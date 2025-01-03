@@ -1,7 +1,12 @@
+import logging
+
+import matplotlib.pyplot as plt
 import numpy as np
 from scipy.special import gamma, gammainc
 from scipy.stats import gamma as gamma_dist
 
+# Create a logger instance
+logger = logging.getLogger(__name__)
 
 def gamma_equal_mass_bins(alpha, beta, n_bins):
     """
@@ -73,21 +78,40 @@ if __name__ == "__main__":
     # Example parameters
     alpha = 10.0
     beta = 1.0
-    n_bins = 490
+    n_bins = 8
 
     bins = gamma_equal_mass_bins(alpha, beta, n_bins)
 
-    print(f"Gamma distribution (α={alpha}, β={beta}) divided into {n_bins} equal-mass bins:")
-    print("-" * 80)
-    print(f"{'Bin':>3} {'Lower':>10} {'Upper':>10} {'E[X|bin]':>10} {'P(bin)':>10}")
-    print("-" * 80)
+    logger.info(f"Gamma distribution (α={alpha}, β={beta}) divided into {n_bins} equal-mass bins:")
+    logger.info("-" * 80)
+    logger.info(f"{'Bin':>3} {'Lower':>10} {'Upper':>10} {'E[X|bin]':>10} {'P(bin)':>10}")
+    logger.info("-" * 80)
 
     for i in range(n_bins):
         upper = f"{bins['upper_bound'][i]:.3f}" if not np.isinf(bins["upper_bound"][i]) else "∞"
         lower = f"{bins['lower_bound'][i]:.3f}"
         expected = f"{bins['expected_value'][i]:.3f}"
         prob = f"{bins['probability_mass'][i]:.3f}"
-        print(f"{i:3d} {lower:>10} {upper:>10} {expected:>10} {prob:>10}")
+        logger.info(f"{i:3d} {lower:>10} {upper:>10} {expected:>10} {prob:>10}")
 
     # Verify total probability is exactly 1
-    print(f"\nTotal probability mass: {bins['probability_mass'].sum():.6f}")
+    logger.info(f"\nTotal probability mass: {bins['probability_mass'].sum():.6f}")
+
+    # Verify expected value is close to the mean of the distribution
+    mean = alpha * beta
+    expected_value = np.sum(bins["expected_value"] * bins["probability_mass"])
+    logger.info(f"Mean of distribution: {mean:.3f}")
+    logger.info(f"Expected value of bins: {expected_value:.3f}")
+
+    # plot the gamma distribution and the bins
+    x = np.linspace(0, 30, 1000)
+    y = gamma_dist.pdf(x, alpha, scale=beta)
+    plt.plot(x, y, label="Gamma PDF")
+    for i in range(n_bins):
+        plt.axvline(bins["lower_bound"][i], color="black", linestyle="--", alpha=0.5)
+        plt.axvline(bins["upper_bound"][i], color="black", linestyle="--", alpha=0.5)
+        plt.axvline(bins["expected_value"][i], color="red", linestyle="--", alpha=0.5)
+    plt.xlabel("x")
+    plt.ylabel("f(x)")
+    plt.legend()
+    plt.show()
