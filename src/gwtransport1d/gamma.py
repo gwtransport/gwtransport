@@ -1,16 +1,18 @@
+"""Functions for working with gamma distributions."""
 import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.special import gamma, gammainc
+from scipy.special import gammainc
 from scipy.stats import gamma as gamma_dist
 
 # Create a logger instance
 logger = logging.getLogger(__name__)
 
+
 def gamma_equal_mass_bins(alpha, beta, n_bins):
     """
-    Divide gamma distribution into n bins with equal probability mass using array operations.
+    Divide gamma distribution into n bins with equal probability mass.
 
     Parameters
     ----------
@@ -31,9 +33,11 @@ def gamma_equal_mass_bins(alpha, beta, n_bins):
     """
     # Parameter validation
     if alpha <= 0 or beta <= 0:
-        raise ValueError("Alpha and beta must be positive")
+        msg = "Alpha and beta must be positive"
+        raise ValueError(msg)
     if n_bins < 1:
-        raise ValueError("Number of bins must be positive")
+        msg = "Number of bins must be positive"
+        raise ValueError(msg)
 
     # Calculate boundaries for equal mass bins
     prob_per_bin = 1.0 / n_bins
@@ -44,15 +48,9 @@ def gamma_equal_mass_bins(alpha, beta, n_bins):
     lower_bounds = bin_boundaries[:-1]
     upper_bounds = bin_boundaries[1:]
 
-    # Calculate expected values using vectorized operations
-    # For finite bounds
-    gamma_diff_alpha = gamma(alpha) * (
-        gammainc(alpha, upper_bounds[:-1] / beta) - gammainc(alpha, lower_bounds[:-1] / beta)
-    )
-    gamma_diff_alpha_plus_1 = gamma(alpha + 1) * (
-        gammainc(alpha + 1, upper_bounds[:-1] / beta) - gammainc(alpha + 1, lower_bounds[:-1] / beta)
-    )
-    finite_expectations = beta * gamma_diff_alpha_plus_1 / gamma_diff_alpha
+    diff_alpha = gammainc(alpha, upper_bounds[:-1] / beta) - gammainc(alpha, lower_bounds[:-1] / beta)
+    diff_alpha_plus_1 = gammainc(alpha + 1, upper_bounds[:-1] / beta) - gammainc(alpha + 1, lower_bounds[:-1] / beta)
+    finite_expectations = beta * alpha * diff_alpha_plus_1 / diff_alpha
 
     # For the last bin (to infinity)
     gamma_ratio_alpha = 1 - gammainc(alpha, lower_bounds[-1] / beta)  # Upper tail
@@ -72,19 +70,73 @@ def gamma_equal_mass_bins(alpha, beta, n_bins):
         "probability_mass": probability_mass,
     }
 
+def bin_masses(alpha, beta, lower_bounds, upper_bounds):
+   """
+   Calculate prbability mass for each bin in gamma distribution.
+
+   Parameters
+   ----------
+   alpha : float
+       Shape parameter of gamma distribution (must be > 0)
+   beta : float
+       Scale parameter of gamma distribution (must be > 0)
+   lower_bounds : array-like
+       Lower bounds of bins
+   upper_bounds : array-like
+       Upper bounds of bins (can include inf)
+
+   Returns
+   -------
+   array
+       Probability mass for each bin
+   """
+   # Convert inputs to numpy arrays
+   lower_bounds = np.asarray(lower_bounds)
+   upper_bounds = np.asarray(upper_bounds)
+
+   # Parameter validation
+   if alpha <= 0 or beta <= 0:
+       msg = "Alpha and beta must be positive"
+       raise ValueError(msg)
+   if len(lower_bounds) != len(upper_bounds):
+       msg = "Lower and upper bounds must have same length"
+       raise ValueError(msg)
+   if np.any(lower_bounds > upper_bounds):
+       msg = "Lower bounds must be less than upper bounds"
+       raise ValueError(msg)
+
+   # Handle infinite upper bounds
+   is_infinite = np.isinf(upper_bounds)
+
+   # Initialize probability mass array
+   masses = np.zeros(len(lower_bounds))
+
+   # Calculate for finite bounds
+   finite_mask = ~is_infinite
+   if np.any(finite_mask):
+       masses[finite_mask] = (
+           gammainc(alpha, upper_bounds[finite_mask] / beta) -
+           gammainc(alpha, lower_bounds[finite_mask] / beta)
+       )
+
+   # Calculate for infinite bounds
+   if np.any(is_infinite):
+       masses[is_infinite] = 1 - gammainc(alpha, lower_bounds[is_infinite] / beta)
+
+   return masses
 
 # Example usage
 if __name__ == "__main__":
     # Example parameters
-    alpha = 10.0
+    alpha = 500.0
     beta = 1.0
     n_bins = 8
 
     bins = gamma_equal_mass_bins(alpha, beta, n_bins)
 
-    logger.info(f"Gamma distribution (α={alpha}, β={beta}) divided into {n_bins} equal-mass bins:")
+    logger.info("Gamma distribution (α=%s, β=%s) divided into %d equal-mass bins:", alpha, beta, n_bins)
     logger.info("-" * 80)
-    logger.info(f"{'Bin':>3} {'Lower':>10} {'Upper':>10} {'E[X|bin]':>10} {'P(bin)':>10}")
+    logger.info("%3s %10s %10s %10s %10s", "Bin", "Lower", "Upper", "E[X|bin]", "P(bin)")
     logger.info("-" * 80)
 
     for i in range(n_bins):
@@ -92,19 +144,24 @@ if __name__ == "__main__":
         lower = f"{bins['lower_bound'][i]:.3f}"
         expected = f"{bins['expected_value'][i]:.3f}"
         prob = f"{bins['probability_mass'][i]:.3f}"
-        logger.info(f"{i:3d} {lower:>10} {upper:>10} {expected:>10} {prob:>10}")
+        logger.info("%3d %10s %10s %10s %10s", i, lower, upper, expected, prob)
 
     # Verify total probability is exactly 1
-    logger.info(f"\nTotal probability mass: {bins['probability_mass'].sum():.6f}")
+    logger.info("\nTotal probability mass: %.6f", bins['probability_mass'].sum())
 
     # Verify expected value is close to the mean of the distribution
     mean = alpha * beta
     expected_value = np.sum(bins["expected_value"] * bins["probability_mass"])
-    logger.info(f"Mean of distribution: {mean:.3f}")
-    logger.info(f"Expected value of bins: {expected_value:.3f}")
+    logger.info("Mean of distribution: %.3f", mean)
+    logger.info("Expected value of bins: %.3f", expected_value)
+
+    mass_per_bin = bin_masses(alpha, beta, bins['lower_bound'], bins['upper_bound'])
+    logger.info("Total probability mass: %.6f", mass_per_bin.sum())
+    logger.info("Probability mass per bin:")
+    logger.info(mass_per_bin)
 
     # plot the gamma distribution and the bins
-    x = np.linspace(0, 30, 1000)
+    x = np.linspace(0, 530, 1000)
     y = gamma_dist.pdf(x, alpha, scale=beta)
     plt.plot(x, y, label="Gamma PDF")
     for i in range(n_bins):
