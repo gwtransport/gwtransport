@@ -50,7 +50,7 @@ def get_cout_advection(cin, flow, aquifer_pore_volume, retardation_factor, resam
     rt = pd.to_timedelta(interp_series(rt_infiltration, cin.index), unit="D")
     cout = pd.Series(data=cin.values, index=cin.index + rt, name="cout")
 
-    if resample_dates is None:
+    if resample_dates is not None:
         cout = pd.Series(interp_series(cout, resample_dates), index=resample_dates, name="cout")
 
     return cout

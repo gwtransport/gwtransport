@@ -40,7 +40,7 @@ def residence_time_retarded(flow, aquifer_pore_volume, retardation_factor, direc
     flow_cum = flow.cumsum()
     dates_days_extraction = (flow.index - flow.index[0]) / np.timedelta64(1, "D")
     if direction == "extraction":
-        # How many days ago was the water that is extracted now infiltrated
+        # How many days ago was the extraced water infiltrated
         dates_infiltration_retarded = (
             pd.to_timedelta(
                 np.interp(

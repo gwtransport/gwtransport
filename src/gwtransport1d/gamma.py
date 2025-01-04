@@ -7,6 +7,14 @@ from scipy.special import gammainc
 from scipy.stats import gamma as gamma_dist
 
 # Create a logger instance
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 
@@ -31,41 +39,19 @@ def gamma_equal_mass_bins(alpha, beta, n_bins):
         - expected_value: expected values in bins
         - probability_mass: probability mass in bins (1/n_bins for all)
     """
-    # Parameter validation
-    if alpha <= 0 or beta <= 0:
-        msg = "Alpha and beta must be positive"
-        raise ValueError(msg)
-    if n_bins < 1:
-        msg = "Number of bins must be positive"
-        raise ValueError(msg)
-
     # Calculate boundaries for equal mass bins
-    prob_per_bin = 1.0 / n_bins
+    probability_mass = np.full(n_bins, 1.0 / n_bins)
     quantiles = np.linspace(0, 1, n_bins + 1)  # includes 0 and 1
     bin_boundaries = gamma_dist.ppf(quantiles, alpha, scale=beta)
 
-    # Create arrays for bounds
-    lower_bounds = bin_boundaries[:-1]
-    upper_bounds = bin_boundaries[1:]
-
-    diff_alpha = gammainc(alpha, upper_bounds[:-1] / beta) - gammainc(alpha, lower_bounds[:-1] / beta)
-    diff_alpha_plus_1 = gammainc(alpha + 1, upper_bounds[:-1] / beta) - gammainc(alpha + 1, lower_bounds[:-1] / beta)
-    finite_expectations = beta * alpha * diff_alpha_plus_1 / diff_alpha
-
-    # For the last bin (to infinity)
-    gamma_ratio_alpha = 1 - gammainc(alpha, lower_bounds[-1] / beta)  # Upper tail
-    gamma_ratio_alpha_plus_1 = 1 - gammainc(alpha + 1, lower_bounds[-1] / beta)  # Upper tail
-    infinite_expectation = beta * alpha * gamma_ratio_alpha_plus_1 / gamma_ratio_alpha
-
-    # Combine finite and infinite expectations
-    expected_values = np.append(finite_expectations, infinite_expectation)
-
-    # Create uniform probability mass array
-    probability_mass = np.full(n_bins, prob_per_bin)
+    # Calculate expected value for each bin
+    alpha_plus_1 = gammainc(alpha + 1, bin_boundaries / beta)
+    diff_alpha_plus_1 = np.diff(alpha_plus_1)
+    expected_values = beta * alpha * diff_alpha_plus_1 / probability_mass
 
     return {
-        "lower_bound": lower_bounds,
-        "upper_bound": upper_bounds,
+        "lower_bound": bin_boundaries[:-1],
+        "upper_bound": bin_boundaries[1:],
         "expected_value": expected_values,
         "probability_mass": probability_mass,
     }
@@ -128,9 +114,9 @@ def bin_masses(alpha, beta, lower_bounds, upper_bounds):
 # Example usage
 if __name__ == "__main__":
     # Example parameters
-    alpha = 500.0
-    beta = 1.0
-    n_bins = 8
+    alpha = 300.0
+    beta = 15.0
+    n_bins = 12
 
     bins = gamma_equal_mass_bins(alpha, beta, n_bins)
 
