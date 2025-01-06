@@ -1,4 +1,5 @@
 """Functions for working with gamma distributions."""
+
 import logging
 
 import matplotlib.pyplot as plt
@@ -9,11 +10,8 @@ from scipy.stats import gamma as gamma_dist
 # Create a logger instance
 logging.basicConfig(
     level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('app.log'),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("app.log"), logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
 
@@ -56,60 +54,61 @@ def gamma_equal_mass_bins(alpha, beta, n_bins):
         "probability_mass": probability_mass,
     }
 
+
 def bin_masses(alpha, beta, lower_bounds, upper_bounds):
-   """
-   Calculate prbability mass for each bin in gamma distribution.
+    """
+    Calculate prbability mass for each bin in gamma distribution.
 
-   Parameters
-   ----------
-   alpha : float
-       Shape parameter of gamma distribution (must be > 0)
-   beta : float
-       Scale parameter of gamma distribution (must be > 0)
-   lower_bounds : array-like
-       Lower bounds of bins
-   upper_bounds : array-like
-       Upper bounds of bins (can include inf)
+    Parameters
+    ----------
+    alpha : float
+        Shape parameter of gamma distribution (must be > 0)
+    beta : float
+        Scale parameter of gamma distribution (must be > 0)
+    lower_bounds : array-like
+        Lower bounds of bins
+    upper_bounds : array-like
+        Upper bounds of bins (can include inf)
 
-   Returns
-   -------
-   array
-       Probability mass for each bin
-   """
-   # Convert inputs to numpy arrays
-   lower_bounds = np.asarray(lower_bounds)
-   upper_bounds = np.asarray(upper_bounds)
+    Returns
+    -------
+    array
+        Probability mass for each bin
+    """
+    # Convert inputs to numpy arrays
+    lower_bounds = np.asarray(lower_bounds)
+    upper_bounds = np.asarray(upper_bounds)
 
-   # Parameter validation
-   if alpha <= 0 or beta <= 0:
-       msg = "Alpha and beta must be positive"
-       raise ValueError(msg)
-   if len(lower_bounds) != len(upper_bounds):
-       msg = "Lower and upper bounds must have same length"
-       raise ValueError(msg)
-   if np.any(lower_bounds > upper_bounds):
-       msg = "Lower bounds must be less than upper bounds"
-       raise ValueError(msg)
+    # Parameter validation
+    if alpha <= 0 or beta <= 0:
+        msg = "Alpha and beta must be positive"
+        raise ValueError(msg)
+    if len(lower_bounds) != len(upper_bounds):
+        msg = "Lower and upper bounds must have same length"
+        raise ValueError(msg)
+    if np.any(lower_bounds > upper_bounds):
+        msg = "Lower bounds must be less than upper bounds"
+        raise ValueError(msg)
 
-   # Handle infinite upper bounds
-   is_infinite = np.isinf(upper_bounds)
+    # Handle infinite upper bounds
+    is_infinite = np.isinf(upper_bounds)
 
-   # Initialize probability mass array
-   masses = np.zeros(len(lower_bounds))
+    # Initialize probability mass array
+    masses = np.zeros(len(lower_bounds))
 
-   # Calculate for finite bounds
-   finite_mask = ~is_infinite
-   if np.any(finite_mask):
-       masses[finite_mask] = (
-           gammainc(alpha, upper_bounds[finite_mask] / beta) -
-           gammainc(alpha, lower_bounds[finite_mask] / beta)
-       )
+    # Calculate for finite bounds
+    finite_mask = ~is_infinite
+    if np.any(finite_mask):
+        masses[finite_mask] = gammainc(alpha, upper_bounds[finite_mask] / beta) - gammainc(
+            alpha, lower_bounds[finite_mask] / beta
+        )
 
-   # Calculate for infinite bounds
-   if np.any(is_infinite):
-       masses[is_infinite] = 1 - gammainc(alpha, lower_bounds[is_infinite] / beta)
+    # Calculate for infinite bounds
+    if np.any(is_infinite):
+        masses[is_infinite] = 1 - gammainc(alpha, lower_bounds[is_infinite] / beta)
 
-   return masses
+    return masses
+
 
 # Example usage
 if __name__ == "__main__":
@@ -120,7 +119,7 @@ if __name__ == "__main__":
 
     bins = gamma_equal_mass_bins(alpha, beta, n_bins)
 
-    logger.info("Gamma distribution (α=%s, β=%s) divided into %d equal-mass bins:", alpha, beta, n_bins)
+    logger.info("Gamma distribution (alpha=%s, beta=%s) divided into %d equal-mass bins:", alpha, beta, n_bins)
     logger.info("-" * 80)
     logger.info("%3s %10s %10s %10s %10s", "Bin", "Lower", "Upper", "E[X|bin]", "P(bin)")
     logger.info("-" * 80)
@@ -133,7 +132,7 @@ if __name__ == "__main__":
         logger.info("%3d %10s %10s %10s %10s", i, lower, upper, expected, prob)
 
     # Verify total probability is exactly 1
-    logger.info("\nTotal probability mass: %.6f", bins['probability_mass'].sum())
+    logger.info("\nTotal probability mass: %.6f", bins["probability_mass"].sum())
 
     # Verify expected value is close to the mean of the distribution
     mean = alpha * beta
@@ -141,7 +140,7 @@ if __name__ == "__main__":
     logger.info("Mean of distribution: %.3f", mean)
     logger.info("Expected value of bins: %.3f", expected_value)
 
-    mass_per_bin = bin_masses(alpha, beta, bins['lower_bound'], bins['upper_bound'])
+    mass_per_bin = bin_masses(alpha, beta, bins["lower_bound"], bins["upper_bound"])
     logger.info("Total probability mass: %.6f", mass_per_bin.sum())
     logger.info("Probability mass per bin:")
     logger.info(mass_per_bin)

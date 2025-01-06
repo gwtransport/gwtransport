@@ -14,7 +14,6 @@ groundwater contamination and transport problems.
 """
 
 import numpy as np
-import pandas as pd
 
 
 def residence_time_retarded(flow, aquifer_pore_volume, retardation_factor, direction="extraction"):
@@ -37,42 +36,38 @@ def residence_time_retarded(flow, aquifer_pore_volume, retardation_factor, direc
     pandas.Series
         Residence time of the retarded compound in the aquifer [days].
     """
-    flow_cum = flow.cumsum()
-    dates_days_extraction = (flow.index - flow.index[0]) / np.timedelta64(1, "D")
+    aquifer_pore_volume = np.atleast_1d(aquifer_pore_volume)
+
+    dates_days_extraction = np.asarray((flow.index - flow.index[0]) / np.timedelta64(1, "D"))
+    days_extraction = np.diff(dates_days_extraction, prepend=0.0)
+    flow_cum = (flow.values * days_extraction).cumsum()
+
     if direction == "extraction":
         # How many days ago was the extraced water infiltrated
-        dates_infiltration_retarded = (
-            pd.to_timedelta(
-                np.interp(
-                    flow_cum - retardation_factor * aquifer_pore_volume,
-                    flow_cum,
-                    dates_days_extraction,
-                    left=np.nan,
-                    right=np.nan,
-                ),
-                unit="D",
-            )
-            + flow.index[0]
+        a = np.asarray([flow_cum - retardation_factor * aqv for aqv in aquifer_pore_volume])
+        a_sort_ind = np.unravel_index(np.argsort(a, axis=None), a.shape)
+        days = np.zeros(a.shape)
+        days[a_sort_ind] = np.interp(
+            a[a_sort_ind],
+            flow_cum,
+            dates_days_extraction,
+            left=np.nan,
+            right=np.nan,
         )
-        data = (flow.index - dates_infiltration_retarded) / np.timedelta64(1, "D")
-    elif direction == "infiltration":
+        return dates_days_extraction - days
+    if direction == "infiltration":
         # In how many days the water that is infiltrated now be extracted
-        dates_extraction_retarded = (
-            pd.to_timedelta(
-                np.interp(
-                    flow_cum + retardation_factor * aquifer_pore_volume,
-                    flow_cum,
-                    dates_days_extraction,
-                    left=np.nan,
-                    right=np.nan,
-                ),
-                unit="D",
-            )
-            + flow.index[0]
+        a = np.asarray([flow_cum + retardation_factor * aqv for aqv in aquifer_pore_volume])
+        a_sort_ind = np.unravel_index(np.argsort(a, axis=None), a.shape)
+        days = np.zeros(a.shape)
+        days[a_sort_ind] = np.interp(
+            a[a_sort_ind],
+            flow_cum,
+            dates_days_extraction,
+            left=np.nan,
+            right=np.nan,
         )
-        data = (dates_extraction_retarded - flow.index) / np.timedelta64(1, "D")
-    else:
-        msg = "direction should be 'extraction' or 'infiltration'"
-        raise ValueError(msg)
+        return days - dates_days_extraction
 
-    return pd.Series(data=data, index=flow.index, name="residence_times_retarded")
+    msg = "direction should be 'extraction' or 'infiltration'"
+    raise ValueError(msg)

@@ -16,7 +16,7 @@ flow = pd.Series(300.0 * 24, index=dates, name="flow")  # m3
 flow[100:200] = 505.0 * 24
 flow[200:300] = 83.0 * 24
 
-residence_time_avg = 35.3  # days
+residence_time_avg = 35.3  # days; not retarded
 
 u = 1.0  # ng/m2/day
 

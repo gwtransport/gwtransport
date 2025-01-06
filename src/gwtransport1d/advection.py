@@ -18,9 +18,11 @@ and time series handling. It is designed for researchers and engineers working o
 groundwater contamination and transport problems.
 """
 
+import numpy as np
 import pandas as pd
 
 from gwtransport1d.deposition import interp_series
+from gwtransport1d.gamma import gamma_equal_mass_bins
 from gwtransport1d.residence_time import residence_time_retarded
 
 
@@ -54,3 +56,52 @@ def get_cout_advection(cin, flow, aquifer_pore_volume, retardation_factor, resam
         cout = pd.Series(interp_series(cout, resample_dates), index=resample_dates, name="cout")
 
     return cout
+
+
+def get_cout_advection_gamma(cin, flow, alpha, beta, n_bins=100, retardation_factor=1.0, min_frac_known=0.75):
+    """
+    Compute the concentration of the extracted water by shifting cin with its residence time.
+
+    The compound is retarded in the aquifer with a retardation factor. The residence
+    time is computed based on the flow rate of the water in the aquifer and the pore volume
+    of the aquifer. The aquifer pore volume is approximated by a gamma distribution, with
+    parameters alpha and beta.
+
+    Parameters
+    ----------
+    cin : pandas.Series
+        Concentration of the compound in the extracted water [ng/m3] or temperature in infiltrating water.
+    flow : pandas.Series
+        Flow rate of water in the aquifer [m3/day].
+    alpha : float
+        Shape parameter of gamma distribution (must be > 0)
+    beta : float
+        Scale parameter of gamma distribution (must be > 0)
+    n_bins : int
+        Number of bins to discretize the gamma distribution.
+
+    Returns
+    -------
+    pandas.Series
+        Concentration of the compound in the extracted water [ng/m3] or temperature.
+    """
+    # Every apv bin transports the same fraction of flow
+    bins = gamma_equal_mass_bins(alpha, beta, n_bins)
+    aquifer_pore_volume = bins["expected_value"]
+
+    day_of_extraction = np.array(flow.index - flow.index[0]) / np.timedelta64(1, "D")
+
+    # Use temperature at center point of bin
+    rt = residence_time_retarded(flow, aquifer_pore_volume, retardation_factor, direction="extraction")
+    day_of_infiltration = day_of_extraction - rt
+    iday_of_infiltration = np.searchsorted(day_of_extraction, day_of_infiltration)
+
+    # Setup mask for nan values and only compute temperature for when the infiltration temp of min_frac_known is known
+    mask = np.isnan(day_of_infiltration)
+    mask[1.0 - (np.count_nonzero(mask, axis=1) / mask.shape[1]) < min_frac_known] = np.nan
+
+    iday_of_infiltration[mask] = 0  # Integers are not allowed to be nan
+    tout_arr = cin.values[iday_of_infiltration]
+    tout_arr[mask] = np.nan
+
+    return np.nanmean(tout_arr, axis=0)
