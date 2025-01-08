@@ -50,12 +50,13 @@ def gamma_equal_mass_bins(alpha, beta, n_bins):
     return {
         "lower_bound": bin_boundaries[:-1],
         "upper_bound": bin_boundaries[1:],
+        "bin_edges": bin_boundaries,
         "expected_value": expected_values,
         "probability_mass": probability_mass,
     }
 
 
-def bin_masses(alpha, beta, lower_bounds, upper_bounds):
+def bin_masses(alpha, beta, bin_edges):
     """
     Calculate prbability mass for each bin in gamma distribution.
 
@@ -65,10 +66,8 @@ def bin_masses(alpha, beta, lower_bounds, upper_bounds):
         Shape parameter of gamma distribution (must be > 0)
     beta : float
         Scale parameter of gamma distribution (must be > 0)
-    lower_bounds : array-like
-        Lower bounds of bins
-    upper_bounds : array-like
-        Upper bounds of bins (can include inf)
+    bin_edges : array-like
+        Bin edges. Array of increasing values of size len(bins) + 1.
 
     Returns
     -------
@@ -76,38 +75,15 @@ def bin_masses(alpha, beta, lower_bounds, upper_bounds):
         Probability mass for each bin
     """
     # Convert inputs to numpy arrays
-    lower_bounds = np.asarray(lower_bounds)
-    upper_bounds = np.asarray(upper_bounds)
+    bin_edges = np.asarray(bin_edges)
 
     # Parameter validation
     if alpha <= 0 or beta <= 0:
         msg = "Alpha and beta must be positive"
         raise ValueError(msg)
-    if len(lower_bounds) != len(upper_bounds):
-        msg = "Lower and upper bounds must have same length"
-        raise ValueError(msg)
-    if np.any(lower_bounds > upper_bounds):
-        msg = "Lower bounds must be less than upper bounds"
-        raise ValueError(msg)
 
-    # Handle infinite upper bounds
-    is_infinite = np.isinf(upper_bounds)
-
-    # Initialize probability mass array
-    masses = np.zeros(len(lower_bounds))
-
-    # Calculate for finite bounds
-    finite_mask = ~is_infinite
-    if np.any(finite_mask):
-        masses[finite_mask] = gammainc(alpha, upper_bounds[finite_mask] / beta) - gammainc(
-            alpha, lower_bounds[finite_mask] / beta
-        )
-
-    # Calculate for infinite bounds
-    if np.any(is_infinite):
-        masses[is_infinite] = 1 - gammainc(alpha, lower_bounds[is_infinite] / beta)
-
-    return masses
+    val = gammainc(alpha, bin_edges / beta)
+    return val[1:] - val[:-1]
 
 
 # Example usage
@@ -140,7 +116,7 @@ if __name__ == "__main__":
     logger.info("Mean of distribution: %.3f", mean)
     logger.info("Expected value of bins: %.3f", expected_value)
 
-    mass_per_bin = bin_masses(alpha, beta, bins["lower_bound"], bins["upper_bound"])
+    mass_per_bin = bin_masses(alpha, beta, bins["bin_edges"])
     logger.info("Total probability mass: %.6f", mass_per_bin.sum())
     logger.info("Probability mass per bin:")
     logger.info(mass_per_bin)

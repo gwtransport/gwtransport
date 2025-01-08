@@ -18,12 +18,15 @@ and time series handling. It is designed for researchers and engineers working o
 groundwater contamination and transport problems.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
 from gwtransport1d.deposition import interp_series
 from gwtransport1d.gamma import gamma_equal_mass_bins
 from gwtransport1d.residence_time import residence_time_retarded
+from gwtransport1d.utils import linear_interpolate
 
 
 def get_cout_advection(cin, flow, aquifer_pore_volume, retardation_factor, resample_dates=None):
@@ -58,7 +61,7 @@ def get_cout_advection(cin, flow, aquifer_pore_volume, retardation_factor, resam
     return cout
 
 
-def get_cout_advection_gamma(cin, flow, alpha, beta, n_bins=100, retardation_factor=1.0, min_frac_known=0.75):
+def get_cout_advection_gamma(cin, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.
 
@@ -85,23 +88,21 @@ def get_cout_advection_gamma(cin, flow, alpha, beta, n_bins=100, retardation_fac
     pandas.Series
         Concentration of the compound in the extracted water [ng/m3] or temperature.
     """
-    # Every apv bin transports the same fraction of flow
-    bins = gamma_equal_mass_bins(alpha, beta, n_bins)
-    aquifer_pore_volume = bins["expected_value"]
-
     day_of_extraction = np.array(flow.index - flow.index[0]) / np.timedelta64(1, "D")
 
+    # Every apv bin transports the same fraction of flow
+    bins = gamma_equal_mass_bins(alpha, beta, n_bins)
+    aquifer_pore_volume_edges = bins["bin_edges"]
+
     # Use temperature at center point of bin
-    rt = residence_time_retarded(flow, aquifer_pore_volume, retardation_factor, direction="extraction")
-    day_of_infiltration = day_of_extraction - rt
-    iday_of_infiltration = np.searchsorted(day_of_extraction, day_of_infiltration)
+    rt_edges = residence_time_retarded(flow, aquifer_pore_volume_edges, retardation_factor, direction="extraction")
+    day_of_infiltration_edges = day_of_extraction - rt_edges
 
-    # Setup mask for nan values and only compute temperature for when the infiltration temp of min_frac_known is known
-    mask = np.isnan(day_of_infiltration)
-    mask[1.0 - (np.count_nonzero(mask, axis=1) / mask.shape[1]) < min_frac_known] = np.nan
-
-    iday_of_infiltration[mask] = 0  # Integers are not allowed to be nan
-    tout_arr = cin.values[iday_of_infiltration]
-    tout_arr[mask] = np.nan
-
-    return np.nanmean(tout_arr, axis=0)
+    cin_sum = cin.cumsum()
+    cin_sum_edges = linear_interpolate(day_of_extraction, cin_sum, day_of_infiltration_edges)
+    n_measurements = linear_interpolate(day_of_extraction, np.arange(cin.size), day_of_infiltration_edges)
+    cout_arr = np.diff(cin_sum_edges, axis=0) / np.diff(n_measurements, axis=0)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(action="ignore", message="Mean of empty slice")
+        cout_data = np.nanmean(cout_arr, axis=0)
+    return pd.Series(data=cout_data, index=flow.index, name="cout")

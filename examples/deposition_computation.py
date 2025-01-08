@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
 from gwtransport1d.deposition import compute_concentration, compute_deposition
 from gwtransport1d.residence_time import residence_time_retarded
 
