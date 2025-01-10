@@ -43,8 +43,9 @@ def gamma_equal_mass_bins(alpha, beta, n_bins):
     bin_boundaries = gamma_dist.ppf(quantiles, alpha, scale=beta)
 
     # Calculate expected value for each bin
-    alpha_plus_1 = gammainc(alpha + 1, bin_boundaries / beta)
-    diff_alpha_plus_1 = np.diff(alpha_plus_1)
+    # alpha_plus_1 = gammainc(alpha + 1, bin_boundaries / beta)
+    # diff_alpha_plus_1 = np.diff(alpha_plus_1)
+    diff_alpha_plus_1 = bin_masses(alpha + 1, beta, bin_boundaries / beta)
     expected_values = beta * alpha * diff_alpha_plus_1 / probability_mass
 
     return {
