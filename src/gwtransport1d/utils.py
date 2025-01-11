@@ -1,3 +1,4 @@
+"""General utilities for the 1D groundwater transport model."""
 import numpy as np
 
 

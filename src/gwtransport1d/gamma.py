@@ -7,6 +7,8 @@ import numpy as np
 from scipy.special import gammainc
 from scipy.stats import gamma as gamma_dist
 
+from gwtransport1d.advection import cout_advection_distribution
+
 # Create a logger instance
 logging.basicConfig(
     level=logging.DEBUG,
@@ -14,6 +16,39 @@ logging.basicConfig(
     handlers=[logging.FileHandler("app.log"), logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
+
+
+def cout_advection_gamma(cin, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
+    """
+    Compute the concentration of the extracted water by shifting cin with its residence time.
+
+    The compound is retarded in the aquifer with a retardation factor. The residence
+    time is computed based on the flow rate of the water in the aquifer and the pore volume
+    of the aquifer. The aquifer pore volume is approximated by a gamma distribution, with
+    parameters alpha and beta.
+
+    Parameters
+    ----------
+    cin : pandas.Series
+        Concentration of the compound in the extracted water [ng/m3] or temperature in infiltrating water.
+    flow : pandas.Series
+        Flow rate of water in the aquifer [m3/day].
+    alpha : float
+        Shape parameter of gamma distribution (must be > 0)
+    beta : float
+        Scale parameter of gamma distribution (must be > 0)
+    n_bins : int
+        Number of bins to discretize the gamma distribution.
+    retardation_factor : float
+        Retardation factor of the compound in the aquifer.
+
+    Returns
+    -------
+    pandas.Series
+        Concentration of the compound in the extracted water [ng/m3] or temperature.
+    """
+    bins = gamma_equal_mass_bins(alpha, beta, n_bins)
+    return cout_advection_distribution(cin, flow, bins["edges"], retardation_factor=retardation_factor)
 
 
 def gamma_equal_mass_bins(alpha, beta, n_bins):
@@ -40,18 +75,16 @@ def gamma_equal_mass_bins(alpha, beta, n_bins):
     # Calculate boundaries for equal mass bins
     probability_mass = np.full(n_bins, 1.0 / n_bins)
     quantiles = np.linspace(0, 1, n_bins + 1)  # includes 0 and 1
-    bin_boundaries = gamma_dist.ppf(quantiles, alpha, scale=beta)
+    bin_edges = gamma_dist.ppf(quantiles, alpha, scale=beta)
 
     # Calculate expected value for each bin
-    # alpha_plus_1 = gammainc(alpha + 1, bin_boundaries / beta)
-    # diff_alpha_plus_1 = np.diff(alpha_plus_1)
-    diff_alpha_plus_1 = bin_masses(alpha + 1, beta, bin_boundaries / beta)
+    diff_alpha_plus_1 = bin_masses(alpha + 1, beta, bin_edges)
     expected_values = beta * alpha * diff_alpha_plus_1 / probability_mass
 
     return {
-        "lower_bound": bin_boundaries[:-1],
-        "upper_bound": bin_boundaries[1:],
-        "bin_edges": bin_boundaries,
+        "lower_bound": bin_edges[:-1],
+        "upper_bound": bin_edges[1:],
+        "edges": bin_edges,
         "expected_value": expected_values,
         "probability_mass": probability_mass,
     }
@@ -117,7 +150,7 @@ if __name__ == "__main__":
     logger.info("Mean of distribution: %.3f", mean)
     logger.info("Expected value of bins: %.3f", expected_value)
 
-    mass_per_bin = bin_masses(alpha, beta, bins["bin_edges"])
+    mass_per_bin = bin_masses(alpha, beta, bins["edges"])
     logger.info("Total probability mass: %.6f", mass_per_bin.sum())
     logger.info("Probability mass per bin:")
     logger.info(mass_per_bin)

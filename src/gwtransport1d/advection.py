@@ -11,7 +11,8 @@ the compound of intrest flows through the aquifer with a retarded velocity. The 
 extracted ('cout').
 
 Main functions:
-- get_cout_advection: Compute the concentration of the extracted water by shifting cin with its residence time.
+- cout_advection: Compute the concentration of the extracted water by shifting cin with its residence time.
+- cout_advection_distribution: Similar to cout_advection, but with a distribution of aquifer pore volumes.
 
 The module leverages numpy, pandas, and scipy for efficient numerical computations
 and time series handling. It is designed for researchers and engineers working on
@@ -24,12 +25,11 @@ import numpy as np
 import pandas as pd
 
 from gwtransport1d.deposition import interp_series
-from gwtransport1d.gamma import gamma_equal_mass_bins
 from gwtransport1d.residence_time import residence_time_retarded
 from gwtransport1d.utils import linear_interpolate
 
 
-def get_cout_advection(cin, flow, aquifer_pore_volume, retardation_factor, resample_dates=None):
+def cout_advection(cin, flow, aquifer_pore_volume, retardation_factor, resample_dates=None):
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.
 
@@ -61,38 +61,29 @@ def get_cout_advection(cin, flow, aquifer_pore_volume, retardation_factor, resam
     return cout
 
 
-def get_cout_advection_gamma(cin, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
+def cout_advection_distribution(cin, flow, aquifer_pore_volume_edges, retardation_factor=1.0):
     """
-    Compute the concentration of the extracted water by shifting cin with its residence time.
-
-    The compound is retarded in the aquifer with a retardation factor. The residence
-    time is computed based on the flow rate of the water in the aquifer and the pore volume
-    of the aquifer. The aquifer pore volume is approximated by a gamma distribution, with
-    parameters alpha and beta.
+    Similar to cout_advection, but with a distribution of aquifer pore volumes.
 
     Parameters
     ----------
     cin : pandas.Series
-        Concentration of the compound in the extracted water [ng/m3] or temperature in infiltrating water.
+        Concentration of the compound in infiltrating water or temperature of infiltrating
+        water.
     flow : pandas.Series
         Flow rate of water in the aquifer [m3/day].
-    alpha : float
-        Shape parameter of gamma distribution (must be > 0)
-    beta : float
-        Scale parameter of gamma distribution (must be > 0)
-    n_bins : int
-        Number of bins to discretize the gamma distribution.
+    aquifer_pore_volume_edges : array-like
+        Edges of the bins that define the distribution of the aquifer pore volume.
+        Of size nbins + 1 [m3].
+    retardation_factor : float
+        Retardation factor of the compound in the aquifer.
 
     Returns
     -------
     pandas.Series
-        Concentration of the compound in the extracted water [ng/m3] or temperature.
+        Concentration of the compound in the extracted water or temperature. Same units as cin.
     """
     day_of_extraction = np.array(flow.index - flow.index[0]) / np.timedelta64(1, "D")
-
-    # Every apv bin transports the same fraction of flow
-    bins = gamma_equal_mass_bins(alpha, beta, n_bins)
-    aquifer_pore_volume_edges = bins["bin_edges"]
 
     # Use temperature at center point of bin
     rt_edges = residence_time_retarded(flow, aquifer_pore_volume_edges, retardation_factor, direction="extraction")
@@ -102,7 +93,9 @@ def get_cout_advection_gamma(cin, flow, alpha, beta, n_bins=100, retardation_fac
     cin_sum_edges = linear_interpolate(day_of_extraction, cin_sum, day_of_infiltration_edges)
     n_measurements = linear_interpolate(day_of_extraction, np.arange(cin.size), day_of_infiltration_edges)
     cout_arr = np.diff(cin_sum_edges, axis=0) / np.diff(n_measurements, axis=0)
+
     with warnings.catch_warnings():
         warnings.filterwarnings(action="ignore", message="Mean of empty slice")
         cout_data = np.nanmean(cout_arr, axis=0)
+
     return pd.Series(data=cout_data, index=flow.index, name="cout")
