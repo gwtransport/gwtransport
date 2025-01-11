@@ -1,3 +1,8 @@
+"""
+Example showing how to compute the concentration of a compound in the extracted water given the concentration of the compound in the infiltrating water and the flow rate of the water in the aquifer increased by deposition.
+
+The compound is retarded in the aquifer with a retardation factor. The residence time is computed based on the flow rate of the water in the aquifer and the pore volume of the aquifer. The pore volume of the aquifer is approximated by a gamma distribution.
+"""
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd

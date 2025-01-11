@@ -48,6 +48,7 @@ convention = "numpy"
 ]
 "tests/**/test_*.py" = [
     "S101", # asserts allowed in tests
+    "D",
 ]
 "**/*.ipynb" = [
     "B018", # allow notebooks printing out variables in the mid cell with variable names only

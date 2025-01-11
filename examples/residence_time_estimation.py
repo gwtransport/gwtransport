@@ -28,7 +28,7 @@ for _alpha, _beta in zip(alphas, betas, strict=True):
     rt = _alpha * _beta / df["Q"].mean() * retardation_factor
     tout = get_cout_advection_gamma(df.T_bodem, df.Q, _alpha, _beta, n_bins=100, retardation_factor=2.0)
     err = ((tout - df.T_bodem) ** 2).sum()
-    print(rt, _alpha, _beta, err)
+    print(rt, _alpha, _beta, err)  # noqa: T201
     plt.plot(df.index, tout, label=f"alpha={_alpha:.0f}, beta={_beta:.0f}")
 
 plt.plot(df.index, df.gwt0, c="C3", label="gwt0")
