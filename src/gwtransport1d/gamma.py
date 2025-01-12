@@ -67,8 +67,9 @@ def gamma_equal_mass_bins(alpha, beta, n_bins):
     Returns
     -------
     dict of arrays with keys:
-        - lower_bound: lower bounds of bins
+        - lower_bound: lower bounds of bins (first one is 0)
         - upper_bound: upper bounds of bins (last one is inf)
+        - edges: bin edges (lower_bound[0], upper_bound[0], ..., upper_bound[-1])
         - expected_value: expected values in bins
         - probability_mass: probability mass in bins (1/n_bins for all)
     """
@@ -92,7 +93,7 @@ def gamma_equal_mass_bins(alpha, beta, n_bins):
 
 def bin_masses(alpha, beta, bin_edges):
     """
-    Calculate prbability mass for each bin in gamma distribution.
+    Calculate probability mass for each bin in gamma distribution.
 
     Parameters
     ----------
@@ -102,6 +103,7 @@ def bin_masses(alpha, beta, bin_edges):
         Scale parameter of gamma distribution (must be > 0)
     bin_edges : array-like
         Bin edges. Array of increasing values of size len(bins) + 1.
+        Must be > 0.
 
     Returns
     -------

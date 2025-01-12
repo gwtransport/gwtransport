@@ -24,11 +24,11 @@ groundwater contamination and transport problems.
 
 import numpy as np
 import pandas as pd
-from scipy import interpolate
 from scipy.linalg import null_space
 from scipy.optimize import minimize
 
 from gwtransport1d.residence_time import residence_time_retarded
+from gwtransport1d.utils import interp_series
 
 
 def compute_deposition(
@@ -233,31 +233,6 @@ def deposition_coefficients(dcout_index, flow, aquifer_pore_volume, porosity, th
         raise ValueError(msg)
 
     return coeff, df, index_dep
-
-
-def interp_series(series, index_new, **interp1d_kwargs):
-    """
-    Interpolate a pandas.Series to a new index.
-
-    Parameters
-    ----------
-    series : pandas.Series
-        Series to interpolate.
-    index_new : pandas.DatetimeIndex
-        New index to interpolate to.
-    interp1d_kwargs : dict, optional
-        Keyword arguments passed to scipy.interpolate.interp1d. Default is {}.
-
-    Returns
-    -------
-    pandas.Series
-        Interpolated series.
-    """
-    series = series[series.index.notna() & series.notna()]
-    dt = (series.index - series.index[0]) / pd.to_timedelta(1, unit="D")
-    dt_interp = (index_new - series.index[0]) / pd.to_timedelta(1, unit="D")
-    interp_obj = interpolate.interp1d(dt, series.values, bounds_error=False, **interp1d_kwargs)
-    return interp_obj(dt_interp)
 
 
 def dcout_date_range_from_dcout_index(dcout_index):

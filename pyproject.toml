@@ -28,7 +28,12 @@ dependencies = [
   "matplotlib",
   "numpy",
 ]
-version = "0.1.0"
+version = "0.2.0"
+[project.optional-dependencies]
+test = [
+  "pytest",
+  "ruff==0.6.8",
+]
 
 [project.urls]
 Homepage = "https://github.com/bdestombe/python_gwtransport1d"

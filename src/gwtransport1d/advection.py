@@ -12,7 +12,7 @@ extracted ('cout').
 
 Main functions:
 - cout_advection: Compute the concentration of the extracted water by shifting cin with its residence time.
-- cout_advection_distribution: Similar to cout_advection, but with a distribution of aquifer pore volumes.
+- cout_advection_distribution: Similar to cout_advection, but for a distribution of aquifer pore volumes.
 
 The module leverages numpy, pandas, and scipy for efficient numerical computations
 and time series handling. It is designed for researchers and engineers working on
@@ -24,12 +24,11 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from gwtransport1d.deposition import interp_series
 from gwtransport1d.residence_time import residence_time_retarded
-from gwtransport1d.utils import linear_interpolate
+from gwtransport1d.utils import interp_series, linear_interpolate
 
 
-def cout_advection(cin, flow, aquifer_pore_volume, retardation_factor, resample_dates=None):
+def cout_advection(cin, flow, aquifer_pore_volume, retardation_factor=1.0, resample_dates=None):
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.
 
