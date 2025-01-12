@@ -7,8 +7,6 @@ import numpy as np
 import pandas as pd
 
 from gwtransport1d.gamma import cout_advection_gamma
-from gwtransport1d.residence_time import residence_time_retarded
-from gwtransport1d.utils import find_consecutive_true_ranges, interp_series
 
 fp = Path(
     "/Users/bdestombe/Projects/bdestombe/python-pwn-productiecapaciteit-infiltratiegebieden/productiecapaciteit/data/Merged/IK93.feather"
