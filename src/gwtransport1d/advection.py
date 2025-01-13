@@ -85,7 +85,9 @@ def cout_advection_distribution(cin, flow, aquifer_pore_volume_edges, retardatio
     day_of_extraction = np.array(flow.index - flow.index[0]) / np.timedelta64(1, "D")
 
     # Use temperature at center point of bin
-    rt_edges = residence_time_retarded(flow, aquifer_pore_volume_edges, retardation_factor, direction="extraction")
+    rt_edges = residence_time_retarded(
+        flow, aquifer_pore_volume_edges, retardation_factor=retardation_factor, direction="extraction"
+    )
     day_of_infiltration_edges = day_of_extraction - rt_edges
 
     cin_sum = cin.cumsum()

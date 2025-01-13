@@ -62,7 +62,7 @@ def gamma_equal_mass_bins(alpha, beta, n_bins):
     beta : float
         Scale parameter of gamma distribution (must be > 0)
     n_bins : int
-        Number of bins
+        Number of bins to divide the gamma distribution.
 
     Returns
     -------
