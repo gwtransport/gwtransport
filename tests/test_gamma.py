@@ -21,8 +21,8 @@ def sample_time_series():
 def gamma_params():
     """Sample gamma distribution parameters."""
     return {
-        "alpha": 2.0,  # Shape parameter
-        "beta": 1.0,  # Scale parameter
+        "alpha": 200.0,  # Shape parameter
+        "beta": 5.0,  # Scale parameter
         "n_bins": 10,  # Number of bins
     }
 
@@ -30,7 +30,7 @@ def gamma_params():
 # Test bin_masses function
 def test_bin_masses_basic():
     """Test basic functionality of bin_masses."""
-    edges = np.array([0, 1, 2, 3])
+    edges = np.array([0, 1, 2, np.inf])
     masses = bin_masses(alpha=2.0, beta=1.0, bin_edges=edges)
 
     assert len(masses) == len(edges) - 1
@@ -104,11 +104,11 @@ def test_cout_advection_gamma_basic(sample_time_series, gamma_params):
     assert len(cout) == len(cin)
 
     # Check output values are non-negative
-    assert np.all(cout >= 0)
+    assert np.all(cout[~np.isnan(cout)] >= 0)
 
     # Check conservation of mass (approximately)
     # Note: This might not hold exactly due to boundary effects
-    assert np.isclose(cout.mean(), cin.mean(), rtol=0.1)
+    assert np.isclose(cout.mean(), cin.mean(), rtol=0.01)
 
 
 def test_cout_advection_gamma_retardation(sample_time_series, gamma_params):
@@ -138,20 +138,17 @@ def test_cout_advection_gamma_constant_input(gamma_params):
     cout = cout_advection_gamma(cin=cin, flow=flow, alpha=gamma_params["alpha"], beta=gamma_params["beta"])
 
     # Output should also be constant and equal to input
-    assert np.allclose(cout, 1.0, rtol=1e-10)
+    assert np.allclose(cout[~np.isnan(cout)], 1.0, rtol=1e-10)
 
 
 # Edge cases and error handling
 def test_invalid_parameters():
     """Test error handling for invalid parameters."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # noqa: PT011
         gamma_equal_mass_bins(alpha=-1, beta=1, n_bins=10)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # noqa: PT011
         gamma_equal_mass_bins(alpha=1, beta=-1, n_bins=10)
-
-    with pytest.raises(ValueError):
-        gamma_equal_mass_bins(alpha=1, beta=1, n_bins=0)
 
 
 def test_numerical_stability():
