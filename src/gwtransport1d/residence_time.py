@@ -20,7 +20,7 @@ from gwtransport1d.utils import linear_interpolate
 
 
 def residence_time_retarded(
-    flow, aquifer_pore_volume, index=None, retardation_factor=1.0, direction="extraction", *, return_as_series=False
+    flow, aquifer_pore_volume, *, index=None, retardation_factor=1.0, direction="extraction", return_as_series=False
 ):
     """
     Compute the residence time of retarded compound in the water in the aquifer.
