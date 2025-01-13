@@ -147,7 +147,9 @@ def test_flow_variations(sample_flow_data):
     pore_volume = 100.0
 
     result1 = residence_time_retarded(flow=sample_flow_data, aquifer_pore_volume=pore_volume, direction="extraction")
-    result2 = residence_time_retarded(flow=sample_flow_data * 2, aquifer_pore_volume=pore_volume, direction="extraction")
+    result2 = residence_time_retarded(
+        flow=sample_flow_data * 2, aquifer_pore_volume=pore_volume, direction="extraction"
+    )
 
     # Residence times should half with double flow
     np.testing.assert_array_almost_equal(result1[1:], result2[1:] * 2)
