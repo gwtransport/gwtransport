@@ -1,10 +1,8 @@
-import pytest
 import numpy as np
 import pandas as pd
-from scipy.stats import gamma as gamma_dist
-from scipy.special import gammainc
+import pytest
 
-from gwtransport1d.gamma import cout_advection_gamma, gamma_equal_mass_bins, bin_masses
+from gwtransport1d.gamma import bin_masses, cout_advection_gamma, gamma_equal_mass_bins
 
 
 # Fixtures
@@ -42,10 +40,10 @@ def test_bin_masses_invalid_params():
     """Test bin_masses with invalid parameters."""
     edges = np.array([0, 1, 2])
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # noqa: PT011
         bin_masses(alpha=-1, beta=1.0, bin_edges=edges)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # noqa: PT011
         bin_masses(alpha=1.0, beta=-1, bin_edges=edges)
 
 
