@@ -79,6 +79,11 @@ def test_gamma_equal_mass_bins_basic(gamma_params):
     # Check bin edges are monotonically increasing
     assert np.all(np.diff(result["edges"]) > 0)
 
+    # Check if the sum of the expected value of each bin is equal to the expected value of the distribution (alpha * beta)
+    expected_value_bins = np.sum(result["expected_value"] * result["probability_mass"])
+    expected_value_gamma = gamma_params["alpha"] * gamma_params["beta"]
+    assert expected_value_gamma == expected_value_bins
+
 
 def test_gamma_equal_mass_bins_expected_values(gamma_params):
     """Test that expected values are within their respective bins."""
