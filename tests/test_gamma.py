@@ -2,7 +2,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport1d.gamma import bin_masses, cout_advection_gamma, gamma_equal_mass_bins
+from gwtransport1d.gamma import (
+    bin_masses,
+    cout_advection_gamma,
+    gamma_alpha_beta_to_mean_std,
+    gamma_equal_mass_bins,
+    gamma_mean_std_to_alpha_beta,
+)
 
 
 # Fixtures
@@ -163,3 +169,32 @@ def test_numerical_stability():
     # Test with very large alpha and beta
     result_large = gamma_equal_mass_bins(alpha=1e5, beta=1e5, n_bins=10)
     assert not np.any(np.isnan(result_large["expected_value"]))
+
+
+def test_gamma_mean_std_to_alpha_beta_basic():
+    """Test gamma_mean_std_to_alpha_beta with typical input values."""
+    mean, std = 10.0, 2.0
+    alpha, beta = gamma_mean_std_to_alpha_beta(mean, std)
+    assert alpha > 0
+    assert beta > 0
+
+    # Convert back and check if we get approximately the same mean/std
+    mean_back, std_back = gamma_alpha_beta_to_mean_std(alpha, beta)
+    assert np.isclose(mean, mean_back, rtol=1e-7), f"Expected mean ~ {mean}, got {mean_back}"
+    assert np.isclose(std, std_back, rtol=1e-7), f"Expected std ~ {std}, got {std_back}"
+
+
+def test_gamma_mean_std_to_alpha_beta_zero_std():
+    """Test gamma_mean_std_to_alpha_beta when std is zero."""
+    mean, std = 10.0, 0.0
+    with pytest.raises(ZeroDivisionError):
+        gamma_mean_std_to_alpha_beta(mean, std)
+
+
+def test_gamma_alpha_beta_to_mean_std_basic():
+    """Test gamma_alpha_beta_to_mean_std with typical alpha/beta."""
+    alpha, beta = 4.0, 2.0
+    mean, std = gamma_alpha_beta_to_mean_std(alpha, beta)
+    assert mean == 8.0
+    assert np.isclose(std, 4.0, rtol=1e-7), f"Expected std ~ 4.0, got {std}"
+
