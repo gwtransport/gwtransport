@@ -194,7 +194,7 @@ def test_gamma_mean_std_to_alpha_beta_zero_std():
 def test_gamma_alpha_beta_to_mean_std_basic():
     """Test gamma_alpha_beta_to_mean_std with typical alpha/beta."""
     alpha, beta = 4.0, 2.0
+    mean_expected = alpha * beta
     mean, std = gamma_alpha_beta_to_mean_std(alpha, beta)
-    assert mean == 8.0
+    assert mean == mean_expected, f"Expected mean = {mean_expected}, got {mean}"
     assert np.isclose(std, 4.0, rtol=1e-7), f"Expected std ~ 4.0, got {std}"
-

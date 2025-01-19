@@ -21,20 +21,15 @@ isspui = ~np.isclose(df.spui, 0.0)
 # Define Gamma distribution for aquifer pore volume
 alpha, beta, n_bins = 10.0, 140.0 * 4, 100
 retardation_factor = 2.0
+explainable_fraction = 0.95  # Fraction of the spui that can be explained by the Q
 
-spuiin_fraction = np.clip(a=df.spui / df.Q, a_min=0.0, a_max=1.0, where=df.Q.values > 0.)
+spuiin_fraction = np.clip(a=df.spui / df.Q, a_min=0.0, a_max=1.0, where=df.Q.values > 0.0)
 
 means = 9000, 9000, 9000
 stds = 4000, 6000, 8000
 
 fig, (ax1, ax2) = plt.subplots(2, 1, sharex=False, sharey=False)
-secax = ax2.secondary_xaxis(
-    'top',
-    functions=(
-        lambda x: x / df.Q.median(),
-        lambda x: x * df.Q.median()
-    )
-)
+secax = ax2.secondary_xaxis("top", functions=(lambda x: x / df.Q.median(), lambda x: x * df.Q.median()))
 
 for i, (mean, std) in enumerate(zip(means, stds, strict=False)):
     c = f"C{i}"
@@ -43,8 +38,10 @@ for i, (mean, std) in enumerate(zip(means, stds, strict=False)):
 
     tout = cout_advection_gamma(df.T_bodem, df.Q, alpha, beta, n_bins=100, retardation_factor=2.0)
 
-    spuiout_fraction = cout_advection_gamma(isspui.astype(float), df.Q, alpha, beta, n_bins=n_bins, retardation_factor=2.0)
-    isspuiout = spuiout_fraction > 0.05
+    spuiout_fraction = cout_advection_gamma(
+        isspui.astype(float), df.Q, alpha, beta, n_bins=n_bins, retardation_factor=2.0
+    )
+    isspuiout = spuiout_fraction > (1 - explainable_fraction)
     tout[isspuiout] = np.nan
 
     err = ((tout - df.T_bodem) ** 2).sum()
@@ -63,8 +60,8 @@ secax.set_xlabel("Residence time with constant median flow [days]")
 ax1.set_ylabel("Temperature [°C]")
 ax2.set_ylabel("Probability density of flow [-]")
 ax2.set_xlabel("Aquifer pore volume [m$^3$]")
-ax1.legend(fontsize = 'x-small', loc="upper right")
-ax2.legend(fontsize = 'x-small', loc="lower right")
+ax1.legend(fontsize="x-small", loc="upper right")
+ax2.legend(fontsize="x-small", loc="lower right")
 plt.savefig("testje.png", dpi=300)
 
-print("done")
+# print("done")
