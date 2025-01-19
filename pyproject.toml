@@ -28,7 +28,7 @@ dependencies = [
   "matplotlib",
   "numpy",
 ]
-version = "0.3.0"
+version = "0.3.1"
 [project.optional-dependencies]
 test = [
   "pytest",
