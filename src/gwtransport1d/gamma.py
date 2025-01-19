@@ -34,8 +34,8 @@ def gamma_mean_std_to_alpha_beta(mean, std):
     tuple
         Shape and scale parameters of the gamma distribution.
     """
-    alpha = mean ** 2 / std ** 2
-    beta = std ** 2 / mean
+    alpha = mean**2 / std**2
+    beta = std**2 / mean
     return alpha, beta
 
 
