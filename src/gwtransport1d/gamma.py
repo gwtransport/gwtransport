@@ -18,6 +18,48 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def gamma_mean_std_to_alpha_beta(mean, std):
+    """
+    Convert mean and standard deviation of gamma distribution to shape and scale parameters.
+
+    Parameters
+    ----------
+    mean : float
+        Mean of the gamma distribution.
+    std : float
+        Standard deviation of the gamma distribution.
+
+    Returns
+    -------
+    tuple
+        Shape and scale parameters of the gamma distribution.
+    """
+    alpha = mean ** 2 / std ** 2
+    beta = std ** 2 / mean
+    return alpha, beta
+
+
+def gamma_alpha_beta_to_mean_std(alpha, beta):
+    """
+    Convert shape and scale parameters of gamma distribution to mean and standard deviation.
+
+    Parameters
+    ----------
+    alpha : float
+        Shape parameter of the gamma distribution.
+    beta : float
+        Scale parameter of the gamma distribution.
+
+    Returns
+    -------
+    tuple
+        Mean and standard deviation of the gamma distribution.
+    """
+    mean = alpha * beta
+    std = np.sqrt(alpha) * beta
+    return mean, std
+
+
 def cout_advection_gamma(cin, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.

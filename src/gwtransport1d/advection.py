@@ -50,8 +50,10 @@ def cout_advection(cin, flow, aquifer_pore_volume, retardation_factor=1.0, resam
     pandas.Series
         Concentration of the compound in the extracted water [ng/m3].
     """
-    rt_infiltration = residence_time_retarded(flow, aquifer_pore_volume, retardation_factor, direction="infiltration")
-    rt = pd.to_timedelta(interp_series(rt_infiltration, cin.index), unit="D")
+    rt_float = residence_time_retarded(
+        flow, aquifer_pore_volume, index=cin.index, retardation_factor=retardation_factor, direction="infiltration"
+    )
+    rt = pd.to_timedelta(rt_float, unit="D")
     cout = pd.Series(data=cin.values, index=cin.index + rt, name="cout")
 
     if resample_dates is not None:
