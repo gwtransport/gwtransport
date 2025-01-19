@@ -5,8 +5,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy.stats import gamma
 
-from gwtransport1d.gamma import cout_advection_gamma
+from gwtransport1d.gamma import cout_advection_gamma, gamma_equal_mass_bins, gamma_mean_std_to_alpha_beta
 
 fp = Path(
     "/Users/bdestombe/Projects/bdestombe/python-pwn-productiecapaciteit-infiltratiegebieden/productiecapaciteit/data/Merged/IK93.feather"
@@ -16,51 +17,54 @@ df = pd.read_feather(fp).set_index("Datum")
 df.index = pd.to_datetime(df.index)
 
 isspui = ~np.isclose(df.spui, 0.0)
-# spui_period_indices = find_consecutive_true_ranges(isspui, timestamp_at_end_of_index=True)
-# spui_period_times = df.index[spui_period_indices.flatten()]
-# df["rt_infiltration"] = residence_time_retarded(df.Q, 1300 * 8, 2, direction="infiltration")[0]
-# rt = pd.to_timedelta(interp_series(df["rt_infiltration"], spui_period_times), unit="D")
-# projected_period_times = (spui_period_times + rt).values.reshape((-1, 2))
-
 
 # Define Gamma distribution for aquifer pore volume
 alpha, beta, n_bins = 10.0, 140.0 * 4, 100
 retardation_factor = 2.0
-rt_est = alpha * beta / df["Q"].mean() * retardation_factor
 
+spuiin_fraction = np.clip(a=df.spui / df.Q, a_min=0.0, a_max=1.0, where=df.Q.values > 0.)
 
-tout = cout_advection_gamma(df.T_bodem, df.Q, alpha, beta, n_bins=100, retardation_factor=2.0)
+means = 9000, 9000, 9000
+stds = 4000, 6000, 8000
 
-alphas = [8, 8, 8]
-betas = [1300, 1000, 1500]
+fig, (ax1, ax2) = plt.subplots(2, 1, sharex=False, sharey=False)
+secax = ax2.secondary_xaxis(
+    'top',
+    functions=(
+        lambda x: x / df.Q.median(),
+        lambda x: x * df.Q.median()
+    )
+)
 
-for _alpha, _beta in zip(alphas, betas, strict=True):
-    rt = _alpha * _beta / df["Q"].mean() * retardation_factor
-    tout = cout_advection_gamma(df.T_bodem, df.Q, _alpha, _beta, n_bins=100, retardation_factor=2.0)
+for i, (mean, std) in enumerate(zip(means, stds, strict=False)):
+    c = f"C{i}"
+    label = f"mean={mean:.0f}, std={std:.0f}"
+    alpha, beta = gamma_mean_std_to_alpha_beta(mean, std)
+
+    tout = cout_advection_gamma(df.T_bodem, df.Q, alpha, beta, n_bins=100, retardation_factor=2.0)
+
+    spuiout_fraction = cout_advection_gamma(isspui.astype(float), df.Q, alpha, beta, n_bins=n_bins, retardation_factor=2.0)
+    isspuiout = spuiout_fraction > 0.05
+    tout[isspuiout] = np.nan
+
     err = ((tout - df.T_bodem) ** 2).sum()
-    print(rt, _alpha, _beta, err)  # noqa: T201
-    plt.plot(df.index, tout, label=f"alpha={_alpha:.0f}, beta={_beta:.0f}")
+    ax1.plot(df.index, tout, lw=0.5, label=label, c=c)
 
-plt.plot(df.index, df.gwt0, c="C3", label="gwt0")
-plt.legend()
-plt.show()
+    # plot distribution
+    bins = gamma_equal_mass_bins(alpha, beta, n_bins)
+    x = np.linspace(0.0, gamma.ppf(0.99, alpha, scale=beta), 100)
+    ax2.plot(x, gamma.pdf(x, alpha, scale=beta), c=c, lw=0.5, label=label)
 
-# plt.figure()
-# plt.plot(df.index, df.T_bodem, c="C2", label="T_bodem")
-# plt.plot(df.index, df.gwt0, c="C3", label="gwt0")
-# plt.plot(df.index, tout, c="C1", label="mean1")
-# plt.legend()
+ax1.plot(df.index, df.gwt0, c="C3", lw=0.5, label="gwt0")
 
-# plt.show()
+ax1.xaxis.tick_top()
+secax.tick_params(axis="x", direction="in", pad=-15)
+secax.set_xlabel("Residence time with constant median flow [days]")
+ax1.set_ylabel("Temperature [°C]")
+ax2.set_ylabel("Probability density of flow [-]")
+ax2.set_xlabel("Aquifer pore volume [m$^3$]")
+ax1.legend(fontsize = 'x-small', loc="upper right")
+ax2.legend(fontsize = 'x-small', loc="lower right")
+plt.savefig("testje.png", dpi=300)
 
-# def fun(x):
-#     print(x)
-#     _alpha, _beta = x
-#     out = (get_cout_advection_gamma(df.T_bodem, df.Q, _alpha, _beta, n_bins=100, retardation_factor=2.0) - df.T_bodem).values
-#     out[np.isnan(out)] = 0.0
-#     out[np.isinf(out)] = 0.0
-#     return out
-
-# res = fsolve(fun, x0=[alpha, beta])
-# res = least_squares(fun, x0=[alpha, beta], loss='cauchy', gtol=None, verbose=2)
-# print(res)
+print("done")

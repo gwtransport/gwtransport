@@ -63,56 +63,6 @@ def linear_interpolate(x_ref, y_ref, x_query, left=None, right=None):
     return y_query
 
 
-def find_consecutive_true_ranges(bool_series, *, timestamp_at_end_of_index=True):
-    """
-    Find consecutive segments in the given boolean series that are True, and return their start and end indices.
-
-    Parameters
-    ----------
-    bool_series : array-like of bool
-        A sequence of boolean values indicating where to identify
-        consecutive True segments.
-    timestamp_at_end_of_index : bool, optional
-        Set to True if the timestamp is at the end of the period. At PWN the case for flow data.
-
-    Returns
-    -------
-    array
-        An array of shape (n_segments, 2) where each row contains the start
-        and end index of a consecutive True segment.
-
-    Notes
-    -----
-    If the series starts with True, this function accounts for the first
-    index as a potential start. Likewise, if the series ends with True, that
-    last index is considered a valid ending for a segment.
-    """
-    # Convert to numpy array if it's not already
-    arr = np.asarray(bool_series)
-
-    # Find the boundaries where values change
-    # This gives us True where the value changes from False to True or True to False
-    changes = np.diff(arr.astype(int))
-
-    # Find start indices (where value changes from 0 to 1)
-    start_idx = np.where(changes == 1)[0] if timestamp_at_end_of_index else np.where(changes == 1)[0] + 1
-
-    # Find end indices (where value changes from 1 to -1)
-    end_idx = np.where(changes == -1)[0]
-
-    # Handle edge cases
-    # If series starts with True, add 0 as start index
-    if arr[0]:
-        start_idx = np.insert(start_idx, 0, 0)
-
-    # If series ends with True, add last index as end index
-    if arr[-1]:
-        end_idx = np.append(end_idx, len(arr) - 1)
-
-    # Return as list of tuples (start, end)
-    return np.stack((start_idx, end_idx), axis=-1)
-
-
 def interp_series(series, index_new, **interp1d_kwargs):
     """
     Interpolate a pandas.Series to a new index.
