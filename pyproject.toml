@@ -15,7 +15,7 @@ keywords = [
   "deposition",
 ]
 authors = [
-  { name = "Bas des Tombe", email = "bdestombegmail.com" },
+  { name = "Bas des Tombe", email = "bdestombe@gmail.com" },
 ]
 classifiers = [
   "Programming Language :: Python :: 3.10",
