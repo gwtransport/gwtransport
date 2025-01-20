@@ -1,20 +1,28 @@
 name: Build and release package
 
-on: push
+on:
+  workflow_run:
+    workflows: [Functional Testing]
+    types:
+      - completed
 
 jobs:
   build:
     name: Build distribution 📦
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v5
       - name: Set up Python
         run: uv python install 3.12
+      - name: Install the project
+        run: uv sync --extra test
+      - name: Run ruff
+        run: uv run ruff check .
       - name: Build a binary wheel and a source tarball
         run: uv build --no-sources
       - name: Store the distribution packages
@@ -33,7 +41,6 @@ jobs:
       url: https://pypi.org/p/gwtransport1d
     permissions:
       id-token: write # IMPORTANT: mandatory for trusted publishing
-
     steps:
       - name: Download all the dists
         uses: actions/download-artifact@v4
