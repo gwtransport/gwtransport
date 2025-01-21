@@ -1,10 +1,10 @@
 name: Functional Testing
 
 on:
-    push:
-      branches: [ "main" ]
-    pull_request:
-      branches: [ "main" ]
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
 
 jobs:
   pytest:
@@ -16,7 +16,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
-          enable-cache: false  
+          enable-cache: false
       - name: Install the project
         run: uv sync --extra test
       - name: Run tests
