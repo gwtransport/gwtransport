@@ -27,5 +27,5 @@ jobs:
       - name: Prettier
         run: npx prettier --check "**/*.{yaml,yml,md}"
       - name: Prettier show diff
-        if: ${{ failure() }} && !(npx prettier --check "**/*.{yaml,yml,md}")
+        if: ${{ failure() }}
         run: npx prettier --write "**/*.{yaml,yml,md}" && git diff
