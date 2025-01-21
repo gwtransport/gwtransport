@@ -26,5 +26,7 @@ jobs:
         run: uv run validate-pyproject pyproject.toml
       - name: "Prettier"
         run: |
-          npx prettier --debug-check "**/*.{json5,yaml,yml}"
-          npx prettier --prose-wrap always --debug-check "**/*.md"
+          npx prettier --diff "**/*.{json5,yaml,yml}"
+          npx prettier --prose-wrap always --diff "**/*.md"
+          npx prettier --check "**/*.{json5,yaml,yml}"
+          npx prettier --prose-wrap always --check "**/*.md"
