@@ -25,7 +25,7 @@ jobs:
       - name: "Validate project metadata"
         run: uv run validate-pyproject pyproject.toml
       - name: Prettier
-        run: npx prettier --check "**/*.{yaml,yml,md}" && git diff
+        run: npx prettier --check "**/*.{yaml,yml,md}"
       - name: Prettier show diff
-        if: ${{ failure() }} &&
+        if: ${{ failure() }} && npx prettier --check "**/*.{yaml,yml,md}"
         run: npx prettier --write "**/*.{yaml,yml,md}" && git diff
