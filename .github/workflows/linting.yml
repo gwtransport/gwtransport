@@ -27,4 +27,4 @@ jobs:
       - name: "Prettier"
         run: |
           npx prettier --debug-check "**/*.{json5,yaml,yml}"
-          npx prettier --prose-wrap always --check "**/*.md"
+          npx prettier --prose-wrap always --debug-check "**/*.md"
