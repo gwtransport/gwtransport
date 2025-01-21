@@ -15,8 +15,16 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
-          enable-cache: false  
+          enable-cache: false
       - name: Install the project
         run: uv sync --extra test
+      - name: Python format
+        run: uv run ruff format --diff .
       - name: Run ruff
         run: uv run ruff check .
+      - name: "Validate project metadata"
+        run: uv run validate-pyproject pyproject.toml
+      - name: "Prettier"
+        run: |
+          npx prettier --check "**/*.{json5,yaml,yml}"
+          npx prettier --prose-wrap always --check "**/*.md"
