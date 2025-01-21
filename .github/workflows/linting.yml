@@ -27,4 +27,4 @@ jobs:
       - name: "Prettier"
         run: |
           npx prettier --write "**/*.{json5,yaml,yml}" && git diff
-          npx prettier --prose-wrap always --write "**/*.md" && git diff
+          npx prettier --write "**/*.md" && git diff
