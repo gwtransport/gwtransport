@@ -26,5 +26,4 @@ jobs:
         run: uv run validate-pyproject pyproject.toml
       - name: "Prettier"
         run: |
-          npx prettier --write "**/*.{json5,yaml,yml}" && git diff
-          npx prettier --write "**/*.md" && git diff
+          npx prettier --write "**/*.{yaml,yml,md}" && git diff
