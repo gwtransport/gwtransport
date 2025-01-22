@@ -4,7 +4,7 @@ import numpy as np
 from scipy import ndimage, sparse
 
 
-def gaussian_filter_variable_sigma(input_signal, sigma_array, mode="nearest", truncate=4.0):
+def gaussian_filter_variable_sigma(input_signal, sigma_array, truncate=4.0):
     """Apply Gaussian filter with position-dependent sigma values.
 
     This function extends scipy.ndimage.gaussian_filter1d by allowing the standard
@@ -20,9 +20,6 @@ def gaussian_filter_variable_sigma(input_signal, sigma_array, mode="nearest", tr
         One-dimensional array of standard deviation values, must have same length
         as input_signal. Each value specifies the Gaussian kernel width at the
         corresponding position.
-    mode : {'reflect', 'constant', 'nearest', 'mirror', 'wrap'}, optional
-        The mode parameter determines how the input array is extended when
-        the filter overlaps a border. Default is 'nearest'.
     truncate : float, optional
         Truncate the filter at this many standard deviations.
         Default is 4.0.
@@ -34,6 +31,9 @@ def gaussian_filter_variable_sigma(input_signal, sigma_array, mode="nearest", tr
 
     Notes
     -----
+    At the boundaries, the outer values are repeated to avoid edge effects. Equal to mode=`nearest`
+    in `scipy.ndimage.gaussian_filter1d`.
+
     The function constructs a sparse convolution matrix where each row represents
     a position-specific Gaussian kernel. The kernel width adapts to local sigma
     values, making it suitable for problems with varying diffusion coefficients
@@ -69,10 +69,6 @@ def gaussian_filter_variable_sigma(input_signal, sigma_array, mode="nearest", tr
     """
     if len(input_signal) != len(sigma_array):
         msg = "Input signal and sigma array must have the same length"
-        raise ValueError(msg)
-
-    if mode not in {"reflect", "constant", "nearest", "mirror", "wrap"}:
-        msg = f"Invalid mode: {mode}"
         raise ValueError(msg)
 
     n = len(input_signal)
@@ -115,20 +111,6 @@ def gaussian_filter_variable_sigma(input_signal, sigma_array, mode="nearest", tr
     absolute_positions = center_positions + relative_positions
 
     # Handle boundary conditions
-    if mode == "wrap":
-        absolute_positions %= n
-    elif mode == "reflect":
-        absolute_positions = np.clip(absolute_positions, 0, n - 1)
-        reflect_mask = absolute_positions >= n
-        absolute_positions[reflect_mask] = 2 * (n - 1) - absolute_positions[reflect_mask]
-        reflect_mask = absolute_positions < 0
-        absolute_positions[reflect_mask] = -absolute_positions[reflect_mask]
-    elif mode == "constant":
-        valid_mask = (absolute_positions >= 0) & (absolute_positions < n)
-        weights[~valid_mask] = 0
-    elif mode == "mirror":
-        absolute_positions = np.clip(absolute_positions, 0, n - 1)
-    # 'nearest' is handled by clipping
     absolute_positions = np.clip(absolute_positions, 0, n - 1)
 
     # Create coordinate arrays for sparse matrix

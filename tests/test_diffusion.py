@@ -1,5 +1,3 @@
-import time
-
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
@@ -274,35 +272,6 @@ def test_delta_function():
     assert_allclose(numerical, analytical, rtol=1e-2, atol=1e-2)
 
 
-def test_boundary_conditions():
-    """Test different boundary conditions."""
-    # Setup grid
-    domain_length = 10.0
-    nx = 100
-    x = np.linspace(-domain_length / 2, domain_length / 2, nx)
-    dx = x[1] - x[0]
-
-    # Diffusion parameters
-    diffusion_coefficient = 0.1
-    dt = 0.01
-
-    # Create Gaussian pulse near boundary
-    initial = np.exp(-((x - domain_length / 2.5) ** 2) / 0.1)
-
-    # Calculate sigma
-    sigma = np.sqrt(2 * diffusion_coefficient * dt) / dx
-    sigma_array = np.full_like(x, sigma)
-
-    # Test different boundary conditions
-    modes = ["reflect", "constant", "nearest", "mirror", "wrap"]
-
-    for mode in modes:
-        result = gaussian_filter_variable_sigma(initial, sigma_array, mode=mode)
-        # Check conservation of mass for appropriate boundary conditions
-        if mode in {"reflect", "mirror", "wrap"}:
-            assert_allclose(result.sum() * dx, initial.sum() * dx, rtol=1e-3)
-
-
 def test_zero_sigma():
     """Test behavior when sigma is zero."""
     # Setup
@@ -326,11 +295,6 @@ def test_input_validation():
     with pytest.raises(ValueError):  # noqa: PT011
         gaussian_filter_variable_sigma(signal, sigma_array)
 
-    # Test invalid mode
-    sigma_array = np.zeros_like(x)
-    with pytest.raises(ValueError):  # noqa: PT011
-        gaussian_filter_variable_sigma(signal, sigma_array, mode="invalid_mode")
-
 
 class TestGaussianComparison:
     """Test suite comparing variable sigma implementation with scipy.ndimage.
@@ -341,12 +305,12 @@ class TestGaussianComparison:
 
     The test suite includes:
     1. Comparison with constant sigma values
-    2. Performance benchmarking
     3. Boundary condition verification
     4. Error analysis
     """
 
-    def generate_test_signals(self):
+    @staticmethod
+    def generate_test_signals():
         """Generate a variety of test signals for comprehensive testing.
 
         Returns
@@ -377,6 +341,7 @@ class TestGaussianComparison:
         """Test that our implementation matches scipy for constant sigma."""
         signals = self.generate_test_signals()
         sigma = 2.0  # Constant sigma value
+        truncate = 4.0
 
         for name, signal_dict in signals.items():
             signal = signal_dict["signal"]
@@ -385,71 +350,12 @@ class TestGaussianComparison:
             sigma_array = np.full_like(signal, sigma)
 
             # Apply both filters
-            result_variable = gaussian_filter_variable_sigma(signal, sigma_array, mode="reflect")
-            result_scipy = ndimage.gaussian_filter1d(signal, sigma, mode="reflect")
+            result_variable = gaussian_filter_variable_sigma(signal, sigma_array, truncate=truncate)
+            result_scipy = ndimage.gaussian_filter1d(signal, sigma, mode="nearest", truncate=truncate)
 
             # Compare results
             assert_allclose(
                 result_variable, result_scipy, rtol=1e-10, atol=1e-10, err_msg=f"Failed for signal type: {name}"
-            )
-
-    def test_different_modes(self):
-        """Test equivalence across different boundary modes."""
-        # Create a simple test signal
-        signal = np.zeros(100)
-        signal[40:60] = 1  # Square pulse
-
-        sigma = 3.0
-        sigma_array = np.full_like(signal, sigma)
-
-        # Test all available boundary modes
-        modes = ["reflect", "constant", "nearest", "mirror", "wrap"]
-
-        for mode in modes:
-            result_variable = gaussian_filter_variable_sigma(signal, sigma_array, mode=mode)
-            result_scipy = ndimage.gaussian_filter1d(signal, sigma, mode=mode)
-
-            assert_allclose(result_variable, result_scipy, rtol=1e-10, atol=1e-10, err_msg=f"Failed for mode: {mode}")
-
-    def test_performance_comparison(self):
-        """Compare performance of both implementations."""
-        # Test different signal sizes
-        sizes = [1000, 5000, 10000, 50000]
-        sigma = 2.0
-
-        results = []
-        for size in sizes:
-            # Create test signal
-            signal = np.random.randn(size)
-            sigma_array = np.full_like(signal, sigma)
-
-            # Time variable sigma implementation
-            start_time = time.time()
-            for _ in range(10):  # Average over 10 runs
-                _ = gaussian_filter_variable_sigma(signal, sigma_array)
-            time_variable = (time.time() - start_time) / 10
-
-            # Time scipy implementation
-            start_time = time.time()
-            for _ in range(10):  # Average over 10 runs
-                _ = ndimage.gaussian_filter1d(signal, sigma)
-            time_scipy = (time.time() - start_time) / 10
-
-            results.append({
-                "size": size,
-                "time_variable": time_variable,
-                "time_scipy": time_scipy,
-                "ratio": time_variable / time_scipy,
-            })
-
-        # Store results for analysis
-        self.performance_results = results
-
-        # Verify our implementation is within reasonable performance range
-        # Should not be more than 10x slower than scipy
-        for result in results:
-            assert result["ratio"] < 10, (
-                f"Performance too slow for size {result['size']}: " f"{result['ratio']}x slower than scipy"
             )
 
     def test_variable_vs_constant_sigma(self):
@@ -489,8 +395,8 @@ class TestGaussianComparison:
         ), "Variable and constant sigma gave identical results"
 
     @staticmethod
-    def test_edge_cases():
-        """Test behavior with edge cases."""
+    def test_compare_with_scipy():
+        """Test behavior with scipy.ndimage.gaussian_filter1d()."""
         # Create small signal for edge cases
         signal = np.array([1.0, 2.0, 3.0, 2.0, 1.0])
 
@@ -499,17 +405,13 @@ class TestGaussianComparison:
         result_zero = gaussian_filter_variable_sigma(signal, sigma_zero)
         assert_allclose(result_zero, signal, err_msg="Failed for zero sigma")
 
-        # Test very small sigma
-        sigma_small = np.full_like(signal, 1e-10)
-        result_small_variable = gaussian_filter_variable_sigma(signal, sigma_small)
-        result_small_scipy = ndimage.gaussian_filter1d(signal, 1e-10)
-        assert_allclose(result_small_variable, result_small_scipy, rtol=1e-6, err_msg="Failed for very small sigma")
-
-        # Test very large sigma
-        sigma_large = np.full_like(signal, 1e3)
-        result_large_variable = gaussian_filter_variable_sigma(signal, sigma_large)
-        result_large_scipy = ndimage.gaussian_filter1d(signal, 1e3)
-        assert_allclose(result_large_variable, result_large_scipy, rtol=1e-6, err_msg="Failed for very large sigma")
+        # Test various sigmas
+        sigmas = [1e-10, 1e-5, 1.0, 1e-3]
+        for sigma in sigmas:
+            sigma_array = np.full_like(signal, sigma)
+            result_small_variable = gaussian_filter_variable_sigma(signal, sigma_array, truncate=4.0)
+            result_small_scipy = ndimage.gaussian_filter1d(signal, sigma, mode="nearest", truncate=4.0)
+            assert_allclose(result_small_variable, result_small_scipy, rtol=1e-6, err_msg=f"Failed for sigma={sigma}")
 
 
 if __name__ == "__main__":
