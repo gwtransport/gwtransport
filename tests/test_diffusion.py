@@ -132,7 +132,11 @@ class AnalyticalSolutions:
         if np.isscalar(t):
             t = np.full_like(x, t)
 
-        return amplitude / np.sqrt(4 * np.pi * diffusion_coefficient * t) * np.exp(-((x - x0) ** 2) / (4 * diffusion_coefficient * t))
+        return (
+            amplitude
+            / np.sqrt(4 * np.pi * diffusion_coefficient * t)
+            * np.exp(-((x - x0) ** 2) / (4 * diffusion_coefficient * t))
+        )
 
 
 def test_gaussian_pulse_constant_time():
