@@ -4,7 +4,7 @@ import numpy as np
 from scipy import ndimage, sparse
 
 
-def gaussian_filter_variable_sigma(input_signal, sigma_array, mode="reflect", truncate=4.0):
+def gaussian_filter_variable_sigma(input_signal, sigma_array, mode="nearest", truncate=4.0):
     """Apply Gaussian filter with position-dependent sigma values.
 
     This function extends scipy.ndimage.gaussian_filter1d by allowing the standard
@@ -22,7 +22,7 @@ def gaussian_filter_variable_sigma(input_signal, sigma_array, mode="reflect", tr
         corresponding position.
     mode : {'reflect', 'constant', 'nearest', 'mirror', 'wrap'}, optional
         The mode parameter determines how the input array is extended when
-        the filter overlaps a border. Default is 'reflect'.
+        the filter overlaps a border. Default is 'nearest'.
     truncate : float, optional
         Truncate the filter at this many standard deviations.
         Default is 4.0.
