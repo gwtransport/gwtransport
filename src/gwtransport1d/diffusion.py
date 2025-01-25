@@ -13,7 +13,7 @@ def compute_diffusion(
     cin,
     flow,
     aquifer_pore_volume,
-    diffusion_coefficient=0.1,
+    diffusivity=0.1,
     retardation_factor=1.0,
     aquifer_length=80.0,
     porosity=0.35,
@@ -28,8 +28,8 @@ def compute_diffusion(
         Flow rate of water in the aquifer [m3/day].
     aquifer_pore_volume : float
         Pore volume of the aquifer [m3].
-    diffusion_coefficient : float, optional
-        Diffusion coefficient of the compound in the aquifer [m2/day]. Default is 0.1.
+    diffusivity : float, optional
+        diffusivity of the compound in the aquifer [m2/day]. Default is 0.1.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
     aquifer_length : float, optional
@@ -45,7 +45,7 @@ def compute_diffusion(
     sigma_array = compute_sigma_array(
         flow=flow,
         aquifer_pore_volume=aquifer_pore_volume,
-        diffusion_coefficient=diffusion_coefficient,
+        diffusivity=diffusivity,
         retardation_factor=retardation_factor,
         aquifer_length=aquifer_length,
         porosity=porosity,
@@ -54,7 +54,7 @@ def compute_diffusion(
 
 
 def compute_sigma_array(
-    flow, aquifer_pore_volume, diffusion_coefficient=0.1, retardation_factor=1.0, aquifer_length=80.0, porosity=0.35
+    flow, aquifer_pore_volume, diffusivity=0.1, retardation_factor=1.0, aquifer_length=80.0, porosity=0.35
 ):
     """Compute sigma values for diffusion based on flow and aquifer properties.
 
@@ -64,8 +64,8 @@ def compute_sigma_array(
         Flow rate of water in the aquifer [m3/day].
     aquifer_pore_volume : float
         Pore volume of the aquifer [m3].
-    diffusion_coefficient : float, optional
-        Diffusion coefficient of the compound in the aquifer [m2/day]. Default is 0.1.
+    diffusivity : float, optional
+        diffusivity of the compound in the aquifer [m2/day]. Default is 0.1.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
     aquifer_length : float, optional
@@ -90,7 +90,7 @@ def compute_sigma_array(
     volume_infiltrated_at_departure = flow * timedelta_at_departure
     cross_sectional_area = aquifer_pore_volume / aquifer_length
     dx = volume_infiltrated_at_departure / cross_sectional_area / porosity
-    sigma_array = np.sqrt(2 * diffusion_coefficient * residence_time) / dx
+    sigma_array = np.sqrt(2 * diffusivity * residence_time) / dx
     return np.clip(a=sigma_array.values, a_min=0.0, a_max=100)
 
 
@@ -126,12 +126,12 @@ def gaussian_filter_variable_sigma(input_signal, sigma_array, truncate=4.0):
 
     The function constructs a sparse convolution matrix where each row represents
     a position-specific Gaussian kernel. The kernel width adapts to local sigma
-    values, making it suitable for problems with varying diffusion coefficients
+    values, making it suitable for problems with varying diffusivitys
     or time steps.
 
     For diffusion problems, the local sigma values can be calculated as:
-    sigma = sqrt(2 * diffusion_coefficient * dt) / dx
-    where diffusion_coefficient is the diffusion coefficient, dt is the time step, and dx is the
+    sigma = sqrt(2 * diffusivity * dt) / dx
+    where diffusivity is the diffusivity, dt is the time step, and dx is the
     spatial step size.
 
     The implementation uses sparse matrices for memory efficiency when dealing
@@ -149,10 +149,10 @@ def gaussian_filter_variable_sigma(input_signal, sigma_array, truncate=4.0):
     >>> signal = np.exp(-((x - 3) ** 2)) + 0.5 * np.exp(-((x - 7) ** 2) / 0.5)
 
     >>> # Create position-dependent sigma values
-    >>> diffusion_coefficient = 0.1  # Diffusion coefficient
+    >>> diffusivity = 0.1  # diffusivity
     >>> dt = 0.001 * (1 + np.sin(2 * np.pi * x / 10))  # Varying time steps
     >>> dx = x[1] - x[0]
-    >>> sigma_array = np.sqrt(2 * diffusion_coefficient * dt) / dx
+    >>> sigma_array = np.sqrt(2 * diffusivity * dt) / dx
 
     >>> # Apply the filter
     >>> filtered = gaussian_filter_variable_sigma(signal, sigma_array)
@@ -228,7 +228,7 @@ def gaussian_filter_variable_sigma(input_signal, sigma_array, truncate=4.0):
     return conv_matrix.dot(input_signal)
 
 
-def create_example_diffusion_data(nx=1000, domain_length=10.0, diffusion_coefficient=0.1):
+def create_example_diffusion_data(nx=1000, domain_length=10.0, diffusivity=0.1):
     """Create example data for demonstrating variable-sigma diffusion.
 
     Parameters
@@ -237,8 +237,8 @@ def create_example_diffusion_data(nx=1000, domain_length=10.0, diffusion_coeffic
         Number of spatial points. Default is 1000.
     domain_length : float, optional
         Domain length. Default is 10.0.
-    diffusion_coefficient : float, optional
-        Diffusion coefficient. Default is 0.1.
+    diffusivity : float, optional
+        diffusivity. Default is 0.1.
 
     Returns
     -------
@@ -269,7 +269,7 @@ def create_example_diffusion_data(nx=1000, domain_length=10.0, diffusion_coeffic
     dt = 0.001 * (1 + np.sin(2 * np.pi * x / domain_length))
 
     # Calculate corresponding sigma values
-    sigma_array = np.sqrt(2 * diffusion_coefficient * dt) / dx
+    sigma_array = np.sqrt(2 * diffusivity * dt) / dx
 
     return x, signal, sigma_array, dt
 

@@ -1,4 +1,5 @@
-"""Compute the diffusion coefficient from the temperature profile in the aquifer."""
+"""Compute the diffusivity from the temperature profile in the aquifer."""
+
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -19,12 +20,12 @@ aquifer_pore_volume = 216000
 retardation_factor = 2.0
 aquifer_length = 80.0  # [m] average stream flow length
 porosity = 0.35  # [-] porosity of the aquifer
-diffusion_coefficient_heat = (
+diffusivity_heat = (
     4.85 ** (1 - porosity) * 0.58**porosity / ((1 - porosity) * 2710 * 835 + porosity * 1000 * 4183) * 3600 * 24
 )
-diffusion_coefficient = diffusion_coefficient_heat
+diffusivity = diffusivity_heat
 
-cout = compute_diffusion(df.T_bodem, df.Q, aquifer_pore_volume, diffusion_coefficient, retardation_factor)
+cout = compute_diffusion(df.T_bodem, df.Q, aquifer_pore_volume, diffusivity, retardation_factor)
 df["cout"] = cout
 
 df[["T_bodem", "cout"]].plot()

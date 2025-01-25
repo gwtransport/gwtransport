@@ -17,18 +17,18 @@ class AnalyticalSolutions:
     Notes
     -----
     The diffusion equation:
-        ∂c/∂t = diffusion_coefficient ∂²c/∂x²
+        ∂c/∂t = diffusivity ∂²c/∂x²
 
     Has a fundamental solution (Green's function):
         c(x,t) = 1/sqrt(4πDt) * exp(-x²/(4Dt))
 
-    For variable diffusion coefficients or time steps, we can use the
+    For variable diffusivitys or time steps, we can use the
     relationship:
         sigma = sqrt(2Dt)/dx
     """
 
     @staticmethod
-    def gaussian_pulse(x, t, diffusion_coefficient, x0, amplitude, width):
+    def gaussian_pulse(x, t, diffusivity, x0, amplitude, width):
         """Analytical solution for initial Gaussian pulse.
 
         Parameters
@@ -37,8 +37,8 @@ class AnalyticalSolutions:
             Spatial coordinates
         t : float or ndarray
             Time or array of times
-        diffusion_coefficient : float
-            Diffusion coefficient
+        diffusivity : float
+            diffusivity
         x0 : float
             Initial center position
         amplitude : float
@@ -63,11 +63,11 @@ class AnalyticalSolutions:
         if np.isscalar(t):
             t = np.full_like(x, t)
 
-        new_width = np.sqrt(width**2 + 2 * diffusion_coefficient * t)
+        new_width = np.sqrt(width**2 + 2 * diffusivity * t)
         return amplitude * width / new_width * np.exp(-((x - x0) ** 2) / (2 * new_width**2))
 
     @staticmethod
-    def step_function(x, t, diffusion_coefficient, x0):
+    def step_function(x, t, diffusivity, x0):
         """Analytical solution for initial step function.
 
         Parameters
@@ -76,8 +76,8 @@ class AnalyticalSolutions:
             Spatial coordinates
         t : float or ndarray
             Time or array of times
-        diffusion_coefficient : float
-            Diffusion coefficient
+        diffusivity : float
+            diffusivity
         x0 : float
             Position of step
 
@@ -97,10 +97,10 @@ class AnalyticalSolutions:
         if np.isscalar(t):
             t = np.full_like(x, t)
 
-        return 0.5 * (1 + special.erf((x - x0) / np.sqrt(4 * diffusion_coefficient * t)))
+        return 0.5 * (1 + special.erf((x - x0) / np.sqrt(4 * diffusivity * t)))
 
     @staticmethod
-    def delta_function(x, t, diffusion_coefficient, x0, amplitude=1.0):
+    def delta_function(x, t, diffusivity, x0, amplitude=1.0):
         """Analytical solution for initial delta function.
 
         Parameters
@@ -109,8 +109,8 @@ class AnalyticalSolutions:
             Spatial coordinates
         t : float or ndarray
             Time or array of times
-        diffusion_coefficient : float
-            Diffusion coefficient
+        diffusivity : float
+            diffusivity
         x0 : float
             Position of delta function
         amplitude : float, optional
@@ -132,11 +132,7 @@ class AnalyticalSolutions:
         if np.isscalar(t):
             t = np.full_like(x, t)
 
-        return (
-            amplitude
-            / np.sqrt(4 * np.pi * diffusion_coefficient * t)
-            * np.exp(-((x - x0) ** 2) / (4 * diffusion_coefficient * t))
-        )
+        return amplitude / np.sqrt(4 * np.pi * diffusivity * t) * np.exp(-((x - x0) ** 2) / (4 * diffusivity * t))
 
 
 def test_gaussian_pulse_constant_time():
@@ -148,7 +144,7 @@ def test_gaussian_pulse_constant_time():
     dx = x[1] - x[0]
 
     # Diffusion parameters
-    diffusion_coefficient = 0.1
+    diffusivity = 0.1
     dt = 0.01
     t = dt
 
@@ -158,17 +154,17 @@ def test_gaussian_pulse_constant_time():
     width = 0.5
 
     # Create initial condition
-    initial = AnalyticalSolutions.gaussian_pulse(x, 0, diffusion_coefficient, x0, amplitude, width)
+    initial = AnalyticalSolutions.gaussian_pulse(x, 0, diffusivity, x0, amplitude, width)
 
     # Calculate sigma for our filter
-    sigma = np.sqrt(2 * diffusion_coefficient * dt) / dx
+    sigma = np.sqrt(2 * diffusivity * dt) / dx
     sigma_array = np.full_like(x, sigma)
 
     # Apply our filter
     numerical = gaussian_filter_variable_sigma(initial, sigma_array)
 
     # Calculate analytical solution
-    analytical = AnalyticalSolutions.gaussian_pulse(x, t, diffusion_coefficient, x0, amplitude, width)
+    analytical = AnalyticalSolutions.gaussian_pulse(x, t, diffusivity, x0, amplitude, width)
 
     # Compare solutions
     assert_allclose(numerical, analytical, rtol=1e-3, atol=1e-3)
@@ -183,7 +179,7 @@ def test_gaussian_pulse_variable_time():
     dx = x[1] - x[0]
 
     # Diffusion parameters
-    diffusion_coefficient = 0.1
+    diffusivity = 0.1
     # Time steps vary sinusoidally
     dt = 0.01 * (1 + 0.5 * np.sin(2 * np.pi * x / domain_length))
 
@@ -193,16 +189,16 @@ def test_gaussian_pulse_variable_time():
     width = 0.5
 
     # Create initial condition
-    initial = AnalyticalSolutions.gaussian_pulse(x, 0, diffusion_coefficient, x0, amplitude, width)
+    initial = AnalyticalSolutions.gaussian_pulse(x, 0, diffusivity, x0, amplitude, width)
 
     # Calculate variable sigma values
-    sigma_array = np.sqrt(2 * diffusion_coefficient * dt) / dx
+    sigma_array = np.sqrt(2 * diffusivity * dt) / dx
 
     # Apply our filter
     numerical = gaussian_filter_variable_sigma(initial, sigma_array)
 
     # Calculate analytical solution at each point with its local time
-    analytical = AnalyticalSolutions.gaussian_pulse(x, dt, diffusion_coefficient, x0, amplitude, width)
+    analytical = AnalyticalSolutions.gaussian_pulse(x, dt, diffusivity, x0, amplitude, width)
 
     # Compare solutions
     assert_allclose(numerical, analytical, rtol=1e-3, atol=1e-3)
@@ -217,7 +213,7 @@ def test_step_function():
     dx = x[1] - x[0]
 
     # Diffusion parameters
-    diffusion_coefficient = 0.1
+    diffusivity = 0.1
     dt = 20.0
     t = dt
 
@@ -225,14 +221,14 @@ def test_step_function():
     initial = np.heaviside(x, 1.0)
 
     # Calculate sigma for our filter
-    sigma = np.sqrt(2 * diffusion_coefficient * dt) / dx
+    sigma = np.sqrt(2 * diffusivity * dt) / dx
     sigma_array = np.full_like(x, sigma)
 
     # Apply our filter
     numerical = gaussian_filter_variable_sigma(initial, sigma_array, truncate=10.0)
 
     # Calculate analytical solution
-    analytical = AnalyticalSolutions.step_function(x, t, diffusion_coefficient, 0.0)
+    analytical = AnalyticalSolutions.step_function(x, t, diffusivity, 0.0)
 
     # Compare solutions
     assert_allclose(numerical, analytical, rtol=1e-6, atol=1e-6)
@@ -247,7 +243,7 @@ def test_delta_function():
     dx = x[1] - x[0]
 
     # Diffusion parameters
-    diffusion_coefficient = 0.2
+    diffusivity = 0.2
     dt = 0.01
     t = dt
 
@@ -258,14 +254,14 @@ def test_delta_function():
     initial[center_idx] = 1.0 / dx  # Normalize by dx
 
     # Calculate sigma for our filter
-    sigma = np.sqrt(2 * diffusion_coefficient * dt) / dx
+    sigma = np.sqrt(2 * diffusivity * dt) / dx
     sigma_array = np.full_like(x, sigma)
 
     # Apply our filter
     numerical = gaussian_filter_variable_sigma(initial, sigma_array)
 
     # Calculate analytical solution
-    analytical = AnalyticalSolutions.delta_function(x, t, diffusion_coefficient, x0)
+    analytical = AnalyticalSolutions.delta_function(x, t, diffusivity, x0)
 
     # Compare solutions
     # Use larger tolerance due to discrete approximation of delta function
