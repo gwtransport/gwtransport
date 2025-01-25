@@ -15,6 +15,8 @@ fp = Path(
 df = pd.read_feather(fp).set_index("Datum")
 # df = df.groupby(df.index.date).mean()
 df.index = pd.to_datetime(df.index)
+df.Q *= 24.0  # m3/day
+df.spui *= 24.0  # m3/day
 
 isspui = ~np.isclose(df.spui, 0.0)
 
@@ -25,8 +27,8 @@ explainable_fraction = 0.95  # Fraction of the spui that can be explained by the
 
 spuiin_fraction = np.clip(a=df.spui / df.Q, a_min=0.0, a_max=1.0, where=df.Q.values > 0.0)
 
-means = 9000, 9000, 9000
-stds = 4000, 6000, 8000
+means = 216000, 216000, 216000
+stds = 96000, 144000, 192000
 
 fig, (ax1, ax2) = plt.subplots(2, 1, sharex=False, sharey=False)
 secax = ax2.secondary_xaxis("top", functions=(lambda x: x / df.Q.median(), lambda x: x * df.Q.median()))

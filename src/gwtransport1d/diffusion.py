@@ -1,7 +1,97 @@
 """Module that implements diffusion."""
 
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from scipy import ndimage, sparse
+
+from gwtransport1d.residence_time import residence_time_retarded
+from gwtransport1d.utils import diff
+
+
+def compute_diffusion(
+    cin,
+    flow,
+    aquifer_pore_volume,
+    diffusion_coefficient=0.1,
+    retardation_factor=1.0,
+    aquifer_length=80.0,
+    porosity=0.35,
+):
+    """Compute the diffusion of a compound during 1D transport in the aquifer.
+
+    Parameters
+    ----------
+    cin : pandas.Series
+        Concentration or temperature of the compound in the infiltrating water [ng/m3].
+    flow : pandas.Series
+        Flow rate of water in the aquifer [m3/day].
+    aquifer_pore_volume : float
+        Pore volume of the aquifer [m3].
+    diffusion_coefficient : float, optional
+        Diffusion coefficient of the compound in the aquifer [m2/day]. Default is 0.1.
+    retardation_factor : float, optional
+        Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
+    aquifer_length : float, optional
+        Length of the aquifer [m]. Default is 80.0.
+    porosity : float, optional
+        Porosity of the aquifer [dimensionless]. Default is 0.35.
+
+    Returns
+    -------
+    pandas.Series
+        Concentration of the compound in the extracted water [ng/m3].
+    """
+    sigma_array = compute_sigma_array(
+        flow=flow,
+        aquifer_pore_volume=aquifer_pore_volume,
+        diffusion_coefficient=diffusion_coefficient,
+        retardation_factor=retardation_factor,
+        aquifer_length=aquifer_length,
+        porosity=porosity,
+    )
+    return gaussian_filter_variable_sigma(cin.values, sigma_array, truncate=30.0)
+
+
+def compute_sigma_array(
+    flow, aquifer_pore_volume, diffusion_coefficient=0.1, retardation_factor=1.0, aquifer_length=80.0, porosity=0.35
+):
+    """Compute sigma values for diffusion based on flow and aquifer properties.
+
+    Parameters
+    ----------
+    flow : pandas.Series
+        Flow rate of water in the aquifer [m3/day].
+    aquifer_pore_volume : float
+        Pore volume of the aquifer [m3].
+    diffusion_coefficient : float, optional
+        Diffusion coefficient of the compound in the aquifer [m2/day]. Default is 0.1.
+    retardation_factor : float, optional
+        Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
+    aquifer_length : float, optional
+        Length of the aquifer [m]. Default is 80.0.
+    porosity : float, optional
+        Porosity of the aquifer [dimensionless]. Default is 0.35.
+
+    Returns
+    -------
+    array
+        Array of sigma values for diffusion.
+    """
+    residence_time = residence_time_retarded(
+        flow=flow,
+        aquifer_pore_volume=aquifer_pore_volume,
+        retardation_factor=retardation_factor,
+        direction="infiltration",
+        return_as_series=True,
+    )
+    residence_time = residence_time.interpolate(method="nearest").ffill().bfill()
+    timedelta_at_departure = diff(flow.index, alignment="right") / pd.to_timedelta(1, unit="D")
+    volume_infiltrated_at_departure = flow * timedelta_at_departure
+    cross_sectional_area = aquifer_pore_volume / aquifer_length
+    dx = volume_infiltrated_at_departure / cross_sectional_area / porosity
+    sigma_array = np.sqrt(2 * diffusion_coefficient * residence_time) / dx
+    return np.clip(a=sigma_array.values, a_min=0.0, a_max=100)
 
 
 def gaussian_filter_variable_sigma(input_signal, sigma_array, truncate=4.0):

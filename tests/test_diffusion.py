@@ -218,7 +218,7 @@ def test_step_function():
 
     # Diffusion parameters
     diffusion_coefficient = 0.1
-    dt = 0.01
+    dt = 20.0
     t = dt
 
     # Create initial condition (step at x=0)
@@ -229,13 +229,13 @@ def test_step_function():
     sigma_array = np.full_like(x, sigma)
 
     # Apply our filter
-    numerical = gaussian_filter_variable_sigma(initial, sigma_array)
+    numerical = gaussian_filter_variable_sigma(initial, sigma_array, truncate=10.0)
 
     # Calculate analytical solution
     analytical = AnalyticalSolutions.step_function(x, t, diffusion_coefficient, 0.0)
 
     # Compare solutions
-    assert_allclose(numerical, analytical, rtol=1e-3, atol=1e-3)
+    assert_allclose(numerical, analytical, rtol=1e-6, atol=1e-6)
 
 
 def test_delta_function():
