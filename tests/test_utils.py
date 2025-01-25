@@ -1,7 +1,7 @@
 import numpy as np
 from numpy.testing import assert_array_almost_equal
 
-from gwtransport1d.utils import linear_interpolate
+from gwtransport1d.utils import diff, linear_interpolate
 
 
 def test_linear_interpolate():
@@ -48,4 +48,34 @@ def test_linear_interpolate():
     expected = np.array([0, 10, 20])
 
     result = linear_interpolate(x_ref, y_ref, x_query)
+    assert_array_almost_equal(result, expected, decimal=6)
+
+
+def test_diff():
+    # Test 1: Basic difference
+    x = np.array([0, 1, 2, 3, 4, 6])
+    expected = np.array([1, 1, 1, 1, 1.5, 2])
+
+    result = diff(x, alignment="centered")
+    assert_array_almost_equal(result, expected, decimal=6)
+
+
+def test_diff_centered_two_points():
+    x = np.array([10, 20])
+    expected = np.array([10, 10])
+    result = diff(x, alignment="centered")
+    assert_array_almost_equal(result, expected, decimal=6)
+
+
+def test_diff_left():
+    x = np.array([0, 1, 2, 3, 4, 6])
+    expected = np.array([1, 1, 1, 1, 2, 2])
+    result = diff(x, alignment="left")
+    assert_array_almost_equal(result, expected, decimal=6)
+
+
+def test_diff_right():
+    x = np.array([0, 1, 2, 3, 4, 6])
+    expected = np.array([1, 1, 1, 1, 1, 2])
+    result = diff(x, alignment="right")
     assert_array_almost_equal(result, expected, decimal=6)

@@ -86,3 +86,32 @@ def interp_series(series, index_new, **interp1d_kwargs):
     dt_interp = (index_new - series.index[0]) / pd.to_timedelta(1, unit="D")
     interp_obj = interpolate.interp1d(dt, series.values, bounds_error=False, **interp1d_kwargs)
     return interp_obj(dt_interp)
+
+
+def diff(a, alignment="centered"):
+    """Compute the cell widths for a given array of cell coordinates.
+
+    If alignment is "centered", the coordinates are assumed to be centered in the cells.
+    If alignment is "left", the coordinates are assumed to be at the left edge of the cells.
+    If alignment is "right", the coordinates are assumed to be at the right edge of the cells.
+
+    Parameters
+    ----------
+    a : array-like
+        Input array.
+
+    Returns
+    -------
+    array
+        Array with differences between elements.
+    """
+    if alignment == "centered":
+        mid = a[:-1] + (a[1:] - a[:-1]) / 2
+        return np.concatenate((a[[1]] - a[[0]], mid[1:] - mid[:-1], a[[-1]] - a[[-2]]))
+    if alignment == "left":
+        return np.concatenate((a[1:] - a[:-1], a[[-1]] - a[[-2]]))
+    if alignment == "right":
+        return np.concatenate((a[[1]] - a[[0]], a[1:] - a[:-1]))
+
+    msg = f"Invalid alignment: {alignment}"
+    raise ValueError(msg)
