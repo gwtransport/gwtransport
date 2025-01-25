@@ -88,12 +88,12 @@ def interp_series(series, index_new, **interp1d_kwargs):
     return interp_obj(dt_interp)
 
 
-def diff(a, time_alignment="centered"):
+def diff(a, alignment="centered"):
     """Compute the cell widths for a given array of cell coordinates.
 
-    If time_alignment is "centered", the coordinates are assumed to be centered in the cells.
-    If time_alignment is "left", the coordinates are assumed to be at the left edge of the cells.
-    If time_alignment is "right", the coordinates are assumed to be at the right edge of the cells.
+    If alignment is "centered", the coordinates are assumed to be centered in the cells.
+    If alignment is "left", the coordinates are assumed to be at the left edge of the cells.
+    If alignment is "right", the coordinates are assumed to be at the right edge of the cells.
 
     Parameters
     ----------
@@ -105,13 +105,13 @@ def diff(a, time_alignment="centered"):
     array
         Array with differences between elements.
     """
-    if time_alignment == "centered":
+    if alignment == "centered":
         mid = a[:-1] + (a[1:] - a[:-1]) / 2
         return np.concatenate((a[[1]] - a[[0]], mid[1:] - mid[:-1], a[[-1]] - a[[-2]]))
-    if time_alignment == "left":
+    if alignment == "left":
         return np.concatenate((a[1:] - a[:-1], a[[-1]] - a[[-2]]))
-    if time_alignment == "right":
+    if alignment == "right":
         return np.concatenate((a[[1]] - a[[0]], a[1:] - a[:-1]))
 
-    msg = f"Invalid time_alignment: {time_alignment}"
+    msg = f"Invalid alignment: {alignment}"
     raise ValueError(msg)
