@@ -19,5 +19,5 @@ def pytest_generate_tests(metafunc):
         perform test setup.
     """
     if "pythonfile_path" in metafunc.fixturenames:
-        filepaths = sorted(glob(os.path.join("examples", "**", "*.py")))
+        filepaths = sorted(glob(os.path.join("examples", "*.py")))
         metafunc.parametrize("pythonfile_path", filepaths)

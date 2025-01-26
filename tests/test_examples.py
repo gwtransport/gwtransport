@@ -2,7 +2,7 @@ import subprocess
 import sys
 
 
-def pythonscript_test_exec(pythonfile_path):
+def test_pythonscript(pythonfile_path):
     """
     Execute a Python script as a test.
 
@@ -20,3 +20,4 @@ def pythonscript_test_exec(pythonfile_path):
     if result.returncode != 0:
         msg = f"Failed executing {pythonfile_path}.\n\n{result.stderr}"
         raise AssertionError(msg)
+    return result.stdout
