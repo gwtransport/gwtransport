@@ -1,15 +1,14 @@
 name: Build and release package
 
 on:
-  workflow_run:
-    workflows: [Functional Testing]
-    types:
-      - completed
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
 
 jobs:
   build:
-    name: Build distribution 📦
-    if: github.event.workflow_run.conclusion == 'success'
+    name: Build distribution
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,14 +18,27 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: false
-      - name: Set up Python
-        run: uv python install 3.12
-      - name: Install the project
-        run: uv sync --extra test
-      - name: Run ruff
-        run: uv run ruff check .
       - name: Build a binary wheel and a source tarball
         run: uv build --no-sources
+      - name: Install the built wheel
+        run: uv run --with `find dist -name "*.whl"` --refresh-package gwtransport1d --no-project -- python -c "import importlib.metadata as m;print(m.version('gwtransport1d'))"
+      - name: Install the built source tarball
+        run: uv run --with `find dist -name "*.tar.gz"` --refresh-package gwtransport1d --no-project -- python -c "import importlib.metadata as m;print(m.version('gwtransport1d'))"
+      - name: Compare release tag with pyproject.toml version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/}
+          echo "Git tag version: $TAG_VERSION"
+
+          PYPROJECT_VERSION=$(uv run --with `find dist -name "*.tar.gz"` --refresh-package gwtransport1d --no-project -- python -c "import importlib.metadata as m; print(m.version('gwtransport1d'))")
+          echo "pyproject.toml version: $PYPROJECT_VERSION"
+
+          # Compare versions
+          if [ "$TAG_VERSION" != "$PYPROJECT_VERSION" ]; then
+            echo "Version mismatch!"
+            echo "Git tag version ($TAG_VERSION) does not match pyproject.toml version ($PYPROJECT_VERSION)"
+            exit 1
+          fi
       - name: Store the distribution packages
         uses: actions/upload-artifact@v4
         with:
@@ -34,9 +46,9 @@ jobs:
           path: dist/
 
   publish-to-pypi:
-    name: Publish Python 🐍 distribution 📦 to PyPI
+    name: Publish Python distribution to PyPI
     if: startsWith(github.ref, 'refs/tags/') # only publish to PyPI on tag pushes
-    needs: build
+    needs: publish-to-testpypi
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -49,13 +61,13 @@ jobs:
         with:
           name: python-package-distributions
           path: dist/
-      - name: Publish distribution 📦 to PyPI
+      - name: Publish distribution to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           verbose: true
 
   publish-to-testpypi:
-    name: Publish Python 🐍 distribution 📦 to TestPyPI
+    name: Publish Python distribution to TestPyPI
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -69,7 +81,7 @@ jobs:
         with:
           name: python-package-distributions
           path: dist/
-      - name: Publish distribution 📦 to TestPyPI
+      - name: Publish distribution to TestPyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
