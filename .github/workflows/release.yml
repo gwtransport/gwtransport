@@ -20,8 +20,10 @@ jobs:
           enable-cache: false
       - name: Build a binary wheel and a source tarball
         run: uv build --no-sources
-      - name: Install the build
-        run: uv run --with gwtransport1d --refresh-package gwtransport1d --no-project -- python -c "import importlib.metadata as m; print(m.version('gwtransport1d'))"
+      - name: Install the built wheel
+        run: uv run --with `find dist -name "*.whl"` --refresh-package gwtransport1d --no-project -- python -c "import importlib.metadata as m;print(m.version('gwtransport1d'))"
+      - name: Install the built source tarball
+        run: uv run --with `find dist -name "*.tar.gz"` --refresh-package gwtransport1d --no-project -- python -c "import importlib.metadata as m;print(m.version('gwtransport1d'))"
       - name: Store the distribution packages
         uses: actions/upload-artifact@v4
         with:
