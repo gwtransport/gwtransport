@@ -62,3 +62,5 @@ def test_deposition_coefficients(sample_data):
     assert isinstance(df, pd.DataFrame)
     assert isinstance(index_dep, pd.DatetimeIndex)
     assert len(index_dep) >= len(cout)
+    assert np.isclose(coeff.sum(axis=0), 1.0, rtol=1e-5).all()
+    assert np.isclose(coeff.sum(axis=1), 1.0, rtol=1e-5).all()
