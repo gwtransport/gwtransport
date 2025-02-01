@@ -3,9 +3,16 @@
 import numpy as np
 import pandas as pd
 from scipy import interpolate
+from typing import Union, Optional
 
 
-def linear_interpolate(x_ref, y_ref, x_query, left=None, right=None):
+def linear_interpolate(
+    x_ref: Union[np.ndarray, list],
+    y_ref: Union[np.ndarray, list],
+    x_query: Union[np.ndarray, list],
+    left: Optional[float] = None,
+    right: Optional[float] = None
+) -> np.ndarray:
     """
     Linear interpolation on monotonically increasing data.
 
@@ -63,7 +70,11 @@ def linear_interpolate(x_ref, y_ref, x_query, left=None, right=None):
     return y_query
 
 
-def interp_series(series, index_new, **interp1d_kwargs):
+def interp_series(
+    series: pd.Series,
+    index_new: pd.DatetimeIndex,
+    **interp1d_kwargs: Optional[dict]
+) -> pd.Series:
     """
     Interpolate a pandas.Series to a new index.
 
@@ -88,7 +99,7 @@ def interp_series(series, index_new, **interp1d_kwargs):
     return interp_obj(dt_interp)
 
 
-def diff(a, alignment="centered"):
+def diff(a: Union[np.ndarray, list], alignment: str = "centered") -> np.ndarray:
     """Compute the cell widths for a given array of cell coordinates.
 
     If alignment is "centered", the coordinates are assumed to be centered in the cells.
@@ -111,7 +122,7 @@ def diff(a, alignment="centered"):
     if alignment == "left":
         return np.concatenate((a[1:] - a[:-1], a[[-1]] - a[[-2]]))
     if alignment == "right":
-        return np.concatenate((a[[1]] - a[[0]], a[1:] - a[:-1]))
+        return np.concatenate((a[[1]] - a[[0]], a[1:] - a[[:-1]]))
 
     msg = f"Invalid alignment: {alignment}"
     raise ValueError(msg)

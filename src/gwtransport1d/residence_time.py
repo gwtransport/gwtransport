@@ -17,11 +17,18 @@ import numpy as np
 import pandas as pd
 
 from gwtransport1d.utils import linear_interpolate
+from typing import Union, Optional
 
 
 def residence_time_retarded(
-    flow, aquifer_pore_volume, *, index=None, retardation_factor=1.0, direction="extraction", return_as_series=False
-):
+    flow: pd.Series,
+    aquifer_pore_volume: Union[float, np.ndarray],
+    *,
+    index: Optional[pd.DatetimeIndex] = None,
+    retardation_factor: float = 1.0,
+    direction: str = "extraction",
+    return_as_series: bool = False
+) -> Union[np.ndarray, pd.Series]:
     """
     Compute the residence time of retarded compound in the water in the aquifer.
 
@@ -31,7 +38,7 @@ def residence_time_retarded(
     ----------
     flow : pandas.Series
         Flow rate of water in the aquifer [m3/day].
-    aquifer_pore_volume : float
+    aquifer_pore_volume : float or np.ndarray
         Pore volume of the aquifer [m3].
     index : pandas.DatetimeIndex, optional
         Index of the residence time. If left to None, the index of `flow` is used. Default is None.
@@ -42,7 +49,7 @@ def residence_time_retarded(
 
     Returns
     -------
-    array
+    array or pandas.Series
         Residence time of the retarded compound in the aquifer [days].
     """
     aquifer_pore_volume = np.atleast_1d(aquifer_pore_volume)

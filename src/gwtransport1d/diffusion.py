@@ -10,14 +10,14 @@ from gwtransport1d.utils import diff
 
 
 def compute_diffusion(
-    cin,
-    flow,
-    aquifer_pore_volume,
-    diffusivity=0.1,
-    retardation_factor=1.0,
-    aquifer_length=80.0,
-    porosity=0.35,
-):
+    cin: pd.Series,
+    flow: pd.Series,
+    aquifer_pore_volume: float,
+    diffusivity: float = 0.1,
+    retardation_factor: float = 1.0,
+    aquifer_length: float = 80.0,
+    porosity: float = 0.35,
+) -> pd.Series:
     """Compute the diffusion of a compound during 1D transport in the aquifer.
 
     Parameters
@@ -54,8 +54,13 @@ def compute_diffusion(
 
 
 def compute_sigma_array(
-    flow, aquifer_pore_volume, diffusivity=0.1, retardation_factor=1.0, aquifer_length=80.0, porosity=0.35
-):
+    flow: pd.Series,
+    aquifer_pore_volume: float,
+    diffusivity: float = 0.1,
+    retardation_factor: float = 1.0,
+    aquifer_length: float = 80.0,
+    porosity: float = 0.35
+) -> np.ndarray:
     """Compute sigma values for diffusion based on flow and aquifer properties.
 
     Parameters
@@ -94,7 +99,11 @@ def compute_sigma_array(
     return np.clip(a=sigma_array.values, a_min=0.0, a_max=100)
 
 
-def gaussian_filter_variable_sigma(input_signal, sigma_array, truncate=4.0):
+def gaussian_filter_variable_sigma(
+    input_signal: np.ndarray,
+    sigma_array: np.ndarray,
+    truncate: float = 4.0
+) -> np.ndarray:
     """Apply Gaussian filter with position-dependent sigma values.
 
     This function extends scipy.ndimage.gaussian_filter1d by allowing the standard

@@ -29,11 +29,18 @@ from scipy.optimize import minimize
 
 from gwtransport1d.residence_time import residence_time_retarded
 from gwtransport1d.utils import interp_series
+from typing import Union, Callable, Tuple
 
 
 def compute_deposition(
-    cout, flow, aquifer_pore_volume, porosity, thickness, retardation_factor, nullspace_objective="squared_lengths"
-):
+    cout: pd.Series,
+    flow: pd.Series,
+    aquifer_pore_volume: float,
+    porosity: float,
+    thickness: float,
+    retardation_factor: float,
+    nullspace_objective: Union[str, Callable] = "squared_lengths"
+) -> pd.Series:
     """
     Compute the deposition given the added concentration of the compound in the extracted water.
 
@@ -122,7 +129,15 @@ def compute_deposition(
     return pd.Series(data=deposition_data, index=index_dep, name="deposition")
 
 
-def compute_dc(dcout_index, deposition, flow, aquifer_pore_volume, porosity, thickness, retardation_factor):
+def compute_dc(
+    dcout_index: pd.Series,
+    deposition: pd.Series,
+    flow: pd.Series,
+    aquifer_pore_volume: float,
+    porosity: float,
+    thickness: float,
+    retardation_factor: float
+) -> pd.Series:
     """
     Compute the increase in concentration of the compound in the extracted water by the deposition.
 
@@ -158,7 +173,14 @@ def compute_dc(dcout_index, deposition, flow, aquifer_pore_volume, porosity, thi
     return pd.Series(coeff @ deposition[dep_index], index=dcout_index, name="dcout")
 
 
-def deposition_coefficients(dcout_index, flow, aquifer_pore_volume, porosity, thickness, retardation_factor):
+def deposition_coefficients(
+    dcout_index: pd.Series,
+    flow: pd.Series,
+    aquifer_pore_volume: float,
+    porosity: float,
+    thickness: float,
+    retardation_factor: float
+) -> Tuple[np.ndarray, pd.DataFrame, pd.DatetimeIndex]:
     """
     Compute the coefficients of the deposition model.
 
