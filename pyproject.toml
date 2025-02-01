@@ -34,6 +34,7 @@ test = [
   "pytest",
   "ruff==0.6.8",
   "validate-pyproject[all,store]",
+  "mypy",
 ]
 
 [project.urls]
@@ -41,3 +42,4 @@ Homepage = "https://github.com/bdestombe/python_gwtransport1d"
 
 [tool.hatch.envs.hatch-static-analysis]
 config-path = "ruff.toml"
+dependencies = ["mypy"]

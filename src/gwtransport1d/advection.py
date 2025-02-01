@@ -20,6 +20,7 @@ groundwater contamination and transport problems.
 """
 
 import warnings
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -28,7 +29,13 @@ from gwtransport1d.residence_time import residence_time_retarded
 from gwtransport1d.utils import interp_series, linear_interpolate
 
 
-def cout_advection(cin, flow, aquifer_pore_volume, retardation_factor=1.0, resample_dates=None):
+def cout_advection(
+    cin: pd.Series,
+    flow: pd.Series,
+    aquifer_pore_volume: float,
+    retardation_factor: float = 1.0,
+    resample_dates: Optional[pd.DatetimeIndex] = None,
+) -> pd.Series:
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.
 
@@ -44,6 +51,10 @@ def cout_advection(cin, flow, aquifer_pore_volume, retardation_factor=1.0, resam
         Flow rate of water in the aquifer [m3/day].
     aquifer_pore_volume : float
         Pore volume of the aquifer [m3].
+    retardation_factor : float, optional
+        Retardation factor of the compound in the aquifer. Default is 1.0.
+    resample_dates : pandas.DatetimeIndex, optional
+        Dates to resample the output concentration. Default is None.
 
     Returns
     -------
@@ -62,7 +73,12 @@ def cout_advection(cin, flow, aquifer_pore_volume, retardation_factor=1.0, resam
     return cout
 
 
-def cout_advection_distribution(cin, flow, aquifer_pore_volume_edges, retardation_factor=1.0):
+def cout_advection_distribution(
+    cin: pd.Series,
+    flow: pd.Series,
+    aquifer_pore_volume_edges: Union[np.ndarray, list],
+    retardation_factor: float = 1.0,
+) -> pd.Series:
     """
     Similar to cout_advection, but with a distribution of aquifer pore volumes.
 
@@ -76,8 +92,8 @@ def cout_advection_distribution(cin, flow, aquifer_pore_volume_edges, retardatio
     aquifer_pore_volume_edges : array-like
         Edges of the bins that define the distribution of the aquifer pore volume.
         Of size nbins + 1 [m3].
-    retardation_factor : float
-        Retardation factor of the compound in the aquifer.
+    retardation_factor : float, optional
+        Retardation factor of the compound in the aquifer. Default is 1.0.
 
     Returns
     -------
