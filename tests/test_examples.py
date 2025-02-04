@@ -18,4 +18,3 @@ def test_pythonscript(pythonfile_path):
     """
     result = subprocess.run([sys.executable, pythonfile_path], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
-    return result.stdout
