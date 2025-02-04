@@ -16,8 +16,6 @@ def test_pythonscript(pythonfile_path):
     AssertionError
         If the Python script does not execute successfully.
     """
-    result = subprocess.run([sys.executable, pythonfile_path], capture_output=True, text=True, check=True)
-    if result.returncode != 0:
-        msg = f"Failed executing {pythonfile_path}.\n\n{result.stderr}"
-        raise AssertionError(msg)
+    result = subprocess.run([sys.executable, pythonfile_path], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
     return result.stdout
