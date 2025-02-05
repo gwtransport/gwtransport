@@ -224,6 +224,9 @@ def gaussian_filter_variable_sigma(input_signal, sigma_array, truncate=4.0):
     # Create the sparse matrix
     conv_matrix = sparse.csr_matrix((data, (rows, cols)), shape=(n, n))
 
+    # remove diffusion from signal with inverse of the convolution matrix
+    # conv_matrix_inv = np.linalg.lstsq(conv_matrix.todense(), np.eye(n), rcond=None)[0]
+
     # Apply the filter
     return conv_matrix.dot(input_signal)
 
