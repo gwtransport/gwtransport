@@ -46,10 +46,10 @@ def test_bin_masses_invalid_params():
     """Test bin_masses with invalid parameters."""
     edges = np.array([0, 1, 2])
 
-    with pytest.raises(ValueError):  # noqa: PT011
+    with pytest.raises(ValueError):
         bin_masses(alpha=-1, beta=1.0, bin_edges=edges)
 
-    with pytest.raises(ValueError):  # noqa: PT011
+    with pytest.raises(ValueError):
         bin_masses(alpha=1.0, beta=-1, bin_edges=edges)
 
 
@@ -153,10 +153,10 @@ def test_cout_advection_gamma_constant_input(gamma_params):
 # Edge cases and error handling
 def test_invalid_parameters():
     """Test error handling for invalid parameters."""
-    with pytest.raises(ValueError):  # noqa: PT011
+    with pytest.raises(ValueError):
         gamma_equal_mass_bins(alpha=-1, beta=1, n_bins=10)
 
-    with pytest.raises(ValueError):  # noqa: PT011
+    with pytest.raises(ValueError):
         gamma_equal_mass_bins(alpha=1, beta=-1, n_bins=10)
 
 

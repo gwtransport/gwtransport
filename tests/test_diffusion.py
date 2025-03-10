@@ -3,7 +3,6 @@ import pytest
 from numpy.testing import assert_allclose
 from scipy import ndimage, special
 
-# Import our function to test
 from gwtransport1d.diffusion import gaussian_filter_variable_sigma
 
 
@@ -288,7 +287,7 @@ def test_input_validation():
 
     # Test mismatched lengths
     sigma_array = np.zeros(len(x) + 1)
-    with pytest.raises(ValueError):  # noqa: PT011
+    with pytest.raises(ValueError):
         gaussian_filter_variable_sigma(signal, sigma_array)
 
 
