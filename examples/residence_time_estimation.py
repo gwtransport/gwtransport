@@ -1,11 +1,9 @@
 """Example of residence time estimation using the advection model with a Gamma distribution for the aquifer pore volume.
+
 means, stds
 IK93: 9000, 6000
-IK94: 
-
-
+IK94:
 """
-
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -74,7 +72,7 @@ for i, (mean, std) in enumerate(zip(means, stds, strict=False)):
 c = f"C{i + 1}"
 ax1.plot(df.index, df.T_bodem, alpha=0.3, **lkwargs, c=c)
 df.loc[isspui, "T_bodem"] = np.nan
-ax1.plot(df.index, df.T_bodem, label="Infiltratie",lw=0.4, c=c)
+ax1.plot(df.index, df.T_bodem, label="Infiltratie", lw=0.4, c=c)
 
 c = f"C{i + 2}"
 ax1.plot(df.index, df.gwt0, alpha=0.3, label="gwt0", **lkwargs, c=c)
@@ -114,7 +112,7 @@ for i, (mean, std) in enumerate(zip(means, stds, strict=False)):
 c = f"C{i + 1}"
 ax1.plot(df.index, df.T_bodem, alpha=0.3, **lkwargs, c=c)
 df.loc[isspui, "T_bodem"] = np.nan
-ax1.plot(df.index, df.T_bodem, label="Infiltratie",lw=0.4, c=c)
+ax1.plot(df.index, df.T_bodem, label="Infiltratie", lw=0.4, c=c)
 
 c = f"C{i + 2}"
 ax1.plot(df.index, df.gwt0, alpha=0.3, label="gwt0", **lkwargs, c=c)
@@ -155,6 +153,3 @@ ax3.legend(fontsize="x-small", loc="lower right")
 ax2.legend(fontsize="x-small", loc="upper right")
 ax3.legend(fontsize="x-small", loc="lower right")
 plt.savefig("testje.png", dpi=300)
-
-print("done")
-print("done")
