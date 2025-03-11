@@ -371,9 +371,11 @@ def erf_integral_numerical_space_time2(x, t, diffusivity):
 
     # Define the integrand function for numerical integration
     def integrand(t, x):
-        if t <= 0 and x >= 0.0:
+        if x == 0.0:
+            return 0.0
+        if np.isposinf(x) or (x > 0.0 and t <= 0.0):
             return 1.0
-        if t <= 0 and x < 0.0:
+        if np.isneginf(x) or (x < 0.0 and t <= 0.0):
             return -1.0
         return special.erf(x / (2 * np.sqrt(diffusivity * t)))
 
@@ -509,9 +511,11 @@ def erf_mean_numerical_space_time2(xedges, tedges, diffusivity):
 
     # Define the integrand function for numerical integration
     def integrand(t, x):
-        if t <= 0 or np.isposinf(x):
+        if x == 0.0:
+            return 0.0
+        if np.isposinf(x) or (x > 0.0 and t <= 0.0):
             return 1.0
-        if np.isneginf(x):
+        if np.isneginf(x) or (x < 0.0 and t <= 0.0):
             return -1.0
         return special.erf(x / (2 * np.sqrt(diffusivity * t)))
 
@@ -547,6 +551,9 @@ def erf_mean_numerical_space_time2(xedges, tedges, diffusivity):
 
     # Return scalar if both inputs were scalar
     if n_x_cells == 1 and n_t_cells == 1:
-        return result[0, 0]
-
+        return averages[0, 0]
+    if n_x_cells == 1 and n_t_cells != 1:
+        return averages[:, 0]
+    if n_x_cells != 1 and n_t_cells == 1:
+        return averages[0, :]
     return averages
