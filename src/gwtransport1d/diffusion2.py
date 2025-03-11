@@ -275,11 +275,7 @@ def erf_integral_space_time(x, t, diffusivity):
     ndarray
         Integral of the error function in space and time.
     """
-    if np.ndim(t) == 1:
-        t = t[:, None]
-    out_shape = np.broadcast_shapes(np.shape(x), np.shape(t))
-    xarray = np.broadcast_to(x, out_shape)
-    tarray = np.broadcast_to(t, out_shape)
+    xarray, tarray = np.meshgrid(x, t, sparse=True)
     isnan = np.isnan(xarray) | np.isnan(tarray)
 
     sqrt_diffusivity = np.sqrt(diffusivity)
@@ -301,10 +297,32 @@ def erf_integral_space_time(x, t, diffusivity):
     )
     term4 = -(xarray**3) / (6 * diffusivity)
     out = term1 + term2 + term3 + term4
-    out = np.where(isnan, np.nan, out)
-    out = np.where(tarray <= 0.0, 0.0, out)
-    return np.where(np.isinf(xarray) | np.isinf(tarray), np.inf, out)
 
+    out = np.where(isnan, np.nan, out)
+    # out = np.where(tarray <= 0.0 and x > 0.0, 1.0, out)
+    # out = np.where(tarray <= 0.0 and x < 0.0, -1.0, out)
+
+
+    # out[maskl] = -x[maskl] - 1 / (a * np.sqrt(np.pi))
+    # out[masku] = x[masku] - 1 / (a * np.sqrt(np.pi))
+
+    # if x == 0.0:
+    #     return 0.0
+    # if np.isposinf(x) or (x > 0.0 and t <= 0.0):
+    #     return 1.0
+    # if np.isneginf(x) or (x < 0.0 and t <= 0.0):
+    #     return -1.0
+
+    out = np.where(tarray <= 0.0, 0.0, out)
+    result = np.where(np.isinf(xarray) | np.isinf(tarray), np.inf, out)
+
+    if np.size(x) == 1 and np.size(t) == 1:
+        return result[0, 0]
+    if np.size(x) == 1 and np.size(t) != 1:
+        return result[:, 0]
+    if np.size(x) != 1 and np.size(t) == 1:
+        return result[0, :]
+    return result
 
 # def erf_integral_space_time2(x, t, diffusivity):
 #     """
@@ -449,12 +467,7 @@ def erf_mean_space_time(xedges, tedges, diffusivity):
 
 
 def erf_mean_space_time2(xedges, tedges, diffusivity):
-    """
-    Vectorized computation of cell averages using a single analytical_solution call.
-    Most efficient for large grids.
-
-    Parameters same as compute_cell_averages.
-    """
+    """Vectorized computation of cell averages using a single analytical_solution call."""
     from erf_double_integral import analytical_solution
 
     # Ensure arrays
