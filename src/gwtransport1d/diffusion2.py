@@ -90,7 +90,9 @@ def analytical_diffusion_filter(
         times_out = np.full_like(xedges, times_out)
 
         times = times_out[:, None] - times_in[None, 1:-1]
-        assert np.all(times >= 0), "times_out must be greater than times_in. or clip to zero"
+        if not np.all(times >= 0):
+            msg = "times_out must be greater than times_in, or clip to zero"
+            raise ValueError(msg)
 
     # Op het moment dat ik een xedge (axis=0) onttrek, wil ik weten welke steps(axis=1) hebben er hoelang invloed gehad op het punt van onttrekking
     delta_input_signal = input_signal[1:] - input_signal[:-1]
@@ -302,7 +304,6 @@ def erf_integral_space_time(x, t, diffusivity):
     # out = np.where(tarray <= 0.0 and x > 0.0, x, out)
     # out = np.where(tarray <= 0.0 and x < 0.0, -1.0, out)
 
-
     # out[maskl] = -x[maskl] - 1 / (a * np.sqrt(np.pi))
     # out[masku] = x[masku] - 1 / (a * np.sqrt(np.pi))
 
@@ -323,6 +324,7 @@ def erf_integral_space_time(x, t, diffusivity):
     if np.size(x) != 1 and np.size(t) == 1:
         return result[0, :]
     return result
+
 
 # def erf_integral_space_time2(x, t, diffusivity):
 #     """
@@ -468,19 +470,16 @@ def erf_mean_space_time(xedges, tedges, diffusivity):
 
 def erf_mean_space_time2(xedges, tedges, diffusivity):
     """Vectorized computation of cell averages using a single analytical_solution call."""
-    from erf_double_integral import analytical_solution
-
     # Ensure arrays
     xedges = np.asarray(xedges)
     tedges = np.asarray(tedges)
 
     # Calculate integral for all edge combinations at once
-    X, T = np.meshgrid(xedges, tedges, indexing="ij")
-    I_all = analytical_solution(X, T, diffusivity)
+    integral = erf_integral_numerical_space_time2(xedges, tedges, diffusivity)
 
     # Use inclusion-exclusion to calculate integrals for all cells
     # I[i,j] - I[i-1,j] - I[i,j-1] + I[i-1,j-1]
-    double_integrals = I_all[1:, 1:] - I_all[:-1, 1:] - I_all[1:, :-1] + I_all[:-1, :-1]
+    double_integrals = integral[1:, 1:] - integral[:-1, 1:] - integral[1:, :-1] + integral[:-1, :-1]
 
     # Calculate cell areas
     dx = np.diff(xedges)[:, np.newaxis]
@@ -509,7 +508,7 @@ def erf_mean_numerical_space_time2(xedges, tedges, diffusivity):
     Returns
     -------
     averages : ndarray
-        2D array (n×m) containing average values for each cell
+        2D array (nxm) containing average values for each cell
     """
     # Ensure arrays
     xedges = np.asarray(xedges)
