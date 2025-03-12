@@ -299,7 +299,7 @@ def erf_integral_space_time(x, t, diffusivity):
     out = term1 + term2 + term3 + term4
 
     out = np.where(isnan, np.nan, out)
-    # out = np.where(tarray <= 0.0 and x > 0.0, 1.0, out)
+    # out = np.where(tarray <= 0.0 and x > 0.0, x, out)
     # out = np.where(tarray <= 0.0 and x < 0.0, -1.0, out)
 
 
