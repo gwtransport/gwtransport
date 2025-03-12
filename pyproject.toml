@@ -7,7 +7,7 @@ name = "gwtransport1d"
 description = "Transport of contaminants in 1D groundwater flow system"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = [
   "groundwater",
   "transport",
@@ -18,7 +18,6 @@ authors = [
   { name = "Bas des Tombe", email = "bdestombe@gmail.com" },
 ]
 classifiers = [
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
 ]
@@ -32,7 +31,7 @@ version = "0.6.1"
 [project.optional-dependencies]
 test = [
   "pytest",
-  "ruff==0.6.8",
+  "ruff==0.9.10",
   "validate-pyproject[all,store]",
 ]
 
