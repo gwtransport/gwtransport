@@ -52,6 +52,9 @@ convention = "numpy"
     "PT011",  # Valueerror should be allowed
     "PLR2004",
 ]
+"**/*.py" = [
+    "C901", # allow complexity
+]
 "**/*.ipynb" = [
     "B018", # allow notebooks printing out variables in the mid cell with variable names only
 ]
