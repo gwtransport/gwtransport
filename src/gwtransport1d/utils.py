@@ -1,6 +1,9 @@
 """General utilities for the 1D groundwater transport model."""
 
+from collections.abc import Sequence
+
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 from scipy import interpolate
 
@@ -115,3 +118,97 @@ def diff(a, alignment="centered"):
 
     msg = f"Invalid alignment: {alignment}"
     raise ValueError(msg)
+
+
+def linear_average(
+    x_data: Sequence[float] | npt.NDArray[np.float_],
+    y_data: Sequence[float] | npt.NDArray[np.float_],
+    x_edges: Sequence[float] | npt.NDArray[np.float_],
+) -> npt.NDArray[np.float_]:
+    """
+    Compute the average value of a piecewise linear time series between specified x-edges.
+
+    Parameters
+    ----------
+    x_data : array-like
+        x-coordinates of the time series data points, must be in ascending order
+    y_data : array-like
+        y-coordinates of the time series data points
+    x_edges : array-like
+        x-coordinates of the integration edges, must be in ascending order
+
+    Returns
+    -------
+    numpy.ndarray
+        Array of average values between consecutive pairs of x_edges
+
+    Examples
+    --------
+    >>> x_data = [0, 1, 2, 3]
+    >>> y_data = [0, 1, 1, 0]
+    >>> x_edges = [0, 1.5, 3]
+    >>> linear_average(x_data, y_data, x_edges)
+    array([0.667, 0.667])
+    """
+    x_data = np.asarray(x_data, dtype=float)
+    y_data = np.asarray(y_data, dtype=float)
+    x_edges = np.asarray(x_edges, dtype=float)
+
+    # Input validation
+    if len(x_data) != len(y_data):
+        msg = "x_data and y_data must have the same length"
+        raise ValueError(msg)
+    if len(x_edges) < 2:  # noqa: PLR2004
+        msg = "x_edges must contain at least 2 values"
+        raise ValueError(msg)
+    if not np.all(np.diff(x_data) >= 0):
+        msg = "x_data must be in ascending order"
+        raise ValueError(msg)
+    if not np.all(np.diff(x_edges) >= 0):
+        msg = "x_edges must be in ascending order"
+        raise ValueError(msg)
+
+    # Create a combined array of all x points
+    all_x = np.concatenate([x_data, x_edges])
+
+    # Get unique values and inverse indices
+    unique_x, inverse_indices = np.unique(all_x, return_inverse=True)
+
+    # Get indices of where the edges are in the unique array
+    edge_indices = inverse_indices[len(x_data) : len(all_x)]
+
+    # Interpolate y values at all unique x points
+    unique_y = np.interp(unique_x, x_data, y_data)
+
+    # Compute segment-wise integrals using the trapezoidal rule
+    dx = np.diff(unique_x)
+    y_avg = (unique_y[:-1] + unique_y[1:]) / 2
+    segment_integrals = dx * y_avg
+
+    # Compute cumulative integral
+    cumulative_integral = np.concatenate([[0], np.cumsum(segment_integrals)])
+
+    # Compute integral between consecutive edges
+    integral_values = np.diff(cumulative_integral[edge_indices])
+
+    # Compute widths between consecutive edges
+    edge_widths = np.diff(x_edges)
+
+    # Handle zero-width intervals and non-zero width intervals in a vectorized way
+    zero_width_mask = edge_widths == 0
+
+    # For non-zero width intervals, compute average = integral / width
+    average_values = np.zeros_like(edge_widths)
+    non_zero_mask = ~zero_width_mask
+    if np.any(non_zero_mask):
+        average_values[non_zero_mask] = integral_values[non_zero_mask] / edge_widths[non_zero_mask]
+
+    # For zero-width intervals, get the y-value directly from unique_y using edge_indices
+    if np.any(zero_width_mask):
+        # The indices in unique_x for zero-width edge positions
+        zero_width_indices = edge_indices[np.where(zero_width_mask)[0]]
+
+        # Get all the y-values at once and assign them
+        average_values[zero_width_mask] = unique_y[zero_width_indices]
+
+    return average_values
