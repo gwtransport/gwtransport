@@ -11,12 +11,14 @@ Main functions:
 The module leverages numpy, pandas, and scipy for efficient numerical computations
 and time series handling. It is designed for researchers and engineers working on
 groundwater contamination and transport problems.
+
+TODO: Create function residence_time_mean to compute the mean residence time. Making use of tedges argument.
 """
 
 import numpy as np
 import pandas as pd
 
-from gwtransport1d.utils import linear_interpolate
+from gwtransport1d.utils import linear_average, linear_interpolate
 
 
 def residence_time_retarded(
@@ -80,3 +82,35 @@ def residence_time_retarded(
             raise ValueError(msg)
         return pd.Series(data=data[0], index=index, name=f"residence_time_{direction}")
     return data
+
+
+def residence_time_mean(
+    flow, flow_tedges, tedges_out, aquifer_pore_volume, *, direction="extraction", retardation_factor=1.0
+):
+    flow = np.asarray(flow)
+    flow_tedges = np.asarray(flow_tedges)
+    tedges_out = np.asarray(tedges_out)
+    aquifer_pore_volume = np.atleast_1d(aquifer_pore_volume)
+    flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
+
+    # compute cumulative flow at flow_tedges and flow_tedges_days
+    flow_cum = np.diff(flow_tedges_days, prepend=0.0)
+    flow_cum[1:] *= flow
+    flow_cum = flow_cum.cumsum()
+
+    if direction == "extraction":
+        # How many days ago was the extraced water infiltrated
+        a = flow_cum[None, :] - retardation_factor * aquifer_pore_volume[:, None]
+        days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
+        data_edges = flow_tedges_days - days
+        data_avg = linear_average(flow_tedges_days, data_edges, tedges_out)
+    elif direction == "infiltration":
+        # In how many days the water that is infiltrated now be extracted
+        a = flow_cum[None, :] + retardation_factor * aquifer_pore_volume[:, None]
+        days = linear_interpolate
+        data_edges = days - flow_tedges_days
+        data_avg = linear_average(flow_tedges_days, data_edges, tedges_out)
+    else:
+        msg = "direction should be 'extraction' or 'infiltration'"
+        raise ValueError(msg)
+    return data_avg
