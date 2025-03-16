@@ -121,10 +121,10 @@ def diff(a, alignment="centered"):
 
 
 def linear_average(
-    x_data: Sequence[float] | npt.NDArray[np.float_],
-    y_data: Sequence[float] | npt.NDArray[np.float_],
-    x_edges: Sequence[float] | npt.NDArray[np.float_],
-) -> npt.NDArray[np.float_]:
+    x_data: Sequence[float] | npt.NDArray[np.float64],
+    y_data: Sequence[float] | npt.NDArray[np.float64],
+    x_edges: Sequence[float] | npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
     """
     Compute the average value of a piecewise linear time series between specified x-edges.
 
