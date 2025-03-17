@@ -126,8 +126,8 @@ def residence_time_mean(
     -------
     numpy.ndarray
         Mean residence time of the retarded compound in the aquifer [days] for each interval
-        defined by tedges_out. If multiple pore volumes are provided, the first dimension
-        corresponds to the different pore volumes.
+        defined by tedges_out. The first dimension corresponds to the different pore volumes
+        and the second to the residence times between tedges_out.
 
     Notes
     -----
@@ -175,13 +175,13 @@ def residence_time_mean(
         a = flow_cum[None, :] - retardation_factor * aquifer_pore_volume[:, None]
         days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
         data_edges = flow_tedges_days - days
-        data_avg = linear_average(flow_tedges_days, data_edges, tedges_out)
+        data_avg = np.array([linear_average(flow_tedges_days, y, tedges_out) for y in data_edges])
     elif direction == "infiltration":
         # In how many days the water that is infiltrated now be extracted
         a = flow_cum[None, :] + retardation_factor * aquifer_pore_volume[:, None]
         days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
         data_edges = days - flow_tedges_days
-        data_avg = linear_average(flow_tedges_days, data_edges, tedges_out)
+        data_avg = np.array([linear_average(flow_tedges_days, y, tedges_out) for y in data_edges])
     else:
         msg = "direction should be 'extraction' or 'infiltration'"
         raise ValueError(msg)
