@@ -124,6 +124,7 @@ def linear_average(
     x_data: Sequence[float] | npt.NDArray[np.float64],
     y_data: Sequence[float] | npt.NDArray[np.float64],
     x_edges: Sequence[float] | npt.NDArray[np.float64],
+    extrapolate_method: str = "nan",
 ) -> npt.NDArray[np.float64]:
     """
     Compute the average value of a piecewise linear time series between specified x-edges.
@@ -136,6 +137,11 @@ def linear_average(
         y-coordinates of the time series data points
     x_edges : array-like
         x-coordinates of the integration edges, must be in ascending order
+    extrapolate_method : str, optional
+        Method for handling extrapolation. Default is 'nan'.
+        - 'outer': Extrapolate using the outermost data points.
+        - 'nan': Extrapolate using np.nan.
+        - 'raise': Raise an error for out-of-bounds values.
 
     Returns
     -------
@@ -150,16 +156,21 @@ def linear_average(
     >>> linear_average(x_data, y_data, x_edges)
     array([0.667, 0.667])
     """
-    x_data = np.asarray(x_data, dtype=float)
-    y_data = np.asarray(y_data, dtype=float)
+    show = ~np.isnan(x_data) & ~np.isnan(y_data)
+
+    if show.sum() < 2:  # noqa: PLR2004
+        return np.full(shape=len(x_edges) - 1, fill_value=np.nan)
+
+    x_data = np.asarray(x_data, dtype=float)[show]
+    y_data = np.asarray(y_data, dtype=float)[show]
     x_edges = np.asarray(x_edges, dtype=float)
 
     # Input validation
-    if len(x_data) != len(y_data):
-        msg = "x_data and y_data must have the same length"
+    if len(x_data) != len(y_data) and len(x_data) > 0:
+        msg = "x_data and y_data must have the same length and be non-empty"
         raise ValueError(msg)
     if len(x_edges) < 2:  # noqa: PLR2004
-        msg = "x_edges must contain at least 2 values"
+        msg = "x_edges_in_range must contain at least 2 values"
         raise ValueError(msg)
     if not np.all(np.diff(x_data) >= 0):
         msg = "x_data must be in ascending order"
@@ -168,8 +179,25 @@ def linear_average(
         msg = "x_edges must be in ascending order"
         raise ValueError(msg)
 
+    # Extrapolate
+    if extrapolate_method == "outer":
+        # bins with x_edges ouside the range of x_data should be nan
+        # Zero-widths are handles at the end of this function
+        x_edges_in_range = np.clip(x_edges, x_data.min(), x_data.max())
+    elif extrapolate_method == "nan":
+        # bins with x_edges ouside the range of x_data should be nan
+        is_within_range = (x_edges >= x_data.min()) & (x_edges <= x_data.max())
+        x_edges_in_range = x_edges[is_within_range]
+    elif extrapolate_method == "raise":
+        if np.any(x_edges < x_data.min()) or np.any(x_edges > x_data.max()):
+            msg = "x_edges must be within the range of x_data"
+            raise ValueError(msg)
+    else:
+        msg = "extrapolate_method must be 'outer', 'nan', or 'raise'"
+        raise ValueError(msg)
+
     # Create a combined array of all x points
-    all_x = np.concatenate([x_data, x_edges])
+    all_x = np.concatenate([x_data, x_edges_in_range])
 
     # Get unique values and inverse indices
     unique_x, inverse_indices = np.unique(all_x, return_inverse=True)
@@ -178,7 +206,7 @@ def linear_average(
     edge_indices = inverse_indices[len(x_data) : len(all_x)]
 
     # Interpolate y values at all unique x points
-    unique_y = np.interp(unique_x, x_data, y_data)
+    unique_y = np.interp(unique_x, x_data, y_data, left=np.nan, right=np.nan)
 
     # Compute segment-wise integrals using the trapezoidal rule
     dx = np.diff(unique_x)
@@ -192,16 +220,16 @@ def linear_average(
     integral_values = np.diff(cumulative_integral[edge_indices])
 
     # Compute widths between consecutive edges
-    edge_widths = np.diff(x_edges)
+    edge_widths = np.diff(x_edges_in_range)
 
     # Handle zero-width intervals and non-zero width intervals in a vectorized way
     zero_width_mask = edge_widths == 0
 
     # For non-zero width intervals, compute average = integral / width
-    average_values = np.zeros_like(edge_widths)
+    average_values_in_range = np.zeros_like(edge_widths)
     non_zero_mask = ~zero_width_mask
     if np.any(non_zero_mask):
-        average_values[non_zero_mask] = integral_values[non_zero_mask] / edge_widths[non_zero_mask]
+        average_values_in_range[non_zero_mask] = integral_values[non_zero_mask] / edge_widths[non_zero_mask]
 
     # For zero-width intervals, get the y-value directly from unique_y using edge_indices
     if np.any(zero_width_mask):
@@ -209,6 +237,12 @@ def linear_average(
         zero_width_indices = edge_indices[np.where(zero_width_mask)[0]]
 
         # Get all the y-values at once and assign them
-        average_values[zero_width_mask] = unique_y[zero_width_indices]
+        average_values_in_range[zero_width_mask] = unique_y[zero_width_indices]
 
-    return average_values
+    if extrapolate_method == "nan" and ~np.all(is_within_range):
+        bins_within_range = (x_edges[:-1] >= x_data.min()) & (x_edges[1:] <= x_data.max())
+        average_values = np.full(shape=bins_within_range.size, fill_value=np.nan)
+        average_values[bins_within_range] = average_values_in_range
+        return average_values
+
+    return average_values_in_range

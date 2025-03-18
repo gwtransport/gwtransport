@@ -145,25 +145,25 @@ def residence_time_mean(
     >>> flow_dates = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
     >>> flow_values = np.full(len(flow_dates) - 1, 100.0)  # Constant flow of 100 m³/day
     >>> pore_volume = 200.0  # Aquifer pore volume in m³
-    >>> # Define output time edges
-    >>> output_dates = pd.date_range(start="2023-01-02", end="2023-01-09", freq="2D")
     >>> # Calculate mean residence times
     >>> mean_times = residence_time_mean(
     ...     flow=flow_values,
     ...     flow_tedges=flow_dates,
-    ...     tedges_out=output_dates,
+    ...     tedges_out=flow_dates,
     ...     aquifer_pore_volume=pore_volume,
     ...     direction="extraction",
     ... )
     >>> # With constant flow of 100 m³/day and pore volume of 200 m³,
     >>> # mean residence time should be approximately 2 days
-    >>> print(mean_times)  # Output: [2.0, 2.0, 2.0, 2.0]
+    >>> print(mean_times)  # Output: [np.nan, np.nan, 2.0, 2.0, 2.0, ..., 2.0]
     """
     flow = np.asarray(flow)
-    flow_tedges = np.asarray(flow_tedges)
-    tedges_out = np.asarray(tedges_out)
+    flow_tedges = pd.DatetimeIndex(flow_tedges)
+    tedges_out = pd.DatetimeIndex(tedges_out)
     aquifer_pore_volume = np.atleast_1d(aquifer_pore_volume)
+
     flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
+    tedges_out_days = np.asarray((tedges_out - flow_tedges[0]) / np.timedelta64(1, "D"))
 
     # compute cumulative flow at flow_tedges and flow_tedges_days
     flow_cum = np.diff(flow_tedges_days, prepend=0.0)
@@ -175,13 +175,13 @@ def residence_time_mean(
         a = flow_cum[None, :] - retardation_factor * aquifer_pore_volume[:, None]
         days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
         data_edges = flow_tedges_days - days
-        data_avg = np.array([linear_average(flow_tedges_days, y, tedges_out) for y in data_edges])
+        data_avg = np.array([linear_average(flow_tedges_days, y, tedges_out_days) for y in data_edges])
     elif direction == "infiltration":
         # In how many days the water that is infiltrated now be extracted
         a = flow_cum[None, :] + retardation_factor * aquifer_pore_volume[:, None]
         days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
         data_edges = days - flow_tedges_days
-        data_avg = np.array([linear_average(flow_tedges_days, y, tedges_out) for y in data_edges])
+        data_avg = np.array([linear_average(flow_tedges_days, y, tedges_out_days) for y in data_edges])
     else:
         msg = "direction should be 'extraction' or 'infiltration'"
         raise ValueError(msg)
