@@ -131,7 +131,7 @@ def test_edges_beyond_data():
     # Extrapolation should extend the first and last segments
     # Average of y=x from 0 to 4 = 2
     expected = np.array([2])
-    result = linear_average(x_data, y_data, x_edges)
+    result = linear_average(x_data, y_data, x_edges, extrapolate_method="outer")
 
     np.testing.assert_allclose(result, expected)
 
@@ -178,11 +178,11 @@ def test_empty_interval():
 def test_input_validation():
     """Test input validation."""
     # Test unequal lengths of x_data and y_data
-    with pytest.raises(ValueError, match="x_data and y_data must have the same length"):
+    with pytest.raises(ValueError, match="x_data and y_data must have the same length and be non-empty"):
         linear_average([0, 1], [0], [0, 1])
 
     # Test x_edges too short
-    with pytest.raises(ValueError, match="x_edges must contain at least 2 values"):
+    with pytest.raises(ValueError, match="x_edges_in_range must contain at least 2 values"):
         linear_average([0, 1], [0, 1], [0])
 
     # Test x_data not in ascending order
@@ -230,7 +230,7 @@ def test_single_point_data():
 
     # Single point should be treated as constant value
     expected = np.array([5])
-    result = linear_average(x_data, y_data, x_edges)
+    result = linear_average(x_data, y_data, x_edges, extrapolate_method="outer")
 
     np.testing.assert_allclose(result, expected)
 
