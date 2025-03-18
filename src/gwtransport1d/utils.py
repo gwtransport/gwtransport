@@ -156,15 +156,6 @@ def linear_average(  # noqa: C901
     >>> linear_average(x_data, y_data, x_edges)
     array([0.667, 0.667])
     """
-    show = ~np.isnan(x_data) & ~np.isnan(y_data)
-
-    if show.sum() < 2:  # noqa: PLR2004
-        return np.full(shape=len(x_edges) - 1, fill_value=np.nan)
-
-    x_data = np.asarray(x_data, dtype=float)[show]
-    y_data = np.asarray(y_data, dtype=float)[show]
-    x_edges = np.asarray(x_edges, dtype=float)
-
     # Input validation
     if len(x_data) != len(y_data) and len(x_data) > 0:
         msg = "x_data and y_data must have the same length and be non-empty"
@@ -178,6 +169,15 @@ def linear_average(  # noqa: C901
     if not np.all(np.diff(x_edges) >= 0):
         msg = "x_edges must be in ascending order"
         raise ValueError(msg)
+
+    show = ~np.isnan(x_data) & ~np.isnan(y_data)
+
+    if (show.sum() < 2 and extrapolate_method == "nan") or show.sum() == 0:  # noqa: PLR2004
+        return np.full(shape=len(x_edges) - 1, fill_value=np.nan)
+
+    x_data = np.asarray(x_data, dtype=float)[show]
+    y_data = np.asarray(y_data, dtype=float)[show]
+    x_edges = np.asarray(x_edges, dtype=float)
 
     # Extrapolate
     if extrapolate_method == "outer":
