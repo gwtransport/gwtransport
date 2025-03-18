@@ -120,7 +120,7 @@ def diff(a, alignment="centered"):
     raise ValueError(msg)
 
 
-def linear_average(
+def linear_average(  # noqa: C901
     x_data: Sequence[float] | npt.NDArray[np.float64],
     y_data: Sequence[float] | npt.NDArray[np.float64],
     x_edges: Sequence[float] | npt.NDArray[np.float64],
@@ -239,9 +239,13 @@ def linear_average(
         # Get all the y-values at once and assign them
         average_values_in_range[zero_width_mask] = unique_y[zero_width_indices]
 
+    # Handle extrapolation when 'nan' method is used and some edges are outside data range
     if extrapolate_method == "nan" and ~np.all(is_within_range):
+        # Identify which bins are completely within the data range
         bins_within_range = (x_edges[:-1] >= x_data.min()) & (x_edges[1:] <= x_data.max())
+        # Create array of NaNs with same size as the number of bins
         average_values = np.full(shape=bins_within_range.size, fill_value=np.nan)
+        # Copy calculated averages only to bins that are within data range
         average_values[bins_within_range] = average_values_in_range
         return average_values
 
