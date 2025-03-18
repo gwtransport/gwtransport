@@ -11,8 +11,6 @@ Main functions:
 The module leverages numpy, pandas, and scipy for efficient numerical computations
 and time series handling. It is designed for researchers and engineers working on
 groundwater contamination and transport problems.
-
-TODO: Create function residence_time_mean to compute the mean residence time. Making use of tedges argument.
 """
 
 import numpy as np

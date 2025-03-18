@@ -68,6 +68,35 @@ def test_basic_infiltration(constant_flow_data):
     assert np.isnan(result[0, -1])
 
 
+def test_varying_extraction(constant_flow_data):
+    """Test basic extraction scenario with constant flow."""
+    flow_values, flow_tedges = constant_flow_data
+    flow_values[5:] *= 2.0  # Double the flow after the 5th day
+    tedges_out_highres = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1H")
+    tedges_out_lowres = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1D")
+    pore_volume = 200.0
+
+    result_highres = residence_time_mean(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        tedges_out=tedges_out_highres,
+        aquifer_pore_volume=pore_volume,
+        direction="extraction",
+    )
+    df_highres = pd.Series(result_highres[0], index=tedges_out_highres[:-1])
+    df_lowres = df_highres.resample("1D").mean()
+    result_lowres = residence_time_mean(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        tedges_out=tedges_out_lowres,
+        aquifer_pore_volume=pore_volume,
+        direction="extraction",
+    )
+
+    # Check that the mean values are consistent
+    assert np.allclose(df_lowres.values, result_lowres[0], equal_nan=True)
+
+
 def test_retardation_factor(constant_flow_data):
     """Test the effect of retardation factor."""
     flow_values, flow_tedges = constant_flow_data
