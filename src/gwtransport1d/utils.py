@@ -120,7 +120,7 @@ def diff(a, alignment="centered"):
     raise ValueError(msg)
 
 
-def linear_average(  # noqa: C901
+def linear_average(
     x_data: Sequence[float] | npt.NDArray[np.float64],
     y_data: Sequence[float] | npt.NDArray[np.float64],
     x_edges: Sequence[float] | npt.NDArray[np.float64],
