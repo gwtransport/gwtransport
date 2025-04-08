@@ -119,7 +119,7 @@ def erf_integral_space(x: NDArray[np.float64], a: float = 1.0, clip_to_inf=6.0) 
     x : ndarray
         Input values.
     a : float, optional
-        Scaling factor for the error function. Default is 1.
+        a = 1/(2*sqrt(diffusivity*t)). Default is 1.
     clip_to_inf : float, optional
         Clip the input values to -clip_to_inf and clip_to_inf to avoid numerical issues.
         Default is 6.
@@ -128,6 +128,8 @@ def erf_integral_space(x: NDArray[np.float64], a: float = 1.0, clip_to_inf=6.0) 
     -------
     ndarray
         Integral of the error function from 0 to x.
+
+    TODO: a may by a vector
     """
     a = float(a)
     ax = a * x
@@ -206,9 +208,10 @@ def erf_mean_space(edges: NDArray[np.float64], a: float = 1.0) -> NDArray[np.flo
     """
     _edges = np.clip(edges, -1e6, 1e6)
     _erfint = erf_integral_space(_edges, a=a)
+    dx = _edges[1:] - _edges[:-1]
 
-    with np.errstate(divide="ignore", invalid="ignore"):
-        out = (_erfint[1:] - _erfint[:-1]) / (_edges[1:] - _edges[:-1])
+    out = np.where(dx != 0.0, (_erfint[1:] - _erfint[:-1]) / dx, np.nan)
+    out[dx == 0.0] = special.erf(edges[:-1][dx == 0.0])
 
     # Handle the case where the edges are far from the origin and have a known outcome
     ue, le = edges[1:], edges[:-1]  # upper and lower cell edges
@@ -482,12 +485,38 @@ def erf_mean_space_time2(xedges, tedges, diffusivity):
     double_integrals = integral[1:, 1:] - integral[:-1, 1:] - integral[1:, :-1] + integral[:-1, :-1]
 
     # Calculate cell areas
-    dx = np.diff(xedges)[:, np.newaxis]
-    dt = np.diff(tedges)[np.newaxis, :]
+    dt = np.diff(tedges)[:, np.newaxis]
+    dx = np.diff(xedges)[np.newaxis, :]
     cell_areas = dx * dt
 
     # Return averages
-    return double_integrals / cell_areas
+    averages = double_integrals / cell_areas
+
+    # Handle dt == 0 case
+    if (dt == 0.0).any():
+        # ts = tedges[:-1][dt == 0.0]
+        # aa = [1 / (2 * np.sqrt(diffusivity * t)) for t in ts]
+        # averages[dt == 0.0] = [erf_mean_space(xedges, a) for a in aa]
+        msg = "dt == 0.0 case not implemented yet"
+        raise NotImplementedError(msg)
+
+    # Handle dx == 0 case
+    if (dx == 0.0).any():
+        # xs = xedges[:-1][dx == 0.0]
+        # bb = []
+        # averages[dx == 0.0] = [erf_mean_time(tedges, b) for b in bb]
+        msg = "dx == 0.0 case not implemented yet"
+        raise NotImplementedError(msg)
+
+    n_t_cells, n_x_cells = averages.shape
+
+    if n_x_cells == 1 and n_t_cells == 1:
+        return averages[0, 0]
+    if n_x_cells == 1 and n_t_cells != 1:
+        return averages[:, 0]
+    if n_x_cells != 1 and n_t_cells == 1:
+        return averages[0, :]
+    return averages
 
 
 def erf_mean_numerical_space_time2(xedges, tedges, diffusivity):
@@ -519,7 +548,8 @@ def erf_mean_numerical_space_time2(xedges, tedges, diffusivity):
     n_t_cells = len(tedges) - 1
 
     # Initialize output array
-    averages = np.zeros((n_x_cells, n_t_cells))
+    # averages = np.zeros((n_x_cells, n_t_cells))
+    averages = np.zeros((n_t_cells, n_x_cells))
 
     # Define the integrand function for numerical integration
     def integrand(t, x):
@@ -532,10 +562,10 @@ def erf_mean_numerical_space_time2(xedges, tedges, diffusivity):
         return special.erf(x / (2 * np.sqrt(diffusivity * t)))
 
     # Compute average for each cell
-    for i in range(n_x_cells):
-        for j in range(n_t_cells):
-            x1, x2 = xedges[i], xedges[i + 1]
-            t1, t2 = tedges[j], tedges[j + 1]
+    for i in range(n_t_cells):
+        for j in range(n_x_cells):
+            t1, t2 = tedges[i], tedges[i + 1]
+            x1, x2 = xedges[j], xedges[j + 1]
 
             # Skip empty cells
             if x1 == x2 and t1 != t2:

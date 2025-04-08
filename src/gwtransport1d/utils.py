@@ -183,13 +183,13 @@ def linear_average(
     if extrapolate_method == "outer":
         # bins with x_edges ouside the range of x_data should be nan
         # Zero-widths are handles at the end of this function
-        x_edges_in_range = np.clip(x_edges, x_data.min(), x_data.max())
+        x_edges_in_range = np.clip(x_edges, x_data[0], x_data[-1])
     elif extrapolate_method == "nan":
         # bins with x_edges ouside the range of x_data should be nan
-        is_within_range = (x_edges >= x_data.min()) & (x_edges <= x_data.max())
+        is_within_range = (x_edges >= x_data[0]) & (x_edges <= x_data[-1])
         x_edges_in_range = x_edges[is_within_range]
     elif extrapolate_method == "raise":
-        if np.any(x_edges < x_data.min()) or np.any(x_edges > x_data.max()):
+        if np.any(x_edges < x_data[0]) or np.any(x_edges > x_data[-1]):
             msg = "x_edges must be within the range of x_data"
             raise ValueError(msg)
     else:
@@ -242,7 +242,7 @@ def linear_average(
     # Handle extrapolation when 'nan' method is used and some edges are outside data range
     if extrapolate_method == "nan" and ~np.all(is_within_range):
         # Identify which bins are completely within the data range
-        bins_within_range = (x_edges[:-1] >= x_data.min()) & (x_edges[1:] <= x_data.max())
+        bins_within_range = (x_edges[:-1] >= x_data[0]) & (x_edges[1:] <= x_data[-1])
         # Create array of NaNs with same size as the number of bins
         average_values = np.full(shape=bins_within_range.size, fill_value=np.nan)
         # Copy calculated averages only to bins that are within data range

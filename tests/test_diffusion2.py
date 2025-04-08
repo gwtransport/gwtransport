@@ -9,7 +9,9 @@ from gwtransport1d.diffusion2 import (
     erf_integral_space,
     erf_integral_space_time,
     erf_mean_numerical_space,
+    erf_mean_numerical_space_time2,
     erf_mean_space,
+    erf_mean_space_time2,
 )
 from gwtransport1d.diffusion2 import erf_integral_numerical_space_time2 as erf_integral_numerical_space_time
 
@@ -181,6 +183,273 @@ def test_erf_integral_space_time():
     assert np.all(np.isnan(analytical) == np.isnan(numerical))
     assert np.all(np.isnan(analytical[np.isnan(x_nan) | np.isnan(t[:, None])]))
     assert ~np.any(np.isnan(analytical[~(np.isnan(x_nan) | np.isnan(t[:, None]))]))
+
+
+def test_erf_mean_space_time2_basic():
+    """Test basic functionality of erf_mean_space_time2 vs numerical implementation."""
+    xedges = np.array([0.0, 1.0, 2.0])
+    tedges = np.array([0.5, 1.0, 1.5])
+    diffusivity = 0.5
+
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+
+    # Both should return a 2x2 array
+    assert analytical.shape == (2, 2)
+    assert numerical.shape == (2, 2)
+
+    # Results should be close
+    np.testing.assert_allclose(analytical, numerical, rtol=1e-5)
+
+
+def test_erf_mean_space_time2_various_parameters():
+    """Test with various combinations of parameters."""
+    xedges_list = [
+        np.array([0.0, 0.5, 1.0]),
+        np.array([0.0, 1.0, 2.0, 3.0]),
+        np.array([-1.0, 0.0, 1.0]),
+    ]
+
+    tedges_list = [
+        np.array([0.1, 0.5, 1.0]),
+        np.array([0.5, 1.0, 1.5, 2.0]),
+        np.array([1.0, 2.0, 3.0]),
+    ]
+
+    diffusivity_values = [0.1, 0.5, 1.0]
+
+    for xedges, tedges, diffusivity in itertools.product(xedges_list, tedges_list, diffusivity_values):
+        analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+        numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+
+        # Results should be close
+        np.testing.assert_allclose(
+            analytical,
+            numerical,
+            rtol=1e-4,
+            err_msg=f"Failed with xedges={xedges}, tedges={tedges}, diffusivity={diffusivity}",
+        )
+
+
+def test_erf_mean_space_time2_scalar_outputs():
+    """Test scalar output cases."""
+    # Single cell case (1x1 output)
+    xedges = np.array([0.0, 1.0])
+    tedges = np.array([0.5, 1.0])
+    diffusivity = 0.5
+
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+
+    # Should be scalar or 1x1
+    assert np.isscalar(analytical) or analytical.shape == (1, 1)
+    assert np.isscalar(numerical) or numerical.shape == (1, 1)
+
+    # Results should be close
+    np.testing.assert_allclose(analytical, numerical, rtol=1e-5)
+
+    # 1D array cases
+    # Single x cell, multiple t cells
+    xedges = np.array([0.0, 1.0])
+    tedges = np.array([0.5, 1.0, 1.5])
+
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+
+    # Should be 1D arrays
+    assert analytical.shape == (2,)
+    assert numerical.shape == (2,)
+
+    # Results should be close
+    np.testing.assert_allclose(analytical, numerical, rtol=1e-5)
+
+    # Multiple x cells, single t cell
+    xedges = np.array([0.0, 1.0, 2.0])
+    tedges = np.array([0.5, 1.0])
+
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+
+    # Should be 1D arrays
+    assert analytical.shape == (2,)
+    assert numerical.shape == (2,)
+
+    # Results should be close
+    np.testing.assert_allclose(analytical, numerical, rtol=1e-5)
+
+
+@pytest.mark.skip(reason="Zero width cell averaging not implemented yet")
+def test_erf_mean_space_time2_zero_width_cells():
+    """Test edge cases including zero width cells and cells at time/space extremes."""
+    # Zero width cells in space
+    xedges = np.array([0.0, 0.0, 1.0, 2.0])
+    tedges = np.array([0.5, 1.0, 1.5])
+    diffusivity = 0.5
+
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+
+    # Results should be close
+    np.testing.assert_allclose(analytical, numerical, rtol=1e-5)
+
+    # Zero width cells in time
+    xedges = np.array([0.0, 1.0, 2.0])
+    tedges = np.array([0.5, 0.5, 1.0, 1.5])
+
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+
+    # Results should be close
+    np.testing.assert_allclose(analytical, numerical, rtol=1e-5)
+
+def test_erf_mean_space_time2_edge_cases2():
+    diffusivity = 0.5
+
+    # Zero time limit
+    xedges = np.array([0.0, 1.0, 2.0])
+    tedges = np.array([0.0, 0.5, 1.0])
+
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+
+    # Results should be close
+    np.testing.assert_allclose(analytical, numerical, rtol=1e-5)
+
+    # Very small time differences
+    xedges = np.array([0.0, 1.0, 2.0])
+    tedges = np.array([0.0001, 0.0002, 0.0003])
+
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+
+    # Results should be close (with higher tolerance for numerical precision issues)
+    np.testing.assert_allclose(analytical, numerical, rtol=1e-3, atol=1e-3)
+
+
+def test_erf_mean_space_time2_large_values():
+    """Test with large values for space and time."""
+    # Large space values
+    xedges = np.array([1000.0, 2000.0, 3000.0])
+    tedges = np.array([0.5, 1.0, 1.5])
+    diffusivity = 0.5
+
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+
+    # Results should be close (with higher tolerance)
+    np.testing.assert_allclose(analytical, numerical, rtol=1e-3)
+
+    # Large time values
+    xedges = np.array([0.0, 1.0, 2.0])
+    tedges = np.array([100.0, 200.0, 300.0])
+
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+
+    # Results should be close (with higher tolerance)
+    np.testing.assert_allclose(analytical, numerical, rtol=1e-3)
+
+
+def test_erf_mean_space_time2_negative_values():
+    """Test with negative x values."""
+    xedges = np.array([-2.0, -1.0, 0.0, 1.0])
+    tedges = np.array([0.5, 1.0, 1.5])
+    diffusivity = 0.5
+
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+
+    # Results should be close
+    np.testing.assert_allclose(analytical, numerical, rtol=1e-4)
+
+
+def test_erf_mean_space_time2_inf_values():
+    """Test with infinite values in space edges."""
+    xedges = np.array([-np.inf, -10.0, 0.0, 10.0, np.inf])
+    tedges = np.array([0.5, 1.0, 1.5])
+    diffusivity = 0.5
+
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+
+    # Results should be close
+    # Skip comparing cells with infinite boundaries as numerical integration might struggle
+    finite_mask = np.isfinite(analytical)
+    if np.any(finite_mask):
+        np.testing.assert_allclose(analytical[finite_mask], numerical[finite_mask], rtol=1e-4)
+
+    # Check that infinite cells have expected values
+    # Lower edge at -inf should give -1.0
+    if analytical.shape[0] > 0 and analytical.shape[1] > 0:
+        assert np.all(analytical[0, :] == -1.0)
+
+    # Upper edge at +inf should give 1.0
+    if analytical.shape[0] > 3 and analytical.shape[1] > 0:
+        assert np.all(analytical[3, :] == 1.0)
+
+
+def test_erf_mean_space_time2_nan_handling():
+    """Test handling of NaN values in inputs."""
+    xedges = np.array([0.0, 1.0, np.nan, 3.0])
+    tedges = np.array([0.5, np.nan, 1.5])
+    diffusivity = 0.5
+
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+
+    # Check that NaN pattern is consistent
+    assert np.all(np.isnan(analytical) == np.isnan(numerical))
+
+    # Check non-NaN values are close
+    valid_mask = ~np.isnan(analytical)
+    if np.any(valid_mask):
+        np.testing.assert_allclose(analytical[valid_mask], numerical[valid_mask], rtol=1e-4)
+
+
+def test_erf_mean_space_time2_different_diffusivities():
+    """Test with various diffusivity values, including very small and large."""
+    xedges = np.array([0.0, 1.0, 2.0])
+    tedges = np.array([0.5, 1.0, 1.5])
+
+    # Test with very small diffusivity
+    diffusivity = 1e-4
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+    np.testing.assert_allclose(analytical, numerical, rtol=1e-3, atol=1e-3)
+
+    # Test with very large diffusivity
+    diffusivity = 1e4
+    analytical = erf_mean_space_time2(xedges, tedges, diffusivity)
+    numerical = erf_mean_numerical_space_time2(xedges, tedges, diffusivity)
+    np.testing.assert_allclose(analytical, numerical, rtol=1e-3)
+
+
+def test_erf_mean_space_time2_non_monotonic_edges():
+    """Test error handling for non-monotonic edges."""
+    # Non-monotonic x edges
+    xedges = np.array([0.0, 2.0, 1.0])
+    tedges = np.array([0.5, 1.0, 1.5])
+    diffusivity = 0.5
+
+    with pytest.raises(ValueError):
+        erf_mean_space_time2(xedges, tedges, diffusivity)
+
+    # Non-monotonic t edges
+    xedges = np.array([0.0, 1.0, 2.0])
+    tedges = np.array([1.5, 1.0, 0.5])
+
+    with pytest.raises(ValueError):
+        erf_mean_space_time2(xedges, tedges, diffusivity)
+
+
+def test_erf_mean_space_time2_negative_diffusivity():
+    """Test error handling for negative diffusivity."""
+    xedges = np.array([0.0, 1.0, 2.0])
+    tedges = np.array([0.5, 1.0, 1.5])
+    diffusivity = -0.5
+
+    with pytest.raises(ValueError):
+        erf_mean_space_time2(xedges, tedges, diffusivity)
 
 
 if __name__ == "__main__":
