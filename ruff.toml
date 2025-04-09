@@ -46,6 +46,9 @@ convention = "numpy"
 'modelscripts/**/*.py' = [
     'INP001',  # Missing return type annotation for public function
 ]
+"examples/*.py" = [
+    "INP001",  # __init__.py is not needed for the examples folder
+]
 "tests/**/test_*.py" = [
     "S101", # asserts allowed in tests
     "D",
