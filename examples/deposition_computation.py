@@ -39,20 +39,35 @@ aquifer_volume = aquifer_pore_volume / porosity  # m3
 aquifer_surface_area = aquifer_volume / thickness  # m2
 
 # compute concentration of the compound in the extracted water given the deposition [ng/m3]
-rt = residence_time_retarded(flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_as_series=True)
+rt = residence_time_retarded(
+    flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_as_series=True
+)
 valid_rt_mask = rt.notnull()
 modeled_cout = compute_dc(
-     flow[valid_rt_mask].index, measurements.deposition, flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, porosity=porosity, thickness=thickness, retardation_factor=retardation_factor
+    flow[valid_rt_mask].index,
+    measurements.deposition,
+    flow=measurements.flow,
+    aquifer_pore_volume=aquifer_pore_volume,
+    porosity=porosity,
+    thickness=thickness,
+    retardation_factor=retardation_factor,
 )
 
 # compute deposition given the added concentration of the compound in the extracted water [ng/m2/day]
 # modeled_deposition should be similar to measurements.deposition
 modeled_deposition = compute_deposition(
-    cout=modeled_cout, flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, porosity=porosity, thickness=thickness, retardation_factor=retardation_factor
+    cout=modeled_cout,
+    flow=measurements.flow,
+    aquifer_pore_volume=aquifer_pore_volume,
+    porosity=porosity,
+    thickness=thickness,
+    retardation_factor=retardation_factor,
 )
 
 # Compute the residence time of the extracted water and retarded by the retardation factor
-residence_time = residence_time_retarded(flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, retardation_factor=1.0)
+residence_time = residence_time_retarded(
+    flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, retardation_factor=1.0
+)
 residence_time_r = residence_time_retarded(
     flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, retardation_factor=retardation_factor
 )
