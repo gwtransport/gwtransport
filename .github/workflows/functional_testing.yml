@@ -26,20 +26,17 @@ jobs:
       - name: Install the project
         run: uv sync --extra test
       - name: Run tests with coverage
-        run: uv run pytest --cov=src --cov-report=xml --cov-report=html
+        run: uv run pytest --cov=src -cov-report=xml:coverage/coverage.xml --cov-report=html:coverage/htmlcov
       # - name: Run coverage for examples
       #   run: uv run pytest --cov=examples --cov-report=xml --cov-report=html
       - name: Create coverage badge
         run: |
           uv tool install "genbadge[coverage]"
-          uv run genbadge coverage -i coverage.xml -o coverage-badge.svg
+          uv run genbadge coverage -i coverage/coverage.xml -o coverage/coverage-badge.svg
       - name: Upload coverage results
         uses: actions/upload-pages-artifact@v3
         with:
-          path: |
-            coverage.xml
-            htmlcov/
-            coverage-badge.svg
+          path: coverage
 
   # Deployment job
   deploy:
