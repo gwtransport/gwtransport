@@ -51,6 +51,7 @@ convention = "numpy"
     "D",
     "PT011",  # Valueerror should be allowed
     "PLR2004",
+    "INP001",  # __init__.py is not needed for the test folders
 ]
 "**/*.ipynb" = [
     "B018", # allow notebooks printing out variables in the mid cell with variable names only
