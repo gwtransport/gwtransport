@@ -44,6 +44,8 @@ jobs:
 
   # Deployment job
   deploy:
+    # Pages can only be updated from the main branch
+    if: github.ref == 'refs/heads/main'
     # Deploy to the github-pages environment
     runs-on: ubuntu-latest
     environment:
@@ -55,6 +57,7 @@ jobs:
       contents: read
       pages: write
       id-token: write
+
     steps:
       - name: Configure Pages
         uses: actions/configure-pages@v4
