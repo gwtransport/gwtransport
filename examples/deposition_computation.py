@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from gwtransport1d.deposition import compute_concentration, compute_deposition
+from gwtransport1d.deposition import compute_dc, compute_deposition
 from gwtransport1d.residence_time import residence_time_retarded
 
 # Flow data
@@ -39,20 +39,37 @@ aquifer_volume = aquifer_pore_volume / porosity  # m3
 aquifer_surface_area = aquifer_volume / thickness  # m2
 
 # compute concentration of the compound in the extracted water given the deposition [ng/m3]
-modeled_cout = compute_concentration(
-    measurements.deposition, measurements.flow, aquifer_pore_volume, porosity, thickness, retardation_factor
+rt = residence_time_retarded(
+    flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_as_series=True
+)
+valid_rt_mask = rt.notnull()
+modeled_cout = compute_dc(
+    flow[valid_rt_mask].index,
+    measurements.deposition,
+    flow=measurements.flow,
+    aquifer_pore_volume=aquifer_pore_volume,
+    porosity=porosity,
+    thickness=thickness,
+    retardation_factor=retardation_factor,
 )
 
 # compute deposition given the added concentration of the compound in the extracted water [ng/m2/day]
 # modeled_deposition should be similar to measurements.deposition
 modeled_deposition = compute_deposition(
-    modeled_cout, measurements.flow, aquifer_pore_volume, porosity, thickness, retardation_factor
+    cout=modeled_cout,
+    flow=measurements.flow,
+    aquifer_pore_volume=aquifer_pore_volume,
+    porosity=porosity,
+    thickness=thickness,
+    retardation_factor=retardation_factor,
 )
 
 # Compute the residence time of the extracted water and retarded by the retardation factor
-residence_time = residence_time_retarded(measurements.flow, aquifer_pore_volume, retardation_factor=1.0)
+residence_time = residence_time_retarded(
+    flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, retardation_factor=1.0
+)
 residence_time_r = residence_time_retarded(
-    measurements.flow, aquifer_pore_volume, retardation_factor=retardation_factor
+    flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, retardation_factor=retardation_factor
 )
 
 fig, ax = plt.subplots(2, 1, figsize=(10, 10))
@@ -69,7 +86,7 @@ ax0r.set_ylim(0, 1.2 * measurements.deposition.max())
 ax0r.set_ylabel("Deposition [ng/m2/day]")
 ax0r.legend(loc="upper right")
 
-ax[1].plot(measurements.index, measurements.flow, label="Volumestroom", color="C0")
+ax[1].plot(measurements.index, flow=measurements.flow, label="Volumestroom", color="C0")
 ax[1].set_ylabel("Flow [m3/day]")
 ax[1].legend(loc="upper left")
 

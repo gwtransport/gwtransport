@@ -1,4 +1,4 @@
-name: Functional Testing
+name: Testing of examples
 
 on:
   push:
@@ -9,14 +9,13 @@ on:
 # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
 # However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
 concurrency:
-  group: "pages"
+  group: "examples-pages"
   cancel-in-progress: false
 
 jobs:
-  pytest:
-    name: python
+  pytest-examples:
+    name: Pytest examples
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -26,32 +25,27 @@ jobs:
       - name: Install the project
         run: uv sync --extra test
       - name: Run tests with coverage
-        run: uv run pytest tests/src --cov=src --cov-report=xml:coverage/coverage.xml --cov-report=html:coverage/htmlcov
+        run: uv run pytest tests/examples --cov=src --cov-report=xml:coverage/coverage_examples.xml --cov-report=html:coverage/htmlcov_examples
       - name: Create coverage badge
         run: |
           uv tool install "genbadge[coverage]"
-          uv run genbadge coverage -i coverage/coverage.xml -o coverage/coverage-badge.svg
+          uv run genbadge coverage -i coverage/coverage_examples.xml -o coverage/coverage_examples-badge.svg
       - name: Upload coverage results
         uses: actions/upload-pages-artifact@v3
         with:
           path: coverage
 
-  # Deployment job
-  deploy:
-    # Pages can only be updated from the main branch
+  deploy-examples:
     if: github.ref == 'refs/heads/main'
-    # Deploy to the github-pages environment
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    needs: pytest
-    # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+    needs: pytest-examples
     permissions:
       contents: read
       pages: write
       id-token: write
-
     steps:
       - name: Configure Pages
         uses: actions/configure-pages@v4

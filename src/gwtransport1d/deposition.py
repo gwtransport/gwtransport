@@ -16,10 +16,6 @@ Main functions:
 - compute_dc: Determine concentration changes due to deposition
 - deposition_coefficients: Generate coefficients for deposition modeling
 - interp_series: Interpolate time series data to new time points
-
-The module leverages numpy, pandas, and scipy for efficient numerical computations
-and time series handling. It is designed for researchers and engineers working on
-groundwater contamination and transport problems.
 """
 
 import numpy as np
@@ -277,7 +273,7 @@ def deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, re
         Index of the deposition.
     """
     rt = residence_time_retarded(
-        flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction"
+        flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_as_series=True
     )
     rt_at_start_cout = pd.to_timedelta(interp_series(rt, dcout_index.min()), "D")
     start_dep = (dcout_index.min() - rt_at_start_cout).floor("D")
