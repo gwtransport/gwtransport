@@ -385,9 +385,9 @@ class TestGaussianComparison:
         }
 
         # Verify that the results are different (as they should be)
-        assert not np.allclose(result_variable, result_constant, rtol=1e-3), (
-            "Variable and constant sigma gave identical results"
-        )
+        assert not np.allclose(
+            result_variable, result_constant, rtol=1e-3
+        ), "Variable and constant sigma gave identical results"
 
     @staticmethod
     def test_compare_with_scipy():
