@@ -34,9 +34,8 @@ jobs:
           uv tool install "genbadge[coverage]"
           uv run genbadge coverage -i coverage.xml -o coverage-badge.svg
       - name: Upload coverage results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: coverage-results
           path: |
             coverage.xml
             htmlcov/
