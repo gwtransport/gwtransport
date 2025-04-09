@@ -28,12 +28,13 @@ dependencies = [
   "matplotlib",
   "numpy",
 ]
-version = "0.5.1"
+version = "0.6.1"
 [project.optional-dependencies]
 test = [
   "pytest",
   "ruff==0.6.8",
   "validate-pyproject[all,store]",
+  "pytest-cov",
 ]
 
 [project.urls]

@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: ["main"]
 
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
 jobs:
   pytest:
     name: python
@@ -19,6 +25,38 @@ jobs:
           enable-cache: false
       - name: Install the project
         run: uv sync --extra test
-      - name: Run tests
-        # For example, using `pytest`
-        run: uv run pytest tests
+      - name: Run tests with coverage
+        run: uv run pytest --cov=src --cov-report=xml:coverage/coverage.xml --cov-report=html:coverage/htmlcov
+      # - name: Run coverage for examples
+      #   run: uv run pytest --cov=examples --cov-report=xml --cov-report=html
+      - name: Create coverage badge
+        run: |
+          uv tool install "genbadge[coverage]"
+          uv run genbadge coverage -i coverage/coverage.xml -o coverage/coverage-badge.svg
+      - name: Upload coverage results
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: coverage
+
+  # Deployment job
+  deploy:
+    # Pages can only be updated from the main branch
+    if: github.ref == 'refs/heads/main'
+    # Deploy to the github-pages environment
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    needs: pytest
+    # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v4
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
