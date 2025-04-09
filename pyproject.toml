@@ -35,6 +35,7 @@ test = [
   "ruff==0.6.8",
   "validate-pyproject[all,store]",
   "pytest-cov",
+  "pytest-xdist",
 ]
 
 [project.urls]
@@ -42,3 +43,8 @@ Homepage = "https://github.com/bdestombe/python_gwtransport1d"
 
 [tool.hatch.envs.hatch-static-analysis]
 config-path = "ruff.toml"
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+]
