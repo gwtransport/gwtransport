@@ -34,7 +34,6 @@ test = [
   "pytest",
   "ruff==0.6.8",
   "validate-pyproject[all,store]",
-  "coverage",
   "pytest-cov",
 ]
 
