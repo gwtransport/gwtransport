@@ -227,6 +227,7 @@ def print_gamma_bins(alpha=None, beta=None, mean=None, std=None, n_bins=None, lo
     logger.info("Probability mass per bin:")
     logger.info(mass_per_bin)
 
+
 if __name__ == "__main__":
     # Example parameters
     mean = 10.0
@@ -243,7 +244,7 @@ if __name__ == "__main__":
     plt.plot(x, y, label="Gamma PDF")
     bins["upper_bound"][-1] = bins["expected_value"][-1]  # to avoid plotting inf
     for i in range(n_bins):
-        height = bins['probability_mass'][i] / (bins["upper_bound"][i] - bins["lower_bound"][i])
+        height = bins["probability_mass"][i] / (bins["upper_bound"][i] - bins["lower_bound"][i])
         plt.fill_between(
             [bins["lower_bound"][i], bins["upper_bound"][i]],
             0,
