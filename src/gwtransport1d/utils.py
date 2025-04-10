@@ -250,3 +250,11 @@ def linear_average(  # noqa: C901
         return average_values
 
     return average_values_in_range
+
+
+def generate_failed_coverage_badge():
+    """Generate a badge indicating failed coverage."""
+    from genbadge import Badge  # type: ignore # noqa: PLC0415
+
+    b = Badge(left_txt="coverage", right_txt="failed", color="red")
+    b.write_to("coverage_failed.svg", use_shields=False)

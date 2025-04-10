@@ -31,6 +31,9 @@ jobs:
         run: |
           uv tool install "genbadge[coverage]"
           uv run genbadge coverage -i coverage/coverage.xml -o coverage/coverage-badge.svg
+      - name: Use the failed badge if coverage creation failed
+        if: ${{ failure() }}
+        run: cp .github/assets/coverage_failed.svg coverage/coverage-badge.svg
       - name: Upload coverage results
         uses: actions/upload-pages-artifact@v3
         with:
@@ -51,7 +54,6 @@ jobs:
       contents: read
       pages: write
       id-token: write
-
     steps:
       - name: Configure Pages
         uses: actions/configure-pages@v4
