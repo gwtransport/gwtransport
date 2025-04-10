@@ -42,17 +42,13 @@ jobs:
         with:
           path: coverage
 
-  # Deployment job
   deploy:
-    # Pages can only be updated from the main branch
     if: github.ref == 'refs/heads/main' && always()
-    # Deploy to the github-pages environment
+    needs: pytest
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    needs: pytest
-    # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
     permissions:
       contents: read
       pages: write
