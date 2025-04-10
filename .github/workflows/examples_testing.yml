@@ -42,7 +42,7 @@ jobs:
           path: coverage
 
   deploy-examples:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && always()
     runs-on: ubuntu-latest
     environment:
       name: github-pages

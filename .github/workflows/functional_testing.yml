@@ -45,7 +45,7 @@ jobs:
   # Deployment job
   deploy:
     # Pages can only be updated from the main branch
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && always()
     # Deploy to the github-pages environment
     runs-on: ubuntu-latest
     environment:
