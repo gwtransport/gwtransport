@@ -33,8 +33,11 @@ jobs:
           uv run genbadge coverage -i coverage/coverage.xml -o coverage/coverage-badge.svg
       - name: Use the failed badge if coverage creation failed
         if: ${{ failure() }}
-        run: cp .github/assets/coverage_failed.svg coverage/coverage-badge.svg
+        run: |
+          mkdir -p coverage/htmlcov
+          cp .github/assets/coverage_failed.svg coverage/coverage-badge.svg
       - name: Upload coverage results
+        if: always()
         uses: actions/upload-pages-artifact@v3
         with:
           path: coverage
