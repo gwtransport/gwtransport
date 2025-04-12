@@ -36,13 +36,13 @@ jobs:
           mkdir -p coverage/htmlcov_examples
           cp .github/assets/coverage_failed.svg coverage/coverage_examples-badge.svg
       - name: Upload coverage results
-        if: always()
+        if: ${{ always() }}
         uses: actions/upload-pages-artifact@v3
         with:
           path: coverage
 
   deploy-examples:
-    if: github.ref == 'refs/heads/main' && always()
+    if: ${{ github.ref == 'refs/heads/main' && always() }}
     needs: pytest-examples
     runs-on: ubuntu-latest
     environment:
