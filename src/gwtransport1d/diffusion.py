@@ -52,7 +52,7 @@ def forward(
         aquifer_length=aquifer_length,
         porosity=porosity,
     )
-    return gaussian_filter_variable_sigma(cin.values, sigma_array, truncate=30.0)
+    return convolve_diffusion(cin.values, sigma_array, truncate=30.0)
 
 
 def backward(
@@ -140,7 +140,7 @@ def compute_sigma_array(
     return np.clip(a=sigma_array.values, a_min=0.0, a_max=100)
 
 
-def gaussian_filter_variable_sigma(input_signal, sigma_array, truncate=4.0):
+def convolve_diffusion(input_signal, sigma_array, truncate=4.0):
     """Apply Gaussian filter with position-dependent sigma values.
 
     This function extends scipy.ndimage.gaussian_filter1d by allowing the standard
@@ -201,7 +201,7 @@ def gaussian_filter_variable_sigma(input_signal, sigma_array, truncate=4.0):
     >>> sigma_array = np.sqrt(2 * diffusivity * dt) / dx
 
     >>> # Apply the filter
-    >>> filtered = gaussian_filter_variable_sigma(signal, sigma_array)
+    >>> filtered = convolve_diffusion(signal, sigma_array)
     """
     if len(input_signal) != len(sigma_array):
         msg = "Input signal and sigma array must have the same length"
@@ -277,6 +277,35 @@ def gaussian_filter_variable_sigma(input_signal, sigma_array, truncate=4.0):
     return conv_matrix.dot(input_signal)
 
 
+def deconvolve_diffusion(output_signal, sigma_array, truncate=4.0):
+    """Apply Gaussian deconvolution with position-dependent sigma values.
+
+    This function extends scipy.ndimage.gaussian_filter1d by allowing the standard
+    deviation (sigma) of the Gaussian kernel to vary at each point in the signal.
+    It implements the filter using a sparse convolution matrix where each row
+    represents a Gaussian kernel with a locally-appropriate standard deviation.
+
+    Parameters
+    ----------
+    output_signal : ndarray
+        One-dimensional input array to be filtered.
+    sigma_array : ndarray
+        One-dimensional array of standard deviation values, must have same length
+        as output_signal. Each value specifies the Gaussian kernel width at the
+        corresponding position.
+    truncate : float, optional
+        Truncate the filter at this many standard deviations.
+        Default is 4.0.
+
+    Returns
+    -------
+    ndarray
+        The filtered output signal. Has the same shape as output_signal.
+    """
+    msg = "Deconvolution is not implemented yet"
+    raise NotImplementedError(msg)
+
+
 def create_example_data(nx=1000, domain_length=10.0, diffusivity=0.1):
     """Create example data for demonstrating variable-sigma diffusion.
 
@@ -330,7 +359,7 @@ if __name__ == "__main__":
     x, signal, sigma_array, dt = create_example_data()
 
     # Apply variable-sigma filtering
-    filtered = gaussian_filter_variable_sigma(signal, sigma_array * 5)
+    filtered = convolve_diffusion(signal, sigma_array * 5)
 
     # Compare with regular Gaussian filter
     avg_sigma = np.mean(sigma_array)
