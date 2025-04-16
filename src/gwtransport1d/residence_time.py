@@ -6,11 +6,9 @@ The residence time is the time it takes for the compound to travel from the infi
 point to the extraction point. The compound is retarded in the aquifer with a retardation factor.
 
 Main functions:
-- residence_time_retarded: Compute the residence time of a retarded compound in the aquifer.
-
-The module leverages numpy, pandas, and scipy for efficient numerical computations
-and time series handling. It is designed for researchers and engineers working on
-groundwater contamination and transport problems.
+- residence_time: Compute the residence time of a retarded compound in the aquifer at indices.
+- residence_time_mean: Compute the mean residence time of a retarded compound in the aquifer
+  between specified time edges.
 """
 
 import numpy as np
@@ -19,19 +17,17 @@ import pandas as pd
 from gwtransport1d.utils import linear_average, linear_interpolate
 
 
-def residence_time_retarded(
-    flow, aquifer_pore_volume, *, index=None, retardation_factor=1.0, direction="extraction", return_as_series=False
+def residence_time(
+    flow, aquifer_pore_volume, *, index=None, retardation_factor=1.0, direction="extraction", return_pandas_series=False
 ):
     """
     Compute the residence time of retarded compound in the water in the aquifer.
-
-    This function can be used to compute when water was infiltrated that is now extracted and vice versa.
 
     Parameters
     ----------
     flow : pandas.Series
         Flow rate of water in the aquifer [m3/day].
-    aquifer_pore_volume : float
+    aquifer_pore_volume : float or array-like of float
         Pore volume of the aquifer [m3].
     index : pandas.DatetimeIndex, optional
         Index of the residence time. If left to None, the index of `flow` is used. Default is None.
@@ -74,9 +70,9 @@ def residence_time_retarded(
         msg = "direction should be 'extraction' or 'infiltration'"
         raise ValueError(msg)
 
-    if return_as_series:
+    if return_pandas_series:
         if len(aquifer_pore_volume) > 1:
-            msg = "return_as_series=True is only supported for a single pore volume"
+            msg = "return_pandas_series=True is only supported for a single pore volume"
             raise ValueError(msg)
         return pd.Series(data=data[0], index=index, name=f"residence_time_{direction}")
     return data

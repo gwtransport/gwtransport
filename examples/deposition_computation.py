@@ -8,8 +8,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from gwtransport1d.deposition import compute_dc, compute_deposition
-from gwtransport1d.residence_time import residence_time_retarded
+from gwtransport1d.deposition import backward as deposition_backward
+from gwtransport1d.deposition import forward as deposition_forward
+from gwtransport1d.residence_time import residence_time
 
 # Flow data
 dates = pd.date_range("2020-01-01 23:59:59", periods=400)  # Volume extracted during past day
@@ -39,11 +40,11 @@ aquifer_volume = aquifer_pore_volume / porosity  # m3
 aquifer_surface_area = aquifer_volume / thickness  # m2
 
 # compute concentration of the compound in the extracted water given the deposition [ng/m3]
-rt = residence_time_retarded(
-    flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_as_series=True
+rt = residence_time(
+    flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_pandas_series=True
 )
 valid_rt_mask = rt.notnull()
-modeled_cout = compute_dc(
+modeled_cout = deposition_forward(
     flow[valid_rt_mask].index,
     measurements.deposition,
     flow=measurements.flow,
@@ -55,7 +56,7 @@ modeled_cout = compute_dc(
 
 # compute deposition given the added concentration of the compound in the extracted water [ng/m2/day]
 # modeled_deposition should be similar to measurements.deposition
-modeled_deposition = compute_deposition(
+modeled_deposition = deposition_backward(
     cout=modeled_cout,
     flow=measurements.flow,
     aquifer_pore_volume=aquifer_pore_volume,
@@ -65,10 +66,8 @@ modeled_deposition = compute_deposition(
 )
 
 # Compute the residence time of the extracted water and retarded by the retardation factor
-residence_time = residence_time_retarded(
-    flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, retardation_factor=1.0
-)
-residence_time_r = residence_time_retarded(
+residence_time = residence_time(flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, retardation_factor=1.0)
+residence_time_r = residence_time(
     flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, retardation_factor=retardation_factor
 )
 

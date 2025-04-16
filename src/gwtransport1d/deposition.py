@@ -7,15 +7,14 @@ changes, and related coefficients based on extraction data and aquifer propertie
 
 The model assumes requires the groundwaterflow to be reduced to a 1D system. On one side,
 water with a certain concentration infiltrates ('cin'), the water flows through the aquifer and
-the compound of intrest flows through the aquifer with a retarded velocity. During the soil pasage,
+the compound of interest flows through the aquifer with a retarded velocity. During the soil passage,
 deposition enriches the water with the compound. The water is extracted ('cout') and the concentration
 increase due to deposition is called 'dcout'.
 
 Main functions:
-- compute_deposition: Calculate deposition rates from extraction data
-- compute_dc: Determine concentration changes due to deposition
+- backward: Calculate deposition rates from extraction data (backward operation, equivalent to deconvolution)
+- forward: Determine concentration changes due to deposition (forward operation, equivalent to convolution)
 - deposition_coefficients: Generate coefficients for deposition modeling
-- interp_series: Interpolate time series data to new time points
 """
 
 import numpy as np
@@ -23,11 +22,11 @@ import pandas as pd
 from scipy.linalg import null_space
 from scipy.optimize import minimize
 
-from gwtransport1d.residence_time import residence_time_retarded
+from gwtransport1d.residence_time import residence_time
 from gwtransport1d.utils import interp_series
 
 
-def compute_deposition(
+def backward(
     cout, flow, aquifer_pore_volume, porosity, thickness, retardation_factor, nullspace_objective="squared_lengths"
 ):
     """
@@ -118,9 +117,11 @@ def compute_deposition(
     return pd.Series(data=deposition_data, index=index_dep, name="deposition")
 
 
-def compute_dc(dcout_index, deposition, flow, aquifer_pore_volume, porosity, thickness, retardation_factor):
+def forward(dcout_index, deposition, flow, aquifer_pore_volume, porosity, thickness, retardation_factor):
     """
     Compute the increase in concentration of the compound in the extracted water by the deposition.
+
+    This function represents a forward operation (equivalent to convolution).
 
     Parameters
     ----------
@@ -183,9 +184,7 @@ def deposition_coefficients(dcout_index, flow, aquifer_pore_volume, porosity, th
         Datetime index of the deposition.
     """
     # Get deposition indices
-    rt = residence_time_retarded(
-        flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction"
-    )
+    rt = residence_time(flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction")
     index_dep = deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, retardation_factor)
 
     if not index_dep.isin(flow.index).all():
@@ -196,7 +195,7 @@ def deposition_coefficients(dcout_index, flow, aquifer_pore_volume, porosity, th
         data={
             "flow": flow[dcout_index.floor(freq="D")].values,
             "rt": pd.to_timedelta(interp_series(rt, dcout_index), "D"),
-            "dates_infiltration_retarded": dcout_index - pd.to_timedelta(interp_series(rt, dcout_index), "D"),
+            "dates_infiltration": dcout_index - pd.to_timedelta(interp_series(rt, dcout_index), "D"),
             "darea": flow[dcout_index.floor(freq="D")].values
             / (retardation_factor * porosity * thickness),  # Aquifer area cathing deposition
         },
@@ -207,10 +206,10 @@ def deposition_coefficients(dcout_index, flow, aquifer_pore_volume, porosity, th
     dt = np.zeros((len(dcout_index), len(index_dep)), dtype=float)
 
     for iout, (date_extraction, row) in enumerate(df.iterrows()):
-        itinf = index_dep.searchsorted(row.dates_infiltration_retarded.floor(freq="D"))  # partial day
+        itinf = index_dep.searchsorted(row.dates_infiltration.floor(freq="D"))  # partial day
         itextr = index_dep.searchsorted(date_extraction.floor(freq="D"))  # whole day
 
-        dt[iout, itinf] = (index_dep[itinf + 1] - row.dates_infiltration_retarded) / pd.to_timedelta(1.0, unit="D")
+        dt[iout, itinf] = (index_dep[itinf + 1] - row.dates_infiltration) / pd.to_timedelta(1.0, unit="D")
         dt[iout, itinf + 1 : itextr] = 1.0
 
         # fraction of first day
@@ -272,8 +271,12 @@ def deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, re
     pandas.DatetimeIndex
         Index of the deposition.
     """
-    rt = residence_time_retarded(
-        flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_as_series=True
+    rt = residence_time(
+        flow,
+        aquifer_pore_volume,
+        retardation_factor=retardation_factor,
+        direction="extraction",
+        return_pandas_series=True,
     )
     rt_at_start_cout = pd.to_timedelta(interp_series(rt, dcout_index.min()), "D")
     start_dep = (dcout_index.min() - rt_at_start_cout).floor("D")
