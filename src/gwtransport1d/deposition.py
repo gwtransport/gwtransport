@@ -12,8 +12,8 @@ deposition enriches the water with the compound. The water is extracted ('cout')
 increase due to deposition is called 'dcout'.
 
 Main functions:
-- backward_deposition: Calculate deposition rates from extraction data (backward operation, equivalent to deconvolution)
-- forward_deposition: Determine concentration changes due to deposition (forward operation, equivalent to convolution)
+- backward: Calculate deposition rates from extraction data (backward operation, equivalent to deconvolution)
+- forward: Determine concentration changes due to deposition (forward operation, equivalent to convolution)
 - deposition_coefficients: Generate coefficients for deposition modeling
 """
 
@@ -26,7 +26,7 @@ from gwtransport1d.residence_time import residence_time_retarded
 from gwtransport1d.utils import interp_series
 
 
-def backward_deposition(
+def backward(
     cout, flow, aquifer_pore_volume, porosity, thickness, retardation_factor, nullspace_objective="squared_lengths"
 ):
     """
@@ -117,7 +117,7 @@ def backward_deposition(
     return pd.Series(data=deposition_data, index=index_dep, name="deposition")
 
 
-def forward_deposition(dcout_index, deposition, flow, aquifer_pore_volume, porosity, thickness, retardation_factor):
+def forward(dcout_index, deposition, flow, aquifer_pore_volume, porosity, thickness, retardation_factor):
     """
     Compute the increase in concentration of the compound in the extracted water by the deposition.
 

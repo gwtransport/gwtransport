@@ -8,7 +8,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from gwtransport1d.deposition import compute_dc, compute_deposition
+from gwtransport1d.deposition import backward as deposition_backward
+from gwtransport1d.deposition import forward as deposition_forward
 from gwtransport1d.residence_time import residence_time_retarded
 
 # Flow data
@@ -43,7 +44,7 @@ rt = residence_time_retarded(
     flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_as_series=True
 )
 valid_rt_mask = rt.notnull()
-modeled_cout = compute_dc(
+modeled_cout = deposition_forward(
     flow[valid_rt_mask].index,
     measurements.deposition,
     flow=measurements.flow,
@@ -55,7 +56,7 @@ modeled_cout = compute_dc(
 
 # compute deposition given the added concentration of the compound in the extracted water [ng/m2/day]
 # modeled_deposition should be similar to measurements.deposition
-modeled_deposition = compute_deposition(
+modeled_deposition = deposition_backward(
     cout=modeled_cout,
     flow=measurements.flow,
     aquifer_pore_volume=aquifer_pore_volume,
