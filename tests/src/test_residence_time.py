@@ -72,9 +72,7 @@ def test_custom_index():
     custom_dates = pd.date_range(start="2023-01-02", end="2023-01-04", freq="D")
     pore_volume = 200.0
 
-    result = residence_time(
-        flow=flow, aquifer_pore_volume=pore_volume, index=custom_dates, direction="extraction"
-    )
+    result = residence_time(flow=flow, aquifer_pore_volume=pore_volume, index=custom_dates, direction="extraction")
 
     assert result.shape[1] == len(custom_dates)
 
@@ -147,9 +145,7 @@ def test_flow_variations(sample_flow_data):
     pore_volume = 100.0
 
     result1 = residence_time(flow=sample_flow_data, aquifer_pore_volume=pore_volume, direction="extraction")
-    result2 = residence_time(
-        flow=sample_flow_data * 2, aquifer_pore_volume=pore_volume, direction="extraction"
-    )
+    result2 = residence_time(flow=sample_flow_data * 2, aquifer_pore_volume=pore_volume, direction="extraction")
 
     # Residence times should half with double flow
     np.testing.assert_array_almost_equal(result1[1:], result2[1:] * 2)

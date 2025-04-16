@@ -66,9 +66,7 @@ modeled_deposition = deposition_backward(
 )
 
 # Compute the residence time of the extracted water and retarded by the retardation factor
-residence_time = residence_time(
-    flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, retardation_factor=1.0
-)
+residence_time = residence_time(flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, retardation_factor=1.0)
 residence_time_r = residence_time(
     flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, retardation_factor=retardation_factor
 )

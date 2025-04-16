@@ -184,9 +184,7 @@ def deposition_coefficients(dcout_index, flow, aquifer_pore_volume, porosity, th
         Datetime index of the deposition.
     """
     # Get deposition indices
-    rt = residence_time(
-        flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction"
-    )
+    rt = residence_time(flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction")
     index_dep = deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, retardation_factor)
 
     if not index_dep.isin(flow.index).all():
@@ -274,7 +272,11 @@ def deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, re
         Index of the deposition.
     """
     rt = residence_time(
-        flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_pandas_series=True
+        flow,
+        aquifer_pore_volume,
+        retardation_factor=retardation_factor,
+        direction="extraction",
+        return_pandas_series=True,
     )
     rt_at_start_cout = pd.to_timedelta(interp_series(rt, dcout_index.min()), "D")
     start_dep = (dcout_index.min() - rt_at_start_cout).floor("D")
