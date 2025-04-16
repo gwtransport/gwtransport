@@ -9,7 +9,7 @@ from gwtransport1d.residence_time import residence_time_retarded
 from gwtransport1d.utils import diff
 
 
-def compute_diffusion(
+def forward_diffusion(
     cin,
     flow,
     aquifer_pore_volume,
@@ -19,6 +19,8 @@ def compute_diffusion(
     porosity=0.35,
 ):
     """Compute the diffusion of a compound during 1D transport in the aquifer.
+
+    This function represents a forward operation (equivalent to convolution).
 
     Parameters
     ----------
@@ -51,6 +53,50 @@ def compute_diffusion(
         porosity=porosity,
     )
     return gaussian_filter_variable_sigma(cin.values, sigma_array, truncate=30.0)
+
+
+def backward_diffusion(
+    cout,
+    flow,
+    aquifer_pore_volume,
+    diffusivity=0.1,
+    retardation_factor=1.0,
+    aquifer_length=80.0,
+    porosity=0.35,
+):
+    """Compute the reverse diffusion of a compound during 1D transport in the aquifer.
+
+    This function represents a backward operation (equivalent to deconvolution).
+
+    Parameters
+    ----------
+    cout : pandas.Series
+        Concentration or temperature of the compound in the extracted water [ng/m3].
+    flow : pandas.Series
+        Flow rate of water in the aquifer [m3/day].
+    aquifer_pore_volume : float
+        Pore volume of the aquifer [m3].
+    diffusivity : float, optional
+        diffusivity of the compound in the aquifer [m2/day]. Default is 0.1.
+    retardation_factor : float, optional
+        Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
+    aquifer_length : float, optional
+        Length of the aquifer [m]. Default is 80.0.
+    porosity : float, optional
+        Porosity of the aquifer [dimensionless]. Default is 0.35.
+
+    Returns
+    -------
+    pandas.Series
+        Concentration of the compound in the infiltrating water [ng/m3].
+
+    Notes
+    -----
+    Backward diffusion (deconvolution) is mathematically ill-posed and requires
+    regularization to obtain a stable solution.
+    """
+    msg = "Backward diffusion (deconvolution) is not implemented yet"
+    raise NotImplementedError(msg)
 
 
 def compute_sigma_array(

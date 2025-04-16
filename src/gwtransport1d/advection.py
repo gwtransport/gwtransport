@@ -7,16 +7,13 @@ based on the concentration of the infiltrating water, extraction data and aquife
 
 The model assumes requires the groundwaterflow to be reduced to a 1D system. On one side,
 water with a certain concentration infiltrates ('cin'), the water flows through the aquifer and
-the compound of intrest flows through the aquifer with a retarded velocity. The water is
+the compound of interest flows through the aquifer with a retarded velocity. The water is
 extracted ('cout').
 
 Main functions:
-- cout_advection: Compute the concentration of the extracted water by shifting cin with its residence time.
-- cout_advection_distribution: Similar to cout_advection, but for a distribution of aquifer pore volumes.
-
-The module leverages numpy, pandas, and scipy for efficient numerical computations
-and time series handling. It is designed for researchers and engineers working on
-groundwater contamination and transport problems.
+- forward: Compute the concentration of the extracted water by shifting cin with its residence time. This corresponds to a convolution operation.
+- gamma_forward: Similar to forward, but for a gamma distribution of aquifer pore volumes.
+- distribution_forward: Similar to forward, but for an arbitrairy distribution of aquifer pore volumes.
 """
 
 import warnings
@@ -24,17 +21,20 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from gwtransport1d.gamma import bins as gamma_bins
 from gwtransport1d.residence_time import residence_time_retarded
 from gwtransport1d.utils import interp_series, linear_interpolate
 
 
-def cout_advection(cin, flow, aquifer_pore_volume, retardation_factor=1.0, resample_dates=None):
+def forward(cin, flow, aquifer_pore_volume, retardation_factor=1.0, resample_dates=None):
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.
 
     The compound is retarded in the aquifer with a retardation factor. The residence
     time is computed based on the flow rate of the water in the aquifer and the pore volume
     of the aquifer.
+
+    This function represents a forward operation (equivalent to convolution).
 
     Parameters
     ----------
@@ -62,9 +62,98 @@ def cout_advection(cin, flow, aquifer_pore_volume, retardation_factor=1.0, resam
     return cout
 
 
-def cout_advection_distribution(cin, flow, aquifer_pore_volume_edges, retardation_factor=1.0):
+def backward(cout, flow, aquifer_pore_volume, retardation_factor=1.0, resample_dates=None):
     """
-    Similar to cout_advection, but with a distribution of aquifer pore volumes.
+    Compute the concentration of the infiltrating water by shifting cout with its residence time.
+
+    This function represents a backward operation (equivalent to deconvolution).
+
+    Parameters
+    ----------
+    cout : pandas.Series
+        Concentration of the compound in the extracted water [ng/m3].
+    flow : pandas.Series
+        Flow rate of water in the aquifer [m3/day].
+    aquifer_pore_volume : float
+        Pore volume of the aquifer [m3].
+
+    Returns
+    -------
+    pandas.Series
+        Concentration of the compound in the infiltrating water [ng/m3].
+    """
+    msg = "Backward advection (deconvolution) is not implemented yet"
+    raise NotImplementedError(msg)
+
+
+def gamma_forward(cin, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
+    """
+    Compute the concentration of the extracted water by shifting cin with its residence time.
+
+    The compound is retarded in the aquifer with a retardation factor. The residence
+    time is computed based on the flow rate of the water in the aquifer and the pore volume
+    of the aquifer. The aquifer pore volume is approximated by a gamma distribution, with
+    parameters alpha and beta.
+
+    This function represents a forward operation (equivalent to convolution).
+
+    Parameters
+    ----------
+    cin : pandas.Series
+        Concentration of the compound in the extracted water [ng/m3] or temperature in infiltrating water.
+    flow : pandas.Series
+        Flow rate of water in the aquifer [m3/day].
+    alpha : float
+        Shape parameter of gamma distribution (must be > 0)
+    beta : float
+        Scale parameter of gamma distribution (must be > 0)
+    n_bins : int
+        Number of bins to discretize the gamma distribution.
+    retardation_factor : float
+        Retardation factor of the compound in the aquifer.
+
+    Returns
+    -------
+    pandas.Series
+        Concentration of the compound in the extracted water [ng/m3] or temperature.
+    """
+    bins = gamma_bins(alpha, beta, n_bins)
+    return distribution_forward(cin, flow, bins["edges"], retardation_factor=retardation_factor)
+
+
+def gamma_backward(cout, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
+    """
+    Compute the concentration of the infiltrating water by shifting cout with its residence time.
+
+    This function represents a backward operation (equivalent to deconvolution).
+
+    Parameters
+    ----------
+    cout : pandas.Series
+        Concentration of the compound in the extracted water [ng/m3].
+    flow : pandas.Series
+        Flow rate of water in the aquifer [m3/day].
+    alpha : float
+        Shape parameter of gamma distribution (must be > 0)
+    beta : float
+        Scale parameter of gamma distribution (must be > 0)
+    n_bins : int
+        Number of bins to discretize the gamma distribution.
+    retardation_factor : float
+        Retardation factor of the compound in the aquifer.
+
+    Returns
+    -------
+    NotImplementedError
+        This function is not yet implemented.
+    """
+    msg = "Backward advection gamma (deconvolution) is not implemented yet"
+    raise NotImplementedError(msg)
+
+
+def distribution_forward(cin, flow, aquifer_pore_volume_edges, retardation_factor=1.0):
+    """
+    Similar to forward_advection, but with a distribution of aquifer pore volumes.
 
     Parameters
     ----------
@@ -102,3 +191,30 @@ def cout_advection_distribution(cin, flow, aquifer_pore_volume_edges, retardatio
         cout_data = np.nanmean(cout_arr, axis=0)
 
     return pd.Series(data=cout_data, index=flow.index, name="cout")
+
+
+def distribution_backward(cout, flow, aquifer_pore_volume_edges, retardation_factor=1.0):
+    """
+    Compute the concentration of the infiltrating water from the extracted water concentration considering a distribution of aquifer pore volumes.
+
+    This function represents a backward operation (equivalent to deconvolution).
+
+    Parameters
+    ----------
+    cout : pandas.Series
+        Concentration of the compound in the extracted water [ng/m3].
+    flow : pandas.Series
+        Flow rate of water in the aquifer [m3/day].
+    aquifer_pore_volume_edges : array-like
+        Edges of the bins that define the distribution of the aquifer pore volume.
+        Of size nbins + 1 [m3].
+    retardation_factor : float
+        Retardation factor of the compound in the aquifer.
+
+    Returns
+    -------
+    NotImplementedError
+        This function is not yet implemented.
+    """
+    msg = "Backward advection distribution (deconvolution) is not implemented yet"
+    raise NotImplementedError(msg)

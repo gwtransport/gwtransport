@@ -7,15 +7,14 @@ changes, and related coefficients based on extraction data and aquifer propertie
 
 The model assumes requires the groundwaterflow to be reduced to a 1D system. On one side,
 water with a certain concentration infiltrates ('cin'), the water flows through the aquifer and
-the compound of intrest flows through the aquifer with a retarded velocity. During the soil pasage,
+the compound of interest flows through the aquifer with a retarded velocity. During the soil passage,
 deposition enriches the water with the compound. The water is extracted ('cout') and the concentration
 increase due to deposition is called 'dcout'.
 
 Main functions:
-- compute_deposition: Calculate deposition rates from extraction data
-- compute_dc: Determine concentration changes due to deposition
+- backward_deposition: Calculate deposition rates from extraction data (backward operation, equivalent to deconvolution)
+- forward_deposition: Determine concentration changes due to deposition (forward operation, equivalent to convolution)
 - deposition_coefficients: Generate coefficients for deposition modeling
-- interp_series: Interpolate time series data to new time points
 """
 
 import numpy as np
@@ -27,7 +26,7 @@ from gwtransport1d.residence_time import residence_time_retarded
 from gwtransport1d.utils import interp_series
 
 
-def compute_deposition(
+def backward_deposition(
     cout, flow, aquifer_pore_volume, porosity, thickness, retardation_factor, nullspace_objective="squared_lengths"
 ):
     """
@@ -118,9 +117,11 @@ def compute_deposition(
     return pd.Series(data=deposition_data, index=index_dep, name="deposition")
 
 
-def compute_dc(dcout_index, deposition, flow, aquifer_pore_volume, porosity, thickness, retardation_factor):
+def forward_deposition(dcout_index, deposition, flow, aquifer_pore_volume, porosity, thickness, retardation_factor):
     """
     Compute the increase in concentration of the compound in the extracted water by the deposition.
+
+    This function represents a forward operation (equivalent to convolution).
 
     Parameters
     ----------
