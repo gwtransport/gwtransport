@@ -9,7 +9,7 @@ from gwtransport1d.residence_time import residence_time_retarded
 from gwtransport1d.utils import diff
 
 
-def forward_diffusion(
+def forward(
     cin,
     flow,
     aquifer_pore_volume,
@@ -55,7 +55,7 @@ def forward_diffusion(
     return gaussian_filter_variable_sigma(cin.values, sigma_array, truncate=30.0)
 
 
-def backward_diffusion(
+def backward(
     cout,
     flow,
     aquifer_pore_volume,
@@ -277,7 +277,7 @@ def gaussian_filter_variable_sigma(input_signal, sigma_array, truncate=4.0):
     return conv_matrix.dot(input_signal)
 
 
-def create_example_diffusion_data(nx=1000, domain_length=10.0, diffusivity=0.1):
+def create_example_data(nx=1000, domain_length=10.0, diffusivity=0.1):
     """Create example data for demonstrating variable-sigma diffusion.
 
     Parameters
@@ -327,7 +327,7 @@ if __name__ == "__main__":
     from matplotlib import pyplot as plt
 
     # Generate example data
-    x, signal, sigma_array, dt = create_example_diffusion_data()
+    x, signal, sigma_array, dt = create_example_data()
 
     # Apply variable-sigma filtering
     filtered = gaussian_filter_variable_sigma(signal, sigma_array * 5)
