@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from gwtransport1d.gamma import bins as gamma_bins
-from gwtransport1d.residence_time import residence_time_retarded
+from gwtransport1d.residence_time import residence_time
 from gwtransport1d.utils import interp_series, linear_interpolate
 
 
@@ -50,7 +50,7 @@ def forward(cin, flow, aquifer_pore_volume, retardation_factor=1.0, resample_dat
     pandas.Series
         Concentration of the compound in the extracted water [ng/m3].
     """
-    rt_float = residence_time_retarded(
+    rt_float = residence_time(
         flow, aquifer_pore_volume, index=cin.index, retardation_factor=retardation_factor, direction="infiltration"
     )
     rt = pd.to_timedelta(rt_float, unit="D")
@@ -176,7 +176,7 @@ def distribution_forward(cin, flow, aquifer_pore_volume_edges, retardation_facto
     day_of_extraction = np.array(flow.index - flow.index[0]) / np.timedelta64(1, "D")
 
     # Use temperature at center point of bin
-    rt_edges = residence_time_retarded(
+    rt_edges = residence_time(
         flow, aquifer_pore_volume_edges, retardation_factor=retardation_factor, direction="extraction"
     )
     day_of_infiltration_edges = day_of_extraction - rt_edges

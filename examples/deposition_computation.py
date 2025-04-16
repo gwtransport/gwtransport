@@ -10,7 +10,7 @@ import pandas as pd
 
 from gwtransport1d.deposition import backward as deposition_backward
 from gwtransport1d.deposition import forward as deposition_forward
-from gwtransport1d.residence_time import residence_time_retarded
+from gwtransport1d.residence_time import residence_time
 
 # Flow data
 dates = pd.date_range("2020-01-01 23:59:59", periods=400)  # Volume extracted during past day
@@ -40,7 +40,7 @@ aquifer_volume = aquifer_pore_volume / porosity  # m3
 aquifer_surface_area = aquifer_volume / thickness  # m2
 
 # compute concentration of the compound in the extracted water given the deposition [ng/m3]
-rt = residence_time_retarded(
+rt = residence_time(
     flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_as_series=True
 )
 valid_rt_mask = rt.notnull()
@@ -66,10 +66,10 @@ modeled_deposition = deposition_backward(
 )
 
 # Compute the residence time of the extracted water and retarded by the retardation factor
-residence_time = residence_time_retarded(
+residence_time = residence_time(
     flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, retardation_factor=1.0
 )
-residence_time_r = residence_time_retarded(
+residence_time_r = residence_time(
     flow=measurements.flow, aquifer_pore_volume=aquifer_pore_volume, retardation_factor=retardation_factor
 )
 

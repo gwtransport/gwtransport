@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from scipy import ndimage, sparse
 
-from gwtransport1d.residence_time import residence_time_retarded
+from gwtransport1d.residence_time import residence_time
 from gwtransport1d.utils import diff
 
 
@@ -124,7 +124,7 @@ def compute_sigma_array(
     array
         Array of sigma values for diffusion.
     """
-    residence_time = residence_time_retarded(
+    residence_time = residence_time(
         flow=flow,
         aquifer_pore_volume=aquifer_pore_volume,
         retardation_factor=retardation_factor,

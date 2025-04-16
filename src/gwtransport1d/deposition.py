@@ -22,7 +22,7 @@ import pandas as pd
 from scipy.linalg import null_space
 from scipy.optimize import minimize
 
-from gwtransport1d.residence_time import residence_time_retarded
+from gwtransport1d.residence_time import residence_time
 from gwtransport1d.utils import interp_series
 
 
@@ -184,7 +184,7 @@ def deposition_coefficients(dcout_index, flow, aquifer_pore_volume, porosity, th
         Datetime index of the deposition.
     """
     # Get deposition indices
-    rt = residence_time_retarded(
+    rt = residence_time(
         flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction"
     )
     index_dep = deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, retardation_factor)
@@ -197,7 +197,7 @@ def deposition_coefficients(dcout_index, flow, aquifer_pore_volume, porosity, th
         data={
             "flow": flow[dcout_index.floor(freq="D")].values,
             "rt": pd.to_timedelta(interp_series(rt, dcout_index), "D"),
-            "dates_infiltration_retarded": dcout_index - pd.to_timedelta(interp_series(rt, dcout_index), "D"),
+            "dates_infiltration": dcout_index - pd.to_timedelta(interp_series(rt, dcout_index), "D"),
             "darea": flow[dcout_index.floor(freq="D")].values
             / (retardation_factor * porosity * thickness),  # Aquifer area cathing deposition
         },
@@ -208,10 +208,10 @@ def deposition_coefficients(dcout_index, flow, aquifer_pore_volume, porosity, th
     dt = np.zeros((len(dcout_index), len(index_dep)), dtype=float)
 
     for iout, (date_extraction, row) in enumerate(df.iterrows()):
-        itinf = index_dep.searchsorted(row.dates_infiltration_retarded.floor(freq="D"))  # partial day
+        itinf = index_dep.searchsorted(row.dates_infiltration.floor(freq="D"))  # partial day
         itextr = index_dep.searchsorted(date_extraction.floor(freq="D"))  # whole day
 
-        dt[iout, itinf] = (index_dep[itinf + 1] - row.dates_infiltration_retarded) / pd.to_timedelta(1.0, unit="D")
+        dt[iout, itinf] = (index_dep[itinf + 1] - row.dates_infiltration) / pd.to_timedelta(1.0, unit="D")
         dt[iout, itinf + 1 : itextr] = 1.0
 
         # fraction of first day
@@ -273,7 +273,7 @@ def deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, re
     pandas.DatetimeIndex
         Index of the deposition.
     """
-    rt = residence_time_retarded(
+    rt = residence_time(
         flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_as_series=True
     )
     rt_at_start_cout = pd.to_timedelta(interp_series(rt, dcout_index.min()), "D")
