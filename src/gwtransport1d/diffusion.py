@@ -129,7 +129,7 @@ def compute_sigma_array(
         aquifer_pore_volume=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="infiltration",
-        return_as_series=True,
+        return_pandas_series=True,
     )
     residence_time = residence_time.interpolate(method="nearest").ffill().bfill()
     timedelta_at_departure = diff(flow.index, alignment="right") / pd.to_timedelta(1, unit="D")

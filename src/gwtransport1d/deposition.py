@@ -274,7 +274,7 @@ def deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, re
         Index of the deposition.
     """
     rt = residence_time(
-        flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_as_series=True
+        flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_pandas_series=True
     )
     rt_at_start_cout = pd.to_timedelta(interp_series(rt, dcout_index.min()), "D")
     start_dep = (dcout_index.min() - rt_at_start_cout).floor("D")

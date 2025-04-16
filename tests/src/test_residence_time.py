@@ -79,14 +79,14 @@ def test_custom_index():
     assert result.shape[1] == len(custom_dates)
 
 
-def test_return_as_series():
+def test_return_pandas_series():
     """Test returning results as pandas Series."""
     dates = pd.date_range(start="2023-01-01", end="2023-01-05", freq="D")
     flow = pd.Series(data=[100.0] * 5, index=dates)
     pore_volume = 200.0
 
     result = residence_time(
-        flow=flow, aquifer_pore_volume=pore_volume, direction="extraction", return_as_series=True
+        flow=flow, aquifer_pore_volume=pore_volume, direction="extraction", return_pandas_series=True
     )
 
     assert isinstance(result, pd.Series)

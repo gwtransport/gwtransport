@@ -41,7 +41,7 @@ aquifer_surface_area = aquifer_volume / thickness  # m2
 
 # compute concentration of the compound in the extracted water given the deposition [ng/m3]
 rt = residence_time(
-    flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_as_series=True
+    flow, aquifer_pore_volume, retardation_factor=retardation_factor, direction="extraction", return_pandas_series=True
 )
 valid_rt_mask = rt.notnull()
 modeled_cout = deposition_forward(
