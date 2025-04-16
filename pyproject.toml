@@ -32,7 +32,7 @@ version = "0.7.0"
 [project.optional-dependencies]
 test = [
   "pytest",
-  "ruff==0.6.8",
+  "ruff==0.11.0",
   "validate-pyproject[all,store]",
   "pytest-cov",
   "pytest-xdist",
