@@ -21,9 +21,11 @@ parallel systems, a weighted average based on flow distribution is required.
 """
 
 import numpy as np
+from scipy import stats
+from scipy.special import digamma, gamma
 
 
-def calculate_parallel_log_removal(log_removals, flow_fractions=None):
+def parallel_mean(log_removals, flow_fractions=None):
     """
     Calculate the weighted average log removal for a system with parallel flows.
 
@@ -130,3 +132,175 @@ def calculate_parallel_log_removal(log_removals, flow_fractions=None):
 
     # Convert back to log scale
     return -np.log10(weighted_decimal_reduction)
+
+
+def gamma_pdf(r, rt_alpha, rt_beta, C):
+    """
+    Compute the probability density function (PDF) of log removal given a gamma distribution for the residence time.
+
+    gamma(rt_alpha, rt_beta) = gamma(apv_alpha, apv_beta / flow)
+
+    Parameters
+    ----------
+    r : array_like
+        Log removal values at which to compute the PDF.
+    rt_alpha : float
+        Shape parameter of the gamma distribution for residence time.
+    rt_beta : float
+        Scale parameter of the gamma distribution for residence time.
+    C : float
+        Coefficient for log removal calculation (R = C * log10(T)).
+
+    Returns
+    -------
+    pdf_values : ndarray
+        PDF values corresponding to the input r values.
+    """
+    # Compute the transformed PDF
+    t_values = 10 ** (r / C)
+
+    return (
+        (np.log(10) / (C * gamma(rt_alpha) * (rt_beta**rt_alpha))) * (t_values**rt_alpha) * np.exp(-t_values / rt_beta)
+    )
+
+
+def gamma_cdf(r, rt_alpha, rt_beta, C):
+    """
+    Compute the cumulative distribution function (CDF) of log removal given a gamma distribution for the residence time.
+
+    gamma(rt_alpha, rt_beta) = gamma(apv_alpha, apv_beta / flow)
+
+    Parameters
+    ----------
+    r : array_like
+        Log removal values at which to compute the CDF.
+    alpha : float
+        Shape parameter of the gamma distribution for residence time.
+    beta : float
+        Scale parameter of the gamma distribution for residence time.
+    C : float
+        Coefficient for log removal calculation (R = C * log10(T)).
+
+    Returns
+    -------
+    cdf_values : ndarray
+        CDF values corresponding to the input r values.
+    """
+    # Compute t values corresponding to r values
+    t_values = 10 ** (r / C)
+
+    # Use the gamma CDF directly
+    return stats.gamma.cdf(t_values, a=rt_alpha, scale=rt_beta)
+
+
+def gamma_mean(rt_alpha, rt_beta, C):
+    """
+    Compute the mean of the log removal distribution given a gamma distribution for the residence time.
+
+    gamma(rt_alpha, rt_beta) = gamma(apv_alpha, apv_beta / flow)
+
+    Parameters
+    ----------
+    rt_alpha : float
+        Shape parameter of the gamma distribution for residence time.
+    rt_beta : float
+        Scale parameter of the gamma distribution for residence time.
+    C : float
+        Coefficient for log removal calculation (R = C * log10(T)).
+
+    Returns
+    -------
+    mean : float
+        Mean value of the log removal distribution.
+    """
+    # Calculate E[R] = C * E[log10(T)]
+    # For gamma distribution: E[ln(T)] = digamma(alpha) + ln(beta_adjusted)
+    # Convert to log10: E[log10(T)] = E[ln(T)] / ln(10)
+
+    return (C / np.log(10)) * (digamma(rt_alpha) + np.log(rt_beta))
+
+
+def gamma_find_flow_for_target_mean(target_mean, apv_alpha, apv_beta, C):
+    """
+    Find the flow rate flow that produces a specified target mean log removal given a gamma distribution for the residence time.
+
+    gamma(rt_alpha, rt_beta) = gamma(apv_alpha, apv_beta / flow)
+
+    Parameters
+    ----------
+    target_mean : float
+        Target mean log removal value.
+    apv_alpha : float
+        Shape parameter of the gamma distribution for residence time.
+    apv_beta : float
+        Scale parameter of the gamma distribution for pore volume.
+    C : float
+        Coefficient for log removal calculation (R = C * log10(T)).
+
+    Returns
+    -------
+    flow : float
+        Flow rate that produces the target mean log removal.
+
+    Notes
+    -----
+    This function uses the analytical solution derived from the mean formula.
+    From E[R] = (C/ln(10)) * (digamma(alpha) + ln(beta) - ln(Q)),
+    we can solve for Q to get:
+    flow = beta * exp(ln(10)*target_mean/C - digamma(alpha))
+    """
+    # Rearranging the mean formula to solve for Q:
+    # target_mean = (C/ln(10)) * (digamma(alpha) + ln(beta) - ln(Q))
+    # ln(Q) = digamma(alpha) + ln(beta) - (ln(10)*target_mean/C)
+    # Q = beta * exp(-(ln(10)*target_mean/C - digamma(alpha)))
+    return apv_beta * np.exp(digamma(apv_alpha) - (np.log(10) * target_mean) / C)
+
+
+# Example usage
+if __name__ == "__main__":
+    # Example parameters
+    Q = 5.0  # Flow rate
+    apv_alpha = 2.0
+    apv_beta = 10.0  # Scale parameter for pore volume
+    rt_alpha = 2.0
+    rt_beta = apv_beta / Q  # Scale parameter for pore volume
+    C = 2.0  # Coefficient for log removal
+
+    # Generate range of log removal values
+    r_values = np.linspace(-1, 5, 1000)
+
+    mean = gamma_mean(rt_alpha, rt_beta, C)
+    print(f"Mean log removal: {mean:.4f}")
+
+    # Example of finding Q for a target mean log removal
+    target_mean = 3.0  # Example target mean
+    required_Q = gamma_find_flow_for_target_mean(target_mean, apv_alpha, apv_beta, C)
+    print(f"Flow rate Q required for mean log removal of {target_mean}: {required_Q:.4f}")
+
+    # Verify the result
+    verification_mean = gamma_mean(rt_alpha, rt_beta, C)
+    print(f"Verification - mean log removal with Q = {required_Q:.4f}: {verification_mean:.4f}")
+
+    # To visualize (optional):
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(12, 5))
+
+    plt.subplot(1, 2, 1)
+    pdf = gamma_pdf(r_values, rt_alpha, rt_beta, C)
+    cdf = gamma_cdf(r_values, rt_alpha, rt_beta, C)
+    plt.plot(r_values, pdf)
+    plt.title("PDF of Log Removal")
+    plt.xlabel("Log Removal (R)")
+    plt.ylabel("Probability Density")
+    plt.grid(True)
+
+    plt.subplot(1, 2, 2)
+    plt.plot(r_values, cdf)
+    plt.title("CDF of Log Removal")
+    plt.xlabel("Log Removal (R)")
+    plt.ylabel("Cumulative Probability")
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.show()
