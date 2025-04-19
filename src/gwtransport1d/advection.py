@@ -21,6 +21,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from gwtransport1d import gamma
 from gwtransport1d.gamma import bins as gamma_bins
 from gwtransport1d.residence_time import residence_time
 from gwtransport1d.utils import interp_series, linear_interpolate
@@ -86,7 +87,7 @@ def backward(cout, flow, aquifer_pore_volume, retardation_factor=1.0, resample_d
     raise NotImplementedError(msg)
 
 
-def gamma_forward(cin, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
+def gamma_forward(cin, flow, alpha=None, beta=None, mean=None, std=None, n_bins=100, retardation_factor=1.0):
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.
 
@@ -97,16 +98,22 @@ def gamma_forward(cin, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
 
     This function represents a forward operation (equivalent to convolution).
 
+    Provide either alpha and beta or mean and std.
+
     Parameters
     ----------
     cin : pandas.Series
         Concentration of the compound in the extracted water [ng/m3] or temperature in infiltrating water.
     flow : pandas.Series
         Flow rate of water in the aquifer [m3/day].
-    alpha : float
-        Shape parameter of gamma distribution (must be > 0)
-    beta : float
-        Scale parameter of gamma distribution (must be > 0)
+    alpha : float, optional
+        Shape parameter of gamma distribution of the aquifer pore volume (must be > 0)
+    beta : float, optional
+        Scale parameter of gamma distribution of the aquifer pore volume (must be > 0)
+    mean : float, optional
+        Mean of the gamma distribution.
+    std : float, optional
+        Standard deviation of the gamma distribution.
     n_bins : int
         Number of bins to discretize the gamma distribution.
     retardation_factor : float
@@ -117,6 +124,12 @@ def gamma_forward(cin, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
     pandas.Series
         Concentration of the compound in the extracted water [ng/m3] or temperature.
     """
+    if alpha is None or beta is None:
+        if mean is None or std is None:
+            msg = "Either alpha and beta or mean and std must be provided."
+            raise ValueError(msg)
+        alpha, beta = gamma.mean_std_to_alpha_beta(mean, std)
+
     bins = gamma_bins(alpha, beta, n_bins)
     return distribution_forward(cin, flow, bins["edges"], retardation_factor=retardation_factor)
 
@@ -134,9 +147,9 @@ def gamma_backward(cout, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
     flow : pandas.Series
         Flow rate of water in the aquifer [m3/day].
     alpha : float
-        Shape parameter of gamma distribution (must be > 0)
+        Shape parameter of gamma distribution of the aquifer pore volume (must be > 0)
     beta : float
-        Scale parameter of gamma distribution (must be > 0)
+        Scale parameter of gamma distribution of the aquifer pore volume (must be > 0)
     n_bins : int
         Number of bins to discretize the gamma distribution.
     retardation_factor : float
