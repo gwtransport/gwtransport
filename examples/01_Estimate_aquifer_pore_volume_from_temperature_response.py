@@ -108,7 +108,7 @@ plt.tight_layout()
 # -------------------
 # The number of bins is reduced here for demonstration (dramatic) purposes.
 #
-# Note that the gamma distribution can be parameterized in two ways:
+# Note that the gamma distribution is parameterized here in two ways:
 # - Shape and scale (alpha, beta)
 # - Mean and standard deviation (mean, std)
 # The two parameterizations are related by the following equations:
@@ -120,7 +120,7 @@ n_bins = 10
 alpha, beta = gamma_utils.mean_std_to_alpha_beta(mean, std)
 gbins = gamma_utils.bins(alpha, beta, n_bins=n_bins)
 
-print(f"Gamma distribution (alpha={alpha:.1f}, beta={beta:.1f}) divided into {n_bins} equal-mass bins:")
+print(f"Gamma distribution (alpha={alpha:.1f}, beta={beta:.1f}) divided into {n_bins} equal-volume bins:")
 print("-" * 80)
 print(f"{'Bin':3s} {'Lower':10s} {'Upper':10s} {'E[X|bin]':10s} {'P(bin)':10s}")
 print("-" * 80)
@@ -151,10 +151,12 @@ x = np.linspace(0, 1.1 * gbins["expected_value"][-1], 1000)
 y = gamma_dist.pdf(x, alpha, scale=beta)
 
 fig, ax = plt.subplots(figsize=(10, 6))
-ax.plot(x, y, label="Gamma PDF", color="C0", alpha=0.8, linewidth=0.8)
-ax.vlines(
-    gbins["edges"][:-1], 0, gamma_dist.pdf(gbins["edges"][:-1], alpha, scale=beta), color="C1", alpha=0.8, linewidth=0.8
+ax.set_title(
+    f"Gamma distribution (alpha={alpha:.1f}, beta={beta:.1f}, mean={mean:.1f}, std={std:.1f}) divided into {n_bins} equal-volume bins:"
 )
+ax.plot(x, y, label="Gamma PDF", color="C0", alpha=0.8, linewidth=0.8)
+pdf_at_lower_bound = gamma_dist.pdf(gbins["lower_bound"], alpha, scale=beta)
+ax.vlines(gbins["lower_bound"], 0, pdf_at_lower_bound, color="C1", alpha=0.8, linewidth=0.8)
 ax.set_xlabel("Aquifer pore volume (m³)")
 ax.set_ylabel("Probability density (-)")
 ax.legend()
