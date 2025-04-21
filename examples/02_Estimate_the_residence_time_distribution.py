@@ -98,7 +98,6 @@ ax[1].text(
     fontsize=10,
 )
 plt.tight_layout()
-plt.show()
 
 # %%
 # 4. Residence time as a function of flow
@@ -125,4 +124,3 @@ ax.set_ylabel("Residence time [days]")
 ax.set_title("Residence time as a function of flow")
 ax.legend()
 plt.tight_layout()
-plt.show()
