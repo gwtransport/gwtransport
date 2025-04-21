@@ -1,15 +1,26 @@
 """
 Example 1: Estimation of aquifer pore volume using temperature response.
 
-This notebook demonstrates how to use temperature data to estimate the aquifer
-pore volume by fitting a gamma distribution to the temperature response of the aquifer.
+This notebook demonstrates how to use temperature data to estimate the aquifer pore volume distribution.
+The aquifer pore volume distribution directly affects the distribution of residence time of
+the extracted water. We seek a distribution of aquifer pore volume that retards the temperature of the
+infiltrating water to match the temperature of the extracted water.
+
+An estimate of the aquifer pore volume distribution is the starting point for:
+- Forecasting the concentration/temperature of the extracted water.
+- Estimating the residence time of the infiltrating/extracted water.
+- Log-removal of pathogens based on residence time.
 
 Key concepts:
-- Using temperature time series to infer aquifer properties
-- Fitting gamma distribution parameters of the aquifer pore volume (alpha/beta or mean/std)
+- Temperature of the infiltrating water, temperature of the extracted water and the flow rate are known.
+- Fitting gamma distribution parameters of the aquifer pore volume.
 - The distribution is discretized into bins that convey an equal fraction of the flow, similar to streamlines.
 - Per bin, at every time of extraction, the time of infiltration is computed. See Example 2 for more details on residence time.
 - The temperature of the extracted water is the average of all bins of the temperature at the time of infiltration.
+
+Assumptions:
+- The aquifer pore volume distribution is constant over time.
+- Advection is the only transport process.
 """
 
 import matplotlib.pyplot as plt
