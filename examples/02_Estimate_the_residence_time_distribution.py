@@ -1,4 +1,5 @@
 """Example 2: Estimation of the residence time distribution using synthetic data."""
+
 import warnings
 
 import matplotlib.pyplot as plt
