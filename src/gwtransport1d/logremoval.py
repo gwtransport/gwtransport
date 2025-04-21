@@ -91,11 +91,6 @@ def parallel_mean(log_removals, flow_fractions=None):
     See Also
     --------
     For systems in series, log removals would be summed directly.
-
-    References
-    ----------
-    USEPA (2006). Ultraviolet Disinfection Guidance Manual for the
-    Final Long Term 2 Enhanced Surface Water Treatment Rule.
     """
     # Convert log_removals to numpy array if it isn't already
     log_removals = np.asarray(log_removals, dtype=float)
