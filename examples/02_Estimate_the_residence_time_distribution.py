@@ -1,11 +1,26 @@
-"""Example 2: Estimation of the residence time distribution using synthetic data."""
+"""
+Example 2: Estimation of the residence time distribution using synthetic data.
+
+This notebook demonstrates how to estimate the residence time distribution from the
+aquifer pore volume distribution (See: Example 1) and the flow rate. The residence time is the time
+it takes for water to travel through the aquifer. It is a key parameter in
+groundwater transport modeling and is important for understanding the fate and
+transport of contaminants in groundwater systems.
+
+Assumptions:
+- The aquifer pore volume distribution is constant over time.
+- Advection is the only transport process.
+
+Two types of residence time are computed:
+- Forward: In how many days from now is the water extracted?
+- Backward: How many days ago was the water infiltrated?
+"""
 
 import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
 from example_data_generation import generate_synthetic_data
-from scipy.stats import gamma as gamma_dist
 
 from gwtransport1d import advection
 from gwtransport1d import gamma as gamma_utils
@@ -22,6 +37,7 @@ plt.style.use("seaborn-v0_8-whitegrid")
 mean, std = 8000.0, 400.0  # m3
 retardation_factor = 2.0
 mean_flow = 120.0  # m3/day
+
 df = generate_synthetic_data(
     start_date="2020-01-01",
     end_date="2025-12-31",
@@ -36,42 +52,47 @@ df = generate_synthetic_data(
     random_seed=42,
 )
 
-# %%
-# 2. Compute and plot the mean residence time of the generated data
-# -----------------------------------------------------------------
-# Compute the residence time of the generated data
-
 # Discretize the aquifer pore volume distribution in bins
 alpha, beta = gamma_utils.mean_std_to_alpha_beta(mean, std)
 bins = gamma_utils.bins(alpha, beta, n_bins=1000)
 
-# Compute the residence time for every bin. Data returned is of shape (n_bins, n_days)
-rt_forward = advection.residence_time(
+# %%
+# 2. Forward: Compute and plot the residence time
+# ---------------------------------------------------------------------
+# Compute the residence time at the time of infiltration of the generated data for every bin of the aquifer pore volume distribion.
+# Data returned is of shape (n_bins, n_days). First with retardation factor = 1.0, then with the
+# retardation factor of the temperature in the aquifer (= 2).
+rt_forward_rf1 = advection.residence_time(
     df.flow,
     bins["expected_value"],
     retardation_factor=1.0,  # Note that we are computing the rt of the water, not the heat transport
     direction="infiltration",
 )
-rt_backward = advection.residence_time(
+rt_forward_rf2 = advection.residence_time(
     df.flow,
     bins["expected_value"],
-    retardation_factor=1.0,
-    direction="extraction",
+    retardation_factor=retardation_factor,
+    direction="infiltration",
 )
 
+# The rt_forward_rf1 and rt_forward_rf2 arrays contain the residence time distribution at each timestamp of infiltration. This distribution varies over time.
+# Here, we compute the mean residence time for each timestamp of infiltration, and certain quantiles to visualize the spread in residence time.
 # Note that the residence time can not be computed at the outer ends.
+quantiles = [1, 10, 90, 99]
+quantile_headers = [f"rt_forward_rf1_{q}%" for q in quantiles]
+
 with warnings.catch_warnings():
     warnings.filterwarnings(action="ignore", message="Mean of empty slice")
     warnings.filterwarnings(action="ignore", message="All-NaN slice encountered")
-    df["rt_forward_mean"] = np.nanmean(rt_forward, axis=0)  # last values not defined
-    df["rt_backward_mean"] = np.nanmean(rt_backward, axis=0)  # first values not defined
+    df["rt_forward_rf1_mean"] = np.nanmean(rt_forward_rf1, axis=0)  # last values not defined
+    df["rt_forward_rf2_mean"] = np.nanmean(rt_forward_rf2, axis=0)  # last values not defined
 
-    df["rt_forward_fastest_5perc"] = np.nanpercentile(rt_forward, 5, axis=0)  # last values not defined
-    df["rt_backward_fastest_5perc"] = np.nanpercentile(rt_backward, 5, axis=0)  # first values not defined
+    df[quantile_headers] = np.nanpercentile(rt_forward_rf1, quantiles, axis=0).T  # last values not defined
 
 # %%
-# 3. Plot the results
-# -------------------
+# 3. Forward: Plot the results
+# ----------------------------
+# Forward: After how many days is the water extracted?
 
 fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
 ax[0].plot(df.index, df.flow, label="Flow", color="C0")
@@ -79,11 +100,13 @@ ax[0].set_ylabel("Flow [m³/day]")
 ax[0].legend(loc="upper left")
 
 # Plot the residence time
-ax[1].plot(df.index, df.rt_forward_mean, label="Mean residence time (forward)", color="C1")
-ax[1].plot(df.index, df.rt_backward_mean, label="Mean residence time (backward)", color="C2")
-ax[1].plot(df.index, df.rt_forward_fastest_5perc, label="Fastest 5% residence time (forward)", color="C1", ls="--")
-ax[1].plot(df.index, df.rt_backward_fastest_5perc, label="Fastest 5% residence time (backward)", color="C2", ls="--")
-ax[1].set_title("Residence time of the aquifer")
+ax[1].plot(df.index, df.rt_forward_rf1_mean, label="Mean (forward; retardation=1)")
+ax[1].plot(df.index, df.rt_forward_rf2_mean, label=f"Mean (forward; retardation={retardation_factor:.1f})")
+
+for q in quantiles:
+    ax[1].plot(df.index, df[f"rt_forward_rf1_{q}%"], label=f"Quantile {q}% (forward; retardation=1)", ls="--", lw=0.8)
+
+ax[1].set_title("Residence time in the aquifer")
 ax[1].set_ylabel("Residence time [days]")
 ax[1].legend(loc="upper left")
 ax[1].set_xlabel("Date")
@@ -92,7 +115,7 @@ ax[1].set_xlabel("Date")
 ax[1].text(
     0.01,
     0.01,
-    "Forward: After how many days is the water extracted?\nBackward: How many days ago was the water infiltrated?",
+    "Forward: After how many days is the water extracted?",
     ha="left",
     va="bottom",
     transform=ax[1].transAxes,
@@ -101,27 +124,62 @@ ax[1].text(
 plt.tight_layout()
 
 # %%
-# 4. Residence time as a function of flow
-# ---------------------------------------
-# If the flow is constant we can compute the residence time distribution directly from the aquifer pore volume distribution.
+# 4. Backward: Compute and plot the residence time
+# ------------------------------------------------
+# Compute the residence time at the time of extraction of the generated data for every bin of the aquifer pore volume distribion.
+# Data returned is of shape (n_bins, n_days). First with retardation factor = 1.0, then with the
+# retardation factor of the temperature in the aquifer (= 2).
+rt_backward_rf1 = advection.residence_time(
+    df.flow,
+    bins["expected_value"],
+    retardation_factor=1.0,
+    direction="extraction",
+)
+rt_backward_rf2 = advection.residence_time(
+    df.flow,
+    bins["expected_value"],
+    retardation_factor=retardation_factor,
+    direction="extraction",
+)
+# The rt_backward_rf1 and rt_backward_rf2 arrays contain the residence time distribution at each timestamp of extraction. This distribution varies over time.
+# Here, we compute the mean residence time for each timestamp of extraction, and certain quantiles to visualize the spread in residence time.
+quantiles = [1, 10, 90, 99]
+quantile_headers = [f"rt_backward_rf1_{q}%" for q in quantiles]
+with warnings.catch_warnings():
+    warnings.filterwarnings(action="ignore", message="Mean of empty slice")
+    warnings.filterwarnings(action="ignore", message="All-NaN slice encountered")
+    df["rt_backward_rf1_mean"] = np.nanmean(rt_backward_rf1, axis=0)  # last values not defined
+    df["rt_backward_rf2_mean"] = np.nanmean(rt_backward_rf2, axis=0)  # last values not defined
 
-# Flows for which to compute the residence time
-flows = np.linspace(0.1, mean_flow, 100)  # m3/day
+    df[quantile_headers] = np.nanpercentile(rt_backward_rf1, quantiles, axis=0).T  # last values not defined
 
-alpha, beta = gamma_utils.mean_std_to_alpha_beta(mean, std)
-
-quantiles = np.array([0.1, 0.5, 0.9])
-scaled_beta = beta / flows
-bin_edges = gamma_dist.ppf(quantiles[:, None], alpha, scale=scaled_beta[None, :])
-
-# Plot on log-log scale
-
-
-fig, ax = plt.subplots(figsize=(12, 6))
-for i, q in enumerate(quantiles):
-    ax.loglog(flows, bin_edges[i], label=f"Quantile {q:.0%}")
-ax.set_xlabel("Flow [m³/day]")
-ax.set_ylabel("Residence time [days]")
-ax.set_title("Residence time as a function of flow")
-ax.legend()
+# %%
+# 5. Backward: Plot the results
+# ----------------------------
+# Backward: How many days ago was the water infiltrated?
+fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+ax[0].plot(df.index, df.flow, label="Flow", color="C0")
+ax[0].set_ylabel("Flow [m³/day]")
+ax[0].legend(loc="upper left")
+# Plot the residence time
+ax[1].plot(df.index, df.rt_backward_rf1_mean, label="Mean (backward; retardation=1)")
+ax[1].plot(df.index, df.rt_backward_rf2_mean, label=f"Mean (backward; retardation={retardation_factor:.1f})")
+for q in quantiles:
+    ax[1].plot(df.index, df[f"rt_backward_rf1_{q}%"], label=f"Quantile {q}% (backward; retardation=1)", ls="--", lw=0.8)
+ax[1].set_title("Residence time in the aquifer")
+ax[1].set_ylabel("Residence time [days]")
+ax[1].legend(loc="upper left")
+ax[1].set_xlabel("Date")
+# Make a note about forward and backward residence time
+ax[1].text(
+    0.01,
+    0.01,
+    "Backward: How many days ago was the water infiltrated?",
+    ha="left",
+    va="bottom",
+    transform=ax[1].transAxes,
+    fontsize=10,
+)
 plt.tight_layout()
+
+plt.show()
