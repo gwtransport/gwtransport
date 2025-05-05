@@ -23,7 +23,7 @@ def generate_synthetic_data(
     temp_infiltration_noise=1.0,  # °C
     aquifer_pore_volume=1000.0,  # m3
     aquifer_pore_volume_std=200.0,  # m3
-    retardation_factor=1.0
+    retardation_factor=1.0,
 ):
     """
     Generate synthetic temperature and flow data for groundwater transport examples.
@@ -81,10 +81,13 @@ def generate_synthetic_data(
     infiltration_temp += np.random.normal(0, temp_infiltration_noise, len(dates))
 
     # Create data frame
-    df = pd.DataFrame(data={
-        "flow": flow,
-        "temp_infiltration": infiltration_temp,
-    }, index=dates)
+    df = pd.DataFrame(
+        data={
+            "flow": flow,
+            "temp_infiltration": infiltration_temp,
+        },
+        index=dates,
+    )
     df["temp_extraction"] = advection.gamma_forward(
         df["temp_infiltration"],
         df["flow"],

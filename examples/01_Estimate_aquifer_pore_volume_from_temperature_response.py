@@ -52,7 +52,6 @@ df = generate_synthetic_data(
     aquifer_pore_volume=8000.0,  # m3
     aquifer_pore_volume_std=400.0,  # m3
     retardation_factor=2.0,
-    random_seed=42,
 )
 
 print("Data summary:")
@@ -62,6 +61,7 @@ print(f"- Mean infiltration temperature: {df['temp_infiltration'].mean():.1f} °
 print(f"- Mean extraction temperature: {df['temp_extraction'].mean():.1f} °C")
 print(f"- True mean of aquifer pore volume distribution: {df.attrs['aquifer_pore_volume_mean']:.1f} m³")
 print(f"- True standard deviation of aquifer pore volume distribution: {df.attrs['aquifer_pore_volume_std']:.1f} m³")
+
 
 # %%
 # 3. Curve fitting to estimate aquifer pore volume distribution parameters

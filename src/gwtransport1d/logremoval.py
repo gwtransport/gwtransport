@@ -155,7 +155,9 @@ def gamma_pdf(r, rt_alpha, rt_beta, log_removal_rate):
     t_values = 10 ** (r / log_removal_rate)
 
     return (
-        (np.log(10) / (log_removal_rate * gamma(rt_alpha) * (rt_beta**rt_alpha))) * (t_values**rt_alpha) * np.exp(-t_values / rt_beta)
+        (np.log(10) / (log_removal_rate * gamma(rt_alpha) * (rt_beta**rt_alpha)))
+        * (t_values**rt_alpha)
+        * np.exp(-t_values / rt_beta)
     )
 
 
