@@ -8,7 +8,7 @@ infiltrating water to match the temperature of the extracted water.
 
 An estimate of the aquifer pore volume distribution is the starting point for:
 - Forecasting the concentration/temperature of the extracted water.
-- Estimating the residence time of the infiltrating/extracted water.
+- Estimating the residence time of the infiltrating/extracted water (Example 2).
 - Log-removal of pathogens based on residence time.
 
 Key concepts:
@@ -62,7 +62,6 @@ print(f"- Mean infiltration temperature: {df['temp_infiltration'].mean():.1f} °
 print(f"- Mean extraction temperature: {df['temp_extraction'].mean():.1f} °C")
 print(f"- True mean of aquifer pore volume distribution: {df.attrs['aquifer_pore_volume_mean']:.1f} m³")
 print(f"- True standard deviation of aquifer pore volume distribution: {df.attrs['aquifer_pore_volume_std']:.1f} m³")
-
 
 # %%
 # 3. Curve fitting to estimate aquifer pore volume distribution parameters
@@ -125,8 +124,6 @@ plt.tight_layout()
 # The two parameterizations are related by the following equations:
 # - mean = alpha * beta
 # - std = beta * sqrt(alpha)
-
-
 n_bins = 10
 alpha, beta = gamma_utils.mean_std_to_alpha_beta(mean, std)
 gbins = gamma_utils.bins(alpha, beta, n_bins=n_bins)
@@ -171,3 +168,4 @@ ax.vlines(gbins["lower_bound"], 0, pdf_at_lower_bound, color="C1", alpha=0.8, li
 ax.set_xlabel("Aquifer pore volume (m³)")
 ax.set_ylabel("Probability density (-)")
 ax.legend()
+plt.show()

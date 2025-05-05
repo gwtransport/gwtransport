@@ -92,8 +92,7 @@ with warnings.catch_warnings():
 # %%
 # 3. Forward: Plot the results
 # ----------------------------
-# Forward: After how many days is the water extracted?
-
+# Forward: In how many days from now is the water extracted?
 fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
 ax[0].plot(df.index, df.flow, label="Flow", color="C0")
 ax[0].set_ylabel("Flow [m³/day]")
@@ -115,7 +114,7 @@ ax[1].set_xlabel("Date")
 ax[1].text(
     0.01,
     0.01,
-    "Forward: After how many days is the water extracted?",
+    "Forward: In how many days from now is the water extracted?",
     ha="left",
     va="bottom",
     transform=ax[1].transAxes,
@@ -181,5 +180,4 @@ ax[1].text(
     fontsize=10,
 )
 plt.tight_layout()
-
 plt.show()
