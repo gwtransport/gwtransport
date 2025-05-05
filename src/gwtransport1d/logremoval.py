@@ -129,7 +129,7 @@ def parallel_mean(log_removals, flow_fractions=None):
     return -np.log10(weighted_decimal_reduction)
 
 
-def gamma_pdf(r, rt_alpha, rt_beta, C):
+def gamma_pdf(r, rt_alpha, rt_beta, log_removal_rate):
     """
     Compute the probability density function (PDF) of log removal given a gamma distribution for the residence time.
 
@@ -143,8 +143,8 @@ def gamma_pdf(r, rt_alpha, rt_beta, C):
         Shape parameter of the gamma distribution for residence time.
     rt_beta : float
         Scale parameter of the gamma distribution for residence time.
-    C : float
-        Coefficient for log removal calculation (R = C * log10(T)).
+    log_removal_rate : float
+        Coefficient for log removal calculation (R = log_removal_rate * log10(T)).
 
     Returns
     -------
@@ -152,14 +152,14 @@ def gamma_pdf(r, rt_alpha, rt_beta, C):
         PDF values corresponding to the input r values.
     """
     # Compute the transformed PDF
-    t_values = 10 ** (r / C)
+    t_values = 10 ** (r / log_removal_rate)
 
     return (
-        (np.log(10) / (C * gamma(rt_alpha) * (rt_beta**rt_alpha))) * (t_values**rt_alpha) * np.exp(-t_values / rt_beta)
+        (np.log(10) / (log_removal_rate * gamma(rt_alpha) * (rt_beta**rt_alpha))) * (t_values**rt_alpha) * np.exp(-t_values / rt_beta)
     )
 
 
-def gamma_cdf(r, rt_alpha, rt_beta, C):
+def gamma_cdf(r, rt_alpha, rt_beta, log_removal_rate):
     """
     Compute the cumulative distribution function (CDF) of log removal given a gamma distribution for the residence time.
 
@@ -173,8 +173,8 @@ def gamma_cdf(r, rt_alpha, rt_beta, C):
         Shape parameter of the gamma distribution for residence time.
     beta : float
         Scale parameter of the gamma distribution for residence time.
-    C : float
-        Coefficient for log removal calculation (R = C * log10(T)).
+    log_removal_rate : float
+        Coefficient for log removal calculation (R = log_removal_rate * log10(T)).
 
     Returns
     -------
@@ -182,13 +182,13 @@ def gamma_cdf(r, rt_alpha, rt_beta, C):
         CDF values corresponding to the input r values.
     """
     # Compute t values corresponding to r values
-    t_values = 10 ** (r / C)
+    t_values = 10 ** (r / log_removal_rate)
 
     # Use the gamma CDF directly
     return stats.gamma.cdf(t_values, a=rt_alpha, scale=rt_beta)
 
 
-def gamma_mean(rt_alpha, rt_beta, C):
+def gamma_mean(rt_alpha, rt_beta, log_removal_rate):
     """
     Compute the mean of the log removal distribution given a gamma distribution for the residence time.
 
@@ -200,22 +200,22 @@ def gamma_mean(rt_alpha, rt_beta, C):
         Shape parameter of the gamma distribution for residence time.
     rt_beta : float
         Scale parameter of the gamma distribution for residence time.
-    C : float
-        Coefficient for log removal calculation (R = C * log10(T)).
+    log_removal_rate : float
+        Coefficient for log removal calculation (R = log_removal_rate * log10(T)).
 
     Returns
     -------
     mean : float
         Mean value of the log removal distribution.
     """
-    # Calculate E[R] = C * E[log10(T)]
+    # Calculate E[R] = log_removal_rate * E[log10(T)]
     # For gamma distribution: E[ln(T)] = digamma(alpha) + ln(beta_adjusted)
     # Convert to log10: E[log10(T)] = E[ln(T)] / ln(10)
 
-    return (C / np.log(10)) * (digamma(rt_alpha) + np.log(rt_beta))
+    return (log_removal_rate / np.log(10)) * (digamma(rt_alpha) + np.log(rt_beta))
 
 
-def gamma_find_flow_for_target_mean(target_mean, apv_alpha, apv_beta, C):
+def gamma_find_flow_for_target_mean(target_mean, apv_alpha, apv_beta, log_removal_rate):
     """
     Find the flow rate flow that produces a specified target mean log removal given a gamma distribution for the residence time.
 
@@ -229,8 +229,8 @@ def gamma_find_flow_for_target_mean(target_mean, apv_alpha, apv_beta, C):
         Shape parameter of the gamma distribution for residence time.
     apv_beta : float
         Scale parameter of the gamma distribution for pore volume.
-    C : float
-        Coefficient for log removal calculation (R = C * log10(T)).
+    log_removal_rate : float
+        Coefficient for log removal calculation (R = log_removal_rate * log10(T)).
 
     Returns
     -------
@@ -240,15 +240,15 @@ def gamma_find_flow_for_target_mean(target_mean, apv_alpha, apv_beta, C):
     Notes
     -----
     This function uses the analytical solution derived from the mean formula.
-    From E[R] = (C/ln(10)) * (digamma(alpha) + ln(beta) - ln(Q)),
+    From E[R] = (log_removal_rate/ln(10)) * (digamma(alpha) + ln(beta) - ln(Q)),
     we can solve for Q to get:
-    flow = beta * exp(ln(10)*target_mean/C - digamma(alpha))
+    flow = beta * exp(ln(10)*target_mean/log_removal_rate - digamma(alpha))
     """
     # Rearranging the mean formula to solve for Q:
-    # target_mean = (C/ln(10)) * (digamma(alpha) + ln(beta) - ln(Q))
-    # ln(Q) = digamma(alpha) + ln(beta) - (ln(10)*target_mean/C)
-    # Q = beta * exp(-(ln(10)*target_mean/C - digamma(alpha)))
-    return apv_beta * np.exp(digamma(apv_alpha) - (np.log(10) * target_mean) / C)
+    # target_mean = (log_removal_rate/ln(10)) * (digamma(alpha) + ln(beta) - ln(Q))
+    # ln(Q) = digamma(alpha) + ln(beta) - (ln(10)*target_mean/log_removal_rate)
+    # Q = beta * exp(-(ln(10)*target_mean/log_removal_rate - digamma(alpha)))
+    return apv_beta * np.exp(digamma(apv_alpha) - (np.log(10) * target_mean) / log_removal_rate)
 
 
 # Example usage
@@ -259,21 +259,21 @@ if __name__ == "__main__":
     apv_beta = 10.0  # Scale parameter for pore volume
     rt_alpha = 2.0
     rt_beta = apv_beta / Q  # Scale parameter for pore volume
-    C = 2.0  # Coefficient for log removal
+    log_removal_rate = 2.0  # Coefficient for log removal
 
     # Generate range of log removal values
     r_values = np.linspace(-1, 5, 1000)
 
-    mean = gamma_mean(rt_alpha, rt_beta, C)
+    mean = gamma_mean(rt_alpha, rt_beta, log_removal_rate)
     print(f"Mean log removal: {mean:.4f}")
 
     # Example of finding Q for a target mean log removal
     target_mean = 3.0  # Example target mean
-    required_Q = gamma_find_flow_for_target_mean(target_mean, apv_alpha, apv_beta, C)
+    required_Q = gamma_find_flow_for_target_mean(target_mean, apv_alpha, apv_beta, log_removal_rate)
     print(f"Flow rate Q required for mean log removal of {target_mean}: {required_Q:.4f}")
 
     # Verify the result
-    verification_mean = gamma_mean(rt_alpha, rt_beta, C)
+    verification_mean = gamma_mean(rt_alpha, rt_beta, log_removal_rate)
     print(f"Verification - mean log removal with Q = {required_Q:.4f}: {verification_mean:.4f}")
 
     # To visualize (optional):
@@ -282,8 +282,8 @@ if __name__ == "__main__":
     plt.figure(figsize=(12, 5))
 
     plt.subplot(1, 2, 1)
-    pdf = gamma_pdf(r_values, rt_alpha, rt_beta, C)
-    cdf = gamma_cdf(r_values, rt_alpha, rt_beta, C)
+    pdf = gamma_pdf(r_values, rt_alpha, rt_beta, log_removal_rate)
+    cdf = gamma_cdf(r_values, rt_alpha, rt_beta, log_removal_rate)
     plt.plot(r_values, pdf)
     plt.title("PDF of Log Removal")
     plt.xlabel("Log Removal (R)")
