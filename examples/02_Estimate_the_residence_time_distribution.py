@@ -49,7 +49,6 @@ df = generate_synthetic_data(
     aquifer_pore_volume=mean,  # m3
     aquifer_pore_volume_std=std,  # m3
     retardation_factor=retardation_factor,
-    random_seed=42,
 )
 
 # Discretize the aquifer pore volume distribution in bins
