@@ -267,16 +267,16 @@ if __name__ == "__main__":
     r_values = np.linspace(-1, 5, 1000)
 
     mean = gamma_mean(rt_alpha, rt_beta, log_removal_rate)
-    print(f"Mean log removal: {mean:.4f}")
+    print(f"Mean log removal: {mean:.4f}")  # noqa: T201
 
     # Example of finding Q for a target mean log removal
     target_mean = 3.0  # Example target mean
-    required_Q = gamma_find_flow_for_target_mean(target_mean, apv_alpha, apv_beta, log_removal_rate)
-    print(f"Flow rate Q required for mean log removal of {target_mean}: {required_Q:.4f}")
+    required_flow = gamma_find_flow_for_target_mean(target_mean, apv_alpha, apv_beta, log_removal_rate)
+    print(f"Flow rate Q required for mean log removal of {target_mean}: {required_flow:.4f}")  # noqa: T201
 
     # Verify the result
     verification_mean = gamma_mean(rt_alpha, rt_beta, log_removal_rate)
-    print(f"Verification - mean log removal with Q = {required_Q:.4f}: {verification_mean:.4f}")
+    print(f"Verification - mean log removal with Q = {required_flow:.4f}: {verification_mean:.4f}")  # noqa: T201
 
     # To visualize (optional):
     import matplotlib.pyplot as plt
@@ -287,6 +287,8 @@ if __name__ == "__main__":
     pdf = gamma_pdf(r_values, rt_alpha, rt_beta, log_removal_rate)
     cdf = gamma_cdf(r_values, rt_alpha, rt_beta, log_removal_rate)
     plt.plot(r_values, pdf)
+    plt.axvline(x=mean, label="Mean")
+    plt.legend(loc="upper left")
     plt.title("PDF of Log Removal")
     plt.xlabel("Log Removal (R)")
     plt.ylabel("Probability Density")
@@ -294,6 +296,8 @@ if __name__ == "__main__":
 
     plt.subplot(1, 2, 2)
     plt.plot(r_values, cdf)
+    plt.axvline(x=mean, label="Mean")
+    plt.legend(loc="upper left")
     plt.title("CDF of Log Removal")
     plt.xlabel("Log Removal (R)")
     plt.ylabel("Cumulative Probability")
