@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from gwtransport1d.logremoval import parallel_mean
+from gwtransport1d.logremoval import gamma_find_flow_for_target_mean, gamma_mean, parallel_mean
 
 
 def test_single_flow():
@@ -151,3 +151,20 @@ def test_extreme_weights():
 
     result = parallel_mean(log_removals, weights)
     assert result == 4.0
+
+
+def test_gamma_find_flow_for_target_mean():
+    # Example parameters
+    apv_alpha = 2.0  # Shape parameter for pore volume
+    apv_beta = 10.0  # Scale parameter for pore volume
+    log_removal_rate = 2.0  # Coefficient for log removal
+
+    # Example of finding Q for a target mean log removal
+    target_mean = 3.0  # Example target mean
+    required_flow = gamma_find_flow_for_target_mean(target_mean, apv_alpha, apv_beta, log_removal_rate)
+
+    # Verify the result
+    rt_alpha = 2.0  # Shape parameter for residence time
+    rt_beta = apv_beta / required_flow  # Scale parameter for residence time
+    verification_mean = gamma_mean(rt_alpha, rt_beta, log_removal_rate)
+    assert_allclose(verification_mean, target_mean, rtol=1e-10)
