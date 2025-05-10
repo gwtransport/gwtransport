@@ -35,7 +35,15 @@ jobs:
         run: |
           mkdir -p coverage/htmlcov_examples
           cp .github/assets/coverage_failed.svg coverage/coverage_examples-badge.svg
-      - name: Upload coverage results
+      - name: Pack example coverage results
+        run: |
+          zip -FSr coverage-examples.zip coverage/coverage_examples-badge.svg coverage/htmlcov_examples coverage/coverage_examples.xml
+          mv coverage-examples.zip coverage
+      - name: Download functional coverage results
+        run: |
+          curl https://bdestombe.github.io/python-gwtransport1d/coverage-functional.zip -L -o coverage-functional.zip
+          unzip -o coverage-functional.zip
+      - name: Upload both coverage results
         if: ${{ always() }}
         uses: actions/upload-pages-artifact@v3
         with:

@@ -16,7 +16,6 @@ jobs:
   pytest:
     name: python
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -36,7 +35,15 @@ jobs:
         run: |
           mkdir -p coverage/htmlcov
           cp .github/assets/coverage_failed.svg coverage/coverage-badge.svg
-      - name: Upload coverage results
+      - name: Pack functional coverage results
+        run: |
+          zip -FSr coverage-functional.zip coverage/coverage-badge.svg coverage/htmlcov coverage/coverage.xml
+          mv coverage-functional.zip coverage
+      - name: Download examples coverage results
+        run: |
+          curl https://bdestombe.github.io/python-gwtransport1d/coverage-examples.zip -L -o coverage-examples.zip
+          unzip -o coverage-examples.zip
+      - name: Upload both coverage results
         if: ${{ always() }}
         uses: actions/upload-pages-artifact@v3
         with:

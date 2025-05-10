@@ -24,7 +24,6 @@ def generate_synthetic_data(
     aquifer_pore_volume=1000.0,  # m3
     aquifer_pore_volume_std=200.0,  # m3
     retardation_factor=1.0,
-    random_seed=42,
 ):
     """
     Generate synthetic temperature and flow data for groundwater transport examples.
@@ -53,8 +52,6 @@ def generate_synthetic_data(
         Standard deviation of aquifer pore volume in m3 (for generating heterogeneity)
     retardation_factor : float
         Retardation factor for temperature transport
-    random_seed : int
-        Random seed for reproducibility
 
     Returns
     -------
@@ -62,8 +59,6 @@ def generate_synthetic_data(
         DataFrame containing dates, flow rates, infiltration temperature, and
         extracted water temperature
     """
-    np.random.seed(random_seed)
-
     # Create date range
     dates = pd.date_range(start=start_date, end=end_date, freq="D")
     days = (dates - dates[0]).days.values
@@ -86,13 +81,14 @@ def generate_synthetic_data(
     infiltration_temp += np.random.normal(0, temp_infiltration_noise, len(dates))
 
     # Create data frame
-    df = pd.DataFrame({
-        "date": dates,
-        "flow": flow,
-        "temp_infiltration": infiltration_temp,
-    })
-    df.set_index("date", inplace=True)
-    extracted_temp = advection.gamma_forward(
+    df = pd.DataFrame(
+        data={
+            "flow": flow,
+            "temp_infiltration": infiltration_temp,
+        },
+        index=dates,
+    )
+    df["temp_extraction"] = advection.gamma_forward(
         df["temp_infiltration"],
         df["flow"],
         mean=aquifer_pore_volume,
@@ -102,10 +98,7 @@ def generate_synthetic_data(
     )
 
     # Add some noise to represent measurement errors and other factors
-    extracted_temp += np.random.normal(0, 0.1, len(extracted_temp))
-
-    # Add extraction temperature to dataframe
-    df["temp_extraction"] = extracted_temp[: len(dates)]
+    df["temp_extraction"] += np.random.normal(0, 0.1, len(df))
 
     # Add some spills (periods with lower extraction temperature due to external factors)
     # Simulate 2-3 spill events of varying duration
