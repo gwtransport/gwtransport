@@ -43,6 +43,7 @@ jobs:
         run: |
           curl https://bdestombe.github.io/python-gwtransport1d/coverage-examples.zip -L -o coverage-examples.zip
           unzip -o coverage-examples.zip
+          mv coverage-examples.zip coverage
       - name: Upload both coverage results
         if: ${{ always() }}
         uses: actions/upload-pages-artifact@v3
