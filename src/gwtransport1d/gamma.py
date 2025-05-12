@@ -1,11 +1,50 @@
 """Functions for working with gamma distributions."""
 
-import logging
-
-import matplotlib.pyplot as plt
 import numpy as np
 from scipy.special import gammainc
 from scipy.stats import gamma as gamma_dist
+
+
+def parse_parameters(alpha=None, beta=None, mean=None, std=None):
+    """
+    Parse parameters for gamma distribution.
+
+    Either alpha and beta or mean and std must be provided.
+
+    Parameters
+    ----------
+    alpha : float, optional
+        Shape parameter of gamma distribution (must be > 0)
+    beta : float, optional
+        Scale parameter of gamma distribution (must be > 0)
+    mean : float, optional
+        Mean of the gamma distribution.
+    std : float, optional
+        Standard deviation of the gamma distribution.
+
+    Returns
+    -------
+    tuple
+        Shape and scale parameters of the gamma distribution.
+
+    Raises
+    ------
+    ValueError
+        If both alpha and beta are None or if both mean and std are None.
+        If alpha or beta are not positive.
+    """
+    if alpha is None or beta is None:
+        if mean is None or std is None:
+            msg = "Either alpha and beta or mean and std must be provided."
+            raise ValueError(msg)
+
+        alpha, beta = mean_std_to_alpha_beta(mean, std)
+
+    if alpha <= 0 or beta <= 0:
+        msg = "Alpha and beta must be positive"
+        raise ValueError(msg)
+
+    return alpha, beta
 
 
 def mean_std_to_alpha_beta(mean, std):
@@ -50,7 +89,7 @@ def alpha_beta_to_mean_std(alpha, beta):
     return mean, std
 
 
-def bins(alpha, beta, n_bins=None, quantile_edges=None):
+def bins(*, alpha=None, beta=None, mean=None, std=None, n_bins=None, quantile_edges=None):
     """
     Divide gamma distribution into bins and compute various bin properties.
 
@@ -61,10 +100,14 @@ def bins(alpha, beta, n_bins=None, quantile_edges=None):
 
     Parameters
     ----------
-    alpha : float
+    alpha : float, optional
         Shape parameter of gamma distribution (must be > 0)
-    beta : float
+    beta : float, optional
         Scale parameter of gamma distribution (must be > 0)
+    mean : float, optional
+        Mean of the gamma distribution.
+    std : float, optional
+        Standard deviation of the gamma distribution.
     n_bins : int, optional
         Number of bins to divide the gamma distribution (must be > 1)
     quantile_edges : array-like, optional
@@ -81,10 +124,8 @@ def bins(alpha, beta, n_bins=None, quantile_edges=None):
         - expected_value: expected values in bins
         - probability_mass: probability mass in bins
     """
-    # Validate inputs
-    if alpha <= 0 or beta <= 0:
-        msg = "Alpha and beta must be positive"
-        raise ValueError(msg)
+    alpha, beta = parse_parameters(alpha=alpha, beta=beta, mean=mean, std=std)
+
     # Calculate boundaries for equal mass bins
     if not ((n_bins is None) ^ (quantile_edges is None)):
         msg = "Either n_bins or quantiles must be provided"
@@ -154,61 +195,3 @@ def bin_masses(alpha, beta, bin_edges):
     bin_edges = np.asarray(bin_edges)
     val = gammainc(alpha, bin_edges / beta)
     return val[1:] - val[:-1]
-
-
-# Example usage
-if __name__ == "__main__":
-    # Create a logger instance
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[logging.FileHandler("app.log"), logging.StreamHandler()],
-    )
-    logger = logging.getLogger(__name__)
-    logging.getLogger("matplotlib.font_manager").disabled = True
-
-    # Example parameters
-    alpha = 300.0
-    beta = 15.0
-    n_bins = 12
-
-    gbins = bins(alpha, beta, n_bins=n_bins)
-
-    logger.info("Gamma distribution (alpha=%s, beta=%s) divided into %d equal-mass bins:", alpha, beta, n_bins)
-    logger.info("-" * 80)
-    logger.info("%3s %10s %10s %10s %10s", "Bin", "Lower", "Upper", "E[X|bin]", "P(bin)")
-    logger.info("-" * 80)
-
-    for i in range(n_bins):
-        upper = f"{gbins['upper_bound'][i]:.3f}" if not np.isinf(gbins["upper_bound"][i]) else "∞"
-        lower = f"{gbins['lower_bound'][i]:.3f}"
-        expected = f"{gbins['expected_value'][i]:.3f}"
-        prob = f"{gbins['probability_mass'][i]:.3f}"
-        logger.info("%3d %10s %10s %10s %10s", i, lower, upper, expected, prob)
-
-    # Verify total probability is exactly 1
-    logger.info("\nTotal probability mass: %.6f", gbins["probability_mass"].sum())
-
-    # Verify expected value is close to the mean of the distribution
-    mean = alpha * beta
-    expected_value = np.sum(gbins["expected_value"] * gbins["probability_mass"])
-    logger.info("Mean of distribution: %.3f", mean)
-    logger.info("Expected value of bins: %.3f", expected_value)
-
-    mass_per_bin = bin_masses(alpha, beta, gbins["edges"])
-    logger.info("Total probability mass: %.6f", mass_per_bin.sum())
-    logger.info("Probability mass per bin:")
-    logger.info(mass_per_bin)
-
-    # plot the gamma distribution and the bins
-    x = np.linspace(0, 530, 1000)
-    y = gamma_dist.pdf(x, alpha, scale=beta)
-    plt.plot(x, y, label="Gamma PDF")
-    for i in range(n_bins):
-        plt.axvline(gbins["lower_bound"][i], color="black", linestyle="--", alpha=0.5)
-        plt.axvline(gbins["upper_bound"][i], color="black", linestyle="--", alpha=0.5)
-        plt.axvline(gbins["expected_value"][i], color="red", linestyle="--", alpha=0.5)
-    plt.xlabel("x")
-    plt.ylabel("f(x)")
-    plt.legend()
-    plt.show()

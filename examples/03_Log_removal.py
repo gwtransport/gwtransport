@@ -45,8 +45,8 @@ df = generate_synthetic_data(
 )
 
 # Discretize the aquifer pore volume distribution in bins
-alpha, beta = gamma_utils.mean_std_to_alpha_beta(mean, std)
-bins = gamma_utils.bins(alpha, beta, n_bins=1000)
+# alpha, beta = gamma_utils.mean_std_to_alpha_beta(mean, std)
+bins = gamma_utils.bins(mean=mean, std=std, n_bins=1000)
 
 # Compute the residence time, similar to Example 2
 rt_forward_rf1 = advection.residence_time(

@@ -90,8 +90,7 @@ retardation_factor = 1.0
 flow_data = pd.Series(...)  # Your flow data
 
 # Calculate residence time
-alpha, beta = gamma.mean_std_to_alpha_beta(mean, std)
-bins = gamma.bins(alpha, beta, n_bins=1000)
+bins = gamma.bins(mean=mean, std=std, n_bins=1000)
 
 # Calculate forward residence time (infiltration to extraction)
 rt_forward = advection.residence_time(
