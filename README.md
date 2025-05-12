@@ -20,15 +20,15 @@ An practical approach to calibrate the two parameters of the Gamma distribution 
 - Infiltration and extraction temperature,
 - Extraction rate or a quantity that is proportional to the extraction rate, such as the head gradient.
 
-[./examples/01_Estimate_aquifer_pore_volume_from_temperature_response.py](https://github.com/bdestombe/python-gwtransport1d/blob/main/examples/01_Estimate_aquifer_pore_volume_from_temperature_response.py)
+See: [Example 1](https://github.com/bdestombe/python-gwtransport1d/blob/main/examples/01_Estimate_aquifer_pore_volume_from_temperature_response.py).
 
 ### Examples that make use of the aquifer pore volume distribution
 
 The aquifer pore volume distribution can be used to compute:
 
-- Contaminent transport with different retardation factors [./examples/01_Estimate_aquifer_pore_volume_from_temperature_response.py](https://github.com/bdestombe/python-gwtransport1d/blob/main/examples/01_Estimate_aquifer_pore_volume_from_temperature_response.py)
-- The residence time [./examples/02_Estimate_the_residence_time_distribution.py](https://github.com/bdestombe/python-gwtransport1d/blob/main/examples/02_Estimate_the_residence_time_distribution.py)
-- Log-removal of pathogens [./examples/03_Log_removal.py](https://github.com/bdestombe/python-gwtransport1d/blob/main/examples/03_Log_removal.py)
+- [Contaminent transport with different retardation factors](https://github.com/bdestombe/python-gwtransport1d/blob/main/examples/01_Estimate_aquifer_pore_volume_from_temperature_response.py)
+- [The residence time](https://github.com/bdestombe/python-gwtransport1d/blob/main/examples/02_Estimate_the_residence_time_distribution.py)
+- [Log-removal of pathogens](https://github.com/bdestombe/python-gwtransport1d/blob/main/examples/03_Log_removal.py)
 
 ## Installation
 
