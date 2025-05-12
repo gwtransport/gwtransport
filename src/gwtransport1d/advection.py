@@ -22,7 +22,6 @@ import numpy as np
 import pandas as pd
 
 from gwtransport1d import gamma
-from gwtransport1d.gamma import bins as gamma_bins
 from gwtransport1d.residence_time import residence_time
 from gwtransport1d.utils import interp_series, linear_interpolate
 
@@ -124,7 +123,7 @@ def gamma_forward(cin, flow, alpha=None, beta=None, mean=None, std=None, n_bins=
     pandas.Series
         Concentration of the compound in the extracted water [ng/m3] or temperature.
     """
-    bins = gamma_bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
+    bins = gamma.bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
     return distribution_forward(cin, flow, bins["edges"], retardation_factor=retardation_factor)
 
 
