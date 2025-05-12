@@ -1,8 +1,5 @@
 """Functions for working with gamma distributions."""
 
-import logging
-
-import matplotlib.pyplot as plt
 import numpy as np
 from scipy.special import gammainc
 from scipy.stats import gamma as gamma_dist
