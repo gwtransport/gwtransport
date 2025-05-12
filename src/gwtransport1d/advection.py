@@ -124,13 +124,7 @@ def gamma_forward(cin, flow, alpha=None, beta=None, mean=None, std=None, n_bins=
     pandas.Series
         Concentration of the compound in the extracted water [ng/m3] or temperature.
     """
-    if alpha is None or beta is None:
-        if mean is None or std is None:
-            msg = "Either alpha and beta or mean and std must be provided."
-            raise ValueError(msg)
-        alpha, beta = gamma.mean_std_to_alpha_beta(mean, std)
-
-    bins = gamma_bins(alpha, beta, n_bins)
+    bins = gamma_bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
     return distribution_forward(cin, flow, bins["edges"], retardation_factor=retardation_factor)
 
 

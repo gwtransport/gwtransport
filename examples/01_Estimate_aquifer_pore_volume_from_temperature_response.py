@@ -126,7 +126,7 @@ plt.tight_layout()
 # - std = beta * sqrt(alpha)
 n_bins = 10
 alpha, beta = gamma_utils.mean_std_to_alpha_beta(mean, std)
-gbins = gamma_utils.bins(alpha, beta, n_bins=n_bins)
+gbins = gamma_utils.bins(alpha=alpha, beta=beta, n_bins=n_bins)
 
 print(f"Gamma distribution (alpha={alpha:.1f}, beta={beta:.1f}) divided into {n_bins} equal-volume bins:")
 print("-" * 80)
