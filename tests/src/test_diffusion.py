@@ -3,7 +3,7 @@ import pytest
 from numpy.testing import assert_allclose
 from scipy import ndimage, special
 
-from gwtransport1d.diffusion import convolve_diffusion
+from gwtransport.diffusion import convolve_diffusion
 
 
 class AnalyticalSolutions:

@@ -19,8 +19,8 @@ Two cases are explored here:
 import numpy as np
 from example_data_generation import generate_synthetic_data
 
-from gwtransport1d import advection
-from gwtransport1d import gamma as gamma_utils
+from gwtransport import advection
+from gwtransport import gamma as gamma_utils
 
 # %% 1. Varying flow
 # ------------------

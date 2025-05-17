@@ -21,9 +21,9 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from gwtransport1d import gamma
-from gwtransport1d.residence_time import residence_time
-from gwtransport1d.utils import interp_series, linear_interpolate
+from gwtransport import gamma
+from gwtransport.residence_time import residence_time
+from gwtransport.utils import interp_series, linear_interpolate
 
 
 def forward(cin, flow, aquifer_pore_volume, retardation_factor=1.0, resample_dates=None):

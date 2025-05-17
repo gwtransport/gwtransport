@@ -1,13 +1,13 @@
-|                        |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Testing of source code | [![Functional Testing](https://github.com/bdestombe/python_gwtransport1d/actions/workflows/functional_testing.yml/badge.svg?branch=main)](https://github.com/bdestombe/python_gwtransport1d/actions/workflows/functional_testing.yml) [![Test Coverage](https://bdestombe.github.io/python-gwtransport1d/coverage-badge.svg)](https://bdestombe.github.io/python-gwtransport1d/htmlcov/) [![Linting](https://github.com/bdestombe/python_gwtransport1d/actions/workflows/linting.yml/badge.svg?branch=main)](https://github.com/bdestombe/python_gwtransport1d/actions/workflows/linting.yml) [![Build and release package](https://github.com/bdestombe/python-gwtransport1d/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/bdestombe/python-gwtransport1d/actions/workflows/release.yml) |
-| Testing of examples    | [![Testing of examples](https://github.com/bdestombe/python_gwtransport1d/actions/workflows/examples_testing.yml/badge.svg?branch=main)](https://github.com/bdestombe/python_gwtransport1d/actions/workflows/examples_testing.yml) [![Coverage by examples](https://bdestombe.github.io/python-gwtransport1d/coverage_examples-badge.svg)](https://bdestombe.github.io/python-gwtransport1d/htmlcov_examples/)                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Package                | [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/gwtransport1d.svg?logo=python&label=Python&logoColor=gold)](https://pypi.org/project/gwtransport1d/) [![PyPI - Version](https://img.shields.io/pypi/v/gwtransport1d.svg?logo=pypi&label=PyPI&logoColor=gold)](https://pypi.org/project/gwtransport1d/) [![GitHub commits since latest release](https://img.shields.io/github/commits-since/bdestombe/python-gwtransport1d/latest?logo=github&logoColor=lightgrey)](https://github.com/bdestombe/python-gwtransport1d/compare/)                                                                                                                                                                                                                                                                      |
-|                        |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+|                        |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Testing of source code | [![Functional Testing](https://github.com/bdestombe/python_gwtransport/actions/workflows/functional_testing.yml/badge.svg?branch=main)](https://github.com/bdestombe/python_gwtransport/actions/workflows/functional_testing.yml) [![Test Coverage](https://bdestombe.github.io/python-gwtransport/coverage-badge.svg)](https://bdestombe.github.io/python-gwtransport/htmlcov/) [![Linting](https://github.com/bdestombe/python_gwtransport/actions/workflows/linting.yml/badge.svg?branch=main)](https://github.com/bdestombe/python_gwtransport/actions/workflows/linting.yml) [![Build and release package](https://github.com/bdestombe/python-gwtransport/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/bdestombe/python-gwtransport/actions/workflows/release.yml) |
+| Testing of examples    | [![Testing of examples](https://github.com/bdestombe/python_gwtransport/actions/workflows/examples_testing.yml/badge.svg?branch=main)](https://github.com/bdestombe/python_gwtransport/actions/workflows/examples_testing.yml) [![Coverage by examples](https://bdestombe.github.io/python-gwtransport/coverage_examples-badge.svg)](https://bdestombe.github.io/python-gwtransport/htmlcov_examples/)                                                                                                                                                                                                                                                                                                                                                                                               |
+| Package                | [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/gwtransport.svg?logo=python&label=Python&logoColor=gold)](https://pypi.org/project/gwtransport/) [![PyPI - Version](https://img.shields.io/pypi/v/gwtransport.svg?logo=pypi&label=PyPI&logoColor=gold)](https://pypi.org/project/gwtransport/) [![GitHub commits since latest release](https://img.shields.io/github/commits-since/bdestombe/python-gwtransport/latest?logo=github&logoColor=lightgrey)](https://github.com/bdestombe/python-gwtransport/compare/)                                                                                                                                                                                                                                                                  |
+|                        |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ## Overview
 
-`gwtransport1d` is a Python package for modeling the transport of temperature and contaminants in groundwater flow systems. It provides practical tools for analyzing advection, diffusion, deposition processes, and calculating residence time distributions in aquifer systems.
+`gwtransport` is a Python package for modeling the transport of temperature and contaminants in groundwater flow systems. It provides practical tools for analyzing advection, diffusion, deposition processes, and calculating residence time distributions in aquifer systems.
 
 ### Aquifer Pore Volume Distribution
 
@@ -20,20 +20,20 @@ A practical approach to calibrate the two parameters of the Gamma distribution i
 - Infiltration and extraction temperature,
 - Extraction rate or a quantity that is proportional to the extraction rate, such as the head gradient.
 
-See: [Example 1](https://github.com/bdestombe/python-gwtransport1d/blob/main/examples/01_Estimate_aquifer_pore_volume_from_temperature_response.py).
+See: [Example 1](https://github.com/bdestombe/python-gwtransport/blob/main/examples/01_Estimate_aquifer_pore_volume_from_temperature_response.py).
 
 ### Examples that make use of the aquifer pore volume distribution
 
 The aquifer pore volume distribution can be used to compute:
 
-- [Contaminent transport with different retardation factors](https://github.com/bdestombe/python-gwtransport1d/blob/main/examples/01_Estimate_aquifer_pore_volume_from_temperature_response.py)
-- [The residence time](https://github.com/bdestombe/python-gwtransport1d/blob/main/examples/02_Estimate_the_residence_time_distribution.py)
-- [Log-removal of pathogens](https://github.com/bdestombe/python-gwtransport1d/blob/main/examples/03_Log_removal.py)
+- [Contaminent transport with different retardation factors](https://github.com/bdestombe/python-gwtransport/blob/main/examples/01_Estimate_aquifer_pore_volume_from_temperature_response.py)
+- [The residence time](https://github.com/bdestombe/python-gwtransport/blob/main/examples/02_Estimate_the_residence_time_distribution.py)
+- [Log-removal of pathogens](https://github.com/bdestombe/python-gwtransport/blob/main/examples/03_Log_removal.py)
 
 ## Installation
 
 ```bash
-pip install gwtransport1d
+pip install gwtransport
 ```
 
 ## Usage Examples
@@ -44,7 +44,7 @@ This example demonstrates how to use temperature data to estimate the aquifer po
 
 ```python
 from scipy.optimize import curve_fit
-from gwtransport1d import advection
+from gwtransport import advection
 
 # Load your temperature and flow data
 # ...
@@ -81,7 +81,7 @@ Once you've characterized your aquifer, you can calculate residence time distrib
 
 ```python
 import pandas as pd
-from gwtransport1d import advection, gamma
+from gwtransport import advection, gamma
 
 # Set up your parameters
 mean = 8000.0  # m3
@@ -107,7 +107,7 @@ Calculate the log removal of pathogens based on residence time:
 
 ```python
 import numpy as np
-from gwtransport1d import logremoval
+from gwtransport import logremoval
 
 # Calculate log-removal of the extracted water
 rt_alpha = 2.0  # Shape parameter of the gamma distribution for the residence time

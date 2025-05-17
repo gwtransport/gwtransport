@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport1d.residence_time import residence_time_mean
+from gwtransport.residence_time import residence_time_mean
 
 
 @pytest.fixture

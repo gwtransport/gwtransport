@@ -1,1 +1,1 @@
-"""Tests for the gwtransport1d package."""
+"""Tests for the gwtransport package."""

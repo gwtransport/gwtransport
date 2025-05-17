@@ -29,8 +29,8 @@ from example_data_generation import generate_synthetic_data
 from scipy.optimize import curve_fit
 from scipy.stats import gamma as gamma_dist
 
-from gwtransport1d import advection
-from gwtransport1d import gamma as gamma_utils
+from gwtransport import advection
+from gwtransport import gamma as gamma_utils
 
 np.random.seed(42)  # For reproducibility
 plt.style.use("seaborn-v0_8-whitegrid")

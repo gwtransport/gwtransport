@@ -3,7 +3,7 @@ requires = ["hatchling>=1.24.2", "hatch-vcs>=0.3.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "gwtransport1d"
+name = "gwtransport"
 description = "Transport of contaminants in 1D groundwater flow system"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -15,7 +15,7 @@ keywords = [
   "deposition",
 ]
 authors = [
-  { name = "Bas des Tombe", email = "bdestombe@gmail.com" },
+  { name = "Bas des Tombe"},
 ]
 classifiers = [
   "Programming Language :: Python :: 3.10",
@@ -39,7 +39,7 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/bdestombe/python_gwtransport1d"
+Homepage = "https://github.com/gwtransport/gwtransport"
 
 [tool.hatch.envs.hatch-static-analysis]
 config-path = "ruff.toml"

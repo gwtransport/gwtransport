@@ -2,12 +2,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport1d.gamma import (
+from gwtransport.gamma import (
     alpha_beta_to_mean_std,
     bin_masses,
     mean_std_to_alpha_beta,
 )
-from gwtransport1d.gamma import (
+from gwtransport.gamma import (
     bins as gamma_bins,
 )
 
