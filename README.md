@@ -11,7 +11,7 @@
 
 ### Aquifer Pore Volume Distribution
 
-The aquifer pore volume distribution is a probability density curve that holds the fraction of flow that passes a certain pore volume between infiltration and extraction. This package relies on the estimating this distribution and uses it to compute many different transport processes related to residence time. In the examples here, the aquifer pore volume distribution is approximated by a Gamma distribution of which the two parameters are estimated from the flow rate, the temperature of the infiltration and extracted water. Alternatively, you can derive the aquifer pore volume distribution from the streamlines of your groundwater model. In all examples the assumption is made that the aquifer pore volume distribution is constant over time.
+The aquifer pore volume distribution is a probability density curve that holds the fraction of flow that passes a certain pore volume between infiltration and extraction. This package relies on the estimating this distribution and uses it to compute many different transport processes related to residence time. In the examples here, the aquifer pore volume distribution is approximated by a Gamma distribution of which the two parameters are estimated from the flow rate, the temperature of the infiltration and extracted water. Alternatively, you can derive the aquifer pore volume distribution from the streamlines of your groundwater model. In all examples the assumption is made that the aquifer pore volume distribution is constant over time and all water infiltrates with the same temperature.
 
 ### Calibration of the aquifer pore volume distribution (Example 1)
 
