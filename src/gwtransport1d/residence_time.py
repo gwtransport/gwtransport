@@ -14,7 +14,7 @@ Main functions:
 import numpy as np
 import pandas as pd
 
-from gwtransport1d.utils import linear_average, linear_interpolate
+from gwtransport.utils import linear_average, linear_interpolate
 
 
 def residence_time(

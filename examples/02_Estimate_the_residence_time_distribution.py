@@ -22,8 +22,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from example_data_generation import generate_synthetic_data
 
-from gwtransport1d import advection
-from gwtransport1d import gamma as gamma_utils
+from gwtransport import advection
+from gwtransport import gamma as gamma_utils
 
 np.random.seed(42)  # For reproducibility
 plt.style.use("seaborn-v0_8-whitegrid")

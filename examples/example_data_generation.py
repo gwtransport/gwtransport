@@ -9,7 +9,7 @@ with seasonal patterns and random variations.
 import numpy as np
 import pandas as pd
 
-from gwtransport1d import advection, gamma
+from gwtransport import advection, gamma
 
 
 def generate_synthetic_data(

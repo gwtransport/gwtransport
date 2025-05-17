@@ -1,5 +1,5 @@
-"""gwtransport1d: A Python package for solving one-dimensional groundwater transport problems."""
+"""gwtransport: A Python package for solving one-dimensional groundwater transport problems."""
 
 import importlib.metadata as m
 
-__version__ = m.version("gwtransport1d")
+__version__ = m.version("gwtransport")

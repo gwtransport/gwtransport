@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_array_almost_equal
 
-from gwtransport1d.utils import diff, linear_average, linear_interpolate
+from gwtransport.utils import diff, linear_average, linear_interpolate
 
 
 def test_linear_interpolate():

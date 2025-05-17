@@ -22,8 +22,8 @@ import pandas as pd
 from scipy.linalg import null_space
 from scipy.optimize import minimize
 
-from gwtransport1d.residence_time import residence_time
-from gwtransport1d.utils import interp_series
+from gwtransport.residence_time import residence_time
+from gwtransport.utils import interp_series
 
 
 def backward(

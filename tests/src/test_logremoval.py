@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from gwtransport1d.logremoval import gamma_find_flow_for_target_mean, gamma_mean, parallel_mean
+from gwtransport.logremoval import gamma_find_flow_for_target_mean, gamma_mean, parallel_mean
 
 
 def test_single_flow():

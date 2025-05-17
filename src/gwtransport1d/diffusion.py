@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 from scipy import ndimage, sparse
 
-from gwtransport1d.residence_time import residence_time
-from gwtransport1d.utils import diff
+from gwtransport.residence_time import residence_time
+from gwtransport.utils import diff
 
 
 def forward(

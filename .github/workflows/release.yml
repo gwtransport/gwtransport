@@ -22,16 +22,16 @@ jobs:
       - name: Build a binary wheel and a source tarball
         run: uv build --no-sources
       - name: Install the built wheel
-        run: uv run --with `find dist -name "*.whl"` --refresh-package gwtransport1d --no-project -- python -c "import importlib.metadata as m;print(m.version('gwtransport1d'))"
+        run: uv run --with `find dist -name "*.whl"` --refresh-package gwtransport --no-project -- python -c "import importlib.metadata as m;print(m.version('gwtransport'))"
       - name: Install the built source tarball
-        run: uv run --with `find dist -name "*.tar.gz"` --refresh-package gwtransport1d --no-project -- python -c "import importlib.metadata as m;print(m.version('gwtransport1d'))"
+        run: uv run --with `find dist -name "*.tar.gz"` --refresh-package gwtransport --no-project -- python -c "import importlib.metadata as m;print(m.version('gwtransport'))"
       - name: Compare release tag with pyproject.toml version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           TAG_VERSION=${GITHUB_REF#refs/tags/}
           echo "Git tag version: $TAG_VERSION"
 
-          PYPROJECT_VERSION=$(uv run --with `find dist -name "*.tar.gz"` --refresh-package gwtransport1d --no-project -- python -c "import importlib.metadata as m; print(m.version('gwtransport1d'))")
+          PYPROJECT_VERSION=$(uv run --with `find dist -name "*.tar.gz"` --refresh-package gwtransport --no-project -- python -c "import importlib.metadata as m; print(m.version('gwtransport'))")
           echo "pyproject.toml version: $PYPROJECT_VERSION"
 
           # Compare versions
@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/gwtransport1d
+      url: https://pypi.org/p/gwtransport
     permissions:
       id-token: write # IMPORTANT: mandatory for trusted publishing
     steps:
@@ -73,7 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: testpypi
-      url: https://test.pypi.org/p/gwtransport1d
+      url: https://test.pypi.org/p/gwtransport
     permissions:
       id-token: write # IMPORTANT: mandatory for trusted publishing
     steps:
