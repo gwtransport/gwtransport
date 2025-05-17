@@ -41,7 +41,7 @@ jobs:
           mv coverage-examples.zip coverage
       - name: Download functional coverage results
         run: |
-          curl https://bdestombe.github.io/python-gwtransport/coverage-functional.zip -L -o coverage-functional.zip
+          curl https://gwtransport.github.io/gwtransport/coverage-functional.zip -L -o coverage-functional.zip
           unzip -o coverage-functional.zip
           mv coverage-functional.zip coverage
       - name: Upload both coverage results
