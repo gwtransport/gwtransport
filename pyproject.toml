@@ -39,7 +39,7 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/gwtransport/python_gwtransport"
+Homepage = "https://github.com/gwtransport/gwtransport"
 
 [tool.hatch.envs.hatch-static-analysis]
 config-path = "ruff.toml"
