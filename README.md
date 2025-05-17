@@ -15,7 +15,7 @@ The aquifer pore volume distribution is a probability density curve that holds t
 
 ### Calibration of the aquifer pore volume distribution (Example 1)
 
-An practical approach to calibrate the two parameters of the Gamma distribution is to use the temperature response of the aquifer. This requires the following measurements over a limited time period:
+A practical approach to calibrate the two parameters of the Gamma distribution is to use the temperature response of the aquifer. This requires the following measurements over a limited time period:
 
 - Infiltration and extraction temperature,
 - Extraction rate or a quantity that is proportional to the extraction rate, such as the head gradient.
