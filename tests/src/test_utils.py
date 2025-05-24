@@ -346,7 +346,6 @@ def test_empty_inputs():
     """Test with empty timespan list."""
     bin_edges = np.array([0, 10, 20])
     timespans = np.empty((0, 2))
-    expected = np.empty((0, 2))
 
     result = partial_isin(bin_edges, timespans)
     assert result.shape == (0, 2)
@@ -408,11 +407,11 @@ def test_invalid_inputs():
     # Test with unsorted bin edges
     bin_edges = np.array([30, 20, 10, 0])  # Descending order
     timespans = np.array([[5, 15]])
-    with pytest.raises(Exception):  # Could be ValueError or AssertionError depending on implementation
+    with pytest.raises(Exception):  # Could be ValueError or AssertionError depending on implementation  # noqa: B017
         partial_isin(bin_edges, timespans)
 
     # Test with timespan where end is before start
     bin_edges = np.array([0, 10, 20])
     timespans = np.array([[15, 5]])  # End before start
-    with pytest.raises(Exception):  # Could be ValueError or AssertionError
+    with pytest.raises(Exception):  # Could be ValueError or AssertionError  # noqa: B017
         partial_isin(bin_edges, timespans)
