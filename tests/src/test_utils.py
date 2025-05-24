@@ -2,7 +2,12 @@ import numpy as np
 import pytest
 from numpy.testing import assert_array_almost_equal
 
-from gwtransport.utils import diff, linear_average, linear_interpolate
+from gwtransport.utils import (
+    diff,
+    linear_average,
+    linear_interpolate,
+    partial_isin,  # Assuming the function is in partial_isin.py
+)
 
 
 def test_linear_interpolate():
@@ -247,3 +252,167 @@ def test_zero_width_interval_edge_case():
     result = linear_average(x_data, y_data, x_edges)
 
     np.testing.assert_allclose(result, expected)
+
+
+def test_basic_case():
+    """Test the basic case from the function's docstring example."""
+    bin_edges = np.array([0, 10, 20, 30])
+    timespans = np.array([[5, 25], [15, 35]])
+    expected = np.array([[0.5, 1.0, 0.5], [0.0, 0.5, 1.0]])
+
+    result = partial_isin(bin_edges, timespans)
+    assert_array_almost_equal(result, expected)
+
+
+def test_no_overlap():
+    """Test when there is no overlap between timespan and bins."""
+    bin_edges = np.array([0, 10, 20])
+    timespans = np.array([[30, 40]])
+    expected = np.array([[0.0, 0.0]])
+
+    result = partial_isin(bin_edges, timespans)
+    assert_array_almost_equal(result, expected)
+
+
+def test_complete_overlap():
+    """Test when timespan completely overlaps all bins."""
+    bin_edges = np.array([10, 20, 30, 40])
+    timespans = np.array([[0, 50]])
+    expected = np.array([[1.0, 1.0, 1.0]])
+
+    result = partial_isin(bin_edges, timespans)
+    assert_array_almost_equal(result, expected)
+
+
+def test_exact_bin_match():
+    """Test when timespan exactly matches a bin."""
+    bin_edges = np.array([0, 10, 20, 30])
+    timespans = np.array([[10, 20]])
+    expected = np.array([[0.0, 1.0, 0.0]])
+
+    result = partial_isin(bin_edges, timespans)
+    assert_array_almost_equal(result, expected)
+
+
+def test_multiple_timespans():
+    """Test with multiple timespans of different sizes."""
+    bin_edges = np.array([0, 10, 20, 30, 40])
+    timespans = np.array([
+        [5, 15],  # Overlaps bins 0 and 1
+        [25, 35],  # Overlaps bins 2 and 3
+        [0, 40],  # Overlaps all bins
+    ])
+    expected = np.array([
+        [0.5, 0.5, 0.0, 0.0],
+        [0.0, 0.0, 0.5, 0.5],
+        [1.0, 1.0, 1.0, 1.0],
+    ])
+
+    result = partial_isin(bin_edges, timespans)
+    assert_array_almost_equal(result, expected)
+
+
+def test_partial_overlaps():
+    """Test various partial overlaps."""
+    bin_edges = np.array([0, 10, 20])
+    timespans = np.array([
+        [5, 15],  # 50% of bin 0, 50% of bin 1
+        [5, 10],  # 50% of bin, 0% of bin 1
+        [10, 15],  # 0% of bin 0, 50% of bin 1
+        [7.5, 12.5],  # 25% of bin 0, 25% of bin 1
+    ])
+    expected = np.array([
+        [0.5, 0.5],
+        [0.5, 0.0],
+        [0.0, 0.5],
+        [0.25, 0.25],
+    ])
+
+    result = partial_isin(bin_edges, timespans)
+    assert_array_almost_equal(result, expected)
+
+
+def test_list_inputs():
+    """Test with list inputs instead of numpy arrays."""
+    bin_edges = [0, 10, 20, 30]
+    timespans = [[5, 25], [15, 35]]
+    expected = np.array([[0.5, 1.0, 0.5], [0.0, 0.5, 1.0]])
+
+    result = partial_isin(bin_edges, timespans)
+    assert_array_almost_equal(result, expected)
+
+
+def test_empty_inputs():
+    """Test with empty timespan list."""
+    bin_edges = np.array([0, 10, 20])
+    timespans = np.empty((0, 2))
+    expected = np.empty((0, 2))
+
+    result = partial_isin(bin_edges, timespans)
+    assert result.shape == (0, 2)
+
+
+def test_single_bin():
+    """Test with a single bin."""
+    bin_edges = np.array([0, 10])
+    timespans = np.array([[5, 15], [0, 5]])
+    expected = np.array([
+        [0.5],
+        [0.5],
+    ])
+
+    result = partial_isin(bin_edges, timespans)
+    assert_array_almost_equal(result, expected)
+
+
+def test_timespan_at_edge():
+    """Test when timespan starts or ends exactly at bin edge."""
+    bin_edges = np.array([0, 10, 20, 30])
+    timespans = np.array([
+        [0, 15],  # Starts at first bin edge
+        [15, 30],  # Ends at last bin edge
+        [10, 20],  # Exactly matches middle bin
+    ])
+    expected = np.array([
+        [1.0, 0.5, 0.0],
+        [0.0, 0.5, 1.0],
+        [0.0, 1.0, 0.0],
+    ])
+
+    result = partial_isin(bin_edges, timespans)
+    assert_array_almost_equal(result, expected)
+
+
+def test_floating_point_precision():
+    """Test with floating point values that might have precision issues."""
+    bin_edges = np.array([0.1, 0.2, 0.3, 0.4])
+    timespans = np.array([[0.15, 0.35]])
+    expected = np.array([[0.5, 1.0, 0.5]])
+
+    result = partial_isin(bin_edges, timespans)
+    assert_array_almost_equal(result, expected)
+
+
+def test_negative_values():
+    """Test with negative values."""
+    bin_edges = np.array([-30, -20, -10, 0])
+    timespans = np.array([[-25, -5]])
+    expected = np.array([[0.5, 1.0, 0.5]])
+
+    result = partial_isin(bin_edges, timespans)
+    assert_array_almost_equal(result, expected)
+
+
+def test_invalid_inputs():
+    """Test with invalid inputs."""
+    # Test with unsorted bin edges
+    bin_edges = np.array([30, 20, 10, 0])  # Descending order
+    timespans = np.array([[5, 15]])
+    with pytest.raises(Exception):  # Could be ValueError or AssertionError depending on implementation
+        partial_isin(bin_edges, timespans)
+
+    # Test with timespan where end is before start
+    bin_edges = np.array([0, 10, 20])
+    timespans = np.array([[15, 5]])  # End before start
+    with pytest.raises(Exception):  # Could be ValueError or AssertionError
+        partial_isin(bin_edges, timespans)

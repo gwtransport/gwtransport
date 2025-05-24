@@ -252,6 +252,73 @@ def linear_average(  # noqa: C901
     return average_values_in_range
 
 
+def partial_isin(bin_edges, timespans):
+    """
+    Calculate the fraction of each bin that falls within each timespan.
+
+    Parameters
+    ----------
+    bin_edges : array_like
+        1D array of bin edges in ascending order. For n bins, there should be n+1 edges.
+    timespans : array_like
+        Timespans as a 2D array of shape (m, 2) where m is the number of timespans and
+        each row contains [start, end] of a timespan.
+
+    Returns
+    -------
+    bin_fractions : ndarray
+        2D array of shape (m, n) where m is the number of timespans and n is the number of bins.
+        Each element (i, j) represents the fraction of bin j that falls within timespan i.
+
+    Notes
+    -----
+    - The function assumes bin_edges and timespans are in the same units.
+    - Bins are defined by their edges, i.e., bin j spans from bin_edges[j] to bin_edges[j+1].
+    - Values range from 0 (no overlap) to 1 (complete overlap).
+
+    Examples
+    --------
+    >>> bin_edges = np.array([0, 10, 20, 30])
+    >>> timespans = np.array([[5, 25], [15, 35]])
+    >>> partial_isin(bin_edges, timespans)
+    array([[0.5, 1. , 0.5],
+           [0. , 0.5, 1. ]])
+    """
+    # Convert inputs to numpy arrays
+    bin_edges = np.asarray(bin_edges)
+    timespans = np.asarray(timespans)
+
+    # Validate inputs
+    if bin_edges.ndim != 1 or timespans.ndim != 2 or timespans.shape[1] != 2:  # noqa: PLR2004
+        msg = "Invalid input shapes: bin_edges must be 1D and timespans must be 2D with shape (m, 2)."
+        raise ValueError(msg)
+    if not np.all(np.diff(bin_edges) > 0):
+        msg = "bin_edges must be in ascending order."
+        raise ValueError(msg)
+    if not np.all(np.diff(timespans) > 0):
+        msg = "timespans must be in ascending order."
+        raise ValueError(msg)
+
+    # Calculate bin widths
+    bin_widths = np.diff(bin_edges)
+
+    # Calculate overlapping segments using broadcasting
+    left_edges = bin_edges[:-1][np.newaxis, :]
+    right_edges = bin_edges[1:][np.newaxis, :]
+
+    starts = timespans[:, 0][:, np.newaxis]
+    ends = timespans[:, 1][:, np.newaxis]
+
+    overlap_left = np.maximum(left_edges, starts)
+    overlap_right = np.minimum(right_edges, ends)
+
+    # Calculate overlap widths (clip at 0 to handle non-overlapping cases)
+    overlap_widths = np.maximum(0, overlap_right - overlap_left)
+
+    # Calculate fraction of each bin that overlaps with timespan
+    return overlap_widths / bin_widths[np.newaxis, :]
+
+
 def generate_failed_coverage_badge():
     """Generate a badge indicating failed coverage."""
     from genbadge import Badge  # type: ignore # noqa: PLC0415
