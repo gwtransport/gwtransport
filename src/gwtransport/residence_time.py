@@ -18,19 +18,29 @@ from gwtransport.utils import linear_average, linear_interpolate
 
 
 def residence_time(
-    flow, aquifer_pore_volume, *, index=None, retardation_factor=1.0, direction="extraction", return_pandas_series=False
+    flow=None, flow_tedges=None, flow_tstart=None, flow_tend=None, aquifer_pore_volume=None, index=None, retardation_factor=1.0, direction="extraction", return_pandas_series=False
 ):
     """
     Compute the residence time of retarded compound in the water in the aquifer.
 
     Parameters
     ----------
-    flow : pandas.Series
-        Flow rate of water in the aquifer [m3/day].
+    flow : pandas.Series, array-like
+        Flow rate of water in the aquifer [m3/day]. If flow_tedges is not defined, the index of `flow` is used.
+    flow_tedges : pandas.DatetimeIndex, optional
+        Time edges for the flow data. If provided, it is used to compute the cumulative flow.
+        If left to None, the index of `flow` is used. Default is None.
+    flow_tstart : pandas.Timestamp, optional
+        Timestamps aligned to the start of the flow measurement intervals. Preferably use flow_tedges,
+        but if not available this approach can be used for convenience.
+    flow_tend : pandas.Timestamp, optional
+        Timestamps aligned to the end of the flow measurement intervals. Preferably use flow_tedges,
+        but if not available this approach can be used for convenience.
     aquifer_pore_volume : float or array-like of float
         Pore volume of the aquifer [m3].
     index : pandas.DatetimeIndex, optional
-        Index of the residence time. If left to None, the index of `flow` is used. Default is None.
+        Index at which to compute the residence time. If left to None, the index of `flow` is used.
+        If Default is None.
     retardation_factor : float
         Retardation factor of the compound in the aquifer [dimensionless].
     direction : str, optional
@@ -42,29 +52,45 @@ def residence_time(
         Residence time of the retarded compound in the aquifer [days].
     """
     aquifer_pore_volume = np.atleast_1d(aquifer_pore_volume)
-    dates_days_extraction = np.asarray((flow.index - flow.index[0]) / np.timedelta64(1, "D"))
-    days_extraction = np.diff(dates_days_extraction, prepend=0.0)
-    flow_cum = (flow.values * days_extraction).cumsum()
+
+    if flow_tedges is not None:
+        flow_tedges = pd.DatetimeIndex(flow_tedges)
+    elif flow_tstart is not None:
+        # Assume the index refers to the time at the start of the measurement interval
+        flow_tstart = pd.DatetimeIndex(flow_tstart)
+        flow_tedges = pd.concat([flow_tstart, [flow_tstart[-1] + (flow_tstart[-1] - flow_tstart[-2])]])
+    elif flow_tend is not None:
+        # Assume the index refers to the time at the end of the measurement interval
+        flow_tend = pd.DatetimeIndex(flow_tend)
+        flow_tedges = pd.concat([[flow_tend[0] - (flow_tend[1] - flow_tend[0])], flow_tend])
+    else:
+        msg = "Either provide flow_tedges, flow_tstart, and flow_tend"
+        raise ValueError(msg)
+
+    flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
+    flow_tdelta = np.diff(flow_tedges_days, prepend=0.0)
+    flow_values = np.concat(([0.0], np.asarray(flow)))
+    flow_cum = (flow_values * flow_tdelta).cumsum()  # at flow_tedges and flow_tedges_days. First value is 0.
 
     if index is None:
-        index = flow.index
-        index_dates_days_extraction = dates_days_extraction
+        # If index is not provided return the residence time that matches with the index of the flow; at the center of the flow bin.
+        index_dates_days_extraction = (flow_tedges_days[:-1] + flow_tedges_days[1:]) / 2
         flow_cum_at_index = flow_cum
     else:
-        index_dates_days_extraction = np.asarray((index - flow.index[0]) / np.timedelta64(1, "D"))
+        index_dates_days_extraction = np.asarray((index - flow_tedges[0]) / np.timedelta64(1, "D"))
         flow_cum_at_index = linear_interpolate(
-            dates_days_extraction, flow_cum, index_dates_days_extraction, left=np.nan, right=np.nan
+            flow_tedges_days, flow_cum, index_dates_days_extraction, left=np.nan, right=np.nan
         )
 
     if direction == "extraction":
         # How many days ago was the extraced water infiltrated
         a = flow_cum_at_index[None, :] - retardation_factor * aquifer_pore_volume[:, None]
-        days = linear_interpolate(flow_cum, dates_days_extraction, a, left=np.nan, right=np.nan)
+        days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
         data = index_dates_days_extraction - days
     elif direction == "infiltration":
         # In how many days the water that is infiltrated now be extracted
         a = flow_cum_at_index[None, :] + retardation_factor * aquifer_pore_volume[:, None]
-        days = linear_interpolate(flow_cum, dates_days_extraction, a, left=np.nan, right=np.nan)
+        days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
         data = days - index_dates_days_extraction
     else:
         msg = "direction should be 'extraction' or 'infiltration'"
