@@ -29,13 +29,13 @@ def residence_time(
         Flow rate of water in the aquifer [m3/day]. If flow_tedges is not defined, the index of `flow` is used.
     flow_tedges : pandas.DatetimeIndex, optional
         Time edges for the flow data. If provided, it is used to compute the cumulative flow.
-        If left to None, the index of `flow` is used. Default is None.
+        If left to None, the index of `flow` is used. Has a length of one more than `flow`. Default is None.
     flow_tstart : pandas.Timestamp, optional
         Timestamps aligned to the start of the flow measurement intervals. Preferably use flow_tedges,
-        but if not available this approach can be used for convenience.
+        but if not available this approach can be used for convenience. Has the same length as `flow`.
     flow_tend : pandas.Timestamp, optional
         Timestamps aligned to the end of the flow measurement intervals. Preferably use flow_tedges,
-        but if not available this approach can be used for convenience.
+        but if not available this approach can be used for convenience. Has the same length as `flow`.
     aquifer_pore_volume : float or array-like of float
         Pore volume of the aquifer [m3].
     index : pandas.DatetimeIndex, optional
@@ -55,14 +55,28 @@ def residence_time(
 
     if flow_tedges is not None:
         flow_tedges = pd.DatetimeIndex(flow_tedges)
+        if len(flow) != len(flow_tedges) - 1:
+            msg = "flow_tedges must have one more element than flow"
+            raise ValueError(msg)
+
     elif flow_tstart is not None:
         # Assume the index refers to the time at the start of the measurement interval
         flow_tstart = pd.DatetimeIndex(flow_tstart)
+        if len(flow) != len(flow_tstart):
+            msg = "flow_tstart must have the same number of elements as flow"
+            raise ValueError(msg)
+
         flow_tedges = pd.concat([flow_tstart, [flow_tstart[-1] + (flow_tstart[-1] - flow_tstart[-2])]])
+
     elif flow_tend is not None:
         # Assume the index refers to the time at the end of the measurement interval
         flow_tend = pd.DatetimeIndex(flow_tend)
+        if len(flow) != len(flow_tend):
+            msg = "flow_tend must have the same number of elements as flow"
+            raise ValueError(msg)
+
         flow_tedges = pd.concat([[flow_tend[0] - (flow_tend[1] - flow_tend[0])], flow_tend])
+
     else:
         msg = "Either provide flow_tedges, flow_tstart, and flow_tend"
         raise ValueError(msg)
