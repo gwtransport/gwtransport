@@ -325,3 +325,80 @@ def generate_failed_coverage_badge():
 
     b = Badge(left_txt="coverage", right_txt="failed", color="red")
     b.write_to("coverage_failed.svg", use_shields=False)
+
+
+def compute_time_edges(tedges, tstart, tend, number_of_bins):
+    """
+    Compute time edges for binning data based on provided time parameters.
+
+    This function creates a DatetimeIndex of time bin edges from one of three possible
+    input formats: explicit edges, start times, or end times. The resulting edges
+    define the boundaries of time intervals for data binning.
+
+    Define either explicit time edges, or start and end times for each bin and leave the others at None.
+
+    Parameters
+    ----------
+    tedges : pandas.DatetimeIndex or None
+        Explicit time edges for the bins. If provided, must have one more element
+        than the number of bins (n_bins + 1). Takes precedence over tstart and tend.
+    tstart : pandas.DatetimeIndex or None
+        Start times for each bin. Must have the same number of elements as the
+        number of bins. Used when tedges is None.
+    tend : pandas.DatetimeIndex or None
+        End times for each bin. Must have the same number of elements as the
+        number of bins. Used when both tedges and tstart are None.
+    number_of_bins : int
+        The expected number of time bins. Used for validation against the provided
+        time parameters.
+
+    Returns
+    -------
+    pandas.DatetimeIndex
+        Time edges defining the boundaries of the time bins. Has one more element
+        than number_of_bins.
+
+    Raises
+    ------
+    ValueError
+        If tedges has incorrect length (not number_of_bins + 1).
+        If tstart has incorrect length (not equal to number_of_bins).
+        If tend has incorrect length (not equal to number_of_bins).
+        If none of tedges, tstart, or tend are provided.
+
+    Notes
+    -----
+    - When using tstart, the function assumes uniform spacing and extrapolates
+      the final edge based on the spacing between the last two start times.
+    - When using tend, the function assumes uniform spacing and extrapolates
+      the first edge based on the spacing between the first two end times.
+    - All input time data is converted to pandas.DatetimeIndex for consistency.
+    """
+    if tedges is not None:
+        tedges = pd.DatetimeIndex(tedges)
+        if number_of_bins != len(tedges) - 1:
+            msg = "tedges must have one more element than flow"
+            raise ValueError(msg)
+
+    elif tstart is not None:
+        # Assume the index refers to the time at the start of the measurement interval
+        tstart = pd.DatetimeIndex(tstart)
+        if number_of_bins != len(tstart):
+            msg = "tstart must have the same number of elements as flow"
+            raise ValueError(msg)
+
+        tedges = tstart.append(tstart[[-1]] + (tstart[-1] - tstart[-2]))
+
+    elif tend is not None:
+        # Assume the index refers to the time at the end of the measurement interval
+        tend = pd.DatetimeIndex(tend)
+        if number_of_bins != len(tend):
+            msg = "tend must have the same number of elements as flow"
+            raise ValueError(msg)
+
+        tedges = (tend[[0]] - (tend[1] - tend[0])).append(tend)
+
+    else:
+        msg = "Either provide tedges, tstart, and tend"
+        raise ValueError(msg)
+    return tedges

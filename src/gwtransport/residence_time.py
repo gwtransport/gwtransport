@@ -14,7 +14,7 @@ Main functions:
 import numpy as np
 import pandas as pd
 
-from gwtransport.utils import linear_average, linear_interpolate
+from gwtransport.utils import compute_time_edges, linear_average, linear_interpolate
 
 
 def residence_time(
@@ -65,7 +65,7 @@ def residence_time(
     """
     aquifer_pore_volume = np.atleast_1d(aquifer_pore_volume)
 
-    flow_tedges = _compute_time_edges(flow_tedges, flow_tstart, flow_tend, len(flow))
+    flow_tedges = compute_time_edges(flow_tedges, flow_tstart, flow_tend, len(flow))
 
     flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
     flow_tdelta = np.diff(flow_tedges_days, prepend=0.0)
@@ -102,37 +102,6 @@ def residence_time(
             raise ValueError(msg)
         return pd.Series(data=data[0], index=index, name=f"residence_time_{direction}")
     return data
-
-
-def _compute_time_edges(flow_tedges, flow_tstart, flow_tend, number_of_bins):
-    if flow_tedges is not None:
-        flow_tedges = pd.DatetimeIndex(flow_tedges)
-        if number_of_bins != len(flow_tedges) - 1:
-            msg = "flow_tedges must have one more element than flow"
-            raise ValueError(msg)
-
-    elif flow_tstart is not None:
-        # Assume the index refers to the time at the start of the measurement interval
-        flow_tstart = pd.DatetimeIndex(flow_tstart)
-        if number_of_bins != len(flow_tstart):
-            msg = "flow_tstart must have the same number of elements as flow"
-            raise ValueError(msg)
-
-        flow_tedges = flow_tstart.append(flow_tstart[[-1]] + (flow_tstart[-1] - flow_tstart[-2]))
-
-    elif flow_tend is not None:
-        # Assume the index refers to the time at the end of the measurement interval
-        flow_tend = pd.DatetimeIndex(flow_tend)
-        if number_of_bins != len(flow_tend):
-            msg = "flow_tend must have the same number of elements as flow"
-            raise ValueError(msg)
-
-        flow_tedges = (flow_tend[[0]] - (flow_tend[1] - flow_tend[0])).append(flow_tend)
-
-    else:
-        msg = "Either provide flow_tedges, flow_tstart, and flow_tend"
-        raise ValueError(msg)
-    return flow_tedges
 
 
 def residence_time_mean(
