@@ -184,7 +184,7 @@ def test_missing_flow_timing_parameters():
     flow_values = np.full(5, 100.0)
     pore_volume = 200.0
 
-    with pytest.raises(ValueError, match="Either provide flow_tedges, flow_tstart, and flow_tend"):
+    with pytest.raises(ValueError, match="Either provide tedges, tstart, and tend"):
         residence_time(flow=flow_values, aquifer_pore_volume=pore_volume, direction="extraction")
 
 
@@ -194,7 +194,7 @@ def test_flow_tedges_length_validation():
     flow_values = np.full(len(flow_tedges), 100.0)  # Wrong length (should be len-1)
     pore_volume = 200.0
 
-    with pytest.raises(ValueError, match="flow_tedges must have one more element than flow"):
+    with pytest.raises(ValueError, match="tedges must have one more element than flow"):
         residence_time(
             flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volume=pore_volume, direction="extraction"
         )
@@ -206,7 +206,7 @@ def test_flow_tstart_length_validation():
     flow_values = np.full(len(flow_tstart) + 1, 100.0)  # Wrong length
     pore_volume = 200.0
 
-    with pytest.raises(ValueError, match="flow_tstart must have the same number of elements as flow"):
+    with pytest.raises(ValueError, match="tstart must have the same number of elements as flow"):
         residence_time(
             flow=flow_values, flow_tstart=flow_tstart, aquifer_pore_volume=pore_volume, direction="extraction"
         )
@@ -218,7 +218,7 @@ def test_flow_tend_length_validation():
     flow_values = np.full(len(flow_tend) + 1, 100.0)  # Wrong length
     pore_volume = 200.0
 
-    with pytest.raises(ValueError, match="flow_tend must have the same number of elements as flow"):
+    with pytest.raises(ValueError, match="tend must have the same number of elements as flow"):
         residence_time(flow=flow_values, flow_tend=flow_tend, aquifer_pore_volume=pore_volume, direction="extraction")
 
 
