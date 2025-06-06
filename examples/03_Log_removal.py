@@ -50,8 +50,9 @@ bins = gamma_utils.bins(mean=mean, std=std, n_bins=1000)
 
 # Compute the residence time, similar to Example 2
 rt_forward_rf1 = advection.residence_time(
-    df.flow,
-    bins["expected_value"],
+    flow=df.flow,
+    flow_tend=df.index,
+    aquifer_pore_volume=bins["expected_value"],
     retardation_factor=1.0,  # Note that we are computing the rt of the water, not the heat transport
     direction="infiltration",
 )

@@ -252,9 +252,153 @@ def linear_average(  # noqa: C901
     return average_values_in_range
 
 
+def partial_isin(bin_edges, timespans):
+    """
+    Calculate the fraction of each bin that falls within each timespan.
+
+    Parameters
+    ----------
+    bin_edges : array_like
+        1D array of bin edges in ascending order. For n bins, there should be n+1 edges.
+    timespans : array_like
+        Timespans as a 2D array of shape (m, 2) where m is the number of timespans and
+        each row contains [start, end] of a timespan.
+
+    Returns
+    -------
+    bin_fractions : ndarray
+        2D array of shape (m, n) where m is the number of timespans and n is the number of bins.
+        Each element (i, j) represents the fraction of bin j that falls within timespan i.
+
+    Notes
+    -----
+    - The function assumes bin_edges and timespans are in the same units.
+    - Bins are defined by their edges, i.e., bin j spans from bin_edges[j] to bin_edges[j+1].
+    - Values range from 0 (no overlap) to 1 (complete overlap).
+
+    Examples
+    --------
+    >>> bin_edges = np.array([0, 10, 20, 30])
+    >>> timespans = np.array([[5, 25], [15, 35]])
+    >>> partial_isin(bin_edges, timespans)
+    array([[0.5, 1. , 0.5],
+           [0. , 0.5, 1. ]])
+    """
+    # Convert inputs to numpy arrays
+    bin_edges = np.asarray(bin_edges)
+    timespans = np.asarray(timespans)
+
+    # Validate inputs
+    if bin_edges.ndim != 1 or timespans.ndim != 2 or timespans.shape[1] != 2:  # noqa: PLR2004
+        msg = "Invalid input shapes: bin_edges must be 1D and timespans must be 2D with shape (m, 2)."
+        raise ValueError(msg)
+    if not np.all(np.diff(bin_edges) > 0):
+        msg = "bin_edges must be in ascending order."
+        raise ValueError(msg)
+    if not np.all(np.diff(timespans) > 0):
+        msg = "timespans must be in ascending order."
+        raise ValueError(msg)
+
+    # Calculate bin widths
+    bin_widths = np.diff(bin_edges)
+
+    # Calculate overlapping segments using broadcasting
+    left_edges = bin_edges[:-1][np.newaxis, :]
+    right_edges = bin_edges[1:][np.newaxis, :]
+
+    starts = timespans[:, 0][:, np.newaxis]
+    ends = timespans[:, 1][:, np.newaxis]
+
+    overlap_left = np.maximum(left_edges, starts)
+    overlap_right = np.minimum(right_edges, ends)
+
+    # Calculate overlap widths (clip at 0 to handle non-overlapping cases)
+    overlap_widths = np.maximum(0, overlap_right - overlap_left)
+
+    # Calculate fraction of each bin that overlaps with timespan
+    return overlap_widths / bin_widths[np.newaxis, :]
+
+
 def generate_failed_coverage_badge():
     """Generate a badge indicating failed coverage."""
     from genbadge import Badge  # type: ignore # noqa: PLC0415
 
     b = Badge(left_txt="coverage", right_txt="failed", color="red")
     b.write_to("coverage_failed.svg", use_shields=False)
+
+
+def compute_time_edges(tedges, tstart, tend, number_of_bins):
+    """
+    Compute time edges for binning data based on provided time parameters.
+
+    This function creates a DatetimeIndex of time bin edges from one of three possible
+    input formats: explicit edges, start times, or end times. The resulting edges
+    define the boundaries of time intervals for data binning.
+
+    Define either explicit time edges, or start and end times for each bin and leave the others at None.
+
+    Parameters
+    ----------
+    tedges : pandas.DatetimeIndex or None
+        Explicit time edges for the bins. If provided, must have one more element
+        than the number of bins (n_bins + 1). Takes precedence over tstart and tend.
+    tstart : pandas.DatetimeIndex or None
+        Start times for each bin. Must have the same number of elements as the
+        number of bins. Used when tedges is None.
+    tend : pandas.DatetimeIndex or None
+        End times for each bin. Must have the same number of elements as the
+        number of bins. Used when both tedges and tstart are None.
+    number_of_bins : int
+        The expected number of time bins. Used for validation against the provided
+        time parameters.
+
+    Returns
+    -------
+    pandas.DatetimeIndex
+        Time edges defining the boundaries of the time bins. Has one more element
+        than number_of_bins.
+
+    Raises
+    ------
+    ValueError
+        If tedges has incorrect length (not number_of_bins + 1).
+        If tstart has incorrect length (not equal to number_of_bins).
+        If tend has incorrect length (not equal to number_of_bins).
+        If none of tedges, tstart, or tend are provided.
+
+    Notes
+    -----
+    - When using tstart, the function assumes uniform spacing and extrapolates
+      the final edge based on the spacing between the last two start times.
+    - When using tend, the function assumes uniform spacing and extrapolates
+      the first edge based on the spacing between the first two end times.
+    - All input time data is converted to pandas.DatetimeIndex for consistency.
+    """
+    if tedges is not None:
+        tedges = pd.DatetimeIndex(tedges)
+        if number_of_bins != len(tedges) - 1:
+            msg = "tedges must have one more element than flow"
+            raise ValueError(msg)
+
+    elif tstart is not None:
+        # Assume the index refers to the time at the start of the measurement interval
+        tstart = pd.DatetimeIndex(tstart)
+        if number_of_bins != len(tstart):
+            msg = "tstart must have the same number of elements as flow"
+            raise ValueError(msg)
+
+        tedges = tstart.append(tstart[[-1]] + (tstart[-1] - tstart[-2]))
+
+    elif tend is not None:
+        # Assume the index refers to the time at the end of the measurement interval
+        tend = pd.DatetimeIndex(tend)
+        if number_of_bins != len(tend):
+            msg = "tend must have the same number of elements as flow"
+            raise ValueError(msg)
+
+        tedges = (tend[[0]] - (tend[1] - tend[0])).append(tend)
+
+    else:
+        msg = "Either provide tedges, tstart, and tend"
+        raise ValueError(msg)
+    return tedges

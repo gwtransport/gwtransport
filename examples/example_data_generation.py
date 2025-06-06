@@ -89,8 +89,11 @@ def generate_synthetic_data(
         index=dates,
     )
     df["temp_extraction"] = advection.gamma_forward(
-        df["temp_infiltration"],
-        df["flow"],
+        cin=df["temp_infiltration"],
+        cin_tend=df["temp_infiltration"].index,
+        cout_tend=df["temp_infiltration"].index,
+        flow=df["flow"],
+        flow_tend=df["flow"].index,
         mean=aquifer_pore_volume,
         std=aquifer_pore_volume_std,
         n_bins=1000,
