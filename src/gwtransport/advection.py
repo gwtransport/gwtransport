@@ -350,51 +350,6 @@ def distribution_forward(
     return pd.Series(data=cout_data, index=cout_time, name="cout")
 
 
-def time_of_infiltration(flow, aquifer_pore_volume_edges, retardation_factor=1.0, fill_na=True):
-    rt_edges = residence_time(
-        flow, aquifer_pore_volume_edges, retardation_factor=retardation_factor, direction="extraction"
-    ).astype("timedelta64[D]")
-    times = flow.index.values[None] - rt_edges
-
-    if fill_na:
-        isna = np.isnat(times)
-
-
-def coefficients_forward(
-    flow, flow_tedges, out_tedges, aquifer_pore_volume, direction="extraction", retardation_factor=1.0
-):
-    """
-    Compute the coefficients for the advection distribution.
-
-    This function computes the coefficients for the advection distribution based on the flow rate,
-    time edges, and aquifer pore volume edges. It can compute both backward modeling (extraction direction)
-    and forward modeling (infiltration direction).
-
-    Parameters
-    ----------
-    flow : pandas.Series
-        Flow rate of water in the aquifer [m3/day].
-    flow_tedges : array-like
-        Time edges corresponding to the flow data.
-    out_tedges : array-like
-        Time edges for the output data.
-    aquifer_pore_volume : array-like
-    direction : str, optional
-        Direction of the operation ('extraction' or 'infiltration'). Default is 'extraction'.
-    retardation_factor : float, optional
-        Retardation factor of the compound in the aquifer. Default is 1.0.
-
-    Returns
-    -------
-    """
-    flow = np.asarray(flow)
-    flow_tedges = pd.DatetimeIndex(flow_tedges)
-    out_tedges = pd.DatetimeIndex(out_tedges)
-    aquifer_pore_volume = np.atleast_1d(aquifer_pore_volume)
-
-    rt = residence_time(flow=flow, flow_tedges=flow_tedges, aquifer_pore_volume=aquifer_pore_volume)
-
-
 def distribution_backward(cout, flow, aquifer_pore_volume_edges, retardation_factor=1.0):
     """
     Compute the concentration of the infiltrating water from the extracted water concentration considering a distribution of aquifer pore volumes.

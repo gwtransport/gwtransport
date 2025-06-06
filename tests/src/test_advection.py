@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport.advection import forward, gamma_forward, distribution_forward
+from gwtransport.advection import distribution_forward, forward, gamma_forward
 
 
 # Fixtures
