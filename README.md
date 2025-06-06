@@ -53,11 +53,14 @@ from gwtransport import advection
 def objective(time, mean, std):
     cout = advection.gamma_forward(
         cin=temperature_data,
+        cin_tend=temperature_data.index,
+        cout_tend=cout_times,
         flow=flow_data,
-        mean=mean,
-        std=std,
+        flow_tend=flow_times,
+        mean=gamma_mean,
+        std=gamma_std,
         n_bins=200,
-        retardation_factor=2.0
+        retardation_factor=2.0,
     )
     return cout.values
 
@@ -94,8 +97,9 @@ bins = gamma.bins(mean=mean, std=std, n_bins=1000)
 
 # Calculate forward residence time (infiltration to extraction)
 rt_forward = advection.residence_time(
-    flow_data,
-    bins["expected_value"],
+    flow=flow_data,
+    flow_tend=flow_data.index,
+    aquifer_pore_volume=bins["expected_value"],
     retardation_factor=1.0,
     direction="infiltration"
 )
