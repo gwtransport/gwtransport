@@ -89,14 +89,36 @@ def generate_synthetic_data(
         index=dates,
     )
     df["temp_extraction"] = advection.gamma_forward(
-        df["temp_infiltration"],
-        df["flow"],
+        cin=df["temp_infiltration"],
+        cin_tend=df["temp_infiltration"].index,
+        cout_tend=df["temp_infiltration"].index,
+        flow=df["flow"],
+        flow_tend=df["flow"].index,
         mean=aquifer_pore_volume,
         std=aquifer_pore_volume_std,
         n_bins=1000,
         retardation_factor=retardation_factor,
     )
-
+# gamma_forward(
+#     *,
+#     cin,
+#     cin_tedges=None,
+#     cin_tstart=None,
+#     cin_tend=None,
+#     cout_tedges=None,
+#     cout_tstart=None,
+#     cout_tend=None,
+#     flow,
+#     flow_tedges=None,
+#     flow_tstart=None,
+#     flow_tend=None,
+#     alpha=None,
+#     beta=None,
+#     mean=None,
+#     std=None,
+#     n_bins=100,
+#     retardation_factor=1.0,
+# )
     # Add some noise to represent measurement errors and other factors
     df["temp_extraction"] += np.random.normal(0, 0.1, len(df))
 

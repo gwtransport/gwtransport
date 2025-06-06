@@ -314,7 +314,16 @@ def distribution_forward(
     """
     cin_tedges = compute_time_edges(tedges=cin_tedges, tstart=cin_tstart, tend=cin_tend, number_of_bins=len(cin))
     cout_tedges = compute_time_edges(tedges=cout_tedges, tstart=cout_tstart, tend=cout_tend, number_of_bins=len(flow))
-    cout_time = cout_tedges[:-1] + (cout_tedges[1:] - cout_tedges[:-1]) / 2
+
+    if cout_tstart is not None:
+        cout_time = cout_tstart
+    elif cout_tend is not None:
+        cout_time = cout_tend
+    elif cout_tedges is not None:
+        cout_time = cout_tedges[:-1] + (cout_tedges[1:] - cout_tedges[:-1]) / 2
+    else:
+        msg = "Either cout_tedges, cout_tstart, or cout_tend must be provided."
+        raise ValueError(msg)
 
     # Use residence time at cout_tedges
     rt_edges = residence_time(

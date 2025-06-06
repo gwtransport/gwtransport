@@ -61,14 +61,16 @@ bins = gamma_utils.bins(mean=mean, std=std, n_bins=1000)
 # Data returned is of shape (n_bins, n_days). First with retardation factor = 1.0, then with the
 # retardation factor of the temperature in the aquifer (= 2).
 rt_forward_rf1 = advection.residence_time(
-    df.flow,
-    bins["expected_value"],
+    flow=df.flow,
+    flow_tend=df.index,
+    aquifer_pore_volume=bins["expected_value"],
     retardation_factor=1.0,  # Note that we are computing the rt of the water, not the heat transport
     direction="infiltration",
 )
 rt_forward_rf2 = advection.residence_time(
-    df.flow,
-    bins["expected_value"],
+    flow=df.flow,
+    flow_tend=df.index,
+    aquifer_pore_volume=bins["expected_value"],
     retardation_factor=retardation_factor,
     direction="infiltration",
 )
@@ -127,14 +129,16 @@ plt.tight_layout()
 # Data returned is of shape (n_bins, n_days). First with retardation factor = 1.0, then with the
 # retardation factor of the temperature in the aquifer (= 2).
 rt_backward_rf1 = advection.residence_time(
-    df.flow,
-    bins["expected_value"],
+    flow=df.flow,
+    flow_tend=df.index,
+    aquifer_pore_volume=bins["expected_value"],
     retardation_factor=1.0,
     direction="extraction",
 )
 rt_backward_rf2 = advection.residence_time(
-    df.flow,
-    bins["expected_value"],
+    flow=df.flow,
+    flow_tend=df.index,
+    aquifer_pore_volume=bins["expected_value"],
     retardation_factor=retardation_factor,
     direction="extraction",
 )

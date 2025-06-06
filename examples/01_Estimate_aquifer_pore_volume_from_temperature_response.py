@@ -71,7 +71,15 @@ print(f"- True standard deviation of aquifer pore volume distribution: {df.attrs
 # we will use the first year as spin up time and only fit the data from 2021 onwards.
 def objective(time, mean, std):  # noqa: ARG001, D103
     cout = advection.gamma_forward(
-        cin=df.temp_infiltration, flow=df.flow, mean=mean, std=std, n_bins=200, retardation_factor=2.0
+        cin=df.temp_infiltration,
+        cin_tend=df.index,
+        cout_tend=df.index,
+        flow=df.flow,
+        flow_tend=df.index,
+        mean=mean,
+        std=std,
+        n_bins=200,
+        retardation_factor=2.0,
     )
     return cout["2021-01-01":].values
 
@@ -86,7 +94,15 @@ def objective(time, mean, std):  # noqa: ARG001, D103
     max_nfev=100,  # Limit number of function evaluations to keep runtime reasonable
 )
 df["temp_extraction_modeled"] = advection.gamma_forward(
-    cin=df.temp_infiltration, flow=df.flow, mean=mean, std=std, n_bins=100, retardation_factor=2.0
+    cin=df.temp_infiltration,
+    cin_tend=df.index,
+    cout_tend=df.index,
+    flow=df.flow,
+    flow_tend=df.index,
+    mean=mean,
+    std=std,
+    n_bins=100,
+    retardation_factor=2.0,
 )
 
 # Print the fitted parameters
