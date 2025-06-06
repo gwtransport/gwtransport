@@ -23,10 +23,10 @@ import pandas as pd
 
 from gwtransport import gamma
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import interp_series, linear_interpolate
+from gwtransport.utils import compute_time_edges, interp_series, linear_interpolate
 
 
-def forward(cin, flow, aquifer_pore_volume, retardation_factor=1.0, resample_dates=None):
+def forward(cin_series, flow_series, aquifer_pore_volume, retardation_factor=1.0, cout_index="cin"):
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.
 
@@ -38,28 +38,53 @@ def forward(cin, flow, aquifer_pore_volume, retardation_factor=1.0, resample_dat
 
     Parameters
     ----------
-    cin : pandas.Series
-        Concentration of the compound in the extracted water [ng/m3].
-    flow : pandas.Series
-        Flow rate of water in the aquifer [m3/day].
+    cin_series : pandas.Series
+        Concentration of the compound in the extracted water [ng/m3]. The cin_series should be the average concentration of a time bin. The index should be a pandas.DatetimeIndex
+        and is labeled at the end of the time bin.
+    flow_series : pandas.Series
+        Flow rate of water in the aquifer [m3/day]. The flow_series should be the average flow of a time bin. The index should be a pandas.DatetimeIndex
+        and is labeled at the end of the time bin.
     aquifer_pore_volume : float
         Pore volume of the aquifer [m3].
+    cout_index : str, optional
+        The index of the output series. Can be 'cin', 'flow', or 'cout'. Default is 'cin'.
+        - 'cin': The output series will have the same index as `cin_series`.
+        - 'flow': The output series will have the same index as `flow_series`.
+        - 'cout': The output series will have the same index as `cin_series + residence_time`.
 
     Returns
     -------
     pandas.Series
         Concentration of the compound in the extracted water [ng/m3].
     """
-    rt_float = residence_time(
-        flow, aquifer_pore_volume, index=cin.index, retardation_factor=retardation_factor, direction="infiltration"
+    rt_series = residence_time(
+        flow=flow_series,
+        flow_tedges=None,
+        flow_tstart=None,
+        flow_tend=flow_series.index,
+        index=cin_series.index,
+        aquifer_pore_volume=aquifer_pore_volume,
+        retardation_factor=retardation_factor,
+        direction="infiltration",
+        return_pandas_series=True,
     )
-    rt = pd.to_timedelta(rt_float, unit="D")
-    cout = pd.Series(data=cin.values, index=cin.index + rt, name="cout")
 
-    if resample_dates is not None:
-        cout = pd.Series(interp_series(cout, resample_dates), index=resample_dates, name="cout")
+    rt = pd.to_timedelta(rt_series.values, unit="D", errors="coerce")
+    index = cin_series.index + rt
 
-    return cout
+    cout = pd.Series(data=cin_series.values, index=index, name="cout")
+
+    if cout_index == "cin":
+        return pd.Series(interp_series(cout, cin_series.index), index=cin_series.index, name="cout")
+    if cout_index == "flow":
+        # If cout_index is 'flow', we need to resample cout to the flow index
+        return pd.Series(interp_series(cout, flow_series.index), index=flow_series.index, name="cout")
+    if cout_index == "cout":
+        # If cout_index is 'cout', we return the cout as is
+        return cout
+
+    msg = f"Invalid cout_index: {cout_index}. Must be 'cin', 'flow', or 'cout'."
+    raise ValueError(msg)
 
 
 def backward(cout, flow, aquifer_pore_volume, retardation_factor=1.0, resample_dates=None):
@@ -86,7 +111,26 @@ def backward(cout, flow, aquifer_pore_volume, retardation_factor=1.0, resample_d
     raise NotImplementedError(msg)
 
 
-def gamma_forward(cin, flow, alpha=None, beta=None, mean=None, std=None, n_bins=100, retardation_factor=1.0):
+def gamma_forward(
+    *,
+    cin,
+    cin_tedges=None,
+    cin_tstart=None,
+    cin_tend=None,
+    cout_tedges=None,
+    cout_tstart=None,
+    cout_tend=None,
+    flow,
+    flow_tedges=None,
+    flow_tstart=None,
+    flow_tend=None,
+    alpha=None,
+    beta=None,
+    mean=None,
+    std=None,
+    n_bins=100,
+    retardation_factor=1.0,
+):
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.
 
@@ -97,14 +141,44 @@ def gamma_forward(cin, flow, alpha=None, beta=None, mean=None, std=None, n_bins=
 
     This function represents a forward operation (equivalent to convolution).
 
-    Provide either alpha and beta or mean and std.
+    Provide:
+    - either alpha and beta or mean and std.
+    - either cin_tedges or cin_tstart or cin_tend.
+    - either cout_tedges or cout_tstart or cout_tend.
+    - either flow_tedges or flow_tstart or flow_tend.
 
     Parameters
     ----------
     cin : pandas.Series
-        Concentration of the compound in the extracted water [ng/m3] or temperature in infiltrating water.
+        Concentration of the compound in infiltrating water or temperature of infiltrating
+        water.
+    cin_tedges : pandas.DatetimeIndex, optional
+        Time edges for the concentration data. If provided, it is used to compute the cumulative concentration.
+    cin_tstart : pandas.DatetimeIndex, optional
+        Timestamps aligned to the start of the concentration measurement intervals. Preferably use cin_tedges,
+        but if not available this approach can be used for convenience.
+    cin_tend : pandas.DatetimeIndex, optional
+        Timestamps aligned to the end of the concentration measurement intervals. Preferably use cin_tedges,
+        but if not available this approach can be used for convenience.
+    cout_tedges : pandas.DatetimeIndex, optional
+        Time edges for the output data. If provided, it is used to compute the cumulative concentration.
+    cout_tstart : pandas.DatetimeIndex, optional
+        Timestamps aligned to the start of the output measurement intervals. Preferably use cout_tedges,
+        but if not available this approach can be used for convenience.
+    cout_tend : pandas.DatetimeIndex, optional
+        Timestamps aligned to the end of the output measurement intervals. Preferably use cout_tedges,
+        but if not available this approach can be used for convenience.
     flow : pandas.Series
         Flow rate of water in the aquifer [m3/day].
+    flow_tedges : pandas.DatetimeIndex, optional
+        Time edges for the flow data. If provided, it is used to compute the cumulative flow.
+        If left to None, the index of `flow` is used. Has a length of one more than `flow`. Default is None.
+    flow_tstart : pandas.DatetimeIndex, optional
+        Timestamps aligned to the start of the flow measurement intervals. Preferably use flow_tedges,
+        but if not available this approach can be used for convenience. Has the same length as `flow`.
+    flow_tend : pandas.DatetimeIndex, optional
+        Timestamps aligned to the end of the flow measurement intervals. Preferably use flow_tedges,
+        but if not available this approach can be used for convenience. Has the same length as `flow`.
     alpha : float, optional
         Shape parameter of gamma distribution of the aquifer pore volume (must be > 0)
     beta : float, optional
@@ -124,7 +198,21 @@ def gamma_forward(cin, flow, alpha=None, beta=None, mean=None, std=None, n_bins=
         Concentration of the compound in the extracted water [ng/m3] or temperature.
     """
     bins = gamma.bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
-    return distribution_forward(cin, flow, bins["edges"], retardation_factor=retardation_factor)
+    return distribution_forward(
+        cin=cin,
+        cin_tedges=cin_tedges,
+        cin_tstart=cin_tstart,
+        cin_tend=cin_tend,
+        cout_tedges=cout_tedges,
+        cout_tstart=cout_tstart,
+        cout_tend=cout_tend,
+        flow=flow,
+        flow_tedges=flow_tedges,
+        flow_tstart=flow_tstart,
+        flow_tend=flow_tend,
+        aquifer_pore_volume_edges=bins["edges"],
+        retardation_factor=retardation_factor,
+    )
 
 
 def gamma_backward(cout, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
@@ -157,17 +245,62 @@ def gamma_backward(cout, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
     raise NotImplementedError(msg)
 
 
-def distribution_forward(cin, flow, aquifer_pore_volume_edges, retardation_factor=1.0):
+def distribution_forward(
+    *,
+    cin,
+    cin_tedges=None,
+    cin_tstart=None,
+    cin_tend=None,
+    cout_tedges=None,
+    cout_tstart=None,
+    cout_tend=None,
+    flow,
+    flow_tedges=None,
+    flow_tstart=None,
+    flow_tend=None,
+    aquifer_pore_volume_edges=None,
+    retardation_factor=1.0,
+):
     """
     Similar to forward_advection, but with a distribution of aquifer pore volumes.
+
+    Provide:
+    - either cin_tedges or cin_tstart or cin_tend.
+    - either cout_tedges or cout_tstart or cout_tend.
+    - either flow_tedges or flow_tstart or flow_tend.
 
     Parameters
     ----------
     cin : pandas.Series
         Concentration of the compound in infiltrating water or temperature of infiltrating
         water.
+    cin_tedges : pandas.DatetimeIndex, optional
+        Time edges for the concentration data. If provided, it is used to compute the cumulative concentration.
+    cin_tstart : pandas.DatetimeIndex, optional
+        Timestamps aligned to the start of the concentration measurement intervals. Preferably use cin_tedges,
+        but if not available this approach can be used for convenience.
+    cin_tend : pandas.DatetimeIndex, optional
+        Timestamps aligned to the end of the concentration measurement intervals. Preferably use cin_tedges,
+        but if not available this approach can be used for convenience.
+    cout_tedges : pandas.DatetimeIndex, optional
+        Time edges for the output data. If provided, it is used to compute the cumulative concentration.
+    cout_tstart : pandas.DatetimeIndex, optional
+        Timestamps aligned to the start of the output measurement intervals. Preferably use cout_tedges,
+        but if not available this approach can be used for convenience.
+    cout_tend : pandas.DatetimeIndex, optional
+        Timestamps aligned to the end of the output measurement intervals. Preferably use cout_tedges,
+        but if not available this approach can be used for convenience.
     flow : pandas.Series
         Flow rate of water in the aquifer [m3/day].
+    flow_tedges : pandas.DatetimeIndex, optional
+        Time edges for the flow data. If provided, it is used to compute the cumulative flow.
+        If left to None, the index of `flow` is used. Has a length of one more than `flow`. Default is None.
+    flow_tstart : pandas.DatetimeIndex, optional
+        Timestamps aligned to the start of the flow measurement intervals. Preferably use flow_tedges,
+        but if not available this approach can be used for convenience. Has the same length as `flow`.
+    flow_tend : pandas.DatetimeIndex, optional
+        Timestamps aligned to the end of the flow measurement intervals. Preferably use flow_tedges,
+        but if not available this approach can be used for convenience. Has the same length as `flow`.
     aquifer_pore_volume_edges : array-like
         Edges of the bins that define the distribution of the aquifer pore volume.
         Of size nbins + 1 [m3].
@@ -179,24 +312,78 @@ def distribution_forward(cin, flow, aquifer_pore_volume_edges, retardation_facto
     pandas.Series
         Concentration of the compound in the extracted water or temperature. Same units as cin.
     """
-    day_of_extraction = np.array(flow.index - flow.index[0]) / np.timedelta64(1, "D")
+    cin_tedges = compute_time_edges(tedges=cin_tedges, tstart=cin_tstart, tend=cin_tend, number_of_bins=len(cin))
+    cout_tedges = compute_time_edges(tedges=cout_tedges, tstart=cout_tstart, tend=cout_tend, number_of_bins=len(flow))
+    cout_time = cout_tedges[:-1] + (cout_tedges[1:] - cout_tedges[:-1]) / 2
 
-    # Use temperature at center point of bin
+    # Use residence time at cout_tedges
     rt_edges = residence_time(
-        flow, aquifer_pore_volume_edges, retardation_factor=retardation_factor, direction="extraction"
-    )
-    day_of_infiltration_edges = day_of_extraction - rt_edges
+        flow=flow,
+        flow_tedges=flow_tedges,
+        flow_tstart=flow_tstart,
+        flow_tend=flow_tend,
+        index=cout_time,
+        aquifer_pore_volume=aquifer_pore_volume_edges,
+        retardation_factor=retardation_factor,
+        direction="extraction",
+    ).astype("timedelta64[D]")
+    day_of_infiltration_edges = cout_time.values[None] - rt_edges
 
-    cin_sum = cin.cumsum()
-    cin_sum_edges = linear_interpolate(day_of_extraction, cin_sum, day_of_infiltration_edges)
-    n_measurements = linear_interpolate(day_of_extraction, np.arange(cin.size), day_of_infiltration_edges)
+    cin_sum = np.concat(([0.0], cin.cumsum()))  # Add a zero at the beginning for cumulative sum
+    cin_sum_edges = linear_interpolate(cin_tedges, cin_sum, day_of_infiltration_edges)
+    n_measurements = linear_interpolate(cin_tedges, np.arange(cin_tedges.size), day_of_infiltration_edges)
     cout_arr = np.diff(cin_sum_edges, axis=0) / np.diff(n_measurements, axis=0)
 
     with warnings.catch_warnings():
         warnings.filterwarnings(action="ignore", message="Mean of empty slice")
         cout_data = np.nanmean(cout_arr, axis=0)
 
-    return pd.Series(data=cout_data, index=flow.index, name="cout")
+    return pd.Series(data=cout_data, index=cout_time, name="cout")
+
+
+def time_of_infiltration(flow, aquifer_pore_volume_edges, retardation_factor=1.0, fill_na=True):
+    rt_edges = residence_time(
+        flow, aquifer_pore_volume_edges, retardation_factor=retardation_factor, direction="extraction"
+    ).astype("timedelta64[D]")
+    times = flow.index.values[None] - rt_edges
+
+    if fill_na:
+        isna = np.isnat(times)
+
+
+def coefficients_forward(
+    flow, flow_tedges, out_tedges, aquifer_pore_volume, direction="extraction", retardation_factor=1.0
+):
+    """
+    Compute the coefficients for the advection distribution.
+
+    This function computes the coefficients for the advection distribution based on the flow rate,
+    time edges, and aquifer pore volume edges. It can compute both backward modeling (extraction direction)
+    and forward modeling (infiltration direction).
+
+    Parameters
+    ----------
+    flow : pandas.Series
+        Flow rate of water in the aquifer [m3/day].
+    flow_tedges : array-like
+        Time edges corresponding to the flow data.
+    out_tedges : array-like
+        Time edges for the output data.
+    aquifer_pore_volume : array-like
+    direction : str, optional
+        Direction of the operation ('extraction' or 'infiltration'). Default is 'extraction'.
+    retardation_factor : float, optional
+        Retardation factor of the compound in the aquifer. Default is 1.0.
+
+    Returns
+    -------
+    """
+    flow = np.asarray(flow)
+    flow_tedges = pd.DatetimeIndex(flow_tedges)
+    out_tedges = pd.DatetimeIndex(out_tedges)
+    aquifer_pore_volume = np.atleast_1d(aquifer_pore_volume)
+
+    rt = residence_time(flow=flow, flow_tedges=flow_tedges, aquifer_pore_volume=aquifer_pore_volume)
 
 
 def distribution_backward(cout, flow, aquifer_pore_volume_edges, retardation_factor=1.0):
