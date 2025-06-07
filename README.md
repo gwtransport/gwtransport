@@ -18,7 +18,7 @@
 ### Workflow
 
 1. **Characterization** ([Example 1](#example-1-aquifer-characterization)): Use temperature data to estimate aquifer heterogeneity parameters
-2. **Analysis** ([Example 2](#example-2-residence-time-analysis)): Calculate residence time distributions for different flow paths  
+2. **Analysis** ([Example 2](#example-2-residence-time-analysis)): Calculate residence time distributions for different flow paths
 3. **Application** ([Example 3](#example-3-pathogen-removal-assessment)): Assess contaminant removal or transport predictions
 
 ### Key Assumptions
@@ -47,15 +47,15 @@ from gwtransport import advection, compute_time_edges
 
 # Load temperature and flow time series data
 recharge_temp = pd.Series(...)    # Temperature of infiltrating water [°C]
-discharge_temp = pd.Series(...)   # Temperature of extracted water [°C]  
+discharge_temp = pd.Series(...)   # Temperature of extracted water [°C]
 flow_rates = pd.Series(...)       # Discharge rates [m³/day]
 
 # Define time bin edges for discrete convolution
-cin_tedges = compute_time_edges(tedges=None, tstart=None, 
-                               tend=recharge_temp.index, 
+cin_tedges = compute_time_edges(tedges=None, tstart=None,
+                               tend=recharge_temp.index,
                                number_of_bins=len(recharge_temp))
-cout_tedges = compute_time_edges(tedges=None, tstart=None, 
-                                tend=flow_rates.index, 
+cout_tedges = compute_time_edges(tedges=None, tstart=None,
+                                tend=flow_rates.index,
                                 number_of_bins=len(flow_rates))
 flow_tedges = cout_tedges
 
@@ -104,13 +104,13 @@ from gwtransport.residence_time import residence_time
 
 # Use parameters from aquifer characterization (Example 1)
 mean_pore_volume = 8000.0   # Mean pore volume [m³]
-std_pore_volume = 400.0     # Standard deviation [m³] 
+std_pore_volume = 400.0     # Standard deviation [m³]
 flow_data = pd.Series(...)  # Discharge time series [m³/day]
 
 # Discretize pore volume distribution into flow paths
 pore_vol_bins = gamma.bins(mean=mean_pore_volume, std=std_pore_volume, n_bins=1000)
-flow_tedges = compute_time_edges(tedges=None, tstart=None, 
-                                tend=flow_data.index, 
+flow_tedges = compute_time_edges(tedges=None, tstart=None,
+                                tend=flow_data.index,
                                 number_of_bins=len(flow_data))
 
 # Calculate residence times for different scenarios
@@ -158,7 +158,7 @@ log_removal_rate = 0.8    # First-order removal rate [1/day]
 mean_rt = np.nanmean(mean_rt_water)
 std_rt = np.nanstd(mean_rt_water)
 
-# Fit gamma distribution to residence time statistics  
+# Fit gamma distribution to residence time statistics
 rt_alpha, rt_beta = gamma.mean_std_to_alpha_beta(mean_rt, std_rt)
 
 # Calculate log-removal statistics
@@ -190,7 +190,7 @@ else:
 For detailed, runnable examples with data generation and visualization:
 
 - **[Aquifer Characterization](https://github.com/gwtransport/gwtransport/blob/main/examples/01_Estimate_aquifer_pore_volume_from_temperature_response.py)**: Complete inverse modeling workflow using temperature breakthrough data
-- **[Residence Time Analysis](https://github.com/gwtransport/gwtransport/blob/main/examples/02_Estimate_the_residence_time_distribution.py)**: Comprehensive residence time distribution calculations and visualization  
+- **[Residence Time Analysis](https://github.com/gwtransport/gwtransport/blob/main/examples/02_Estimate_the_residence_time_distribution.py)**: Comprehensive residence time distribution calculations and visualization
 - **[Pathogen Risk Assessment](https://github.com/gwtransport/gwtransport/blob/main/examples/03_Log_removal.py)**: Risk-based evaluation of pathogen removal in groundwater systems
 
 ## Contributing
