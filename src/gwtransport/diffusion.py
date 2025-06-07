@@ -41,7 +41,7 @@ def forward(
 
     Returns
     -------
-    pandas.Series
+    numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3].
     """
     sigma_array = compute_sigma_array(
@@ -87,7 +87,7 @@ def backward(
 
     Returns
     -------
-    pandas.Series
+    numpy.ndarray
         Concentration of the compound in the infiltrating water [ng/m3].
 
     Notes

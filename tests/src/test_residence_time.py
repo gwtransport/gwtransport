@@ -135,8 +135,8 @@ def test_custom_index():
     assert result.shape[1] == len(custom_dates)
 
 
-def test_return_pandas_series():
-    """Test returning results as pandas Series."""
+def test_return_numpy_array():
+    """Test returning results as numpy array (default behavior)."""
     flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
     flow_values = np.full(len(flow_tedges) - 1, 100.0)
     pore_volume = 200.0
@@ -146,8 +146,28 @@ def test_return_pandas_series():
         flow_tedges=flow_tedges,
         aquifer_pore_volume=pore_volume,
         direction="extraction",
-        return_pandas_series=True,
     )
+
+    assert isinstance(result, np.ndarray)
+    # Should return for the center points of flow bins
+    expected_length = len(flow_tedges) - 1
+    assert result.shape == (1, expected_length)
+
+
+def test_return_pandas_series():
+    """Test returning results as pandas Series (deprecated functionality)."""
+    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    pore_volume = 200.0
+
+    with pytest.warns(DeprecationWarning, match="return_pandas_series parameter is deprecated"):
+        result = residence_time(
+            flow=flow_values,
+            flow_tedges=flow_tedges,
+            aquifer_pore_volume=pore_volume,
+            direction="extraction",
+            return_pandas_series=True,
+        )
 
     assert isinstance(result, pd.Series)
     assert result.name == "residence_time_extraction"

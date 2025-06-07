@@ -54,7 +54,7 @@ def forward(cin_series, flow_series, aquifer_pore_volume, retardation_factor=1.0
 
     Returns
     -------
-    pandas.Series
+    numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3].
     """
     # Create flow tedges from the flow series index (assuming it's at the end of bins)
@@ -75,13 +75,13 @@ def forward(cin_series, flow_series, aquifer_pore_volume, retardation_factor=1.0
     cout = pd.Series(data=cin_series.values, index=index, name="cout")
 
     if cout_index == "cin":
-        return pd.Series(interp_series(cout, cin_series.index), index=cin_series.index, name="cout")
+        return interp_series(cout, cin_series.index)
     if cout_index == "flow":
         # If cout_index is 'flow', we need to resample cout to the flow index
-        return pd.Series(interp_series(cout, flow_series.index), index=flow_series.index, name="cout")
+        return interp_series(cout, flow_series.index)
     if cout_index == "cout":
         # If cout_index is 'cout', we return the cout as is
-        return cout
+        return cout.values
 
     msg = f"Invalid cout_index: {cout_index}. Must be 'cin', 'flow', or 'cout'."
     raise ValueError(msg)
@@ -104,7 +104,7 @@ def backward(cout, flow, aquifer_pore_volume, retardation_factor=1.0, resample_d
 
     Returns
     -------
-    pandas.Series
+    numpy.ndarray
         Concentration of the compound in the infiltrating water [ng/m3].
     """
     msg = "Backward advection (deconvolution) is not implemented yet"
@@ -168,7 +168,7 @@ def gamma_forward(
 
     Returns
     -------
-    pandas.Series
+    numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3] or temperature.
     """
     bins = gamma.bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
@@ -250,7 +250,7 @@ def distribution_forward(
 
     Returns
     -------
-    pandas.Series
+    numpy.ndarray
         Concentration of the compound in the extracted water or temperature. Same units as cin.
     """
     cin_tedges = pd.DatetimeIndex(cin_tedges)
@@ -282,9 +282,7 @@ def distribution_forward(
 
     with warnings.catch_warnings():
         warnings.filterwarnings(action="ignore", message="Mean of empty slice")
-        cout_data = np.nanmean(cout_arr, axis=0)
-
-    return pd.Series(data=cout_data, index=cout_time, name="cout")
+        return np.nanmean(cout_arr, axis=0)
 
 
 def distribution_backward(cout, flow, aquifer_pore_volume_edges, retardation_factor=1.0):

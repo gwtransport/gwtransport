@@ -11,6 +11,8 @@ Main functions:
   between specified time edges.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -47,11 +49,11 @@ def residence_time(
     direction : str, optional
         Direction of the flow. Either 'extraction' or 'infiltration'. Extraction refers to backward modeling: how many days ago did this extracted water infiltrate. Infiltration refers to forward modeling: how many days will it take for this infiltrated water to be extracted. Default is 'extraction'.
     return_pandas_series : bool, optional
-        If True, return a pandas Series with the residence time at the index provided. Only supported for a single aquifer pore volume.
+        If True, return a pandas Series with the residence time at the index provided. Only supported for a single aquifer pore volume. This parameter is deprecated and will be removed in a future version.
 
     Returns
     -------
-    array
+    numpy.ndarray
         Residence time of the retarded compound in the aquifer [days].
     """
     aquifer_pore_volume = np.atleast_1d(aquifer_pore_volume)
@@ -95,6 +97,12 @@ def residence_time(
         raise ValueError(msg)
 
     if return_pandas_series:
+        warnings.warn(
+            "return_pandas_series parameter is deprecated and will be removed in a future version. "
+            "The function now returns numpy arrays by default.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         if len(aquifer_pore_volume) > 1:
             msg = "return_pandas_series=True is only supported for a single pore volume"
             raise ValueError(msg)

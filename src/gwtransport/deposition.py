@@ -51,7 +51,7 @@ def backward(
 
     Returns
     -------
-    pandas.Series
+    numpy.ndarray
         Deposition of the compound in the aquifer [ng/m2/day].
     """
     # concentration extracted water is coeff dot deposition
@@ -113,8 +113,7 @@ def backward(
             msg = f"Optimization failed: {res.message}"
             raise ValueError(msg)
 
-    deposition_data = deposition_ls + cols_of_nullspace @ res.x
-    return pd.Series(data=deposition_data, index=index_dep, name="deposition")
+    return deposition_ls + cols_of_nullspace @ res.x
 
 
 def forward(dcout_index, deposition, flow, aquifer_pore_volume, porosity, thickness, retardation_factor):
@@ -140,7 +139,7 @@ def forward(dcout_index, deposition, flow, aquifer_pore_volume, porosity, thickn
 
     Returns
     -------
-    pandas.Series
+    numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3].
     """
     cout_date_range = dcout_date_range_from_dcout_index(dcout_index)
@@ -152,7 +151,7 @@ def forward(dcout_index, deposition, flow, aquifer_pore_volume, porosity, thickn
         thickness=thickness,
         retardation_factor=retardation_factor,
     )
-    return pd.Series(coeff @ deposition[dep_index], index=dcout_index, name="dcout")
+    return coeff @ deposition[dep_index]
 
 
 def deposition_coefficients(dcout_index, flow, aquifer_pore_volume, porosity, thickness, retardation_factor):

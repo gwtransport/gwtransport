@@ -69,12 +69,15 @@ print(f"- True standard deviation of aquifer pore volume distribution: {df.attrs
 # Perform the curve fitting on valid data. It takes some time to for large fractions
 # of the infiltration temperature be present in the extracted water. For simplicity sake,
 # we will use the first year as spin up time and only fit the data from 2021 onwards.
-def objective(time, mean, std):  # noqa: ARG001, D103
-    # Create time edges for the simplified API
-    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.temp_infiltration))
-    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
-    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
+cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.temp_infiltration))
+cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
+flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
 
+# Get the length of training data for fitting
+train_data = df["2021-01-01":].temp_extraction
+train_length = len(train_data)
+
+def objective(_xdata, mean, std):  # noqa: D103
     cout = advection.gamma_forward(
         cin=df.temp_infiltration,
         cin_tedges=cin_tedges,
@@ -86,13 +89,15 @@ def objective(time, mean, std):  # noqa: ARG001, D103
         n_bins=200,
         retardation_factor=2.0,
     )
-    return cout["2021-01-01":].values
+    # cout is now an array, so we need to get the appropriate slice based on the index
+    # Return the same number of elements as the training data
+    return cout[-train_length:]  # Skip first year (2020) for spin-up
 
 
 (mean, std), pcov = curve_fit(
     objective,
     df.index,
-    df["2021-01-01":].temp_extraction,
+    train_data,
     p0=(7000.0, 500.0),
     bounds=([1000, 10], [10000, 1000]),  # Reasonable bounds for mean and std
     method="trf",  # Trust Region Reflective algorithm

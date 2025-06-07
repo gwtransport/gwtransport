@@ -41,9 +41,8 @@ def test_forward_basic(sample_time_series):
     )
 
     # Check output type and length
-    assert isinstance(cout, pd.Series)
+    assert isinstance(cout, np.ndarray)
     assert len(cout) == len(cin)
-    assert cout.name == "cout"
 
     # Check output values are non-negative (ignoring NaN values)
     valid_values = cout[~np.isnan(cout)]
@@ -58,18 +57,15 @@ def test_forward_cout_index_options(sample_time_series):
     # Test cout_index="cin"
     cout_cin = forward(cin_series=cin, flow_series=flow, aquifer_pore_volume=aquifer_pore_volume, cout_index="cin")
     assert len(cout_cin) == len(cin)
-    assert cout_cin.index.equals(cin.index)
 
     # Test cout_index="flow"
     cout_flow = forward(cin_series=cin, flow_series=flow, aquifer_pore_volume=aquifer_pore_volume, cout_index="flow")
     assert len(cout_flow) == len(flow)
-    assert cout_flow.index.equals(flow.index)
 
     # Test cout_index="cout"
     cout_cout = forward(cin_series=cin, flow_series=flow, aquifer_pore_volume=aquifer_pore_volume, cout_index="cout")
-    # This should have a shifted index
+    # This should have a shifted time series
     assert len(cout_cout) == len(cin)
-    assert not cout_cout.index.equals(cin.index)
 
 
 def test_forward_invalid_cout_index(sample_time_series):
@@ -132,9 +128,8 @@ def test_gamma_forward_basic(sample_time_series, gamma_params):
     )
 
     # Check output type and length
-    assert isinstance(cout, pd.Series)
+    assert isinstance(cout, np.ndarray)
     assert len(cout) == len(flow)
-    assert cout.name == "cout"
 
     # Check output values are non-negative (ignoring NaN values)
     valid_values = cout[~np.isnan(cout)]
@@ -164,7 +159,7 @@ def test_gamma_forward_with_mean_std(sample_time_series):
     )
 
     # Check output type and length
-    assert isinstance(cout, pd.Series)
+    assert isinstance(cout, np.ndarray)
     assert len(cout) == len(flow)
 
 
@@ -257,9 +252,8 @@ def test_distribution_forward_basic(sample_time_series):
     )
 
     # Check output type and length
-    assert isinstance(cout, pd.Series)
+    assert isinstance(cout, np.ndarray)
     assert len(cout) == len(flow)
-    assert cout.name == "cout"
 
     # Check output values are non-negative (ignoring NaN values)
     valid_values = cout[~np.isnan(cout)]
@@ -300,8 +294,8 @@ def test_distribution_forward_different_time_edges(sample_time_series):
     )
 
     # Both should produce valid outputs
-    assert isinstance(cout1, pd.Series)
-    assert isinstance(cout2, pd.Series)
+    assert isinstance(cout1, np.ndarray)
+    assert isinstance(cout2, np.ndarray)
     assert len(cout1) == len(flow)
     assert len(cout2) == len(flow)
 
@@ -326,7 +320,7 @@ def test_distribution_forward_single_bin(sample_time_series):
     )
 
     # Check output type and length
-    assert isinstance(cout, pd.Series)
+    assert isinstance(cout, np.ndarray)
     assert len(cout) == len(flow)
 
 
@@ -369,7 +363,7 @@ def test_time_edge_consistency():
         n_bins=5,
     )
 
-    assert isinstance(cout, pd.Series)
+    assert isinstance(cout, np.ndarray)
     assert len(cout) == len(flow)
 
 
@@ -439,5 +433,5 @@ def test_mismatched_series_lengths():
         beta=100.0,
     )
 
-    assert isinstance(cout, pd.Series)
+    assert isinstance(cout, np.ndarray)
     assert len(cout) == len(flow)
