@@ -9,7 +9,7 @@ with seasonal patterns and random variations.
 import numpy as np
 import pandas as pd
 
-from gwtransport import advection, gamma
+from gwtransport import advection, compute_time_edges, gamma
 
 
 def generate_synthetic_data(
@@ -88,12 +88,21 @@ def generate_synthetic_data(
         },
         index=dates,
     )
+    # Create time edges for the simplified API
+    cin_tedges = compute_time_edges(
+        tedges=None, tstart=None, tend=df["temp_infiltration"].index, number_of_bins=len(df["temp_infiltration"])
+    )
+    cout_tedges = compute_time_edges(
+        tedges=None, tstart=None, tend=df["temp_infiltration"].index, number_of_bins=len(df["flow"])
+    )
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=df["flow"].index, number_of_bins=len(df["flow"]))
+
     df["temp_extraction"] = advection.gamma_forward(
         cin=df["temp_infiltration"],
-        cin_tend=df["temp_infiltration"].index,
-        cout_tend=df["temp_infiltration"].index,
+        cin_tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=df["flow"],
-        flow_tend=df["flow"].index,
+        flow_tedges=flow_tedges,
         mean=aquifer_pore_volume,
         std=aquifer_pore_volume_std,
         n_bins=1000,

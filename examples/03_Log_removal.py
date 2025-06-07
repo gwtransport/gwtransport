@@ -19,8 +19,9 @@ Two cases are explored here:
 import numpy as np
 from example_data_generation import generate_synthetic_data
 
-from gwtransport import advection
+from gwtransport import compute_time_edges
 from gwtransport import gamma as gamma_utils
+from gwtransport.residence_time import residence_time
 
 # %% 1. Varying flow
 # ------------------
@@ -49,9 +50,12 @@ df = generate_synthetic_data(
 bins = gamma_utils.bins(mean=mean, std=std, n_bins=1000)
 
 # Compute the residence time, similar to Example 2
-rt_forward_rf1 = advection.residence_time(
+# Create time edges for the simplified API
+flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
+
+rt_forward_rf1 = residence_time(
     flow=df.flow,
-    flow_tend=df.index,
+    flow_tedges=flow_tedges,
     aquifer_pore_volume=bins["expected_value"],
     retardation_factor=1.0,  # Note that we are computing the rt of the water, not the heat transport
     direction="infiltration",

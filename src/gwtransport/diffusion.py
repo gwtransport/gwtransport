@@ -6,7 +6,7 @@ import pandas as pd
 from scipy import ndimage, sparse
 
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import diff
+from gwtransport.utils import compute_time_edges, diff
 
 
 def forward(
@@ -41,7 +41,7 @@ def forward(
 
     Returns
     -------
-    pandas.Series
+    numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3].
     """
     sigma_array = compute_sigma_array(
@@ -87,7 +87,7 @@ def backward(
 
     Returns
     -------
-    pandas.Series
+    numpy.ndarray
         Concentration of the compound in the infiltrating water [ng/m3].
 
     Notes
@@ -124,8 +124,11 @@ def compute_sigma_array(
     array
         Array of sigma values for diffusion.
     """
+    # Create flow tedges from the flow series index (assuming it's at the end of bins)
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
     residence_time = residence_time(
         flow=flow,
+        flow_tedges=flow_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="infiltration",
