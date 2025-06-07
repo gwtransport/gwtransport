@@ -43,6 +43,9 @@ extend-select = ["D", "E4", "E7", "E9", "F", "C901"]
 convention = "numpy"
 
 [lint.per-file-ignores]
+'**/*.py' = [
+    "RUF001",
+]
 'modelscripts/**/*.py' = [
     'INP001',  # Missing return type annotation for public function
 ]
