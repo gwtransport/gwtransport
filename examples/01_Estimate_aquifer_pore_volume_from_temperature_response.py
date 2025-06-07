@@ -29,7 +29,7 @@ from example_data_generation import generate_synthetic_data
 from scipy.optimize import curve_fit
 from scipy.stats import gamma as gamma_dist
 
-from gwtransport import advection
+from gwtransport import advection, compute_time_edges
 from gwtransport import gamma as gamma_utils
 
 np.random.seed(42)  # For reproducibility
@@ -70,12 +70,17 @@ print(f"- True standard deviation of aquifer pore volume distribution: {df.attrs
 # of the infiltration temperature be present in the extracted water. For simplicity sake,
 # we will use the first year as spin up time and only fit the data from 2021 onwards.
 def objective(time, mean, std):  # noqa: ARG001, D103
+    # Create time edges for the simplified API
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.temp_infiltration))
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
+
     cout = advection.gamma_forward(
         cin=df.temp_infiltration,
-        cin_tend=df.index,
-        cout_tend=df.index,
+        cin_tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=df.flow,
-        flow_tend=df.index,
+        flow_tedges=flow_tedges,
         mean=mean,
         std=std,
         n_bins=200,
@@ -93,12 +98,17 @@ def objective(time, mean, std):  # noqa: ARG001, D103
     method="trf",  # Trust Region Reflective algorithm
     max_nfev=100,  # Limit number of function evaluations to keep runtime reasonable
 )
+# Create time edges for the simplified API
+cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.temp_infiltration))
+cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
+flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
+
 df["temp_extraction_modeled"] = advection.gamma_forward(
     cin=df.temp_infiltration,
-    cin_tend=df.index,
-    cout_tend=df.index,
+    cin_tedges=cin_tedges,
+    cout_tedges=cout_tedges,
     flow=df.flow,
-    flow_tend=df.index,
+    flow_tedges=flow_tedges,
     mean=mean,
     std=std,
     n_bins=100,

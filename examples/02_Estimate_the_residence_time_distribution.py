@@ -22,8 +22,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from example_data_generation import generate_synthetic_data
 
-from gwtransport import advection
+from gwtransport import compute_time_edges
 from gwtransport import gamma as gamma_utils
+from gwtransport.residence_time import residence_time
 
 np.random.seed(42)  # For reproducibility
 plt.style.use("seaborn-v0_8-whitegrid")
@@ -60,16 +61,19 @@ bins = gamma_utils.bins(mean=mean, std=std, n_bins=1000)
 # Compute the residence time at the time of infiltration of the generated data for every bin of the aquifer pore volume distribion.
 # Data returned is of shape (n_bins, n_days). First with retardation factor = 1.0, then with the
 # retardation factor of the temperature in the aquifer (= 2).
-rt_forward_rf1 = advection.residence_time(
+# Create time edges for the simplified API
+flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
+
+rt_forward_rf1 = residence_time(
     flow=df.flow,
-    flow_tend=df.index,
+    flow_tedges=flow_tedges,
     aquifer_pore_volume=bins["expected_value"],
     retardation_factor=1.0,  # Note that we are computing the rt of the water, not the heat transport
     direction="infiltration",
 )
-rt_forward_rf2 = advection.residence_time(
+rt_forward_rf2 = residence_time(
     flow=df.flow,
-    flow_tend=df.index,
+    flow_tedges=flow_tedges,
     aquifer_pore_volume=bins["expected_value"],
     retardation_factor=retardation_factor,
     direction="infiltration",
@@ -128,16 +132,16 @@ plt.tight_layout()
 # Compute the residence time at the time of extraction of the generated data for every bin of the aquifer pore volume distribion.
 # Data returned is of shape (n_bins, n_days). First with retardation factor = 1.0, then with the
 # retardation factor of the temperature in the aquifer (= 2).
-rt_backward_rf1 = advection.residence_time(
+rt_backward_rf1 = residence_time(
     flow=df.flow,
-    flow_tend=df.index,
+    flow_tedges=flow_tedges,
     aquifer_pore_volume=bins["expected_value"],
     retardation_factor=1.0,
     direction="extraction",
 )
-rt_backward_rf2 = advection.residence_time(
+rt_backward_rf2 = residence_time(
     flow=df.flow,
-    flow_tend=df.index,
+    flow_tedges=flow_tedges,
     aquifer_pore_volume=bins["expected_value"],
     retardation_factor=retardation_factor,
     direction="extraction",
