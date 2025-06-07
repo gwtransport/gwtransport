@@ -52,11 +52,11 @@ flow_rates = pd.Series(...)       # Discharge rates [m³/day]
 
 # Define time bin edges for discrete convolution
 cin_tedges = compute_time_edges(tedges=None, tstart=None,
-                               tend=recharge_temp.index,
-                               number_of_bins=len(recharge_temp))
+                                tend=recharge_temp.index,
+                                number_of_bins=len(recharge_temp))
 cout_tedges = compute_time_edges(tedges=None, tstart=None,
-                                tend=flow_rates.index,
-                                number_of_bins=len(flow_rates))
+                                 tend=flow_rates.index,
+                                 number_of_bins=len(flow_rates))
 flow_tedges = cout_tedges
 
 # Forward model for optimization
