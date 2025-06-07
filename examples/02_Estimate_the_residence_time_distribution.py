@@ -1,19 +1,25 @@
 """
-Example 2: Estimation of the residence time distribution using synthetic data.
+Example 2: Residence time distribution analysis.
 
-This notebook demonstrates how to estimate the residence time distribution from the
-aquifer pore volume distribution (See: Example 1) and the flow rate. The residence time is the time
-it takes for water to travel through the aquifer. It is a key parameter in
-groundwater transport modeling and is important for understanding the fate and
-transport of contaminants in groundwater systems.
+This example demonstrates how to calculate residence time distributions from
+aquifer pore volume distribution (from Example 1) and flow rates. Residence time
+quantifies how long water spends in the aquifer, which is crucial for:
+- Contaminant transport predictions
+- Groundwater vulnerability assessment
+- Treatment efficiency evaluation
+
+Methodology:
+- Input: pore volume distribution, flow time series
+- Calculate travel times for different flow paths
+- Analyze temporal variations in residence time
+
+Two perspectives:
+- Forward: How long until infiltrating water is extracted?
+- Backward: How long ago was extracted water infiltrated?
 
 Assumptions:
-- The aquifer pore volume distribution is constant over time.
-- Advection is the only transport process.
-
-Two types of residence time are computed:
-- Forward: In how many days from now is the water extracted?
-- Backward: How many days ago was the water infiltrated?
+- Stationary pore volume distribution
+- Advection-dominated transport
 """
 
 import warnings
@@ -32,57 +38,61 @@ plt.style.use("seaborn-v0_8-whitegrid")
 # %%
 # 1. Generate synthetic data
 # --------------------------
-# We'll use our data generation function to create synthetic temperature and flow data
+# Create flow and aquifer parameter data for residence time analysis
 
-# Generate one year of daily data
-mean, std = 8000.0, 400.0  # m3
-retardation_factor = 2.0
-mean_flow = 120.0  # m3/day
+# Define aquifer parameters (typically from Example 1 optimization)
+mean, std = 8000.0, 400.0  # Pore volume statistics [m³]
+retardation_factor = 2.0  # For conservative tracer analysis
+mean_flow = 120.0  # Base discharge rate [m³/day]
 
 df = generate_synthetic_data(
     start_date="2020-01-01",
     end_date="2025-12-31",
-    mean_flow=mean_flow,  # m3/day
-    flow_amplitude=40.0,  # m3/day
-    flow_noise=5.0,  # m3/day
-    mean_temp_infiltration=12.0,  # °C
-    temp_infiltration_amplitude=8.0,  # °C
-    aquifer_pore_volume=mean,  # m3
-    aquifer_pore_volume_std=std,  # m3
-    retardation_factor=retardation_factor,
+    mean_flow=mean_flow,  # Base discharge [m³/day]
+    flow_amplitude=40.0,  # Seasonal variation [m³/day]
+    flow_noise=5.0,  # Daily fluctuations [m³/day]
+    mean_temp_infiltration=12.0,  # Mean temperature [°C]
+    temp_infiltration_amplitude=8.0,  # Seasonal range [°C]
+    aquifer_pore_volume=mean,  # Mean pore volume [m³]
+    aquifer_pore_volume_std=std,  # Pore volume variability [m³]
+    retardation_factor=retardation_factor,  # Thermal retardation [-]
 )
 
-# Discretize the aquifer pore volume distribution in bins
-bins = gamma_utils.bins(mean=mean, std=std, n_bins=1000)
+# Discretize pore volume distribution for residence time calculation
+bins = gamma_utils.bins(mean=mean, std=std, n_bins=1000)  # High resolution for accuracy
 
 # %%
-# 2. Forward: Compute and plot the residence time
-# ---------------------------------------------------------------------
-# Compute the residence time at the time of infiltration of the generated data for every bin of the aquifer pore volume distribion.
-# Data returned is of shape (n_bins, n_days). First with retardation factor = 1.0, then with the
-# retardation factor of the temperature in the aquifer (= 2).
-# Create time edges for the simplified API
+# 2. Forward residence time analysis
+# ---------------------------------
+# Calculate how long infiltrating water takes to be extracted.
+# Compute for all flow paths (bins) and compare water vs thermal transport.
+
+# Define time bin edges for residence time calculation
 flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
 
+# Water residence time (no retardation)
 rt_forward_rf1 = residence_time(
     flow=df.flow,
     flow_tedges=flow_tedges,
     aquifer_pore_volume=bins["expected_value"],
-    retardation_factor=1.0,  # Note that we are computing the rt of the water, not the heat transport
+    retardation_factor=1.0,  # Conservative tracer (water flow)
     direction="infiltration",
 )
+
+# Thermal residence time (with retardation)
 rt_forward_rf2 = residence_time(
     flow=df.flow,
     flow_tedges=flow_tedges,
     aquifer_pore_volume=bins["expected_value"],
-    retardation_factor=retardation_factor,
+    retardation_factor=retardation_factor,  # Heat transport (slower)
     direction="infiltration",
 )
 
-# The rt_forward_rf1 and rt_forward_rf2 arrays contain the residence time distribution at each timestamp of infiltration. This distribution varies over time.
-# Here, we compute the mean residence time for each timestamp of infiltration, and certain quantiles to visualize the spread in residence time.
-# Note that the residence time can not be computed at the outer ends.
-quantiles = [1, 10, 90, 99]
+# Statistical analysis of residence time distributions
+# Arrays contain residence times for all flow paths at each time step
+# Calculate mean and quantiles to characterize temporal variability
+
+quantiles = [1, 10, 90, 99]  # Percentiles for uncertainty bounds
 quantile_headers = [f"rt_forward_rf1_{q}%" for q in quantiles]
 
 with warnings.catch_warnings():

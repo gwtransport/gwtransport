@@ -1,26 +1,25 @@
 """
-Example 1: Estimation of aquifer pore volume using temperature response.
+Example 1: Aquifer pore volume estimation using temperature response.
 
-This notebook demonstrates how to use temperature data to estimate the aquifer pore volume distribution.
-The aquifer pore volume distribution directly affects the distribution of residence time of
-the extracted water. We seek a distribution of aquifer pore volume that retards the temperature of the
-infiltrating water to match the temperature of the extracted water.
+This example demonstrates inverse modeling to estimate aquifer pore volume distribution
+from temperature breakthrough curves. Temperature acts as a conservative tracer with
+known thermal retardation, allowing characterization of flow paths and residence times.
 
-An estimate of the aquifer pore volume distribution is the starting point for:
-- Forecasting the concentration/temperature of the extracted water.
-- Estimating the residence time of the infiltrating/extracted water (Example 2).
-- Log-removal of pathogens based on residence time.
+Applications:
+- Groundwater vulnerability assessment
+- Residence time distribution analysis (Example 2)
+- Contaminant transport forecasting
 
-Key concepts:
-- Temperature of the infiltrating water, temperature of the extracted water and the flow rate are known.
-- Fitting gamma distribution parameters of the aquifer pore volume.
-- The distribution is discretized into bins that convey an equal fraction of the flow, similar to streamlines.
-- Per bin, at every time of extraction, the time of infiltration is computed. See Example 2 for more details on residence time.
-- The temperature of the extracted water is the average of all bins of the temperature at the time of infiltration.
+Methodology:
+- Input: infiltration temperature, extraction temperature, flow rates
+- Model: gamma-distributed pore volumes with thermal retardation
+- Optimization: curve fitting to match observed temperature breakthrough
+- Output: statistical parameters of pore volume distribution
 
-Assumptions:
-- The aquifer pore volume distribution is constant over time.
-- Advection is the only transport process.
+Key assumptions:
+- Stationary pore volume distribution
+- Advection-dominated transport (Pe >> 1)
+- Thermal retardation factor = 2.0 (typical for saturated media)
 """
 
 import matplotlib.pyplot as plt
@@ -38,20 +37,20 @@ plt.style.use("seaborn-v0_8-whitegrid")
 # %%
 # 1. Generate synthetic data
 # --------------------------
-# We'll use our data generation function to create synthetic temperature and flow data
+# Create synthetic temperature and flow time series to demonstrate the inverse modeling approach
 
-# Generate one year of daily data
+# Generate 6 years of daily data with seasonal patterns
 df = generate_synthetic_data(
     start_date="2020-01-01",
     end_date="2025-12-31",
-    mean_flow=120.0,  # m3/day
-    flow_amplitude=40.0,  # m3/day
-    flow_noise=5.0,  # m3/day
-    mean_temp_infiltration=12.0,  # °C
-    temp_infiltration_amplitude=8.0,  # °C
-    aquifer_pore_volume=8000.0,  # m3
-    aquifer_pore_volume_std=400.0,  # m3
-    retardation_factor=2.0,
+    mean_flow=120.0,  # Base flow rate [m³/day]
+    flow_amplitude=40.0,  # Seasonal flow variation [m³/day]
+    flow_noise=5.0,  # Random daily fluctuations [m³/day]
+    mean_temp_infiltration=12.0,  # Annual mean temperature [°C]
+    temp_infiltration_amplitude=8.0,  # Seasonal temperature range [°C]
+    aquifer_pore_volume=8000.0,  # True mean pore volume [m³]
+    aquifer_pore_volume_std=400.0,  # True standard deviation [m³]
+    retardation_factor=2.0,  # Thermal retardation factor [-]
 )
 
 print("Data summary:")
@@ -64,105 +63,100 @@ print(f"- True standard deviation of aquifer pore volume distribution: {df.attrs
 
 
 # %%
-# 3. Curve fitting to estimate aquifer pore volume distribution parameters
-# ------------------------------------------------------------------------
-# Perform the curve fitting on valid data. It takes some time to for large fractions
-# of the infiltration temperature be present in the extracted water. For simplicity sake,
-# we will use the first year as spin up time and only fit the data from 2021 onwards.
+# 2. Parameter estimation via optimization
+# ----------------------------------------
+# Implement inverse modeling to estimate gamma distribution parameters.
+# Use spin-up period to allow thermal breakthrough to stabilize.
+
+# Define time bin edges for discrete convolution
 cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.temp_infiltration))
 cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
 flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
 
-# Get the length of training data for fitting
-train_data = df["2021-01-01":].temp_extraction
+# Define training dataset (exclude spin-up period)
+train_data = df["2021-01-01":].temp_extraction  # Skip first year for thermal equilibration
 train_length = len(train_data)
 
 
-def objective(_xdata, mean, std):  # noqa: D103
+def objective(_xdata, mean, std):
+    """Forward model for temperature breakthrough with gamma-distributed pore volumes."""
     cout = advection.gamma_forward(
         cin=df.temp_infiltration,
         cin_tedges=cin_tedges,
         cout_tedges=cout_tedges,
         flow=df.flow,
         flow_tedges=flow_tedges,
-        mean=mean,
-        std=std,
-        n_bins=200,
-        retardation_factor=2.0,
+        mean=mean,  # Mean pore volume [m³]
+        std=std,   # Standard deviation [m³]
+        n_bins=200,  # Discretization resolution
+        retardation_factor=2.0,  # Thermal retardation factor
     )
-    # cout is now an array, so we need to get the appropriate slice based on the index
-    # Return the same number of elements as the training data
-    return cout[-train_length:]  # Skip first year (2020) for spin-up
+    return cout[-train_length:]  # Return post-equilibration period
 
 
+# Nonlinear least squares optimization
 (mean, std), pcov = curve_fit(
     objective,
     df.index,
     train_data,
-    p0=(7000.0, 500.0),
-    bounds=([1000, 10], [10000, 1000]),  # Reasonable bounds for mean and std
+    p0=(7000.0, 500.0),  # Initial parameter estimates [m³]
+    bounds=([1000, 10], [10000, 1000]),  # Physical constraints [m³]
     method="trf",  # Trust Region Reflective algorithm
-    max_nfev=100,  # Limit number of function evaluations to keep runtime reasonable
+    max_nfev=100,  # Limit function evaluations for computational efficiency
 )
-# Create time edges for the simplified API
-cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.temp_infiltration))
-cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
-flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
 
+# Generate model predictions using optimized parameters
 df["temp_extraction_modeled"] = advection.gamma_forward(
     cin=df.temp_infiltration,
     cin_tedges=cin_tedges,
     cout_tedges=cout_tedges,
     flow=df.flow,
     flow_tedges=flow_tedges,
-    mean=mean,
-    std=std,
-    n_bins=100,
-    retardation_factor=2.0,
+    mean=mean,  # Fitted mean pore volume
+    std=std,    # Fitted standard deviation
+    n_bins=100,  # Computational resolution
+    retardation_factor=2.0,  # Thermal retardation
 )
 
-# Print the fitted parameters
-print("\nFitted parameters:")
-print(f"- Fitted mean of aquifer pore volume distribution: {mean:.1f} +/- {pcov[0, 0] ** 0.5:.1f} m³")
-print(f"- Fitted standard deviation of aquifer pore volume distribution: {std:.1f} +/- {pcov[1, 1] ** 0.5:.1f} m³")
+# Report optimization results with uncertainty estimates
+print("\nParameter estimation results:")
+print(f"- Mean pore volume: {mean:.1f} ± {pcov[0, 0] ** 0.5:.1f} m³")
+print(f"- Standard deviation: {std:.1f} ± {pcov[1, 1] ** 0.5:.1f} m³")
+print(f"- Coefficient of variation: {std/mean:.2f}")
 
 # %%
-# 4. Plot the measured and modeled temperatures
-# -------------------
+# 3. Model validation and visualization
+# ------------------------------------
 fig, (ax1, ax2) = plt.subplots(figsize=(10, 6), nrows=2, ncols=1, sharex=True)
 
-ax1.set_title("Estimation of aquifer pore volume using temperature response")
-ax1.plot(df.index, df.flow, label="Flow rate", color="C0", alpha=0.8, linewidth=0.8)
-ax1.set_ylabel("Flow rate (m³/day)")
+ax1.set_title("Temperature-based aquifer characterization")
+ax1.plot(df.index, df.flow, label="Discharge rate", color="C0", alpha=0.8, linewidth=0.8)
+ax1.set_ylabel("Discharge [m³/day]")
 ax1.legend()
 
-ax2.plot(df.index, df.temp_infiltration, label="Infiltration water: measured", color="C0", alpha=0.8, linewidth=0.8)
-ax2.plot(df.index, df.temp_extraction, label="Extracted water: measured", color="C1", alpha=0.8, linewidth=0.8)
-ax2.plot(df.index, df.temp_extraction_modeled, label="Extracted water: modeled", color="C2", alpha=0.8, linewidth=0.8)
+ax2.plot(df.index, df.temp_infiltration, label="Recharge temperature", color="C0", alpha=0.8, linewidth=0.8)
+ax2.plot(df.index, df.temp_extraction, label="Discharge temperature (observed)", color="C1", alpha=0.8, linewidth=0.8)
+ax2.plot(df.index, df.temp_extraction_modeled, label="Discharge temperature (modeled)", color="C2", alpha=0.8, linewidth=0.8)
 ax2.set_xlabel("Date")
-ax2.set_ylabel("Temperature (°C)")
+ax2.set_ylabel("Temperature [°C]")
 ax2.legend()
 
 plt.tight_layout()
 
 # %%
-# 5. Plot the fitted distribution of the aquifer pore volume
-# -------------------
-# The number of bins is reduced here for demonstration (dramatic) purposes.
-#
-# Note that the gamma distribution is parameterized here in two ways:
-# - Shape and scale (alpha, beta)
-# - Mean and standard deviation (mean, std)
-# The two parameterizations are related by the following equations:
-# - mean = alpha * beta
-# - std = beta * sqrt(alpha)
-n_bins = 10
-alpha, beta = gamma_utils.mean_std_to_alpha_beta(mean, std)
-gbins = gamma_utils.bins(alpha=alpha, beta=beta, n_bins=n_bins)
+# 4. Pore volume distribution analysis
+# -----------------------------------
+# Visualize the fitted gamma distribution representing spatial heterogeneity
+# in pore volume. Each bin represents a different flow path through the aquifer.
 
-print(f"Gamma distribution (alpha={alpha:.1f}, beta={beta:.1f}) divided into {n_bins} equal-volume bins:")
+# Discretize gamma distribution into flow path bins
+n_bins = 10  # Reduced for visualization clarity
+alpha, beta = gamma_utils.mean_std_to_alpha_beta(mean, std)  # Convert parameterization
+gbins = gamma_utils.bins(alpha=alpha, beta=beta, n_bins=n_bins)  # Equal-probability bins
+
+print(f"Gamma distribution (α={alpha:.1f}, β={beta:.1f}) discretized into {n_bins} equiprobable bins:")
 print("-" * 80)
-print(f"{'Bin':3s} {'Lower':10s} {'Upper':10s} {'E[X|bin]':10s} {'P(bin)':10s}")
+print(f"{'Bin':3s} {'Lower [m³]':10s} {'Upper [m³]':10s} {'E[V|bin]':10s} {'P(bin)':10s}")
 print("-" * 80)
 
 for i in range(n_bins):
@@ -172,14 +166,14 @@ for i in range(n_bins):
     prob = f"{gbins['probability_mass'][i]:.3f}"
     print(f"{i:3d} {lower:10s} {upper:10s} {expected:10s} {prob:10s}")
 
-# Verify total probability is exactly 1
-print(f"\nTotal probability mass: {gbins['probability_mass'].sum():.6f}")
-
-# Verify expected value is close to the mean of the distribution
-mean = alpha * beta
-expected_value = np.sum(gbins["expected_value"] * gbins["probability_mass"])
-print(f"Mean of distribution: {mean:.3f}")
-print(f"Expected value of bins: {expected_value:.3f}")
+# Verify discretization accuracy
+print("\nDiscretization verification:")
+print(f"Total probability mass: {gbins['probability_mass'].sum():.6f}")
+mean_analytical = alpha * beta
+mean_numerical = np.sum(gbins["expected_value"] * gbins["probability_mass"])
+print(f"Analytical mean: {mean_analytical:.3f} m³")
+print(f"Numerical mean: {mean_numerical:.3f} m³")
+print(f"Relative error: {abs(mean_analytical - mean_numerical) / mean_analytical * 100:.2f}%")
 
 mass_per_bin = gamma_utils.bin_masses(alpha, beta, gbins["edges"])
 print(f"Total probability mass: {mass_per_bin.sum():.6f}")
@@ -192,12 +186,12 @@ y = gamma_dist.pdf(x, alpha, scale=beta)
 
 fig, ax = plt.subplots(figsize=(10, 6))
 ax.set_title(
-    f"Gamma distribution (alpha={alpha:.1f}, beta={beta:.1f}, mean={mean:.1f}, std={std:.1f}) divided into {n_bins} equal-volume bins:"
+    f"Fitted pore volume distribution (α={alpha:.1f}, β={beta:.1f}, μ={mean:.1f} m³, σ={std:.1f} m³)"
 )
-ax.plot(x, y, label="Gamma PDF", color="C0", alpha=0.8, linewidth=0.8)
+ax.plot(x, y, label="Probability density function", color="C0", alpha=0.8, linewidth=2)
 pdf_at_lower_bound = gamma_dist.pdf(gbins["lower_bound"], alpha, scale=beta)
-ax.vlines(gbins["lower_bound"], 0, pdf_at_lower_bound, color="C1", alpha=0.8, linewidth=0.8)
-ax.set_xlabel("Aquifer pore volume (m³)")
-ax.set_ylabel("Probability density (-)")
+ax.vlines(gbins["lower_bound"], 0, pdf_at_lower_bound, color="C1", alpha=0.6, linewidth=1, label="Bin boundaries")
+ax.set_xlabel("Pore volume [m³]")
+ax.set_ylabel("Probability density [m⁻³]")
 ax.legend()
 plt.show()
