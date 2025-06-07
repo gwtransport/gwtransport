@@ -124,8 +124,12 @@ def compute_sigma_array(
     array
         Array of sigma values for diffusion.
     """
+    # Create flow tedges from the flow series index (assuming it's at the end of bins)
+    from gwtransport.utils import compute_time_edges
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
     residence_time = residence_time(
         flow=flow,
+        flow_tedges=flow_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="infiltration",

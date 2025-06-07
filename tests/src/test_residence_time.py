@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from gwtransport.residence_time import residence_time
+from gwtransport import compute_time_edges
 
 
 @pytest.fixture
@@ -37,13 +38,16 @@ def test_basic_extraction_with_flow_tedges():
 
 
 def test_basic_extraction_with_flow_tstart():
-    """Test basic extraction scenario using flow_tstart."""
+    """Test basic extraction scenario using flow_tstart converted to tedges."""
     flow_tstart = pd.date_range(start="2023-01-01", end="2023-01-05", freq="D")
     flow_values = np.full(len(flow_tstart), 100.0)
     pore_volume = 200.0
 
+    # Convert tstart to tedges
+    flow_tedges = compute_time_edges(tedges=None, tstart=flow_tstart, tend=None, number_of_bins=len(flow_values))
+
     result = residence_time(
-        flow=flow_values, flow_tstart=flow_tstart, aquifer_pore_volume=pore_volume, direction="extraction"
+        flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volume=pore_volume, direction="extraction"
     )
 
     # With constant flow of 100 m³/day and pore volume of 200 m³,
@@ -52,13 +56,16 @@ def test_basic_extraction_with_flow_tstart():
 
 
 def test_basic_extraction_with_flow_tend():
-    """Test basic extraction scenario using flow_tend."""
+    """Test basic extraction scenario using flow_tend converted to tedges."""
     flow_tend = pd.date_range(start="2023-01-02", end="2023-01-06", freq="D")
     flow_values = np.full(len(flow_tend), 100.0)
     pore_volume = 200.0
 
+    # Convert tend to tedges
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow_tend, number_of_bins=len(flow_values))
+
     result = residence_time(
-        flow=flow_values, flow_tend=flow_tend, aquifer_pore_volume=pore_volume, direction="extraction"
+        flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volume=pore_volume, direction="extraction"
     )
 
     # With constant flow of 100 m³/day and pore volume of 200 m³,
@@ -184,7 +191,7 @@ def test_missing_flow_timing_parameters():
     flow_values = np.full(5, 100.0)
     pore_volume = 200.0
 
-    with pytest.raises(ValueError, match="Either provide tedges, tstart, and tend"):
+    with pytest.raises(ValueError, match="flow_tedges must be provided"):
         residence_time(flow=flow_values, aquifer_pore_volume=pore_volume, direction="extraction")
 
 
@@ -201,25 +208,31 @@ def test_flow_tedges_length_validation():
 
 
 def test_flow_tstart_length_validation():
-    """Test validation of flow_tstart length."""
+    """Test validation of flow_tstart length when converting to tedges."""
     flow_tstart = pd.date_range(start="2023-01-01", end="2023-01-05", freq="D")
     flow_values = np.full(len(flow_tstart) + 1, 100.0)  # Wrong length
     pore_volume = 200.0
 
     with pytest.raises(ValueError, match="tstart must have the same number of elements as flow"):
+        # This should fail during compute_time_edges
+        flow_tedges = compute_time_edges(tedges=None, tstart=flow_tstart, tend=None, number_of_bins=len(flow_values))
         residence_time(
-            flow=flow_values, flow_tstart=flow_tstart, aquifer_pore_volume=pore_volume, direction="extraction"
+            flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volume=pore_volume, direction="extraction"
         )
 
 
 def test_flow_tend_length_validation():
-    """Test validation of flow_tend length."""
+    """Test validation of flow_tend length when converting to tedges."""
     flow_tend = pd.date_range(start="2023-01-02", end="2023-01-06", freq="D")
     flow_values = np.full(len(flow_tend) + 1, 100.0)  # Wrong length
     pore_volume = 200.0
 
     with pytest.raises(ValueError, match="tend must have the same number of elements as flow"):
-        residence_time(flow=flow_values, flow_tend=flow_tend, aquifer_pore_volume=pore_volume, direction="extraction")
+        # This should fail during compute_time_edges
+        flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow_tend, number_of_bins=len(flow_values))
+        residence_time(
+            flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volume=pore_volume, direction="extraction"
+        )
 
 
 def test_multiple_pore_volumes_pandas_series_error():
@@ -317,14 +330,20 @@ def test_consistency_between_timing_methods():
 
     # Method 2: flow_tstart (assuming flow is measured at start of intervals)
     flow_tstart = dates[:-1]
+    flow_tedges_from_tstart = compute_time_edges(
+        tedges=None, tstart=flow_tstart, tend=None, number_of_bins=len(flow_values)
+    )
     result_tstart = residence_time(
-        flow=flow_values, flow_tstart=flow_tstart, aquifer_pore_volume=pore_volume, direction="extraction"
+        flow=flow_values, flow_tedges=flow_tedges_from_tstart, aquifer_pore_volume=pore_volume, direction="extraction"
     )
 
     # Method 3: flow_tend (assuming flow is measured at end of intervals)
     flow_tend = dates[1:]
+    flow_tedges_from_tend = compute_time_edges(
+        tedges=None, tstart=None, tend=flow_tend, number_of_bins=len(flow_values)
+    )
     result_tend = residence_time(
-        flow=flow_values, flow_tend=flow_tend, aquifer_pore_volume=pore_volume, direction="extraction"
+        flow=flow_values, flow_tedges=flow_tedges_from_tend, aquifer_pore_volume=pore_volume, direction="extraction"
     )
 
     # Results should be similar but may have slight differences due to timing assumptions

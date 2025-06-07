@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from gwtransport.advection import distribution_forward, forward, gamma_forward
+from gwtransport import compute_time_edges
 
 
 # Fixtures
@@ -114,12 +115,17 @@ def test_gamma_forward_basic(sample_time_series, gamma_params):
     """Test basic functionality of gamma_forward."""
     cin, flow = sample_time_series
 
+    # Create tedges from tend
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin.index, number_of_bins=len(cin))
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+
     cout = gamma_forward(
         cin=cin,
-        cin_tend=cin.index,
-        cout_tend=flow.index,
+        cin_tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow,
-        flow_tend=flow.index,
+        flow_tedges=flow_tedges,
         alpha=gamma_params["alpha"],
         beta=gamma_params["beta"],
         n_bins=gamma_params["n_bins"],
@@ -141,12 +147,17 @@ def test_gamma_forward_with_mean_std(sample_time_series):
     mean = 1000.0
     std = 200.0
 
+    # Create tedges from tend
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin.index, number_of_bins=len(cin))
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+
     cout = gamma_forward(
         cin=cin,
-        cin_tend=cin.index,
-        cout_tend=flow.index,
+        cin_tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow,
-        flow_tend=flow.index,
+        flow_tedges=flow_tedges,
         mean=mean,
         std=std,
         n_bins=10,
@@ -161,13 +172,18 @@ def test_gamma_forward_retardation(sample_time_series, gamma_params):
     """Test gamma_forward with different retardation factors."""
     cin, flow = sample_time_series
 
+    # Create tedges from tend
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin.index, number_of_bins=len(cin))
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+
     # Compare results with different retardation factors
     cout1 = gamma_forward(
         cin=cin,
-        cin_tend=cin.index,
-        cout_tend=flow.index,
+        cin_tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow,
-        flow_tend=flow.index,
+        flow_tedges=flow_tedges,
         alpha=gamma_params["alpha"],
         beta=gamma_params["beta"],
         retardation_factor=1.0,
@@ -175,10 +191,10 @@ def test_gamma_forward_retardation(sample_time_series, gamma_params):
 
     cout2 = gamma_forward(
         cin=cin,
-        cin_tend=cin.index,
-        cout_tend=flow.index,
+        cin_tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow,
-        flow_tend=flow.index,
+        flow_tedges=flow_tedges,
         alpha=gamma_params["alpha"],
         beta=gamma_params["beta"],
         retardation_factor=2.0,
@@ -197,8 +213,19 @@ def test_gamma_forward_constant_input():
     cin = pd.Series(np.ones(len(dates)), index=dates)
     flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
 
+    # Create tedges from tend
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin.index, number_of_bins=len(cin))
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+
     cout = gamma_forward(
-        cin=cin, cin_tend=cin.index, cout_tend=flow.index, flow=flow, flow_tend=flow.index, alpha=200.0, beta=5.0
+        cin=cin,
+        cin_tedges=cin_tedges,
+        cout_tedges=cout_tedges,
+        flow=flow,
+        flow_tedges=flow_tedges,
+        alpha=200.0,
+        beta=5.0,
     )
 
     # Output should also be constant where valid (ignoring NaN values)
@@ -214,12 +241,17 @@ def test_distribution_forward_basic(sample_time_series):
     # Create simple pore volume distribution edges
     aquifer_pore_volume_edges = np.array([500, 1000, 1500, 2000])
 
+    # Create tedges from tend
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin.index, number_of_bins=len(cin))
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+
     cout = distribution_forward(
         cin=cin,
-        cin_tend=cin.index,
-        cout_tend=flow.index,
+        cin_tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow,
-        flow_tend=flow.index,
+        flow_tedges=flow_tedges,
         aquifer_pore_volume_edges=aquifer_pore_volume_edges,
         retardation_factor=1.0,
     )
@@ -253,13 +285,17 @@ def test_distribution_forward_different_time_edges(sample_time_series):
         aquifer_pore_volume_edges=aquifer_pore_volume_edges,
     )
 
-    # Test with tend
+    # Test with tend converted to tedges
+    cin_tedges2 = compute_time_edges(tedges=None, tstart=None, tend=cin.index, number_of_bins=len(cin))
+    cout_tedges2 = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+    flow_tedges2 = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+
     cout2 = distribution_forward(
         cin=cin,
-        cin_tend=cin.index,
-        cout_tend=flow.index,
+        cin_tedges=cin_tedges2,
+        cout_tedges=cout_tedges2,
         flow=flow,
-        flow_tend=flow.index,
+        flow_tedges=flow_tedges2,
         aquifer_pore_volume_edges=aquifer_pore_volume_edges,
     )
 
@@ -275,12 +311,17 @@ def test_distribution_forward_single_bin(sample_time_series):
     cin, flow = sample_time_series
     aquifer_pore_volume_edges = np.array([1000, 2000])
 
+    # Create tedges from tend
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin.index, number_of_bins=len(cin))
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+
     cout = distribution_forward(
         cin=cin,
-        cin_tend=cin.index,
-        cout_tend=flow.index,
+        cin_tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow,
-        flow_tend=flow.index,
+        flow_tedges=flow_tedges,
         aquifer_pore_volume_edges=aquifer_pore_volume_edges,
     )
 
@@ -294,9 +335,14 @@ def test_gamma_forward_missing_parameters(sample_time_series):
     """Test that gamma_forward raises appropriate errors for missing parameters."""
     cin, flow = sample_time_series
 
+    # Create tedges from tend
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin.index, number_of_bins=len(cin))
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+
     # Test missing both alpha/beta and mean/std
     with pytest.raises(ValueError):
-        gamma_forward(cin=cin, cin_tend=cin.index, cout_tend=flow.index, flow=flow, flow_tend=flow.index)
+        gamma_forward(cin=cin, cin_tedges=cin_tedges, cout_tedges=cout_tedges, flow=flow, flow_tedges=flow_tedges)
 
 
 def test_time_edge_consistency():
@@ -306,13 +352,18 @@ def test_time_edge_consistency():
     cin = pd.Series(np.ones(len(dates)), index=dates)
     flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
 
+    # Create tedges from tend
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin.index, number_of_bins=len(cin))
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+
     # Test with consistent time edges
     cout = gamma_forward(
         cin=cin,
-        cin_tend=cin.index,
-        cout_tend=flow.index,
+        cin_tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow,
-        flow_tend=flow.index,
+        flow_tedges=flow_tedges,
         alpha=10.0,
         beta=100.0,
         n_bins=5,
@@ -329,12 +380,17 @@ def test_conservation_properties():
     cin = pd.Series(np.ones(len(dates)), index=dates)  # Constant input
     flow = pd.Series(np.ones(len(dates)) * 100, index=dates)  # Constant flow
 
+    # Create tedges from tend
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin.index, number_of_bins=len(cin))
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+
     cout = gamma_forward(
         cin=cin,
-        cin_tend=cin.index,
-        cout_tend=flow.index,
+        cin_tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow,
-        flow_tend=flow.index,
+        flow_tedges=flow_tedges,
         alpha=10.0,
         beta=100.0,
         n_bins=20,
@@ -356,12 +412,21 @@ def test_empty_series():
 
     # This should handle gracefully or raise appropriate error
     with pytest.raises((ValueError, IndexError)):
+        # Create tedges - this should fail for empty series
+        cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=empty_cin.index, number_of_bins=len(empty_cin))
+        cout_tedges = compute_time_edges(
+            tedges=None, tstart=None, tend=empty_flow.index, number_of_bins=len(empty_flow)
+        )
+        flow_tedges = compute_time_edges(
+            tedges=None, tstart=None, tend=empty_flow.index, number_of_bins=len(empty_flow)
+        )
+
         gamma_forward(
             cin=empty_cin,
-            cin_tend=empty_cin.index,
-            cout_tend=empty_flow.index,
+            cin_tedges=cin_tedges,
+            cout_tedges=cout_tedges,
             flow=empty_flow,
-            flow_tend=empty_flow.index,
+            flow_tedges=flow_tedges,
             alpha=10.0,
             beta=100.0,
         )
@@ -375,9 +440,20 @@ def test_mismatched_series_lengths():
     cin = pd.Series(np.ones(len(dates_cin)), index=dates_cin)
     flow = pd.Series(np.ones(len(dates_flow)) * 100, index=dates_flow)
 
+    # Create tedges from tend
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin.index, number_of_bins=len(cin))
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
+
     # This should work - the function should handle different lengths
     cout = gamma_forward(
-        cin=cin, cin_tend=cin.index, cout_tend=flow.index, flow=flow, flow_tend=flow.index, alpha=10.0, beta=100.0
+        cin=cin,
+        cin_tedges=cin_tedges,
+        cout_tedges=cout_tedges,
+        flow=flow,
+        flow_tedges=flow_tedges,
+        alpha=10.0,
+        beta=100.0,
     )
 
     assert isinstance(cout, pd.Series)
