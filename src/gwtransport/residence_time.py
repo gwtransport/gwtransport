@@ -101,7 +101,7 @@ def residence_time(
             "return_pandas_series parameter is deprecated and will be removed in a future version. "
             "The function now returns numpy arrays by default.",
             DeprecationWarning,
-            stacklevel=2
+            stacklevel=2,
         )
         if len(aquifer_pore_volume) > 1:
             msg = "return_pandas_series=True is only supported for a single pore volume"
