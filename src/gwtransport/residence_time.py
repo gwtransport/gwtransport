@@ -14,7 +14,7 @@ Main functions:
 import numpy as np
 import pandas as pd
 
-from gwtransport.utils import compute_time_edges, linear_average, linear_interpolate
+from gwtransport.utils import linear_average, linear_interpolate
 
 
 def residence_time(
@@ -59,7 +59,7 @@ def residence_time(
     if flow_tedges is None:
         msg = "flow_tedges must be provided"
         raise ValueError(msg)
-    
+
     flow_tedges = pd.DatetimeIndex(flow_tedges)
     if len(flow_tedges) != len(flow) + 1:
         msg = "flow_tedges must have one more element than flow"

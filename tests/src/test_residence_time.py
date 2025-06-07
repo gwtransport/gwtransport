@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport.residence_time import residence_time
 from gwtransport import compute_time_edges
+from gwtransport.residence_time import residence_time
 
 
 @pytest.fixture
@@ -211,28 +211,20 @@ def test_flow_tstart_length_validation():
     """Test validation of flow_tstart length when converting to tedges."""
     flow_tstart = pd.date_range(start="2023-01-01", end="2023-01-05", freq="D")
     flow_values = np.full(len(flow_tstart) + 1, 100.0)  # Wrong length
-    pore_volume = 200.0
 
     with pytest.raises(ValueError, match="tstart must have the same number of elements as flow"):
         # This should fail during compute_time_edges
-        flow_tedges = compute_time_edges(tedges=None, tstart=flow_tstart, tend=None, number_of_bins=len(flow_values))
-        residence_time(
-            flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volume=pore_volume, direction="extraction"
-        )
+        compute_time_edges(tedges=None, tstart=flow_tstart, tend=None, number_of_bins=len(flow_values))
 
 
 def test_flow_tend_length_validation():
     """Test validation of flow_tend length when converting to tedges."""
     flow_tend = pd.date_range(start="2023-01-02", end="2023-01-06", freq="D")
     flow_values = np.full(len(flow_tend) + 1, 100.0)  # Wrong length
-    pore_volume = 200.0
 
     with pytest.raises(ValueError, match="tend must have the same number of elements as flow"):
         # This should fail during compute_time_edges
-        flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow_tend, number_of_bins=len(flow_values))
-        residence_time(
-            flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volume=pore_volume, direction="extraction"
-        )
+        compute_time_edges(tedges=None, tstart=None, tend=flow_tend, number_of_bins=len(flow_values))
 
 
 def test_multiple_pore_volumes_pandas_series_error():

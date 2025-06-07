@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport.advection import distribution_forward, forward, gamma_forward
 from gwtransport import compute_time_edges
+from gwtransport.advection import distribution_forward, forward, gamma_forward
 
 
 # Fixtures
@@ -408,28 +408,11 @@ def test_conservation_properties():
 def test_empty_series():
     """Test handling of empty series."""
     empty_cin = pd.Series([], dtype=float)
-    empty_flow = pd.Series([], dtype=float)
 
     # This should handle gracefully or raise appropriate error
     with pytest.raises((ValueError, IndexError)):
         # Create tedges - this should fail for empty series
-        cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=empty_cin.index, number_of_bins=len(empty_cin))
-        cout_tedges = compute_time_edges(
-            tedges=None, tstart=None, tend=empty_flow.index, number_of_bins=len(empty_flow)
-        )
-        flow_tedges = compute_time_edges(
-            tedges=None, tstart=None, tend=empty_flow.index, number_of_bins=len(empty_flow)
-        )
-
-        gamma_forward(
-            cin=empty_cin,
-            cin_tedges=cin_tedges,
-            cout_tedges=cout_tedges,
-            flow=empty_flow,
-            flow_tedges=flow_tedges,
-            alpha=10.0,
-            beta=100.0,
-        )
+        compute_time_edges(tedges=None, tstart=None, tend=empty_cin.index, number_of_bins=len(empty_cin))
 
 
 def test_mismatched_series_lengths():

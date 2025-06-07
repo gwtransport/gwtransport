@@ -6,7 +6,7 @@ import pandas as pd
 from scipy import ndimage, sparse
 
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import diff
+from gwtransport.utils import compute_time_edges, diff
 
 
 def forward(
@@ -125,7 +125,6 @@ def compute_sigma_array(
         Array of sigma values for diffusion.
     """
     # Create flow tedges from the flow series index (assuming it's at the end of bins)
-    from gwtransport.utils import compute_time_edges
     flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
     residence_time = residence_time(
         flow=flow,
