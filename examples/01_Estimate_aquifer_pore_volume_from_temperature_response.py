@@ -87,7 +87,7 @@ def objective(_xdata, mean, std):
         flow=df.flow,
         flow_tedges=flow_tedges,
         mean=mean,  # Mean pore volume [m³]
-        std=std,   # Standard deviation [m³]
+        std=std,  # Standard deviation [m³]
         n_bins=200,  # Discretization resolution
         retardation_factor=2.0,  # Thermal retardation factor
     )
@@ -113,7 +113,7 @@ df["temp_extraction_modeled"] = advection.gamma_forward(
     flow=df.flow,
     flow_tedges=flow_tedges,
     mean=mean,  # Fitted mean pore volume
-    std=std,    # Fitted standard deviation
+    std=std,  # Fitted standard deviation
     n_bins=100,  # Computational resolution
     retardation_factor=2.0,  # Thermal retardation
 )
@@ -122,7 +122,7 @@ df["temp_extraction_modeled"] = advection.gamma_forward(
 print("\nParameter estimation results:")
 print(f"- Mean pore volume: {mean:.1f} ± {pcov[0, 0] ** 0.5:.1f} m³")
 print(f"- Standard deviation: {std:.1f} ± {pcov[1, 1] ** 0.5:.1f} m³")
-print(f"- Coefficient of variation: {std/mean:.2f}")
+print(f"- Coefficient of variation: {std / mean:.2f}")
 
 # %%
 # 3. Model validation and visualization
@@ -136,7 +136,9 @@ ax1.legend()
 
 ax2.plot(df.index, df.temp_infiltration, label="Recharge temperature", color="C0", alpha=0.8, linewidth=0.8)
 ax2.plot(df.index, df.temp_extraction, label="Discharge temperature (observed)", color="C1", alpha=0.8, linewidth=0.8)
-ax2.plot(df.index, df.temp_extraction_modeled, label="Discharge temperature (modeled)", color="C2", alpha=0.8, linewidth=0.8)
+ax2.plot(
+    df.index, df.temp_extraction_modeled, label="Discharge temperature (modeled)", color="C2", alpha=0.8, linewidth=0.8
+)
 ax2.set_xlabel("Date")
 ax2.set_ylabel("Temperature [°C]")
 ax2.legend()
@@ -185,9 +187,7 @@ x = np.linspace(0, 1.1 * gbins["expected_value"][-1], 1000)
 y = gamma_dist.pdf(x, alpha, scale=beta)
 
 fig, ax = plt.subplots(figsize=(10, 6))
-ax.set_title(
-    f"Fitted pore volume distribution (α={alpha:.1f}, β={beta:.1f}, μ={mean:.1f} m³, σ={std:.1f} m³)"
-)
+ax.set_title(f"Fitted pore volume distribution (α={alpha:.1f}, β={beta:.1f}, μ={mean:.1f} m³, σ={std:.1f} m³)")
 ax.plot(x, y, label="Probability density function", color="C0", alpha=0.8, linewidth=2)
 pdf_at_lower_bound = gamma_dist.pdf(gbins["lower_bound"], alpha, scale=beta)
 ax.vlines(gbins["lower_bound"], 0, pdf_at_lower_bound, color="C1", alpha=0.6, linewidth=1, label="Bin boundaries")
