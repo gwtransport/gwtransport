@@ -35,6 +35,7 @@ def forward(cin_series, flow_series, aquifer_pore_volume, retardation_factor=1.0
     of the aquifer.
 
     This function represents a forward operation (equivalent to convolution).
+    Forward modeling computes transport from infiltration to extraction.
 
     Parameters
     ----------
@@ -92,6 +93,7 @@ def backward(cout, flow, aquifer_pore_volume, retardation_factor=1.0, resample_d
     Compute the concentration of the infiltrating water by shifting cout with its residence time.
 
     This function represents a backward operation (equivalent to deconvolution).
+    Backward modeling computes transport from extraction to infiltration.
 
     Parameters
     ----------
@@ -134,6 +136,7 @@ def gamma_forward(
     parameters alpha and beta.
 
     This function represents a forward operation (equivalent to convolution).
+    Forward modeling computes transport from infiltration to extraction.
 
     Provide either alpha and beta or mean and std.
 
@@ -188,6 +191,7 @@ def gamma_backward(cout, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
     Compute the concentration of the infiltrating water by shifting cout with its residence time.
 
     This function represents a backward operation (equivalent to deconvolution).
+    Backward modeling computes transport from extraction to infiltration.
 
     Parameters
     ----------
@@ -225,6 +229,8 @@ def distribution_forward(
 ):
     """
     Similar to forward_advection, but with a distribution of aquifer pore volumes.
+
+    Forward modeling computes transport from infiltration to extraction.
 
     Parameters
     ----------
@@ -290,6 +296,7 @@ def distribution_backward(cout, flow, aquifer_pore_volume_edges, retardation_fac
     Compute the concentration of the infiltrating water from the extracted water concentration considering a distribution of aquifer pore volumes.
 
     This function represents a backward operation (equivalent to deconvolution).
+    Backward modeling computes transport from extraction to infiltration.
 
     Parameters
     ----------

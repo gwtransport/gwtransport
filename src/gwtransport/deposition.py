@@ -32,6 +32,8 @@ def backward(
     """
     Compute the deposition given the added concentration of the compound in the extracted water.
 
+    Backward modeling computes transport from extraction to infiltration.
+
     Parameters
     ----------
     cout : pandas.Series
@@ -121,6 +123,7 @@ def forward(dcout_index, deposition, flow, aquifer_pore_volume, porosity, thickn
     Compute the increase in concentration of the compound in the extracted water by the deposition.
 
     This function represents a forward operation (equivalent to convolution).
+    Forward modeling computes transport from infiltration to extraction.
 
     Parameters
     ----------

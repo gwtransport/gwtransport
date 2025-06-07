@@ -21,6 +21,7 @@ def forward(
     """Compute the diffusion of a compound during 1D transport in the aquifer.
 
     This function represents a forward operation (equivalent to convolution).
+    Forward modeling computes transport from infiltration to extraction.
 
     Parameters
     ----------
@@ -67,6 +68,7 @@ def backward(
     """Compute the reverse diffusion of a compound during 1D transport in the aquifer.
 
     This function represents a backward operation (equivalent to deconvolution).
+    Backward modeling computes transport from extraction to infiltration.
 
     Parameters
     ----------
