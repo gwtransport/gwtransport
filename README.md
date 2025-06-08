@@ -11,7 +11,7 @@
 
 ### Key Concepts
 
-**Pore Volume Distribution**: Aquifers are heterogeneous - some flow paths hold more water than others. This package models this heterogeneity using a statistical distribution (typically gamma) that describes how pore volumes vary across different flow paths.
+**Aquifer Pore Volume Distribution**: Aquifers are heterogeneous - some flow paths hold more water than others. This package models this heterogeneity using a statistical distribution (typically gamma) that describes how aquifer pore volumes vary across different flow paths.
 
 **Physical Basis**: When water enters an aquifer, it follows different paths with varying volumes and travel times. By analyzing temperature or tracer breakthrough curves, we can characterize this heterogeneity and predict contaminant transport.
 
@@ -24,7 +24,7 @@
 ### Key Assumptions
 
 - Advection-dominated transport (Péclet number >> 1)
-- Stationary pore volume distribution over time
+- Stationary aquifer pore volume distribution over time
 - Well-mixed recharge conditions
 
 ## Installation
@@ -46,30 +46,26 @@ from scipy.optimize import curve_fit
 from gwtransport import advection, compute_time_edges
 
 # Load temperature and flow time series data
-recharge_temp = pd.Series(...)    # Temperature of infiltrating water [°C]
-discharge_temp = pd.Series(...)   # Temperature of extracted water [°C]
-flow_rates = pd.Series(...)       # Discharge rates [m³/day]
+recharge_temp = np.array(...)    # Temperature of infiltrating water [°C]
+discharge_temp = np.array(...)   # Temperature of extracted water [°C]
+flow_rates = np.array(...)       # Discharge rates [m³/day]
 
-# Define time bin edges for discrete convolution
-cin_tedges = compute_time_edges(tedges=None, tstart=None,
-                                tend=recharge_temp.index,
-                                number_of_bins=len(recharge_temp))
-cout_tedges = compute_time_edges(tedges=None, tstart=None,
-                                 tend=flow_rates.index,
-                                 number_of_bins=len(flow_rates))
-flow_tedges = cout_tedges
+# Load time edges (1 item larger than data arrays, can be created using compute_time_edges function)
+recharge_time_edges = np.array(...)  # Time edges for recharge temperature data
+discharge_time_edges = np.array(...) # Time edges for discharge temperature data
+flow_time_edges = np.array(...)      # Time edges for flow rate data
 
 # Forward model for optimization
-def temperature_model(xdata, mean_pore_vol, std_pore_vol):
+def temperature_model(xdata, mean_aquifer_pore_vol, std_aquifer_pore_vol):
     """Calculate modeled discharge temperature for given aquifer parameters."""
     modeled_temp = advection.gamma_forward(
         cin=recharge_temp,
-        cin_tedges=cin_tedges,
-        cout_tedges=cout_tedges,
+        cin_tedges=recharge_time_edges,
+        cout_tedges=discharge_time_edges,
         flow=flow_rates,
-        flow_tedges=flow_tedges,
-        mean=mean_pore_vol,           # Mean pore volume [m³]
-        std=std_pore_vol,             # Standard deviation [m³]
+        flow_tedges=flow_time_edges,
+        mean=mean_aquifer_pore_vol,           # Mean aquifer pore volume [m³]
+        std=std_aquifer_pore_vol,             # Standard deviation [m³]
         n_bins=200,                   # Discretization resolution
         retardation_factor=2.0,       # Thermal retardation factor
     )
@@ -78,15 +74,15 @@ def temperature_model(xdata, mean_pore_vol, std_pore_vol):
 # Nonlinear least squares optimization
 (fitted_mean, fitted_std), covariance = curve_fit(
     temperature_model,
-    discharge_temp.index,
-    discharge_temp.values,
+    discharge_time_edges,  # Use time centers from edges
+    discharge_temp,
     p0=(8000.0, 400.0),              # Initial parameter estimates [m³]
     bounds=([1000, 50], [20000, 2000])  # Physical constraints [m³]
 )
 
 # Report results with uncertainty
 print("Aquifer characterization results:")
-print(f"Mean pore volume: {fitted_mean:.0f} ± {np.sqrt(covariance[0,0]):.0f} m³")
+print(f"Mean aquifer pore volume: {fitted_mean:.0f} ± {np.sqrt(covariance[0,0]):.0f} m³")
 print(f"Standard deviation: {fitted_std:.0f} ± {np.sqrt(covariance[1,1]):.0f} m³")
 print(f"Coefficient of variation: {fitted_std/fitted_mean:.2f}")
 ```
@@ -103,22 +99,22 @@ from gwtransport import gamma, compute_time_edges
 from gwtransport.residence_time import residence_time
 
 # Use parameters from aquifer characterization (Example 1)
-mean_pore_volume = 8000.0   # Mean pore volume [m³]
-std_pore_volume = 400.0     # Standard deviation [m³]
-flow_data = pd.Series(...)  # Discharge time series [m³/day]
+mean_aquifer_pore_volume = 8000.0   # Mean aquifer pore volume [m³]
+std_aquifer_pore_volume = 400.0     # Standard deviation [m³]
+flow_data = np.array(...)  # Discharge time series [m³/day]
 
-# Discretize pore volume distribution into flow paths
-pore_vol_bins = gamma.bins(mean=mean_pore_volume, std=std_pore_volume, n_bins=1000)
-flow_tedges = compute_time_edges(tedges=None, tstart=None,
-                                tend=flow_data.index,
-                                number_of_bins=len(flow_data))
+# Load time edges (1 item larger than flow_data, can be created using compute_time_edges function)
+flow_tedges = np.array(...)  # Time edges for flow data
+
+# Discretize aquifer pore volume distribution into flow paths
+aquifer_pore_vol_bins = gamma.bins(mean=mean_aquifer_pore_volume, std=std_aquifer_pore_volume, n_bins=1000)
 
 # Calculate residence times for different scenarios
 # Water residence time (conservative tracer)
 rt_water = residence_time(
     flow=flow_data,
     flow_tedges=flow_tedges,
-    aquifer_pore_volume=pore_vol_bins["expected_value"],
+    aquifer_pore_volume=aquifer_pore_vol_bins["expected_value"],
     retardation_factor=1.0,           # No retardation for water/conservative tracers
     direction="infiltration"          # Forward: when will water be extracted?
 )
@@ -127,7 +123,7 @@ rt_water = residence_time(
 rt_contaminant = residence_time(
     flow=flow_data,
     flow_tedges=flow_tedges,
-    aquifer_pore_volume=pore_vol_bins["expected_value"],
+    aquifer_pore_volume=aquifer_pore_vol_bins["expected_value"],
     retardation_factor=3.0,           # Sorbing contaminant (slower transport)
     direction="infiltration"
 )
