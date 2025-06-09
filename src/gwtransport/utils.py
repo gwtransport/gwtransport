@@ -204,81 +204,60 @@ def linear_average(  # noqa: C901
 
     # Initialize output array
     n_series, n_edges = x_edges.shape
-    n_bins = n_edges - 1
-    result = np.full((n_series, n_bins), np.nan)
 
-    # Process each series of x_edges
-    for i in range(n_series):
-        current_edges = x_edges[i, :]
-
-        # Handle extrapolation
-        if extrapolate_method == "outer":
-            edges_in_range = np.clip(current_edges, x_data_clean.min(), x_data_clean.max())
-        elif extrapolate_method == "nan":
-            is_within_range = (current_edges >= x_data_clean.min()) & (current_edges <= x_data_clean.max())
-            edges_in_range = current_edges[is_within_range]
-        elif extrapolate_method == "raise":
-            if np.any(current_edges < x_data_clean.min()) or np.any(current_edges > x_data_clean.max()):
-                msg = "x_edges must be within the range of x_data"
-                raise ValueError(msg)
-            edges_in_range = current_edges
-        else:
-            msg = "extrapolate_method must be 'outer', 'nan', or 'raise'"
+    # Handle extrapolation for all series at once (vectorized)
+    if extrapolate_method == "outer":
+        edges_processed = np.clip(x_edges, x_data_clean.min(), x_data_clean.max())
+    elif extrapolate_method == "raise":
+        if np.any(x_edges < x_data_clean.min()) or np.any(x_edges > x_data_clean.max()):
+            msg = "x_edges must be within the range of x_data"
             raise ValueError(msg)
+        edges_processed = x_edges.copy()
+    else:  # nan method
+        edges_processed = x_edges.copy()
 
-        # Skip if not enough edges after filtering
-        if len(edges_in_range) < 2:  # noqa: PLR2004
-            continue
+    # Create a combined grid of all unique x points (data + all edges)
+    all_unique_x = np.unique(np.concatenate([x_data_clean, edges_processed.ravel()]))
 
-        # Create a combined array of all x points
-        all_x = np.concatenate([x_data_clean, edges_in_range])
+    # Interpolate y values at all unique x points once
+    all_unique_y = np.interp(all_unique_x, x_data_clean, y_data_clean, left=np.nan, right=np.nan)
 
-        # Get unique values and inverse indices
-        unique_x, inverse_indices = np.unique(all_x, return_inverse=True)
+    # Compute cumulative integrals once using trapezoidal rule
+    dx = np.diff(all_unique_x)
+    y_avg = (all_unique_y[:-1] + all_unique_y[1:]) / 2
+    segment_integrals = dx * y_avg
+    # Replace NaN values with 0 to avoid breaking cumulative sum
+    segment_integrals = np.nan_to_num(segment_integrals, nan=0.0)
+    cumulative_integral = np.concatenate([[0], np.cumsum(segment_integrals)])
 
-        # Get indices of where the edges are in the unique array
-        edge_indices = inverse_indices[len(x_data_clean) :]
+    # Vectorized computation for all series
+    # Find indices of all edges in the combined grid
+    edge_indices = np.searchsorted(all_unique_x, edges_processed)
 
-        # Interpolate y values at all unique x points
-        unique_y = np.interp(unique_x, x_data_clean, y_data_clean, left=np.nan, right=np.nan)
+    # Compute integral between consecutive edges for all series (vectorized)
+    integral_values = cumulative_integral[edge_indices[:, 1:]] - cumulative_integral[edge_indices[:, :-1]]
 
-        # Compute segment-wise integrals using the trapezoidal rule
-        dx = np.diff(unique_x)
-        y_avg = (unique_y[:-1] + unique_y[1:]) / 2
-        segment_integrals = dx * y_avg
+    # Compute widths between consecutive edges for all series (vectorized)
+    edge_widths = np.diff(edges_processed, axis=1)
 
-        # Compute cumulative integral
-        cumulative_integral = np.concatenate([[0], np.cumsum(segment_integrals)])
+    # Handle zero-width intervals (vectorized)
+    zero_width_mask = edge_widths == 0
+    result = np.zeros_like(edge_widths)
 
-        # Compute integral between consecutive edges
-        integral_values = np.diff(cumulative_integral[edge_indices])
+    # For non-zero width intervals, compute average = integral / width (vectorized)
+    non_zero_mask = ~zero_width_mask
+    result[non_zero_mask] = integral_values[non_zero_mask] / edge_widths[non_zero_mask]
 
-        # Compute widths between consecutive edges
-        edge_widths = np.diff(edges_in_range)
+    # For zero-width intervals, interpolate y-value directly (vectorized)
+    if np.any(zero_width_mask):
+        zero_width_positions = edges_processed[:, :-1][zero_width_mask]
+        result[zero_width_mask] = np.interp(zero_width_positions, x_data_clean, y_data_clean)
 
-        # Handle zero-width intervals
-        zero_width_mask = edge_widths == 0
-        average_values_in_range = np.zeros_like(edge_widths)
-
-        # For non-zero width intervals, compute average = integral / width
-        non_zero_mask = ~zero_width_mask
-        if np.any(non_zero_mask):
-            average_values_in_range[non_zero_mask] = integral_values[non_zero_mask] / edge_widths[non_zero_mask]
-
-        # For zero-width intervals, get the y-value directly
-        if np.any(zero_width_mask):
-            zero_width_indices = edge_indices[np.where(zero_width_mask)[0]]
-            average_values_in_range[zero_width_mask] = unique_y[zero_width_indices]
-
-        # Handle extrapolation when 'nan' method is used
-        if extrapolate_method == "nan":
-            # Map results back to full edge array, setting out-of-range bins to NaN
-            bins_within_range = (current_edges[:-1] >= x_data_clean.min()) & (current_edges[1:] <= x_data_clean.max())
-            full_average_values = np.full(n_bins, np.nan)
-            full_average_values[bins_within_range] = average_values_in_range
-            result[i, :] = full_average_values
-        else:
-            result[i, : len(average_values_in_range)] = average_values_in_range
+    # Handle extrapolation when 'nan' method is used (vectorized)
+    if extrapolate_method == "nan":
+        # Set out-of-range bins to NaN
+        bins_within_range = (x_edges[:, :-1] >= x_data_clean.min()) & (x_edges[:, 1:] <= x_data_clean.max())
+        result[~bins_within_range] = np.nan
 
     return result
 
