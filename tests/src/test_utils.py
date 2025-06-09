@@ -93,7 +93,7 @@ def test_constant_function():
     y_data = np.array([2, 2, 2, 2, 2])
     x_edges = np.array([0, 2, 4])
 
-    expected = np.array([2, 2])  # Average is constant
+    expected = np.array([[2, 2]])  # Average is constant, now 2D
     result = linear_average(x_data, y_data, x_edges)
 
     np.testing.assert_allclose(result, expected)
@@ -107,7 +107,7 @@ def test_linear_function():
 
     # Average of y=x from 0 to 2 = 1
     # Average of y=x from 2 to 4 = 3
-    expected = np.array([1, 3])
+    expected = np.array([[1, 3]])
     result = linear_average(x_data, y_data, x_edges)
 
     np.testing.assert_allclose(result, expected)
@@ -121,7 +121,7 @@ def test_piecewise_linear():
 
     # Integral from 0 to 1.5 = 1, width = 1.5 → average = 2/3
     # Integral from 1.5 to 3 = 1, width = 1.5 → average = 2/3
-    expected = np.array([1.0 / 1.5, 1.0 / 1.5])
+    expected = np.array([[1.0 / 1.5, 1.0 / 1.5]])
     result = linear_average(x_data, y_data, x_edges)
 
     np.testing.assert_allclose(result, expected, rtol=1e-10)
@@ -135,7 +135,7 @@ def test_edges_beyond_data():
 
     # Extrapolation should extend the first and last segments
     # Average of y=x from 0 to 4 = 2
-    expected = np.array([2])
+    expected = np.array([[2]])
     result = linear_average(x_data, y_data, x_edges, extrapolate_method="outer")
 
     np.testing.assert_allclose(result, expected)
@@ -148,7 +148,7 @@ def test_edges_matching_data():
     x_edges = np.array([1, 3])
 
     # Average under the curve from 1 to 3 = 4.5
-    expected = np.array([4.5])
+    expected = np.array([[4.5]])
     result = linear_average(x_data, y_data, x_edges)
 
     np.testing.assert_allclose(result, expected)
@@ -161,7 +161,7 @@ def test_multiple_edge_intervals():
     x_edges = np.array([0, 1, 2, 3, 4, 5])
 
     # Average of each segment
-    expected = np.array([0.5, 2.5, 6.5, 12.5, 20.5])
+    expected = np.array([[0.5, 2.5, 6.5, 12.5, 20.5]])
     result = linear_average(x_data, y_data, x_edges)
 
     np.testing.assert_allclose(result, expected)
@@ -174,7 +174,7 @@ def test_empty_interval():
     x_edges = np.array([0, 1, 1, 2])
 
     # Second interval has zero width at x=1, so average should be y=1
-    expected = np.array([0.5, 1.0, 2.5])
+    expected = np.array([[0.5, 1.0, 2.5]])
     result = linear_average(x_data, y_data, x_edges)
 
     np.testing.assert_allclose(result, expected)
@@ -187,7 +187,7 @@ def test_input_validation():
         linear_average([0, 1], [0], [0, 1])
 
     # Test x_edges too short
-    with pytest.raises(ValueError, match="x_edges_in_range must contain at least 2 values"):
+    with pytest.raises(ValueError, match="x_edges must contain at least 2 values in each row"):
         linear_average([0, 1], [0, 1], [0])
 
     # Test x_data not in ascending order
@@ -207,7 +207,7 @@ def test_complex_piecewise_function():
 
     # First interval: integral = 3.0, width = 2.0 → average = 1.5
     # Second interval: integral = 3.0, width = 2.0 → average = 1.5
-    expected = np.array([1.5, 1.5])
+    expected = np.array([[1.5, 1.5]])
     result = linear_average(x_data, y_data, x_edges)
 
     np.testing.assert_allclose(result, expected)
@@ -221,7 +221,7 @@ def test_edge_case_numerical_precision():
 
     # For a linear function y=x, the average from 0 to 0.5 is 0.25
     # and from 0.5 to 1 is 0.75
-    expected = np.array([0.25, 0.75])
+    expected = np.array([[0.25, 0.75]])
     result = linear_average(x_data, y_data, x_edges)
 
     np.testing.assert_allclose(result, expected, rtol=1e-10)
@@ -234,7 +234,7 @@ def test_single_point_data():
     x_edges = np.array([0, 2])
 
     # Single point should be treated as constant value
-    expected = np.array([5])
+    expected = np.array([[5]])
     result = linear_average(x_data, y_data, x_edges, extrapolate_method="outer")
 
     np.testing.assert_allclose(result, expected)
@@ -248,10 +248,32 @@ def test_zero_width_interval_edge_case():
 
     # First interval has zero width at x=0, so average should be y=0
     # Second interval is 0 to 1, average is 0.5
-    expected = np.array([0.0, 0.5])
+    expected = np.array([[0.0, 0.5]])
     result = linear_average(x_data, y_data, x_edges)
 
     np.testing.assert_allclose(result, expected)
+
+
+def test_2d_x_edges():
+    """Test 2D x_edges functionality."""
+    x_data = np.array([0, 1, 2, 3])
+    y_data = np.array([0, 1, 1, 0])
+
+    # 2D x_edges: two different edge sets
+    x_edges_2d = np.array([
+        [0, 1.5, 3],  # First set of edges
+        [0.5, 2, 3],  # Second set of edges
+    ])
+
+    # Expected results for each row
+    expected = np.array([
+        [2 / 3, 2 / 3],  # First row results
+        [11 / 12, 0.5],  # Second row results (0.916667, 0.5)
+    ])
+
+    result = linear_average(x_data, y_data, x_edges_2d)
+
+    np.testing.assert_allclose(result, expected, rtol=1e-2)
 
 
 def test_basic_case():

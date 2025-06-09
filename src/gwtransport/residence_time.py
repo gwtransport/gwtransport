@@ -201,13 +201,19 @@ def residence_time_mean(
         a = flow_cum[None, :] - retardation_factor * aquifer_pore_volume[:, None]
         days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
         data_edges = flow_tedges_days - days
-        data_avg = np.array([linear_average(flow_tedges_days, y, tedges_out_days) for y in data_edges])
+        # Process each pore volume (row) separately. Although linear_average supports 2D x_edges,
+        # our use case is different: multiple time series (different y_data) with same edges,
+        # rather than same time series with multiple edge sets.
+        data_avg = np.array([linear_average(flow_tedges_days, y, tedges_out_days)[0] for y in data_edges])
     elif direction == "infiltration":
         # In how many days the water that is infiltrated now be extracted
         a = flow_cum[None, :] + retardation_factor * aquifer_pore_volume[:, None]
         days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
         data_edges = days - flow_tedges_days
-        data_avg = np.array([linear_average(flow_tedges_days, y, tedges_out_days) for y in data_edges])
+        # Process each pore volume (row) separately. Although linear_average supports 2D x_edges,
+        # our use case is different: multiple time series (different y_data) with same edges,
+        # rather than same time series with multiple edge sets.
+        data_avg = np.array([linear_average(flow_tedges_days, y, tedges_out_days)[0] for y in data_edges])
     else:
         msg = "direction should be 'extraction' or 'infiltration'"
         raise ValueError(msg)

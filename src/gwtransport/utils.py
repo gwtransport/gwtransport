@@ -136,7 +136,9 @@ def linear_average(  # noqa: C901
     y_data : array-like
         y-coordinates of the time series data points
     x_edges : array-like
-        x-coordinates of the integration edges, must be in ascending order
+        x-coordinates of the integration edges. Can be 1D or 2D.
+        - If 1D: shape (n_edges,), must be in ascending order
+        - If 2D: shape (n_series, n_edges), each row must be in ascending order
     extrapolate_method : str, optional
         Method for handling extrapolation. Default is 'nan'.
         - 'outer': Extrapolate using the outermost data points.
@@ -146,7 +148,9 @@ def linear_average(  # noqa: C901
     Returns
     -------
     numpy.ndarray
-        Array of average values between consecutive pairs of x_edges
+        2D array of average values between consecutive pairs of x_edges.
+        Shape is (n_series, n_bins) where n_bins = n_edges - 1.
+        If x_edges is 1D, n_series = 1.
 
     Examples
     --------
@@ -154,102 +158,105 @@ def linear_average(  # noqa: C901
     >>> y_data = [0, 1, 1, 0]
     >>> x_edges = [0, 1.5, 3]
     >>> linear_average(x_data, y_data, x_edges)
-    array([0.667, 0.667])
+    array([[0.667, 0.667]])
+
+    >>> x_edges_2d = [[0, 1.5, 3], [0.5, 2, 3]]
+    >>> linear_average(x_data, y_data, x_edges_2d)
+    array([[0.667, 0.667], [0.75, 0.5]])
     """
+    # Convert inputs to numpy arrays
+    x_data = np.asarray(x_data, dtype=float)
+    y_data = np.asarray(y_data, dtype=float)
+    x_edges = np.asarray(x_edges, dtype=float)
+
+    # Ensure x_edges is always 2D
+    if x_edges.ndim == 1:
+        x_edges = x_edges[np.newaxis, :]
+    elif x_edges.ndim != 2:  # noqa: PLR2004
+        msg = "x_edges must be 1D or 2D array"
+        raise ValueError(msg)
+
     # Input validation
-    if len(x_data) != len(y_data) and len(x_data) > 0:
+    if len(x_data) != len(y_data) or len(x_data) == 0:
         msg = "x_data and y_data must have the same length and be non-empty"
         raise ValueError(msg)
-    if len(x_edges) < 2:  # noqa: PLR2004
-        msg = "x_edges_in_range must contain at least 2 values"
+    if x_edges.shape[1] < 2:  # noqa: PLR2004
+        msg = "x_edges must contain at least 2 values in each row"
         raise ValueError(msg)
     if not np.all(np.diff(x_data) >= 0):
         msg = "x_data must be in ascending order"
         raise ValueError(msg)
-    if not np.all(np.diff(x_edges) >= 0):
-        msg = "x_edges must be in ascending order"
+    if not np.all(np.diff(x_edges, axis=1) >= 0):
+        msg = "x_edges must be in ascending order along each row"
         raise ValueError(msg)
 
+    # Filter out NaN values
     show = ~np.isnan(x_data) & ~np.isnan(y_data)
+    if show.sum() < 2:  # noqa: PLR2004
+        if show.sum() == 1 and extrapolate_method == "outer":
+            # For single data point with outer extrapolation, use constant value
+            constant_value = y_data[show][0]
+            return np.full(shape=(x_edges.shape[0], x_edges.shape[1] - 1), fill_value=constant_value)
+        return np.full(shape=(x_edges.shape[0], x_edges.shape[1] - 1), fill_value=np.nan)
 
-    if (show.sum() < 2 and extrapolate_method == "nan") or show.sum() == 0:  # noqa: PLR2004
-        return np.full(shape=len(x_edges) - 1, fill_value=np.nan)
+    x_data_clean = x_data[show]
+    y_data_clean = y_data[show]
 
-    x_data = np.asarray(x_data, dtype=float)[show]
-    y_data = np.asarray(y_data, dtype=float)[show]
-    x_edges = np.asarray(x_edges, dtype=float)
-
-    # Extrapolate
+    # Handle extrapolation for all series at once (vectorized)
     if extrapolate_method == "outer":
-        # bins with x_edges ouside the range of x_data should be nan
-        # Zero-widths are handles at the end of this function
-        x_edges_in_range = np.clip(x_edges, x_data.min(), x_data.max())
-    elif extrapolate_method == "nan":
-        # bins with x_edges ouside the range of x_data should be nan
-        is_within_range = (x_edges >= x_data.min()) & (x_edges <= x_data.max())
-        x_edges_in_range = x_edges[is_within_range]
+        edges_processed = np.clip(x_edges, x_data_clean.min(), x_data_clean.max())
     elif extrapolate_method == "raise":
-        if np.any(x_edges < x_data.min()) or np.any(x_edges > x_data.max()):
+        if np.any(x_edges < x_data_clean.min()) or np.any(x_edges > x_data_clean.max()):
             msg = "x_edges must be within the range of x_data"
             raise ValueError(msg)
-    else:
-        msg = "extrapolate_method must be 'outer', 'nan', or 'raise'"
-        raise ValueError(msg)
+        edges_processed = x_edges.copy()
+    else:  # nan method
+        edges_processed = x_edges.copy()
 
-    # Create a combined array of all x points
-    all_x = np.concatenate([x_data, x_edges_in_range])
+    # Create a combined grid of all unique x points (data + all edges)
+    all_unique_x = np.unique(np.concatenate([x_data_clean, edges_processed.ravel()]))
 
-    # Get unique values and inverse indices
-    unique_x, inverse_indices = np.unique(all_x, return_inverse=True)
+    # Interpolate y values at all unique x points once
+    all_unique_y = np.interp(all_unique_x, x_data_clean, y_data_clean, left=np.nan, right=np.nan)
 
-    # Get indices of where the edges are in the unique array
-    edge_indices = inverse_indices[len(x_data) : len(all_x)]
-
-    # Interpolate y values at all unique x points
-    unique_y = np.interp(unique_x, x_data, y_data, left=np.nan, right=np.nan)
-
-    # Compute segment-wise integrals using the trapezoidal rule
-    dx = np.diff(unique_x)
-    y_avg = (unique_y[:-1] + unique_y[1:]) / 2
+    # Compute cumulative integrals once using trapezoidal rule
+    dx = np.diff(all_unique_x)
+    y_avg = (all_unique_y[:-1] + all_unique_y[1:]) / 2
     segment_integrals = dx * y_avg
-
-    # Compute cumulative integral
+    # Replace NaN values with 0 to avoid breaking cumulative sum
+    segment_integrals = np.nan_to_num(segment_integrals, nan=0.0)
     cumulative_integral = np.concatenate([[0], np.cumsum(segment_integrals)])
 
-    # Compute integral between consecutive edges
-    integral_values = np.diff(cumulative_integral[edge_indices])
+    # Vectorized computation for all series
+    # Find indices of all edges in the combined grid
+    edge_indices = np.searchsorted(all_unique_x, edges_processed)
 
-    # Compute widths between consecutive edges
-    edge_widths = np.diff(x_edges_in_range)
+    # Compute integral between consecutive edges for all series (vectorized)
+    integral_values = cumulative_integral[edge_indices[:, 1:]] - cumulative_integral[edge_indices[:, :-1]]
 
-    # Handle zero-width intervals and non-zero width intervals in a vectorized way
+    # Compute widths between consecutive edges for all series (vectorized)
+    edge_widths = np.diff(edges_processed, axis=1)
+
+    # Handle zero-width intervals (vectorized)
     zero_width_mask = edge_widths == 0
+    result = np.zeros_like(edge_widths)
 
-    # For non-zero width intervals, compute average = integral / width
-    average_values_in_range = np.zeros_like(edge_widths)
+    # For non-zero width intervals, compute average = integral / width (vectorized)
     non_zero_mask = ~zero_width_mask
-    if np.any(non_zero_mask):
-        average_values_in_range[non_zero_mask] = integral_values[non_zero_mask] / edge_widths[non_zero_mask]
+    result[non_zero_mask] = integral_values[non_zero_mask] / edge_widths[non_zero_mask]
 
-    # For zero-width intervals, get the y-value directly from unique_y using edge_indices
+    # For zero-width intervals, interpolate y-value directly (vectorized)
     if np.any(zero_width_mask):
-        # The indices in unique_x for zero-width edge positions
-        zero_width_indices = edge_indices[np.where(zero_width_mask)[0]]
+        zero_width_positions = edges_processed[:, :-1][zero_width_mask]
+        result[zero_width_mask] = np.interp(zero_width_positions, x_data_clean, y_data_clean)
 
-        # Get all the y-values at once and assign them
-        average_values_in_range[zero_width_mask] = unique_y[zero_width_indices]
+    # Handle extrapolation when 'nan' method is used (vectorized)
+    if extrapolate_method == "nan":
+        # Set out-of-range bins to NaN
+        bins_within_range = (x_edges[:, :-1] >= x_data_clean.min()) & (x_edges[:, 1:] <= x_data_clean.max())
+        result[~bins_within_range] = np.nan
 
-    # Handle extrapolation when 'nan' method is used and some edges are outside data range
-    if extrapolate_method == "nan" and ~np.all(is_within_range):
-        # Identify which bins are completely within the data range
-        bins_within_range = (x_edges[:-1] >= x_data.min()) & (x_edges[1:] <= x_data.max())
-        # Create array of NaNs with same size as the number of bins
-        average_values = np.full(shape=bins_within_range.size, fill_value=np.nan)
-        # Copy calculated averages only to bins that are within data range
-        average_values[bins_within_range] = average_values_in_range
-        return average_values
-
-    return average_values_in_range
+    return result
 
 
 def partial_isin(bin_edges, timespans):
