@@ -202,9 +202,6 @@ def linear_average(  # noqa: C901
     x_data_clean = x_data[show]
     y_data_clean = y_data[show]
 
-    # Initialize output array
-    n_series, n_edges = x_edges.shape
-
     # Handle extrapolation for all series at once (vectorized)
     if extrapolate_method == "outer":
         edges_processed = np.clip(x_edges, x_data_clean.min(), x_data_clean.max())
