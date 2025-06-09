@@ -93,7 +93,7 @@ def test_constant_function():
     y_data = np.array([2, 2, 2, 2, 2])
     x_edges = np.array([0, 2, 4])
 
-    expected = np.array([[[2, 2]]])  # Average is constant, now 2D, now 2D
+    expected = np.array([[2, 2]])  # Average is constant, now 2D
     result = linear_average(x_data, y_data, x_edges)
 
     np.testing.assert_allclose(result, expected)
