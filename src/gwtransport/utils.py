@@ -159,7 +159,7 @@ def linear_average(  # noqa: C901
     >>> x_edges = [0, 1.5, 3]
     >>> linear_average(x_data, y_data, x_edges)
     array([[0.667, 0.667]])
-    
+
     >>> x_edges_2d = [[0, 1.5, 3], [0.5, 2, 3]]
     >>> linear_average(x_data, y_data, x_edges_2d)
     array([[0.667, 0.667], [0.75, 0.5]])
@@ -168,7 +168,7 @@ def linear_average(  # noqa: C901
     x_data = np.asarray(x_data, dtype=float)
     y_data = np.asarray(y_data, dtype=float)
     x_edges = np.asarray(x_edges, dtype=float)
-    
+
     # Ensure x_edges is always 2D
     if x_edges.ndim == 1:
         x_edges = x_edges[np.newaxis, :]
@@ -211,7 +211,7 @@ def linear_average(  # noqa: C901
     # Process each series of x_edges
     for i in range(n_series):
         current_edges = x_edges[i, :]
-        
+
         # Handle extrapolation
         if extrapolate_method == "outer":
             edges_in_range = np.clip(current_edges, x_data_clean.min(), x_data_clean.max())
@@ -238,7 +238,7 @@ def linear_average(  # noqa: C901
         unique_x, inverse_indices = np.unique(all_x, return_inverse=True)
 
         # Get indices of where the edges are in the unique array
-        edge_indices = inverse_indices[len(x_data_clean):]
+        edge_indices = inverse_indices[len(x_data_clean) :]
 
         # Interpolate y values at all unique x points
         unique_y = np.interp(unique_x, x_data_clean, y_data_clean, left=np.nan, right=np.nan)
@@ -260,7 +260,7 @@ def linear_average(  # noqa: C901
         # Handle zero-width intervals
         zero_width_mask = edge_widths == 0
         average_values_in_range = np.zeros_like(edge_widths)
-        
+
         # For non-zero width intervals, compute average = integral / width
         non_zero_mask = ~zero_width_mask
         if np.any(non_zero_mask):
@@ -279,7 +279,7 @@ def linear_average(  # noqa: C901
             full_average_values[bins_within_range] = average_values_in_range
             result[i, :] = full_average_values
         else:
-            result[i, :len(average_values_in_range)] = average_values_in_range
+            result[i, : len(average_values_in_range)] = average_values_in_range
 
     return result
 

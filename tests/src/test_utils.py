@@ -258,21 +258,21 @@ def test_2d_x_edges():
     """Test 2D x_edges functionality."""
     x_data = np.array([0, 1, 2, 3])
     y_data = np.array([0, 1, 1, 0])
-    
+
     # 2D x_edges: two different edge sets
     x_edges_2d = np.array([
-        [0, 1.5, 3],    # First set of edges
-        [0.5, 2, 3]     # Second set of edges
+        [0, 1.5, 3],  # First set of edges
+        [0.5, 2, 3],  # Second set of edges
     ])
-    
+
     # Expected results for each row
     expected = np.array([
-        [2 / 3, 2 / 3],       # First row results
-        [11 / 12, 0.5]        # Second row results (0.916667, 0.5)
+        [2 / 3, 2 / 3],  # First row results
+        [11 / 12, 0.5],  # Second row results (0.916667, 0.5)
     ])
-    
+
     result = linear_average(x_data, y_data, x_edges_2d)
-    
+
     np.testing.assert_allclose(result, expected, rtol=1e-2)
 
 
