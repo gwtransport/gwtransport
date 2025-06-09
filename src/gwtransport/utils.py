@@ -197,8 +197,7 @@ def linear_average(  # noqa: C901
             # For single data point with outer extrapolation, use constant value
             constant_value = y_data[show][0]
             return np.full(shape=(x_edges.shape[0], x_edges.shape[1] - 1), fill_value=constant_value)
-        else:
-            return np.full(shape=(x_edges.shape[0], x_edges.shape[1] - 1), fill_value=np.nan)
+        return np.full(shape=(x_edges.shape[0], x_edges.shape[1] - 1), fill_value=np.nan)
 
     x_data_clean = x_data[show]
     y_data_clean = y_data[show]
