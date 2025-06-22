@@ -233,8 +233,8 @@ def test_gamma_forward_constant_input():
 def test_distribution_forward_basic(sample_time_series):
     """Test basic functionality of distribution_forward."""
     cin, flow = sample_time_series
-    # Create simple pore volume distribution edges
-    aquifer_pore_volume_edges = np.array([500, 1000, 1500, 2000])
+    # Create simple pore volume distribution (discrete values)
+    aquifer_pore_volumes = np.array([750, 1250, 1750])  # Representative values instead of edges
 
     # Create tedges from tend
     cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin.index, number_of_bins=len(cin))
@@ -247,7 +247,7 @@ def test_distribution_forward_basic(sample_time_series):
         cout_tedges=cout_tedges,
         flow=flow,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume_edges=aquifer_pore_volume_edges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=1.0,
     )
 
@@ -263,7 +263,7 @@ def test_distribution_forward_basic(sample_time_series):
 def test_distribution_forward_different_time_edges(sample_time_series):
     """Test distribution_forward with different time edge specifications."""
     cin, flow = sample_time_series
-    aquifer_pore_volume_edges = np.array([500, 1000, 1500])
+    aquifer_pore_volumes = np.array([750, 1250])  # Representative values instead of edges
 
     # Test with tedges
     cin_tedges = pd.date_range(start=cin.index[0] - pd.Timedelta(days=1), end=cin.index[-1], freq="D")
@@ -276,7 +276,7 @@ def test_distribution_forward_different_time_edges(sample_time_series):
         cout_tedges=cout_tedges,
         flow=flow,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume_edges=aquifer_pore_volume_edges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
     )
 
     # Test with tend converted to tedges
@@ -290,7 +290,7 @@ def test_distribution_forward_different_time_edges(sample_time_series):
         cout_tedges=cout_tedges2,
         flow=flow,
         flow_tedges=flow_tedges2,
-        aquifer_pore_volume_edges=aquifer_pore_volume_edges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
     )
 
     # Both should produce valid outputs
@@ -301,9 +301,9 @@ def test_distribution_forward_different_time_edges(sample_time_series):
 
 
 def test_distribution_forward_single_bin(sample_time_series):
-    """Test distribution_forward with a single bin (two edges)."""
+    """Test distribution_forward with a single pore volume."""
     cin, flow = sample_time_series
-    aquifer_pore_volume_edges = np.array([1000, 2000])
+    aquifer_pore_volumes = np.array([1500])  # Single pore volume
 
     # Create tedges from tend
     cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin.index, number_of_bins=len(cin))
@@ -316,7 +316,7 @@ def test_distribution_forward_single_bin(sample_time_series):
         cout_tedges=cout_tedges,
         flow=flow,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume_edges=aquifer_pore_volume_edges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
     )
 
     # Check output type and length

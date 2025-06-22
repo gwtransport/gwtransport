@@ -178,7 +178,7 @@ def gamma_forward(
         cout_tedges=cout_tedges,
         flow=flow,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume_edges=bins["edges"],
+        aquifer_pore_volumes=bins["expected_value"],
         retardation_factor=retardation_factor,
     )
 
@@ -220,7 +220,7 @@ def distribution_forward(
     cout_tedges,
     flow,
     flow_tedges,
-    aquifer_pore_volume_edges,
+    aquifer_pore_volumes,
     retardation_factor=1.0,
 ):
     """
@@ -242,9 +242,8 @@ def distribution_forward(
     flow_tedges : pandas.DatetimeIndex
         Time edges for the flow data. Used to compute the cumulative flow.
         Has a length of one more than `flow`.
-    aquifer_pore_volume_edges : array-like
-        Edges of the bins that define the distribution of the aquifer pore volume.
-        Of size nbins + 1 [m3].
+    aquifer_pore_volumes : array-like
+        Array of aquifer pore volumes [m3] representing the distribution.
     retardation_factor : float
         Retardation factor of the compound in the aquifer.
 
@@ -264,21 +263,21 @@ def distribution_forward(
 
     cout_time = cout_tedges[:-1] + (cout_tedges[1:] - cout_tedges[:-1]) / 2
 
-    # Use residence time at cout_tedges
-    rt_edges = residence_time(
+    # Use residence time at cout_time for all pore volumes
+    rt_array = residence_time(
         flow=flow,
         flow_tedges=flow_tedges,
         index=cout_time,
-        aquifer_pore_volume=aquifer_pore_volume_edges,
+        aquifer_pore_volume=aquifer_pore_volumes,
         retardation_factor=retardation_factor,
         direction="extraction",
     ).astype("timedelta64[D]")
-    day_of_infiltration_edges = cout_time.values[None] - rt_edges
+    day_of_infiltration_array = cout_time.values[None] - rt_array
 
     cin_sum = np.concat(([0.0], cin.cumsum()))  # Add a zero at the beginning for cumulative sum
-    cin_sum_edges = linear_interpolate(cin_tedges, cin_sum, day_of_infiltration_edges)
-    n_measurements = linear_interpolate(cin_tedges, np.arange(cin_tedges.size), day_of_infiltration_edges)
-    cout_arr = np.diff(cin_sum_edges, axis=0) / np.diff(n_measurements, axis=0)
+    cin_sum_interpolated = linear_interpolate(cin_tedges, cin_sum, day_of_infiltration_array)
+    n_measurements = linear_interpolate(cin_tedges, np.arange(cin_tedges.size), day_of_infiltration_array)
+    cout_arr = np.diff(cin_sum_interpolated, axis=0) / np.diff(n_measurements, axis=0)
 
     with warnings.catch_warnings():
         warnings.filterwarnings(action="ignore", message="Mean of empty slice")
