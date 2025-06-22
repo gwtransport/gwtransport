@@ -412,6 +412,97 @@ def test_invalid_inputs():
         partial_isin(bin_edges_in, bin_edges_out)
 
 
+def test_partial_isin_2d_basic():
+    """Test 2D partial_isin functionality with multiple pore volumes."""
+    # Two sets of input edges (representing different pore volumes)
+    bin_edges_in_2d = np.array([
+        [0, 10, 20, 30],  # First pore volume
+        [2, 12, 22, 32],  # Second pore volume (shifted)
+    ])
+    bin_edges_out = np.array([5, 15, 25])
+
+    # Expected: (2 pore volumes, 3 input bins, 2 output bins)
+    expected = np.array([
+        [[0.5, 0.0], [0.5, 0.5], [0.0, 0.5]],  # First pore volume
+        [[0.7, 0.0], [0.3, 0.7], [0.0, 0.3]],  # Second pore volume (corrected)
+    ])
+
+    result = partial_isin(bin_edges_in_2d, bin_edges_out)
+    assert result.shape == (2, 3, 2)
+    assert_array_almost_equal(result, expected, decimal=6)
+
+
+def test_partial_isin_2d_no_overlap():
+    """Test 2D partial_isin with no overlap."""
+    bin_edges_in_2d = np.array([
+        [0, 10, 20],  # First set
+        [100, 110, 120],  # Second set (no overlap)
+    ])
+    bin_edges_out = np.array([30, 40, 50])
+
+    expected = np.zeros((2, 2, 2))  # No overlaps
+
+    result = partial_isin(bin_edges_in_2d, bin_edges_out)
+    assert_array_almost_equal(result, expected)
+
+
+def test_partial_isin_2d_complete_overlap():
+    """Test 2D partial_isin with complete overlap."""
+    bin_edges_in_2d = np.array([
+        [0, 10, 20],  # First set
+        [0, 10, 20],  # Second set (identical)
+    ])
+    bin_edges_out = np.array([0, 10, 20])
+
+    expected = np.array([
+        [[1.0, 0.0], [0.0, 1.0]],  # First set: complete overlap
+        [[1.0, 0.0], [0.0, 1.0]],  # Second set: complete overlap
+    ])
+
+    result = partial_isin(bin_edges_in_2d, bin_edges_out)
+    assert_array_almost_equal(result, expected)
+
+
+def test_partial_isin_2d_edge_cases():
+    """Test 2D partial_isin edge cases."""
+    # Single pore volume (should behave like 1D)
+    bin_edges_in_2d = np.array([[0, 10, 20, 30]])
+    bin_edges_out = np.array([5, 15, 25])
+
+    expected = np.array([[[0.5, 0.0], [0.5, 0.5], [0.0, 0.5]]])
+
+    result = partial_isin(bin_edges_in_2d, bin_edges_out)
+    assert result.shape == (1, 3, 2)
+    assert_array_almost_equal(result, expected)
+
+
+def test_partial_isin_2d_invalid_inputs():
+    """Test 2D partial_isin with invalid inputs."""
+    # Test with 3D input (not supported)
+    bin_edges_in_3d = np.array([[[0, 10, 20]]])
+    bin_edges_out = np.array([5, 15])
+
+    with pytest.raises(ValueError, match="bin_edges_in must be 1D or 2D array"):
+        partial_isin(bin_edges_in_3d, bin_edges_out)
+
+    # Test with 2D output (not supported)
+    bin_edges_in = np.array([0, 10, 20])
+    bin_edges_out_2d = np.array([[5, 15], [6, 16]])
+
+    with pytest.raises(ValueError, match="bin_edges_out must be a 1D array"):
+        partial_isin(bin_edges_in, bin_edges_out_2d)
+
+    # Test with non-monotonic 2D input
+    bin_edges_in_2d = np.array([
+        [0, 10, 20],  # Valid
+        [20, 10, 0],  # Invalid: descending
+    ])
+    bin_edges_out = np.array([5, 15])
+
+    with pytest.raises(ValueError, match="All rows in bin_edges_in must be in ascending order"):
+        partial_isin(bin_edges_in_2d, bin_edges_out)
+
+
 def test_combine_bin_series_basic():
     """Test basic functionality of combine_bin_series."""
     # Simple case: non-overlapping bins

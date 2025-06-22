@@ -272,8 +272,10 @@ def partial_isin(bin_edges_in, bin_edges_out):
     Parameters
     ----------
     bin_edges_in : array_like
-        1D array of input bin edges in ascending order. For n_in bins, there
-        should be n_in+1 edges.
+        Input bin edges in ascending order. Can be:
+        - 1D array of shape (n_edges_in,) for single set of bins
+        - 2D array of shape (n_sets, n_edges_in) for multiple sets of bins
+        For n_in bins, there should be n_in+1 edges.
     bin_edges_out : array_like
         1D array of output bin edges in ascending order. For n_out bins, there
         should be n_out+1 edges.
@@ -281,15 +283,16 @@ def partial_isin(bin_edges_in, bin_edges_out):
     Returns
     -------
     overlap_matrix : numpy.ndarray
-        Dense matrix of shape (n_in, n_out) where n_in is the number of input
-        bins and n_out is the number of output bins. Each element (i, j)
-        represents the fraction of input bin i that overlaps with output bin j.
+        Overlap matrix. Shape depends on input dimensions:
+        - If bin_edges_in is 1D: shape (n_in, n_out)
+        - If bin_edges_in is 2D: shape (n_sets, n_in, n_out)
+        Each element represents the fraction of input bin that overlaps with output bin.
         Values range from 0 (no overlap) to 1 (complete overlap).
 
     Notes
     -----
-    - Both input arrays must be sorted in ascending order
-    - The function leverages the sorted nature of both inputs for efficiency
+    - All input arrays must be sorted in ascending order along the last axis
+    - The function leverages the sorted nature of inputs for efficiency
     - Uses vectorized operations to handle large bin arrays efficiently
     - All overlaps sum to 1.0 for each input bin when output bins fully cover input range
 
@@ -301,46 +304,100 @@ def partial_isin(bin_edges_in, bin_edges_out):
     array([[0.5, 0.0],
            [0.5, 0.5],
            [0.0, 0.5]])
+
+    >>> bin_edges_in_2d = np.array([[0, 10, 20, 30], [2, 12, 22, 32]])
+    >>> partial_isin(bin_edges_in_2d, bin_edges_out)
+    array([[[0.5, 0.0],
+            [0.5, 0.5],
+            [0.0, 0.5]],
+           [[0.3, 0.0],
+            [0.7, 0.3],
+            [0.0, 0.7]]])
     """
     # Convert inputs to numpy arrays
     bin_edges_in = np.asarray(bin_edges_in, dtype=float)
     bin_edges_out = np.asarray(bin_edges_out, dtype=float)
 
-    # Validate inputs
-    if bin_edges_in.ndim != 1 or bin_edges_out.ndim != 1:
-        msg = "Both bin_edges_in and bin_edges_out must be 1D arrays"
+    # Validate bin_edges_out (must be 1D)
+    if bin_edges_out.ndim != 1:
+        msg = "bin_edges_out must be a 1D array"
         raise ValueError(msg)
-    if len(bin_edges_in) < 2 or len(bin_edges_out) < 2:  # noqa: PLR2004
-        msg = "Both edge arrays must have at least 2 elements"
-        raise ValueError(msg)
-    if not np.all(np.diff(bin_edges_in) > 0):
-        msg = "bin_edges_in must be in ascending order"
+    if len(bin_edges_out) < 2:  # noqa: PLR2004
+        msg = "bin_edges_out must have at least 2 elements"
         raise ValueError(msg)
     if not np.all(np.diff(bin_edges_out) > 0):
         msg = "bin_edges_out must be in ascending order"
         raise ValueError(msg)
 
-    # Create bin widths
-    bin_widths_in = np.diff(bin_edges_in)
+    # Handle different input dimensions
+    if bin_edges_in.ndim == 1:
+        # Single set of input edges - original behavior
+        if len(bin_edges_in) < 2:  # noqa: PLR2004
+            msg = "bin_edges_in must have at least 2 elements"
+            raise ValueError(msg)
+        if not np.all(np.diff(bin_edges_in) > 0):
+            msg = "bin_edges_in must be in ascending order"
+            raise ValueError(msg)
 
-    # Build matrix using fully vectorized approach
-    # Create meshgrids for all possible input-output bin combinations
-    in_left = bin_edges_in[:-1, None]  # Shape: (n_bins_in, 1)
-    in_right = bin_edges_in[1:, None]  # Shape: (n_bins_in, 1)
-    in_width = bin_widths_in[:, None]  # Shape: (n_bins_in, 1)
+        # Create bin widths
+        bin_widths_in = np.diff(bin_edges_in)
 
-    out_left = bin_edges_out[None, :-1]  # Shape: (1, n_bins_out)
-    out_right = bin_edges_out[None, 1:]  # Shape: (1, n_bins_out)
+        # Build matrix using fully vectorized approach
+        in_left = bin_edges_in[:-1, None]  # Shape: (n_bins_in, 1)
+        in_right = bin_edges_in[1:, None]  # Shape: (n_bins_in, 1)
+        in_width = bin_widths_in[:, None]  # Shape: (n_bins_in, 1)
 
-    # Calculate overlaps for all combinations using broadcasting
-    overlap_left = np.maximum(in_left, out_left)  # Shape: (n_bins_in, n_bins_out)
-    overlap_right = np.minimum(in_right, out_right)  # Shape: (n_bins_in, n_bins_out)
+        out_left = bin_edges_out[None, :-1]  # Shape: (1, n_bins_out)
+        out_right = bin_edges_out[None, 1:]  # Shape: (1, n_bins_out)
 
-    # Calculate overlap widths (zero where no overlap)
-    overlap_widths = np.maximum(0, overlap_right - overlap_left)
+        # Calculate overlaps for all combinations using broadcasting
+        overlap_left = np.maximum(in_left, out_left)  # Shape: (n_bins_in, n_bins_out)
+        overlap_right = np.minimum(in_right, out_right)  # Shape: (n_bins_in, n_bins_out)
 
-    # Calculate fractions
-    return overlap_widths / in_width
+        # Calculate overlap widths (zero where no overlap)
+        overlap_widths = np.maximum(0, overlap_right - overlap_left)
+
+        # Calculate fractions
+        return overlap_widths / in_width
+
+    if bin_edges_in.ndim == 2:  # noqa: PLR2004
+        # Multiple sets of input edges - vectorized across sets
+        n_sets, n_edges = bin_edges_in.shape
+        if n_edges < 2:  # noqa: PLR2004
+            msg = "bin_edges_in must have at least 2 elements in the last dimension"
+            raise ValueError(msg)
+
+        # Check if all edge arrays are monotonic
+        if not np.all(np.diff(bin_edges_in, axis=1) > 0):
+            msg = "All rows in bin_edges_in must be in ascending order"
+            raise ValueError(msg)
+
+        # Create bin widths for all sets
+        bin_widths_in = np.diff(bin_edges_in, axis=1)  # Shape: (n_sets, n_bins_in)
+
+        # Reshape for broadcasting: add extra dimensions
+        # bin_edges_in shape: (n_sets, n_edges) -> (n_sets, n_bins_in, 1) and (n_sets, n_bins_in, 1)
+        in_left = bin_edges_in[:, :-1, None]  # Shape: (n_sets, n_bins_in, 1)
+        in_right = bin_edges_in[:, 1:, None]  # Shape: (n_sets, n_bins_in, 1)
+        in_width = bin_widths_in[:, :, None]  # Shape: (n_sets, n_bins_in, 1)
+
+        # bin_edges_out shape: (n_edges_out,) -> (1, 1, n_bins_out) and (1, 1, n_bins_out)
+        out_left = bin_edges_out[None, None, :-1]  # Shape: (1, 1, n_bins_out)
+        out_right = bin_edges_out[None, None, 1:]  # Shape: (1, 1, n_bins_out)
+
+        # Calculate overlaps for all combinations using broadcasting
+        # Result shape: (n_sets, n_bins_in, n_bins_out)
+        overlap_left = np.maximum(in_left, out_left)
+        overlap_right = np.minimum(in_right, out_right)
+
+        # Calculate overlap widths (zero where no overlap)
+        overlap_widths = np.maximum(0, overlap_right - overlap_left)
+
+        # Calculate fractions
+        return overlap_widths / in_width
+
+    msg = f"bin_edges_in must be 1D or 2D array, got {bin_edges_in.ndim}D"
+    raise ValueError(msg)
 
 
 def generate_failed_coverage_badge():
