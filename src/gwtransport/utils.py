@@ -261,71 +261,87 @@ def linear_average(  # noqa: C901
     return result
 
 
-def partial_isin(bin_edges, timespans):
+def partial_isin(bin_edges_in, bin_edges_out):
     """
-    Calculate the fraction of each bin that falls within each timespan.
+    Calculate the fraction of each input bin that overlaps with each output bin.
+
+    This function computes a matrix where element (i, j) represents the fraction
+    of input bin i that overlaps with output bin j. The computation uses
+    vectorized operations to avoid loops.
 
     Parameters
     ----------
-    bin_edges : array_like
-        1D array of bin edges in ascending order. For n bins, there should be n+1 edges.
-    timespans : array_like
-        Timespans as a 2D array of shape (m, 2) where m is the number of timespans and
-        each row contains [start, end] of a timespan.
+    bin_edges_in : array_like
+        1D array of input bin edges in ascending order. For n_in bins, there
+        should be n_in+1 edges.
+    bin_edges_out : array_like
+        1D array of output bin edges in ascending order. For n_out bins, there
+        should be n_out+1 edges.
 
     Returns
     -------
-    bin_fractions : ndarray
-        2D array of shape (m, n) where m is the number of timespans and n is the number of bins.
-        Each element (i, j) represents the fraction of bin j that falls within timespan i.
+    overlap_matrix : numpy.ndarray
+        Dense matrix of shape (n_in, n_out) where n_in is the number of input
+        bins and n_out is the number of output bins. Each element (i, j)
+        represents the fraction of input bin i that overlaps with output bin j.
+        Values range from 0 (no overlap) to 1 (complete overlap).
 
     Notes
     -----
-    - The function assumes bin_edges and timespans are in the same units.
-    - Bins are defined by their edges, i.e., bin j spans from bin_edges[j] to bin_edges[j+1].
-    - Values range from 0 (no overlap) to 1 (complete overlap).
+    - Both input arrays must be sorted in ascending order
+    - The function leverages the sorted nature of both inputs for efficiency
+    - Uses vectorized operations to handle large bin arrays efficiently
+    - All overlaps sum to 1.0 for each input bin when output bins fully cover input range
 
     Examples
     --------
-    >>> bin_edges = np.array([0, 10, 20, 30])
-    >>> timespans = np.array([[5, 25], [15, 35]])
-    >>> partial_isin(bin_edges, timespans)
-    array([[0.5, 1. , 0.5],
-           [0. , 0.5, 1. ]])
+    >>> bin_edges_in = np.array([0, 10, 20, 30])
+    >>> bin_edges_out = np.array([5, 15, 25])
+    >>> partial_isin(bin_edges_in, bin_edges_out)
+    array([[0.5, 0.0],
+           [0.5, 0.5],
+           [0.0, 0.5]])
     """
     # Convert inputs to numpy arrays
-    bin_edges = np.asarray(bin_edges)
-    timespans = np.asarray(timespans)
+    bin_edges_in = np.asarray(bin_edges_in, dtype=float)
+    bin_edges_out = np.asarray(bin_edges_out, dtype=float)
 
     # Validate inputs
-    if bin_edges.ndim != 1 or timespans.ndim != 2 or timespans.shape[1] != 2:  # noqa: PLR2004
-        msg = "Invalid input shapes: bin_edges must be 1D and timespans must be 2D with shape (m, 2)."
+    if bin_edges_in.ndim != 1 or bin_edges_out.ndim != 1:
+        msg = "Both bin_edges_in and bin_edges_out must be 1D arrays"
         raise ValueError(msg)
-    if not np.all(np.diff(bin_edges) > 0):
-        msg = "bin_edges must be in ascending order."
+    if len(bin_edges_in) < 2 or len(bin_edges_out) < 2:  # noqa: PLR2004
+        msg = "Both edge arrays must have at least 2 elements"
         raise ValueError(msg)
-    if not np.all(np.diff(timespans) > 0):
-        msg = "timespans must be in ascending order."
+    if not np.all(np.diff(bin_edges_in) > 0):
+        msg = "bin_edges_in must be in ascending order"
+        raise ValueError(msg)
+    if not np.all(np.diff(bin_edges_out) > 0):
+        msg = "bin_edges_out must be in ascending order"
         raise ValueError(msg)
 
-    # Calculate bin widths
-    bin_widths = np.diff(bin_edges)
+    # Create bin widths
+    bin_widths_in = np.diff(bin_edges_in)
 
-    # Calculate overlapping segments using broadcasting
-    left_edges = bin_edges[:-1][np.newaxis, :]
-    right_edges = bin_edges[1:][np.newaxis, :]
+    # Build matrix using fully vectorized approach
+    # Create meshgrids for all possible input-output bin combinations
+    in_left = bin_edges_in[:-1, None]    # Shape: (n_bins_in, 1)
+    in_right = bin_edges_in[1:, None]    # Shape: (n_bins_in, 1)
+    in_width = bin_widths_in[:, None]    # Shape: (n_bins_in, 1)
 
-    starts = timespans[:, 0][:, np.newaxis]
-    ends = timespans[:, 1][:, np.newaxis]
+    out_left = bin_edges_out[None, :-1]  # Shape: (1, n_bins_out)
+    out_right = bin_edges_out[None, 1:]  # Shape: (1, n_bins_out)
 
-    overlap_left = np.maximum(left_edges, starts)
-    overlap_right = np.minimum(right_edges, ends)
+    # Calculate overlaps for all combinations using broadcasting
+    overlap_left = np.maximum(in_left, out_left)   # Shape: (n_bins_in, n_bins_out)
+    overlap_right = np.minimum(in_right, out_right)  # Shape: (n_bins_in, n_bins_out)
 
-    # Calculate overlap widths (clip at 0 to handle non-overlapping cases)
+    # Calculate overlap widths (zero where no overlap)
     overlap_widths = np.maximum(0, overlap_right - overlap_left)
 
-    # Calculate fraction of each bin that overlaps with timespan
-    return overlap_widths / bin_widths[np.newaxis, :]
+    # Calculate fractions
+    return overlap_widths / in_width
+
 
 
 def generate_failed_coverage_badge():

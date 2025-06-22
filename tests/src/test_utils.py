@@ -6,7 +6,7 @@ from gwtransport.utils import (
     diff,
     linear_average,
     linear_interpolate,
-    partial_isin,  # Assuming the function is in partial_isin.py
+    partial_isin,
 )
 
 
@@ -277,163 +277,135 @@ def test_2d_x_edges():
 
 
 def test_basic_case():
-    """Test the basic case from the function's docstring example."""
-    bin_edges = np.array([0, 10, 20, 30])
-    timespans = np.array([[5, 25], [15, 35]])
-    expected = np.array([[0.5, 1.0, 0.5], [0.0, 0.5, 1.0]])
+    """Test the basic case with new interface."""
+    bin_edges_in = np.array([0, 10, 20, 30])
+    bin_edges_out = np.array([5, 15, 25])
+    expected = np.array([[0.5, 0.0], [0.5, 0.5], [0.0, 0.5]])
 
-    result = partial_isin(bin_edges, timespans)
+    result = partial_isin(bin_edges_in, bin_edges_out)
     assert_array_almost_equal(result, expected)
 
 
 def test_no_overlap():
-    """Test when there is no overlap between timespan and bins."""
-    bin_edges = np.array([0, 10, 20])
-    timespans = np.array([[30, 40]])
-    expected = np.array([[0.0, 0.0]])
+    """Test when there is no overlap between input and output bins."""
+    bin_edges_in = np.array([0, 10, 20])
+    bin_edges_out = np.array([30, 40, 50])
+    expected = np.array([[0.0, 0.0], [0.0, 0.0]])
 
-    result = partial_isin(bin_edges, timespans)
+    result = partial_isin(bin_edges_in, bin_edges_out)
     assert_array_almost_equal(result, expected)
 
 
 def test_complete_overlap():
-    """Test when timespan completely overlaps all bins."""
-    bin_edges = np.array([10, 20, 30, 40])
-    timespans = np.array([[0, 50]])
-    expected = np.array([[1.0, 1.0, 1.0]])
+    """Test when input bins completely overlap with output bins."""
+    bin_edges_in = np.array([0, 10, 20])
+    bin_edges_out = np.array([0, 10, 20])
+    expected = np.array([[1.0, 0.0], [0.0, 1.0]])
 
-    result = partial_isin(bin_edges, timespans)
+    result = partial_isin(bin_edges_in, bin_edges_out)
     assert_array_almost_equal(result, expected)
 
 
 def test_exact_bin_match():
-    """Test when timespan exactly matches a bin."""
-    bin_edges = np.array([0, 10, 20, 30])
-    timespans = np.array([[10, 20]])
-    expected = np.array([[0.0, 1.0, 0.0]])
+    """Test when input and output bins exactly match."""
+    bin_edges_in = np.array([10, 20, 30])
+    bin_edges_out = np.array([10, 20, 30])
+    expected = np.array([[1.0, 0.0], [0.0, 1.0]])
 
-    result = partial_isin(bin_edges, timespans)
+    result = partial_isin(bin_edges_in, bin_edges_out)
     assert_array_almost_equal(result, expected)
 
 
-def test_multiple_timespans():
-    """Test with multiple timespans of different sizes."""
-    bin_edges = np.array([0, 10, 20, 30, 40])
-    timespans = np.array([
-        [5, 15],  # Overlaps bins 0 and 1
-        [25, 35],  # Overlaps bins 2 and 3
-        [0, 40],  # Overlaps all bins
-    ])
-    expected = np.array([
-        [0.5, 0.5, 0.0, 0.0],
-        [0.0, 0.0, 0.5, 0.5],
-        [1.0, 1.0, 1.0, 1.0],
-    ])
+def test_multiple_bins():
+    """Test with multiple bins of different sizes."""
+    bin_edges_in = np.array([0, 10, 20, 30])
+    bin_edges_out = np.array([5, 12, 18, 25])
+    expected = np.array([[0.5, 0.0, 0.0], [0.2, 0.6, 0.2], [0.0, 0.0, 0.5]])
 
-    result = partial_isin(bin_edges, timespans)
+    result = partial_isin(bin_edges_in, bin_edges_out)
     assert_array_almost_equal(result, expected)
 
 
 def test_partial_overlaps():
     """Test various partial overlaps."""
-    bin_edges = np.array([0, 10, 20])
-    timespans = np.array([
-        [5, 15],  # 50% of bin 0, 50% of bin 1
-        [5, 10],  # 50% of bin, 0% of bin 1
-        [10, 15],  # 0% of bin 0, 50% of bin 1
-        [7.5, 12.5],  # 25% of bin 0, 25% of bin 1
-    ])
-    expected = np.array([
-        [0.5, 0.5],
-        [0.5, 0.0],
-        [0.0, 0.5],
-        [0.25, 0.25],
-    ])
+    bin_edges_in = np.array([0, 20])  # One large input bin
+    bin_edges_out = np.array([5, 10, 15])  # Two smaller output bins
+    expected = np.array([[0.25, 0.25]])  # 25% overlap with each output bin
 
-    result = partial_isin(bin_edges, timespans)
+    result = partial_isin(bin_edges_in, bin_edges_out)
     assert_array_almost_equal(result, expected)
 
 
 def test_list_inputs():
     """Test with list inputs instead of numpy arrays."""
-    bin_edges = [0, 10, 20, 30]
-    timespans = [[5, 25], [15, 35]]
-    expected = np.array([[0.5, 1.0, 0.5], [0.0, 0.5, 1.0]])
+    bin_edges_in = [0, 10, 20, 30]
+    bin_edges_out = [5, 15, 25]
+    expected = np.array([[0.5, 0.0], [0.5, 0.5], [0.0, 0.5]])
 
-    result = partial_isin(bin_edges, timespans)
+    result = partial_isin(bin_edges_in, bin_edges_out)
     assert_array_almost_equal(result, expected)
 
 
 def test_empty_inputs():
-    """Test with empty timespan list."""
-    bin_edges = np.array([0, 10, 20])
-    timespans = np.empty((0, 2))
+    """Test with minimal valid inputs."""
+    bin_edges_in = np.array([0, 10])
+    bin_edges_out = np.array([5, 15])
+    expected = np.array([[0.5]])
 
-    result = partial_isin(bin_edges, timespans)
-    assert result.shape == (0, 2)
-
-
-def test_single_bin():
-    """Test with a single bin."""
-    bin_edges = np.array([0, 10])
-    timespans = np.array([[5, 15], [0, 5]])
-    expected = np.array([
-        [0.5],
-        [0.5],
-    ])
-
-    result = partial_isin(bin_edges, timespans)
+    result = partial_isin(bin_edges_in, bin_edges_out)
     assert_array_almost_equal(result, expected)
 
 
-def test_timespan_at_edge():
-    """Test when timespan starts or ends exactly at bin edge."""
-    bin_edges = np.array([0, 10, 20, 30])
-    timespans = np.array([
-        [0, 15],  # Starts at first bin edge
-        [15, 30],  # Ends at last bin edge
-        [10, 20],  # Exactly matches middle bin
-    ])
-    expected = np.array([
-        [1.0, 0.5, 0.0],
-        [0.0, 0.5, 1.0],
-        [0.0, 1.0, 0.0],
-    ])
+def test_single_bin():
+    """Test with single input and output bins."""
+    bin_edges_in = np.array([0, 10])
+    bin_edges_out = np.array([5, 15])
+    expected = np.array([[0.5]])
 
-    result = partial_isin(bin_edges, timespans)
+    result = partial_isin(bin_edges_in, bin_edges_out)
+    assert_array_almost_equal(result, expected)
+
+
+def test_edge_alignment():
+    """Test when edges are perfectly aligned."""
+    bin_edges_in = np.array([0, 10, 20, 30])
+    bin_edges_out = np.array([0, 15, 30])
+    expected = np.array([[1.0, 0.0], [0.5, 0.5], [0.0, 1.0]])
+
+    result = partial_isin(bin_edges_in, bin_edges_out)
     assert_array_almost_equal(result, expected)
 
 
 def test_floating_point_precision():
-    """Test with floating point values that might have precision issues."""
-    bin_edges = np.array([0.1, 0.2, 0.3, 0.4])
-    timespans = np.array([[0.15, 0.35]])
-    expected = np.array([[0.5, 1.0, 0.5]])
+    """Test with floating point values."""
+    bin_edges_in = np.array([0.1, 0.3, 0.5])
+    bin_edges_out = np.array([0.2, 0.4])
+    expected = np.array([[0.5], [0.5]])
 
-    result = partial_isin(bin_edges, timespans)
+    result = partial_isin(bin_edges_in, bin_edges_out)
     assert_array_almost_equal(result, expected)
 
 
 def test_negative_values():
     """Test with negative values."""
-    bin_edges = np.array([-30, -20, -10, 0])
-    timespans = np.array([[-25, -5]])
-    expected = np.array([[0.5, 1.0, 0.5]])
+    bin_edges_in = np.array([-30, -20, -10])
+    bin_edges_out = np.array([-25, -15, -5])
+    expected = np.array([[0.5, 0.0], [0.5, 0.5]])
 
-    result = partial_isin(bin_edges, timespans)
+    result = partial_isin(bin_edges_in, bin_edges_out)
     assert_array_almost_equal(result, expected)
 
 
 def test_invalid_inputs():
-    """Test with invalid inputs."""
-    # Test with unsorted bin edges
-    bin_edges = np.array([30, 20, 10, 0])  # Descending order
-    timespans = np.array([[5, 15]])
-    with pytest.raises(Exception):  # Could be ValueError or AssertionError depending on implementation  # noqa: B017
-        partial_isin(bin_edges, timespans)
+    """Test with invalid inputs for new interface."""
+    # Test with unsorted input edges
+    bin_edges_in = np.array([30, 20, 10])  # Descending order
+    bin_edges_out = np.array([5, 15, 25])
+    with pytest.raises(ValueError, match="bin_edges_in must be in ascending order"):
+        partial_isin(bin_edges_in, bin_edges_out)
 
-    # Test with timespan where end is before start
-    bin_edges = np.array([0, 10, 20])
-    timespans = np.array([[15, 5]])  # End before start
-    with pytest.raises(Exception):  # Could be ValueError or AssertionError  # noqa: B017
-        partial_isin(bin_edges, timespans)
+    # Test with unsorted output edges
+    bin_edges_in = np.array([0, 10, 20])
+    bin_edges_out = np.array([25, 15, 5])  # Descending order
+    with pytest.raises(ValueError, match="bin_edges_out must be in ascending order"):
+        partial_isin(bin_edges_in, bin_edges_out)
