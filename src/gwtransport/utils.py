@@ -325,15 +325,15 @@ def partial_isin(bin_edges_in, bin_edges_out):
 
     # Build matrix using fully vectorized approach
     # Create meshgrids for all possible input-output bin combinations
-    in_left = bin_edges_in[:-1, None]    # Shape: (n_bins_in, 1)
-    in_right = bin_edges_in[1:, None]    # Shape: (n_bins_in, 1)
-    in_width = bin_widths_in[:, None]    # Shape: (n_bins_in, 1)
+    in_left = bin_edges_in[:-1, None]  # Shape: (n_bins_in, 1)
+    in_right = bin_edges_in[1:, None]  # Shape: (n_bins_in, 1)
+    in_width = bin_widths_in[:, None]  # Shape: (n_bins_in, 1)
 
     out_left = bin_edges_out[None, :-1]  # Shape: (1, n_bins_out)
     out_right = bin_edges_out[None, 1:]  # Shape: (1, n_bins_out)
 
     # Calculate overlaps for all combinations using broadcasting
-    overlap_left = np.maximum(in_left, out_left)   # Shape: (n_bins_in, n_bins_out)
+    overlap_left = np.maximum(in_left, out_left)  # Shape: (n_bins_in, n_bins_out)
     overlap_right = np.minimum(in_right, out_right)  # Shape: (n_bins_in, n_bins_out)
 
     # Calculate overlap widths (zero where no overlap)
@@ -341,7 +341,6 @@ def partial_isin(bin_edges_in, bin_edges_out):
 
     # Calculate fractions
     return overlap_widths / in_width
-
 
 
 def generate_failed_coverage_badge():
