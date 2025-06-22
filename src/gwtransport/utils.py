@@ -351,6 +351,110 @@ def generate_failed_coverage_badge():
     b.write_to("coverage_failed.svg", use_shields=False)
 
 
+def combine_bin_series(a, a_edges, b, b_edges, extrapolation=0.0):
+    """
+    Combine two binned series onto a common set of unique edges.
+
+    This function takes two binned series (a and b) with their respective bin edges
+    and creates new series (c and d) that are defined on a combined set of unique
+    edges from both input edge arrays.
+
+    Parameters
+    ----------
+    a : array-like
+        Values for the first binned series.
+    a_edges : array-like
+        Bin edges for the first series. Must have len(a) + 1 elements.
+    b : array-like
+        Values for the second binned series.
+    b_edges : array-like
+        Bin edges for the second series. Must have len(b) + 1 elements.
+    extrapolation : str or float, optional
+        Method for handling combined bins that fall outside the original series ranges.
+        - 'nearest': Use the nearest original bin value
+        - float value (e.g., np.nan, 0.0): Fill with the specified value (default: 0.0)
+
+    Returns
+    -------
+    c : numpy.ndarray
+        Values from series a mapped to the combined edge structure.
+    c_edges : numpy.ndarray
+        Combined unique edges from a_edges and b_edges.
+    d : numpy.ndarray
+        Values from series b mapped to the combined edge structure.
+    d_edges : numpy.ndarray
+        Combined unique edges from a_edges and b_edges (same as c_edges).
+
+    Notes
+    -----
+    The combined edges are created by taking the union of all unique values
+    from both a_edges and b_edges, sorted in ascending order. The values
+    are then broadcasted/repeated for each combined bin that falls within
+    the original bin's range.
+    """
+    # Convert inputs to numpy arrays
+    a = np.asarray(a, dtype=float)
+    a_edges = np.asarray(a_edges, dtype=float)
+    b = np.asarray(b, dtype=float)
+    b_edges = np.asarray(b_edges, dtype=float)
+
+    # Validate inputs
+    if len(a_edges) != len(a) + 1:
+        msg = "a_edges must have len(a) + 1 elements"
+        raise ValueError(msg)
+    if len(b_edges) != len(b) + 1:
+        msg = "b_edges must have len(b) + 1 elements"
+        raise ValueError(msg)
+
+    # Create combined unique edges
+    combined_edges = np.unique(np.concatenate([a_edges, b_edges]))
+
+    # Initialize output arrays
+    c = np.zeros(len(combined_edges) - 1)
+    d = np.zeros(len(combined_edges) - 1)
+
+    # Vectorized mapping using searchsorted - find which original bin each combined bin belongs to
+    # For series a: find which original bin each combined bin center falls into
+    combined_bin_centers = (combined_edges[:-1] + combined_edges[1:]) / 2
+    a_bin_assignment = np.searchsorted(a_edges, combined_bin_centers, side="right") - 1
+    a_bin_assignment = np.clip(a_bin_assignment, 0, len(a) - 1)
+
+    # Handle extrapolation for series a
+    if extrapolation == "nearest":
+        # Assign all values using nearest neighbor (already clipped)
+        c[:] = a[a_bin_assignment]
+    else:
+        # Only assign values where the combined bin is completely within the original bin
+        a_valid_mask = (combined_edges[:-1] >= a_edges[a_bin_assignment]) & (
+            combined_edges[1:] <= a_edges[a_bin_assignment + 1]
+        )
+        c[a_valid_mask] = a[a_bin_assignment[a_valid_mask]]
+        # Fill out-of-range bins with extrapolation value
+        c[~a_valid_mask] = extrapolation
+
+    # Handle extrapolation for series b
+    b_bin_assignment = np.searchsorted(b_edges, combined_bin_centers, side="right") - 1
+    b_bin_assignment = np.clip(b_bin_assignment, 0, len(b) - 1)
+
+    if extrapolation == "nearest":
+        # Assign all values using nearest neighbor (already clipped)
+        d[:] = b[b_bin_assignment]
+    else:
+        # Only assign values where the combined bin is completely within the original bin
+        b_valid_mask = (combined_edges[:-1] >= b_edges[b_bin_assignment]) & (
+            combined_edges[1:] <= b_edges[b_bin_assignment + 1]
+        )
+        d[b_valid_mask] = b[b_bin_assignment[b_valid_mask]]
+        # Fill out-of-range bins with extrapolation value
+        d[~b_valid_mask] = extrapolation
+
+    # Return the combined series
+    c_edges = combined_edges
+    d_edges = combined_edges.copy()
+
+    return c, c_edges, d, d_edges
+
+
 def compute_time_edges(tedges, tstart, tend, number_of_bins):
     """
     Compute time edges for binning data based on provided time parameters.

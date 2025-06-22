@@ -3,6 +3,7 @@ import pytest
 from numpy.testing import assert_array_almost_equal
 
 from gwtransport.utils import (
+    combine_bin_series,
     diff,
     linear_average,
     linear_interpolate,
@@ -409,3 +410,362 @@ def test_invalid_inputs():
     bin_edges_out = np.array([25, 15, 5])  # Descending order
     with pytest.raises(ValueError, match="bin_edges_out must be in ascending order"):
         partial_isin(bin_edges_in, bin_edges_out)
+
+
+def test_combine_bin_series_basic():
+    """Test basic functionality of combine_bin_series."""
+    # Simple case: non-overlapping bins
+    a = np.array([1.0, 2.0])
+    a_edges = np.array([0.0, 1.0, 2.0])
+    b = np.array([3.0, 4.0])
+    b_edges = np.array([1.0, 1.5, 2.0])
+
+    c, c_edges, d, d_edges = combine_bin_series(a, a_edges, b, b_edges)
+
+    # Expected combined edges: [0, 1, 1.5, 2]
+    expected_edges = np.array([0.0, 1.0, 1.5, 2.0])
+    assert_array_almost_equal(c_edges, expected_edges)
+    assert_array_almost_equal(d_edges, expected_edges)
+
+    # Expected values for c: [1, 2, 2] (a[0] broadcasts to first bin, a[1] broadcasts to bins 2&3)
+    # Expected values for d: [0, 3, 4] (b[0] broadcasts to second bin, b[1] broadcasts to third bin)
+    expected_c = np.array([1.0, 2.0, 2.0])
+    expected_d = np.array([0.0, 3.0, 4.0])
+    assert_array_almost_equal(c, expected_c)
+    assert_array_almost_equal(d, expected_d)
+
+
+def test_combine_bin_series_identical_edges():
+    """Test combine_bin_series when both series have identical edges."""
+    a = np.array([1.0, 2.0, 3.0])
+    a_edges = np.array([0.0, 1.0, 2.0, 3.0])
+    b = np.array([4.0, 5.0, 6.0])
+    b_edges = np.array([0.0, 1.0, 2.0, 3.0])
+
+    c, c_edges, d, d_edges = combine_bin_series(a, a_edges, b, b_edges)
+
+    # Edges should remain the same
+    expected_edges = np.array([0.0, 1.0, 2.0, 3.0])
+    assert_array_almost_equal(c_edges, expected_edges)
+    assert_array_almost_equal(d_edges, expected_edges)
+
+    # Values should be preserved
+    assert_array_almost_equal(c, a)
+    assert_array_almost_equal(d, b)
+
+
+def test_combine_bin_series_overlapping_bins():
+    """Test combine_bin_series with overlapping bin structures."""
+    a = np.array([10.0, 20.0])
+    a_edges = np.array([0.0, 5.0, 10.0])
+    b = np.array([30.0, 40.0])
+    b_edges = np.array([2.0, 7.0, 12.0])
+
+    c, c_edges, d, d_edges = combine_bin_series(a, a_edges, b, b_edges)
+
+    # Expected combined edges: [0, 2, 5, 7, 10, 12]
+    expected_edges = np.array([0.0, 2.0, 5.0, 7.0, 10.0, 12.0])
+    assert_array_almost_equal(c_edges, expected_edges)
+    assert_array_almost_equal(d_edges, expected_edges)
+
+    # Test that the values are broadcasted/repeated correctly
+    # a[0]=10 covers [0,5]: broadcasts to bins [0,2] and [2,5]
+    # a[1]=20 covers [5,10]: broadcasts to bins [5,7] and [7,10]
+    # b[0]=30 covers [2,7]: broadcasts to bins [2,5] and [5,7]
+    # b[1]=40 covers [7,12]: broadcasts to bins [7,10] and [10,12]
+    expected_c = np.array([10.0, 10.0, 20.0, 20.0, 0.0])
+    expected_d = np.array([0.0, 30.0, 30.0, 40.0, 40.0])
+    assert_array_almost_equal(c, expected_c)
+    assert_array_almost_equal(d, expected_d)
+
+
+def test_combine_bin_series_single_bins():
+    """Test combine_bin_series with single bins."""
+    a = np.array([5.0])
+    a_edges = np.array([0.0, 2.0])
+    b = np.array([10.0])
+    b_edges = np.array([1.0, 3.0])
+
+    c, c_edges, d, d_edges = combine_bin_series(a, a_edges, b, b_edges)
+
+    # Expected combined edges: [0, 1, 2, 3]
+    expected_edges = np.array([0.0, 1.0, 2.0, 3.0])
+    assert_array_almost_equal(c_edges, expected_edges)
+    assert_array_almost_equal(d_edges, expected_edges)
+
+    # a=5 covers [0,2]: broadcasts to [0,1] and [1,2]
+    # b=10 covers [1,3]: broadcasts to [1,2] and [2,3]
+    expected_c = np.array([5.0, 5.0, 0.0])
+    expected_d = np.array([0.0, 10.0, 10.0])
+    assert_array_almost_equal(c, expected_c)
+    assert_array_almost_equal(d, expected_d)
+
+
+def test_combine_bin_series_nested_bins():
+    """Test combine_bin_series where one series is nested within another."""
+    a = np.array([100.0])
+    a_edges = np.array([0.0, 10.0])
+    b = np.array([20.0, 30.0])
+    b_edges = np.array([2.0, 5.0, 8.0])
+
+    c, c_edges, d, d_edges = combine_bin_series(a, a_edges, b, b_edges)
+
+    # Expected combined edges: [0, 2, 5, 8, 10]
+    expected_edges = np.array([0.0, 2.0, 5.0, 8.0, 10.0])
+    assert_array_almost_equal(c_edges, expected_edges)
+    assert_array_almost_equal(d_edges, expected_edges)
+
+    # a=100 covers [0,10]: broadcasts to all combined bins within its range
+    # b[0]=20 covers [2,5] and b[1]=30 covers [5,8]
+    expected_c = np.array([100.0, 100.0, 100.0, 100.0])
+    expected_d = np.array([0.0, 20.0, 30.0, 0.0])
+    assert_array_almost_equal(c, expected_c)
+    assert_array_almost_equal(d, expected_d)
+
+
+def test_combine_bin_series_non_overlapping():
+    """Test combine_bin_series with completely non-overlapping bins."""
+    a = np.array([1.0, 2.0])
+    a_edges = np.array([0.0, 1.0, 2.0])
+    b = np.array([3.0, 4.0])
+    b_edges = np.array([3.0, 4.0, 5.0])
+
+    c, c_edges, d, d_edges = combine_bin_series(a, a_edges, b, b_edges)
+
+    # Expected combined edges: [0, 1, 2, 3, 4, 5]
+    expected_edges = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+    assert_array_almost_equal(c_edges, expected_edges)
+    assert_array_almost_equal(d_edges, expected_edges)
+
+    # a maps to first two bins, b maps to last two bins
+    expected_c = np.array([1.0, 2.0, 0.0, 0.0, 0.0])
+    expected_d = np.array([0.0, 0.0, 0.0, 3.0, 4.0])
+    assert_array_almost_equal(c, expected_c)
+    assert_array_almost_equal(d, expected_d)
+
+
+def test_combine_bin_series_zero_values():
+    """Test combine_bin_series with zero values."""
+    a = np.array([0.0, 5.0])
+    a_edges = np.array([0.0, 1.0, 2.0])
+    b = np.array([3.0, 0.0])
+    b_edges = np.array([0.5, 1.5, 2.5])
+
+    c, c_edges, d, d_edges = combine_bin_series(a, a_edges, b, b_edges)
+
+    # Expected combined edges: [0, 0.5, 1, 1.5, 2, 2.5]
+    expected_edges = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 2.5])
+    assert_array_almost_equal(c_edges, expected_edges)
+    assert_array_almost_equal(d_edges, expected_edges)
+
+    # Check that zero values are preserved and broadcasted correctly
+    expected_c = np.array([0.0, 0.0, 5.0, 5.0, 0.0])
+    expected_d = np.array([0.0, 3.0, 3.0, 0.0, 0.0])
+    assert_array_almost_equal(c, expected_c)
+    assert_array_almost_equal(d, expected_d)
+
+
+def test_combine_bin_series_floating_point():
+    """Test combine_bin_series with floating point precision."""
+    a = np.array([1.1, 2.2])
+    a_edges = np.array([0.1, 1.1, 2.1])
+    b = np.array([3.3, 4.4])
+    b_edges = np.array([0.6, 1.6, 2.6])
+
+    c, c_edges, d, d_edges = combine_bin_series(a, a_edges, b, b_edges)
+
+    # Expected combined edges: [0.1, 0.6, 1.1, 1.6, 2.1, 2.6]
+    expected_edges = np.array([0.1, 0.6, 1.1, 1.6, 2.1, 2.6])
+    assert_array_almost_equal(c_edges, expected_edges)
+    assert_array_almost_equal(d_edges, expected_edges)
+
+    # Test with appropriate precision and broadcasting
+    expected_c = np.array([1.1, 1.1, 2.2, 2.2, 0.0])
+    expected_d = np.array([0.0, 3.3, 3.3, 4.4, 4.4])
+    assert_array_almost_equal(c, expected_c, decimal=10)
+    assert_array_almost_equal(d, expected_d, decimal=10)
+
+
+def test_combine_bin_series_input_validation():
+    """Test input validation for combine_bin_series."""
+    # Test mismatched array lengths
+    a = np.array([1.0, 2.0])
+    a_edges = np.array([0.0, 1.0])  # Should have 3 elements for 2 bins
+    b = np.array([3.0])
+    b_edges = np.array([1.0, 2.0])
+
+    with pytest.raises(ValueError, match="a_edges must have len\\(a\\) \\+ 1 elements"):
+        combine_bin_series(a, a_edges, b, b_edges)
+
+    # Test mismatched b array lengths
+    a = np.array([1.0])
+    a_edges = np.array([0.0, 1.0])
+    b = np.array([3.0, 4.0])
+    b_edges = np.array([1.0, 2.0])  # Should have 3 elements for 2 bins
+
+    with pytest.raises(ValueError, match="b_edges must have len\\(b\\) \\+ 1 elements"):
+        combine_bin_series(a, a_edges, b, b_edges)
+
+
+def test_combine_bin_series_list_inputs():
+    """Test combine_bin_series with list inputs."""
+    a = [1.0, 2.0]
+    a_edges = [0.0, 1.0, 2.0]
+    b = [3.0, 4.0]
+    b_edges = [1.5, 2.5, 3.5]
+
+    c, c_edges, d, d_edges = combine_bin_series(a, a_edges, b, b_edges)
+
+    # Should work with list inputs and return numpy arrays
+    assert isinstance(c, np.ndarray)
+    assert isinstance(c_edges, np.ndarray)
+    assert isinstance(d, np.ndarray)
+    assert isinstance(d_edges, np.ndarray)
+
+    # Expected combined edges: [0, 1, 1.5, 2, 2.5, 3.5]
+    expected_edges = np.array([0.0, 1.0, 1.5, 2.0, 2.5, 3.5])
+    assert_array_almost_equal(c_edges, expected_edges)
+    assert_array_almost_equal(d_edges, expected_edges)
+
+
+def test_combine_bin_series_negative_values():
+    """Test combine_bin_series with negative values."""
+    a = np.array([-5.0, -2.0])
+    a_edges = np.array([-10.0, -3.0, 0.0])
+    b = np.array([1.0, 4.0])
+    b_edges = np.array([-1.0, 2.0, 5.0])
+
+    c, c_edges, d, d_edges = combine_bin_series(a, a_edges, b, b_edges)
+
+    # Expected combined edges: [-10, -3, -1, 0, 2, 5]
+    expected_edges = np.array([-10.0, -3.0, -1.0, 0.0, 2.0, 5.0])
+    assert_array_almost_equal(c_edges, expected_edges)
+    assert_array_almost_equal(d_edges, expected_edges)
+
+    # Test correct mapping with negative values and broadcasting
+    expected_c = np.array([-5.0, -2.0, -2.0, 0.0, 0.0])
+    expected_d = np.array([0.0, 0.0, 1.0, 1.0, 4.0])
+    assert_array_almost_equal(c, expected_c)
+    assert_array_almost_equal(d, expected_d)
+
+
+def test_combine_bin_series_empty_arrays():
+    """Test combine_bin_series with minimal valid inputs."""
+    a = np.array([42.0])
+    a_edges = np.array([0.0, 1.0])
+    b = np.array([24.0])
+    b_edges = np.array([0.5, 1.5])
+
+    c, c_edges, d, d_edges = combine_bin_series(a, a_edges, b, b_edges)
+
+    # Expected combined edges: [0, 0.5, 1, 1.5]
+    expected_edges = np.array([0.0, 0.5, 1.0, 1.5])
+    assert_array_almost_equal(c_edges, expected_edges)
+    assert_array_almost_equal(d_edges, expected_edges)
+
+    expected_c = np.array([42.0, 42.0, 0.0])
+    expected_d = np.array([0.0, 24.0, 24.0])
+    assert_array_almost_equal(c, expected_c)
+    assert_array_almost_equal(d, expected_d)
+
+
+def test_combine_bin_series_extrapolation_nearest():
+    """Test combine_bin_series with nearest extrapolation."""
+    a = np.array([1.0, 2.0])
+    a_edges = np.array([1.0, 2.0, 3.0])
+    b = np.array([10.0, 20.0])
+    b_edges = np.array([2.0, 3.0, 4.0])
+
+    c, c_edges, d, d_edges = combine_bin_series(a, a_edges, b, b_edges, extrapolation="nearest")
+
+    # Expected combined edges: [1, 2, 3, 4]
+    expected_edges = np.array([1.0, 2.0, 3.0, 4.0])
+    assert_array_almost_equal(c_edges, expected_edges)
+    assert_array_almost_equal(d_edges, expected_edges)
+
+    # With nearest extrapolation:
+    # c extends to all bins using nearest values
+    # d extends to all bins using nearest values
+    expected_c = np.array([1.0, 2.0, 2.0])  # nearest for [3,4] is a[1]=2.0
+    expected_d = np.array([10.0, 10.0, 20.0])  # nearest for [1,2] is b[0]=10.0
+    assert_array_almost_equal(c, expected_c)
+    assert_array_almost_equal(d, expected_d)
+
+
+def test_combine_bin_series_extrapolation_nan():
+    """Test combine_bin_series with nan extrapolation."""
+    a = np.array([1.0, 2.0])
+    a_edges = np.array([1.0, 2.0, 3.0])
+    b = np.array([10.0, 20.0])
+    b_edges = np.array([2.0, 3.0, 4.0])
+
+    c, c_edges, d, d_edges = combine_bin_series(a, a_edges, b, b_edges, extrapolation=np.nan)
+
+    # Expected combined edges: [1, 2, 3, 4]
+    expected_edges = np.array([1.0, 2.0, 3.0, 4.0])
+    assert_array_almost_equal(c_edges, expected_edges)
+    assert_array_almost_equal(d_edges, expected_edges)
+
+    # With nan extrapolation:
+    # Out-of-range bins get nan values
+    expected_c = np.array([1.0, 2.0, np.nan])  # [3,4] is out of range for a
+    expected_d = np.array([np.nan, 10.0, 20.0])  # [1,2] is out of range for b
+    assert_array_almost_equal(c, expected_c)
+    assert_array_almost_equal(d, expected_d)
+
+
+def test_combine_bin_series_extrapolation_custom_value():
+    """Test combine_bin_series with custom extrapolation value."""
+    a = np.array([1.0, 2.0])
+    a_edges = np.array([1.0, 2.0, 3.0])
+    b = np.array([10.0, 20.0])
+    b_edges = np.array([2.0, 3.0, 4.0])
+
+    c, c_edges, d, d_edges = combine_bin_series(a, a_edges, b, b_edges, extrapolation=-999.0)
+
+    # Expected combined edges: [1, 2, 3, 4]
+    expected_edges = np.array([1.0, 2.0, 3.0, 4.0])
+    assert_array_almost_equal(c_edges, expected_edges)
+    assert_array_almost_equal(d_edges, expected_edges)
+
+    # With custom extrapolation value:
+    # Out-of-range bins get the custom value
+    expected_c = np.array([1.0, 2.0, -999.0])  # [3,4] is out of range for a
+    expected_d = np.array([-999.0, 10.0, 20.0])  # [1,2] is out of range for b
+    assert_array_almost_equal(c, expected_c)
+    assert_array_almost_equal(d, expected_d)
+
+
+def test_combine_bin_series_extrapolation_default_behavior():
+    """Test that default extrapolation preserves backward compatibility."""
+    a = np.array([1.0, 2.0])
+    a_edges = np.array([1.0, 2.0, 3.0])
+    b = np.array([10.0, 20.0])
+    b_edges = np.array([2.0, 3.0, 4.0])
+
+    # Default behavior should be equivalent to extrapolation=0.0
+    c1, c_edges1, d1, d_edges1 = combine_bin_series(a, a_edges, b, b_edges)
+    c2, c_edges2, d2, d_edges2 = combine_bin_series(a, a_edges, b, b_edges, extrapolation=0.0)
+
+    assert_array_almost_equal(c1, c2)
+    assert_array_almost_equal(d1, d2)
+    assert_array_almost_equal(c_edges1, c_edges2)
+    assert_array_almost_equal(d_edges1, d_edges2)
+
+
+def test_combine_bin_series_extrapolation_no_out_of_range():
+    """Test extrapolation when there are no out-of-range bins."""
+    a = np.array([1.0, 2.0])
+    a_edges = np.array([0.0, 1.0, 2.0])
+    b = np.array([3.0, 4.0])
+    b_edges = np.array([0.0, 1.0, 2.0])
+
+    # When series have identical ranges, extrapolation method shouldn't matter
+    c1, _, d1, _ = combine_bin_series(a, a_edges, b, b_edges, extrapolation="nearest")
+    c2, _, d2, _ = combine_bin_series(a, a_edges, b, b_edges, extrapolation=np.nan)
+    c3, _, d3, _ = combine_bin_series(a, a_edges, b, b_edges, extrapolation=0.0)
+
+    assert_array_almost_equal(c1, c2)
+    assert_array_almost_equal(c1, c3)
+    assert_array_almost_equal(d1, d2)
+    assert_array_almost_equal(d1, d3)
