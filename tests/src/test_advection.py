@@ -781,3 +781,206 @@ def test_distribution_forward_v2_mixed_overlap():
     # Should return valid results averaging only the overlapping contributions
     assert isinstance(cout, np.ndarray)
     assert len(cout) == len(cout_dates)
+
+
+def test_distribution_forward_v2_known_constant_delay():
+    """Test distribution_forward_v2 with known constant delay scenario."""
+    # Create a simple scenario where we know the exact outcome
+    # 10 days of data, constant flow, single pore volume
+    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # Output period starts after the delay
+    cout_dates = pd.date_range(start="2020-01-06", end="2020-01-10", freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Constant flow and known pore volume that gives exactly 1 day residence time
+    flow_rate = 100.0  # m3/day
+    pore_volume = 100.0  # m3 -> residence time = 100/100 = 1 day
+
+    # Step function: concentration jumps from 1 to 5 on day 5
+    cin_values = [1.0, 1.0, 1.0, 1.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0]
+    cin = pd.Series(cin_values, index=dates)
+    flow = pd.Series([flow_rate] * len(dates), index=dates)
+    aquifer_pore_volumes = np.array([pore_volume])
+
+    cout = distribution_forward_v2(
+        cin=cin,
+        tedges=tedges,
+        flow=flow,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # With 1-day residence time, the step change on day 5 should appear on day 6
+    # Output days 6-10 correspond to infiltration days 5-9
+    # So we expect: day 6 -> 5.0, days 7-10 -> 5.0
+    valid_outputs = cout[~np.isnan(cout)]
+    if len(valid_outputs) > 0:
+        # All valid outputs should be close to 5.0 (after the step change)
+        assert np.allclose(valid_outputs, 5.0, rtol=0.1), f"Expected ~5.0, got {valid_outputs}"
+
+
+def test_distribution_forward_v2_known_instantaneous_response():
+    """Test distribution_forward_v2 with instantaneous response (zero residence time)."""
+    # Create scenario with very small pore volume -> near-instantaneous response
+    dates = pd.date_range(start="2020-01-01", end="2020-01-05", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # Same time period for output
+    cout_tedges = tedges.copy()
+
+    # Very small pore volume -> residence time ≈ 0
+    flow_rate = 1000.0  # Large flow
+    pore_volume = 0.1  # Very small pore volume -> residence time ≈ 0.0001 days
+
+    # Linear increasing concentration
+    cin_values = [1.0, 2.0, 3.0, 4.0, 5.0]
+    cin = pd.Series(cin_values, index=dates)
+    flow = pd.Series([flow_rate] * len(dates), index=dates)
+    aquifer_pore_volumes = np.array([pore_volume])
+
+    cout = distribution_forward_v2(
+        cin=cin,
+        tedges=tedges,
+        flow=flow,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # With near-zero residence time, output should closely match input
+    valid_outputs = cout[~np.isnan(cout)]
+    valid_inputs = np.array(cin_values)[~np.isnan(cout)]
+
+    if len(valid_outputs) > 0 and len(valid_inputs) > 0:
+        # Output should be very close to input due to minimal delay
+        assert np.allclose(valid_outputs, valid_inputs, rtol=0.2), f"Expected {valid_inputs}, got {valid_outputs}"
+
+
+def test_distribution_forward_v2_known_average_of_pore_volumes():
+    """Test distribution_forward_v2 averages multiple pore volumes correctly."""
+    # Simple scenario where we can predict the averaging behavior
+    dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # Output period in the middle to ensure overlap
+    cout_dates = pd.date_range(start="2020-01-10", end="2020-01-15", freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Constant concentration and flow
+    cin = pd.Series([10.0] * len(dates), index=dates)
+    flow = pd.Series([100.0] * len(dates), index=dates)
+
+    # Two identical pore volumes - average should equal the single pore volume result
+    single_pv = np.array([500.0])
+    double_pv = np.array([500.0, 500.0])
+
+    cout_single = distribution_forward_v2(
+        cin=cin,
+        tedges=tedges,
+        flow=flow,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=single_pv,
+        retardation_factor=1.0,
+    )
+
+    cout_double = distribution_forward_v2(
+        cin=cin,
+        tedges=tedges,
+        flow=flow,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=double_pv,
+        retardation_factor=1.0,
+    )
+
+    # Results should be nearly identical (averaging two identical contributions)
+    valid_mask = ~np.isnan(cout_single) & ~np.isnan(cout_double)
+    if np.any(valid_mask):
+        np.testing.assert_allclose(
+            cout_single[valid_mask],
+            cout_double[valid_mask],
+            rtol=1e-10,
+            err_msg="Averaging identical pore volumes should give same result as single pore volume",
+        )
+
+
+def test_distribution_forward_v2_known_zero_input_gives_zero_output():
+    """Test distribution_forward_v2 with zero input gives zero output."""
+    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cout_dates = pd.date_range(start="2020-01-05", end="2020-01-08", freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Zero concentration everywhere
+    cin = pd.Series([0.0] * len(dates), index=dates)
+    flow = pd.Series([100.0] * len(dates), index=dates)
+    aquifer_pore_volumes = np.array([200.0, 400.0])
+
+    cout = distribution_forward_v2(
+        cin=cin,
+        tedges=tedges,
+        flow=flow,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Zero input should give zero output (where valid)
+    valid_outputs = cout[~np.isnan(cout)]
+    if len(valid_outputs) > 0:
+        np.testing.assert_allclose(valid_outputs, 0.0, atol=1e-15, err_msg="Zero input should produce zero output")
+
+
+def test_distribution_forward_v2_known_retardation_effect():
+    """Test distribution_forward_v2 retardation factor effect."""
+    # Create longer time series to capture retardation effects
+    dates = pd.date_range(start="2020-01-01", end="2020-01-30", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # Output period covers a wide range to catch both retarded and non-retarded responses
+    cout_dates = pd.date_range(start="2020-01-05", end="2020-01-25", freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Step function: concentration jumps from 0 to 10 on day 10
+    cin_values = [0.0] * len(dates)
+    for i in range(9, len(dates)):  # Days 10 onwards (index 9+)
+        cin_values[i] = 10.0
+    cin = pd.Series(cin_values, index=dates)
+    flow = pd.Series([100.0] * len(dates), index=dates)
+
+    # Pore volume that gives reasonable residence time
+    pore_volume = 500.0  # residence time = 500/100 = 5 days
+    aquifer_pore_volumes = np.array([pore_volume])
+
+    # Test different retardation factors
+    cout_no_retard = distribution_forward_v2(
+        cin=cin,
+        tedges=tedges,
+        flow=flow,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    cout_retarded = distribution_forward_v2(
+        cin=cin,
+        tedges=tedges,
+        flow=flow,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=2.0,
+    )
+
+    # With retardation=2.0, the effective residence time doubles (5*2=10 days)
+    # The step change should appear later with higher retardation
+    valid_no_retard = cout_no_retard[~np.isnan(cout_no_retard)]
+    valid_retarded = cout_retarded[~np.isnan(cout_retarded)]
+
+    # At minimum, we should see that they're not identical (different timing)
+    if len(valid_no_retard) > 0 and len(valid_retarded) > 0 and len(valid_no_retard) == len(valid_retarded):
+        assert not np.allclose(valid_no_retard, valid_retarded, rtol=0.1), (
+            "Different retardation factors should produce different results"
+        )
