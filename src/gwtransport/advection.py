@@ -16,14 +16,13 @@ Main functions:
 - distribution_forward: Similar to forward, but for an arbitrairy distribution of aquifer pore volumes.
 """
 
-import warnings
 
 import numpy as np
 import pandas as pd
 
 from gwtransport import gamma
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import compute_time_edges, interp_series, linear_interpolate, partial_isin
+from gwtransport.utils import compute_time_edges, interp_series, partial_isin
 
 
 def forward(cin_series, flow_series, aquifer_pore_volume, retardation_factor=1.0, cout_index="cin"):
@@ -56,6 +55,43 @@ def forward(cin_series, flow_series, aquifer_pore_volume, retardation_factor=1.0
     -------
     numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3].
+
+    Examples
+    --------
+    Basic usage with single pore volume:
+
+    >>> import pandas as pd
+    >>> import numpy as np
+    >>> from gwtransport.advection import forward
+    >>>
+    >>> # Create input data
+    >>> dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    >>> cin = pd.Series(np.ones(len(dates)), index=dates)
+    >>> flow = pd.Series(np.ones(len(dates)) * 100, index=dates)  # 100 m3/day
+    >>>
+    >>> # Single aquifer pore volume
+    >>> aquifer_pore_volume = 500.0  # m3
+    >>>
+    >>> # Run forward model (default returns on cin index)
+    >>> cout = forward(cin, flow, aquifer_pore_volume)
+    >>> len(cout) == len(cin)
+    True
+
+    Different output index options:
+
+    >>> # Output on cin index (default)
+    >>> cout_cin = forward(cin, flow, aquifer_pore_volume, cout_index="cin")
+    >>>
+    >>> # Output on flow index
+    >>> cout_flow = forward(cin, flow, aquifer_pore_volume, cout_index="flow")
+    >>>
+    >>> # Output on shifted time index (cin + residence_time)
+    >>> cout_shifted = forward(cin, flow, aquifer_pore_volume, cout_index="cout")
+
+    With retardation factor:
+
+    >>> # Compound moves twice as slowly due to sorption
+    >>> cout = forward(cin, flow, aquifer_pore_volume, retardation_factor=2.0)
     """
     # Create flow tedges from the flow series index (assuming it's at the end of bins)
     flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow_series.index, number_of_bins=len(flow_series))
@@ -169,6 +205,71 @@ def gamma_forward(
     -------
     numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3] or temperature.
+
+    Examples
+    --------
+    Basic usage with alpha and beta parameters:
+
+    >>> import pandas as pd
+    >>> import numpy as np
+    >>> from gwtransport import compute_time_edges
+    >>> from gwtransport.advection import gamma_forward
+    >>>
+    >>> # Create input data with aligned time edges
+    >>> dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
+    >>> tedges = compute_time_edges(
+    ...     tedges=None, tstart=None, tend=dates, number_of_bins=len(dates)
+    ... )
+    >>>
+    >>> # Create output time edges (can be different alignment)
+    >>> cout_dates = pd.date_range(start="2020-01-05", end="2020-01-15", freq="D")
+    >>> cout_tedges = compute_time_edges(
+    ...     tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates)
+    ... )
+    >>>
+    >>> # Input concentration and flow (same length, aligned with tedges)
+    >>> cin = pd.Series(np.ones(len(dates)), index=dates)
+    >>> flow = pd.Series(np.ones(len(dates)) * 100, index=dates)  # 100 m3/day
+    >>>
+    >>> # Run gamma_forward with alpha/beta parameters
+    >>> cout = gamma_forward(
+    ...     cin=cin,
+    ...     cin_tedges=tedges,
+    ...     cout_tedges=cout_tedges,
+    ...     flow=flow,
+    ...     flow_tedges=tedges,  # Must be identical to cin_tedges
+    ...     alpha=10.0,
+    ...     beta=10.0,
+    ...     n_bins=5,
+    ... )
+    >>> cout.shape
+    (11,)
+
+    Using mean and std parameters instead:
+
+    >>> cout = gamma_forward(
+    ...     cin=cin,
+    ...     cin_tedges=tedges,
+    ...     cout_tedges=cout_tedges,
+    ...     flow=flow,
+    ...     flow_tedges=tedges,
+    ...     mean=100.0,
+    ...     std=20.0,
+    ...     n_bins=5,
+    ... )
+
+    With retardation factor:
+
+    >>> cout = gamma_forward(
+    ...     cin=cin,
+    ...     cin_tedges=tedges,
+    ...     cout_tedges=cout_tedges,
+    ...     flow=flow,
+    ...     flow_tedges=tedges,
+    ...     alpha=10.0,
+    ...     beta=10.0,
+    ...     retardation_factor=2.0,  # Doubles residence time
+    ... )
     """
     # Ensure cin and flow have aligned time edges
     if not pd.Index(cin_tedges).equals(pd.Index(flow_tedges)):
@@ -271,6 +372,81 @@ def distribution_forward(
     ValueError
         If tedges length doesn't match cin/flow arrays plus one, or if
         infiltration time edges become non-monotonic (invalid input conditions).
+
+    Examples
+    --------
+    Basic usage with pandas Series:
+
+    >>> import pandas as pd
+    >>> import numpy as np
+    >>> from gwtransport import compute_time_edges
+    >>> from gwtransport.advection import distribution_forward
+    >>>
+    >>> # Create input data
+    >>> dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
+    >>> tedges = compute_time_edges(
+    ...     tedges=None, tstart=None, tend=dates, number_of_bins=len(dates)
+    ... )
+    >>>
+    >>> # Create output time edges (different alignment)
+    >>> cout_dates = pd.date_range(start="2020-01-05", end="2020-01-15", freq="D")
+    >>> cout_tedges = compute_time_edges(
+    ...     tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates)
+    ... )
+    >>>
+    >>> # Input concentration and flow
+    >>> cin = pd.Series(np.ones(len(dates)), index=dates)
+    >>> flow = pd.Series(np.ones(len(dates)) * 100, index=dates)  # 100 m3/day
+    >>>
+    >>> # Define distribution of aquifer pore volumes
+    >>> aquifer_pore_volumes = np.array([50, 100, 200])  # m3
+    >>>
+    >>> # Run distribution_forward
+    >>> cout = distribution_forward(
+    ...     cin=cin,
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cout_tedges=cout_tedges,
+    ...     aquifer_pore_volumes=aquifer_pore_volumes,
+    ... )
+    >>> cout.shape
+    (11,)
+
+    Using array inputs instead of pandas Series:
+
+    >>> # Convert to arrays
+    >>> cin_values = cin.values
+    >>> flow_values = flow.values
+    >>>
+    >>> cout = distribution_forward(
+    ...     cin=cin_values,
+    ...     flow=flow_values,
+    ...     tedges=tedges,
+    ...     cout_tedges=cout_tedges,
+    ...     aquifer_pore_volumes=aquifer_pore_volumes,
+    ... )
+
+    With retardation factor:
+
+    >>> cout = distribution_forward(
+    ...     cin=cin,
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cout_tedges=cout_tedges,
+    ...     aquifer_pore_volumes=aquifer_pore_volumes,
+    ...     retardation_factor=2.0,  # Compound moves twice as slowly
+    ... )
+
+    Using single pore volume:
+
+    >>> single_volume = np.array([100])  # Single 100 m3 pore volume
+    >>> cout = distribution_forward(
+    ...     cin=cin,
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cout_tedges=cout_tedges,
+    ...     aquifer_pore_volumes=single_volume,
+    ... )
     """
     tedges = pd.DatetimeIndex(tedges)
     cout_tedges = pd.DatetimeIndex(cout_tedges)
