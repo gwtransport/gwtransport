@@ -59,17 +59,16 @@ def forward(cin_series, flow_series, aquifer_pore_volume, retardation_factor=1.0
     """
     # Create flow tedges from the flow series index (assuming it's at the end of bins)
     flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow_series.index, number_of_bins=len(flow_series))
-    rt_series = residence_time(
+    rt_array = residence_time(
         flow=flow_series,
         flow_tedges=flow_tedges,
         index=cin_series.index,
         aquifer_pore_volume=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="infiltration",
-        return_pandas_series=True,
     )
 
-    rt = pd.to_timedelta(rt_series.values, unit="D", errors="coerce")
+    rt = pd.to_timedelta(rt_array[0], unit="D", errors="coerce")
     index = cin_series.index + rt
 
     cout = pd.Series(data=cin_series.values, index=index, name="cout")
@@ -277,10 +276,11 @@ def distribution_forward(
     cin_sum = np.concat(([0.0], cin.cumsum()))  # Add a zero at the beginning for cumulative sum
     cin_sum_interpolated = linear_interpolate(cin_tedges, cin_sum, day_of_infiltration_array)
     n_measurements = linear_interpolate(cin_tedges, np.arange(cin_tedges.size), day_of_infiltration_array)
-    cout_arr = np.diff(cin_sum_interpolated, axis=0) / np.diff(n_measurements, axis=0)
 
     with warnings.catch_warnings():
         warnings.filterwarnings(action="ignore", message="Mean of empty slice")
+        warnings.filterwarnings(action="ignore", message="invalid value encountered in divide")
+        cout_arr = np.diff(cin_sum_interpolated, axis=0) / np.diff(n_measurements, axis=0)
         return np.nanmean(cout_arr, axis=0)
 
 
