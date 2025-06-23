@@ -170,13 +170,17 @@ def gamma_forward(
     numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3] or temperature.
     """
+    # Ensure cin and flow have aligned time edges
+    if not pd.Index(cin_tedges).equals(pd.Index(flow_tedges)):
+        msg = "cin_tedges and flow_tedges must be identical for aligned data"
+        raise ValueError(msg)
+
     bins = gamma.bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
     return distribution_forward(
         cin=cin,
-        cin_tedges=cin_tedges,
-        cout_tedges=cout_tedges,
         flow=flow,
-        flow_tedges=flow_tedges,
+        tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=bins["expected_value"],
         retardation_factor=retardation_factor,
     )
@@ -215,116 +219,58 @@ def gamma_backward(cout, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
 def distribution_forward(
     *,
     cin,
-    cin_tedges,
-    cout_tedges,
     flow,
-    flow_tedges,
-    aquifer_pore_volumes,
-    retardation_factor=1.0,
-):
-    """
-    Similar to forward_advection, but with a distribution of aquifer pore volumes.
-
-    Parameters
-    ----------
-    cin : pandas.Series
-        Concentration of the compound in infiltrating water or temperature of infiltrating
-        water.
-    cin_tedges : pandas.DatetimeIndex
-        Time edges for the concentration data. Used to compute the cumulative concentration.
-        Has a length of one more than `cin`.
-    cout_tedges : pandas.DatetimeIndex
-        Time edges for the output data. Used to compute the cumulative concentration.
-        Has a length of one more than `flow`.
-    flow : pandas.Series
-        Flow rate of water in the aquifer [m3/day].
-    flow_tedges : pandas.DatetimeIndex
-        Time edges for the flow data. Used to compute the cumulative flow.
-        Has a length of one more than `flow`.
-    aquifer_pore_volumes : array-like
-        Array of aquifer pore volumes [m3] representing the distribution.
-    retardation_factor : float
-        Retardation factor of the compound in the aquifer.
-
-    Returns
-    -------
-    numpy.ndarray
-        Concentration of the compound in the extracted water or temperature. Same units as cin.
-    """
-    cin_tedges = pd.DatetimeIndex(cin_tedges)
-    cout_tedges = pd.DatetimeIndex(cout_tedges)
-    if len(cin_tedges) != len(cin) + 1:
-        msg = "cin_tedges must have one more element than cin"
-        raise ValueError(msg)
-    if len(cout_tedges) != len(flow) + 1:
-        msg = "cout_tedges must have one more element than flow"
-        raise ValueError(msg)
-
-    cout_time = cout_tedges[:-1] + (cout_tedges[1:] - cout_tedges[:-1]) / 2
-
-    # Use residence time at cout_time for all pore volumes
-    rt_array = residence_time(
-        flow=flow,
-        flow_tedges=flow_tedges,
-        index=cout_time,
-        aquifer_pore_volume=aquifer_pore_volumes,
-        retardation_factor=retardation_factor,
-        direction="extraction",
-    ).astype("timedelta64[D]")
-    day_of_infiltration_array = cout_time.values[None] - rt_array
-
-    cin_sum = np.concat(([0.0], cin.cumsum()))  # Add a zero at the beginning for cumulative sum
-    cin_sum_interpolated = linear_interpolate(cin_tedges, cin_sum, day_of_infiltration_array)
-    n_measurements = linear_interpolate(cin_tedges, np.arange(cin_tedges.size), day_of_infiltration_array)
-
-    with warnings.catch_warnings():
-        warnings.filterwarnings(action="ignore", message="Mean of empty slice")
-        warnings.filterwarnings(action="ignore", message="invalid value encountered in divide")
-        cout_arr = np.diff(cin_sum_interpolated, axis=0) / np.diff(n_measurements, axis=0)
-        return np.nanmean(cout_arr, axis=0)
-
-
-def distribution_forward_v2(
-    *,
-    cin,
     tedges,
-    flow,
     cout_tedges,
     aquifer_pore_volumes,
     retardation_factor=1.0,
 ):
     """
-    Compute the concentration of the extracted water with aligned time edges.
+    Compute the concentration of the extracted water using flow-weighted advection.
 
-    This function implements a forward advection model where cin and flow share
-    the same time edges (tedges). The cout time edges are provided separately
-    and have different time alignment than cin and flow. The output values are
-    computed as flow-weighted averages of cin at the time of infiltration using
-    the partial_isin function to handle bin overlaps.
+    This function implements a forward advection model where cin and flow values
+    correspond to the same aligned time bins defined by tedges.
+
+    The algorithm:
+    1. Computes residence times for each pore volume at cout time edges
+    2. Calculates infiltration time edges by subtracting residence times
+    3. Determines temporal overlaps between infiltration and cin time windows
+    4. Creates flow-weighted overlap matrices normalized by total weights
+    5. Computes weighted contributions and averages across pore volumes
 
     Parameters
     ----------
-    cin : pandas.Series
-        Concentration of the compound in infiltrating water or temperature of infiltrating
-        water.
+    cin : array-like
+        Concentration values of infiltrating water or temperature [concentration units].
+        Length must match the number of time bins defined by tedges.
+    flow : array-like
+        Flow rate values in the aquifer [m3/day].
+        Length must match cin and the number of time bins defined by tedges.
     tedges : pandas.DatetimeIndex
-        Time edges for both cin and flow data. Has a length of one more than both
-        cin and flow.
-    flow : pandas.Series
-        Flow rate of water in the aquifer [m3/day].
+        Time edges defining bins for both cin and flow data. Has length of
+        len(cin) + 1 and len(flow) + 1.
     cout_tedges : pandas.DatetimeIndex
-        Time edges for the output data. Has a length of one more than the desired output.
-        These have different time alignment than cin and flow.
+        Time edges for output data bins. Has length of desired output + 1.
+        Can have different time alignment and resolution than tedges.
     aquifer_pore_volumes : array-like
-        Array of aquifer pore volumes [m3] representing the distribution.
-    retardation_factor : float
-        Retardation factor of the compound in the aquifer.
+        Array of aquifer pore volumes [m3] representing the distribution
+        of residence times in the aquifer system.
+    retardation_factor : float, optional
+        Retardation factor of the compound in the aquifer (default 1.0).
+        Values > 1.0 indicate slower transport due to sorption/interaction.
 
     Returns
     -------
     numpy.ndarray
-        Concentration of the compound in the extracted water or temperature.
-        Same units as cin.
+        Flow-weighted concentration in the extracted water. Same units as cin.
+        Length equals len(cout_tedges) - 1. NaN values indicate time periods
+        with no valid contributions from the infiltration data.
+
+    Raises
+    ------
+    ValueError
+        If tedges length doesn't match cin/flow arrays plus one, or if
+        infiltration time edges become non-monotonic (invalid input conditions).
     """
     tedges = pd.DatetimeIndex(tedges)
     cout_tedges = pd.DatetimeIndex(cout_tedges)
@@ -337,16 +283,19 @@ def distribution_forward_v2(
         raise ValueError(msg)
 
     # Convert to arrays for vectorized operations
-    cin_values = cin.values
-    flow_values = flow.values
+    cin_values = np.asarray(cin)
+    flow_values = np.asarray(flow)
     cin_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
     cout_tedges_days = ((cout_tedges - tedges[0]) / pd.Timedelta(days=1)).values
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
 
+    # Convert flow back to Series for residence_time function compatibility
+    flow_series = pd.Series(flow_values, index=tedges[:-1])
+
     # Compute residence times for all pore volumes at cout_tedges
     # rt_edges shape: (n_pore_volumes, n_cout_edges)
     rt_edges = residence_time(
-        flow=flow,
+        flow=flow_series,
         flow_tedges=tedges,
         index=cout_tedges,
         aquifer_pore_volume=aquifer_pore_volumes,
@@ -354,84 +303,41 @@ def distribution_forward_v2(
         direction="extraction",
     ).astype("timedelta64[D]") / np.timedelta64(1, "D")
 
-    # Compute infiltration time edges for all pore volumes: shape (n_pore_volumes, n_edges)
-    # This is cout_tedges shifted by residence time to get infiltration time
+    # Step 1: Determine infiltration time windows for each pore volume
+    # Shape: (n_pore_volumes, n_cout_edges) - each row represents infiltration timing for one pore volume
+    # For each cout time, subtract residence time to find when that water infiltrated
     infiltration_tedges_matrix = cout_tedges_days[None, :] - rt_edges
 
-    # Check for overlap with cin time range
-    # Shape: (n_pv,) - boolean mask for pore volumes with overlap
-    overlap_mask = (infiltration_tedges_matrix[:, -1] >= cin_tedges_days[0]) & (
-        infiltration_tedges_matrix[:, 0] <= cin_tedges_days[-1]
-    )
+    # Step 2: Calculate temporal overlaps between infiltration windows and cin time bins
+    # Shape: (n_pv, n_cout, n_cin) - fraction of each cin bin contributing to each cout bin per pore volume
+    # Uses vectorized partial_isin to handle all pore volumes simultaneously
+    overlap_matrices = partial_isin(infiltration_tedges_matrix, cin_tedges_days)
 
-    # Filter to only overlapping pore volumes
-    valid_infiltration_edges = infiltration_tedges_matrix[overlap_mask]
+    # Step 3: Create flow-weighted overlap matrices
+    # Shape: (n_pv, n_cout, n_cin) - combines temporal overlap with flow weighting
+    # Each cin time bin is weighted by its corresponding flow rate
+    flow_weighted_overlaps = flow_values[None, None, :] * overlap_matrices
 
-    if len(valid_infiltration_edges) == 0:
-        # No valid contributions
-        return np.full(len(cout_tedges) - 1, np.nan)
+    # Step 4: Normalize weights to create proper weighted average coefficients
+    # Shape: (n_pv, n_cout, 1) - total weight for normalization per (pore_volume, cout_time) pair
+    total_weights = np.sum(flow_weighted_overlaps, axis=2, keepdims=True)
 
-    # Compute overlap matrices for ALL valid pore volumes at once using enhanced partial_isin
-    # overlap_matrices shape: (n_valid_pv, n_cout, n_cin)
-    try:
-        overlap_matrices = partial_isin(valid_infiltration_edges, cin_tedges_days)
-    except ValueError as e:
-        if "ascending order" in str(e):
-            # Handle non-monotonic infiltration edges by returning all NaN
-            # This can happen when residence time calculations produce non-monotonic results
-            # due to extreme flow variations or inappropriate pore volume/flow combinations
-            return np.full(len(cout_tedges) - 1, np.nan)
-        # Re-raise other ValueError types
-        raise
+    # Shape: (n_pv, n_cout, n_cin) - normalized weights that sum to 1 along cin dimension
+    # Where total_weights is 0 (no overlap), division creates NaN (correct for no-data periods)
+    normalized_weights = flow_weighted_overlaps / total_weights
 
-    # Vectorized flow-weighted averaging for all pore volumes simultaneously
-    # Get the number of output bins from overlap_matrices
-    _, n_cout, _ = overlap_matrices.shape
+    # Step 5: Apply weights to concentration values
+    # Shape: (n_pv, n_cout, n_cin) - weighted concentration contributions
+    weighted_contributions = normalized_weights * cin_values[None, None, :]
 
-    # We need to map flow values to cout bins
-    # flow_values corresponds to cin/flow bins, but we need weights for cout bins
-    # Since cout_tedges might be different from flow tedges, we need to be careful
+    # Step 6: Sum weighted contributions to get final concentrations per pore volume
+    # Shape: (n_pv, n_cout) - weighted average concentration for each (pore_volume, cout_time) pair
+    pore_volume_results = np.sum(weighted_contributions, axis=2)
 
-    # For now, assume we can use flow values directly for cout bins
-    # This might need adjustment based on the specific mapping between cout and flow
-    if len(flow_values) == n_cout:
-        # Direct mapping possible
-        flow_broadcast = flow_values[None, :, None]  # Shape: (1, n_cout, 1)
-    else:
-        # Need to interpolate or map flow values to cout time structure
-        # For simplicity, use average flow value
-        avg_flow = np.mean(flow_values)
-        flow_broadcast = np.full((1, n_cout, 1), avg_flow)
-
-    # Create weight matrices: flow[i] * overlap[pv,i,j] for all pore volumes
-    # Shape: (n_valid_pv, n_cout, n_cin)
-    weight_matrices = flow_broadcast * overlap_matrices
-
-    # Let NaNs propagate naturally - don't mask cin values
-    # Shape: (n_valid_pv, n_cout, n_cin)
-    cin_broadcast = cin_values[None, None, :]  # Broadcast cin to all pore volumes and cout bins
-
-    # Compute weighted contributions: weight * cin for each (pv, cout, cin) combination
-    weighted_contributions = weight_matrices * cin_broadcast
-
-    # Sum over cin dimension to get total contribution for each (pv, cout) pair
-    # Shape: (n_valid_pv, n_cout)
-    total_weighted_contributions = np.sum(weighted_contributions, axis=2)
-    total_weights = np.sum(weight_matrices, axis=2)
-
-    # Compute contributions with natural NaN propagation
-    # Shape: (n_valid_pv, n_cout)
-    # Where total_weights is 0 (no overlap), result will be 0/0 = NaN (as desired)
-    valid_contributions = total_weighted_contributions / total_weights
-
-    # Create full contributions matrix for all pore volumes (including non-overlapping ones)
-    n_pv, n_cout = len(aquifer_pore_volumes), len(cout_tedges) - 1
-    final_contributions = np.full((n_pv, n_cout), np.nan)  # Start with NaN
-    final_contributions[overlap_mask] = valid_contributions
-
-    # Average contributions across all pore volumes
-    # NaNs will propagate naturally in the mean operation
-    return np.nanmean(final_contributions, axis=0)
+    # Step 7: Average across all pore volumes to get final result
+    # Shape: (n_cout,) - final concentration time series
+    # NaN values naturally propagate when no valid contributions exist
+    return np.nanmean(pore_volume_results, axis=0)
 
 
 def distribution_backward(cout, flow, aquifer_pore_volume_edges, retardation_factor=1.0):
