@@ -325,7 +325,10 @@ def partial_isin(bin_edges_in, bin_edges_out):
     if len(bin_edges_out) < 2:  # noqa: PLR2004
         msg = "bin_edges_out must have at least 2 elements"
         raise ValueError(msg)
-    if not np.all(np.diff(bin_edges_out) > 0):
+    # Check ascending order, ignoring NaN values
+    diffs_out = np.diff(bin_edges_out)
+    valid_diffs_out = ~np.isnan(diffs_out)
+    if np.any(valid_diffs_out) and not np.all(diffs_out[valid_diffs_out] > 0):
         msg = "bin_edges_out must be in ascending order"
         raise ValueError(msg)
 
@@ -335,7 +338,10 @@ def partial_isin(bin_edges_in, bin_edges_out):
         if len(bin_edges_in) < 2:  # noqa: PLR2004
             msg = "bin_edges_in must have at least 2 elements"
             raise ValueError(msg)
-        if not np.all(np.diff(bin_edges_in) > 0):
+        # Check ascending order, ignoring NaN values
+        diffs_in = np.diff(bin_edges_in)
+        valid_diffs_in = ~np.isnan(diffs_in)
+        if np.any(valid_diffs_in) and not np.all(diffs_in[valid_diffs_in] > 0):
             msg = "bin_edges_in must be in ascending order"
             raise ValueError(msg)
 
@@ -358,7 +364,7 @@ def partial_isin(bin_edges_in, bin_edges_out):
         overlap_widths = np.maximum(0, overlap_right - overlap_left)
 
         # Calculate fractions
-        return overlap_widths / in_width
+        return np.nan_to_num(overlap_widths / in_width, nan=0.0)
 
     if bin_edges_in.ndim == 2:  # noqa: PLR2004
         # Multiple sets of input edges - vectorized across sets
@@ -367,8 +373,10 @@ def partial_isin(bin_edges_in, bin_edges_out):
             msg = "bin_edges_in must have at least 2 elements in the last dimension"
             raise ValueError(msg)
 
-        # Check if all edge arrays are monotonic
-        if not np.all(np.diff(bin_edges_in, axis=1) > 0):
+        # Check if all edge arrays are monotonic, ignoring NaN values
+        diffs_2d = np.diff(bin_edges_in, axis=1)
+        valid_diffs_2d = ~np.isnan(diffs_2d)
+        if np.any(valid_diffs_2d) and not np.all(diffs_2d[valid_diffs_2d] > 0):
             msg = "All rows in bin_edges_in must be in ascending order"
             raise ValueError(msg)
 
@@ -394,7 +402,7 @@ def partial_isin(bin_edges_in, bin_edges_out):
         overlap_widths = np.maximum(0, overlap_right - overlap_left)
 
         # Calculate fractions
-        return overlap_widths / in_width
+        return np.nan_to_num(overlap_widths / in_width, nan=0.0)
 
     msg = f"bin_edges_in must be 1D or 2D array, got {bin_edges_in.ndim}D"
     raise ValueError(msg)
