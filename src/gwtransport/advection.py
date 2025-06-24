@@ -149,10 +149,9 @@ def backward(cout, flow, aquifer_pore_volume, retardation_factor=1.0, resample_d
 def gamma_forward(
     *,
     cin,
-    cin_tedges,
-    cout_tedges,
     flow,
-    flow_tedges,
+    tedges,
+    cout_tedges,
     alpha=None,
     beta=None,
     mean=None,
@@ -271,16 +270,11 @@ def gamma_forward(
     ...     retardation_factor=2.0,  # Doubles residence time
     ... )
     """
-    # Ensure cin and flow have aligned time edges
-    if not pd.Index(cin_tedges).equals(pd.Index(flow_tedges)):
-        msg = "cin_tedges and flow_tedges must be identical for aligned data"
-        raise ValueError(msg)
-
     bins = gamma.bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
     return distribution_forward(
         cin=cin,
         flow=flow,
-        tedges=cin_tedges,
+        tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=bins["expected_value"],
         retardation_factor=retardation_factor,
@@ -477,7 +471,7 @@ def distribution_forward(
         aquifer_pore_volume=aquifer_pore_volumes,
         retardation_factor=retardation_factor,
         direction="extraction",
-    ).astype("timedelta64[D]") / np.timedelta64(1, "D")
+    )
 
     # Step 1: Determine infiltration time windows for each pore volume
     # Shape: (n_pore_volumes, n_cout_edges) - each row represents infiltration timing for one pore volume

@@ -19,7 +19,6 @@ Two cases are explored here:
 import numpy as np
 from example_data_generation import generate_synthetic_data
 
-from gwtransport import compute_time_edges
 from gwtransport import gamma as gamma_utils
 from gwtransport.residence_time import residence_time
 
@@ -29,10 +28,10 @@ from gwtransport.residence_time import residence_time
 # - We generate a flow timeseries
 # - with a log-removal-rate value from literature we compute the log-removal of
 #   the extracted water.
-mean, std = 8000.0, 400.0  # m3
+mean, std = 150.0, 30.0  # m3
 mean_flow = 120.0  # m3/day
 
-df = generate_synthetic_data(
+df, tedges = generate_synthetic_data(
     start_date="2020-01-01",
     end_date="2025-12-31",
     mean_flow=mean_flow,  # m3/day
@@ -50,8 +49,8 @@ df = generate_synthetic_data(
 bins = gamma_utils.bins(mean=mean, std=std, n_bins=1000)
 
 # Compute the residence time, similar to Example 2
-# Create time edges for the simplified API
-flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
+# Use time edges returned from generate_synthetic_data
+flow_tedges = tedges
 
 rt_forward_rf1 = residence_time(
     flow=df.flow,
