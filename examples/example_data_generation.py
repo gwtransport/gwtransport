@@ -136,5 +136,4 @@ def generate_synthetic_data(
     df.attrs["aquifer_pore_volume_gamma_beta"] = beta
     df.attrs["retardation_factor"] = retardation_factor
 
-
     return df, tedges
