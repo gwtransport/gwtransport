@@ -459,13 +459,10 @@ def distribution_forward(
     cout_tedges_days = ((cout_tedges - tedges[0]) / pd.Timedelta(days=1)).values
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
 
-    # Convert flow back to Series for residence_time function compatibility
-    flow_series = pd.Series(flow_values, index=tedges[:-1])
-
     # Compute residence times for all pore volumes at cout_tedges
     # rt_edges shape: (n_pore_volumes, n_cout_edges)
     rt_edges = residence_time(
-        flow=flow_series,
+        flow=flow_values,
         flow_tedges=tedges,
         index=cout_tedges,
         aquifer_pore_volume=aquifer_pore_volumes,
