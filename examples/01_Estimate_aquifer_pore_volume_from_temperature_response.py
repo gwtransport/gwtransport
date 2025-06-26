@@ -28,7 +28,7 @@ from example_data_generation import generate_synthetic_data
 from scipy.optimize import curve_fit
 from scipy.stats import gamma as gamma_dist
 
-from gwtransport import advection, compute_time_edges
+from gwtransport import advection
 from gwtransport import gamma as gamma_utils
 
 np.random.seed(42)  # For reproducibility
@@ -40,7 +40,7 @@ plt.style.use("seaborn-v0_8-whitegrid")
 # Create synthetic temperature and flow time series to demonstrate the inverse modeling approach
 
 # Generate 6 years of daily data with seasonal patterns
-df = generate_synthetic_data(
+df, tedges = generate_synthetic_data(
     start_date="2020-01-01",
     end_date="2025-12-31",
     mean_flow=120.0,  # Base flow rate [m³/day]
@@ -68,13 +68,11 @@ print(f"- True standard deviation of aquifer pore volume distribution: {df.attrs
 # Implement inverse modeling to estimate gamma distribution parameters.
 # Use spin-up period to allow thermal breakthrough to stabilize.
 
-# Define time bin edges for discrete convolution
-cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.temp_infiltration))
-cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
-flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
+# Time bin edges are already computed and returned from generate_synthetic_data
 
 # Define training dataset (exclude spin-up period)
 train_data = df["2021-01-01":].temp_extraction  # Skip first year for thermal equilibration
+train_data = train_data.dropna()  # Remove NaN values that may occur at series boundaries
 train_length = len(train_data)
 
 
@@ -82,23 +80,24 @@ def objective(_xdata, mean, std):
     """Forward model for temperature breakthrough with gamma-distributed pore volumes."""
     cout = advection.gamma_forward(
         cin=df.temp_infiltration,
-        cin_tedges=cin_tedges,
-        cout_tedges=cout_tedges,
         flow=df.flow,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         mean=mean,  # Mean pore volume [m³]
         std=std,  # Standard deviation [m³]
         n_bins=200,  # Discretization resolution
         retardation_factor=2.0,  # Thermal retardation factor
     )
-    return cout[-train_length:]  # Return post-equilibration period
+    # Match the training data indices and remove NaN values
+    cout_series = cout[train_data.index]
+    return cout_series.dropna().values
 
 
 # Nonlinear least squares optimization
 (mean, std), pcov = curve_fit(
     objective,
     df.index,
-    train_data,
+    train_data.values,  # Use the cleaned training data values
     p0=(7000.0, 500.0),  # Initial parameter estimates [m³]
     bounds=([1000, 10], [10000, 1000]),  # Physical constraints [m³]
     method="trf",  # Trust Region Reflective algorithm
@@ -108,10 +107,9 @@ def objective(_xdata, mean, std):
 # Generate model predictions using optimized parameters
 df["temp_extraction_modeled"] = advection.gamma_forward(
     cin=df.temp_infiltration,
-    cin_tedges=cin_tedges,
-    cout_tedges=cout_tedges,
     flow=df.flow,
-    flow_tedges=flow_tedges,
+    tedges=tedges,
+    cout_tedges=tedges,
     mean=mean,  # Fitted mean pore volume
     std=std,  # Fitted standard deviation
     n_bins=100,  # Computational resolution
