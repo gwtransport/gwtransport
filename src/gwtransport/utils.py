@@ -364,7 +364,7 @@ def partial_isin(bin_edges_in, bin_edges_out):
         overlap_widths = np.maximum(0, overlap_right - overlap_left)
 
         # Calculate fractions
-        return np.nan_to_num(overlap_widths / in_width, nan=0.0)
+        return overlap_widths / in_width
 
     if bin_edges_in.ndim == 2:  # noqa: PLR2004
         # Multiple sets of input edges - vectorized across sets
@@ -402,7 +402,7 @@ def partial_isin(bin_edges_in, bin_edges_out):
         overlap_widths = np.maximum(0, overlap_right - overlap_left)
 
         # Calculate fractions
-        return np.nan_to_num(overlap_widths / in_width, nan=0.0)
+        return overlap_widths / in_width
 
     msg = f"bin_edges_in must be 1D or 2D array, got {bin_edges_in.ndim}D"
     raise ValueError(msg)
