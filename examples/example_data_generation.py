@@ -112,7 +112,7 @@ def generate_synthetic_data(
         cout_tedges=tedges,
         mean=aquifer_pore_volume,  # Use mean pore volume
         std=aquifer_pore_volume_std,  # Use standard deviation for heterogeneity
-        n_bins=10000,  # Discretization resolution
+        n_bins=1000,  # Discretization resolution
         retardation_factor=retardation_factor,
     )
 
