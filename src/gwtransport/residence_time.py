@@ -34,7 +34,7 @@ def residence_time(
 
     Parameters
     ----------
-    flow : pandas.Series, array-like
+    flow : array-like
         Flow rate of water in the aquifer [m3/day]. The length of `flow` should match the length of `flow_tedges` minus one.
     flow_tedges : pandas.DatetimeIndex
         Time edges for the flow data. Used to compute the cumulative flow.
