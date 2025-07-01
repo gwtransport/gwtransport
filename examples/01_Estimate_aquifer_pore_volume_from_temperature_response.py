@@ -41,7 +41,7 @@ plt.style.use("seaborn-v0_8-whitegrid")
 
 # Generate 6 years of daily data with seasonal patterns
 df, tedges = generate_synthetic_data(
-    start_date="2023-01-01",
+    start_date="2020-01-01",
     end_date="2025-12-31",
     mean_flow=120.0,  # Base flow rate [m³/day]
     flow_amplitude=40.0,  # Seasonal flow variation [m³/day]
@@ -89,8 +89,7 @@ def objective(_xdata, mean, std):
         retardation_factor=2.0,  # Thermal retardation factor
     )
     # Match the training data indices and remove NaN values
-    cout_series = cout[train_data.index]
-    return cout_series.dropna().values
+    return cout[df.index >= "2021-01-01"]
 
 
 # Nonlinear least squares optimization

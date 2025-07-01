@@ -109,7 +109,7 @@ def generate_synthetic_data(
         cin=df["temp_infiltration"],
         flow=df["flow"],
         tedges=tedges,
-        cout_tedges=tedges[30:],
+        cout_tedges=tedges,
         mean=aquifer_pore_volume,  # Use mean pore volume
         std=aquifer_pore_volume_std,  # Use standard deviation for heterogeneity
         n_bins=100,  # Discretization resolution
