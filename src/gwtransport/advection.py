@@ -16,7 +16,6 @@ Main functions:
 - distribution_forward: Similar to forward, but for an arbitrairy distribution of aquifer pore volumes.
 """
 
-
 import numpy as np
 import pandas as pd
 
@@ -478,33 +477,55 @@ def distribution_forward(
     # Step 2: Calculate temporal overlaps between infiltration windows and cin time bins
     # Shape: (n_pv, n_cout, n_cin) - fraction of each cin bin contributing to each cout bin per pore volume
     # Uses vectorized partial_isin to handle all pore volumes simultaneously
-    overlap_matrices = partial_isin(infiltration_tedges_matrix, cin_tedges_days)
+    overlap_matrices = partial_isin(infiltration_tedges_matrix, cin_tedges_days, convert_nan_to_zero=False)
+    nan_bins_cin = np.isnan(infiltration_tedges_matrix[:, :-1]) | np.isnan(infiltration_tedges_matrix[:, 1:])
+    nan_bins_cin_indices = np.nonzero(nan_bins_cin)
 
+    flow_weighted_overlaps = flow_values[None, None, :] * overlap_matrices
+    # Ensure NaN overlaps are handled correctly
     # Step 3: Create flow-weighted overlap matrices
     # Shape: (n_pv, n_cout, n_cin) - combines temporal overlap with flow weighting
     # Each cin time bin is weighted by its corresponding flow rate
-    flow_weighted_overlaps = flow_values[None, None, :] * overlap_matrices
+    # Convert to dense for numerical operations to maintain compatibility
 
     # Step 4: Normalize weights to create proper weighted average coefficients
     # Shape: (n_pv, n_cout, 1) - total weight for normalization per (pore_volume, cout_time) pair
-    total_weights = np.sum(flow_weighted_overlaps, axis=2, keepdims=True)
+    cin_total_weights = np.sum(flow_weighted_overlaps, axis=2, keepdims=False)
+
+    # import sparse
+
+    # normalized_weights = sparse.COO([], [], shape=overlap_matrices.shape, fill_value=np.nan)
+    valid_arr = cin_total_weights != 0 & ~np.isnan(cin_total_weights)
+    valid_indices = np.nonzero(valid_arr)  # Get indices where total_weights is not zero and not NaN
+    # valid_indices = np.ix_(*np.nonzero(valid_arr))  # Get indices where total_weights is not zero and not NaN
+    # valid_indices = ~np.isnan(total_weights)  # Mask to avoid division by nan
+
+    normalized_weights = flow_weighted_overlaps[valid_arr] / cin_total_weights[valid_arr]
+    # pd.arrays.SparseArray(total_weights)
 
     # Shape: (n_pv, n_cout, n_cin) - normalized weights that sum to 1 along cin dimension
     # Where total_weights is 0 (no overlap), division creates NaN (correct for no-data periods)
-    normalized_weights = flow_weighted_overlaps / total_weights
+    cin_total_weights.fill_value = np.nan  # Set to nan otherwise blows up.
+    flow_weighted_overlaps.fill_value = np.nan
+    normalized_weights = flow_weighted_overlaps / cin_total_weights
+    # normalized_weights[flow_weighted_overlaps] = 0.0  # Replace NaNs with 0 for valid contributions
 
     # Step 5: Apply weights to concentration values
     # Shape: (n_pv, n_cout, n_cin) - weighted concentration contributions
-    weighted_contributions = normalized_weights * cin_values[None, None, :]
+    # weighted_contributions = normalized_weights * cin_values[None, None, :]. <<<< Should be a matrix multiplication
 
-    # Step 6: Sum weighted contributions to get final concentrations per pore volume
-    # Shape: (n_pv, n_cout) - weighted average concentration for each (pore_volume, cout_time) pair
-    pore_volume_results = np.sum(weighted_contributions, axis=2)
+    # # Step 6: Sum weighted contributions to get final concentrations per pore volume
+    # # Shape: (n_pv, n_cout) - weighted average concentration for each (pore_volume, cout_time) pair
+    # pore_volume_results = np.nansum(weighted_contributions, axis=2)
 
-    # Step 7: Average across all pore volumes to get final result
-    # Shape: (n_cout,) - final concentration time series
-    # NaN values naturally propagate when no valid contributions exist
-    return np.nanmean(pore_volume_results, axis=0)
+    # should_be_nan = np.all(np.isnan(weighted_contributions), axis=(0, 2)).todense()
+
+    # # Step 7: Average across all pore volumes to get final result
+    # # Shape: (n_cout,) - final concentration time series
+    # # NaN values naturally propagate when no valid contributions exist
+    # out = np.nanmean(pore_volume_results, axis=0).todense()
+    # out[should_be_nan] = np.nan  # Ensure NaNs propagate correctly
+    # return out
 
 
 def distribution_backward(cout, flow, aquifer_pore_volume_edges, retardation_factor=1.0):

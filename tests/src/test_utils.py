@@ -284,6 +284,9 @@ def test_basic_case():
     expected = np.array([[0.5, 0.0], [0.5, 0.5], [0.0, 0.5]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -294,6 +297,9 @@ def test_no_overlap():
     expected = np.array([[0.0, 0.0], [0.0, 0.0]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -304,6 +310,9 @@ def test_complete_overlap():
     expected = np.array([[1.0, 0.0], [0.0, 1.0]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -314,6 +323,9 @@ def test_exact_bin_match():
     expected = np.array([[1.0, 0.0], [0.0, 1.0]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -324,6 +336,9 @@ def test_multiple_bins():
     expected = np.array([[0.5, 0.0, 0.0], [0.2, 0.6, 0.2], [0.0, 0.0, 0.5]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -334,6 +349,9 @@ def test_partial_overlaps():
     expected = np.array([[0.25, 0.25]])  # 25% overlap with each output bin
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -344,6 +362,9 @@ def test_list_inputs():
     expected = np.array([[0.5, 0.0], [0.5, 0.5], [0.0, 0.5]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -354,6 +375,9 @@ def test_empty_inputs():
     expected = np.array([[0.5]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -364,6 +388,9 @@ def test_single_bin():
     expected = np.array([[0.5]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -374,6 +401,9 @@ def test_edge_alignment():
     expected = np.array([[1.0, 0.0], [0.5, 0.5], [0.0, 1.0]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -384,6 +414,9 @@ def test_floating_point_precision():
     expected = np.array([[0.5], [0.5]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -394,6 +427,9 @@ def test_negative_values():
     expected = np.array([[0.5, 0.0], [0.5, 0.5]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -421,15 +457,18 @@ def test_partial_isin_2d_basic():
     ])
     bin_edges_out = np.array([5, 15, 25])
 
-    # Expected: (2 pore volumes, 3 input bins, 2 output bins)
-    expected = np.array([
+    # Expected: 3D results (2 sets, 3 input bins per set, 2 output bins)
+    expected_3d = np.array([
         [[0.5, 0.0], [0.5, 0.5], [0.0, 0.5]],  # First pore volume
         [[0.7, 0.0], [0.3, 0.7], [0.0, 0.3]],  # Second pore volume (corrected)
     ])
 
     result = partial_isin(bin_edges_in_2d, bin_edges_out)
-    assert result.shape == (2, 3, 2)
-    assert_array_almost_equal(result, expected, decimal=6)
+    # For 2D input, result is a 3D sparse array
+    assert hasattr(result, "todense")
+    result_dense = result.todense()
+    assert result_dense.shape == (2, 3, 2)  # 2 sets, 3 bins per set, 2 output bins
+    assert_array_almost_equal(result_dense, expected_3d, decimal=6)
 
 
 def test_partial_isin_2d_no_overlap():
@@ -440,10 +479,13 @@ def test_partial_isin_2d_no_overlap():
     ])
     bin_edges_out = np.array([30, 40, 50])
 
-    expected = np.zeros((2, 2, 2))  # No overlaps
+    expected_3d = np.zeros((2, 2, 2))  # 2 sets, 2 bins per set, 2 output bins
 
     result = partial_isin(bin_edges_in_2d, bin_edges_out)
-    assert_array_almost_equal(result, expected)
+    # For 2D input, result is a 3D sparse array
+    assert hasattr(result, "todense")
+    result_dense = result.todense()
+    assert_array_almost_equal(result_dense, expected_3d)
 
 
 def test_partial_isin_2d_complete_overlap():
@@ -454,13 +496,16 @@ def test_partial_isin_2d_complete_overlap():
     ])
     bin_edges_out = np.array([0, 10, 20])
 
-    expected = np.array([
+    expected_3d = np.array([
         [[1.0, 0.0], [0.0, 1.0]],  # First set: complete overlap
         [[1.0, 0.0], [0.0, 1.0]],  # Second set: complete overlap
     ])
 
     result = partial_isin(bin_edges_in_2d, bin_edges_out)
-    assert_array_almost_equal(result, expected)
+    # For 2D input, result is a 3D sparse array
+    assert hasattr(result, "todense")
+    result_dense = result.todense()
+    assert_array_almost_equal(result_dense, expected_3d)
 
 
 def test_partial_isin_2d_edge_cases():
@@ -469,11 +514,14 @@ def test_partial_isin_2d_edge_cases():
     bin_edges_in_2d = np.array([[0, 10, 20, 30]])
     bin_edges_out = np.array([5, 15, 25])
 
-    expected = np.array([[[0.5, 0.0], [0.5, 0.5], [0.0, 0.5]]])
+    expected_3d = np.array([[[0.5, 0.0], [0.5, 0.5], [0.0, 0.5]]])
 
     result = partial_isin(bin_edges_in_2d, bin_edges_out)
-    assert result.shape == (1, 3, 2)
-    assert_array_almost_equal(result, expected)
+    # For 2D input, result is a 3D sparse array
+    assert hasattr(result, "todense")
+    result_dense = result.todense()
+    assert result_dense.shape == (1, 3, 2)  # 1 set, 3 bins per set, 2 output bins
+    assert_array_almost_equal(result_dense, expected_3d)
 
 
 def test_partial_isin_2d_invalid_inputs():
@@ -510,8 +558,12 @@ def test_partial_isin_nan_handling_1d():
     bin_edges_out = np.array([5.0, 15.0, 25.0])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
-    expected = np.array([[0.5, 0.0], [0.0, 0.0], [0.0, 0.0]])
-    assert_array_almost_equal(result, expected)
+    expected = np.array([[0.5, 0.0], [np.nan, np.nan], [np.nan, np.nan]])
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
+    # Use numpy's nan-aware comparison
+    np.testing.assert_array_equal(result, expected)
 
     # Test NaN in output bin edges
     bin_edges_in = np.array([0.0, 10.0, 20.0, 30.0])
@@ -519,6 +571,9 @@ def test_partial_isin_nan_handling_1d():
 
     result = partial_isin(bin_edges_in, bin_edges_out)
     expected = np.array([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
     # Test multiple NaN values in input
@@ -526,8 +581,12 @@ def test_partial_isin_nan_handling_1d():
     bin_edges_out = np.array([5.0, 15.0, 25.0])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
-    expected = np.array([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
-    assert_array_almost_equal(result, expected)
+    expected = np.array([[np.nan, np.nan], [np.nan, np.nan], [np.nan, np.nan]])
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
+    # Use numpy's nan-aware comparison
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_partial_isin_nan_handling_2d():
@@ -537,19 +596,26 @@ def test_partial_isin_nan_handling_2d():
     bin_edges_out = np.array([5.0, 15.0, 25.0])
 
     result = partial_isin(bin_edges_in_2d, bin_edges_out)
-    expected = np.array([
-        [[0.5, 0.0], [0.0, 0.0], [0.0, 0.0]],  # First row has NaN
+    expected_3d = np.array([
+        [[0.5, 0.0], [np.nan, np.nan], [np.nan, np.nan]],  # First row has NaN
         [[0.7, 0.0], [0.3, 0.7], [0.0, 0.3]],  # Second row normal
     ])
-    assert_array_almost_equal(result, expected)
+    # For 2D input, result is a 3D sparse array
+    assert hasattr(result, "todense")
+    result_dense = result.todense()
+    # Use numpy's nan-aware comparison
+    np.testing.assert_array_equal(result_dense, expected_3d)
 
     # Test NaN in output with 2D input
     bin_edges_in_2d = np.array([[0.0, 10.0, 20.0, 30.0], [2.0, 12.0, 22.0, 32.0]])
     bin_edges_out = np.array([5.0, np.nan, 25.0])
 
     result = partial_isin(bin_edges_in_2d, bin_edges_out)
-    expected = np.zeros((2, 3, 2))  # All zeros due to NaN in output
-    assert_array_almost_equal(result, expected)
+    expected_3d = np.zeros((2, 3, 2))  # 2 sets, 3 bins per set, 2 output bins
+    # For 2D input, result is a 3D sparse array
+    assert hasattr(result, "todense")
+    result_dense = result.todense()
+    assert_array_almost_equal(result_dense, expected_3d)
 
 
 def test_partial_isin_nan_mixed_with_valid():
@@ -559,8 +625,12 @@ def test_partial_isin_nan_mixed_with_valid():
     bin_edges_out = np.array([5.0, 15.0, 25.0])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
-    expected = np.array([[0.5, 0.0], [0.5, 0.5], [0.0, 0.0]])
-    assert_array_almost_equal(result, expected)
+    expected = np.array([[0.5, 0.0], [0.5, 0.5], [np.nan, np.nan]])
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
+    # Use numpy's nan-aware comparison
+    np.testing.assert_array_equal(result, expected)
 
     # Valid input with some NaN in output
     bin_edges_in = np.array([0.0, 10.0, 20.0, 30.0])
@@ -568,6 +638,9 @@ def test_partial_isin_nan_mixed_with_valid():
 
     result = partial_isin(bin_edges_in, bin_edges_out)
     expected = np.array([[0.0, 0.0], [0.0, 0.5], [0.0, 0.5]])
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
