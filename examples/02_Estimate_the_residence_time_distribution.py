@@ -21,8 +21,8 @@ Assumptions:
 - Stationary pore volume distribution
 - Advection-dominated transport
 """
-
 import warnings
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -135,6 +135,10 @@ ax[1].text(
 )
 plt.tight_layout()
 
+# Save the forward residence time plot
+out_path = Path(__file__).parent / "02_Forward_residence_time.png"
+plt.savefig(out_path, dpi=300, bbox_inches="tight")
+
 # %%
 # 4. Backward: Compute and plot the residence time
 # ------------------------------------------------
@@ -195,4 +199,7 @@ ax[1].text(
     fontsize=10,
 )
 plt.tight_layout()
-plt.show()
+
+# Save the backward residence time plot
+out_path = Path(__file__).parent / "02_Backward_residence_time.png"
+plt.savefig(out_path, dpi=300, bbox_inches="tight")
