@@ -27,7 +27,6 @@ dependencies = [
   "scipy",
   "matplotlib",
   "numpy",
-  "sparse",
 ]
 version = "0.10.0"
 [project.optional-dependencies]
