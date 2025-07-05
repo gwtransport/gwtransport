@@ -21,6 +21,7 @@ Key assumptions:
 - Advection-dominated transport (Pe >> 1)
 - Thermal retardation factor = 2.0 (typical for saturated media)
 """
+
 from pathlib import Path
 
 import matplotlib.pyplot as plt
