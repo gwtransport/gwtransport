@@ -21,6 +21,7 @@ Key assumptions:
 - Advection-dominated transport (Pe >> 1)
 - Thermal retardation factor = 2.0 (typical for saturated media)
 """
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -86,7 +87,7 @@ def objective(_xdata, mean, std):
         cout_tedges=tedges,
         mean=mean,  # Mean pore volume [m³]
         std=std,  # Standard deviation [m³]
-        n_bins=200,  # Discretization resolution
+        n_bins=25,  # Discretization resolution
         retardation_factor=2.0,  # Thermal retardation factor
     )
     # Match the training data indices and remove NaN values
@@ -98,10 +99,10 @@ def objective(_xdata, mean, std):
     objective,
     df.index,
     train_data.values,  # Use the cleaned training data values
-    p0=(7000.0, 500.0),  # Initial parameter estimates [m³]
-    bounds=([1000, 10], [10000, 1000]),  # Physical constraints [m³]
+    p0=(7500.0, 450.0),  # Initial parameter estimates [m³]
+    bounds=([5000, 200], [10000, 600]),  # Physical constraints [m³]
     method="trf",  # Trust Region Reflective algorithm
-    max_nfev=10,  # Limit function evaluations for computational efficiency
+    max_nfev=250,  # Limit function evaluations for computational efficiency
 )
 
 # Generate model predictions using optimized parameters
@@ -112,7 +113,7 @@ df["temp_extraction_modeled"] = advection.gamma_forward(
     cout_tedges=tedges,
     mean=mean,  # Fitted mean pore volume
     std=std,  # Fitted standard deviation
-    n_bins=100,  # Computational resolution
+    n_bins=250,  # Computational resolution
     retardation_factor=2.0,  # Thermal retardation
 )
 
@@ -141,7 +142,11 @@ ax2.set_xlabel("Date")
 ax2.set_ylabel("Temperature [°C]")
 ax2.legend()
 
-plt.tight_layout()
+fig.tight_layout()
+
+# Save the temperature response plot
+out_path = Path(__file__).parent / "01_Temperature_response.png"
+plt.savefig(out_path, dpi=300, bbox_inches="tight")
 
 # %%
 # 4. Pore volume distribution analysis
@@ -192,4 +197,8 @@ ax.vlines(gbins["lower_bound"], 0, pdf_at_lower_bound, color="C1", alpha=0.6, li
 ax.set_xlabel("Pore volume [m³]")
 ax.set_ylabel("Probability density [m⁻³]")
 ax.legend()
-plt.show()
+fig.tight_layout()
+
+# Save the pore volume distribution plot
+out_path = Path(__file__).parent / "01_Pore_volume_distribution.png"
+plt.savefig(out_path, dpi=300, bbox_inches="tight")
