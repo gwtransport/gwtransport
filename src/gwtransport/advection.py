@@ -480,18 +480,20 @@ def distribution_forward(
     for i in range(len(aquifer_pore_volumes)):
         if np.any(valid_bins_2d[i, :]):
             overlap_matrix = partial_isin(infiltration_tedges_2d[i, :], cin_tedges_days)
-            flow_weighted = overlap_matrix * flow_values[None, :]
-            accumulated_weights[valid_bins_2d[i, :], :] += flow_weighted[valid_bins_2d[i, :], :]
+            accumulated_weights[valid_bins_2d[i, :], :] += overlap_matrix[valid_bins_2d[i, :], :]
 
-    # Average across valid pore volumes and normalize
+    # Average across valid pore volumes and apply flow weighting
     averaged_weights = np.zeros_like(accumulated_weights)
     valid_cout = valid_pv_count > 0
     averaged_weights[valid_cout, :] = accumulated_weights[valid_cout, :] / valid_pv_count[valid_cout, None]
 
-    total_weights = np.sum(averaged_weights, axis=1)
+    # Apply flow weighting after averaging
+    flow_weighted_averaged = averaged_weights * flow_values[None, :]
+
+    total_weights = np.sum(flow_weighted_averaged, axis=1)
     valid_weights = total_weights > 0
-    normalized_weights = np.zeros_like(averaged_weights)
-    normalized_weights[valid_weights, :] = averaged_weights[valid_weights, :] / total_weights[valid_weights, None]
+    normalized_weights = np.zeros_like(flow_weighted_averaged)
+    normalized_weights[valid_weights, :] = flow_weighted_averaged[valid_weights, :] / total_weights[valid_weights, None]
 
     # Apply to concentrations and handle NaN for periods with no contributions
     out = np.sum(normalized_weights * cin_values[None, :], axis=1)
