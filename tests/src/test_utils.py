@@ -284,6 +284,9 @@ def test_basic_case():
     expected = np.array([[0.5, 0.0], [0.5, 0.5], [0.0, 0.5]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -294,6 +297,9 @@ def test_no_overlap():
     expected = np.array([[0.0, 0.0], [0.0, 0.0]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -304,6 +310,9 @@ def test_complete_overlap():
     expected = np.array([[1.0, 0.0], [0.0, 1.0]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -314,6 +323,9 @@ def test_exact_bin_match():
     expected = np.array([[1.0, 0.0], [0.0, 1.0]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -324,6 +336,9 @@ def test_multiple_bins():
     expected = np.array([[0.5, 0.0, 0.0], [0.2, 0.6, 0.2], [0.0, 0.0, 0.5]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -334,6 +349,9 @@ def test_partial_overlaps():
     expected = np.array([[0.25, 0.25]])  # 25% overlap with each output bin
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -344,6 +362,9 @@ def test_list_inputs():
     expected = np.array([[0.5, 0.0], [0.5, 0.5], [0.0, 0.5]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -354,6 +375,9 @@ def test_empty_inputs():
     expected = np.array([[0.5]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -364,6 +388,9 @@ def test_single_bin():
     expected = np.array([[0.5]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -374,6 +401,9 @@ def test_edge_alignment():
     expected = np.array([[1.0, 0.0], [0.5, 0.5], [0.0, 1.0]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -384,6 +414,9 @@ def test_floating_point_precision():
     expected = np.array([[0.5], [0.5]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
@@ -394,6 +427,9 @@ def test_negative_values():
     expected = np.array([[0.5, 0.0], [0.5, 0.5]])
 
     result = partial_isin(bin_edges_in, bin_edges_out)
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
     assert_array_almost_equal(result, expected)
 
 
