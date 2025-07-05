@@ -553,11 +553,11 @@ def test_partial_isin_2d_invalid_inputs():
 
 def test_partial_isin_nan_handling_1d():
     """Test partial_isin with NaN values in 1D arrays."""
-    # Test NaN in input bin edges
+    # Test NaN in input bin edges with convert_nan_to_zero=False
     bin_edges_in = np.array([0.0, 10.0, np.nan, 30.0])
     bin_edges_out = np.array([5.0, 15.0, 25.0])
 
-    result = partial_isin(bin_edges_in, bin_edges_out)
+    result = partial_isin(bin_edges_in, bin_edges_out, convert_nan_to_zero=False)
     expected = np.array([[0.5, 0.0], [np.nan, np.nan], [np.nan, np.nan]])
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
@@ -569,7 +569,7 @@ def test_partial_isin_nan_handling_1d():
     bin_edges_in = np.array([0.0, 10.0, 20.0, 30.0])
     bin_edges_out = np.array([5.0, np.nan, 25.0])
 
-    result = partial_isin(bin_edges_in, bin_edges_out)
+    result = partial_isin(bin_edges_in, bin_edges_out, convert_nan_to_zero=False)
     expected = np.array([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
@@ -580,7 +580,7 @@ def test_partial_isin_nan_handling_1d():
     bin_edges_in = np.array([0.0, np.nan, np.nan, 30.0])
     bin_edges_out = np.array([5.0, 15.0, 25.0])
 
-    result = partial_isin(bin_edges_in, bin_edges_out)
+    result = partial_isin(bin_edges_in, bin_edges_out, convert_nan_to_zero=False)
     expected = np.array([[np.nan, np.nan], [np.nan, np.nan], [np.nan, np.nan]])
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
@@ -595,7 +595,7 @@ def test_partial_isin_nan_handling_2d():
     bin_edges_in_2d = np.array([[0.0, 10.0, np.nan, 30.0], [2.0, 12.0, 22.0, 32.0]])
     bin_edges_out = np.array([5.0, 15.0, 25.0])
 
-    result = partial_isin(bin_edges_in_2d, bin_edges_out)
+    result = partial_isin(bin_edges_in_2d, bin_edges_out, convert_nan_to_zero=False)
     expected_3d = np.array([
         [[0.5, 0.0], [np.nan, np.nan], [np.nan, np.nan]],  # First row has NaN
         [[0.7, 0.0], [0.3, 0.7], [0.0, 0.3]],  # Second row normal
@@ -610,7 +610,7 @@ def test_partial_isin_nan_handling_2d():
     bin_edges_in_2d = np.array([[0.0, 10.0, 20.0, 30.0], [2.0, 12.0, 22.0, 32.0]])
     bin_edges_out = np.array([5.0, np.nan, 25.0])
 
-    result = partial_isin(bin_edges_in_2d, bin_edges_out)
+    result = partial_isin(bin_edges_in_2d, bin_edges_out, convert_nan_to_zero=False)
     expected_3d = np.zeros((2, 3, 2))  # 2 sets, 3 bins per set, 2 output bins
     # For 2D input, result is a 3D sparse array
     assert hasattr(result, "todense")
@@ -624,7 +624,7 @@ def test_partial_isin_nan_mixed_with_valid():
     bin_edges_in = np.array([0.0, 10.0, 20.0, np.nan])
     bin_edges_out = np.array([5.0, 15.0, 25.0])
 
-    result = partial_isin(bin_edges_in, bin_edges_out)
+    result = partial_isin(bin_edges_in, bin_edges_out, convert_nan_to_zero=False)
     expected = np.array([[0.5, 0.0], [0.5, 0.5], [np.nan, np.nan]])
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
@@ -636,7 +636,7 @@ def test_partial_isin_nan_mixed_with_valid():
     bin_edges_in = np.array([0.0, 10.0, 20.0, 30.0])
     bin_edges_out = np.array([np.nan, 15.0, 25.0])
 
-    result = partial_isin(bin_edges_in, bin_edges_out)
+    result = partial_isin(bin_edges_in, bin_edges_out, convert_nan_to_zero=False)
     expected = np.array([[0.0, 0.0], [0.0, 0.5], [0.0, 0.5]])
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
@@ -1001,3 +1001,104 @@ def test_combine_bin_series_extrapolation_no_out_of_range():
     assert_array_almost_equal(c1, c3)
     assert_array_almost_equal(d1, d2)
     assert_array_almost_equal(d1, d3)
+
+
+def test_partial_isin_convert_nan_to_zero_true():
+    """Test partial_isin with convert_nan_to_zero=True (default behavior)."""
+    # Test with NaN in input bin edges
+    bin_edges_in = np.array([0.0, 10.0, np.nan, 30.0])
+    bin_edges_out = np.array([5.0, 15.0, 25.0])
+
+    result = partial_isin(bin_edges_in, bin_edges_out, convert_nan_to_zero=True)
+    expected = np.array([[0.5, 0.0], [0.0, 0.0], [0.0, 0.0]])
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
+    assert_array_almost_equal(result, expected)
+
+    # Test default behavior (should be same as convert_nan_to_zero=True)
+    result_default = partial_isin(bin_edges_in, bin_edges_out)
+    if hasattr(result_default, "todense"):
+        result_default = result_default.todense()
+    assert_array_almost_equal(result_default, expected)
+
+
+def test_partial_isin_convert_nan_to_zero_false():
+    """Test partial_isin with convert_nan_to_zero=False."""
+    # Test with NaN in input bin edges
+    bin_edges_in = np.array([0.0, 10.0, np.nan, 30.0])
+    bin_edges_out = np.array([5.0, 15.0, 25.0])
+
+    result = partial_isin(bin_edges_in, bin_edges_out, convert_nan_to_zero=False)
+    expected = np.array([[0.5, 0.0], [np.nan, np.nan], [np.nan, np.nan]])
+    # Convert sparse matrix to dense for comparison
+    if hasattr(result, "todense"):
+        result = result.todense()
+    # Use numpy's nan-aware comparison
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_partial_isin_convert_nan_to_zero_2d():
+    """Test partial_isin with convert_nan_to_zero parameter for 2D inputs."""
+    bin_edges_in_2d = np.array([[0.0, 10.0, np.nan, 30.0], [2.0, 12.0, 22.0, 32.0]])
+    bin_edges_out = np.array([5.0, 15.0, 25.0])
+
+    # Test convert_nan_to_zero=True
+    result_true = partial_isin(bin_edges_in_2d, bin_edges_out, convert_nan_to_zero=True)
+    expected_true = np.array([
+        [[0.5, 0.0], [0.0, 0.0], [0.0, 0.0]],  # First row: NaN converted to zeros
+        [[0.7, 0.0], [0.3, 0.7], [0.0, 0.3]],  # Second row: normal
+    ])
+    assert hasattr(result_true, "todense")
+    result_true_dense = result_true.todense()
+    assert_array_almost_equal(result_true_dense, expected_true)
+
+    # Test convert_nan_to_zero=False
+    result_false = partial_isin(bin_edges_in_2d, bin_edges_out, convert_nan_to_zero=False)
+    expected_false = np.array([
+        [[0.5, 0.0], [np.nan, np.nan], [np.nan, np.nan]],  # First row: NaN preserved
+        [[0.7, 0.0], [0.3, 0.7], [0.0, 0.3]],  # Second row: normal
+    ])
+    assert hasattr(result_false, "todense")
+    result_false_dense = result_false.todense()
+    np.testing.assert_array_equal(result_false_dense, expected_false)
+
+
+def test_partial_isin_convert_nan_to_zero_multiple_nans():
+    """Test partial_isin with multiple NaN values and convert_nan_to_zero parameter."""
+    bin_edges_in = np.array([0.0, np.nan, np.nan, 30.0])
+    bin_edges_out = np.array([5.0, 15.0, 25.0])
+
+    # Test convert_nan_to_zero=True
+    result_true = partial_isin(bin_edges_in, bin_edges_out, convert_nan_to_zero=True)
+    expected_true = np.array([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
+    if hasattr(result_true, "todense"):
+        result_true = result_true.todense()
+    assert_array_almost_equal(result_true, expected_true)
+
+    # Test convert_nan_to_zero=False
+    result_false = partial_isin(bin_edges_in, bin_edges_out, convert_nan_to_zero=False)
+    expected_false = np.array([[np.nan, np.nan], [np.nan, np.nan], [np.nan, np.nan]])
+    if hasattr(result_false, "todense"):
+        result_false = result_false.todense()
+    np.testing.assert_array_equal(result_false, expected_false)
+
+
+def test_partial_isin_convert_nan_to_zero_mixed_valid_invalid():
+    """Test partial_isin with mixed valid and NaN bins."""
+    bin_edges_in = np.array([0.0, 10.0, 20.0, np.nan])
+    bin_edges_out = np.array([5.0, 15.0, 25.0])
+
+    # Test convert_nan_to_zero=True
+    result_true = partial_isin(bin_edges_in, bin_edges_out, convert_nan_to_zero=True)
+    expected_true = np.array([[0.5, 0.0], [0.5, 0.5], [0.0, 0.0]])
+    if hasattr(result_true, "todense"):
+        result_true = result_true.todense()
+    assert_array_almost_equal(result_true, expected_true)
+
+    # Test convert_nan_to_zero=False
+    result_false = partial_isin(bin_edges_in, bin_edges_out, convert_nan_to_zero=False)
+    expected_false = np.array([[0.5, 0.0], [0.5, 0.5], [np.nan, np.nan]])
+    if hasattr(result_false, "todense"):
+        result_false = result_false.todense()
+    np.testing.assert_array_equal(result_false, expected_false)

@@ -78,6 +78,7 @@ train_length = len(train_data)
 
 def objective(_xdata, mean, std):
     """Forward model for temperature breakthrough with gamma-distributed pore volumes."""
+    print(f"Optimizing with parameters: mean={mean:.1f} m³, std={std:.1f} m³")
     cout = advection.gamma_forward(
         cin=df.temp_infiltration,
         flow=df.flow,
@@ -100,7 +101,7 @@ def objective(_xdata, mean, std):
     p0=(7000.0, 500.0),  # Initial parameter estimates [m³]
     bounds=([1000, 10], [10000, 1000]),  # Physical constraints [m³]
     method="trf",  # Trust Region Reflective algorithm
-    max_nfev=100,  # Limit function evaluations for computational efficiency
+    max_nfev=10,  # Limit function evaluations for computational efficiency
 )
 
 # Generate model predictions using optimized parameters

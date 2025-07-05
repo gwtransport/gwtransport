@@ -473,65 +473,56 @@ def distribution_forward(
     # Shape: (n_pore_volumes, n_cout_edges) - each row represents infiltration timing for one pore volume
     # For each cout time, subtract residence time to find when that water infiltrated
     infiltration_tedges_matrix = cout_tedges_days[None, :] - rt_edges
+    nan_bins_cin = np.isnan(infiltration_tedges_matrix[:, :-1]) | np.isnan(infiltration_tedges_matrix[:, 1:])
 
     # Step 2: Calculate temporal overlaps between infiltration windows and cin time bins
     # Shape: (n_pv, n_cout, n_cin) - fraction of each cin bin contributing to each cout bin per pore volume
     # Uses vectorized partial_isin to handle all pore volumes simultaneously
     overlap_matrices = partial_isin(infiltration_tedges_matrix, cin_tedges_days, convert_nan_to_zero=False)
-    nan_bins_cin = np.isnan(infiltration_tedges_matrix[:, :-1]) | np.isnan(infiltration_tedges_matrix[:, 1:])
 
+    # Step 3: Apply flow weights and reduce to 2D immediately for speed optimization
+    # Shape: (n_pv, n_cout, n_cin) -> (n_cout, n_cin) by summing valid contributions
     flow_weighted_overlaps = flow_values[None, None, :] * overlap_matrices
-    # Ensure NaN overlaps are handled correctly
-    # Step 3: Create flow-weighted overlap matrices
-    # Shape: (n_pv, n_cout, n_cin) - combines temporal overlap with flow weighting
-    # Each cin time bin is weighted by its corresponding flow rate
-    # Convert to dense for numerical operations to maintain compatibility
 
-    # Step 4: Compute total weights for normalization, optimized using valid indices
-    # Shape: (n_pv, n_cout) - total weight for normalization per (pore_volume, cout_time) pair
-    cin_total_weights = np.full((flow_weighted_overlaps.shape[0], flow_weighted_overlaps.shape[1]), np.nan)
+    # Sum across pore volumes while preserving sparsity and handling NaN bins
+    # Use sparse-compatible operations that work for both sparse and dense arrays
+    # For sparse arrays: mask invalid contributions by multiplying with valid mask
+    # Create 3D mask that broadcasts correctly
+    valid_mask_2d = ~nan_bins_cin  # Shape: (n_pv, n_cout)
+    # Convert boolean mask to 0/1 for sparse multiplication compatibility
+    valid_mask_float = valid_mask_2d.astype(float)[:, :, np.newaxis]  # Shape: (n_pv, n_cout, 1)
 
-    # Use indices of valid bins to optimize computation
-    valid_cout = ~nan_bins_cin
-    valid_cout_indices = np.nonzero(valid_cout)
-    cin_total_weights[valid_cout] = np.nansum(
-        flow_weighted_overlaps[valid_cout_indices[0], valid_cout_indices[1], :], axis=1
-    ).todense()
+    # Apply mask by multiplication (preserves sparsity)
+    masked_sparse_weights = flow_weighted_overlaps * valid_mask_float
 
-    # Step 5: Compute normalized weights using sparse indexing (memory efficient)
-    # Find indices where normalization is valid
-    valid_normalization = (~nan_bins_cin) & (cin_total_weights > 0) & ~np.isnan(cin_total_weights)
-    valid_norm_indices = np.nonzero(valid_normalization)
+    # Sum across pore volumes - this maintains sparsity
+    total_flow_overlaps_2d = np.sum(masked_sparse_weights, axis=0)
 
-    # Count valid pore volumes for each cout time bin to adjust weights
-    valid_pv_count = np.sum(valid_normalization, axis=0)  # Shape: (n_cout,)
+    # Count valid pore volumes for each cout time bin - preserve this for averaging
+    valid_pv_count = np.sum(~nan_bins_cin, axis=0)  # Shape: (n_cout,)
 
-    # Step 6: Compute final result directly using sparse indexing (no full array)
-    # Shape: (n_cout,) - final concentration time series computed directly
-    out = np.zeros(flow_weighted_overlaps.shape[1])
+    # Step 4: Compute total weights for normalization (now 1D operation)
+    # Shape: (n_cout,) - total weight per cout time bin
+    cin_total_weights_1d = np.nansum(total_flow_overlaps_2d, axis=1).todense().flatten()
 
-    # Extract valid flow weights and normalize them
-    valid_flow_weights = flow_weighted_overlaps[valid_norm_indices[0], valid_norm_indices[1], :]
-    valid_total_weights = cin_total_weights[valid_norm_indices[0], valid_norm_indices[1]]
-    valid_pv_counts = valid_pv_count[valid_norm_indices[1]]
+    # Step 5: Find valid cout bins for normalization
+    valid_cout_bins = (valid_pv_count > 0) & (cin_total_weights_1d > 0) & ~np.isnan(cin_total_weights_1d)
+    valid_cout_indices = np.nonzero(valid_cout_bins)[0]
 
-    # Normalize and adjust weights, then apply to cin_values
-    normalized_valid_weights = valid_flow_weights / valid_total_weights[:, None] / valid_pv_counts[:, None]
+    # Step 6: Compute final result using 2D operations (much faster!)
+    out = np.full(len(valid_pv_count), np.nan)
 
-    # Compute weighted contributions and accumulate by cout time index
-    weighted_cin = normalized_valid_weights * cin_values[None, :]
+    if len(valid_cout_indices) > 0:
+        # Extract valid 2D weights and normalize (preserving sparsity where possible)
+        valid_flow_overlaps_2d = total_flow_overlaps_2d[valid_cout_indices, :]
+        valid_total_weights = cin_total_weights_1d[valid_cout_indices]
 
-    # Sum contributions for each cout time bin using sparse accumulation
-    weighted_cin_sums = np.nansum(weighted_cin, axis=1)
+        # Normalize by total weights only (pore volume averaging already handled in summation)
+        normalized_weights_2d = valid_flow_overlaps_2d / valid_total_weights[:, None]
 
-    # Convert to dense if sparse
-    if hasattr(weighted_cin_sums, "todense"):
-        weighted_cin_sums = weighted_cin_sums.todense()
-
-    # Use bincount for accumulation since np.add.at doesn't work with sparse matrices
-    unique_cout_indices, inverse_indices = np.unique(valid_norm_indices[1], return_inverse=True)
-    accumulated_sums = np.bincount(inverse_indices, weights=weighted_cin_sums)
-    out[unique_cout_indices] += accumulated_sums
+        # Apply to concentrations - use sparse-compatible operations
+        weighted_cin = normalized_weights_2d * cin_values[None, :]
+        out[valid_cout_indices] = np.sum(weighted_cin, axis=1).todense().flatten()
 
     # Ensure periods with no contributions are set to NaN
     no_valid_contributions = valid_pv_count == 0
