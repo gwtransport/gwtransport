@@ -5,9 +5,7 @@ from collections.abc import Sequence
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-import sparse
 from scipy import interpolate
-from scipy import sparse as scipy_sparse
 
 
 def linear_interpolate(x_ref, y_ref, x_query, left=None, right=None):
@@ -263,171 +261,36 @@ def linear_average(  # noqa: C901
     return result
 
 
-def _compute_1d_partial_isin_sparse(bin_edges_in, bin_edges_out, *, convert_nan_to_zero=True):
-    """Compute partial_isin for 1D input edges using fully vectorized approach with single searchsorted call."""
-    n_bins_in = len(bin_edges_in) - 1
-    n_bins_out = len(bin_edges_out) - 1
-
-    # Skip bins with zero width
-    in_width = bin_edges_in[1:] - bin_edges_in[:-1]
-    valid_bins = (in_width > 0) & ~np.isnan(in_width)
-
-    # Identify bins with NaN edges (these should result in NaN overlaps)
-    nan_bins = np.isnan(bin_edges_in[:-1]) | np.isnan(bin_edges_in[1:])
-
-    if not np.any(valid_bins) and not np.any(nan_bins):
-        return sparse.COO.from_scipy_sparse(scipy_sparse.csr_array((n_bins_in, n_bins_out)))
-
-    # # Use searchsorted ONCE to find bin assignments for all input edges
-    all_input_edges = np.concatenate([bin_edges_in[:-1], bin_edges_in[1:]])
-    bin_assignments = np.searchsorted(bin_edges_out, all_input_edges, side="right") - 1
-
-    # Split assignments back for left and right edges
-    left_assignments = np.clip(bin_assignments[:n_bins_in], 0, n_bins_out - 1)
-    right_assignments = np.clip(bin_assignments[n_bins_in:], -1, n_bins_out - 1)
-
-    # Use broadcasting to compute all potential overlaps efficiently
-    # Determine which (input, output) pairs could have overlap using vectorized comparison
-    # An input bin can overlap with output bins from left_assignment to right_assignment+1
-    output_idx = np.arange(n_bins_out)[None, :]
-    could_overlap = (output_idx >= left_assignments[:, None]) & (output_idx <= right_assignments[:, None] + 1)
-    could_overlap &= valid_bins[:, None]
-
-    # Get the indices where overlaps are possible
-    input_indices, output_indices = np.where(could_overlap)
-
-    if len(input_indices) == 0:
-        # Handle case with only NaN bins
-        if not convert_nan_to_zero and np.any(nan_bins):
-            # Create NaN entries for all NaN bins
-            nan_input_indices, nan_output_indices = np.meshgrid(
-                np.where(nan_bins)[0], np.arange(n_bins_out), indexing="ij"
-            )
-            coords = np.stack([nan_input_indices.ravel(), nan_output_indices.ravel()])
-            data_values = np.full(coords.shape[1], np.nan)
-            return sparse.COO(coords, data_values, shape=(n_bins_in, n_bins_out))
-        return sparse.COO.from_scipy_sparse(scipy_sparse.csr_array((n_bins_in, n_bins_out)))
-
-    # Calculate actual overlaps using vectorized operations (using original edges with NaN)
-    overlap_left = np.maximum(bin_edges_in[:-1][input_indices], bin_edges_out[:-1][output_indices])
-    overlap_right = np.minimum(bin_edges_in[1:][input_indices], bin_edges_out[1:][output_indices])
-    overlap_widths = np.maximum(0, overlap_right - overlap_left)
-
-    # Only keep non-zero overlaps
-    nonzero_mask = overlap_widths > 0
-    if not np.any(nonzero_mask):
-        # Handle case with only NaN bins
-        if not convert_nan_to_zero and np.any(nan_bins):
-            # Create NaN entries for all NaN bins
-            nan_input_indices, nan_output_indices = np.meshgrid(
-                np.where(nan_bins)[0], np.arange(n_bins_out), indexing="ij"
-            )
-            coords = np.stack([nan_input_indices.ravel(), nan_output_indices.ravel()])
-            data_values = np.full(coords.shape[1], np.nan)
-            return sparse.COO(coords, data_values, shape=(n_bins_in, n_bins_out))
-        return sparse.COO.from_scipy_sparse(scipy_sparse.csr_array((n_bins_in, n_bins_out)))
-
-    # Filter to actual overlaps and compute fractions
-    overlap_fractions = overlap_widths[nonzero_mask] / in_width[input_indices[nonzero_mask]]
-
-    # Collect coordinates and data for valid overlaps
-    input_coords = input_indices[nonzero_mask]
-    output_coords = output_indices[nonzero_mask]
-    data_values = overlap_fractions
-
-    # Add NaN entries for bins with NaN edges
-    if not convert_nan_to_zero and np.any(nan_bins):
-        nan_input_indices, nan_output_indices = np.meshgrid(np.where(nan_bins)[0], np.arange(n_bins_out), indexing="ij")
-        # Append NaN entries
-        input_coords = np.concatenate([input_coords, nan_input_indices.ravel()])
-        output_coords = np.concatenate([output_coords, nan_output_indices.ravel()])
-        data_values = np.concatenate([data_values, np.full(nan_input_indices.size, np.nan)])
-
-    # Create and return sparse matrix using pydata sparse
-    coords = np.stack([input_coords, output_coords])
-    return sparse.COO(coords, data_values, shape=(n_bins_in, n_bins_out))
-
-
-def _validate_partial_isin_inputs(bin_edges_out):
-    """Validate inputs for partial_isin function."""
-    # Validate bin_edges_out (must be 1D)
-    if bin_edges_out.ndim != 1:
-        msg = "bin_edges_out must be a 1D array"
-        raise ValueError(msg)
-    if len(bin_edges_out) < 2:  # noqa: PLR2004
-        msg = "bin_edges_out must have at least 2 elements"
-        raise ValueError(msg)
-    # Check ascending order, ignoring NaN values
-    diffs_out = np.diff(bin_edges_out)
-    valid_diffs_out = ~np.isnan(diffs_out)
-    if np.any(valid_diffs_out) and not np.all(diffs_out[valid_diffs_out] > 0):
-        msg = "bin_edges_out must be in ascending order"
-        raise ValueError(msg)
-
-
-def _validate_1d_input(bin_edges_in):
-    """Validate 1D input edges."""
-    if len(bin_edges_in) < 2:  # noqa: PLR2004
-        msg = "bin_edges_in must have at least 2 elements"
-        raise ValueError(msg)
-    diffs_in = np.diff(bin_edges_in)
-    valid_diffs_in = ~np.isnan(diffs_in)
-    if np.any(valid_diffs_in) and not np.all(diffs_in[valid_diffs_in] > 0):
-        msg = "bin_edges_in must be in ascending order"
-        raise ValueError(msg)
-
-
-def _validate_2d_input(bin_edges_in):
-    """Validate 2D input edges."""
-    n_sets, n_edges = bin_edges_in.shape
-    if n_edges < 2:  # noqa: PLR2004
-        msg = "bin_edges_in must have at least 2 elements in the last dimension"
-        raise ValueError(msg)
-    diffs_2d = np.diff(bin_edges_in, axis=1)
-    valid_diffs_2d = ~np.isnan(diffs_2d)
-    if np.any(valid_diffs_2d) and not np.all(diffs_2d[valid_diffs_2d] > 0):
-        msg = "All rows in bin_edges_in must be in ascending order"
-        raise ValueError(msg)
-
-
-def partial_isin(bin_edges_in, bin_edges_out, *, convert_nan_to_zero=True):
+def partial_isin(bin_edges_in, bin_edges_out):
     """
     Calculate the fraction of each input bin that overlaps with each output bin.
 
-    This function computes a sparse matrix where element (i, j) represents the fraction
+    This function computes a matrix where element (i, j) represents the fraction
     of input bin i that overlaps with output bin j. The computation uses
-    vectorized operations and sparse matrices to efficiently handle large datasets.
+    vectorized operations to avoid loops.
 
     Parameters
     ----------
     bin_edges_in : array_like
-        Input bin edges in ascending order. Can be:
-        - 1D array of shape (n_edges_in,) for single set of bins
-        - 2D array of shape (n_sets, n_edges_in) for multiple sets of bins
-        For n_in bins, there should be n_in+1 edges.
+        1D array of input bin edges in ascending order. For n_in bins, there
+        should be n_in+1 edges.
     bin_edges_out : array_like
         1D array of output bin edges in ascending order. For n_out bins, there
         should be n_out+1 edges.
-    convert_nan_to_zero : bool, optional
-        If True, NaN overlaps are converted to zero. If False, they remain NaN.
-        Default is True.
 
     Returns
     -------
-    overlap_matrix : sparse.COO
-        Overlap matrix. Shape depends on input dimensions:
-        - If bin_edges_in is 1D: shape (n_in, n_out)
-        - If bin_edges_in is 2D: shape (n_sets, n_in, n_out)
-        Each element represents the fraction of input bin that overlaps with output bin.
+    overlap_matrix : numpy.ndarray
+        Dense matrix of shape (n_in, n_out) where n_in is the number of input
+        bins and n_out is the number of output bins. Each element (i, j)
+        represents the fraction of input bin i that overlaps with output bin j.
         Values range from 0 (no overlap) to 1 (complete overlap).
 
     Notes
     -----
-    - All input arrays must be sorted in ascending order along the last axis
-    - The function leverages the sorted nature of inputs for efficiency
-    - Uses sparse matrix computation internally for memory efficiency
-    - Uses numpy.searchsorted exactly once for maximum efficiency
-    - Fully vectorized implementation avoiding all for-loops
+    - Both input arrays must be sorted in ascending order
+    - The function leverages the sorted nature of both inputs for efficiency
+    - Uses vectorized operations to handle large bin arrays efficiently
     - All overlaps sum to 1.0 for each input bin when output bins fully cover input range
 
     Examples
@@ -438,45 +301,50 @@ def partial_isin(bin_edges_in, bin_edges_out, *, convert_nan_to_zero=True):
     array([[0.5, 0.0],
            [0.5, 0.5],
            [0.0, 0.5]])
-
-    >>> bin_edges_in_2d = np.array([[0, 10, 20, 30], [2, 12, 22, 32]])
-    >>> partial_isin(bin_edges_in_2d, bin_edges_out)
-    array([[[0.5, 0.0],
-            [0.5, 0.5],
-            [0.0, 0.5]],
-           [[0.3, 0.0],
-            [0.7, 0.3],
-            [0.0, 0.7]]])
     """
     # Convert inputs to numpy arrays
     bin_edges_in = np.asarray(bin_edges_in, dtype=float)
     bin_edges_out = np.asarray(bin_edges_out, dtype=float)
 
     # Validate inputs
-    _validate_partial_isin_inputs(bin_edges_out)
+    if bin_edges_in.ndim != 1 or bin_edges_out.ndim != 1:
+        msg = "Both bin_edges_in and bin_edges_out must be 1D arrays"
+        raise ValueError(msg)
+    if len(bin_edges_in) < 2 or len(bin_edges_out) < 2:  # noqa: PLR2004
+        msg = "Both edge arrays must have at least 2 elements"
+        raise ValueError(msg)
 
-    # Handle different input dimensions
-    if bin_edges_in.ndim == 1:
-        _validate_1d_input(bin_edges_in)
-        return _compute_1d_partial_isin_sparse(bin_edges_in, bin_edges_out, convert_nan_to_zero=convert_nan_to_zero)
-    if bin_edges_in.ndim == 2:  # noqa: PLR2004
-        _validate_2d_input(bin_edges_in)
+    # Check ascending order, ignoring NaN values
+    diffs_in = np.diff(bin_edges_in)
+    valid_diffs_in = ~np.isnan(diffs_in)
+    if np.any(valid_diffs_in) and not np.all(diffs_in[valid_diffs_in] > 0):
+        msg = "bin_edges_in must be in ascending order"
+        raise ValueError(msg)
 
-        # For 2D inputs, create 3D sparse array
-        n_sets = bin_edges_in.shape[0]
+    diffs_out = np.diff(bin_edges_out)
+    valid_diffs_out = ~np.isnan(diffs_out)
+    if np.any(valid_diffs_out) and not np.all(diffs_out[valid_diffs_out] > 0):
+        msg = "bin_edges_out must be in ascending order"
+        raise ValueError(msg)
 
-        # Process each set and collect sparse matrices
-        sparse_matrices = []
-        for set_idx in range(n_sets):
-            sparse_result = _compute_1d_partial_isin_sparse(
-                bin_edges_in[set_idx], bin_edges_out, convert_nan_to_zero=convert_nan_to_zero
-            )
-            sparse_matrices.append(sparse_result)
+    # Build matrix using fully vectorized approach
+    # Create meshgrids for all possible input-output bin combinations
+    in_left = bin_edges_in[:-1, None]  # Shape: (n_bins_in, 1)
+    in_right = bin_edges_in[1:, None]  # Shape: (n_bins_in, 1)
+    in_width = np.diff(bin_edges_in)[:, None]  # Shape: (n_bins_in, 1)
 
-        # Stack sparse matrices into 3D array using pydata sparse
-        return sparse.stack(sparse_matrices, axis=0)
-    msg = f"bin_edges_in must be 1D or 2D array, got {bin_edges_in.ndim}D"
-    raise ValueError(msg)
+    out_left = bin_edges_out[None, :-1]  # Shape: (1, n_bins_out)
+    out_right = bin_edges_out[None, 1:]  # Shape: (1, n_bins_out)
+
+    # Calculate overlaps for all combinations using broadcasting
+    overlap_left = np.maximum(in_left, out_left)  # Shape: (n_bins_in, n_bins_out)
+    overlap_right = np.minimum(in_right, out_right)  # Shape: (n_bins_in, n_bins_out)
+
+    # Calculate overlap widths (zero where no overlap)
+    overlap_widths = np.maximum(0, overlap_right - overlap_left)
+
+    # Calculate fractions (NaN widths will result in NaN fractions)
+    return overlap_widths / in_width
 
 
 def generate_failed_coverage_badge():
