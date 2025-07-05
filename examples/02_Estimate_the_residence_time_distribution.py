@@ -23,12 +23,12 @@ Assumptions:
 """
 
 import warnings
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 from example_data_generation import generate_synthetic_data
 
-from gwtransport import compute_time_edges
 from gwtransport import gamma as gamma_utils
 from gwtransport.residence_time import residence_time
 
@@ -45,7 +45,7 @@ mean, std = 8000.0, 400.0  # Pore volume statistics [m³]
 retardation_factor = 2.0  # For conservative tracer analysis
 mean_flow = 120.0  # Base discharge rate [m³/day]
 
-df = generate_synthetic_data(
+df, tedges = generate_synthetic_data(
     start_date="2020-01-01",
     end_date="2025-12-31",
     mean_flow=mean_flow,  # Base discharge [m³/day]
@@ -67,8 +67,8 @@ bins = gamma_utils.bins(mean=mean, std=std, n_bins=1000)  # High resolution for 
 # Calculate how long infiltrating water takes to be extracted.
 # Compute for all flow paths (bins) and compare water vs thermal transport.
 
-# Define time bin edges for residence time calculation
-flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df.flow))
+# Use time bin edges returned from generate_synthetic_data
+flow_tedges = tedges
 
 # Water residence time (no retardation)
 rt_forward_rf1 = residence_time(
@@ -136,6 +136,10 @@ ax[1].text(
 )
 plt.tight_layout()
 
+# Save the forward residence time plot
+out_path = Path(__file__).parent / "02_Forward_residence_time.png"
+plt.savefig(out_path, dpi=300, bbox_inches="tight")
+
 # %%
 # 4. Backward: Compute and plot the residence time
 # ------------------------------------------------
@@ -196,4 +200,7 @@ ax[1].text(
     fontsize=10,
 )
 plt.tight_layout()
-plt.show()
+
+# Save the backward residence time plot
+out_path = Path(__file__).parent / "02_Backward_residence_time.png"
+plt.savefig(out_path, dpi=300, bbox_inches="tight")

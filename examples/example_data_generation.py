@@ -9,7 +9,8 @@ with seasonal patterns and random variations.
 import numpy as np
 import pandas as pd
 
-from gwtransport import advection, compute_time_edges, gamma
+from gwtransport import advection, gamma
+from gwtransport.utils import compute_time_edges
 
 
 def generate_synthetic_data(
@@ -55,9 +56,11 @@ def generate_synthetic_data(
 
     Returns
     -------
-    pandas.DataFrame
-        DataFrame containing dates, flow rates, infiltration temperature, and
-        extracted water temperature
+    tuple
+        A tuple containing:
+        - pandas.DataFrame: DataFrame containing dates, flow rates, infiltration temperature, and
+          extracted water temperature
+        - numpy.ndarray: Time edges (tedges) used for the flow calculations
     """
     # Create date range
     dates = pd.date_range(start=start_date, end=end_date, freq="D")
@@ -68,13 +71,15 @@ def generate_synthetic_data(
     flow = seasonal_flow + np.random.normal(0, flow_noise, len(dates))
     flow = np.maximum(flow, 5.0)  # Ensure flow is not too small or negative
 
-    n_spills = np.random.randint(6, 16)
-    for _ in range(n_spills):
-        spill_start = np.random.randint(0, len(dates) - 30)
-        spill_duration = np.random.randint(15, 45)
-        spill_magnitude = np.random.uniform(2.0, 5.0)
+    min_days_for_spills = 60
+    if len(dates) > min_days_for_spills:  # Only add spills for longer time series
+        n_spills = np.random.randint(6, 16)
+        for _ in range(n_spills):
+            spill_start = np.random.randint(0, len(dates) - 30)
+            spill_duration = np.random.randint(15, 45)
+            spill_magnitude = np.random.uniform(2.0, 5.0)
 
-        flow[spill_start : spill_start + spill_duration] /= spill_magnitude
+            flow[spill_start : spill_start + spill_duration] /= spill_magnitude
 
     # Generate infiltration temperature with seasonal pattern
     infiltration_temp = mean_temp_infiltration + temp_infiltration_amplitude * np.sin(2 * np.pi * days / 365)
@@ -88,24 +93,26 @@ def generate_synthetic_data(
         },
         index=dates,
     )
-    # Create time edges for the simplified API
-    cin_tedges = compute_time_edges(
-        tedges=None, tstart=None, tend=df["temp_infiltration"].index, number_of_bins=len(df["temp_infiltration"])
-    )
-    cout_tedges = compute_time_edges(
-        tedges=None, tstart=None, tend=df["temp_infiltration"].index, number_of_bins=len(df["flow"])
-    )
-    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=df["flow"].index, number_of_bins=len(df["flow"]))
+    # Compute tedges for the flow series
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df))
 
+    # For synthetic data generation, use the simpler forward function with a single pore volume
+    # This avoids the complex temporal alignment issues of gamma_forward
+    # df["temp_extraction"] = advection.forward(
+    #     cin_series=df["temp_infiltration"],
+    #     flow_series=df["flow"],
+    #     aquifer_pore_volume=aquifer_pore_volume,  # Use mean pore volume
+    #     retardation_factor=retardation_factor,
+    #     cout_index="cin",  # Align output with input time index
+    # )
     df["temp_extraction"] = advection.gamma_forward(
         cin=df["temp_infiltration"],
-        cin_tedges=cin_tedges,
-        cout_tedges=cout_tedges,
         flow=df["flow"],
-        flow_tedges=flow_tedges,
-        mean=aquifer_pore_volume,
-        std=aquifer_pore_volume_std,
-        n_bins=1000,
+        tedges=tedges,
+        cout_tedges=tedges,
+        mean=aquifer_pore_volume,  # Use mean pore volume
+        std=aquifer_pore_volume_std,  # Use standard deviation for heterogeneity
+        n_bins=250,  # Discretization resolution
         retardation_factor=retardation_factor,
     )
 
@@ -129,4 +136,4 @@ def generate_synthetic_data(
     df.attrs["aquifer_pore_volume_gamma_beta"] = beta
     df.attrs["retardation_factor"] = retardation_factor
 
-    return df
+    return df, tedges
