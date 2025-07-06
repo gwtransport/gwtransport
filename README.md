@@ -87,6 +87,8 @@ print(f"Standard deviation: {fitted_std:.0f} ± {np.sqrt(covariance[1,1]):.0f} m
 print(f"Coefficient of variation: {fitted_std/fitted_mean:.2f}")
 ```
 
+![Temperature_response](examples/01_Temperature_response.png)
+
 ### Example 2: Residence Time Analysis
 
 Calculate residence time distributions for different flow paths using characterized aquifer parameters:
@@ -136,6 +138,8 @@ p90_rt_water = np.nanpercentile(rt_water, 90, axis=0)  # Slow flow paths
 print(f"Water residence time range: {np.nanmin(mean_rt_water):.1f} - {np.nanmax(mean_rt_water):.1f} days")
 print(f"Mean residence time: {np.nanmean(mean_rt_water):.1f} days")
 ```
+
+![Forward_residence_time](examples/02_Forward_residence_time.png)
 
 ### Example 3: Pathogen Removal Assessment
 
