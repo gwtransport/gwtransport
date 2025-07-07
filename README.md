@@ -19,7 +19,7 @@
 Use temperature breakthrough curves to estimate pore volume distributions through inverse modeling. Temperature acts as a natural tracer, revealing how water flows through different paths in heterogeneous aquifers.
 
 - **Input**: Temperature time series, flow rates
-- **Output**: Two statistical parameters of aquifer pore volume distribution
+- **Output**: Two parameters of aquifer pore volume distribution
 - **Applications**: Groundwater vulnerability assessment, aquifer characterization
 
 ![Temperature Response Analysis](examples/01_Temperature_response.png)
@@ -57,7 +57,7 @@ _Parallel treatment systems require weighted averaging - simple averaging overes
 ## Key Features
 
 - **🌡️ Temperature-based characterization**: Use readily available temperature data as natural tracers
-- **📊 Statistical framework**: Gamma distributions model aquifer heterogeneity realistically
+- **📊 Parameterize aquifer with two parameters**: Gamma distributions model aquifer heterogeneity realistically
 - **⏱️ Residence time analysis**: Predict water travel times under varying flow conditions
 - **🦠 Pathogen removal assessment**: Calculate log-removal efficiency for treatment design
 - **🔧 Design tools**: Find optimal flow rates for target removal efficiency
