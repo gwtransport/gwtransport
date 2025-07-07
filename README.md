@@ -13,19 +13,21 @@
 ## Three-Step Workflow
 
 ### 1. Characterize Aquifer Heterogeneity
+
 **From temperature measurements to aquifer properties**
 
 Use temperature breakthrough curves to estimate pore volume distributions through inverse modeling. Temperature acts as a natural tracer, revealing how water flows through different paths in heterogeneous aquifers.
 
 - **Input**: Temperature time series, flow rates
-- **Output**: Statistical parameters of aquifer pore volume distribution  
+- **Output**: Statistical parameters of aquifer pore volume distribution
 - **Applications**: Groundwater vulnerability assessment, aquifer characterization
 
 ![Temperature Response Analysis](examples/01_Temperature_response.png)
 
-*Temperature breakthrough curves reveal aquifer heterogeneity - faster breakthrough indicates shorter flow paths*
+_Temperature breakthrough curves reveal aquifer heterogeneity - faster breakthrough indicates shorter flow paths_
 
-### 2. Predict Residence Time Distributions  
+### 2. Predict Residence Time Distributions
+
 **From aquifer properties to water travel times**
 
 Calculate how long water spends in the aquifer under varying flow conditions. Essential for predicting when contamination will arrive or when treatment processes will be effective.
@@ -36,25 +38,26 @@ Calculate how long water spends in the aquifer under varying flow conditions. Es
 
 ![Residence Time Analysis](examples/02_Forward_residence_time.png)
 
-*Residence time distributions show when infiltrating water will be extracted - critical for contamination timing*
+_Residence time distributions show when infiltrating water will be extracted - critical for contamination timing_
 
 ### 3. Design Treatment Systems
+
 **From residence times to pathogen removal efficiency**
 
 Evaluate pathogen log-removal efficiency in bank filtration systems. Design optimal flow rates and assess parallel treatment configurations for safe drinking water production.
 
-- **Input**: Residence times (from Step 2), pathogen removal kinetics  
+- **Input**: Residence times (from Step 2), pathogen removal kinetics
 - **Output**: Log-removal efficiency, design flow rates
 - **Applications**: Drinking water treatment design, regulatory compliance
 
 ![Log-Removal Analysis](examples/03_log_removal_analysis.png)
 
-*Parallel treatment systems require weighted averaging - simple averaging overestimates removal efficiency*
+_Parallel treatment systems require weighted averaging - simple averaging overestimates removal efficiency_
 
 ## Key Features
 
 - **🌡️ Temperature-based characterization**: Use readily available temperature data as natural tracers
-- **📊 Statistical framework**: Gamma distributions model aquifer heterogeneity realistically  
+- **📊 Statistical framework**: Gamma distributions model aquifer heterogeneity realistically
 - **⏱️ Residence time analysis**: Predict water travel times under varying flow conditions
 - **🦠 Pathogen removal assessment**: Calculate log-removal efficiency for treatment design
 - **🔧 Design tools**: Find optimal flow rates for target removal efficiency
@@ -74,7 +77,7 @@ cd gwtransport/examples
 
 # Run all three examples
 python 01_Estimate_aquifer_pore_volume_from_temperature_response.py
-python 02_Estimate_the_residence_time_distribution.py  
+python 02_Estimate_the_residence_time_distribution.py
 python 03_Log_removal.py
 ```
 
@@ -84,7 +87,7 @@ python 03_Log_removal.py
 # Aquifer characterization (Example 1)
 from gwtransport.advection import gamma_forward
 
-# Residence time analysis (Example 2)  
+# Residence time analysis (Example 2)
 from gwtransport.residence_time import residence_time
 
 # Treatment design (Example 3)
@@ -104,7 +107,7 @@ from gwtransport.logremoval import parallel_mean, gamma_find_flow_for_target_mea
 The package models aquifer heterogeneity using gamma distributions of pore volumes, representing the reality that groundwater follows preferential flow paths. Temperature serves as an ideal natural tracer because:
 
 - It's continuously measured in most groundwater systems
-- It follows known thermal retardation processes  
+- It follows known thermal retardation processes
 - It provides quantitative data for inverse modeling
 - It's non-reactive and conservative
 
