@@ -11,8 +11,14 @@ requires-python = ">=3.10"
 keywords = [
   "groundwater",
   "transport",
-  "1D",
-  "deposition",
+  "contaminant",
+  "temperature",
+  "aquifer",
+  "hydrology",
+  "residence-time",
+  "pathogen-removal",
+  "bank-filtration",
+  "water-treatment",
 ]
 authors = [
   { name = "Bas des Tombe"},
