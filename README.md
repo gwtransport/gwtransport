@@ -19,7 +19,7 @@
 Use temperature breakthrough curves to estimate pore volume distributions through inverse modeling. Temperature acts as a natural tracer, revealing how water flows through different paths in heterogeneous aquifers.
 
 - **Input**: Temperature time series, flow rates
-- **Output**: Statistical parameters of aquifer pore volume distribution
+- **Output**: Two statistical parameters of aquifer pore volume distribution
 - **Applications**: Groundwater vulnerability assessment, aquifer characterization
 
 ![Temperature Response Analysis](examples/01_Temperature_response.png)
@@ -32,7 +32,7 @@ _Temperature breakthrough curves reveal aquifer heterogeneity - faster breakthro
 
 Calculate how long water spends in the aquifer under varying flow conditions. Essential for predicting when contamination will arrive or when treatment processes will be effective.
 
-- **Input**: Aquifer parameters (from Step 1), flow time series
+- **Input**: Two aquifer parameters (from Step 1), flow time series
 - **Output**: Residence time distributions over time
 - **Applications**: Contaminant transport forecasting, early warning systems
 
@@ -79,19 +79,6 @@ cd gwtransport/examples
 python 01_Estimate_aquifer_pore_volume_from_temperature_response.py
 python 02_Estimate_the_residence_time_distribution.py
 python 03_Log_removal.py
-```
-
-## Core Functions
-
-```python
-# Aquifer characterization (Example 1)
-from gwtransport.advection import gamma_forward
-
-# Residence time analysis (Example 2)
-from gwtransport.residence_time import residence_time
-
-# Treatment design (Example 3)
-from gwtransport.logremoval import parallel_mean, gamma_find_flow_for_target_mean
 ```
 
 ## Applications
