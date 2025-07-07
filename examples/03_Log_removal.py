@@ -132,5 +132,7 @@ print(f"Plot saved to: {out_path}")
 print("\n=== Key Takeaways ===")
 print("1. Log-removal depends on residence time: R = k * log10(t)")
 print("2. Higher flow rates reduce residence time and log-removal")
-print("3. Use parallel_mean() for parallel systems, not simple averaging. Log-removal is weighted towards the shorter residence times.")
+print(
+    "3. Use parallel_mean() for parallel systems, not simple averaging. Log-removal is weighted towards the shorter residence times."
+)
 print("4. Design applications: gamma_find_flow_for_target_mean() finds required flow")
