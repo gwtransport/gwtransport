@@ -18,7 +18,7 @@
 
 Use temperature breakthrough curves to estimate pore volume distributions through inverse modeling. Temperature acts as a natural tracer, revealing how water flows through different paths in heterogeneous aquifers.
 
-- **Input**: Temperature time series, flow rates
+- **Input**: Temperature time series of infiltration, flow time series
 - **Output**: Two parameters of aquifer pore volume distribution
 - **Applications**: Groundwater vulnerability assessment, aquifer characterization
 
