@@ -91,7 +91,7 @@ python 03_Log_removal.py
 
 ## Scientific Basis
 
-The package models aquifer heterogeneity using gamma distributions of pore volumes, representing the reality that groundwater follows preferential flow paths. Temperature serves as an ideal natural tracer because:
+The package models aquifer heterogeneity using gamma distributions of pore volumes, representing the reality that groundwater follows preferential flow paths. Aquifer pore volumes can also be directly by computing the areas between the streamlines. Temperature serves as an ideal natural tracer because:
 
 - It's continuously measured in most groundwater systems
 - It follows known thermal retardation processes
