@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import gamma as gamma_dist
 
 from gwtransport.gamma import (
     alpha_beta_to_mean_std,
@@ -148,3 +149,164 @@ def test_gamma_alpha_beta_to_mean_std_basic():
     mean, std = alpha_beta_to_mean_std(alpha, beta)
     assert mean == mean_expected, f"Expected mean = {mean_expected}, got {mean}"
     assert np.isclose(std, 4.0, rtol=1e-7), f"Expected std ~ 4.0, got {std}"
+
+
+def test_expected_bin_values_monte_carlo():
+    """Test expected bin values using Monte Carlo sampling with strong curvature gamma distributions."""
+    np.random.seed(42)
+
+    # Test parameters for gamma distributions with strong curvature (low alpha values)
+    test_cases = [
+        {"alpha": 0.5, "beta": 2.0, "n_bins": 5},  # Strong curvature, low alpha
+        {"alpha": 1.0, "beta": 1.5, "n_bins": 4},  # Exponential-like
+        {"alpha": 2.0, "beta": 0.5, "n_bins": 6},  # Moderate curvature
+    ]
+
+    n_samples = 100000
+    tolerance = 0.005  # 0.5% tolerance for convergence
+
+    for params in test_cases:
+        alpha, beta, n_bins = params["alpha"], params["beta"], params["n_bins"]
+
+        # Get theoretical bin properties
+        bin_result = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
+        theoretical_expected = bin_result["expected_value"]
+        lower_bounds = bin_result["lower_bound"]
+        upper_bounds = bin_result["upper_bound"]
+
+        # Generate samples from gamma distribution
+        samples = gamma_dist.rvs(alpha, scale=beta, size=n_samples, random_state=42)
+
+        # Calculate empirical expected values for each bin
+        empirical_expected = np.zeros(n_bins)
+
+        for i in range(n_bins):
+            # Find samples that fall within this bin
+            if i == n_bins - 1:  # Last bin goes to infinity
+                bin_mask = samples >= lower_bounds[i]
+            else:
+                bin_mask = (samples >= lower_bounds[i]) & (samples < upper_bounds[i])
+
+            bin_samples = samples[bin_mask]
+
+            if len(bin_samples) > 0:
+                empirical_expected[i] = np.mean(bin_samples)
+            else:
+                empirical_expected[i] = np.nan
+
+        # Compare theoretical and empirical expected values
+        for i in range(n_bins):
+            if not np.isnan(empirical_expected[i]):
+                relative_error = abs(empirical_expected[i] - theoretical_expected[i]) / theoretical_expected[i]
+                assert relative_error < tolerance, (
+                    f"Bin {i} for alpha={alpha}, beta={beta}: "
+                    f"Theoretical={theoretical_expected[i]:.6f}, "
+                    f"Empirical={empirical_expected[i]:.6f}, "
+                    f"Relative error={relative_error:.6f} > {tolerance}"
+                )
+
+
+def test_expected_bin_values_convergence():
+    """Test convergence of expected values to theoretical values with increasing sample sizes."""
+    np.random.seed(123)
+
+    # Strong curvature gamma distribution
+    alpha, beta = 0.8, 1.2
+    n_bins = 4
+
+    # Get theoretical values
+    bin_result = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
+    theoretical_expected = bin_result["expected_value"]
+    lower_bounds = bin_result["lower_bound"]
+    upper_bounds = bin_result["upper_bound"]
+
+    # Test with increasing sample sizes
+    sample_sizes = [1000, 5000, 25000, 100000]
+
+    for n_samples in sample_sizes:
+        samples = gamma_dist.rvs(alpha, scale=beta, size=n_samples, random_state=123)
+
+        empirical_expected = np.zeros(n_bins)
+
+        for i in range(n_bins):
+            if i == n_bins - 1:
+                bin_mask = samples >= lower_bounds[i]
+            else:
+                bin_mask = (samples >= lower_bounds[i]) & (samples < upper_bounds[i])
+
+            bin_samples = samples[bin_mask]
+
+            if len(bin_samples) > 0:
+                empirical_expected[i] = np.mean(bin_samples)
+            else:
+                empirical_expected[i] = np.nan
+
+        # Check that empirical values are getting closer to theoretical values
+        # Use relaxed tolerance for smaller sample sizes
+        tolerance = 0.04 if n_samples <= 5000 else 0.02
+
+        for i in range(n_bins):
+            if not np.isnan(empirical_expected[i]):
+                relative_error = abs(empirical_expected[i] - theoretical_expected[i]) / theoretical_expected[i]
+                assert relative_error < tolerance, (
+                    f"Sample size {n_samples}, bin {i}: "
+                    f"Theoretical={theoretical_expected[i]:.6f}, "
+                    f"Empirical={empirical_expected[i]:.6f}, "
+                    f"Relative error={relative_error:.6f} > {tolerance}"
+                )
+
+
+def test_multiple_gamma_distributions_expected_values():
+    """Test expected bin values for multiple gamma distributions with different parameters."""
+    np.random.seed(456)
+
+    # Various gamma distributions with different characteristics
+    distributions = [
+        {"alpha": 0.3, "beta": 3.0, "description": "Very strong curvature"},
+        {"alpha": 1.0, "beta": 2.0, "description": "Exponential"},
+        {"alpha": 2.5, "beta": 1.5, "description": "Moderate shape"},
+        {"alpha": 5.0, "beta": 0.8, "description": "Bell-shaped"},
+    ]
+
+    n_samples = 50000
+    n_bins = 5
+    tolerance = 0.01
+
+    for dist_params in distributions:
+        alpha, beta = dist_params["alpha"], dist_params["beta"]
+
+        # Get theoretical bin properties
+        bin_result = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
+        theoretical_expected = bin_result["expected_value"]
+        lower_bounds = bin_result["lower_bound"]
+        upper_bounds = bin_result["upper_bound"]
+
+        # Generate samples
+        samples = gamma_dist.rvs(alpha, scale=beta, size=n_samples, random_state=456)
+
+        # Calculate empirical expected values
+        empirical_expected = np.zeros(n_bins)
+
+        for i in range(n_bins):
+            if i == n_bins - 1:
+                bin_mask = samples >= lower_bounds[i]
+            else:
+                bin_mask = (samples >= lower_bounds[i]) & (samples < upper_bounds[i])
+
+            bin_samples = samples[bin_mask]
+
+            if len(bin_samples) > 0:
+                empirical_expected[i] = np.mean(bin_samples)
+            else:
+                empirical_expected[i] = np.nan
+
+        # Validate convergence for each bin
+        for i in range(n_bins):
+            if not np.isnan(empirical_expected[i]):
+                relative_error = abs(empirical_expected[i] - theoretical_expected[i]) / theoretical_expected[i]
+                assert relative_error < tolerance, (
+                    f"{dist_params['description']} (alpha={alpha}, beta={beta}), bin {i}: "
+                    f"Theoretical={theoretical_expected[i]:.6f}, "
+                    f"Empirical={empirical_expected[i]:.6f}, "
+                    f"Relative error={relative_error:.6f} > {tolerance}"
+                )
