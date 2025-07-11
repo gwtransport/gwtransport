@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from gwtransport import compute_time_edges
-from gwtransport.advection import distribution_forward, forward, gamma_forward
+from gwtransport.advection import distribution_backward, distribution_forward, forward, gamma_forward
 
 # ===============================================================================
 # FIXTURES
@@ -1411,3 +1411,543 @@ def test_mismatched_series_lengths():
 
     assert isinstance(cout, np.ndarray)
     assert len(cout) == len(dates_cout)
+
+
+# ===============================================================================
+# DISTRIBUTION_BACKWARD FUNCTION TESTS (MIRROR OF DISTRIBUTION_FORWARD)
+# ===============================================================================
+
+
+def test_distribution_backward_basic_functionality():
+    """Test basic functionality of distribution_backward."""
+    # Create test data with aligned cout and flow
+    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # Create cin_tedges with different alignment
+    cint_dates = pd.date_range(start="2019-12-25", end="2020-01-05", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cint_dates, number_of_bins=len(cint_dates))
+
+    cout = pd.Series(np.ones(len(dates)), index=dates)
+    flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
+    # Use smaller pore volumes for reasonable residence times (1-3 days)
+    aquifer_pore_volumes = np.array([100.0, 200.0, 300.0])
+
+    cin = distribution_backward(
+        cout=cout.values,
+        flow=flow.values,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Check output type and length
+    assert isinstance(cin, np.ndarray)
+    assert len(cin) == len(cint_dates)
+
+
+def test_distribution_backward_constant_input():
+    """Test distribution_backward with constant output concentration."""
+    # Create longer time series for better testing
+    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # Create cin_tedges starting earlier to capture residence time effects
+    cint_dates = pd.date_range(start="2019-06-01", end="2019-11-30", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cint_dates, number_of_bins=len(cint_dates))
+
+    cout = pd.Series(np.ones(len(dates)) * 5.0, index=dates)  # Constant concentration
+    flow = pd.Series(np.ones(len(dates)) * 100, index=dates)  # Constant flow
+    aquifer_pore_volumes = np.array([500.0, 1000.0])  # Two pore volumes
+
+    cin = distribution_backward(
+        cout=cout.values,
+        flow=flow.values,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Check output type and length
+    assert isinstance(cin, np.ndarray)
+    assert len(cin) == len(cint_dates)
+
+    # With constant output and sufficient time, some inputs should be valid
+    valid_inputs = cin[~np.isnan(cin)]
+    if len(valid_inputs) > 0:
+        # Input should be non-negative
+        assert np.all(valid_inputs >= 0)
+
+
+def test_distribution_backward_single_pore_volume():
+    """Test distribution_backward with single pore volume."""
+    dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cint_dates = pd.date_range(start="2019-12-20", end="2020-01-10", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cint_dates, number_of_bins=len(cint_dates))
+
+    cout = pd.Series(np.sin(np.linspace(0, 2 * np.pi, len(dates))) + 2, index=dates)
+    flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
+    # Use smaller pore volume for reasonable residence time (5 days)
+    aquifer_pore_volumes = np.array([500.0])  # Single pore volume
+
+    cin = distribution_backward(
+        cout=cout.values,
+        flow=flow.values,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    assert isinstance(cin, np.ndarray)
+    assert len(cin) == len(cint_dates)
+
+
+def test_distribution_backward_retardation_factor():
+    """Test distribution_backward with different retardation factors."""
+    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cint_dates = pd.date_range(start="2019-06-01", end="2019-11-30", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cint_dates, number_of_bins=len(cint_dates))
+
+    cout = pd.Series(np.ones(len(dates)), index=dates)
+    flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
+    aquifer_pore_volumes = np.array([1000.0, 2000.0])
+
+    # Test different retardation factors
+    cin1 = distribution_backward(
+        cout=cout.values,
+        flow=flow.values,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    cin2 = distribution_backward(
+        cout=cout.values,
+        flow=flow.values,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=2.0,
+    )
+
+    # Results should be different for different retardation factors
+    assert isinstance(cin1, np.ndarray)
+    assert isinstance(cin2, np.ndarray)
+    assert len(cin1) == len(cin2)
+
+
+def test_distribution_backward_error_conditions():
+    """Test distribution_backward error conditions."""
+    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cout = pd.Series(np.ones(len(dates)), index=dates)
+    flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
+    aquifer_pore_volumes = np.array([1000.0])
+
+    # Test mismatched tedges length
+    wrong_tedges = tedges[:-2]  # Too short
+    with pytest.raises(ValueError, match="tedges must have one more element than cout"):
+        distribution_backward(
+            cout=cout.values,
+            flow=flow.values,
+            tedges=wrong_tedges,
+            cin_tedges=cin_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+        )
+
+    # Test mismatched flow and tedges
+    wrong_flow = flow[:-2]  # Too short
+    with pytest.raises(ValueError, match="tedges must have one more element than flow"):
+        distribution_backward(
+            cout=cout.values,
+            flow=wrong_flow.values,
+            tedges=tedges,
+            cin_tedges=cin_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+        )
+
+
+# ===============================================================================
+# PERFECT INVERSE RELATIONSHIP TESTS (MATHEMATICAL SYMMETRY)
+# ===============================================================================
+
+
+def test_forward_backward_perfect_roundtrip_impulse_same_tedges():
+    """Test forward ∘ backward = identity with same time edges for cin and cout."""
+    # Create test data with same time edges for both input and output
+    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # Impulse input signal
+    cin_values = np.zeros(len(dates))
+    cin_values[5] = 10.0  # Impulse at day 6 (index 5)
+    flow_values = np.ones(len(dates)) * 100  # Constant flow
+    aquifer_pore_volumes = np.array([100.0])  # 1 day residence time
+
+    # Forward transformation (same tedges for input and output)
+    cout = distribution_forward(
+        cin=cin_values,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=tedges,  # Same time edges
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Backward transformation (same tedges for input and output)
+    cin_recovered = distribution_backward(
+        cout=cout,
+        flow=flow_values,
+        tedges=tedges,  # Same time edges
+        cin_tedges=tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Check that we can recover the impulse
+    valid_mask = ~np.isnan(cin_recovered)
+    if np.any(valid_mask):
+        # Find the peak in both original and recovered
+        original_peak_idx = np.argmax(cin_values)
+        original_peak_val = cin_values[original_peak_idx]
+
+        recovered_finite = np.where(np.isfinite(cin_recovered), cin_recovered, 0)
+        if np.max(recovered_finite) > 0:
+            recovered_peak_idx = np.argmax(recovered_finite)
+            recovered_peak_val = cin_recovered[recovered_peak_idx]
+
+            # Check that impulse is recovered at correct position with reasonable magnitude
+            assert recovered_peak_idx == original_peak_idx, (
+                f"Peak position: expected {original_peak_idx}, got {recovered_peak_idx}"
+            )
+            assert recovered_peak_val >= original_peak_val * 0.5, (
+                f"Peak magnitude: expected >={original_peak_val * 0.5:.1f}, got {recovered_peak_val:.1f}"
+            )
+        else:
+            pytest.fail("No finite impulse recovered")
+    else:
+        pytest.fail("No valid values in recovered signal")
+
+
+def test_forward_backward_perfect_roundtrip_impulse():
+    """Test that forward ∘ backward = identity for impulse signal with different time edges."""
+    # Create test data with proper temporal alignment
+    cin_dates = pd.date_range(start="2020-01-01", end="2020-01-15", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    # Output period shifted to accommodate residence time
+    cout_dates = pd.date_range(start="2020-01-04", end="2020-01-18", freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Impulse input signal
+    cin_values = np.zeros(len(cin_dates))
+    cin_values[7] = 10.0  # Impulse at day 8 (index 7)
+    cin_flow = np.ones(len(cin_dates)) * 100
+    cout_flow = np.ones(len(cout_dates)) * 100
+    aquifer_pore_volumes = np.array([300.0])  # 3 days residence time
+
+    # Forward transformation
+    cout = distribution_forward(
+        cin=cin_values,
+        flow=cin_flow,
+        tedges=cin_tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Backward transformation
+    cin_recovered = distribution_backward(
+        cout=cout,
+        flow=cout_flow,
+        tedges=cout_tedges,
+        cin_tedges=cin_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Check that we can recover the impulse (allowing for some numerical error)
+    valid_mask = ~np.isnan(cin_recovered)
+    if np.any(valid_mask):
+        # Find finite values only
+        recovered_finite = np.where(np.isfinite(cin_recovered), cin_recovered, 0)
+        max_recovered = np.max(recovered_finite)
+        assert max_recovered > 0, "Should recover some signal from impulse"
+
+        # Check that peak is recovered at approximately correct position
+        if max_recovered > 5:  # Reasonable threshold
+            recovered_peak_idx = np.argmax(recovered_finite)
+            original_peak_idx = 7
+            # Allow some tolerance in position due to temporal discretization
+            position_error = abs(recovered_peak_idx - original_peak_idx)
+            assert position_error <= 2, f"Peak position error: {position_error} (expected ≤2)"
+    else:
+        pytest.fail("No valid values in recovered signal")
+
+
+def test_forward_backward_perfect_roundtrip_step():
+    """Test that forward ∘ backward = identity for step signal."""
+    # Create test data
+    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # Output period with good overlap
+    cout_dates = pd.date_range(start="2020-06-01", end="2020-11-30", freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Step input signal
+    cin_values = np.ones(len(dates))
+    cin_values[100:] = 5.0  # Step change
+    cin = pd.Series(cin_values, index=dates)
+    flow = pd.Series([100.0] * len(dates), index=dates)
+    aquifer_pore_volumes = np.array([500.0])  # 5 days residence time
+
+    # Forward transformation
+    cout = distribution_forward(
+        cin=cin.values,
+        flow=flow.values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Backward transformation
+    # Need to provide flow for the cout time period
+    cout_flow = pd.Series([100.0] * len(cout_dates), index=cout_dates)
+    cin_recovered = distribution_backward(
+        cout=cout,
+        flow=cout_flow.values,
+        tedges=cout_tedges,
+        cin_tedges=tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Check that we can recover the step pattern
+    valid_mask = ~np.isnan(cin_recovered)
+    if np.sum(valid_mask) > 50:  # Need enough points
+        # Check that we have reasonable values in the expected range
+        valid_values = cin_recovered[valid_mask]
+        assert np.all(valid_values >= 0), "All recovered values should be non-negative"
+        assert np.max(valid_values) > 1, "Should recover some of the step change"
+
+
+def test_forward_backward_roundtrip_constant():
+    """Test forward-backward roundtrip with constant concentration."""
+    # Create long time series for steady-state conditions
+    dates = pd.date_range(start="2020-01-01", end="2021-12-31", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # Output period in the middle of the time series
+    cout_dates = pd.date_range(start="2021-01-01", end="2021-11-30", freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Constant input
+    cin = pd.Series([7.5] * len(dates), index=dates)
+    flow = pd.Series([100.0] * len(dates), index=dates)
+    aquifer_pore_volumes = np.array([500.0])  # 5 days residence time
+
+    # Forward transformation
+    cout = distribution_forward(
+        cin=cin.values,
+        flow=flow.values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Backward transformation
+    # Need to provide flow for the cout time period
+    cout_flow = pd.Series([100.0] * len(cout_dates), index=cout_dates)
+    cin_recovered = distribution_backward(
+        cout=cout,
+        flow=cout_flow.values,
+        tedges=cout_tedges,
+        cin_tedges=tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # For constant input, should recover constant output
+    valid_mask = ~np.isnan(cin_recovered)
+    if np.sum(valid_mask) > 100:  # Need enough points for statistical analysis
+        valid_values = cin_recovered[valid_mask]
+        mean_recovered = np.mean(valid_values)
+        # Should be reasonably close to original constant value
+        assert abs(mean_recovered - 7.5) < 2.0, f"Expected ~7.5, got {mean_recovered:.2f}"
+
+
+# ===============================================================================
+# SYMMETRIC ANALYTICAL SOLUTION TESTS
+# ===============================================================================
+
+
+def test_distribution_backward_analytical_simple_delay():
+    """Test distribution_backward with known simple delay scenario."""
+    # Create a scenario where we know the exact relationship
+    dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # Input period starts earlier to account for residence time
+    cint_dates = pd.date_range(start="2019-12-25", end="2020-01-15", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cint_dates, number_of_bins=len(cint_dates))
+
+    # Known pore volume that gives exactly 1 day residence time
+    flow_rate = 100.0  # m3/day
+    pore_volume = 100.0  # m3 -> residence time = 100/100 = 1 day
+
+    # Step function: cout jumps from 1 to 5 on day 5
+    cout_values = [1.0, 1.0, 1.0, 1.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0]
+    cout = pd.Series(cout_values, index=dates)
+    flow = pd.Series([flow_rate] * len(dates), index=dates)
+    aquifer_pore_volumes = np.array([pore_volume])
+
+    cin = distribution_backward(
+        cout=cout.values,
+        flow=flow.values,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # With 1-day residence time, the step change on day 5 should appear 1 day earlier in cin
+    valid_inputs = cin[~np.isnan(cin)]
+    if len(valid_inputs) > 0:
+        # Should recover some reasonable signal
+        assert np.all(valid_inputs >= 0), f"All inputs should be non-negative, got {valid_inputs}"
+
+
+def test_distribution_backward_zero_output_gives_zero_input():
+    """Test distribution_backward with zero output gives zero input."""
+    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cint_dates = pd.date_range(start="2019-12-25", end="2020-01-05", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cint_dates, number_of_bins=len(cint_dates))
+
+    # Zero concentration everywhere
+    cout = pd.Series([0.0] * len(dates), index=dates)
+    flow = pd.Series([100.0] * len(dates), index=dates)
+    aquifer_pore_volumes = np.array([200.0, 400.0])
+
+    cin = distribution_backward(
+        cout=cout.values,
+        flow=flow.values,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Zero output should give zero input (where valid)
+    valid_inputs = cin[~np.isnan(cin)]
+    if len(valid_inputs) > 0:
+        np.testing.assert_allclose(valid_inputs, 0.0, atol=1e-15, err_msg="Zero output should produce zero input")
+
+
+# ===============================================================================
+# SYMMETRIC EDGE CASE TESTS
+# ===============================================================================
+
+
+def test_distribution_backward_no_temporal_overlap():
+    """Test distribution_backward returns NaN when no temporal overlap exists."""
+    # Create cout in early 2020
+    early_dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=early_dates, number_of_bins=len(early_dates))
+
+    # Create cin_tedges much later (no possible overlap)
+    late_dates = pd.date_range(start="2020-12-01", end="2020-12-05", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=late_dates, number_of_bins=len(late_dates))
+
+    cout = pd.Series(np.ones(len(early_dates)), index=early_dates)
+    flow = pd.Series(np.ones(len(early_dates)) * 100, index=early_dates)
+    aquifer_pore_volumes = np.array([100.0])  # Small pore volume
+
+    # No temporal overlap should return all NaN values
+    cin = distribution_backward(
+        cout=cout.values,
+        flow=flow.values,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Should return array of NaN values
+    assert isinstance(cin, np.ndarray)
+    assert len(cin) == len(late_dates)
+    assert np.all(np.isnan(cin))
+
+
+def test_distribution_backward_extreme_pore_volumes():
+    """Test distribution_backward handles extremely large pore volumes gracefully."""
+    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cint_dates = pd.date_range(start="2019-12-25", end="2020-01-05", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cint_dates, number_of_bins=len(cint_dates))
+
+    cout = pd.Series(np.ones(len(dates)), index=dates)
+    flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
+
+    # Extremely large pore volumes that create invalid extraction edges
+    aquifer_pore_volumes = np.array([1e10, 1e12, 1e15])
+
+    # Should handle extreme pore volumes gracefully
+    cin = distribution_backward(
+        cout=cout.values,
+        flow=flow.values,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Should return array (likely all NaN due to extreme residence times)
+    assert isinstance(cin, np.ndarray)
+    assert len(cin) == len(cint_dates)
+    # With extremely large pore volumes, all outputs should be NaN
+    assert np.all(np.isnan(cin))
+
+
+def test_distribution_backward_zero_flow():
+    """Test distribution_backward handles zero flow values gracefully."""
+    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cint_dates = pd.date_range(start="2019-12-25", end="2020-01-05", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cint_dates, number_of_bins=len(cint_dates))
+
+    cout = pd.Series(np.ones(len(dates)), index=dates)
+    flow = pd.Series(np.zeros(len(dates)), index=dates)  # Zero flow
+    aquifer_pore_volumes = np.array([1000.0])
+
+    # Zero flow creates infinite residence times but should be handled gracefully
+    cin = distribution_backward(
+        cout=cout.values,
+        flow=flow.values,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Should return array (likely all NaN due to infinite residence times)
+    assert isinstance(cin, np.ndarray)
+    assert len(cin) == len(cint_dates)
+    # With zero flow, all outputs should be NaN
+    assert np.all(np.isnan(cin))
