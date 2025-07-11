@@ -474,6 +474,34 @@ def distribution_forward(
     valid_pv_count = np.sum(valid_bins_2d, axis=0)
 
     # Initialize accumulator
+    normalized_weights = _distribution_forward_weights(
+        cout_tedges,
+        aquifer_pore_volumes,
+        cin_values,
+        flow_values,
+        cin_tedges_days,
+        infiltration_tedges_2d,
+        valid_bins_2d,
+        valid_pv_count,
+    )
+
+    # Apply to concentrations and handle NaN for periods with no contributions
+    out = normalized_weights.dot(cin_values)
+    out[valid_pv_count == 0] = np.nan
+
+    return out
+
+
+def _distribution_forward_weights(
+    cout_tedges,
+    aquifer_pore_volumes,
+    cin_values,
+    flow_values,
+    cin_tedges_days,
+    infiltration_tedges_2d,
+    valid_bins_2d,
+    valid_pv_count,
+):
     accumulated_weights = np.zeros((len(cout_tedges) - 1, len(cin_values)))
 
     # Loop over each pore volume
@@ -494,12 +522,7 @@ def distribution_forward(
     valid_weights = total_weights > 0
     normalized_weights = np.zeros_like(flow_weighted_averaged)
     normalized_weights[valid_weights, :] = flow_weighted_averaged[valid_weights, :] / total_weights[valid_weights, None]
-
-    # Apply to concentrations and handle NaN for periods with no contributions
-    out = np.sum(normalized_weights * cin_values[None, :], axis=1)
-    out[valid_pv_count == 0] = np.nan
-
-    return out
+    return normalized_weights
 
 
 def distribution_backward(cout, flow, aquifer_pore_volume_edges, retardation_factor=1.0):
