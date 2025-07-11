@@ -1,3 +1,5 @@
+import contextlib
+
 import numpy as np
 from numpy.testing import assert_allclose
 
@@ -105,8 +107,10 @@ def test_weight_sum_behavior():
     result2 = parallel_mean(log_removals, [0.7, 0.2])  # Sum < 1
 
     # Results should be numeric (calculation proceeds)
-    assert isinstance(result1, (int, float)) and not np.isnan(result1)
-    assert isinstance(result2, (int, float)) and not np.isnan(result2)
+    assert isinstance(result1, (int, float))
+    assert not np.isnan(result1)
+    assert isinstance(result2, (int, float))
+    assert not np.isnan(result2)
 
 
 def test_length_mismatch_behavior():
@@ -248,10 +252,8 @@ def test_axis_parameter_behavior():
         pass
 
     # Test potentially out of bounds axis - let numpy handle
-    try:
+    with contextlib.suppress(ValueError, IndexError):
         parallel_mean(log_removals_2d, axis=2)
-    except (ValueError, IndexError):
-        pass
 
 
 def test_negative_axis():
