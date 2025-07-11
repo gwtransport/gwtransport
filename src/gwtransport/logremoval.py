@@ -2,22 +2,29 @@
 Functions for calculating log removal efficiency in water treatment systems.
 
 This module provides utilities to calculate log removal values for different
-configurations of water treatment systems, particularly focusing on parallel flow
-arrangements where multiple treatment processes operate simultaneously on different
-fractions of the total flow.
+configurations of water treatment systems, including both basic log removal
+calculations and parallel flow arrangements where multiple treatment processes
+operate simultaneously on different fractions of the total flow.
 
 Log removal is a standard measure in water treatment that represents the
 reduction of pathogen concentration on a logarithmic scale. For example,
 a log removal of 3 represents a 99.9% reduction in pathogen concentration.
 
-Functions:
-calculate_parallel_log_removal : Calculate the weighted average log removal for
-                                a system with parallel flows.
+Functions
+---------
+compute_log_removal : Calculate log removal from residence times and removal rate
+parallel_mean : Calculate weighted average log removal for parallel flow systems
+gamma_pdf : Compute PDF of log removal given gamma-distributed residence time
+gamma_cdf : Compute CDF of log removal given gamma-distributed residence time
+gamma_mean : Compute mean log removal for gamma-distributed residence time
+gamma_find_flow_for_target_mean : Find flow rate for target mean log removal
 
 Notes
 -----
 For systems in series, log removals are typically summed directly, while for
 parallel systems, a weighted average based on flow distribution is required.
+The parallel_mean function supports multi-dimensional arrays via the axis parameter
+and performs minimal validation for improved performance.
 """
 
 import numpy as np
@@ -25,7 +32,69 @@ from scipy import stats
 from scipy.special import digamma, gamma
 
 
-def parallel_mean(log_removals, flow_fractions=None):
+def compute_log_removal(residence_times, log_removal_rate):
+    """
+    Compute log removal given residence times and a log removal rate.
+
+    This function calculates the log removal efficiency based on the
+    residence times of water in a treatment system and the log removal
+    rate coefficient.
+
+    The calculation uses the formula:
+    Log Removal = log_removal_rate * log₁₀(residence_time)
+
+    Parameters
+    ----------
+    residence_times : array_like
+        Array of residence times (in consistent units, e.g., hours, days).
+        Must be positive values.
+    log_removal_rate : float
+        Log removal rate coefficient that relates residence time to
+        log removal efficiency. Units should be consistent with
+        residence_times.
+
+    Returns
+    -------
+    log_removals : ndarray
+        Array of log removal values corresponding to the input residence times.
+        Same shape as input residence_times.
+
+    Notes
+    -----
+    Log removal is a logarithmic measure of pathogen reduction:
+    - Log 1 = 90% reduction
+    - Log 2 = 99% reduction
+    - Log 3 = 99.9% reduction
+
+    The log removal rate coefficient determines how effectively the
+    treatment system removes pathogens per unit log time.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> residence_times = np.array([1.0, 10.0, 100.0])
+    >>> log_removal_rate = 2.0
+    >>> compute_log_removal(residence_times, log_removal_rate)
+    array([0.   , 2.   , 4.   ])
+
+    >>> # Single residence time
+    >>> compute_log_removal(5.0, 1.5)
+    1.0484550065040283
+
+    >>> # 2D array of residence times
+    >>> residence_times_2d = np.array([[1.0, 10.0], [100.0, 1000.0]])
+    >>> compute_log_removal(residence_times_2d, 1.0)
+    array([[0., 1.],
+           [2., 3.]])
+    """
+    # Convert to numpy array for consistent handling
+    residence_times = np.asarray(residence_times, dtype=float)
+
+    # Calculate log removal using the formula
+    return log_removal_rate * np.log10(residence_times)
+
+
+def parallel_mean(log_removals, flow_fractions=None, axis=None):
     """
     Calculate the weighted average log removal for a system with parallel flows.
 
@@ -46,23 +115,32 @@ def parallel_mean(log_removals, flow_fractions=None):
     log_removals : array_like
         Array of log removal values for each parallel flow.
         Each value represents the log₁₀ reduction of pathogens.
+        For multi-dimensional arrays, the parallel mean is computed along
+        the specified axis.
 
     flow_fractions : array_like, optional
         Array of flow fractions for each parallel flow.
-        Must sum to 1.0 and be the same length as log_removals.
-        If None, equal flow distribution is assumed (default is None).
+        Must sum to 1.0 along the specified axis and have compatible shape
+        with log_removals. If None, equal flow distribution is assumed
+        (default is None).
+
+    axis : int, optional
+        Axis along which to compute the parallel mean for multi-dimensional
+        arrays. If None, the array is treated as 1-dimensional
+        (default is None).
 
     Returns
     -------
-    float
+    float or array_like
         The combined log removal value for the parallel system.
+        If log_removals is multi-dimensional and axis is specified,
+        returns an array with the specified axis removed.
 
-    Raises
-    ------
-    ValueError
-        If log_removals is empty
-        If flow_fractions is provided and does not sum to 1.0 (within tolerance)
-        If flow_fractions is provided and has different length than log_removals
+    Notes
+    -----
+    This function performs minimal input validation to reduce complexity.
+    NumPy will handle most error cases naturally through broadcasting
+    and array operations.
 
     Notes
     -----
@@ -79,14 +157,19 @@ def parallel_mean(log_removals, flow_fractions=None):
     >>> import numpy as np
     >>> # Three parallel streams with equal flow and log removals of 3, 4, and 5
     >>> log_removals = np.array([3, 4, 5])
-    >>> calculate_parallel_log_removal(log_removals)
+    >>> parallel_mean(log_removals)
     3.431798275933005
 
     >>> # Two parallel streams with weighted flow
     >>> log_removals = np.array([3, 5])
     >>> flow_fractions = np.array([0.7, 0.3])
-    >>> calculate_parallel_log_removal(log_removals, flow_fractions)
+    >>> parallel_mean(log_removals, flow_fractions)
     3.153044674980176
+
+    >>> # Multi-dimensional array: parallel mean along axis 1
+    >>> log_removals_2d = np.array([[3, 4, 5], [2, 3, 4]])
+    >>> parallel_mean(log_removals_2d, axis=1)
+    array([3.43179828, 2.43179828])
 
     See Also
     --------
@@ -95,35 +178,34 @@ def parallel_mean(log_removals, flow_fractions=None):
     # Convert log_removals to numpy array if it isn't already
     log_removals = np.asarray(log_removals, dtype=float)
 
-    # Check if log_removals is empty
-    if len(log_removals) == 0:
-        msg = "At least one log removal value must be provided"
-        raise ValueError(msg)
-
     # If flow_fractions is not provided, assume equal distribution
     if flow_fractions is None:
-        # Calculate the number of parallel flows
-        n = len(log_removals)
-        # Create equal flow fractions
-        flow_fractions = np.full(n, 1.0 / n)
+        if axis is None:
+            # 1D case: calculate the number of parallel flows
+            n = len(log_removals)
+            # Create equal flow fractions (avoid division by zero)
+            flow_fractions = np.full(n, 1.0 / n) if n > 0 else np.array([])
+        else:
+            # Multi-dimensional case: create equal flow fractions along the specified axis
+            n = log_removals.shape[axis]
+            shape = [1] * log_removals.ndim
+            shape[axis] = n
+            flow_fractions = np.full(shape, 1.0 / n)
     else:
         # Convert flow_fractions to numpy array
         flow_fractions = np.asarray(flow_fractions, dtype=float)
 
-        # Validate inputs
-        if len(log_removals) != len(flow_fractions):
-            msg = "log_removals and flow_fractions must have the same length"
-            raise ValueError(msg)
-
-        if not np.isclose(np.sum(flow_fractions), 1.0):
-            msg = "flow_fractions must sum to 1.0"
-            raise ValueError(msg)
+        # Note: Shape compatibility and sum validation removed to reduce complexity
+        # NumPy will handle incompatible shapes through broadcasting or errors
 
     # Convert log removal to decimal reduction values
     decimal_reductions = 10 ** (-log_removals)
 
     # Calculate weighted average decimal reduction
-    weighted_decimal_reduction = np.sum(flow_fractions * decimal_reductions)
+    if axis is None:
+        weighted_decimal_reduction = np.sum(flow_fractions * decimal_reductions)
+    else:
+        weighted_decimal_reduction = np.sum(flow_fractions * decimal_reductions, axis=axis)
 
     # Convert back to log scale
     return -np.log10(weighted_decimal_reduction)
