@@ -202,10 +202,7 @@ def parallel_mean(log_removals, flow_fractions=None, axis=None):
     decimal_reductions = 10 ** (-log_removals)
 
     # Calculate weighted average decimal reduction
-    if axis is None:
-        weighted_decimal_reduction = np.sum(flow_fractions * decimal_reductions)
-    else:
-        weighted_decimal_reduction = np.sum(flow_fractions * decimal_reductions, axis=axis)
+    weighted_decimal_reduction = np.sum(flow_fractions * decimal_reductions, axis=axis)
 
     # Convert back to log scale
     return -np.log10(weighted_decimal_reduction)
