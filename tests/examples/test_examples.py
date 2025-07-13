@@ -3,6 +3,7 @@ import subprocess
 import sys
 
 import nbformat
+import pytest
 from nbconvert.preprocessors import ExecutePreprocessor
 
 
@@ -62,3 +63,20 @@ def test_ipynb(ipynb_path):
         # Re-raise with more context about which notebook failed
         error_msg = f"Notebook execution failed for {ipynb_path}: {e}"
         raise AssertionError(error_msg) from e
+
+
+def test_failing_notebook_detection():
+    """
+    Test that failing notebooks are properly detected and raise AssertionError.
+
+    This test ensures our notebook testing infrastructure correctly catches
+    execution failures in notebooks.
+    """
+    failing_notebook_path = os.path.join(os.path.dirname(__file__), "..", "notebooks", "failing_notebook.ipynb")
+
+    # Verify the failing notebook exists
+    assert os.path.exists(failing_notebook_path), f"Test notebook not found: {failing_notebook_path}"
+
+    # The test_ipynb function should raise AssertionError for failing notebooks
+    with pytest.raises(AssertionError, match="Notebook execution failed"):
+        test_ipynb(failing_notebook_path)
