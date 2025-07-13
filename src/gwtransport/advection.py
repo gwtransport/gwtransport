@@ -454,6 +454,14 @@ def distribution_forward(
     # Convert to arrays for vectorized operations
     cin_values = np.asarray(cin)
     flow_values = np.asarray(flow)
+
+    # Validate inputs do not contain NaN values
+    if np.any(np.isnan(cin_values)):
+        msg = "cin contains NaN values, which are not allowed"
+        raise ValueError(msg)
+    if np.any(np.isnan(flow_values)):
+        msg = "flow contains NaN values, which are not allowed"
+        raise ValueError(msg)
     cin_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
     cout_tedges_days = ((cout_tedges - tedges[0]) / pd.Timedelta(days=1)).values
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
@@ -673,6 +681,14 @@ def distribution_backward(
     # Convert to arrays for vectorized operations
     cout_values = np.asarray(cout)
     flow_values = np.asarray(flow)
+
+    # Validate inputs do not contain NaN values
+    if np.any(np.isnan(cout_values)):
+        msg = "cout contains NaN values, which are not allowed"
+        raise ValueError(msg)
+    if np.any(np.isnan(flow_values)):
+        msg = "flow contains NaN values, which are not allowed"
+        raise ValueError(msg)
     cout_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
     cin_tedges_days = ((cin_tedges - tedges[0]) / pd.Timedelta(days=1)).values
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
@@ -705,9 +721,7 @@ def distribution_backward(
     )
 
     # Apply to concentrations and handle NaN for periods with no contributions
-    # Replace NaN values in cout_values with 0 for matrix multiplication (like forward handles edge cases)
-    cout_clean = np.where(np.isnan(cout_values), 0.0, cout_values)
-    out = normalized_weights.dot(cout_clean)
+    out = normalized_weights.dot(cout_values)
     out[valid_pv_count == 0] = np.nan
 
     return out

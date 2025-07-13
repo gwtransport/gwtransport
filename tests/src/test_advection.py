@@ -1605,8 +1605,10 @@ def test_forward_backward_perfect_roundtrip_impulse_same_tedges():
     )
 
     # Backward transformation (same tedges for input and output)
+    # Replace NaN values with 0 for roundtrip testing (NaN means no data contribution)
+    cout_clean = np.where(np.isnan(cout), 0.0, cout)
     cin_recovered = distribution_backward(
-        cout=cout,
+        cout=cout_clean,
         flow=flow_values,
         tedges=tedges,  # Same time edges
         cin_tedges=tedges,
@@ -1667,8 +1669,10 @@ def test_forward_backward_perfect_roundtrip_impulse():
     )
 
     # Backward transformation
+    # Replace NaN values with 0 for roundtrip testing (NaN means no data contribution)
+    cout_clean = np.where(np.isnan(cout), 0.0, cout)
     cin_recovered = distribution_backward(
-        cout=cout,
+        cout=cout_clean,
         flow=cout_flow,
         tedges=cout_tedges,
         cin_tedges=cin_tedges,
