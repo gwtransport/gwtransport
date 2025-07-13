@@ -22,3 +22,7 @@ def pytest_generate_tests(metafunc):
     if "pythonfile_path" in metafunc.fixturenames:
         filepaths = sorted(glob(os.path.join("examples", "*.py")))
         metafunc.parametrize("pythonfile_path", filepaths)
+
+    if "ipynb_path" in metafunc.fixturenames:
+        filepaths = sorted(glob(os.path.join("examples", "*.ipynb")))
+        metafunc.parametrize("ipynb_path", filepaths)
