@@ -26,10 +26,10 @@ from example_data_generation import generate_synthetic_data
 
 from gwtransport import gamma as gamma_utils
 from gwtransport.logremoval import (
-    compute_log_removal,
     gamma_find_flow_for_target_mean,
     gamma_mean,
     parallel_mean,
+    residence_time_to_log_removal,
 )
 from gwtransport.residence_time import residence_time
 
@@ -265,7 +265,7 @@ rt_forward_rf1 = residence_time(
 )
 
 # Compute log-removal for each flow path and time point
-log_removal_array = compute_log_removal(residence_times=rt_forward_rf1, log_removal_rate=log_removal_rate)
+log_removal_array = residence_time_to_log_removal(residence_times=rt_forward_rf1, log_removal_rate=log_removal_rate)
 
 # Average across all flow paths (using correct parallel averaging)
 df["log_removal"] = parallel_mean(log_removal_array, axis=0)
