@@ -66,3 +66,6 @@ config-path = "ruff.toml"
 addopts = [
     "--import-mode=importlib",
 ]
+env = [
+    "JUPYTER_PLATFORM_DIRS=1"
+]
