@@ -65,6 +65,46 @@ def test_ipynb(ipynb_path):
         raise AssertionError(error_msg) from e
 
 
+def test_notebook_cells_executed(ipynb_path):
+    """
+    Test that notebook cells have been executed by checking execution numbers.
+
+    Parameters
+    ----------
+    ipynb_path : str
+        The path to the Jupyter notebook to check.
+
+    Raises
+    ------
+    AssertionError
+        If any code cell lacks an execution number.
+    """
+    with open(ipynb_path, encoding="utf-8") as f:
+        nb = nbformat.read(f, as_version=nbformat.NO_CONVERT)
+
+    for i, cell in enumerate(nb.cells):
+        if cell.cell_type == "code":
+            execution_count = cell.get("execution_count")
+            assert execution_count is not None, f"Cell {i} in {ipynb_path} has not been executed (execution_count is None)"
+            assert isinstance(execution_count, int), f"Cell {i} in {ipynb_path} has invalid execution_count: {execution_count}"
+
+
+@pytest.mark.xfail(reason="This notebook is expected to fail during execution")
+def test_failing_notebook_xfail():
+    """
+    Test that the failing notebook fails as expected.
+
+    This test is marked with xfail since the notebook is designed to fail.
+    """
+    failing_notebook_path = os.path.join(os.path.dirname(__file__), "..", "notebooks", "failing_notebook.ipynb")
+
+    # Verify the failing notebook exists
+    assert os.path.exists(failing_notebook_path), f"Test notebook not found: {failing_notebook_path}"
+
+    # This should fail due to unexecuted cells
+    test_notebook_cells_executed(failing_notebook_path)
+
+
 def test_failing_notebook_detection():
     """
     Test that failing notebooks are properly detected and raise AssertionError.
