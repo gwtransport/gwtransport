@@ -38,6 +38,7 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
+  "ipykernel",
   "pandas",
   "scipy",
   "matplotlib",
