@@ -85,8 +85,12 @@ def test_notebook_cells_executed(ipynb_path):
     for i, cell in enumerate(nb.cells):
         if cell.cell_type == "code":
             execution_count = cell.get("execution_count")
-            assert execution_count is not None, f"Cell {i} in {ipynb_path} has not been executed (execution_count is None)"
-            assert isinstance(execution_count, int), f"Cell {i} in {ipynb_path} has invalid execution_count: {execution_count}"
+            assert execution_count is not None, (
+                f"Cell {i} in {ipynb_path} has not been executed (execution_count is None)"
+            )
+            assert isinstance(execution_count, int), (
+                f"Cell {i} in {ipynb_path} has invalid execution_count: {execution_count}"
+            )
 
 
 @pytest.mark.xfail(reason="This notebook is expected to fail during execution")
