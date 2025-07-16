@@ -12,7 +12,7 @@ a log removal of 3 represents a 99.9% reduction in pathogen concentration.
 
 Functions
 ---------
-compute_log_removal : Calculate log removal from residence times and removal rate
+residence_time_to_log_removal : Calculate log removal from residence times and removal rate
 parallel_mean : Calculate weighted average log removal for parallel flow systems
 gamma_pdf : Compute PDF of log removal given gamma-distributed residence time
 gamma_cdf : Compute CDF of log removal given gamma-distributed residence time
@@ -32,7 +32,7 @@ from scipy import stats
 from scipy.special import digamma, gamma
 
 
-def compute_log_removal(residence_times, log_removal_rate):
+def residence_time_to_log_removal(residence_times, log_removal_rate):
     """
     Compute log removal given residence times and a log removal rate.
 
@@ -74,16 +74,16 @@ def compute_log_removal(residence_times, log_removal_rate):
     >>> import numpy as np
     >>> residence_times = np.array([1.0, 10.0, 100.0])
     >>> log_removal_rate = 2.0
-    >>> compute_log_removal(residence_times, log_removal_rate)
+    >>> residence_time_to_log_removal(residence_times, log_removal_rate)
     array([0.   , 2.   , 4.   ])
 
     >>> # Single residence time
-    >>> compute_log_removal(5.0, 1.5)
+    >>> residence_time_to_log_removal(5.0, 1.5)
     1.0484550065040283
 
     >>> # 2D array of residence times
     >>> residence_times_2d = np.array([[1.0, 10.0], [100.0, 1000.0]])
-    >>> compute_log_removal(residence_times_2d, 1.0)
+    >>> residence_time_to_log_removal(residence_times_2d, 1.0)
     array([[0., 1.],
            [2., 3.]])
     """

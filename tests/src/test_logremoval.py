@@ -3,7 +3,12 @@ import contextlib
 import numpy as np
 from numpy.testing import assert_allclose
 
-from gwtransport.logremoval import compute_log_removal, gamma_find_flow_for_target_mean, gamma_mean, parallel_mean
+from gwtransport.logremoval import (
+    gamma_find_flow_for_target_mean,
+    gamma_mean,
+    parallel_mean,
+    residence_time_to_log_removal,
+)
 
 
 def test_single_flow():
@@ -288,34 +293,34 @@ def test_empty_array_with_axis():
 
 
 def test_compute_log_removal_basic():
-    """Test basic functionality of compute_log_removal."""
+    """Test basic functionality of residence_time_to_log_removal."""
     # Test with single values
-    assert_allclose(compute_log_removal(1.0, 2.0), 0.0)  # log10(1) = 0
-    assert_allclose(compute_log_removal(10.0, 2.0), 2.0)  # 2 * log10(10) = 2
-    assert_allclose(compute_log_removal(100.0, 1.5), 3.0)  # 1.5 * log10(100) = 3
+    assert_allclose(residence_time_to_log_removal(1.0, 2.0), 0.0)  # log10(1) = 0
+    assert_allclose(residence_time_to_log_removal(10.0, 2.0), 2.0)  # 2 * log10(10) = 2
+    assert_allclose(residence_time_to_log_removal(100.0, 1.5), 3.0)  # 1.5 * log10(100) = 3
 
     # Test with different log_removal_rates
-    assert_allclose(compute_log_removal(10.0, 1.0), 1.0)
-    assert_allclose(compute_log_removal(10.0, 3.0), 3.0)
+    assert_allclose(residence_time_to_log_removal(10.0, 1.0), 1.0)
+    assert_allclose(residence_time_to_log_removal(10.0, 3.0), 3.0)
 
 
 def test_compute_log_removal_arrays():
-    """Test compute_log_removal with array inputs."""
+    """Test residence_time_to_log_removal with array inputs."""
     residence_times = np.array([1.0, 10.0, 100.0])
     log_removal_rate = 2.0
 
-    result = compute_log_removal(residence_times, log_removal_rate)
+    result = residence_time_to_log_removal(residence_times, log_removal_rate)
     expected = np.array([0.0, 2.0, 4.0])
 
     assert_allclose(result, expected)
 
 
 def test_compute_log_removal_2d_arrays():
-    """Test compute_log_removal with 2D array inputs."""
+    """Test residence_time_to_log_removal with 2D array inputs."""
     residence_times_2d = np.array([[1.0, 10.0], [100.0, 1000.0]])
     log_removal_rate = 1.0
 
-    result = compute_log_removal(residence_times_2d, log_removal_rate)
+    result = residence_time_to_log_removal(residence_times_2d, log_removal_rate)
     expected = np.array([[0.0, 1.0], [2.0, 3.0]])
 
     assert_allclose(result, expected)
@@ -326,33 +331,33 @@ def test_compute_log_removal_formula_verification():
     residence_times = np.array([5.0, 25.0, 50.0])
     log_removal_rate = 1.5
 
-    result = compute_log_removal(residence_times, log_removal_rate)
+    result = residence_time_to_log_removal(residence_times, log_removal_rate)
     expected = log_removal_rate * np.log10(residence_times)
 
     assert_allclose(result, expected, rtol=1e-15)
 
 
 def test_compute_log_removal_edge_cases():
-    """Test compute_log_removal with edge cases."""
+    """Test residence_time_to_log_removal with edge cases."""
     # Very small residence time
-    result = compute_log_removal(0.1, 2.0)
+    result = residence_time_to_log_removal(0.1, 2.0)
     expected = 2.0 * np.log10(0.1)  # Should be negative
     assert_allclose(result, expected)
     assert result < 0
 
     # Very large residence time
-    result = compute_log_removal(1e6, 1.0)
+    result = residence_time_to_log_removal(1e6, 1.0)
     expected = 1.0 * np.log10(1e6)
     assert_allclose(result, expected)
     assert result == 6.0
 
     # Zero log_removal_rate
-    result = compute_log_removal(100.0, 0.0)
+    result = residence_time_to_log_removal(100.0, 0.0)
     assert result == 0.0
 
 
 def test_compute_log_removal_different_log_rates():
-    """Test compute_log_removal with various log removal rates."""
+    """Test residence_time_to_log_removal with various log removal rates."""
     residence_time = 10.0
 
     # Test different rates
@@ -360,16 +365,16 @@ def test_compute_log_removal_different_log_rates():
     expected_results = [rate * np.log10(residence_time) for rate in rates]
 
     for rate, expected in zip(rates, expected_results, strict=False):
-        result = compute_log_removal(residence_time, rate)
+        result = residence_time_to_log_removal(residence_time, rate)
         assert_allclose(result, expected)
 
 
 def test_compute_log_removal_list_input():
-    """Test compute_log_removal with list inputs (should be converted to numpy array)."""
+    """Test residence_time_to_log_removal with list inputs (should be converted to numpy array)."""
     residence_times = [1.0, 10.0, 100.0]
     log_removal_rate = 2.0
 
-    result = compute_log_removal(residence_times, log_removal_rate)
+    result = residence_time_to_log_removal(residence_times, log_removal_rate)
     expected = np.array([0.0, 2.0, 4.0])
 
     assert_allclose(result, expected)
@@ -377,20 +382,20 @@ def test_compute_log_removal_list_input():
 
 
 def test_compute_log_removal_shape_preservation():
-    """Test that compute_log_removal preserves input array shape."""
+    """Test that residence_time_to_log_removal preserves input array shape."""
     # Test 1D
     residence_times_1d = np.array([1.0, 10.0, 100.0])
-    result_1d = compute_log_removal(residence_times_1d, 1.0)
+    result_1d = residence_time_to_log_removal(residence_times_1d, 1.0)
     assert result_1d.shape == residence_times_1d.shape
 
     # Test 2D
     residence_times_2d = np.array([[1.0, 10.0], [100.0, 1000.0]])
-    result_2d = compute_log_removal(residence_times_2d, 1.0)
+    result_2d = residence_time_to_log_removal(residence_times_2d, 1.0)
     assert result_2d.shape == residence_times_2d.shape
 
     # Test 3D
     residence_times_3d = np.array([[[1.0, 10.0]], [[100.0, 1000.0]]])
-    result_3d = compute_log_removal(residence_times_3d, 1.0)
+    result_3d = residence_time_to_log_removal(residence_times_3d, 1.0)
     assert result_3d.shape == residence_times_3d.shape
 
 
@@ -399,19 +404,19 @@ def test_compute_log_removal_docstring_examples():
     # Example 1: Basic array
     residence_times = np.array([1.0, 10.0, 100.0])
     log_removal_rate = 2.0
-    result = compute_log_removal(residence_times, log_removal_rate)
+    result = residence_time_to_log_removal(residence_times, log_removal_rate)
     expected = np.array([0.0, 2.0, 4.0])
     assert_allclose(result, expected)
 
     # Example 2: Single residence time
-    result = compute_log_removal(5.0, 1.5)
+    result = residence_time_to_log_removal(5.0, 1.5)
     expected = 1.5 * np.log10(5.0)
     assert_allclose(result, expected, rtol=1e-10)
     assert_allclose(result, 1.0484550065040283, rtol=1e-10)
 
     # Example 3: 2D array
     residence_times_2d = np.array([[1.0, 10.0], [100.0, 1000.0]])
-    result = compute_log_removal(residence_times_2d, 1.0)
+    result = residence_time_to_log_removal(residence_times_2d, 1.0)
     expected = np.array([[0.0, 1.0], [2.0, 3.0]])
     assert_allclose(result, expected)
 
@@ -425,6 +430,6 @@ def test_compute_log_removal_consistency_with_manual_calculation():
     manual_result = log_removal_rate * np.log10(residence_times)
 
     # Function result
-    function_result = compute_log_removal(residence_times, log_removal_rate)
+    function_result = residence_time_to_log_removal(residence_times, log_removal_rate)
 
     assert_allclose(function_result, manual_result, rtol=1e-15)

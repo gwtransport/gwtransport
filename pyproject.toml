@@ -38,6 +38,7 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
+  "ipykernel",
   "pandas",
   "scipy",
   "matplotlib",
@@ -46,6 +47,8 @@ dependencies = [
 version = "0.11.0"
 [project.optional-dependencies]
 test = [
+  "nbconvert",
+  "nbformat",
   "pytest",
   "ruff==0.11.0",
   "validate-pyproject[all,store]",
@@ -62,4 +65,7 @@ config-path = "ruff.toml"
 [tool.pytest.ini_options]
 addopts = [
     "--import-mode=importlib",
+]
+env = [
+    "JUPYTER_PLATFORM_DIRS=1"
 ]
