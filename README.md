@@ -2,7 +2,7 @@
 
 **Characterize groundwater systems and predict contaminant transport from field temperature data**
 
-`gwtransport` provides a complete workflow for analyzing heterogeneous aquifer systems - from field measurements to treatment design. Using temperature as a natural tracer, estimate aquifer properties, predict residence times, and assess pathogen removal efficiency.
+`gwtransport` provides timeseries analysis of groundwater transport of solu†es and temperature. Estimate two aquifer properties from a temperature tracer test, predict residence times and transport of other solutes, and assess pathogen removal efficiency. Alternatively, the aquifer properties can be estimated directly from the streamlines.
 
 |                        |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -50,7 +50,7 @@ Evaluate pathogen log-removal efficiency in bank filtration systems. Design opti
 - **Output**: Log-removal efficiency, design flow rates
 - **Applications**: Drinking water treatment design, regulatory compliance
 
-![Log-Removal Analysis](examples/03_log_removal_analysis.png)
+![Log-Removal Analysis](examples/03_log_removal_time_series.png)
 
 _Parallel treatment systems require weighted averaging - simple averaging overestimates removal efficiency_
 

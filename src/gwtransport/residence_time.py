@@ -25,7 +25,7 @@ def residence_time(
     aquifer_pore_volume=None,
     index=None,
     retardation_factor=1.0,
-    direction="extraction",
+    direction="extraction_to_infiltration",
     *,
     return_pandas_series=False,
 ):
@@ -46,8 +46,11 @@ def residence_time(
         Default is None.
     retardation_factor : float
         Retardation factor of the compound in the aquifer [dimensionless].
-    direction : str, optional
-        Direction of the flow. Either 'extraction' or 'infiltration'. Extraction refers to backward modeling: how many days ago did this extracted water infiltrate. Infiltration refers to forward modeling: how many days will it take for this infiltrated water to be extracted. Default is 'extraction'.
+    direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
+        Direction of the flow calculation:
+        * 'extraction_to_infiltration': Extraction to infiltration modeling - how many days ago was the extracted water infiltrated
+        * 'infiltration_to_extraction': Infiltration to extraction modeling - how many days until the infiltrated water is extracted
+        Default is 'extraction_to_infiltration'.
     return_pandas_series : bool, optional
         If True, return a pandas Series with the residence time at the index provided. Only supported for a single aquifer pore volume. This parameter is deprecated and will be removed in a future version.
 
@@ -82,18 +85,18 @@ def residence_time(
             flow_tedges_days, flow_cum, index_dates_days_extraction, left=np.nan, right=np.nan
         )
 
-    if direction == "extraction":
+    if direction == "extraction_to_infiltration":
         # How many days ago was the extraced water infiltrated
         a = flow_cum_at_index[None, :] - retardation_factor * aquifer_pore_volume[:, None]
         days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
         data = index_dates_days_extraction - days
-    elif direction == "infiltration":
+    elif direction == "infiltration_to_extraction":
         # In how many days the water that is infiltrated now be extracted
         a = flow_cum_at_index[None, :] + retardation_factor * aquifer_pore_volume[:, None]
         days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
         data = days - index_dates_days_extraction
     else:
-        msg = "direction should be 'extraction' or 'infiltration'"
+        msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
         raise ValueError(msg)
 
     if return_pandas_series:
@@ -111,14 +114,20 @@ def residence_time(
 
 
 def residence_time_mean(
-    flow, flow_tedges, tedges_out, aquifer_pore_volume, *, direction="extraction", retardation_factor=1.0
+    flow,
+    flow_tedges,
+    tedges_out,
+    aquifer_pore_volume,
+    *,
+    direction="extraction_to_infiltration",
+    retardation_factor=1.0,
 ):
     """
     Compute the mean residence time of a retarded compound in the aquifer between specified time edges.
 
     This function calculates the average residence time of a retarded compound in the aquifer
-    between specified time intervals. It can compute both backward modeling (extraction direction:
-    when was extracted water infiltrated) and forward modeling (infiltration direction: when will
+    between specified time intervals. It can compute both extraction to infiltration modeling (extraction direction:
+    when was extracted water infiltrated) and infiltration to extraction modeling (infiltration direction: when will
     infiltrated water be extracted).
 
     The function handles time series data by computing the cumulative flow and using linear
@@ -138,11 +147,11 @@ def residence_time_mean(
     aquifer_pore_volume : float or array-like
         Pore volume of the aquifer [m3]. Can be a single value or an array of values
         for multiple pore volume scenarios.
-    direction : {'extraction', 'infiltration'}, optional
+    direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
         Direction of the flow calculation:
-        * 'extraction': Backward modeling - how many days ago was the extracted water infiltrated
-        * 'infiltration': Forward modeling - how many days until the infiltrated water is extracted
-        Default is 'extraction'.
+        * 'extraction_to_infiltration': Extraction to infiltration modeling - how many days ago was the extracted water infiltrated
+        * 'infiltration_to_extraction': Infiltration to extraction modeling - how many days until the infiltrated water is extracted
+        Default is 'extraction_to_infiltration'.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless].
         A value greater than 1.0 indicates that the compound moves slower than water.
@@ -158,8 +167,8 @@ def residence_time_mean(
     Notes
     -----
     - The function converts datetime objects to days since the start of the time series.
-    - For extraction direction, the function computes how many days ago water was infiltrated.
-    - For infiltration direction, the function computes how many days until water will be extracted.
+    - For extraction_to_infiltration direction, the function computes how many days ago water was infiltrated.
+    - For infiltration_to_extraction direction, the function computes how many days until water will be extracted.
     - The function uses linear interpolation for computing residence times at specific points
       and linear averaging for computing mean values over intervals.
 
@@ -177,7 +186,7 @@ def residence_time_mean(
     ...     flow_tedges=flow_dates,
     ...     tedges_out=flow_dates,
     ...     aquifer_pore_volume=pore_volume,
-    ...     direction="extraction",
+    ...     direction="extraction_to_infiltration",
     ... )
     >>> # With constant flow of 100 m³/day and pore volume of 200 m³,
     >>> # mean residence time should be approximately 2 days
@@ -196,7 +205,7 @@ def residence_time_mean(
     flow_cum[1:] *= flow
     flow_cum = flow_cum.cumsum()
 
-    if direction == "extraction":
+    if direction == "extraction_to_infiltration":
         # How many days ago was the extraced water infiltrated
         a = flow_cum[None, :] - retardation_factor * aquifer_pore_volume[:, None]
         days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
@@ -205,7 +214,7 @@ def residence_time_mean(
         # our use case is different: multiple time series (different y_data) with same edges,
         # rather than same time series with multiple edge sets.
         data_avg = np.array([linear_average(flow_tedges_days, y, tedges_out_days)[0] for y in data_edges])
-    elif direction == "infiltration":
+    elif direction == "infiltration_to_extraction":
         # In how many days the water that is infiltrated now be extracted
         a = flow_cum[None, :] + retardation_factor * aquifer_pore_volume[:, None]
         days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
@@ -215,6 +224,6 @@ def residence_time_mean(
         # rather than same time series with multiple edge sets.
         data_avg = np.array([linear_average(flow_tedges_days, y, tedges_out_days)[0] for y in data_edges])
     else:
-        msg = "direction should be 'extraction' or 'infiltration'"
+        msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
         raise ValueError(msg)
     return data_avg

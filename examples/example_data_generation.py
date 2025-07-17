@@ -96,16 +96,16 @@ def generate_synthetic_data(
     # Compute tedges for the flow series
     tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df))
 
-    # For synthetic data generation, use the simpler forward function with a single pore volume
-    # This avoids the complex temporal alignment issues of gamma_forward
-    # df["temp_extraction"] = advection.forward(
+    # For synthetic data generation, use the simpler infiltration_to_extraction function with a single pore volume
+    # This avoids the complex temporal alignment issues of gamma_infiltration_to_extraction
+    # df["temp_extraction"] = advection.infiltration_to_extraction(
     #     cin_series=df["temp_infiltration"],
     #     flow_series=df["flow"],
     #     aquifer_pore_volume=aquifer_pore_volume,  # Use mean pore volume
     #     retardation_factor=retardation_factor,
     #     cout_index="cin",  # Align output with input time index
     # )
-    df["temp_extraction"] = advection.gamma_forward(
+    df["temp_extraction"] = advection.gamma_infiltration_to_extraction(
         cin=df["temp_infiltration"],
         flow=df["flow"],
         tedges=tedges,

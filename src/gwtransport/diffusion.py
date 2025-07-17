@@ -9,7 +9,7 @@ from gwtransport.residence_time import residence_time
 from gwtransport.utils import compute_time_edges, diff
 
 
-def forward(
+def infiltration_to_extraction(
     cin,
     flow,
     aquifer_pore_volume,
@@ -20,7 +20,7 @@ def forward(
 ):
     """Compute the diffusion of a compound during 1D transport in the aquifer.
 
-    This function represents a forward operation (equivalent to convolution).
+    This function represents infiltration to extraction modeling (equivalent to convolution).
 
     Parameters
     ----------
@@ -55,7 +55,7 @@ def forward(
     return convolve_diffusion(cin.values, sigma_array, truncate=30.0)
 
 
-def backward(
+def extraction_to_infiltration(
     cout,
     flow,
     aquifer_pore_volume,
@@ -66,7 +66,7 @@ def backward(
 ):
     """Compute the reverse diffusion of a compound during 1D transport in the aquifer.
 
-    This function represents a backward operation (equivalent to deconvolution).
+    This function represents extraction to infiltration modeling (equivalent to deconvolution).
 
     Parameters
     ----------
@@ -92,10 +92,10 @@ def backward(
 
     Notes
     -----
-    Backward diffusion (deconvolution) is mathematically ill-posed and requires
+    Extraction to infiltration diffusion (deconvolution) is mathematically ill-posed and requires
     regularization to obtain a stable solution.
     """
-    msg = "Backward diffusion (deconvolution) is not implemented yet"
+    msg = "Extraction to infiltration diffusion (deconvolution) is not implemented yet"
     raise NotImplementedError(msg)
 
 
@@ -131,7 +131,7 @@ def compute_sigma_array(
         flow_tedges=flow_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         retardation_factor=retardation_factor,
-        direction="infiltration",
+        direction="infiltration_to_extraction",
         return_pandas_series=True,
     )
     residence_time = residence_time.interpolate(method="nearest").ffill().bfill()
