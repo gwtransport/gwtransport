@@ -32,7 +32,7 @@ def test_basic_extraction(constant_flow_data):
         flow_tedges=flow_tedges,
         tedges_out=tedges_out,
         aquifer_pore_volume=pore_volume,
-        direction="extraction",
+        direction="extraction_to_infiltration",
     )
 
     # With constant flow of 100 m³/day and pore volume of 200 m³,
@@ -55,7 +55,7 @@ def test_basic_infiltration(constant_flow_data):
         flow_tedges=flow_tedges,
         tedges_out=flow_tedges,
         aquifer_pore_volume=pore_volume,
-        direction="infiltration",
+        direction="infiltration_to_extraction",
     )
 
     # With constant flow of 100 m³/day and pore volume of 200 m³,
@@ -81,7 +81,7 @@ def test_varying_extraction(constant_flow_data):
         flow_tedges=flow_tedges,
         tedges_out=tedges_out_highres,
         aquifer_pore_volume=pore_volume,
-        direction="extraction",
+        direction="extraction_to_infiltration",
     )
     df_highres = pd.Series(result_highres[0], index=tedges_out_highres[:-1])
     df_lowres = df_highres.resample("1D").mean()
@@ -90,7 +90,7 @@ def test_varying_extraction(constant_flow_data):
         flow_tedges=flow_tedges,
         tedges_out=tedges_out_lowres,
         aquifer_pore_volume=pore_volume,
-        direction="extraction",
+        direction="extraction_to_infiltration",
     )
 
     # Check that the mean values are consistent
@@ -108,7 +108,7 @@ def test_retardation_factor(constant_flow_data):
         tedges_out=flow_tedges,
         aquifer_pore_volume=pore_volume,
         retardation_factor=1.0,
-        direction="extraction",
+        direction="extraction_to_infiltration",
     )
 
     result_with_retardation = residence_time_mean(
@@ -117,7 +117,7 @@ def test_retardation_factor(constant_flow_data):
         tedges_out=flow_tedges,
         aquifer_pore_volume=pore_volume,
         retardation_factor=2.0,
-        direction="extraction",
+        direction="extraction_to_infiltration",
     )
 
     # Residence time should double with retardation factor of 2
@@ -141,7 +141,7 @@ def test_multiple_pore_volumes(constant_flow_data):
         flow_tedges=flow_tedges,
         tedges_out=flow_tedges,
         aquifer_pore_volume=pore_volumes,
-        direction="extraction",
+        direction="extraction_to_infiltration",
     )
 
     assert result.shape[0] == len(pore_volumes)
@@ -163,7 +163,9 @@ def test_invalid_direction(constant_flow_data):
     tedges_out = pd.date_range(start="2023-01-02", end="2023-01-09", freq="2D")
     pore_volume = 200.0
 
-    with pytest.raises(ValueError, match="direction should be 'extraction' or 'infiltration'"):
+    with pytest.raises(
+        ValueError, match="direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
+    ):
         residence_time_mean(
             flow=flow_values,
             flow_tedges=flow_tedges,
@@ -185,7 +187,7 @@ def test_edge_cases(sample_flow_data):
         flow_tedges=flow_tedges,
         tedges_out=tedges_out,
         aquifer_pore_volume=100.0,
-        direction="extraction",
+        direction="extraction_to_infiltration",
     )
     assert np.all(np.isnan(result_zero))
 
@@ -195,7 +197,7 @@ def test_edge_cases(sample_flow_data):
         flow_tedges=flow_tedges,
         tedges_out=tedges_out,
         aquifer_pore_volume=1e6,
-        direction="extraction",
+        direction="extraction_to_infiltration",
     )
     assert np.all(np.isnan(result_large))
 
@@ -212,7 +214,7 @@ def test_negative_flow(constant_flow_data):
         flow_tedges=flow_tedges,
         tedges_out=tedges_out,
         aquifer_pore_volume=pore_volume,
-        direction="extraction",
+        direction="extraction_to_infiltration",
     )
 
     # Negative flow should result in NaN values
@@ -231,7 +233,7 @@ def test_flow_variations(sample_flow_data):
         flow_tedges=flow_tedges,
         tedges_out=tedges_out,
         aquifer_pore_volume=pore_volume,
-        direction="extraction",
+        direction="extraction_to_infiltration",
     )
 
     result2 = residence_time_mean(
@@ -239,7 +241,7 @@ def test_flow_variations(sample_flow_data):
         flow_tedges=flow_tedges,
         tedges_out=tedges_out,
         aquifer_pore_volume=pore_volume,
-        direction="extraction",
+        direction="extraction_to_infiltration",
     )
 
     # Residence times should approximately halve with double flow
@@ -266,7 +268,7 @@ def test_output_tedges_alignment():
         flow_tedges=flow_tedges,
         tedges_out=tedges_out1,
         aquifer_pore_volume=pore_volume,
-        direction="extraction",
+        direction="extraction_to_infiltration",
     )
 
     result2 = residence_time_mean(
@@ -274,7 +276,7 @@ def test_output_tedges_alignment():
         flow_tedges=flow_tedges,
         tedges_out=tedges_out2,
         aquifer_pore_volume=pore_volume,
-        direction="extraction",
+        direction="extraction_to_infiltration",
     )
 
     # Check output shapes match the expected dimensions
@@ -303,7 +305,7 @@ def test_example_from_docstring():
         flow_tedges=flow_dates,
         tedges_out=flow_dates,
         aquifer_pore_volume=pore_volume,
-        direction="extraction",
+        direction="extraction_to_infiltration",
     )
 
     # The first values should be NaN (not enough water has passed)
