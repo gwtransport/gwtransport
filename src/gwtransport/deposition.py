@@ -23,7 +23,7 @@ from scipy.linalg import null_space
 from scipy.optimize import minimize
 
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import interp_series
+from gwtransport.utils import compute_time_edges, interp_series
 
 
 def extraction_to_infiltration(
@@ -185,7 +185,6 @@ def deposition_coefficients(dcout_index, flow, aquifer_pore_volume, porosity, th
         Datetime index of the deposition.
     """
     # Get deposition indices
-    from gwtransport.utils import compute_time_edges
 
     flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
     rt = residence_time(
@@ -281,8 +280,6 @@ def deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, re
     pandas.DatetimeIndex
         Index of the deposition.
     """
-    from gwtransport.utils import compute_time_edges
-
     flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
     rt = residence_time(
         flow=flow,
@@ -293,7 +290,9 @@ def deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, re
         index=flow.index,
     )
     # Convert to pandas series
-    if rt.ndim == 2 and rt.shape[0] == 1:
+    expected_shape_first_dim = 1
+    expected_ndim = 2
+    if rt.ndim == expected_ndim and rt.shape[0] == expected_shape_first_dim:
         rt = pd.Series(rt.flatten(), index=flow.index)
     else:
         rt = pd.Series(rt, index=flow.index)
