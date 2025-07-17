@@ -773,7 +773,7 @@ def test_combine_bin_series_extrapolation_custom_value():
 
 
 def test_combine_bin_series_extrapolation_default_behavior():
-    """Test that default extrapolation preserves backward compatibility."""
+    """Test that default extrapolation preserves backwards compatibility."""
     a = np.array([1.0, 2.0])
     a_edges = np.array([1.0, 2.0, 3.0])
     b = np.array([10.0, 20.0])
