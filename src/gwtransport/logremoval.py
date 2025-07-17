@@ -41,7 +41,7 @@ def residence_time_to_log_removal(residence_times, log_removal_rate):
     rate coefficient.
 
     The calculation uses the formula:
-    Log Removal = log_removal_rate * log₁₀(residence_time)
+    Log Removal = log_removal_rate * log10(residence_time)
 
     Parameters
     ----------
@@ -104,7 +104,7 @@ def parallel_mean(log_removals, flow_fractions=None, axis=None):
 
     The calculation uses the formula:
 
-    Total Log Removal = -log₁₀(sum(F_i * 10^(-LR_i)))
+    Total Log Removal = -log10(sum(F_i * 10^(-LR_i)))
 
     Where:
     - F_i = fraction of flow through system i (decimal, sum to 1.0)
@@ -114,7 +114,7 @@ def parallel_mean(log_removals, flow_fractions=None, axis=None):
     ----------
     log_removals : array_like
         Array of log removal values for each parallel flow.
-        Each value represents the log₁₀ reduction of pathogens.
+        Each value represents the log10 reduction of pathogens.
         For multi-dimensional arrays, the parallel mean is computed along
         the specified axis.
 

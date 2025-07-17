@@ -50,7 +50,7 @@ Evaluate pathogen log-removal efficiency in bank filtration systems. Design opti
 - **Output**: Log-removal efficiency, design flow rates
 - **Applications**: Drinking water treatment design, regulatory compliance
 
-![Log-Removal Analysis](examples/03_log_removal_analysis.png)
+![Log-Removal Analysis](examples/03_log_removal_time_series.png)
 
 _Parallel treatment systems require weighted averaging - simple averaging overestimates removal efficiency_
 
