@@ -19,7 +19,7 @@
 Once you have calibrated the aquifer pore volume distribution, you can:
 
 - **Predict residence time distributions** under varying flow conditions
-- **Forecast contaminant arrival times** and transport pathways  
+- **Forecast contaminant arrival times** and transport pathways
 - **Design treatment systems** with quantified pathogen removal efficiency
 - **Assess groundwater vulnerability** to contamination
 - **Early warning systems** as digital twin for drinking water protection
@@ -28,7 +28,8 @@ Once you have calibrated the aquifer pore volume distribution, you can:
 
 The aquifer pore volume distribution can be obtained using:
 
-### 1. Streamline Analysis  
+### 1. Streamline Analysis
+
 Compute the area between streamlines from flow field data to directly estimate the pore volume distribution parameters.
 
 ```python
@@ -54,6 +55,7 @@ cout = distribution_infiltration_to_extraction(
 ```
 
 ### 2. Temperature Tracer Test
+
 Approximate the aquifer pore volume distribution with a two-parameter gamma distribution. Estimate these parameters from the measured temperature of the infiltrated and extracted water. Temperature acts as a natural tracer, revealing how water flows through different paths in heterogeneous aquifers through calibration.
 
 ```python
@@ -88,6 +90,7 @@ pip install gwtransport
 ## Examples and Documentation
 
 Examples:
+
 - [Estimate aquifer pore volume from temperature response](https://gwtransport.github.io/gwtransport/examples/01_Estimate_aquifer_pore_volume_from_temperature_response.html)
 - [Estimate the residence time distribution](https://gwtransport.github.io/gwtransport/examples/02_Estimate_the_residence_time_distribution.html)
 - [Log removal efficiency analysis](https://gwtransport.github.io/gwtransport/examples/03_Log_removal.html)
