@@ -38,10 +38,10 @@ from gwtransport.advection import distribution_infiltration_to_extraction
 # Measurements
 cin_data = [1.0, 2.0, 3.0]  # Example concentration infiltrated water
 flow_data = [100.0, 150.0, 100.0]  # Example flow rates
-tedges = [0, 1, 2, 3]  # Example time edges
+tedges = pd.date_range(start="2020-01-05", end="2020-01-08", freq="D")  # Example time edges
 
-areas_between_streamlines = np.array([100.0, 200.0, 150.0])  # Example areas
-depth_aquifer = 200.0  # Convert areas between 2d streamlines to 3d aquifer pore volumes.
+areas_between_streamlines = np.array([100.0, 90.0, 110.0])  # Example areas
+depth_aquifer = 2.0  # Convert areas between 2d streamlines to 3d aquifer pore volumes.
 aquifer_pore_volumes = areas_between_streamlines * depth_aquifer
 
 cout = distribution_infiltration_to_extraction(
@@ -52,6 +52,8 @@ cout = distribution_infiltration_to_extraction(
     aquifer_pore_volumes=aquifer_pore_volumes,
     retardation_factor=1.0,
 )
+
+# Note that the first values are NaN, as no cin values have fully passed through the aquifer yet.
 ```
 
 ### 2. Temperature Tracer Test
@@ -64,7 +66,7 @@ from gwtransport.advection import gamma_infiltration_to_extraction
 # Measurements
 cin_data = [11.0, 12.0, 13.0]  # Example temperature infiltrated water
 flow_data = [100.0, 150.0, 100.0]  # Example flow rates
-tedges = [0, 1, 2, 3]  # Example time edges
+tedges = pd.date_range(start="2020-01-05", end="2020-01-08", freq="D")  # Example time edges
 
 cout_data = [10.5, 11.0, 11.5]  # Example temperature extracted water. Only required for the calibration period.
 
@@ -73,8 +75,8 @@ cout_model = gamma_infiltration_to_extraction(
     flow=flow_data,
     tedges=tedges,
     cout_tedges=tedges,
-    mean=30000,  # [m3] Adjust such that cout_model matches the measured cout
-    std=8100,    # [m3] Adjust such that cout_model matches the measured cout
+    mean=200.0,  # [m3] Adjust such that cout_model matches the measured cout
+    std=16.0,    # [m3] Adjust such that cout_model matches the measured cout
     retardation_factor=2.0,  # [-] Retardation factor for the temperature tracer
 )
 
