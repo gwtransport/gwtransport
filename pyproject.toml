@@ -44,7 +44,7 @@ dependencies = [
   "matplotlib",
   "numpy",
 ]
-version = "0.11.0"
+version = "0.12.0"
 [project.optional-dependencies]
 test = [
   "nbconvert",
