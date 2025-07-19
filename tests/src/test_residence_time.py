@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport import compute_time_edges
 from gwtransport.residence_time import residence_time
+from gwtransport.utils import compute_time_edges
 
 
 @pytest.fixture
