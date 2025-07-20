@@ -7,8 +7,7 @@ point to the extraction point. The compound is retarded in the aquifer with a re
 
 Main functions:
 - residence_time: Compute the residence time of a retarded compound in the aquifer at indices.
-- residence_time_mean: Compute the mean residence time of a retarded compound in the aquifer
-  between specified time edges.
+- residence_time_mean: Compute the mean residence time of a retarded compound in the aquifer between specified time edges.
 """
 
 import warnings
