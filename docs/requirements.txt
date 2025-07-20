@@ -1,0 +1,12 @@
+sphinx>=7.0
+sphinx-book-theme>=1.0.0
+sphinx-autodoc-typehints
+sphinx-copybutton
+nbsphinx
+nbsphinx-link
+jupyter
+ipykernel
+matplotlib
+numpy
+scipy
+pandas
