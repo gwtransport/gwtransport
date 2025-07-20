@@ -6,6 +6,7 @@ The residence time is the time it takes for the compound to travel from the infi
 point to the extraction point. The compound is retarded in the aquifer with a retardation factor.
 
 Main functions:
+
 - residence_time: Compute the residence time of a retarded compound in the aquifer at indices.
 - residence_time_mean: Compute the mean residence time of a retarded compound in the aquifer between specified time edges.
 """
