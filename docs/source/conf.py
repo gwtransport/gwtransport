@@ -123,7 +123,7 @@ copybutton_prompt_is_regexp = True
 # -- Options for OpenGraph --------------------------------------------------
 ogp_site_url = "https://gwtransport.github.io/gwtransport/"
 # ogp_image = "https://gwtransport.github.io/gwtransport/_static/logo.png"
-ogp_description_length = 200
+ogp_description_length = 300
 ogp_type = "website"
 ogp_custom_meta_tags = [
     '<meta name="keywords" content="groundwater, transport, solutes, temperature, residence times, pathogen removal, timeseries analysis">',
