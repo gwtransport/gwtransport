@@ -92,6 +92,6 @@ Here's a simple example using temperature tracer test data:
 Next Steps
 ----------
 
-- Explore the :doc:`examples/index` to see detailed workflows
-- Check the :doc:`api/index` for complete function documentation
+- Explore the :doc:`examples/01_Aquifer_Characterization_Temperature` to see detailed workflows
+- Check the :doc:`api/modules` for complete function documentation
 - See :doc:`user_guide/index` for advanced usage patterns

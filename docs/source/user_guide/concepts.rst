@@ -33,7 +33,7 @@ Retardation Factor
 The retardation factor accounts for processes that slow down solute transport relative to water flow:
 
 - **Conservative tracers** (R = 1): Move with the same velocity as water
-- **Temperature** (R > 1): Often retarded due to heat exchange with the solid matrix
+- **Temperature** (R = 2): Often retarded due to heat exchange with the solid matrix
 - **Reactive solutes** (R > 1): Delayed by sorption or chemical reactions
 
 Temperature as a Natural Tracer

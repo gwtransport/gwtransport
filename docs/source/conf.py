@@ -1,17 +1,7 @@
 """Configuration file for the Sphinx documentation builder."""
 
-import os
-import sys
+import tomllib
 from pathlib import Path
-
-# Python 3.11+ has tomllib, older versions need tomli
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib
-
-# Add the source directory to the path
-sys.path.insert(0, os.path.abspath("../../src"))
 
 # Read project information from pyproject.toml
 pyproject_path = Path(__file__).parent.parent.parent / "pyproject.toml"
@@ -22,7 +12,7 @@ project_info = pyproject_data["project"]
 
 # -- Project information -----------------------------------------------------
 project = project_info["name"]
-copyright = "2025, Bas des Tombe"
+copyright = "2025, Bas des Tombe"  # noqa: A001
 author = ", ".join([author["name"] for author in project_info["authors"]])
 release = project_info["version"]
 
@@ -73,7 +63,7 @@ html_theme_options = {
     "use_download_button": True,
     "use_fullscreen_button": True,
     "home_page_in_toc": True,
-    "show_toc_level": 2,
+    "show_toc_level": 3,
     "navigation_with_keys": True,
     "show_navbar_depth": 2,
     "path_to_docs": "docs/source",
