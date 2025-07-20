@@ -1,4 +1,4 @@
-"""Configuration file for the Sphinx documentation builder."""
+"""Configuration file for the Sphinx documentation builder."""  # noqa: INP001
 
 import tomllib
 from pathlib import Path
