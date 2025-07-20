@@ -123,9 +123,9 @@ def diff(a, alignment="centered"):
 
 
 def linear_average(  # noqa: C901
-    x_data: Union[Sequence[float], npt.NDArray[np.float64]],
-    y_data: Union[Sequence[float], npt.NDArray[np.float64]],
-    x_edges: Union[Sequence[float], npt.NDArray[np.float64]],
+    x_data: Sequence[float] | npt.NDArray[np.float64],
+    y_data: Sequence[float] | npt.NDArray[np.float64],
+    x_edges: Sequence[float] | npt.NDArray[np.float64],
     extrapolate_method: str = "nan",
 ) -> npt.NDArray[np.float64]:
     """
