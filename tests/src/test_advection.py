@@ -2,13 +2,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport import compute_time_edges
 from gwtransport.advection import (
     distribution_extraction_to_infiltration,
     distribution_infiltration_to_extraction,
     gamma_infiltration_to_extraction,
     infiltration_to_extraction,
 )
+from gwtransport.utils import compute_time_edges
 
 # ===============================================================================
 # FIXTURES
