@@ -10,3 +10,4 @@ sphinx>=7.0
 sphinx-autodoc-typehints
 sphinx-book-theme>=1.0.0
 sphinx-copybutton
+sphinxext-opengraph[social_cards]
