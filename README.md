@@ -1,7 +1,5 @@
 # gwtransport
 
-**Characterize groundwater systems and predict contaminant transport from field temperature data**
-
 `gwtransport` provides timeseries analysis of groundwater transport of solu†es and temperature. Estimate two aquifer properties from a temperature tracer test, predict residence times and transport of other solutes, and assess pathogen removal efficiency. Alternatively, the aquifer properties can be estimated directly from the streamlines.
 
 |                        |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -10,11 +8,7 @@
 | Testing of examples    | [![Testing of examples](https://github.com/gwtransport/gwtransport/actions/workflows/examples_testing.yml/badge.svg?branch=main)](https://github.com/gwtransport/gwtransport/actions/workflows/examples_testing.yml) [![Coverage by examples](https://gwtransport.github.io/gwtransport/coverage_examples-badge.svg)](https://gwtransport.github.io/gwtransport/htmlcov_examples/)                                                                                                                                                                                                                                                                                                                                                                           |
 | Package                | [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/gwtransport.svg?logo=python&label=Python&logoColor=gold)](https://pypi.org/project/gwtransport/) [![PyPI - Version](https://img.shields.io/pypi/v/gwtransport.svg?logo=pypi&label=PyPI&logoColor=gold)](https://pypi.org/project/gwtransport/) [![GitHub commits since latest release](https://img.shields.io/github/commits-since/gwtransport/gwtransport/latest?logo=github&logoColor=lightgrey)](https://github.com/gwtransport/gwtransport/compare/)                                                                                                                                                                                                                                    |
 
-# gwtransport
-
-**Timeseries analysis of groundwater transport of solutes and temperature**
-
-## What You Can Do With a Calibrated Model
+## What you can do with a calibrated model
 
 Once you have calibrated the aquifer pore volume distribution, you can:
 
@@ -24,7 +18,7 @@ Once you have calibrated the aquifer pore volume distribution, you can:
 - **Assess groundwater vulnerability** to contamination
 - **Early warning systems** as digital twin for drinking water protection
 
-## Two Ways to obtain model parameters
+## Two ways to obtain model parameters
 
 The aquifer pore volume distribution can be obtained using:
 
@@ -93,9 +87,9 @@ pip install gwtransport
 
 Examples:
 
-- [Estimate aquifer pore volume from temperature response](https://gwtransport.github.io/gwtransport/examples/01_Estimate_aquifer_pore_volume_from_temperature_response.html)
-- [Estimate the residence time distribution](https://gwtransport.github.io/gwtransport/examples/02_Estimate_the_residence_time_distribution.html)
-- [Log removal efficiency analysis](https://gwtransport.github.io/gwtransport/examples/03_Log_removal.html)
+- [Estimate aquifer pore volume from temperature response](https://gwtransport.github.io/gwtransport/examples/01_Aquifer_Characterization_Temperature.html)
+- [Estimate the residence time distribution](https://gwtransport.github.io/gwtransport/examples/02_Residence_Time_Analysis.html)
+- [Log removal efficiency analysis](https://gwtransport.github.io/gwtransport/examples/03_Pathogen_Removal_Bank_Filtration.html)
 
 Full documentation: [gwtransport.github.io/gwtransport](https://gwtransport.github.io/gwtransport)
 
