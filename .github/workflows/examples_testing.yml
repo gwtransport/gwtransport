@@ -37,11 +37,14 @@ jobs:
         run: |
           zip -FSr coverage-examples.zip coverage/coverage_examples-badge.svg coverage/htmlcov_examples coverage/coverage_examples.xml
           mv coverage-examples.zip coverage
-      - name: Download functional coverage results
+      - name: Download functional coverage results and documentation
         run: |
           curl https://gwtransport.github.io/gwtransport/coverage-functional.zip -L -o coverage-functional.zip
+          curl https://gwtransport.github.io/gwtransport/documentation.zip -L -o documentation.zip
           unzip -o coverage-functional.zip
+          unzip -o documentation.zip
           mv coverage-functional.zip coverage
+          mv documentation.zip coverage
       - name: Upload both coverage results
         if: ${{ always() }}
         uses: actions/upload-pages-artifact@v3

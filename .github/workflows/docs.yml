@@ -6,17 +6,12 @@ on:
   pull_request:
     branches: [main]
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
 concurrency:
   group: "pages"
   cancel-in-progress: false
 
 jobs:
-  build:
+  build-documentation:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,3 +21,38 @@ jobs:
         uses: pandoc/actions/setup@v1
       - name: Build documentation with sphinx and uv
         run: uv tool run --from sphinx --with-requirements docs/requirements.txt --with-editable "." sphinx-build -M html docs/source docs/build
+      - name: Zip documentation
+        run: |
+          mv docs/build/html coverage
+          zip -FSr documentation.zip coverage
+          mv documentation.zip coverage
+      - name: Download functional and example coverage results
+        run: |
+          curl https://gwtransport.github.io/gwtransport/coverage-functional.zip -L -o coverage-functional.zip
+          curl https://gwtransport.github.io/gwtransport/coverage-example.zip -L -o coverage-example.zip
+          unzip -o coverage-functional.zip
+          unzip -o coverage-example.zip
+          mv coverage-functional.zip coverage
+          mv coverage-example.zip coverage
+      - name: Upload both coverage results
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: coverage
+
+  deploy-documentation:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    needs: build-documentation
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v4
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
