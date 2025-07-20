@@ -45,6 +45,7 @@ convention = "numpy"
 [lint.per-file-ignores]
 '**/*.py' = [
     "RUF001",
+    "TC003",    # Type checking is fine.
 ]
 'modelscripts/**/*.py' = [
     'INP001',  # Missing return type annotation for public function

@@ -218,7 +218,7 @@ def gamma_infiltration_to_extraction(
 
     >>> import pandas as pd
     >>> import numpy as np
-    >>> from gwtransport import compute_time_edges
+    >>> from gwtransport.utils import compute_time_edges
     >>> from gwtransport.advection import gamma_infiltration_to_extraction
     >>>
     >>> # Create input data with aligned time edges
@@ -380,7 +380,7 @@ def distribution_infiltration_to_extraction(
 
     >>> import pandas as pd
     >>> import numpy as np
-    >>> from gwtransport import compute_time_edges
+    >>> from gwtransport.utils import compute_time_edges
     >>> from gwtransport.advection import distribution_infiltration_to_extraction
     >>>
     >>> # Create input data
@@ -607,7 +607,7 @@ def distribution_extraction_to_infiltration(
 
     >>> import pandas as pd
     >>> import numpy as np
-    >>> from gwtransport import compute_time_edges
+    >>> from gwtransport.utils import compute_time_edges
     >>> from gwtransport.advection import distribution_extraction_to_infiltration
     >>>
     >>> # Create input data
