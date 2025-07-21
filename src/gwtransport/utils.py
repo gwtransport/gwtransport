@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import io
+import zipfile
 from collections.abc import Sequence
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import requests
 from scipy import interpolate
 
 
@@ -536,3 +539,66 @@ def compute_time_edges(tedges, tstart, tend, number_of_bins):
         msg = "Either provide tedges, tstart, and tend"
         raise ValueError(msg)
     return tedges
+
+
+def get_soil_temperature(station_number: int = 260) -> pd.DataFrame:
+    """
+    Download soil temperature data from the KNMI and return it as a pandas DataFrame.
+
+    260: De Bilt (vanaf 1981)
+    273: Marknesse (vanaf 1989)
+    286: Nieuw Beerta (vanaf 1990)
+    323: Wilhelminadorp (vanaf 1989)
+
+    TB1	  = grondtemperatuur op   5 cm diepte (graden Celsius) tijdens de waarneming
+    TB2	  = grondtemperatuur op  10 cm diepte (graden Celsius) tijdens de waarneming
+    TB3	  = grondtemperatuur op  20 cm diepte (graden Celsius) tijdens de waarneming
+    TB4	  = grondtemperatuur op  50 cm diepte (graden Celsius) tijdens de waarneming
+    TB5	  = grondtemperatuur op 100 cm diepte (graden Celsius) tijdens de waarneming
+    TNB1	  = minimum grondtemperatuur op  5 cm diepte in de afgelopen 6 uur (graden Celsius)
+    TNB2	  = minimum grondtemperatuur op 10 cm diepte in de afgelopen 6 uur (graden Celsius)
+    TXB1	  = maximum grondtemperatuur op  5 cm diepte in de afgelopen 6 uur (graden Celsius)
+    TXB2	  = maximum grondtemperatuur op 10 cm diepte in de afgelopen 6 uur (graden Celsius)
+
+    Parameters
+    ----------
+    station_number : int, {260, 273, 286, 323}
+        The KNMI station number for which to download soil temperature data.
+        Default is 260 (De Bilt).
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame containing soil temperature data in Celsius with a DatetimeIndex.
+        Columns include TB1, TB2, TB3, TB4, TB5, TNB1, TNB2, TXB1, TXB2.
+
+    Notes
+    -----
+    - The timeseries may contain NaN values for missing data.
+    """
+    url = f"https://cdn.knmi.nl/knmi/map/page/klimatologie/gegevens/bodemtemps/bodemtemps_{station_number}.zip"
+
+    drop_cols = ["YYYYMMDD", "HH", "# STN"]
+
+    # Download the ZIP file
+    response = requests.get(url, params={"download": "zip"}, timeout=10)
+    response.raise_for_status()  # Raise an error for bad responses
+
+    # Use BytesIO to treat the content as a file-like object
+    with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref, zip_ref.open(zip_ref.namelist()[0]) as my_file:
+        df = pd.read_csv(my_file, sep=",", skiprows=16, index_col=None, parse_dates=False, na_values=["     "])
+        df.index = pd.to_datetime(df["YYYYMMDD"].values, format=r"%Y%m%d").tz_localize("UTC") + pd.to_timedelta(
+            df["HH"].values, unit="h"
+        )
+
+    # Strip unused columns
+    drop_cols += [col for col in df.columns if "Unnamed" in col]
+    df.drop(columns=drop_cols, inplace=True)
+
+    # Strip whitespace from column names
+    df.columns = [col.strip() for col in df.columns]
+
+    # Convert to degrees Celsius
+    df /= 10
+
+    return df

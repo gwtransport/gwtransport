@@ -1,10 +1,12 @@
 import numpy as np
+import pandas as pd
 import pytest
 from numpy.testing import assert_array_almost_equal
 
 from gwtransport.utils import (
     combine_bin_series,
     diff,
+    get_soil_temperature,
     linear_average,
     linear_interpolate,
     partial_isin,
@@ -805,3 +807,87 @@ def test_combine_bin_series_extrapolation_no_out_of_range():
     assert_array_almost_equal(c1, c3)
     assert_array_almost_equal(d1, d2)
     assert_array_almost_equal(d1, d3)
+
+
+@pytest.mark.parametrize("station_number", [260, 273, 286, 323])
+def test_get_soil_temperature_valid_stations(station_number):
+    """Test get_soil_temperature for all valid station numbers."""
+    df = get_soil_temperature(station_number)
+    
+    # Check that result is a pandas DataFrame
+    assert isinstance(df, pd.DataFrame)
+    
+    # Check that index is a DatetimeIndex
+    assert isinstance(df.index, pd.DatetimeIndex)
+    
+    # Check that DataFrame is not empty
+    assert len(df) > 0
+    
+    # Expected columns based on the docstring
+    expected_columns = {'TB1', 'TB2', 'TB3', 'TB4', 'TB5', 'TNB1', 'TNB2', 'TXB1', 'TXB2'}
+    
+    # Check that all expected columns are present
+    assert expected_columns.issubset(set(df.columns))
+
+
+def test_get_soil_temperature_column_data_quality():
+    """Test that each column has at least some non-NaN values."""
+    df = get_soil_temperature(260)  # Use default station
+    
+    expected_columns = ['TB1', 'TB2', 'TB3', 'TB4', 'TB5', 'TNB1', 'TNB2', 'TXB1', 'TXB2']
+    
+    # Check that each column has at least some non-NaN values
+    for col in expected_columns:
+        assert col in df.columns, f"Column {col} not found in DataFrame"
+        non_nan_count = df[col].notna().sum()
+        assert non_nan_count > 0, f"Column {col} has no non-NaN values"
+        # Also check that we have a reasonable amount of data (at least 10 data points)
+        assert non_nan_count >= 10, f"Column {col} has fewer than 10 non-NaN values ({non_nan_count})"
+
+
+def test_get_soil_temperature_default_station():
+    """Test that default station parameter works."""
+    df = get_soil_temperature()
+    
+    # Should return data (default is station 260)
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) > 0
+
+
+def test_get_soil_temperature_data_types():
+    """Test that soil temperature data has correct data types and reasonable values."""
+    df = get_soil_temperature(260)
+    
+    # All temperature columns should be numeric
+    temp_columns = ['TB1', 'TB2', 'TB3', 'TB4', 'TB5', 'TNB1', 'TNB2', 'TXB1', 'TXB2']
+    for col in temp_columns:
+        assert pd.api.types.is_numeric_dtype(df[col]), f"Column {col} should be numeric"
+        
+        # Check for reasonable temperature ranges (in Celsius, should be between -50 and +50)
+        valid_data = df[col].dropna()
+        if len(valid_data) > 0:
+            assert valid_data.min() >= -50, f"Column {col} has unreasonably low temperature: {valid_data.min()}"
+            assert valid_data.max() <= 50, f"Column {col} has unreasonably high temperature: {valid_data.max()}"
+
+
+def test_get_soil_temperature_index_properties():
+    """Test that the DataFrame index has correct timezone and is sorted."""
+    df = get_soil_temperature(260)
+    
+    # Index should be timezone-aware (UTC)
+    assert df.index.tz is not None
+    assert str(df.index.tz) == 'UTC'
+    
+    # Index should be sorted
+    assert df.index.is_monotonic_increasing
+
+
+def test_get_soil_temperature_invalid_station():
+    """Test that invalid station numbers raise appropriate errors."""
+    # Test with an invalid station number
+    with pytest.raises((ValueError, Exception)):
+        get_soil_temperature(999)  # Invalid station number
+    
+    # Test with a station that might not have data or causes HTTP errors
+    with pytest.raises((ValueError, Exception)):
+        get_soil_temperature(123)  # Invalid station number
