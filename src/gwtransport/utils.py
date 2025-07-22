@@ -541,30 +541,34 @@ def compute_time_edges(tedges, tstart, tend, number_of_bins):
     return tedges
 
 
-def get_soil_temperature(station_number: int = 260) -> pd.DataFrame:
+def get_soil_temperature(station_number: int = 260, interpolate_missing_values: bool = True) -> pd.DataFrame:
     """
     Download soil temperature data from the KNMI and return it as a pandas DataFrame.
 
-    260: De Bilt (vanaf 1981)
-    273: Marknesse (vanaf 1989)
-    286: Nieuw Beerta (vanaf 1990)
-    323: Wilhelminadorp (vanaf 1989)
+    The data is available for the following KNMI weather stations:
+    - 260: De Bilt, the Netherlands (vanaf 1981)
+    - 273: Marknesse, the Netherlands (vanaf 1989)
+    - 286: Nieuw Beerta, the Netherlands (vanaf 1990)
+    - 323: Wilhelminadorp, the Netherlands (vanaf 1989)
 
-    TB1	  = grondtemperatuur op   5 cm diepte (graden Celsius) tijdens de waarneming
-    TB2	  = grondtemperatuur op  10 cm diepte (graden Celsius) tijdens de waarneming
-    TB3	  = grondtemperatuur op  20 cm diepte (graden Celsius) tijdens de waarneming
-    TB4	  = grondtemperatuur op  50 cm diepte (graden Celsius) tijdens de waarneming
-    TB5	  = grondtemperatuur op 100 cm diepte (graden Celsius) tijdens de waarneming
-    TNB1	  = minimum grondtemperatuur op  5 cm diepte in de afgelopen 6 uur (graden Celsius)
-    TNB2	  = minimum grondtemperatuur op 10 cm diepte in de afgelopen 6 uur (graden Celsius)
-    TXB1	  = maximum grondtemperatuur op  5 cm diepte in de afgelopen 6 uur (graden Celsius)
-    TXB2	  = maximum grondtemperatuur op 10 cm diepte in de afgelopen 6 uur (graden Celsius)
+    TB1	 = grondtemperatuur op   5 cm diepte (graden Celsius) tijdens de waarneming
+    TB2	 = grondtemperatuur op  10 cm diepte (graden Celsius) tijdens de waarneming
+    TB3	 = grondtemperatuur op  20 cm diepte (graden Celsius) tijdens de waarneming
+    TB4	 = grondtemperatuur op  50 cm diepte (graden Celsius) tijdens de waarneming
+    TB5	 = grondtemperatuur op 100 cm diepte (graden Celsius) tijdens de waarneming
+    TNB2 = minimum grondtemperatuur op 10 cm diepte in de afgelopen 6 uur (graden Celsius)
+    TNB1 = minimum grondtemperatuur op  5 cm diepte in de afgelopen 6 uur (graden Celsius)
+    TXB1 = maximum grondtemperatuur op  5 cm diepte in de afgelopen 6 uur (graden Celsius)
+    TXB2 = maximum grondtemperatuur op 10 cm diepte in de afgelopen 6 uur (graden Celsius)
 
     Parameters
     ----------
     station_number : int, {260, 273, 286, 323}
         The KNMI station number for which to download soil temperature data.
         Default is 260 (De Bilt).
+    interpolate_missing_values : bool, optional
+        If True, missing values are interpolated and recent NaN values are extrapolated with the previous value.
+        If False, missing values remain as NaN. Default is True.
 
     Returns
     -------
@@ -574,6 +578,7 @@ def get_soil_temperature(station_number: int = 260) -> pd.DataFrame:
 
     Notes
     -----
+    - KNMI: Royal Netherlands Meteorological Institute
     - The timeseries may contain NaN values for missing data.
     """
     url = f"https://cdn.knmi.nl/knmi/map/page/klimatologie/gegevens/bodemtemps/bodemtemps_{station_number}.zip"
@@ -601,4 +606,14 @@ def get_soil_temperature(station_number: int = 260) -> pd.DataFrame:
     # Convert to degrees Celsius
     df /= 10
 
+    if interpolate_missing_values:
+        # Fill NaN values with the previous value (forward fill) and then interpolate linearly
+        df.interpolate(method="linear", inplace=True)
+        df.ffill(inplace=True)
+
     return df
+
+if __name__ == "__main__":
+    # Example usage
+    df = get_soil_temperature()
+    print(df.head())
