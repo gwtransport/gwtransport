@@ -541,7 +541,7 @@ def compute_time_edges(tedges, tstart, tend, number_of_bins):
     return tedges
 
 
-def get_soil_temperature(station_number: int = 260, interpolate_missing_values: bool = True) -> pd.DataFrame:
+def get_soil_temperature(*, station_number: int = 260, interpolate_missing_values: bool = True) -> pd.DataFrame:
     """
     Download soil temperature data from the KNMI and return it as a pandas DataFrame.
 
@@ -612,9 +612,3 @@ def get_soil_temperature(station_number: int = 260, interpolate_missing_values: 
         df.ffill(inplace=True)
 
     return df
-
-
-if __name__ == "__main__":
-    # Example usage
-    df = get_soil_temperature()
-    print(df.head())
