@@ -613,6 +613,7 @@ def get_soil_temperature(station_number: int = 260, interpolate_missing_values: 
 
     return df
 
+
 if __name__ == "__main__":
     # Example usage
     df = get_soil_temperature()

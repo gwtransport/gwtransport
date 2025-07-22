@@ -3,8 +3,12 @@ import subprocess
 import sys
 
 import nbformat
+import numpy as np
+import pandas as pd
 import pytest
 from nbconvert.preprocessors import ExecutePreprocessor
+
+from examples.example_data_generation import generate_example_data
 
 
 def test_pythonscript(pythonfile_path):
@@ -124,3 +128,64 @@ def test_failing_notebook_detection():
     # The test_ipynb function should raise AssertionError for failing notebooks
     with pytest.raises(AssertionError, match="Notebook execution failed"):
         test_ipynb(failing_notebook_path)
+
+
+def test_generate_example_data_methods():
+    """
+    Test generate_example_data function with all three temperature infiltration methods.
+    """
+    # Common parameters for all tests
+    common_params = {
+        "date_start": "2020-01-01",
+        "date_end": "2020-01-31",
+        "date_freq": "D",
+        "flow_mean": 50.0,
+        "flow_amplitude": 10.0,
+        "flow_noise": 5.0,
+        "temp_infiltration_mean": 10.0,
+        "temp_infiltration_amplitude": 5.0,
+        "temp_infiltration_noise": 0.5,
+        "aquifer_pore_volume_gamma_mean": 500.0,
+        "aquifer_pore_volume_gamma_std": 100.0,
+        "retardation_factor": 1.0,
+    }
+
+    # Test 1: Synthetic method
+    df_synthetic, tedges_synthetic = generate_example_data(temp_infiltration_method="synthetic", **common_params)
+
+    assert isinstance(df_synthetic, pd.DataFrame)
+    assert isinstance(tedges_synthetic, pd.DatetimeIndex)
+    assert len(df_synthetic) == 31  # January has 31 days
+    assert "flow" in df_synthetic.columns
+    assert "temp_infiltration" in df_synthetic.columns
+    assert "temp_extraction" in df_synthetic.columns
+    assert df_synthetic["flow"].mean() > 0
+    assert np.isfinite(df_synthetic["temp_infiltration"]).all()
+    # Check that finite values exist (some initial NaN values are expected due to residence time lag)
+    assert np.isfinite(df_synthetic["temp_extraction"]).any()
+
+    # Test 2: Constant method
+    df_constant, tedges_constant = generate_example_data(temp_infiltration_method="constant", **common_params)
+
+    assert isinstance(df_constant, pd.DataFrame)
+    assert isinstance(tedges_constant, pd.DatetimeIndex)
+    assert len(df_constant) == 31
+    # Temperature should be constant (equal to the mean)
+    assert np.allclose(df_constant["temp_infiltration"], common_params["temp_infiltration_mean"])
+
+    # Test 3: Soil temperature method (may skip if data not available)
+    try:
+        df_soil, tedges_soil = generate_example_data(temp_infiltration_method="soil_temperature", **common_params)
+
+        assert isinstance(df_soil, pd.DataFrame)
+        assert isinstance(tedges_soil, pd.DatetimeIndex)
+        assert len(df_soil) == 31
+        assert np.isfinite(df_soil["temp_infiltration"]).all()
+
+    except (ImportError, KeyError, ValueError, ConnectionError, FileNotFoundError):
+        # Skip soil temperature test if data is not available
+        pytest.skip("Soil temperature data not available for testing")
+
+    # Test invalid method
+    with pytest.raises(ValueError, match="Unknown temperature method"):
+        generate_example_data(temp_infiltration_method="invalid_method", **common_params)

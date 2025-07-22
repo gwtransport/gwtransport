@@ -14,10 +14,11 @@ from gwtransport.utils import compute_time_edges, get_soil_temperature
 
 
 def generate_example_data(
+    *,
     date_start="2020-01-01",
     date_end="2021-12-31",
     date_freq="D",
-    mean_flow=100.0,  # m3/day
+    flow_mean=100.0,  # m3/day
     flow_amplitude=30.0,  # m3/day
     flow_noise=10.0,  # m3/day
     temp_infiltration_method="synthetic",  # Method for generating infiltration temperature
@@ -33,43 +34,55 @@ def generate_example_data(
 
     Parameters
     ----------
-    start_date : str
+    date_start : str, default "2020-01-01"
         Start date for the time series in 'YYYY-MM-DD' format
-    end_date : str
+    date_end : str, default "2021-12-31"
         End date for the time series in 'YYYY-MM-DD' format
-    mean_flow : float
+    date_freq : str, default "D"
+        Frequency for the time series (pandas frequency string)
+    flow_mean : float, default 100.0
         Mean flow rate in m3/day
-    flow_amplitude : float
+    flow_amplitude : float, default 30.0
         Seasonal amplitude of flow rate in m3/day
-    flow_noise : float
+    flow_noise : float, default 10.0
         Random noise level for flow rate in m3/day
-    temp_infiltration_mean : float
+    temp_infiltration_method : str, default "synthetic"
+        Method for generating infiltration temperature. Options:
+        - "synthetic": Seasonal pattern with random noise
+        - "constant": Constant temperature equal to temp_infiltration_mean
+        - "soil_temperature": Use real soil temperature data from KNMI station
+    temp_infiltration_mean : float, default 12.0
         Mean temperature of infiltrating water in °C
-    temp_infiltration_amplitude : float
-        Seasonal amplitude of infiltration temperature in °C
-    temp_infiltration_noise : float
-        Random noise level for infiltration temperature in °C
-    aquifer_pore_volume : float
-        Mean pore volume of the aquifer in m3
-    aquifer_pore_volume_std : float
-        Standard deviation of aquifer pore volume in m3 (for generating heterogeneity)
-    retardation_factor : float
+    temp_infiltration_amplitude : float, default 8.0
+        Seasonal amplitude of infiltration temperature in °C (only used for "synthetic" method)
+    temp_infiltration_noise : float, default 1.0
+        Random noise level for infiltration temperature in °C (only used for "synthetic" method)
+    aquifer_pore_volume_gamma_mean : float, default 1000.0
+        Mean pore volume of the aquifer gamma distribution in m3
+    aquifer_pore_volume_gamma_std : float, default 200.0
+        Standard deviation of aquifer pore volume gamma distribution in m3
+    retardation_factor : float, default 1.0
         Retardation factor for temperature transport
 
     Returns
     -------
     tuple
         A tuple containing:
-        - pandas.DataFrame: DataFrame containing dates, flow rates, infiltration temperature, and
-          extracted water temperature
-        - numpy.ndarray: Time edges (tedges) used for the flow calculations
+        - pandas.DataFrame: DataFrame with columns 'flow', 'temp_infiltration', 'temp_extraction'
+          and metadata attributes for the aquifer parameters
+        - pandas.DatetimeIndex: Time edges (tedges) used for the flow calculations
+
+    Raises
+    ------
+    ValueError
+        If temp_infiltration_method is not one of the supported methods
     """
     # Create date range
     dates = pd.date_range(start=date_start, end=date_end, freq=date_freq).tz_localize("UTC")
     days = (dates - dates[0]).days.values
 
     # Generate flow data with seasonal pattern (higher in winter)
-    seasonal_flow = mean_flow + flow_amplitude * np.sin(2 * np.pi * days / 365 + np.pi)
+    seasonal_flow = flow_mean + flow_amplitude * np.sin(2 * np.pi * days / 365 + np.pi)
     flow = seasonal_flow + np.random.normal(0, flow_noise, len(dates))
     flow = np.maximum(flow, 5.0)  # Ensure flow is not too small or negative
 
@@ -93,10 +106,15 @@ def generate_example_data(
         infiltration_temp = np.full(len(dates), temp_infiltration_mean)
     elif temp_infiltration_method == "soil_temperature":
         # Use soil temperature data
-        infiltration_temp = get_soil_temperature(
-            station_number=260,  # Example station number
-            interpolate_missing_values=True,
-        )["TB3"].resample(date_freq).mean()[dates].values
+        infiltration_temp = (
+            get_soil_temperature(
+                station_number=260,  # Example station number
+                interpolate_missing_values=True,
+            )["TB3"]
+            .resample(date_freq)
+            .mean()[dates]
+            .values
+        )
     else:
         msg = f"Unknown temperature method: {temp_infiltration_method}"
         raise ValueError(msg)
@@ -136,7 +154,7 @@ def generate_example_data(
     #     df.iloc[spill_start : spill_start + spill_duration, df.columns.get_loc("temp_extraction")] -= spill_magnitude
 
     # Add metadata for reference
-    alpha, beta = gamma.mean_std_to_alpha_beta(mean=aquifer_pore_volume_gamma_mean, std=aquifer_pore_volume_std)
+    alpha, beta = gamma.mean_std_to_alpha_beta(mean=aquifer_pore_volume_gamma_mean, std=aquifer_pore_volume_gamma_std)
     df.attrs["aquifer_pore_volume_mean"] = aquifer_pore_volume_gamma_mean
     df.attrs["aquifer_pore_volume_std"] = aquifer_pore_volume_gamma_std
     df.attrs["aquifer_pore_volume_gamma_alpha"] = alpha
