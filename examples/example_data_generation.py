@@ -13,7 +13,7 @@ from gwtransport import advection, gamma
 from gwtransport.utils import compute_time_edges, get_soil_temperature
 
 
-def generate_synthetic_data(
+def generate_example_data(
     date_start="2020-01-01",
     date_end="2021-12-31",
     date_freq="D",
