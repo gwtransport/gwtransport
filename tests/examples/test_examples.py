@@ -3,8 +3,6 @@ import subprocess
 import sys
 
 import nbformat
-import numpy as np
-import pandas as pd
 import pytest
 from nbconvert.preprocessors import ExecutePreprocessor
 
