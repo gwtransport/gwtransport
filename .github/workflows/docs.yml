@@ -34,10 +34,10 @@ jobs:
         run: |
           curl https://gwtransport.github.io/gwtransport/coverage-functional.zip -L -o coverage-functional.zip
           curl https://gwtransport.github.io/gwtransport/coverage-examples.zip -L -o coverage-examples.zip
-          unzip -o coverage-functional.zip
-          unzip -o coverage-examples.zip
-          mv coverage-functional.zip coverage
-          mv coverage-examples.zip coverage
+          unzip -o coverage-functional.zip || true
+          unzip -o coverage-examples.zip || true
+          mv coverage-functional.zip coverage || true
+          mv coverage-examples.zip coverage || true
       - name: Upload both coverage results
         uses: actions/upload-pages-artifact@v3
         with:

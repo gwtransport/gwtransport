@@ -41,10 +41,10 @@ jobs:
         run: |
           curl https://gwtransport.github.io/gwtransport/coverage-functional.zip -L -o coverage-functional.zip
           curl https://gwtransport.github.io/gwtransport/documentation.zip -L -o documentation.zip
-          unzip -o coverage-functional.zip
-          unzip -o documentation.zip
-          mv coverage-functional.zip coverage
-          mv documentation.zip coverage
+          unzip -o coverage-functional.zip || true
+          unzip -o documentation.zip || true
+          mv coverage-functional.zip coverage || true
+          mv documentation.zip coverage || true
       - name: Upload both coverage results
         if: ${{ always() }}
         uses: actions/upload-pages-artifact@v3
