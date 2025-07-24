@@ -3,10 +3,8 @@
 import re
 from pathlib import Path
 
-import pytest
 
-
-def get_all_code_snippets():
+def _get_all_code_snippets():
     """Get all Python code snippets from RST files and README.md."""
     repo_root = Path(__file__).parent.parent.parent
     docs_dir = repo_root / "docs" / "source"
@@ -38,9 +36,16 @@ def get_all_code_snippets():
     return snippets
 
 
-@pytest.mark.parametrize(("code", "line_num", "file_name"), get_all_code_snippets())
-def test_code_snippet(code, line_num, file_name):
+def pytest_generate_tests(metafunc):
+    """Generate tests for each code snippet found."""
+    if "code_snippet_data" in metafunc.fixturenames:
+        snippets = _get_all_code_snippets()
+        metafunc.parametrize("code_snippet_data", snippets, ids=[f"{fname}:{line}" for _, line, fname in snippets])
+
+
+def test_code_snippet(code_snippet_data):
     """Test that documentation code snippets execute without error."""
+    code, line_num, file_name = code_snippet_data
     exec_globals = {"np": __import__("numpy"), "pd": __import__("pandas")}
 
     try:
