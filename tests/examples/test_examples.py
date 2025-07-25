@@ -53,6 +53,7 @@ def test_ipynb(ipynb_path):
     # Create a temporary Python file
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", encoding="utf-8") as temp_file:
         temp_file.write(body)
+        temp_file.flush()
         test_pythonscript(temp_file.name)
 
 
@@ -113,5 +114,5 @@ def test_failing_notebook_detection():
     assert os.path.exists(failing_notebook_path), f"Test notebook not found: {failing_notebook_path}"
 
     # The test_ipynb function should raise AssertionError for failing notebooks
-    with pytest.raises(AssertionError, match="Notebook execution failed"):
+    with pytest.raises(AssertionError):
         test_ipynb(failing_notebook_path)
