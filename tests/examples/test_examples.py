@@ -4,7 +4,7 @@ import sys
 
 import nbformat
 import pytest
-from nbconvert.preprocessors import ExecutePreprocessor
+from nbclient import NotebookClient
 
 
 def test_pythonscript(pythonfile_path):
@@ -27,7 +27,7 @@ def test_pythonscript(pythonfile_path):
 
 def test_ipynb(ipynb_path):
     """
-    Execute a Jupyter notebook as a test using nbconvert.
+    Execute a Jupyter notebook as a test using nbclient.
 
     Parameters
     ----------
@@ -48,17 +48,17 @@ def test_ipynb(ipynb_path):
     # Extract kernel name from notebook metadata, fallback to python3
     kernel_name = nb.metadata.get("kernelspec", {}).get("name", "python3")
 
-    # Configure the preprocessor with appropriate settings for testing
-    ep = ExecutePreprocessor(
+    # Configure the notebook client with appropriate settings for testing
+    client = NotebookClient(
+        nb,
         timeout=300,  # 5 minutes timeout per cell
         kernel_name=kernel_name,
         allow_errors=False,  # Fail fast on any cell error
-        record_timing=False,  # Don't need timing info for tests
     )
 
     try:
         # Execute the notebook in its own directory
-        ep.preprocess(nb, {"metadata": {"path": notebook_dir}})
+        client.execute(cwd=notebook_dir)
     except Exception as e:
         # Re-raise with more context about which notebook failed
         error_msg = f"Notebook execution failed for {ipynb_path}: {e}"
