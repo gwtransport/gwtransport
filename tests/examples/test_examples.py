@@ -1,10 +1,11 @@
 import os
 import subprocess
 import sys
+import tempfile
 
 import nbformat
 import pytest
-from nbclient import NotebookClient
+from nbconvert import PythonExporter
 
 
 def test_pythonscript(pythonfile_path):
@@ -27,42 +28,32 @@ def test_pythonscript(pythonfile_path):
 
 def test_ipynb(ipynb_path):
     """
-    Execute a Jupyter notebook as a test using nbclient.
+    Convert a Jupyter notebook to a Python script and execute it as a test.
+
+    Instead of using nbclient or nbconvert, so that coverage works correctly.
 
     Parameters
     ----------
     ipynb_path : str
-        The path to the Jupyter notebook to execute.
+        The path to the Jupyter notebook to convert and execute.
 
     Raises
     ------
     AssertionError
-        If the Jupyter notebook does not execute successfully.
+        If the converted Python script does not execute successfully.
     """
+    # Read the notebook
     with open(ipynb_path, encoding="utf-8") as f:
-        nb = nbformat.read(f, as_version=4)
+        nb = nbformat.read(f, as_version=nbformat.NO_CONVERT)
 
-    # Get the directory containing the notebook for proper working directory
-    notebook_dir = os.path.dirname(os.path.abspath(ipynb_path))
+    # Convert notebook to Python script
+    exporter = PythonExporter()
+    body = exporter.from_notebook_node(nb)[0]
 
-    # Extract kernel name from notebook metadata, fallback to python3
-    kernel_name = nb.metadata.get("kernelspec", {}).get("name", "python3")
-
-    # Configure the notebook client with appropriate settings for testing
-    client = NotebookClient(
-        nb,
-        timeout=300,  # 5 minutes timeout per cell
-        kernel_name=kernel_name,
-        allow_errors=False,  # Fail fast on any cell error
-    )
-
-    try:
-        # Execute the notebook in its own directory
-        client.execute(cwd=notebook_dir)
-    except Exception as e:
-        # Re-raise with more context about which notebook failed
-        error_msg = f"Notebook execution failed for {ipynb_path}: {e}"
-        raise AssertionError(error_msg) from e
+    # Create a temporary Python file
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", encoding="utf-8") as temp_file:
+        temp_file.write(body)
+        test_pythonscript(temp_file.name)
 
 
 def test_notebook_cells_executed(ipynb_path):

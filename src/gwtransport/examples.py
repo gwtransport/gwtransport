@@ -1,15 +1,18 @@
 """
-Synthetic Data Generation Functions for Groundwater Transport Examples.
+Example data generation for groundwater transport modeling.
 
-This module provides functions to generate synthetic temperature and flow data
-for demonstrating groundwater transport models. It creates realistic time series
-with seasonal patterns and random variations.
+This module provides utilities to generate synthetic temperature and flow data
+for demonstrating and testing groundwater transport models. It was separated
+from the utils module to resolve circular import dependencies.
 """
+
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
-from gwtransport import advection, gamma
+from gwtransport.advection import gamma_infiltration_to_extraction
+from gwtransport.gamma import mean_std_to_alpha_beta
 from gwtransport.utils import compute_time_edges, get_soil_temperature
 
 
@@ -130,7 +133,7 @@ def generate_example_data(
     # Compute tedges for the flow series
     tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df))
 
-    df["temp_extraction"] = advection.gamma_infiltration_to_extraction(
+    df["temp_extraction"] = gamma_infiltration_to_extraction(
         cin=df["temp_infiltration"],
         flow=df["flow"],
         tedges=tedges,
@@ -154,7 +157,7 @@ def generate_example_data(
     #     df.iloc[spill_start : spill_start + spill_duration, df.columns.get_loc("temp_extraction")] -= spill_magnitude
 
     # Add metadata for reference
-    alpha, beta = gamma.mean_std_to_alpha_beta(mean=aquifer_pore_volume_gamma_mean, std=aquifer_pore_volume_gamma_std)
+    alpha, beta = mean_std_to_alpha_beta(mean=aquifer_pore_volume_gamma_mean, std=aquifer_pore_volume_gamma_std)
     df.attrs["aquifer_pore_volume_mean"] = aquifer_pore_volume_gamma_mean
     df.attrs["aquifer_pore_volume_std"] = aquifer_pore_volume_gamma_std
     df.attrs["aquifer_pore_volume_gamma_alpha"] = alpha
