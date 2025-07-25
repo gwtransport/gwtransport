@@ -14,13 +14,17 @@ jobs:
   build-documentation:
     runs-on: ubuntu-latest
     steps:
-      - name: Disable man-db to make pandoc install
+      - name: Disable man-db to speed up pandoc install
         run: |
           echo 'set man-db/auto-update false' | sudo debconf-communicate >/dev/null
           sudo dpkg-reconfigure man-db
       - uses: actions/checkout@v4
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+      - name: Install the project
+        run: uv sync --extra test
+      - name: Run inline examples that are part of the documentation
+        run: uv run pytest tests/docs
       - name: Install Pandoc
         uses: pandoc/actions/setup@v1
       - name: Build documentation with sphinx and uv
