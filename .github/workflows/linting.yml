@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ["main"]
 
+concurrency:
+  group: "linting"
+  cancel-in-progress: false
+
 jobs:
   pytest:
     name: ruff

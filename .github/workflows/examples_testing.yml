@@ -7,7 +7,7 @@ on:
     branches: ["main"]
 
 concurrency:
-  group: "examples-pages"
+  group: "examples"
   cancel-in-progress: false
 
 jobs:
