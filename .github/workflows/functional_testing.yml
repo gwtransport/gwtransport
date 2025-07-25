@@ -23,7 +23,7 @@ jobs:
       - name: Install the project
         run: uv sync --extra test
       - name: Run tests with coverage
-        run: uv run pytest tests/src --cov=src --cov-report=xml:coverage/coverage.xml --cov-report=html:coverage/htmlcov
+        run: uv run pytest tests/src --cov=src --cov-report=xml:coverage/coverage.xml --cov-report=html:coverage/htmlcov --cov-append
       - name: Create coverage badge
         run: |
           uv tool install "genbadge[coverage]"

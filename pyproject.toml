@@ -71,3 +71,15 @@ addopts = [
 filterwarnings = [
     "ignore:.*Jupyter is migrating.*:DeprecationWarning",
 ]
+
+[tool.coverage.run]
+concurrency = ["multiprocessing"]
+parallel = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]
