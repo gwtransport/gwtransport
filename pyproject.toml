@@ -75,7 +75,7 @@ filterwarnings = [
 [tool.coverage.run]
 concurrency = ["multiprocessing"]
 parallel = true
-sigterm = True
+sigterm = true
 
 [tool.coverage.report]
 exclude_lines = [
