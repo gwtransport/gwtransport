@@ -36,7 +36,8 @@ tedges = pd.date_range(start="2020-01-05", end="2020-01-08", freq="D")  # Exampl
 
 areas_between_streamlines = np.array([100.0, 90.0, 110.0])  # Example areas
 depth_aquifer = 2.0  # Convert areas between 2d streamlines to 3d aquifer pore volumes.
-aquifer_pore_volumes = areas_between_streamlines * depth_aquifer
+porosity = 0.35
+aquifer_pore_volumes = areas_between_streamlines * depth_aquifer * porosity
 
 cout = distribution_infiltration_to_extraction(
     cin=cin_data,
