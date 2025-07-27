@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
+
 [project]
 name = "gwtransport"
 description = "Timeseries analysis of groundwater transport of solutes and temperature"
