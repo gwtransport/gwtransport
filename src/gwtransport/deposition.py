@@ -194,6 +194,8 @@ def deposition_coefficients(dcout_index, flow, aquifer_pore_volume, porosity, th
         retardation_factor=retardation_factor,
         direction="extraction_to_infiltration",
     )
+    # Convert to pandas series - guaranteed to have shape (1, N) for single pore volume
+    rt = pd.Series(rt.flatten(), index=flow.index)
     index_dep = deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, retardation_factor)
 
     if not index_dep.isin(flow.index).all():
@@ -289,13 +291,8 @@ def deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, re
         direction="extraction_to_infiltration",
         index=flow.index,
     )
-    # Convert to pandas series
-    expected_shape_first_dim = 1
-    expected_ndim = 2
-    if rt.ndim == expected_ndim and rt.shape[0] == expected_shape_first_dim:
-        rt = pd.Series(rt.flatten(), index=flow.index)
-    else:
-        rt = pd.Series(rt, index=flow.index)
+    # Convert to pandas series - guaranteed to have shape (1, N) for single pore volume
+    rt = pd.Series(rt.flatten(), index=flow.index)
     rt_at_start_cout = pd.to_timedelta(interp_series(rt, dcout_index.min()), "D")
     start_dep = (dcout_index.min() - rt_at_start_cout).floor("D")
     end_dep = dcout_index.max()
