@@ -12,8 +12,8 @@ deposition enriches the water with the compound. The water is extracted ('cout')
 increase due to deposition is called 'dcout'.
 
 Main functions:
-- extraction_to_infiltration: Calculate deposition rates from extraction data (extraction to infiltration modeling, equivalent to deconvolution)
-- infiltration_to_extraction: Determine concentration changes due to deposition (infiltration to extraction modeling, equivalent to convolution)
+- extraction_to_deposition: Calculate deposition rates from extraction data (extraction to deposition modeling, equivalent to deconvolution)
+- deposition_to_extraction: Determine concentration changes due to deposition (deposition to extraction modeling, equivalent to convolution)
 - deposition_coefficients: Generate coefficients for deposition modeling
 """
 
@@ -26,7 +26,7 @@ from gwtransport.residence_time import residence_time
 from gwtransport.utils import compute_time_edges, interp_series
 
 
-def extraction_to_infiltration(
+def extraction_to_deposition(
     cout, flow, aquifer_pore_volume, porosity, thickness, retardation_factor, nullspace_objective="squared_lengths"
 ):
     """
@@ -116,13 +116,13 @@ def extraction_to_infiltration(
     return deposition_ls + cols_of_nullspace @ res.x
 
 
-def infiltration_to_extraction(
+def deposition_to_extraction(
     dcout_index, deposition, flow, aquifer_pore_volume, porosity, thickness, retardation_factor
 ):
     """
     Compute the increase in concentration of the compound in the extracted water by the deposition.
 
-    This function represents infiltration to extraction modeling (equivalent to convolution).
+    This function represents deposition to extraction modeling (equivalent to convolution).
 
     Parameters
     ----------

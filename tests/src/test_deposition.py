@@ -11,8 +11,8 @@ import pytest
 
 from gwtransport.deposition import (
     deposition_index_from_dcout_index,
-    extraction_to_infiltration,
-    infiltration_to_extraction,
+    deposition_to_extraction,
+    extraction_to_deposition,
 )
 
 
@@ -45,7 +45,7 @@ def test_constant_deposition_basic():
     # Start measurements well after residence time
     cout_index = extended_flow.index[50:]  # Start at day 50
 
-    result = infiltration_to_extraction(cout_index, deposition, extended_flow, **working_params)
+    result = deposition_to_extraction(cout_index, deposition, extended_flow, **working_params)
 
     # Basic validations
     assert len(result) == len(cout_index)
@@ -68,7 +68,7 @@ def test_step_deposition():
     deposition.iloc[100:] = 45.0  # Triple deposition after day 100
 
     cout_index = extended_flow.index[120:]  # Start measurements after step
-    result = infiltration_to_extraction(cout_index, deposition, extended_flow, **working_params)
+    result = deposition_to_extraction(cout_index, deposition, extended_flow, **working_params)
 
     assert len(result) == len(cout_index)
     assert np.all(result >= 0)
@@ -89,7 +89,7 @@ def test_zero_deposition_response():
     deposition = pd.Series(0.0, index=extended_flow.index)
     cout_index = extended_flow.index[50:]
 
-    result = infiltration_to_extraction(cout_index, deposition, extended_flow, **working_params)
+    result = deposition_to_extraction(cout_index, deposition, extended_flow, **working_params)
 
     # Should return all zeros
     assert np.allclose(result, 0.0)
@@ -109,7 +109,7 @@ def test_variable_flow_stability():
     deposition = pd.Series(25.0, index=flow.index)
     cout_index = flow.index[30:]
 
-    result = infiltration_to_extraction(cout_index, deposition, flow, **working_params)
+    result = deposition_to_extraction(cout_index, deposition, flow, **working_params)
 
     assert len(result) == len(cout_index)
     assert np.all(result >= 0)
@@ -141,8 +141,8 @@ def test_parameter_effect_basic():
         "retardation_factor": 2.0,
     }
 
-    result_low = infiltration_to_extraction(cout_index, deposition, flow, **params_low)
-    result_high = infiltration_to_extraction(cout_index, deposition, flow, **params_high)
+    result_low = deposition_to_extraction(cout_index, deposition, flow, **params_low)
+    result_high = deposition_to_extraction(cout_index, deposition, flow, **params_high)
 
     # Results should be different due to different retardation
     # If they're the same, the parameters may not affect this scenario enough
@@ -167,7 +167,7 @@ def test_short_pulse_detection():
     deposition.iloc[60:62] = 80.0  # 2-day pulse at day 60-61
 
     cout_index = flow.index[50:]  # Start after first pulse
-    result = infiltration_to_extraction(cout_index, deposition, flow, **working_params)
+    result = deposition_to_extraction(cout_index, deposition, flow, **working_params)
 
     assert len(result) == len(cout_index)
     assert np.all(result >= 0)
@@ -189,7 +189,7 @@ def test_basic_mass_conservation():
     deposition = pd.Series(deposition_rate, index=flow.index)
 
     cout_index = flow.index[30:]
-    result = infiltration_to_extraction(cout_index, deposition, flow, **working_params)
+    result = deposition_to_extraction(cout_index, deposition, flow, **working_params)
 
     # Calculate effective area for mass balance
     effective_area = flow.iloc[0] / (
@@ -222,7 +222,7 @@ def test_extraction_to_infiltration_basic():
     cout_series = pd.Series(cout_values, index=cout_index)
 
     # Should work without errors
-    deposition_result = extraction_to_infiltration(cout_series, flow, **working_params)
+    deposition_result = extraction_to_deposition(cout_series, flow, **working_params)
 
     # Basic validations
     assert len(deposition_result) > 0
@@ -245,7 +245,7 @@ def test_full_reciprocity_loop():
     cout_series = pd.Series(cout_original, index=cout_index)
 
     # Step 1: concentration → deposition
-    deposition_computed = extraction_to_infiltration(cout_series, flow, **working_params)
+    deposition_computed = extraction_to_deposition(cout_series, flow, **working_params)
 
     # Step 2: deposition → concentration
     # Get the deposition index that the function expects
@@ -257,7 +257,7 @@ def test_full_reciprocity_loop():
     deposition_series = pd.Series(deposition_computed, index=dep_index)
 
     # Reconstruct concentration
-    cout_reconstructed = infiltration_to_extraction(cout_index, deposition_series, flow, **working_params)
+    cout_reconstructed = deposition_to_extraction(cout_index, deposition_series, flow, **working_params)
 
     # Test reciprocity - should recover original concentration
     # Allow reasonable tolerance for numerical precision and discretization
@@ -345,7 +345,7 @@ def test_steady_state_analytical_solution_comprehensive(flow_rate, retardation_f
     cout_index = flow.index[start_idx:]
 
     # Run simulation
-    result = infiltration_to_extraction(cout_index, deposition, flow, **params)
+    result = deposition_to_extraction(cout_index, deposition, flow, **params)
 
     # Calculate analytical steady-state concentration
     # Formula: C_ss = (aquifer_pore_volume * deposition_rate) / (porosity * thickness * flow_rate)
@@ -416,7 +416,7 @@ def test_steady_state_with_variable_flow():
 
     # Start measurements after sufficient spin-up
     cout_index = flow.index[400:]
-    result = infiltration_to_extraction(cout_index, deposition, flow, **working_params)
+    result = deposition_to_extraction(cout_index, deposition, flow, **working_params)
 
     # For variable flow, use the mean flow rate in analytical solution
     analytical_concentration = (working_params["aquifer_pore_volume"] * deposition_rate) / (
@@ -486,7 +486,7 @@ def test_steady_state_extreme_parameters():
         cout_index = flow.index[start_idx:]
 
         try:
-            result = infiltration_to_extraction(cout_index, deposition, flow, **params)
+            result = deposition_to_extraction(cout_index, deposition, flow, **params)
 
             analytical_concentration = (case["pore_volume"] * deposition_rate) / (
                 params["porosity"] * params["thickness"] * flow_rate
@@ -528,7 +528,7 @@ def test_steady_state_basic():
     # Start measurements very late to ensure steady state
     cout_index = flow.index[400:]  # Start after 400 days
 
-    result = infiltration_to_extraction(cout_index, deposition, flow, **working_params)
+    result = deposition_to_extraction(cout_index, deposition, flow, **working_params)
 
     # Calculate analytical steady-state concentration
     # Correct formula: C_ss = (aquifer_pore_volume * deposition_rate) / (porosity * thickness * flow_rate)
