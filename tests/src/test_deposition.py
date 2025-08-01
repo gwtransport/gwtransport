@@ -185,29 +185,32 @@ def test_basic_mass_conservation():
     working_params = get_working_params()
     extended_flow = get_extended_flow()
 
-    # Simple constant deposition test
-    flow = extended_flow[:150]  # 150 days
+    # Simple constant deposition test with longer simulation for steady state
+    flow = extended_flow[:300]  # 300 days for proper steady state
     deposition_rate = 25.0
     deposition = pd.Series(deposition_rate, index=flow.index)
 
-    cout_index = flow.index[30:]
+    # Start measurements well after spin-up for steady state
+    cout_index = flow.index[200:]  # Start after 200 days
     result = deposition_to_extraction(cout_index, deposition, flow, **working_params)
 
-    # Calculate effective area for mass balance
-    effective_area = flow.iloc[0] / (
-        working_params["retardation_factor"] * working_params["porosity"] * working_params["thickness"]
+    # Calculate analytical steady-state concentration using correct formula
+    # C_ss = (aquifer_pore_volume * deposition_rate) / (porosity * thickness * flow_rate)
+    expected_steady_state = (working_params["aquifer_pore_volume"] * deposition_rate) / (
+        working_params["porosity"] * working_params["thickness"] * flow.iloc[0]
     )
 
-    # For constant deposition, steady-state concentration should be approximately:
-    # C_ss ≈ (deposition_rate * effective_area) / flow_rate
-    expected_steady_state = (deposition_rate * effective_area) / flow.iloc[0]
+    # Check convergence to steady state (last portion should be nearly constant)
+    steady_state_values = result[-50:]  # Last 50 values
+    cv = np.std(steady_state_values) / np.mean(steady_state_values)
+    assert cv < 0.02, f"Not at steady state, CV = {cv:.6f}"
 
-    # Check that mean result is reasonably close to expected
-    mean_result = np.mean(result)
-    relative_error = abs(mean_result - expected_steady_state) / expected_steady_state
+    # Check exact match with analytical solution
+    observed_steady_state = np.mean(steady_state_values)
+    relative_error = abs(observed_steady_state - expected_steady_state) / expected_steady_state
 
-    # Allow reasonable tolerance for numerical effects
-    assert relative_error < 0.7  # Within 70% - loose check for functionality
+    # Exact tolerance for mathematical precision
+    assert relative_error < 1e-10, f"Mass conservation error: {relative_error:.2e} - should be exact!"
 
 
 def test_extraction_to_infiltration_basic():
@@ -267,10 +270,9 @@ def test_full_reciprocity_loop():
     max_relative_error = np.max(relative_errors)
     mean_relative_error = np.mean(relative_errors)
 
-    # Reciprocity should be reasonable with proper parameterization
-    # Allow more tolerance since this is a challenging numerical test
-    assert max_relative_error < 0.15, f"Max relative error: {max_relative_error:.3f}"
-    assert mean_relative_error < 0.05, f"Mean relative error: {mean_relative_error:.3f}"
+    # Reciprocity should be mathematically exact for this deconvolution-convolution loop
+    assert max_relative_error < 1e-14, f"Max relative error: {max_relative_error:.2e} - should be exact!"
+    assert mean_relative_error < 1e-15, f"Mean relative error: {mean_relative_error:.2e} - should be exact!"
 
 
 @pytest.mark.parametrize(
@@ -431,8 +433,8 @@ def test_steady_state_with_variable_flow():
 
     error = abs(observed_steady_state - analytical_concentration) / analytical_concentration
 
-    # Allow larger error for variable flow due to transport effects
-    assert error < 0.1, f"Variable flow steady state error: {error:.4f} > 0.1 (10%)"
+    # Tighter tolerance - variable flow should still converge well to steady state
+    assert error < 0.03, f"Variable flow steady state error: {error:.4f} > 0.03 (3%)"
 
 
 def test_steady_state_extreme_parameters():
