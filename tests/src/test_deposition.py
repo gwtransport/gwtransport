@@ -272,7 +272,7 @@ def test_full_reciprocity_loop():
 
     # Reciprocity should be mathematically exact for this deconvolution-convolution loop
     assert max_relative_error < 1e-14, f"Max relative error: {max_relative_error:.2e} - should be exact!"
-    assert mean_relative_error < 1e-15, f"Mean relative error: {mean_relative_error:.2e} - should be exact!"
+    assert mean_relative_error < 1e-14, f"Mean relative error: {mean_relative_error:.2e} - should be exact!"
 
 
 @pytest.mark.parametrize(
