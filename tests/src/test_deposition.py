@@ -13,7 +13,9 @@ from gwtransport.deposition import (
     deposition_index_from_dcout_index,
     deposition_to_extraction,
     extraction_to_deposition,
+    spinup_duration,
 )
+from gwtransport.utils import compute_time_edges
 
 
 def get_working_params():
@@ -550,5 +552,89 @@ def test_steady_state_basic():
     assert error < 1e-10, f"Steady state error: {error:.12f} - should be exact!"
 
 
-if __name__ == "__main__":
-    pytest.main([__file__])
+def test_spinup_duration():
+    """Test spinup_duration function."""
+    # Create test parameters with sufficient flow history
+    dates = pd.date_range("2020-01-01", periods=1000, freq="D")  # Long enough for any reasonable spinup
+    flow_values = np.full(1000, 300.0)  # Constant flow of 300 m³/day
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(flow_values))
+
+    aquifer_pore_volume = 600.0  # m³
+    retardation_factor = 2.0
+
+    # Test the function
+    result = spinup_duration(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        aquifer_pore_volume=aquifer_pore_volume,
+        retardation_factor=retardation_factor,
+    )
+
+    # Validate result
+    assert isinstance(result, float)
+    assert result > 0
+
+
+def test_spinup_duration_variable_flow():
+    """Test spinup_duration function with variable flow."""
+    # Create variable flow test with sufficient history
+    dates = pd.date_range("2020-01-01", periods=1000, freq="D")  # Long enough for any reasonable spinup
+    flow_values = np.array([100.0 + 50.0 * np.sin(i * 0.1) for i in range(1000)])  # Variable flow
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(flow_values))
+
+    aquifer_pore_volume = 400.0
+    retardation_factor = 1.5
+
+    # Test the function
+    result = spinup_duration(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        aquifer_pore_volume=aquifer_pore_volume,
+        retardation_factor=retardation_factor,
+    )
+
+    # Validate result
+    assert isinstance(result, float)
+    assert result > 0
+
+
+def test_spinup_duration_parameter_validation():
+    """Test spinup_duration function parameter validation."""
+    # Create longer flow series to ensure sufficient flow history
+    dates = pd.date_range("2020-01-01", periods=1000, freq="D")  # Much longer period
+    flow_values = np.full(1000, 100.0)
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(flow_values))
+
+    # Test that function works with valid parameters
+    result = spinup_duration(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        aquifer_pore_volume=200.0,
+        retardation_factor=1.2,
+    )
+    assert result > 0
+
+    # Test with different parameter combinations - use smaller pore volumes to avoid needing very long flow series
+    test_cases = [
+        {"aquifer_pore_volume": 50.0, "retardation_factor": 1.0},  # No retardation
+        {"aquifer_pore_volume": 100.0, "retardation_factor": 2.0},  # Moderate retardation
+        {"aquifer_pore_volume": 10.0, "retardation_factor": 1.1},  # Small aquifer
+    ]
+    for params in test_cases:
+        result = spinup_duration(flow=flow_values, flow_tedges=flow_tedges, **params)
+        assert result > 0
+
+    # Test that function raises error with insufficient flow history
+    short_dates = pd.date_range("2020-01-01", periods=5, freq="D")  # Very short period
+    short_flow_values = np.full(5, 100.0)
+    short_flow_tedges = compute_time_edges(
+        tedges=None, tstart=None, tend=short_dates, number_of_bins=len(short_flow_values)
+    )
+
+    with pytest.raises(ValueError, match="flow timeseries too short"):
+        spinup_duration(
+            flow=short_flow_values,
+            flow_tedges=short_flow_tedges,
+            aquifer_pore_volume=1000.0,  # Large pore volume requiring long flow history
+            retardation_factor=5.0,
+        )
