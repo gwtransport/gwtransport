@@ -72,7 +72,7 @@ def residence_time(
 
     flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
     flow_tdelta = np.diff(flow_tedges_days, prepend=0.0)
-    flow_values = np.concat(([0.0], np.asarray(flow)))
+    flow_values = np.concatenate(([0.0], np.asarray(flow)))
     flow_cum = (flow_values * flow_tdelta).cumsum()  # at flow_tedges and flow_tedges_days. First value is 0.
 
     if index is None:
