@@ -43,7 +43,7 @@ jobs:
           mv coverage-functional.zip coverage || true
           mv coverage-examples.zip coverage || true
       - name: Upload both coverage results
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: coverage
 
