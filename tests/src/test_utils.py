@@ -870,19 +870,19 @@ def test_get_soil_temperature_cache():
             patch("gwtransport.utils.cache_dir", Path(temp_dir) / "cache"),
             patch("gwtransport.utils.date") as mock_date_module,
         ):
-                mock_date_module.today.return_value = mock_date
+            mock_date_module.today.return_value = mock_date
 
-                # First call creates cache
-                df1 = get_soil_temperature(260)
-                cache_path = Path(temp_dir) / "cache" / f"soil_temp_260_True_{mock_date.isoformat()}.pkl"
-                assert cache_path.exists()
+            # First call creates cache
+            df1 = get_soil_temperature(260)
+            cache_path = Path(temp_dir) / "cache" / f"soil_temp_260_True_{mock_date.isoformat()}.pkl"
+            assert cache_path.exists()
 
-                # Second call uses cache
-                df2 = get_soil_temperature(260)
-                pd.testing.assert_frame_equal(df1, df2)
+            # Second call uses cache
+            df2 = get_soil_temperature(260)
+            pd.testing.assert_frame_equal(df1, df2)
 
-                # Different parameters create separate cache
-                df3 = get_soil_temperature(260, interpolate_missing_values=False)
-                cache_path_false = Path(temp_dir) / "cache" / f"soil_temp_260_False_{mock_date.isoformat()}.pkl"
-                assert cache_path_false.exists()
-                assert not df3.equals(df1)
+            # Different parameters create separate cache
+            df3 = get_soil_temperature(260, interpolate_missing_values=False)
+            cache_path_false = Path(temp_dir) / "cache" / f"soil_temp_260_False_{mock_date.isoformat()}.pkl"
+            assert cache_path_false.exists()
+            assert not df3.equals(df1)
