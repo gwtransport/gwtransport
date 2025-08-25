@@ -1,3 +1,6 @@
+from datetime import date
+from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -891,3 +894,145 @@ def test_get_soil_temperature_invalid_station():
     # Test with a station that might not have data or causes HTTP errors
     with pytest.raises((ValueError, Exception)):
         get_soil_temperature(123)  # Invalid station number
+
+
+def test_get_soil_temperature_cache_functionality():
+    """Test that the cache functionality works correctly."""
+    # Clear any existing cache
+    if hasattr(get_soil_temperature, "_cache"):
+        get_soil_temperature._cache.clear()  # noqa: SLF001
+        get_soil_temperature._cache_date.clear()  # noqa: SLF001
+
+    # Mock the date to control cache behavior
+    mock_date = date(2023, 10, 15)
+
+    with patch("gwtransport.utils.date") as mock_date_module:
+        mock_date_module.today.return_value = mock_date
+
+        # First call should populate cache
+        df1 = get_soil_temperature(260)
+
+        # Verify cache was populated
+        assert hasattr(get_soil_temperature, "_cache")
+        assert hasattr(get_soil_temperature, "_cache_date")
+        cache_key = (260, True)  # station_number, interpolate_missing_values
+        assert cache_key in get_soil_temperature._cache  # noqa: SLF001
+        assert get_soil_temperature._cache_date[cache_key] == mock_date  # noqa: SLF001
+
+        # Second call with same parameters should return cached result
+        df2 = get_soil_temperature(260)
+
+        # Should be the exact same object (cached)
+        assert df1 is df2
+
+        # Call with different parameters should create new cache entry
+        df3 = get_soil_temperature(260, interpolate_missing_values=False)
+        cache_key_false = (260, False)
+        assert cache_key_false in get_soil_temperature._cache  # noqa: SLF001
+        assert df3 is not df1  # Different object
+
+        # Call with different station should create new cache entry
+        df4 = get_soil_temperature(273)
+        cache_key_273 = (273, True)
+        assert cache_key_273 in get_soil_temperature._cache  # noqa: SLF001
+        assert df4 is not df1  # Different object
+
+
+def test_get_soil_temperature_cache_expiration():
+    """Test that cache expires when date changes."""
+    # Clear any existing cache
+    if hasattr(get_soil_temperature, "_cache"):
+        get_soil_temperature._cache.clear()  # noqa: SLF001
+        get_soil_temperature._cache_date.clear()  # noqa: SLF001
+
+    # Mock first date
+    first_date = date(2023, 10, 15)
+
+    with patch("gwtransport.utils.date") as mock_date_module:
+        mock_date_module.today.return_value = first_date
+
+        # First call on first date
+        df1 = get_soil_temperature(260)
+        cache_key = (260, True)
+
+        # Verify cache populated
+        assert cache_key in get_soil_temperature._cache  # noqa: SLF001
+        assert get_soil_temperature._cache_date[cache_key] == first_date  # noqa: SLF001
+
+        # Change to next date
+        second_date = date(2023, 10, 16)
+        mock_date_module.today.return_value = second_date
+
+        # Call again - should not use cache due to date change
+        df2 = get_soil_temperature(260)
+
+        # Cache date should be updated
+        assert get_soil_temperature._cache_date[cache_key] == second_date  # noqa: SLF001
+
+        # Results should be different objects (cache was refreshed)
+        assert df1 is not df2
+
+
+def test_get_soil_temperature_cache_different_arguments():
+    """Test that cache correctly handles different argument combinations."""
+    # Clear any existing cache
+    if hasattr(get_soil_temperature, "_cache"):
+        get_soil_temperature._cache.clear()  # noqa: SLF001
+        get_soil_temperature._cache_date.clear()  # noqa: SLF001
+
+    mock_date = date(2023, 10, 15)
+
+    with patch("gwtransport.utils.date") as mock_date_module:
+        mock_date_module.today.return_value = mock_date
+
+        # Different combinations should be cached separately
+        df1 = get_soil_temperature(260, interpolate_missing_values=True)
+        df2 = get_soil_temperature(260, interpolate_missing_values=False)
+        df3 = get_soil_temperature(273, interpolate_missing_values=True)
+        df4 = get_soil_temperature(273, interpolate_missing_values=False)
+
+        # All should be different objects
+        assert df1 is not df2
+        assert df1 is not df3
+        assert df1 is not df4
+        assert df2 is not df3
+        assert df2 is not df4
+        assert df3 is not df4
+
+        # Verify all cache entries exist
+        expected_keys = [(260, True), (260, False), (273, True), (273, False)]
+
+        for key in expected_keys:
+            assert key in get_soil_temperature._cache  # noqa: SLF001
+            assert get_soil_temperature._cache_date[key] == mock_date  # noqa: SLF001
+
+        # Call same combinations again - should return cached results
+        df1_cached = get_soil_temperature(260, interpolate_missing_values=True)
+        df2_cached = get_soil_temperature(260, interpolate_missing_values=False)
+
+        assert df1 is df1_cached  # Same cached object
+        assert df2 is df2_cached  # Same cached object
+
+
+def test_get_soil_temperature_cache_initialization():
+    """Test that cache attributes are properly initialized."""
+    # Clear cache attributes if they exist
+    if hasattr(get_soil_temperature, "_cache"):
+        delattr(get_soil_temperature, "_cache")
+    if hasattr(get_soil_temperature, "_cache_date"):
+        delattr(get_soil_temperature, "_cache_date")
+
+    # Verify attributes don't exist initially
+    assert not hasattr(get_soil_temperature, "_cache")
+    assert not hasattr(get_soil_temperature, "_cache_date")
+
+    # First call should initialize cache attributes
+    with patch("gwtransport.utils.date") as mock_date_module:
+        mock_date_module.today.return_value = date(2023, 10, 15)
+        get_soil_temperature(260)
+
+    # Verify attributes were created
+    assert hasattr(get_soil_temperature, "_cache")
+    assert hasattr(get_soil_temperature, "_cache_date")
+    assert isinstance(get_soil_temperature._cache, dict)  # noqa: SLF001
+    assert isinstance(get_soil_temperature._cache_date, dict)  # noqa: SLF001

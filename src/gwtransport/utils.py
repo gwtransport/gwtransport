@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import io
-import zipfile
 from collections.abc import Sequence
+from datetime import date
 
 import numpy as np
 import numpy.typing as npt
@@ -581,34 +581,69 @@ def get_soil_temperature(station_number: int = 260, *, interpolate_missing_value
     - KNMI: Royal Netherlands Meteorological Institute
     - The timeseries may contain NaN values for missing data.
     """
+    # Simple daily cache
+    cache_key = (station_number, interpolate_missing_values)
+    today = date.today()  # noqa: DTZ011
+
+    if not hasattr(get_soil_temperature, "_cache"):
+        get_soil_temperature._cache = {}  # noqa: SLF001
+        get_soil_temperature._cache_date = {}  # noqa: SLF001
+
+    # Check if cached result exists and is from today
+    if (
+        cache_key in get_soil_temperature._cache  # noqa: SLF001
+        and get_soil_temperature._cache_date.get(cache_key) == today  # noqa: SLF001
+    ):
+        return get_soil_temperature._cache[cache_key]  # noqa: SLF001
+
     url = f"https://cdn.knmi.nl/knmi/map/page/klimatologie/gegevens/bodemtemps/bodemtemps_{station_number}.zip"
 
-    drop_cols = ["YYYYMMDD", "HH", "# STN"]
+    dtypes = {
+        "YYYYMMDD": "int32",
+        "HH": "int8",
+        "  TB1": "float32",
+        "  TB3": "float32",
+        "  TB2": "float32",
+        "  TB4": "float32",
+        "  TB5": "float32",
+        " TNB1": "float32",
+        " TNB2": "float32",
+        " TXB1": "float32",
+        " TXB2": "float32",
+    }
 
     # Download the ZIP file
-    response = requests.get(url, params={"download": "zip"}, timeout=10)
-    response.raise_for_status()  # Raise an error for bad responses
+    with requests.get(url, params={"download": "zip"}, timeout=10) as response:
+        response.raise_for_status()  # Raise an error for bad responses
 
-    # Use BytesIO to treat the content as a file-like object
-    with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref, zip_ref.open(zip_ref.namelist()[0]) as my_file:
-        df = pd.read_csv(my_file, sep=",", skiprows=16, index_col=None, parse_dates=False, na_values=["     "])
-        df.index = pd.to_datetime(df["YYYYMMDD"].values, format=r"%Y%m%d").tz_localize("UTC") + pd.to_timedelta(
-            df["HH"].values, unit="h"
-        )
+    df = pd.read_csv(
+        io.BytesIO(response.content),
+        compression="zip",
+        dtype=dtypes,
+        usecols=dtypes.keys(),
+        skiprows=16,
+        sep=",",
+        index_col=None,
+        na_values=["     "],
+        engine="c",
+        parse_dates=False,
+    )
 
-    # Strip unused columns
-    drop_cols += [col for col in df.columns if "Unnamed" in col]
-    df.drop(columns=drop_cols, inplace=True)
+    df.index = pd.to_datetime(df["YYYYMMDD"].values, format=r"%Y%m%d").tz_localize("UTC") + pd.to_timedelta(
+        df["HH"].values, unit="h"
+    )
 
-    # Strip whitespace from column names
-    df.columns = [col.strip() for col in df.columns]
-
-    # Convert to degrees Celsius
-    df /= 10
+    df.drop(columns=["YYYYMMDD", "HH"], inplace=True)
+    df.columns = df.columns.str.strip()
+    df /= 10.0
 
     if interpolate_missing_values:
         # Fill NaN values with the previous value (forward fill) and then interpolate linearly
         df.interpolate(method="linear", inplace=True)
         df.ffill(inplace=True)
+
+    # Cache the result
+    get_soil_temperature._cache[cache_key] = df  # noqa: SLF001
+    get_soil_temperature._cache_date[cache_key] = today  # noqa: SLF001
 
     return df
