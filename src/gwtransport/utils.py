@@ -5,12 +5,15 @@ from __future__ import annotations
 import io
 from collections.abc import Sequence
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import requests
 from scipy import interpolate
+
+cache_dir = Path(__file__).parent.parent.parent / "cache"
 
 
 def linear_interpolate(x_ref, y_ref, x_query, left=None, right=None):
@@ -581,20 +584,19 @@ def get_soil_temperature(station_number: int = 260, *, interpolate_missing_value
     - KNMI: Royal Netherlands Meteorological Institute
     - The timeseries may contain NaN values for missing data.
     """
-    # Simple daily cache
-    cache_key = (station_number, interpolate_missing_values)
-    today = date.today()  # noqa: DTZ011
+    # File-based daily cache
+    cache_dir.mkdir(exist_ok=True)
 
-    if not hasattr(get_soil_temperature, "_cache"):
-        get_soil_temperature._cache = {}  # noqa: SLF001
-        get_soil_temperature._cache_date = {}  # noqa: SLF001
+    today = date.today().isoformat()  # noqa: DTZ011
+    cache_path = cache_dir / f"soil_temp_{station_number}_{interpolate_missing_values}_{today}.pkl"
 
-    # Check if cached result exists and is from today
-    if (
-        cache_key in get_soil_temperature._cache  # noqa: SLF001
-        and get_soil_temperature._cache_date.get(cache_key) == today  # noqa: SLF001
-    ):
-        return get_soil_temperature._cache[cache_key]  # noqa: SLF001
+    # Check if cached file exists and is from today
+    if cache_path.exists():
+        return pd.read_pickle(cache_path)  # noqa: S301
+
+    # Clean up old cache files to prevent disk bloat
+    for old_file in cache_dir.glob(f"soil_temp_{station_number}_{interpolate_missing_values}_*.pkl"):
+        old_file.unlink(missing_ok=True)
 
     url = f"https://cdn.knmi.nl/knmi/map/page/klimatologie/gegevens/bodemtemps/bodemtemps_{station_number}.zip"
 
@@ -642,8 +644,6 @@ def get_soil_temperature(station_number: int = 260, *, interpolate_missing_value
         df.interpolate(method="linear", inplace=True)
         df.ffill(inplace=True)
 
-    # Cache the result
-    get_soil_temperature._cache[cache_key] = df  # noqa: SLF001
-    get_soil_temperature._cache_date[cache_key] = today  # noqa: SLF001
-
+    # Save to cache for future use
+    df.to_pickle(cache_path)
     return df
