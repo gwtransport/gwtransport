@@ -640,7 +640,7 @@ def get_soil_temperature(station_number: int = 260, *, interpolate_missing_value
     df /= 10.0
 
     if interpolate_missing_values:
-        # Fill NaN values with the previous value (forward fill) and then interpolate linearly
+        # Fill NaN values with interpolate linearly and then forward fill
         df.interpolate(method="linear", inplace=True)
         df.ffill(inplace=True)
 
