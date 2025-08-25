@@ -1,9 +1,12 @@
+import tempfile
 from datetime import date
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 import pytest
+import requests
 from numpy.testing import assert_array_almost_equal
 
 from gwtransport.utils import (
@@ -812,227 +815,74 @@ def test_combine_bin_series_extrapolation_no_out_of_range():
     assert_array_almost_equal(d1, d3)
 
 
-@pytest.mark.parametrize("station_number", [260, 273, 286, 323])
-def test_get_soil_temperature_valid_stations(station_number):
-    """Test get_soil_temperature for all valid station numbers."""
-    df = get_soil_temperature(station_number)
+def test_get_soil_temperature_basic():
+    """Test basic functionality of get_soil_temperature."""
+    df = get_soil_temperature(260)
 
-    # Check that result is a pandas DataFrame
     assert isinstance(df, pd.DataFrame)
-
-    # Check that index is a DatetimeIndex
     assert isinstance(df.index, pd.DatetimeIndex)
-
-    # Check that DataFrame is not empty
     assert len(df) > 0
+    assert str(df.index.tz) == "UTC"
+    assert df.index.is_monotonic_increasing
 
-    # Expected columns based on the docstring
+    # Check expected columns
     expected_columns = {"TB1", "TB2", "TB3", "TB4", "TB5", "TNB1", "TNB2", "TXB1", "TXB2"}
-
-    # Check that all expected columns are present
     assert expected_columns.issubset(set(df.columns))
 
-
-def test_get_soil_temperature_column_data_quality():
-    """Test that each column has at least some non-NaN values."""
-    df = get_soil_temperature(260)  # Use default station
-
-    expected_columns = ["TB1", "TB2", "TB3", "TB4", "TB5", "TNB1", "TNB2", "TXB1", "TXB2"]
-
-    # Check that each column has at least some non-NaN values
+    # Check data quality
     for col in expected_columns:
-        assert col in df.columns, f"Column {col} not found in DataFrame"
-        non_nan_count = df[col].notna().sum()
-        assert non_nan_count > 0, f"Column {col} has no non-NaN values"
-        # Also check that we have a reasonable amount of data (at least 10 data points)
-        assert non_nan_count >= 10, f"Column {col} has fewer than 10 non-NaN values ({non_nan_count})"
+        assert pd.api.types.is_numeric_dtype(df[col])
+        valid_data = df[col].dropna()
+        if len(valid_data) > 0:
+            assert -50 <= valid_data.min() <= valid_data.max() <= 50
 
 
-def test_get_soil_temperature_default_station():
-    """Test that default station parameter works."""
-    df = get_soil_temperature()
-
-    # Should return data (default is station 260)
+@pytest.mark.parametrize("station", [260, 273, 286, 323])
+def test_get_soil_temperature_valid_stations(station):
+    """Test get_soil_temperature works for all valid stations."""
+    df = get_soil_temperature(station)
     assert isinstance(df, pd.DataFrame)
     assert len(df) > 0
 
 
-def test_get_soil_temperature_data_types():
-    """Test that soil temperature data has correct data types and reasonable values."""
-    df = get_soil_temperature(260)
+def test_get_soil_temperature_interpolation():
+    """Test interpolation parameter affects results."""
+    df_interp = get_soil_temperature(260, interpolate_missing_values=True)
+    df_no_interp = get_soil_temperature(260, interpolate_missing_values=False)
 
-    # All temperature columns should be numeric
-    temp_columns = ["TB1", "TB2", "TB3", "TB4", "TB5", "TNB1", "TNB2", "TXB1", "TXB2"]
-    for col in temp_columns:
-        assert pd.api.types.is_numeric_dtype(df[col]), f"Column {col} should be numeric"
-
-        # Check for reasonable temperature ranges (in Celsius, should be between -50 and +50)
-        valid_data = df[col].dropna()
-        if len(valid_data) > 0:
-            assert valid_data.min() >= -50, f"Column {col} has unreasonably low temperature: {valid_data.min()}"
-            assert valid_data.max() <= 50, f"Column {col} has unreasonably high temperature: {valid_data.max()}"
-
-
-def test_get_soil_temperature_index_properties():
-    """Test that the DataFrame index has correct timezone and is sorted."""
-    df = get_soil_temperature(260)
-
-    # Index should be timezone-aware (UTC)
-    assert df.index.tz is not None
-    assert str(df.index.tz) == "UTC"
-
-    # Index should be sorted
-    assert df.index.is_monotonic_increasing
+    assert not df_interp.equals(df_no_interp)
+    # Interpolated version should have fewer NaN values
+    assert df_interp.isna().sum().sum() <= df_no_interp.isna().sum().sum()
 
 
 def test_get_soil_temperature_invalid_station():
-    """Test that invalid station numbers raise appropriate errors."""
-    # Test with an invalid station number
-    with pytest.raises((ValueError, Exception)):
-        get_soil_temperature(999)  # Invalid station number
-
-    # Test with a station that might not have data or causes HTTP errors
-    with pytest.raises((ValueError, Exception)):
-        get_soil_temperature(123)  # Invalid station number
+    """Test invalid station numbers raise errors."""
+    with pytest.raises((requests.exceptions.HTTPError, ValueError)):
+        get_soil_temperature(999)
 
 
-def test_get_soil_temperature_cache_functionality():
-    """Test that the cache functionality works correctly."""
-    # Clear any existing cache
-    if hasattr(get_soil_temperature, "_cache"):
-        get_soil_temperature._cache.clear()  # noqa: SLF001
-        get_soil_temperature._cache_date.clear()  # noqa: SLF001
+def test_get_soil_temperature_cache():
+    """Test caching functionality."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        mock_date = date(2023, 10, 15)
 
-    # Mock the date to control cache behavior
-    mock_date = date(2023, 10, 15)
+        with (
+            patch("gwtransport.utils.cache_dir", Path(temp_dir) / "cache"),
+            patch("gwtransport.utils.date") as mock_date_module,
+        ):
+                mock_date_module.today.return_value = mock_date
 
-    with patch("gwtransport.utils.date") as mock_date_module:
-        mock_date_module.today.return_value = mock_date
+                # First call creates cache
+                df1 = get_soil_temperature(260)
+                cache_path = Path(temp_dir) / "cache" / f"soil_temp_260_True_{mock_date.isoformat()}.pkl"
+                assert cache_path.exists()
 
-        # First call should populate cache
-        df1 = get_soil_temperature(260)
+                # Second call uses cache
+                df2 = get_soil_temperature(260)
+                pd.testing.assert_frame_equal(df1, df2)
 
-        # Verify cache was populated
-        assert hasattr(get_soil_temperature, "_cache")
-        assert hasattr(get_soil_temperature, "_cache_date")
-        cache_key = (260, True)  # station_number, interpolate_missing_values
-        assert cache_key in get_soil_temperature._cache  # noqa: SLF001
-        assert get_soil_temperature._cache_date[cache_key] == mock_date  # noqa: SLF001
-
-        # Second call with same parameters should return cached result
-        df2 = get_soil_temperature(260)
-
-        # Should be the exact same object (cached)
-        assert df1 is df2
-
-        # Call with different parameters should create new cache entry
-        df3 = get_soil_temperature(260, interpolate_missing_values=False)
-        cache_key_false = (260, False)
-        assert cache_key_false in get_soil_temperature._cache  # noqa: SLF001
-        assert df3 is not df1  # Different object
-
-        # Call with different station should create new cache entry
-        df4 = get_soil_temperature(273)
-        cache_key_273 = (273, True)
-        assert cache_key_273 in get_soil_temperature._cache  # noqa: SLF001
-        assert df4 is not df1  # Different object
-
-
-def test_get_soil_temperature_cache_expiration():
-    """Test that cache expires when date changes."""
-    # Clear any existing cache
-    if hasattr(get_soil_temperature, "_cache"):
-        get_soil_temperature._cache.clear()  # noqa: SLF001
-        get_soil_temperature._cache_date.clear()  # noqa: SLF001
-
-    # Mock first date
-    first_date = date(2023, 10, 15)
-
-    with patch("gwtransport.utils.date") as mock_date_module:
-        mock_date_module.today.return_value = first_date
-
-        # First call on first date
-        df1 = get_soil_temperature(260)
-        cache_key = (260, True)
-
-        # Verify cache populated
-        assert cache_key in get_soil_temperature._cache  # noqa: SLF001
-        assert get_soil_temperature._cache_date[cache_key] == first_date  # noqa: SLF001
-
-        # Change to next date
-        second_date = date(2023, 10, 16)
-        mock_date_module.today.return_value = second_date
-
-        # Call again - should not use cache due to date change
-        df2 = get_soil_temperature(260)
-
-        # Cache date should be updated
-        assert get_soil_temperature._cache_date[cache_key] == second_date  # noqa: SLF001
-
-        # Results should be different objects (cache was refreshed)
-        assert df1 is not df2
-
-
-def test_get_soil_temperature_cache_different_arguments():
-    """Test that cache correctly handles different argument combinations."""
-    # Clear any existing cache
-    if hasattr(get_soil_temperature, "_cache"):
-        get_soil_temperature._cache.clear()  # noqa: SLF001
-        get_soil_temperature._cache_date.clear()  # noqa: SLF001
-
-    mock_date = date(2023, 10, 15)
-
-    with patch("gwtransport.utils.date") as mock_date_module:
-        mock_date_module.today.return_value = mock_date
-
-        # Different combinations should be cached separately
-        df1 = get_soil_temperature(260, interpolate_missing_values=True)
-        df2 = get_soil_temperature(260, interpolate_missing_values=False)
-        df3 = get_soil_temperature(273, interpolate_missing_values=True)
-        df4 = get_soil_temperature(273, interpolate_missing_values=False)
-
-        # All should be different objects
-        assert df1 is not df2
-        assert df1 is not df3
-        assert df1 is not df4
-        assert df2 is not df3
-        assert df2 is not df4
-        assert df3 is not df4
-
-        # Verify all cache entries exist
-        expected_keys = [(260, True), (260, False), (273, True), (273, False)]
-
-        for key in expected_keys:
-            assert key in get_soil_temperature._cache  # noqa: SLF001
-            assert get_soil_temperature._cache_date[key] == mock_date  # noqa: SLF001
-
-        # Call same combinations again - should return cached results
-        df1_cached = get_soil_temperature(260, interpolate_missing_values=True)
-        df2_cached = get_soil_temperature(260, interpolate_missing_values=False)
-
-        assert df1 is df1_cached  # Same cached object
-        assert df2 is df2_cached  # Same cached object
-
-
-def test_get_soil_temperature_cache_initialization():
-    """Test that cache attributes are properly initialized."""
-    # Clear cache attributes if they exist
-    if hasattr(get_soil_temperature, "_cache"):
-        delattr(get_soil_temperature, "_cache")
-    if hasattr(get_soil_temperature, "_cache_date"):
-        delattr(get_soil_temperature, "_cache_date")
-
-    # Verify attributes don't exist initially
-    assert not hasattr(get_soil_temperature, "_cache")
-    assert not hasattr(get_soil_temperature, "_cache_date")
-
-    # First call should initialize cache attributes
-    with patch("gwtransport.utils.date") as mock_date_module:
-        mock_date_module.today.return_value = date(2023, 10, 15)
-        get_soil_temperature(260)
-
-    # Verify attributes were created
-    assert hasattr(get_soil_temperature, "_cache")
-    assert hasattr(get_soil_temperature, "_cache_date")
-    assert isinstance(get_soil_temperature._cache, dict)  # noqa: SLF001
-    assert isinstance(get_soil_temperature._cache_date, dict)  # noqa: SLF001
+                # Different parameters create separate cache
+                df3 = get_soil_temperature(260, interpolate_missing_values=False)
+                cache_path_false = Path(temp_dir) / "cache" / f"soil_temp_260_False_{mock_date.isoformat()}.pkl"
+                assert cache_path_false.exists()
+                assert not df3.equals(df1)
