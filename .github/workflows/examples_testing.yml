@@ -47,7 +47,7 @@ jobs:
           mv documentation.zip coverage || true
       - name: Upload both coverage results
         if: ${{ always() }}
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: coverage
 
