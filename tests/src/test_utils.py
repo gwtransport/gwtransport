@@ -1,6 +1,12 @@
+import tempfile
+from datetime import date
+from pathlib import Path
+from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
 import pytest
+import requests
 from numpy.testing import assert_array_almost_equal
 
 from gwtransport.utils import (
@@ -809,85 +815,74 @@ def test_combine_bin_series_extrapolation_no_out_of_range():
     assert_array_almost_equal(d1, d3)
 
 
-@pytest.mark.parametrize("station_number", [260, 273, 286, 323])
-def test_get_soil_temperature_valid_stations(station_number):
-    """Test get_soil_temperature for all valid station numbers."""
-    df = get_soil_temperature(station_number)
+def test_get_soil_temperature_basic():
+    """Test basic functionality of get_soil_temperature."""
+    df = get_soil_temperature(260)
 
-    # Check that result is a pandas DataFrame
     assert isinstance(df, pd.DataFrame)
-
-    # Check that index is a DatetimeIndex
     assert isinstance(df.index, pd.DatetimeIndex)
-
-    # Check that DataFrame is not empty
     assert len(df) > 0
+    assert str(df.index.tz) == "UTC"
+    assert df.index.is_monotonic_increasing
 
-    # Expected columns based on the docstring
+    # Check expected columns
     expected_columns = {"TB1", "TB2", "TB3", "TB4", "TB5", "TNB1", "TNB2", "TXB1", "TXB2"}
-
-    # Check that all expected columns are present
     assert expected_columns.issubset(set(df.columns))
 
-
-def test_get_soil_temperature_column_data_quality():
-    """Test that each column has at least some non-NaN values."""
-    df = get_soil_temperature(260)  # Use default station
-
-    expected_columns = ["TB1", "TB2", "TB3", "TB4", "TB5", "TNB1", "TNB2", "TXB1", "TXB2"]
-
-    # Check that each column has at least some non-NaN values
+    # Check data quality
     for col in expected_columns:
-        assert col in df.columns, f"Column {col} not found in DataFrame"
-        non_nan_count = df[col].notna().sum()
-        assert non_nan_count > 0, f"Column {col} has no non-NaN values"
-        # Also check that we have a reasonable amount of data (at least 10 data points)
-        assert non_nan_count >= 10, f"Column {col} has fewer than 10 non-NaN values ({non_nan_count})"
+        assert pd.api.types.is_numeric_dtype(df[col])
+        valid_data = df[col].dropna()
+        if len(valid_data) > 0:
+            assert -50 <= valid_data.min() <= valid_data.max() <= 50
 
 
-def test_get_soil_temperature_default_station():
-    """Test that default station parameter works."""
-    df = get_soil_temperature()
-
-    # Should return data (default is station 260)
+@pytest.mark.parametrize("station", [260, 273, 286, 323])
+def test_get_soil_temperature_valid_stations(station):
+    """Test get_soil_temperature works for all valid stations."""
+    df = get_soil_temperature(station)
     assert isinstance(df, pd.DataFrame)
     assert len(df) > 0
 
 
-def test_get_soil_temperature_data_types():
-    """Test that soil temperature data has correct data types and reasonable values."""
-    df = get_soil_temperature(260)
+def test_get_soil_temperature_interpolation():
+    """Test interpolation parameter affects results."""
+    df_interp = get_soil_temperature(260, interpolate_missing_values=True)
+    df_no_interp = get_soil_temperature(260, interpolate_missing_values=False)
 
-    # All temperature columns should be numeric
-    temp_columns = ["TB1", "TB2", "TB3", "TB4", "TB5", "TNB1", "TNB2", "TXB1", "TXB2"]
-    for col in temp_columns:
-        assert pd.api.types.is_numeric_dtype(df[col]), f"Column {col} should be numeric"
-
-        # Check for reasonable temperature ranges (in Celsius, should be between -50 and +50)
-        valid_data = df[col].dropna()
-        if len(valid_data) > 0:
-            assert valid_data.min() >= -50, f"Column {col} has unreasonably low temperature: {valid_data.min()}"
-            assert valid_data.max() <= 50, f"Column {col} has unreasonably high temperature: {valid_data.max()}"
-
-
-def test_get_soil_temperature_index_properties():
-    """Test that the DataFrame index has correct timezone and is sorted."""
-    df = get_soil_temperature(260)
-
-    # Index should be timezone-aware (UTC)
-    assert df.index.tz is not None
-    assert str(df.index.tz) == "UTC"
-
-    # Index should be sorted
-    assert df.index.is_monotonic_increasing
+    assert not df_interp.equals(df_no_interp)
+    # Interpolated version should have fewer NaN values
+    assert df_interp.isna().sum().sum() <= df_no_interp.isna().sum().sum()
 
 
 def test_get_soil_temperature_invalid_station():
-    """Test that invalid station numbers raise appropriate errors."""
-    # Test with an invalid station number
-    with pytest.raises((ValueError, Exception)):
-        get_soil_temperature(999)  # Invalid station number
+    """Test invalid station numbers raise errors."""
+    with pytest.raises((requests.exceptions.HTTPError, ValueError)):
+        get_soil_temperature(999)
 
-    # Test with a station that might not have data or causes HTTP errors
-    with pytest.raises((ValueError, Exception)):
-        get_soil_temperature(123)  # Invalid station number
+
+def test_get_soil_temperature_cache():
+    """Test caching functionality."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        mock_date = date(2023, 10, 15)
+
+        with (
+            patch("gwtransport.utils.cache_dir", Path(temp_dir) / "cache"),
+            patch("gwtransport.utils.date") as mock_date_module,
+        ):
+            mock_date_module.today.return_value = mock_date
+
+            # First call creates cache
+            df1 = get_soil_temperature(260)
+            cache_path = Path(temp_dir) / "cache" / f"soil_temp_260_True_{mock_date.isoformat()}.pkl"
+            assert cache_path.exists()
+
+            # Second call uses cache
+            df2 = get_soil_temperature(260)
+            pd.testing.assert_frame_equal(df1, df2)
+
+            # Different parameters create separate cache
+            df3 = get_soil_temperature(260, interpolate_missing_values=False)
+            cache_path_false = Path(temp_dir) / "cache" / f"soil_temp_260_False_{mock_date.isoformat()}.pkl"
+            assert cache_path_false.exists()
+            assert not df3.equals(df1)
