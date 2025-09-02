@@ -12,8 +12,8 @@ deposition enriches the water with the compound. The water is extracted ('cout')
 increase due to deposition is called 'dcout'.
 
 Main functions:
-- extraction_to_infiltration: Calculate deposition rates from extraction data (extraction to infiltration modeling, equivalent to deconvolution)
-- infiltration_to_extraction: Determine concentration changes due to deposition (infiltration to extraction modeling, equivalent to convolution)
+- extraction_to_deposition: Calculate deposition rates from extraction data (extraction to deposition modeling, equivalent to deconvolution)
+- deposition_to_extraction: Determine concentration changes due to deposition (deposition to extraction modeling, equivalent to convolution)
 - deposition_coefficients: Generate coefficients for deposition modeling
 """
 
@@ -26,7 +26,7 @@ from gwtransport.residence_time import residence_time
 from gwtransport.utils import compute_time_edges, interp_series
 
 
-def extraction_to_infiltration(
+def extraction_to_deposition(
     cout, flow, aquifer_pore_volume, porosity, thickness, retardation_factor, nullspace_objective="squared_lengths"
 ):
     """
@@ -116,13 +116,13 @@ def extraction_to_infiltration(
     return deposition_ls + cols_of_nullspace @ res.x
 
 
-def infiltration_to_extraction(
+def deposition_to_extraction(
     dcout_index, deposition, flow, aquifer_pore_volume, porosity, thickness, retardation_factor
 ):
     """
     Compute the increase in concentration of the compound in the extracted water by the deposition.
 
-    This function represents infiltration to extraction modeling (equivalent to convolution).
+    This function represents deposition to extraction modeling (equivalent to convolution).
 
     Parameters
     ----------
@@ -194,6 +194,8 @@ def deposition_coefficients(dcout_index, flow, aquifer_pore_volume, porosity, th
         retardation_factor=retardation_factor,
         direction="extraction_to_infiltration",
     )
+    # Convert to pandas series - guaranteed to have shape (1, N) for single pore volume
+    rt = pd.Series(rt.flatten(), index=flow.index)
     index_dep = deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, retardation_factor)
 
     if not index_dep.isin(flow.index).all():
@@ -256,6 +258,51 @@ def dcout_date_range_from_dcout_index(dcout_index):
     return pd.date_range(start=dcout_index.min().floor("D"), end=dcout_index.max(), freq="D")
 
 
+def spinup_duration(
+    *,
+    flow: np.ndarray,
+    flow_tedges: pd.DatetimeIndex,
+    aquifer_pore_volume: float,
+    retardation_factor: float,
+) -> float:
+    """
+    Compute the spinup duration for deposition modeling.
+
+    The spinup duration is the residence time at the first time step, representing
+    the time needed for the system to become fully informed. Before this duration,
+    the extracted concentration lacks complete deposition history.
+
+    Parameters
+    ----------
+    flow : numpy.ndarray
+        Flow rate of water in the aquifer [m3/day].
+    flow_tedges : pandas.DatetimeIndex
+        Time edges for the flow data.
+    aquifer_pore_volume : float
+        Pore volume of the aquifer [m3].
+    retardation_factor : float
+        Retardation factor of the compound in the aquifer [dimensionless].
+
+    Returns
+    -------
+    float
+        Spinup duration in days.
+    """
+    rt = residence_time(
+        flow=flow,
+        flow_tedges=flow_tedges,
+        aquifer_pore_volume=aquifer_pore_volume,
+        retardation_factor=retardation_factor,
+        direction="infiltration_to_extraction",
+    )
+    if np.isnan(rt[0, 0]):
+        msg = "Residence time at the first time step is NaN. This indicates that the aquifer is not fully informed: flow timeseries too short."
+        raise ValueError(msg)
+
+    # Return the first residence time value
+    return float(rt[0, 0])
+
+
 def deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, retardation_factor):
     """
     Compute the index of the deposition from the concentration of the compound in the extracted water index.
@@ -289,13 +336,8 @@ def deposition_index_from_dcout_index(dcout_index, flow, aquifer_pore_volume, re
         direction="extraction_to_infiltration",
         index=flow.index,
     )
-    # Convert to pandas series
-    expected_shape_first_dim = 1
-    expected_ndim = 2
-    if rt.ndim == expected_ndim and rt.shape[0] == expected_shape_first_dim:
-        rt = pd.Series(rt.flatten(), index=flow.index)
-    else:
-        rt = pd.Series(rt, index=flow.index)
+    # Convert to pandas series - guaranteed to have shape (1, N) for single pore volume
+    rt = pd.Series(rt.flatten(), index=flow.index)
     rt_at_start_cout = pd.to_timedelta(interp_series(rt, dcout_index.min()), "D")
     start_dep = (dcout_index.min() - rt_at_start_cout).floor("D")
     end_dep = dcout_index.max()
