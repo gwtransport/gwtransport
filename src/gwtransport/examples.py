@@ -27,7 +27,7 @@ def generate_example_data(
     temp_infiltration_method="synthetic",  # Method for generating infiltration temperature
     temp_infiltration_mean=12.0,  # °C
     temp_infiltration_amplitude=8.0,  # °C
-    temp_infiltration_noise=1.0,  # °C
+    temp_measurement_noise=1.0,  # °C
     aquifer_pore_volume_gamma_mean=1000.0,  # m3
     aquifer_pore_volume_gamma_std=200.0,  # m3
     retardation_factor=1.0,
@@ -51,15 +51,15 @@ def generate_example_data(
         Random noise level for flow rate in m3/day
     temp_infiltration_method : str, default "synthetic"
         Method for generating infiltration temperature. Options:
-        - "synthetic": Seasonal pattern with random noise
-        - "constant": Constant temperature equal to temp_infiltration_mean
+        - "synthetic": Seasonal pattern. temp_infiltration_mean and temp_infiltration_amplitude define the pattern. temp_measurement_noise is applied.
+        - "constant": Constant temperature equal to temp_infiltration_mean. temp_measurement_noise is still applied.
         - "soil_temperature": Use real soil temperature data from KNMI station
     temp_infiltration_mean : float, default 12.0
         Mean temperature of infiltrating water in °C
     temp_infiltration_amplitude : float, default 8.0
         Seasonal amplitude of infiltration temperature in °C (only used for "synthetic" method)
-    temp_infiltration_noise : float, default 1.0
-        Random noise level for infiltration temperature in °C (only used for "synthetic" method)
+    temp_measurement_noise : float, default 1.0
+        Random noise level for infiltration temperature in °C
     aquifer_pore_volume_gamma_mean : float, default 1000.0
         Mean pore volume of the aquifer gamma distribution in m3
     aquifer_pore_volume_gamma_std : float, default 200.0
@@ -103,12 +103,13 @@ def generate_example_data(
     if temp_infiltration_method == "synthetic":
         # Seasonal pattern with noise
         infiltration_temp = temp_infiltration_mean + temp_infiltration_amplitude * np.sin(2 * np.pi * days / 365)
-        infiltration_temp += np.random.normal(0, temp_infiltration_noise, len(dates))
+        infiltration_temp += np.random.normal(0, temp_measurement_noise, len(dates))
     elif temp_infiltration_method == "constant":
         # Constant temperature
         infiltration_temp = np.full(len(dates), temp_infiltration_mean)
+        infiltration_temp += np.random.normal(0, temp_measurement_noise, len(dates))
     elif temp_infiltration_method == "soil_temperature":
-        # Use soil temperature data
+        # Use soil temperature data already includes measurement noise
         infiltration_temp = (
             get_soil_temperature(
                 station_number=260,  # Example station number
@@ -122,20 +123,12 @@ def generate_example_data(
         msg = f"Unknown temperature method: {temp_infiltration_method}"
         raise ValueError(msg)
 
-    # Create data frame
-    df = pd.DataFrame(
-        data={
-            "flow": flow,
-            "temp_infiltration": infiltration_temp,
-        },
-        index=dates,
-    )
     # Compute tedges for the flow series
     tedges = compute_time_edges(tedges=None, tstart=None, tend=df.index, number_of_bins=len(df))
 
-    df["temp_extraction"] = gamma_infiltration_to_extraction(
-        cin=df["temp_infiltration"],
-        flow=df["flow"],
+    temp_extraction = gamma_infiltration_to_extraction(
+        cin=infiltration_temp,
+        flow=flow,
         tedges=tedges,
         cout_tedges=tedges,
         mean=aquifer_pore_volume_gamma_mean,  # Use mean pore volume
@@ -144,24 +137,36 @@ def generate_example_data(
         retardation_factor=retardation_factor,
     )
 
-    # Add some noise to represent measurement errors and other factors
-    df["temp_extraction"] += np.random.normal(0, 0.1, len(df))
+    # Add some noise to represent measurement errors
+    temp_extraction += np.random.normal(0, temp_measurement_noise, len(dates))
 
-    # Add some spills (periods with lower extraction temperature due to external factors)
-    # Simulate 2-3 spill events of varying duration
-    # n_spills = np.random.randint(2, 4)
-    # for _ in range(n_spills):
-    #     spill_start = np.random.randint(0, len(dates) - 30)
-    #     spill_duration = np.random.randint(5, 15)
-    #     spill_magnitude = np.random.uniform(2.0, 5.0)
-    #     df.iloc[spill_start : spill_start + spill_duration, df.columns.get_loc("temp_extraction")] -= spill_magnitude
-
-    # Add metadata for reference
+    # Create data frame
     alpha, beta = mean_std_to_alpha_beta(mean=aquifer_pore_volume_gamma_mean, std=aquifer_pore_volume_gamma_std)
-    df.attrs["aquifer_pore_volume_mean"] = aquifer_pore_volume_gamma_mean
-    df.attrs["aquifer_pore_volume_std"] = aquifer_pore_volume_gamma_std
-    df.attrs["aquifer_pore_volume_gamma_alpha"] = alpha
-    df.attrs["aquifer_pore_volume_gamma_beta"] = beta
-    df.attrs["retardation_factor"] = retardation_factor
-
+    df = pd.DataFrame(
+        data={
+            "flow": flow,
+            "temp_infiltration": infiltration_temp,
+            "temp_extraction": temp_extraction
+        },
+        index=dates,
+        attrs={
+            "description": "Example data for groundwater transport modeling",
+            "source": "Synthetic data generated by gwtransport.examples.generate_example_data",
+            "aquifer_pore_volume_gamma_mean": aquifer_pore_volume_gamma_mean,
+            "aquifer_pore_volume_gamma_std": aquifer_pore_volume_gamma_std,
+            "aquifer_pore_volume_gamma_alpha": alpha,
+            "aquifer_pore_volume_gamma_beta": beta,
+            "retardation_factor": retardation_factor,
+            "date_start": date_start,
+            "date_end": date_end,
+            "date_freq": date_freq,
+            "flow_mean": flow_mean,
+            "flow_amplitude": flow_amplitude,
+            "flow_noise": flow_noise,
+            "temp_infiltration_method": temp_infiltration_method,
+            "temp_infiltration_mean": temp_infiltration_mean,
+            "temp_infiltration_amplitude": temp_infiltration_amplitude,
+            "temp_measurement_noise": temp_measurement_noise,
+        }
+    )
     return df, tedges
