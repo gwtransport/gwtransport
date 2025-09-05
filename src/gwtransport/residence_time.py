@@ -227,3 +227,58 @@ def residence_time_mean(
         msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
         raise ValueError(msg)
     return data_avg
+
+
+def fraction_explained(
+    rt=None,
+    flow=None,
+    flow_tedges=None,
+    aquifer_pore_volume=None,
+    index=None,
+    retardation_factor=1.0,
+    direction="extraction_to_infiltration",
+):
+    """
+    Compute the fraction of the aquifer that is informed with respect to the retarded flow.
+
+    Parameters
+    ----------
+    rt : numpy.ndarray, optional
+        Pre-computed residence time array [days]. If not provided, it will be computed.
+    flow : array-like, optional
+        Flow rate of water in the aquifer [m3/day]. The length of `flow` should match the length of `flow_tedges` minus one.
+    flow_tedges : pandas.DatetimeIndex, optional
+        Time edges for the flow data. Used to compute the cumulative flow.
+        Has a length of one more than `flow`. Inbetween neighboring time edges, the flow is assumed constant.
+    aquifer_pore_volume : float or array-like of float, optional
+        Pore volume of the aquifer [m3].
+    index : pandas.DatetimeIndex, optional
+        Index at which to compute the fraction. If left to None, the index of `flow` is used.
+        Default is None.
+    retardation_factor : float or array-like of float, optional
+        Retardation factor of the compound in the aquifer [dimensionless].
+    direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
+        Direction of the flow calculation:
+        * 'extraction_to_infiltration': Extraction to infiltration modeling - how many days ago was the extracted water infiltrated
+        * 'infiltration_to_extraction': Infiltration to extraction modeling - how many days until the infiltrated water is extracted
+        Default is 'extraction_to_infiltration'.
+    return_pandas_series : bool, optional
+        If True, return a pandas Series with the residence time at the index provided. Only supported for a single aquifer pore volume. This parameter is deprecated and will be removed in a future version.
+
+    Returns
+    -------
+    numpy.ndarray
+        Fraction of the aquifer that is informed with respect to the retarded flow.
+    """
+    if rt is None:
+        rt = residence_time(
+            flow=flow,
+            flow_tedges=flow_tedges,
+            aquifer_pore_volume=aquifer_pore_volume,
+            index=index,
+            retardation_factor=retardation_factor,
+            direction=direction,
+        )
+
+    n_aquifer_pore_volume = rt.shape[0]
+    return (n_aquifer_pore_volume - np.isnan(rt).sum(axis=0)) / n_aquifer_pore_volume
