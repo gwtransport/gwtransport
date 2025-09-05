@@ -26,11 +26,11 @@ from gwtransport.utils import partial_isin
 
 def extraction_to_deposition(
     *,
-    dcout,
+    cout,
     flow,
     tedges,
     dep_tedges,
-    aquifer_pore_volume,
+    aquifer_pore_volume_value,
     porosity,
     thickness,
     retardation_factor=1.0,
@@ -43,15 +43,15 @@ def extraction_to_deposition(
 
     Parameters
     ----------
-    dcout : array-like
+    cout : array-like
         Concentration change values of extracted water [ng/m3].
         Length must match the number of time bins defined by tedges.
     flow : array-like
         Flow rate values in the aquifer [m3/day].
-        Length must match dcout and the number of time bins defined by tedges.
+        Length must match cout and the number of time bins defined by tedges.
     tedges : pandas.DatetimeIndex
-        Time edges defining bins for both dcout and flow data. Has length of
-        len(dcout) + 1 and len(flow) + 1.
+        Time edges defining bins for both cout and flow data. Has length of
+        len(cout) + 1 and len(flow) + 1.
     dep_tedges : pandas.DatetimeIndex
         Time edges for output (deposition) data bins. Has length of desired output + 1.
         Can have different time alignment and resolution than tedges.
@@ -92,7 +92,7 @@ def extraction_to_deposition(
     ... )
     >>>
     >>> # Input concentration changes and flow
-    >>> dcout = np.ones(len(dates))
+    >>> cout = np.ones(len(dates))
     >>> flow = np.ones(len(dates)) * 100  # 100 m3/day
     >>>
     >>> # Aquifer properties
@@ -102,7 +102,7 @@ def extraction_to_deposition(
     >>>
     >>> # Run extraction to deposition model
     >>> dep = extraction_to_deposition(
-    ...     dcout=dcout,
+    ...     cout=cout,
     ...     flow=flow,
     ...     tedges=tedges,
     ...     dep_tedges=dep_tedges,
@@ -116,26 +116,26 @@ def extraction_to_deposition(
     tedges = pd.DatetimeIndex(tedges)
     dep_tedges = pd.DatetimeIndex(dep_tedges)
 
-    if len(tedges) != len(dcout) + 1:
-        msg = "tedges must have one more element than dcout"
+    if len(tedges) != len(cout) + 1:
+        msg = "tedges must have one more element than cout"
         raise ValueError(msg)
     if len(tedges) != len(flow) + 1:
         msg = "tedges must have one more element than flow"
         raise ValueError(msg)
 
     # Convert to arrays for vectorized operations
-    dcout_values = np.asarray(dcout)
+    cout_values = np.asarray(cout)
     flow_values = np.asarray(flow)
 
     # Validate inputs do not contain NaN values
-    if np.any(np.isnan(dcout_values)):
-        msg = "dcout contains NaN values, which are not allowed"
+    if np.any(np.isnan(cout_values)):
+        msg = "cout contains NaN values, which are not allowed"
         raise ValueError(msg)
     if np.any(np.isnan(flow_values)):
         msg = "flow contains NaN values, which are not allowed"
         raise ValueError(msg)
 
-    dcout_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    cout_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
     dep_tedges_days = ((dep_tedges - tedges[0]) / pd.Timedelta(days=1)).values
 
     # Pre-compute residence times and deposition edges
@@ -143,7 +143,7 @@ def extraction_to_deposition(
         flow=flow_values,
         flow_tedges=tedges,
         index=dep_tedges,
-        aquifer_pore_volume=aquifer_pore_volume,
+        aquifer_pore_volume=aquifer_pore_volume_value,
         retardation_factor=retardation_factor,
         direction="infiltration_to_extraction",
     )
@@ -156,11 +156,11 @@ def extraction_to_deposition(
     darea = flow_values / (retardation_factor * porosity * thickness)
 
     # Initialize weight matrix
-    weights = np.zeros((len(dep_tedges) - 1, len(dcout_values)))
+    weights = np.zeros((len(dep_tedges) - 1, len(cout_values)))
 
     # Compute temporal overlap
     if np.any(valid_bins):
-        overlap_matrix = partial_isin(extraction_tedges, dcout_tedges_days)
+        overlap_matrix = partial_isin(extraction_tedges, cout_tedges_days)
         weights[valid_bins, :] = overlap_matrix[valid_bins, :]
 
     # Apply flow weighting and area scaling
@@ -173,7 +173,7 @@ def extraction_to_deposition(
     normalized_weights[valid_weights, :] = flow_area_weighted[valid_weights, :] / total_weights[valid_weights, None]
 
     # Apply to concentration changes
-    out = normalized_weights.dot(dcout_values)
+    out = normalized_weights.dot(cout_values)
     out[~valid_bins] = np.nan
 
     return out
@@ -184,8 +184,8 @@ def deposition_to_extraction(
     dep,
     flow,
     tedges,
-    dcout_tedges,
-    aquifer_pore_volume,
+    cout_tedges,
+    aquifer_pore_volume_value,
     porosity,
     thickness,
     retardation_factor=1.0,
@@ -207,10 +207,10 @@ def deposition_to_extraction(
     tedges : pandas.DatetimeIndex
         Time edges defining bins for both dep and flow data. Has length of
         len(dep) + 1 and len(flow) + 1.
-    dcout_tedges : pandas.DatetimeIndex
+    cout_tedges : pandas.DatetimeIndex
         Time edges for output (concentration change) data bins. Has length of desired output + 1.
         Can have different time alignment and resolution than tedges.
-    aquifer_pore_volume : float
+    aquifer_pore_volume_value : float
         Pore volume of the aquifer [m3].
     porosity : float
         Porosity of the aquifer [dimensionless].
@@ -223,7 +223,7 @@ def deposition_to_extraction(
     -------
     numpy.ndarray
         Concentration change of the compound in the extracted water [ng/m3].
-        Length equals len(dcout_tedges) - 1.
+        Length equals len(cout_tedges) - 1.
 
     Examples
     --------
@@ -241,9 +241,9 @@ def deposition_to_extraction(
     ... )
     >>>
     >>> # Create output time edges
-    >>> dcout_dates = pd.date_range(start="2020-01-03", end="2020-01-12", freq="D")
-    >>> dcout_tedges = compute_time_edges(
-    ...     tedges=None, tstart=None, tend=dcout_dates, number_of_bins=len(dcout_dates)
+    >>> cout_dates = pd.date_range(start="2020-01-03", end="2020-01-12", freq="D")
+    >>> cout_tedges = compute_time_edges(
+    ...     tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates)
     ... )
     >>>
     >>> # Input deposition and flow
@@ -256,20 +256,20 @@ def deposition_to_extraction(
     >>> thickness = 10.0  # m
     >>>
     >>> # Run deposition to extraction model
-    >>> dcout = deposition_to_extraction(
+    >>> cout = deposition_to_extraction(
     ...     dep=dep,
     ...     flow=flow,
     ...     tedges=tedges,
-    ...     dcout_tedges=dcout_tedges,
+    ...     cout_tedges=cout_tedges,
     ...     aquifer_pore_volume=aquifer_pore_volume,
     ...     porosity=porosity,
     ...     thickness=thickness,
     ... )
-    >>> dcout.shape
+    >>> cout.shape
     (10,)
     """
     tedges = pd.DatetimeIndex(tedges)
-    dcout_tedges = pd.DatetimeIndex(dcout_tedges)
+    cout_tedges = pd.DatetimeIndex(cout_tedges)
 
     if len(tedges) != len(dep) + 1:
         msg = "tedges must have one more element than dep"
@@ -281,6 +281,7 @@ def deposition_to_extraction(
     # Convert to arrays for vectorized operations
     dep_values = np.asarray(dep)
     flow_values = np.asarray(flow)
+    aquifer_pore_volume_value = float(aquifer_pore_volume_value)
 
     # Validate inputs do not contain NaN values
     if np.any(np.isnan(dep_values)):
@@ -291,18 +292,18 @@ def deposition_to_extraction(
         raise ValueError(msg)
 
     dep_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
-    dcout_tedges_days = ((dcout_tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    cout_tedges_days = ((cout_tedges - tedges[0]) / pd.Timedelta(days=1)).values
 
     # Pre-compute residence times and deposition edges
     rt_edges = residence_time(
         flow=flow_values,
         flow_tedges=tedges,
-        index=dcout_tedges,
-        aquifer_pore_volume=aquifer_pore_volume,
+        index=cout_tedges,
+        aquifer_pore_volume=aquifer_pore_volume_value,
         retardation_factor=retardation_factor,
         direction="extraction_to_infiltration",
     )
-    deposition_tedges = dcout_tedges_days - rt_edges[0]
+    deposition_tedges = cout_tedges_days - rt_edges[0]
 
     # Pre-compute valid bins
     valid_bins = ~(np.isnan(deposition_tedges[:-1]) | np.isnan(deposition_tedges[1:]))
@@ -311,7 +312,7 @@ def deposition_to_extraction(
     darea = flow_values / (retardation_factor * porosity * thickness)
 
     # Initialize weight matrix
-    weights = np.zeros((len(dcout_tedges) - 1, len(dep_values)))
+    weights = np.zeros((len(cout_tedges) - 1, len(dep_values)))
 
     # Compute temporal overlap
     if np.any(valid_bins):
