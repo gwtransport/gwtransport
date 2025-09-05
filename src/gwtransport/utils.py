@@ -616,7 +616,7 @@ def get_soil_temperature(station_number: int = 260, *, interpolate_missing_value
 
     # Download the ZIP file
     with requests.get(url, params={"download": "zip"}, timeout=10) as response:
-        response.raise_for_status()  # Raise an error for bad responses
+        response.raise_for_status()
 
     df = pd.read_csv(
         io.BytesIO(response.content),
