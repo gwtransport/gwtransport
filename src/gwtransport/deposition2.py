@@ -165,16 +165,16 @@ def extraction_to_deposition(
         weights[valid_bins, :] = overlap_matrix[valid_bins, :]
 
     # Apply flow weighting and area scaling
-    flow_area_weighted = weights * flow_values[None, :] / darea[None, :]
+    flow_area_weighted = weights * darea[None, :] / flow_values[None, :]
 
-    # Normalize by total weights
-    total_weights = np.sum(flow_area_weighted, axis=1)
-    valid_weights = total_weights > 0
-    normalized_weights = np.zeros_like(flow_area_weighted)
-    normalized_weights[valid_weights, :] = flow_area_weighted[valid_weights, :] / total_weights[valid_weights, None]
+    # # Normalize by total weights
+    # total_weights = np.sum(flow_area_weighted, axis=1)
+    # valid_weights = total_weights > 0
+    # normalized_weights = np.zeros_like(flow_area_weighted)
+    # normalized_weights[valid_weights, :] = flow_area_weighted[valid_weights, :] / total_weights[valid_weights, None]
 
     # Apply to concentration changes
-    out = normalized_weights.dot(cout_values)
+    out = flow_area_weighted.dot(cout_values)
     out[~valid_bins] = np.nan
 
     return out
@@ -309,8 +309,9 @@ def deposition_to_extraction(
     # Pre-compute valid bins
     valid_bins = ~(np.isnan(deposition_tedges[:-1]) | np.isnan(deposition_tedges[1:]))
 
-    # Compute deposition area for each flow bin
-    darea = flow_values / (retardation_factor * porosity * thickness)
+    # Compute deposition area for each flow bin.
+    dt = dep_tedges_days[1:] - dep_tedges_days[:-1]
+    darea = flow_values * dt / (retardation_factor * porosity * thickness)
 
     # Initialize weight matrix
     weights = np.zeros((len(cout_tedges) - 1, len(dep_values)))
@@ -321,16 +322,16 @@ def deposition_to_extraction(
         weights[valid_bins, :] = overlap_matrix[valid_bins, :]
 
     # Apply flow weighting and area scaling
-    flow_area_weighted = weights * flow_values[None, :] * darea[None, :]
+    flow_area_weighted = weights * darea[None, :] / (flow_values * dt)[None, :]
 
-    # Normalize by total weights
-    total_weights = np.sum(flow_area_weighted, axis=1)
-    valid_weights = total_weights > 0
-    normalized_weights = np.zeros_like(flow_area_weighted)
-    normalized_weights[valid_weights, :] = flow_area_weighted[valid_weights, :] / total_weights[valid_weights, None]
+    # # Normalize by total weights
+    # total_weights = np.sum(flow_area_weighted, axis=1)
+    # valid_weights = total_weights > 0
+    # normalized_weights = np.zeros_like(flow_area_weighted)
+    # normalized_weights[valid_weights, :] = flow_area_weighted[valid_weights, :] / total_weights[valid_weights, None]
 
     # Apply to deposition rates
-    out = normalized_weights.dot(dep_values)
+    out = flow_area_weighted.dot(dep_values)
     out[~valid_bins] = np.nan
 
     return out
