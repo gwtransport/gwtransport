@@ -137,6 +137,7 @@ def extraction_to_deposition(
 
     cout_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
     dep_tedges_days = ((dep_tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    aquifer_pore_volume_value = float(aquifer_pore_volume_value)
 
     # Pre-compute residence times and deposition edges
     rt_edges = residence_time(
