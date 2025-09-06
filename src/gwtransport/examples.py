@@ -146,11 +146,7 @@ def generate_example_data(
     # Create data frame
     alpha, beta = mean_std_to_alpha_beta(mean=aquifer_pore_volume_gamma_mean, std=aquifer_pore_volume_gamma_std)
     df = pd.DataFrame(
-        data={
-            "flow": flow,
-            "temp_infiltration": infiltration_temp,
-            "temp_extraction": temp_extraction
-        },
+        data={"flow": flow, "temp_infiltration": infiltration_temp, "temp_extraction": temp_extraction},
         index=dates,
     )
     df.attrs = {
