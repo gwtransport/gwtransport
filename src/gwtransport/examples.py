@@ -5,6 +5,7 @@ This module provides utilities to generate synthetic temperature and flow data
 for demonstrating and testing groundwater transport models. It was separated
 from the utils module to resolve circular import dependencies.
 """
+
 import numpy as np
 import pandas as pd
 
