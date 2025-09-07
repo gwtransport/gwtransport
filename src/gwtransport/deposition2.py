@@ -154,7 +154,8 @@ def extraction_to_deposition(
     valid_bins = ~(np.isnan(extraction_tedges[:-1]) | np.isnan(extraction_tedges[1:]))
 
     # Compute deposition area for each flow bin
-    darea = flow_values / (retardation_factor * porosity * thickness)
+    dt = dep_tedges_days[1:] - dep_tedges_days[:-1]
+    darea = flow_values * dt / (retardation_factor * porosity * thickness)
 
     # Initialize weight matrix
     weights = np.zeros((len(dep_tedges) - 1, len(cout_values)))
