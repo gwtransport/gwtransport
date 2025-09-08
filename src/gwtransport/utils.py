@@ -355,6 +355,82 @@ def partial_isin(bin_edges_in, bin_edges_out):
     return overlap_widths / in_width
 
 
+def time_bin_overlap(tedges, bin_tedges):
+    """
+    Calculate the fraction of each time bin that overlaps with each time range.
+
+    This function computes an array where element (i, j) represents the fraction
+    of time bin j that overlaps with time range i. The computation uses
+    vectorized operations to avoid loops.
+
+    Parameters
+    ----------
+    tedges : array_like
+        1D array of time bin edges in ascending order. For n bins, there
+        should be n+1 edges.
+    bin_tedges : list of tuples
+        List of tuples where each tuple contains (start_time, end_time)
+        defining a time range.
+
+    Returns
+    -------
+    overlap_array : numpy.ndarray
+        Array of shape (len(bin_tedges), n_bins) where n_bins is the number of
+        time bins. Each element (i, j) represents the fraction of time bin j
+        that overlaps with time range i. Values range from 0 (no overlap) to
+        1 (complete overlap).
+
+    Notes
+    -----
+    - tedges must be sorted in ascending order
+    - Uses vectorized operations to handle large arrays efficiently
+    - Time ranges in bin_tedges can be in any order and can overlap
+
+    Examples
+    --------
+    >>> tedges = np.array([0, 10, 20, 30])
+    >>> bin_tedges = [(5, 15), (25, 35)]
+    >>> time_bin_overlap(tedges, bin_tedges)
+    array([[0.5, 0.5, 0.0],
+           [0.0, 0.0, 0.5]])
+    """
+    # Convert inputs to numpy arrays
+    tedges = np.asarray(tedges)
+    bin_tedges_array = np.asarray(bin_tedges)
+
+    # Validate inputs
+    if tedges.ndim != 1:
+        msg = "tedges must be a 1D array"
+        raise ValueError(msg)
+    if len(tedges) < 2:  # noqa: PLR2004
+        msg = "tedges must have at least 2 elements"
+        raise ValueError(msg)
+    if not bin_tedges:
+        msg = "bin_tedges must be non-empty"
+        raise ValueError(msg)
+
+    # Calculate overlaps for all combinations using broadcasting
+    overlap_left = np.maximum(
+        bin_tedges_array[:, [0]],
+        tedges[None, :-1]
+    )
+    overlap_right = np.minimum(
+        bin_tedges_array[:, [1]],
+        tedges[None, 1:]
+    )
+    overlap_widths = np.maximum(0, overlap_right - overlap_left)
+
+    # Calculate fractions (handle division by zero for zero-width bins)
+    bin_width_bc = np.diff(tedges)[None, :]  # Shape: (1, n_bins)
+
+    return np.divide(
+        overlap_widths, 
+        bin_width_bc, 
+        out=np.zeros_like(overlap_widths, dtype=float), 
+        where=bin_width_bc != 0.0
+    )
+
+
 def generate_failed_coverage_badge():
     """Generate a badge indicating failed coverage."""
     from genbadge import Badge  # type: ignore # noqa: PLC0415
