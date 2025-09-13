@@ -26,7 +26,9 @@ def test_pythonscript(pythonfile_path):
     # Force a non-interactive matplotlib backend to avoid blocking GUI calls
     env.setdefault("MPLBACKEND", "Agg")
     # Run with a timeout to avoid hanging interactive prompts
-    result = subprocess.run([sys.executable, pythonfile_path], capture_output=True, text=True, check=False, env=env, timeout=30)
+    result = subprocess.run(
+        [sys.executable, pythonfile_path], capture_output=True, text=True, check=False, env=env, timeout=30
+    )
     assert result.returncode == 0, result.stderr
 
 
@@ -68,12 +70,7 @@ def test_ipynb(ipynb_path):
     sanitized_body = "\n".join(sanitized_lines)
 
     # Prepend a safety header: disable input() and force non-interactive plotting
-    safety_header = (
-        "import builtins\n"
-        "builtins.input = lambda *a, **k: None\n"
-        "import matplotlib\n"
-        "matplotlib.use('Agg')\n"
-    )
+    safety_header = "import builtins\nbuiltins.input = lambda *a, **k: None\nimport matplotlib\nmatplotlib.use('Agg')\n"
 
     # Create a temporary Python file and execute
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", encoding="utf-8") as temp_file:
