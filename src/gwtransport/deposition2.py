@@ -83,11 +83,14 @@ def extraction_to_deposition(
 
     # Validate input dimensions and values
     if len(tedges) != len(cout_values) + 1:
-        raise ValueError("tedges must have one more element than cout")
+        _msg = "tedges must have one more element than cout"
+        raise ValueError(_msg)
     if len(tedges) != len(flow_values) + 1:
-        raise ValueError("tedges must have one more element than flow")
+        _msg = "tedges must have one more element than flow"
+        raise ValueError(_msg)
     if np.any(np.isnan(cout_values)) or np.any(np.isnan(flow_values)):
-        raise ValueError("Input arrays cannot contain NaN values")
+        _msg = "Input arrays cannot contain NaN values"
+        raise ValueError(_msg)
 
     # Convert to days relative to first time edge
     t0 = tedges[0]
@@ -185,11 +188,14 @@ def deposition_to_extraction(
 
     # Validate input dimensions and values
     if len(tedges) != len(dep_values) + 1:
-        raise ValueError("tedges must have one more element than dep")
+        _msg = "tedges must have one more element than dep"
+        raise ValueError(_msg)
     if len(tedges) != len(flow_values) + 1:
-        raise ValueError("tedges must have one more element than flow")
+        _msg = "tedges must have one more element than flow"
+        raise ValueError(_msg)
     if np.any(np.isnan(dep_values)) or np.any(np.isnan(flow_values)):
-        raise ValueError("Input arrays cannot contain NaN values")
+        _msg = "Input arrays cannot contain NaN values"
+        raise ValueError(_msg)
 
     # Convert to days relative to first time edge
     t0 = tedges[0]
