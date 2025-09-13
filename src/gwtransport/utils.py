@@ -405,6 +405,9 @@ def time_bin_overlap(tedges, bin_tedges):
     if len(tedges) < 2:  # noqa: PLR2004
         msg = "tedges must have at least 2 elements"
         raise ValueError(msg)
+    if bin_tedges_array.size == 0:
+        msg = "bin_tedges must be non-empty"
+        raise ValueError(msg)
 
     # Calculate overlaps for all combinations using broadcasting
     overlap_left = np.maximum(bin_tedges_array[:, [0]], tedges[None, :-1])
