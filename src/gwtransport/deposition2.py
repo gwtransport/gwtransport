@@ -21,7 +21,8 @@ import numpy as np
 import pandas as pd
 
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import partial_isin
+from gwtransport.surfacearea import compute_average_heights
+from gwtransport.utils import linear_interpolate, partial_isin
 
 
 def extraction_to_deposition(
@@ -193,10 +194,12 @@ def deposition_to_extraction(
     retardation_factor=1.0,
 ):
     """
-    Compute concentration changes in extracted water due to deposition.
+    Compute concentration in extracted water due to deposition.
 
     This function represents deposition to extraction modeling (equivalent to convolution).
-    It computes the concentration changes that would result from given deposition rates.
+    It computes the concentration that would result from given deposition rates.
+
+    Deposition is computed as the residence time times the deposition divided by the porosity and the thickness.
 
     Parameters
     ----------
@@ -267,8 +270,6 @@ def deposition_to_extraction(
     ...     porosity=porosity,
     ...     thickness=thickness,
     ... )
-    >>> cout.shape
-    (10,)
     """
     tedges = pd.DatetimeIndex(tedges)
     cout_tedges = pd.DatetimeIndex(cout_tedges)
@@ -293,7 +294,7 @@ def deposition_to_extraction(
         msg = "flow contains NaN values, which are not allowed"
         raise ValueError(msg)
 
-    dep_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
     cout_tedges_days = ((cout_tedges - tedges[0]) / pd.Timedelta(days=1)).values
 
     # Pre-compute residence times and deposition edges
@@ -305,34 +306,31 @@ def deposition_to_extraction(
         retardation_factor=retardation_factor,
         direction="extraction_to_infiltration",
     )
-    deposition_tedges = cout_tedges_days - rt_edges[0]
+    cout_tedges_days_infiltration = cout_tedges_days - rt_edges[0]
 
-    # Pre-compute valid bins
-    valid_bins = ~(np.isnan(deposition_tedges[:-1]) | np.isnan(deposition_tedges[1:]))
+    flow_tdelta = np.diff(tedges_days, prepend=0.0)
+    flow_values = np.concatenate(([0.0], np.asarray(flow)))
+    flow_cum = (flow_values * flow_tdelta).cumsum()
 
-    # Compute deposition area for each flow bin.
-    dt = dep_tedges_days[1:] - dep_tedges_days[:-1]
-    darea = flow_values * dt / (retardation_factor * porosity * thickness)
+    start_volume_at_cout_tedges_days_infiltration = linear_interpolate(
+        x_ref=tedges_days,
+        y_ref=flow_cum,
+        x_query=cout_tedges_days_infiltration,
+    )
+    end_volume_at_cout_tedges_days_extraction = linear_interpolate(
+        x_ref=tedges_days,
+        y_ref=flow_cum,
+        x_query=cout_tedges_days,
+    )
 
-    # Initialize weight matrix
-    weights = np.zeros((len(cout_tedges) - 1, len(dep_values)))
+    flow_cum_cout = flow_cum[None, :] - start_volume_at_cout_tedges_days_infiltration[:, None]
 
-    # Compute temporal overlap
-    if np.any(valid_bins):
-        overlap_matrix = partial_isin(deposition_tedges, dep_tedges_days)
-        weights[valid_bins, :] = overlap_matrix[valid_bins, :]
+    # compute the volumes 
+    volume_array = compute_average_heights(
+        x_edges=tedges_days, y_edges=flow_cum_cout, y_lower=0.0, y_upper=retardation_factor * aquifer_pore_volume_value
+    )  # [m3]
+    area_array = volume_array / (porosity * thickness)
+    extracted_volume = np.diff(end_volume_at_cout_tedges_days_extraction)
+    deposition_weights = area_array * np.diff(tedges_days)[None, :] / extracted_volume[:, None]
 
-    # Apply flow weighting and area scaling
-    flow_area_weighted = weights * darea[None, :] / (flow_values * dt)[None, :]
-
-    # # Normalize by total weights
-    # total_weights = np.sum(flow_area_weighted, axis=1)
-    # valid_weights = total_weights > 0
-    # normalized_weights = np.zeros_like(flow_area_weighted)
-    # normalized_weights[valid_weights, :] = flow_area_weighted[valid_weights, :] / total_weights[valid_weights, None]
-
-    # Apply to deposition rates
-    out = flow_area_weighted.dot(dep_values)
-    out[~valid_bins] = np.nan
-
-    return out
+    return deposition_weights.dot(dep_values)
