@@ -71,11 +71,10 @@ def test_trapezoid_with_clipping():
     # Clip to keep y from 1 to 5
     avg_heights = compute_average_heights(x_edges, y_edges, 1, 5)
 
-    # Analytical: after clipping, left side goes from y=1 to y=5 (height=4)
-    # right side goes from y=1 to y=4 (height=3, since original right top was at y=4)
-    # But the clipping is more complex - need to account for the actual trapezoid shape
-    # The result should be approximately 1.75 based on the geometric clipping
-    assert_almost_equal(avg_heights[0, 0], 1.75)
+    # Analytical: The original trapezoid has a sloped top edge from (0,6) to (2,4)
+    # When clipped at y=5, this creates a pentagonal region with area = 7.5
+    # Average height = 7.5 / 2 = 3.75
+    assert_almost_equal(avg_heights[0, 0], 3.75)
 
 
 def test_triangle_cases():

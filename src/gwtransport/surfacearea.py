@@ -28,41 +28,81 @@ def compute_average_heights(x_edges, y_edges, y_lower, y_upper):
         2D array of average heights (area/width) for each clipped trapezoid,
         shape (n_y-1, n_x-1)
     """
-    # Clip y_edges before extracting corners
-    y_edges_clip = np.clip(y_edges, y_lower, y_upper)
-
-    # Extract corners (y-coordinates) - both original and clipped
+    # Extract corners (y-coordinates) for bounds checking
     y_tl = y_edges[:-1, :-1]  # top-left
     y_tr = y_edges[:-1, 1:]  # top-right
     y_bl = y_edges[1:, :-1]  # bottom-left
     y_br = y_edges[1:, 1:]  # bottom-right
 
-    y_tl_clip = y_edges_clip[:-1, :-1]  # top-left clipped
-    y_tr_clip = y_edges_clip[:-1, 1:]  # top-right clipped
-    y_bl_clip = y_edges_clip[1:, :-1]  # bottom-left clipped
-    y_br_clip = y_edges_clip[1:, 1:]  # bottom-right clipped
-
     # Calculate widths
     widths = (x_edges[1:] - x_edges[:-1])[np.newaxis, :]
 
-    # Default: standard trapezoid formula
-    left_height = y_tl_clip - y_bl_clip
-    right_height = y_tr_clip - y_br_clip
-    areas = 0.5 * (left_height + right_height) * widths
+    # Use Sutherland-Hodgman polygon clipping algorithm
+    # This is the minimal fix: replace the flawed edge crossing logic with proper clipping
+    areas = np.zeros((y_edges.shape[0] - 1, y_edges.shape[1] - 1), dtype=float)
 
-    # Detect edge crossings vectorized
-    edge_data = [
-        # (left_y, right_y, threshold, heights_for_interpolation)
-        (y_tl, y_tr, y_upper, (right_height, left_height)),
-        (y_bl, y_br, y_lower, (right_height, left_height)),
-        (y_tl, y_tr, y_lower, (y_br_clip - y_lower, y_bl_clip - y_lower)),
-        (y_bl, y_br, y_upper, (y_upper - y_tr_clip, y_upper - y_tl_clip)),
-    ]
+    for i in range(areas.shape[0]):
+        for j in range(areas.shape[1]):
+            # Original trapezoid corners
+            corners = np.array([
+                [x_edges[j], y_edges[i + 1, j]],  # bottom-left
+                [x_edges[j + 1], y_edges[i + 1, j + 1]],  # bottom-right
+                [x_edges[j + 1], y_edges[i, j + 1]],  # top-right
+                [x_edges[j], y_edges[i, j]],  # top-left
+            ])
 
-    for left_y, right_y, threshold, (h_right, h_left) in edge_data:
-        mask = (left_y > threshold) != (right_y > threshold)
-        t = (threshold - left_y) / (right_y - left_y)
-        areas = np.where(mask, 0.5 * widths * (t * h_right + (1 - t) * h_left), areas)
+            # Clip against y_lower
+            clipped = []
+            for k in range(len(corners)):
+                curr = corners[k]
+                prev = corners[k - 1]
+
+                if curr[1] >= y_lower:  # current point is inside
+                    if prev[1] < y_lower:  # previous was outside, add intersection
+                        t = (y_lower - prev[1]) / (curr[1] - prev[1])
+                        clipped.append([prev[0] + t * (curr[0] - prev[0]), y_lower])
+                    clipped.append(curr)
+                elif prev[1] >= y_lower:  # current is outside, previous inside, add intersection
+                    t = (y_lower - prev[1]) / (curr[1] - prev[1])
+                    clipped.append([prev[0] + t * (curr[0] - prev[0]), y_lower])
+
+            if not clipped:
+                areas[i, j] = 0
+                continue
+
+            corners = np.array(clipped)
+
+            # Clip against y_upper
+            clipped = []
+            for k in range(len(corners)):
+                curr = corners[k]
+                prev = corners[k - 1]
+
+                if curr[1] <= y_upper:  # current point is inside
+                    if prev[1] > y_upper:  # previous was outside, add intersection
+                        t = (y_upper - prev[1]) / (curr[1] - prev[1])
+                        clipped.append([prev[0] + t * (curr[0] - prev[0]), y_upper])
+                    clipped.append(curr)
+                elif prev[1] <= y_upper:  # current is outside, previous inside, add intersection
+                    t = (y_upper - prev[1]) / (curr[1] - prev[1])
+                    clipped.append([prev[0] + t * (curr[0] - prev[0]), y_upper])
+
+            # Need at least 3 vertices to form a polygon
+            min_vertices = 3
+            if len(clipped) < min_vertices:
+                areas[i, j] = 0
+                continue
+
+            # Calculate area using shoelace formula
+            vertices = np.array(clipped)
+            n = len(vertices)
+            area = 0.5 * abs(
+                sum(
+                    vertices[k, 0] * vertices[(k + 1) % n, 1] - vertices[(k + 1) % n, 0] * vertices[k, 1]
+                    for k in range(n)
+                )
+            )
+            areas[i, j] = area
 
     # Calculate average heights
     avg_heights = areas / widths
