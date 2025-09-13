@@ -1,5 +1,6 @@
 """Pytest configuration file."""
 
+import builtins
 import os
 from glob import glob
 
@@ -26,3 +27,14 @@ def pytest_generate_tests(metafunc):
     if "ipynb_path" in metafunc.fixturenames:
         filepaths = sorted(glob(os.path.join("examples", "*.ipynb")))
         metafunc.parametrize("ipynb_path", filepaths)
+
+
+def pytest_configure(config):
+    """Global test configuration: make plotting non-interactive and disable input()."""
+    # Force non-interactive matplotlib backend for tests
+    os.environ.setdefault("MPLBACKEND", "Agg")
+    # Use platformdirs for jupyter to avoid deprecation warnings being raised as errors
+    os.environ.setdefault("JUPYTER_PLATFORM_DIRS", "1")
+
+    # Disable interactive input to prevent tests from hanging
+    builtins.input = lambda _: None
