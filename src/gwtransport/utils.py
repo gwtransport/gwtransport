@@ -405,29 +405,17 @@ def time_bin_overlap(tedges, bin_tedges):
     if len(tedges) < 2:  # noqa: PLR2004
         msg = "tedges must have at least 2 elements"
         raise ValueError(msg)
-    if not bin_tedges:
-        msg = "bin_tedges must be non-empty"
-        raise ValueError(msg)
 
     # Calculate overlaps for all combinations using broadcasting
-    overlap_left = np.maximum(
-        bin_tedges_array[:, [0]],
-        tedges[None, :-1]
-    )
-    overlap_right = np.minimum(
-        bin_tedges_array[:, [1]],
-        tedges[None, 1:]
-    )
+    overlap_left = np.maximum(bin_tedges_array[:, [0]], tedges[None, :-1])
+    overlap_right = np.minimum(bin_tedges_array[:, [1]], tedges[None, 1:])
     overlap_widths = np.maximum(0, overlap_right - overlap_left)
 
     # Calculate fractions (handle division by zero for zero-width bins)
     bin_width_bc = np.diff(tedges)[None, :]  # Shape: (1, n_bins)
 
     return np.divide(
-        overlap_widths, 
-        bin_width_bc, 
-        out=np.zeros_like(overlap_widths, dtype=float), 
-        where=bin_width_bc != 0.0
+        overlap_widths, bin_width_bc, out=np.zeros_like(overlap_widths, dtype=float), where=bin_width_bc != 0.0
     )
 
 

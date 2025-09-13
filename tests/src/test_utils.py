@@ -894,7 +894,7 @@ def test_time_bin_overlap_basic():
     tedges = np.array([0, 10, 20, 30])
     bin_tedges = [(5, 15), (25, 35)]
     expected = np.array([[0.5, 0.5, 0.0], [0.0, 0.0, 0.5]])
-    
+
     result = time_bin_overlap(tedges, bin_tedges)
     assert_array_almost_equal(result, expected)
 
@@ -904,7 +904,7 @@ def test_time_bin_overlap_no_overlap():
     tedges = np.array([0, 10, 20, 30])
     bin_tedges = [(40, 50), (60, 70)]
     expected = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
-    
+
     result = time_bin_overlap(tedges, bin_tedges)
     assert_array_almost_equal(result, expected)
 
@@ -914,7 +914,7 @@ def test_time_bin_overlap_complete_overlap():
     tedges = np.array([0, 10, 20, 30])
     bin_tedges = [(0, 10), (10, 20), (20, 30)]
     expected = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
-    
+
     result = time_bin_overlap(tedges, bin_tedges)
     assert_array_almost_equal(result, expected)
 
@@ -924,7 +924,7 @@ def test_time_bin_overlap_partial_overlap():
     tedges = np.array([0, 10, 20, 30])
     bin_tedges = [(5, 25)]
     expected = np.array([[0.5, 1.0, 0.5]])
-    
+
     result = time_bin_overlap(tedges, bin_tedges)
     assert_array_almost_equal(result, expected)
 
@@ -934,7 +934,7 @@ def test_time_bin_overlap_single_bin():
     tedges = np.array([0, 10])
     bin_tedges = [(5, 15), (-5, 5)]
     expected = np.array([[0.5], [0.5]])
-    
+
     result = time_bin_overlap(tedges, bin_tedges)
     assert_array_almost_equal(result, expected)
 
@@ -944,7 +944,7 @@ def test_time_bin_overlap_edge_alignment():
     tedges = np.array([0, 10, 20, 30])
     bin_tedges = [(0, 20), (10, 30)]
     expected = np.array([[1.0, 1.0, 0.0], [0.0, 1.0, 1.0]])
-    
+
     result = time_bin_overlap(tedges, bin_tedges)
     assert_array_almost_equal(result, expected)
 
@@ -954,7 +954,7 @@ def test_time_bin_overlap_floating_point():
     tedges = np.array([0.1, 0.3, 0.5, 0.7])
     bin_tedges = [(0.2, 0.4), (0.6, 0.8)]
     expected = np.array([[0.5, 0.5, 0.0], [0.0, 0.0, 0.5]])
-    
+
     result = time_bin_overlap(tedges, bin_tedges)
     assert_array_almost_equal(result, expected)
 
@@ -964,7 +964,7 @@ def test_time_bin_overlap_negative_values():
     tedges = np.array([-30, -20, -10, 0])
     bin_tedges = [(-25, -15), (-5, 5)]
     expected = np.array([[0.5, 0.5, 0.0], [0.0, 0.0, 0.5]])
-    
+
     result = time_bin_overlap(tedges, bin_tedges)
     assert_array_almost_equal(result, expected)
 
@@ -974,7 +974,7 @@ def test_time_bin_overlap_overlapping_ranges():
     tedges = np.array([0, 10, 20, 30])
     bin_tedges = [(5, 15), (10, 25)]
     expected = np.array([[0.5, 0.5, 0.0], [0.0, 1.0, 0.5]])
-    
+
     result = time_bin_overlap(tedges, bin_tedges)
     assert_array_almost_equal(result, expected)
 
@@ -984,7 +984,7 @@ def test_time_bin_overlap_zero_width_bins():
     tedges = np.array([0, 10, 10, 20])
     bin_tedges = [(5, 15)]
     expected = np.array([[0.5, 0.0, 0.5]])
-    
+
     result = time_bin_overlap(tedges, bin_tedges)
     assert_array_almost_equal(result, expected)
 
@@ -994,7 +994,7 @@ def test_time_bin_overlap_large_range():
     tedges = np.array([0, 10, 20, 30])
     bin_tedges = [(-10, 40)]
     expected = np.array([[1.0, 1.0, 1.0]])
-    
+
     result = time_bin_overlap(tedges, bin_tedges)
     assert_array_almost_equal(result, expected)
 
@@ -1004,7 +1004,7 @@ def test_time_bin_overlap_list_inputs():
     tedges = [0, 10, 20, 30]
     bin_tedges = [(5, 15), (25, 35)]
     expected = np.array([[0.5, 0.5, 0.0], [0.0, 0.0, 0.5]])
-    
+
     result = time_bin_overlap(tedges, bin_tedges)
     assert_array_almost_equal(result, expected)
 
@@ -1014,11 +1014,11 @@ def test_time_bin_overlap_input_validation():
     # Test with non-1D tedges
     with pytest.raises(ValueError, match="tedges must be a 1D array"):
         time_bin_overlap(np.array([[0, 10], [20, 30]]), [(5, 15)])
-    
+
     # Test with too few tedges
     with pytest.raises(ValueError, match="tedges must have at least 2 elements"):
         time_bin_overlap(np.array([0]), [(5, 15)])
-    
+
     # Test with empty bin_tedges
     with pytest.raises(ValueError, match="bin_tedges must be non-empty"):
         time_bin_overlap(np.array([0, 10, 20]), [])
@@ -1029,7 +1029,7 @@ def test_time_bin_overlap_precision():
     tedges = np.array([0, 1e-10, 1])
     bin_tedges = [(0.5, 1.5)]
     expected = np.array([[0.0, 0.5]])
-    
+
     result = time_bin_overlap(tedges, bin_tedges)
     assert_array_almost_equal(result, expected, decimal=10)
 
@@ -1037,13 +1037,13 @@ def test_time_bin_overlap_precision():
 def test_time_bin_overlap_many_ranges():
     """Test with many time ranges and bins for performance."""
     tedges = np.linspace(0, 100, 101)  # 100 bins
-    bin_tedges = [(i, i+10) for i in range(0, 90, 5)]  # 18 overlapping ranges
-    
+    bin_tedges = [(i, i + 10) for i in range(0, 90, 5)]  # 18 overlapping ranges
+
     result = time_bin_overlap(tedges, bin_tedges)
-    
+
     # Check output shape
     assert result.shape == (18, 100)
-    
+
     # Check that each range has correct total overlap
     for i in range(len(bin_tedges)):
         # Each range spans 10 units, so total overlap should be 10
@@ -1054,13 +1054,13 @@ def test_time_bin_overlap_many_ranges():
 def test_time_bin_overlap_boundary_cases():
     """Test boundary cases and edge conditions."""
     tedges = np.array([0, 5, 10, 15, 20])
-    
+
     # Range that touches bin boundary but doesn't overlap
     bin_tedges = [(10, 10)]
     result = time_bin_overlap(tedges, bin_tedges)
     expected = np.array([[0.0, 0.0, 0.0, 0.0]])
     assert_array_almost_equal(result, expected)
-    
+
     # Range that exactly matches a bin
     bin_tedges = [(5, 10)]
     result = time_bin_overlap(tedges, bin_tedges)
