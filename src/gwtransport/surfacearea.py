@@ -1,3 +1,10 @@
+"""
+Surface area computation utilities for groundwater transport analysis.
+
+This module provides functions for computing surface areas and average heights
+of geometric shapes used in groundwater transport calculations.
+"""
+
 import numpy as np
 
 
