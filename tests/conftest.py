@@ -29,7 +29,7 @@ def pytest_generate_tests(metafunc):
         metafunc.parametrize("ipynb_path", filepaths)
 
 
-def pytest_configure(config):
+def pytest_configure(config):  # noqa: ARG001
     """Global test configuration: make plotting non-interactive and disable input()."""
     # Force non-interactive matplotlib backend for tests
     os.environ.setdefault("MPLBACKEND", "Agg")

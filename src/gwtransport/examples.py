@@ -215,7 +215,7 @@ def generate_example_deposition_timeseries(
         Time series of deposition values indexed by daily timestamps.
     """
     # Create synthetic deposition time series - needs to match flow period
-    dates = pd.date_range(date_start, date_end, freq=freq)
+    dates = pd.date_range(date_start, date_end, freq=freq).tz_localize("UTC")
     n_dates = len(dates)
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=n_dates)
 
