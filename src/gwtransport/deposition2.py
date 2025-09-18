@@ -18,33 +18,29 @@ import pandas as pd
 
 from gwtransport.residence_time import residence_time
 from gwtransport.surfacearea import compute_average_heights
-from gwtransport.utils import linear_interpolate
+from gwtransport.utils import linear_interpolate, solve_underdetermined_system
 
 
-def extraction_to_deposition(
+def compute_deposition_weights(
     *,
-    cout,
-    flow,
+    flow_values,
     tedges,
-    dep_tedges,
+    cout_tedges,
     aquifer_pore_volume_value,
     porosity,
     thickness,
     retardation_factor=1.0,
 ):
-    """Compute deposition rates from concentration changes (deconvolution).
+    """Compute deposition weights for concentration-deposition convolution.
 
     Parameters
     ----------
-    cout : array_like
-        Concentration changes in extracted water [ng/m3].
-        Length must equal len(tedges) - 1.
-    flow : array_like
+    flow_values : array_like
         Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
     tedges : pandas.DatetimeIndex
-        Time bin edges for cout and flow data.
-    dep_tedges : pandas.DatetimeIndex
-        Time bin edges for output deposition data.
+        Time bin edges for flow data.
+    cout_tedges : pandas.DatetimeIndex
+        Time bin edges for output concentration data.
     aquifer_pore_volume_value : float
         Aquifer pore volume [m3].
     porosity : float
@@ -57,74 +53,46 @@ def extraction_to_deposition(
     Returns
     -------
     ndarray
-        Deposition rates [ng/m2/day] with length len(dep_tedges) - 1.
+        Deposition weights matrix with shape (len(cout_tedges) - 1, len(tedges) - 1).
+        May contain NaN values where residence time cannot be computed.
 
-    Examples
-    --------
-    >>> import pandas as pd
-    >>> import numpy as np
-    >>> dates = pd.date_range("2020-01-01", "2020-01-10", freq="D")
-    >>> tedges = pd.date_range("2019-12-31 12:00", "2020-01-10 12:00", freq="D")
-    >>> dep_tedges = pd.date_range("2019-12-28 12:00", "2020-01-08 12:00", freq="D")
-    >>> cout = np.ones(len(dates))
-    >>> flow = np.full(len(dates), 100.0)
-    >>> dep = extraction_to_deposition(
-    ...     cout=cout,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     dep_tedges=dep_tedges,
-    ...     aquifer_pore_volume_value=500.0,
-    ...     porosity=0.3,
-    ...     thickness=10.0,
-    ... )
+    Notes
+    -----
+    The returned weights matrix may contain NaN values in locations where the
+    residence time calculation fails or is undefined. This typically occurs
+    when flow conditions result in invalid or non-physical residence times.
     """
-    tedges, dep_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(dep_tedges)
-    cout_values, flow_values = np.asarray(cout), np.asarray(flow)
-
-    # Validate input dimensions and values
-    if len(tedges) != len(cout_values) + 1:
-        _msg = "tedges must have one more element than cout"
-        raise ValueError(_msg)
-    if len(tedges) != len(flow_values) + 1:
-        _msg = "tedges must have one more element than flow"
-        raise ValueError(_msg)
-    if np.any(np.isnan(cout_values)) or np.any(np.isnan(flow_values)):
-        _msg = "Input arrays cannot contain NaN values"
-        raise ValueError(_msg)
-
     # Convert to days relative to first time edge
     t0 = tedges[0]
-    cout_tedges_days = ((tedges - t0) / pd.Timedelta(days=1)).values
-    dep_tedges_days = ((dep_tedges - t0) / pd.Timedelta(days=1)).values
+    tedges_days = ((tedges - t0) / pd.Timedelta(days=1)).values
+    cout_tedges_days = ((cout_tedges - t0) / pd.Timedelta(days=1)).values
 
     # Compute residence times and cumulative flow
     rt_edges = residence_time(
         flow=flow_values,
         flow_tedges=tedges,
-        index=dep_tedges,
+        index=cout_tedges,
         aquifer_pore_volume=float(aquifer_pore_volume_value),
         retardation_factor=retardation_factor,
-        direction="infiltration_to_extraction",
+        direction="extraction_to_infiltration",
     )
-    dep_tedges_days_extraction = dep_tedges_days + rt_edges[0]
+    cout_tedges_days_infiltration = cout_tedges_days - rt_edges[0]
 
-    flow_tdelta = np.diff(cout_tedges_days, prepend=0.0)
+    flow_tdelta = np.diff(tedges_days, prepend=0.0)
     flow_cum = (np.concatenate(([0.0], flow_values)) * flow_tdelta).cumsum()
 
-    # Interpolate volumes at deposition time edges
-    start_vol = linear_interpolate(cout_tedges_days, flow_cum, dep_tedges_days)
-    end_vol = linear_interpolate(cout_tedges_days, flow_cum, dep_tedges_days_extraction)
+    # Interpolate volumes at concentration time edges
+    start_vol = linear_interpolate(tedges_days, flow_cum, cout_tedges_days_infiltration)
+    end_vol = linear_interpolate(tedges_days, flow_cum, cout_tedges_days)
 
-    # Compute concentration weights
-    flow_cum_dep = flow_cum[None, :] - start_vol[:, None]
+    # Compute deposition weights
+    flow_cum_cout = flow_cum[None, :] - start_vol[:, None]
     volume_array = compute_average_heights(
-        cout_tedges_days, flow_cum_dep, 0.0, retardation_factor * float(aquifer_pore_volume_value)
+        tedges_days, flow_cum_cout, 0.0, retardation_factor * float(aquifer_pore_volume_value)
     )
     area_array = volume_array / (porosity * thickness)
     extracted_volume = np.diff(end_vol)
-    concentration_weights = area_array * np.diff(cout_tedges_days)[None, :] / extracted_volume[:, None]
-
-    return concentration_weights.dot(cout_values)
+    return area_array * np.diff(tedges_days)[None, :] / extracted_volume[:, None]
 
 
 def deposition_to_extraction(
@@ -147,7 +115,7 @@ def deposition_to_extraction(
     flow : array_like
         Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
     tedges : pandas.DatetimeIndex
-        Time bin edges for dep and flow data.
+        Time bin edges for deposition and flow data.
     cout_tedges : pandas.DatetimeIndex
         Time bin edges for output concentration data.
     aquifer_pore_volume_value : float
@@ -197,36 +165,207 @@ def deposition_to_extraction(
         _msg = "Input arrays cannot contain NaN values"
         raise ValueError(_msg)
 
-    # Convert to days relative to first time edge
-    t0 = tedges[0]
-    tedges_days = ((tedges - t0) / pd.Timedelta(days=1)).values
-    cout_tedges_days = ((cout_tedges - t0) / pd.Timedelta(days=1)).values
-
-    # Compute residence times and cumulative flow
-    rt_edges = residence_time(
-        flow=flow_values,
-        flow_tedges=tedges,
-        index=cout_tedges,
-        aquifer_pore_volume=float(aquifer_pore_volume_value),
-        retardation_factor=retardation_factor,
-        direction="extraction_to_infiltration",
-    )
-    cout_tedges_days_infiltration = cout_tedges_days - rt_edges[0]
-
-    flow_tdelta = np.diff(tedges_days, prepend=0.0)
-    flow_cum = (np.concatenate(([0.0], flow_values)) * flow_tdelta).cumsum()
-
-    # Interpolate volumes at concentration time edges
-    start_vol = linear_interpolate(tedges_days, flow_cum, cout_tedges_days_infiltration)
-    end_vol = linear_interpolate(tedges_days, flow_cum, cout_tedges_days)
-
     # Compute deposition weights
-    flow_cum_cout = flow_cum[None, :] - start_vol[:, None]
-    volume_array = compute_average_heights(
-        tedges_days, flow_cum_cout, 0.0, retardation_factor * float(aquifer_pore_volume_value)
+    deposition_weights = compute_deposition_weights(
+        flow_values=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume_value=aquifer_pore_volume_value,
+        porosity=porosity,
+        thickness=thickness,
+        retardation_factor=retardation_factor,
     )
-    area_array = volume_array / (porosity * thickness)
-    extracted_volume = np.diff(end_vol)
-    deposition_weights = area_array * np.diff(tedges_days)[None, :] / extracted_volume[:, None]
 
     return deposition_weights.dot(dep_values)
+
+
+def extraction_to_deposition(
+    *,
+    flow,
+    tedges,
+    cout,
+    cout_tedges,
+    aquifer_pore_volume_value,
+    porosity,
+    thickness,
+    retardation_factor=1.0,
+    nullspace_objective="squared_differences",
+):
+    """
+    Compute deposition rates from concentration changes (deconvolution).
+
+    The solution for the deposition is fundamentally underdetermined, as multiple
+    deposition histories can lead to the same concentration. This function
+    computes a least-squares solution and then selects a specific solution from the
+    nullspace of the problem based on the provided objective.
+
+    Parameters
+    ----------
+    flow : array_like
+        Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
+        Must not contain NaN values.
+    tedges : pandas.DatetimeIndex
+        Time bin edges for deposition and flow data. Length must equal
+        len(flow) + 1.
+    cout : array_like
+        Concentration changes in extracted water [ng/m3]. Length must equal
+        len(cout_tedges) - 1. May contain NaN values, which will be excluded
+        from the computation along with corresponding rows in the weight matrix.
+    cout_tedges : pandas.DatetimeIndex
+        Time bin edges for output concentration data. Length must equal
+        len(cout) + 1.
+    aquifer_pore_volume_value : float
+        Aquifer pore volume [m3].
+    porosity : float
+        Aquifer porosity [dimensionless].
+    thickness : float
+        Aquifer thickness [m].
+    retardation_factor : float, optional
+        Compound retardation factor, by default 1.0. Values > 1.0 indicate
+        slower transport due to sorption/interaction.
+    nullspace_objective : str or callable, optional
+        Objective function to minimize in the nullspace. Options:
+
+        * "squared_differences" : Minimize sum of squared differences between
+          adjacent deposition rates (default, provides smooth solutions)
+        * "summed_differences" : Minimize sum of absolute differences between
+          adjacent deposition rates (promotes sparse/piecewise constant solutions)
+        * callable : Custom objective function with signature
+          ``objective(coeffs, x_ls, nullspace_basis)``
+
+        Default is "squared_differences".
+
+    Returns
+    -------
+    numpy.ndarray
+        Mean deposition rates [ng/m2/day] between tedges. Length equals
+        len(tedges) - 1.
+
+    Raises
+    ------
+    ValueError
+        If input dimensions are incompatible, if flow contains NaN values,
+        or if the optimization fails.
+
+    Notes
+    -----
+    This function solves the inverse problem of determining deposition rates
+    from observed concentration changes. Since multiple deposition histories
+    can produce the same concentration pattern, regularization in the nullspace
+    is used to select a physically meaningful solution.
+
+    The algorithm:
+
+    1. Validates input dimensions and checks for NaN values in flow
+    2. Computes deposition weight matrix relating deposition to concentration
+    3. Identifies valid rows (no NaN in weights or concentration data)
+    4. Solves the underdetermined system using nullspace regularization
+    5. Returns the regularized deposition rate solution
+
+    Examples
+    --------
+    Basic usage with default squared differences regularization:
+
+    >>> import pandas as pd
+    >>> import numpy as np
+    >>> from gwtransport.deposition2 import extraction_to_deposition
+    >>>
+    >>> # Create input data
+    >>> dates = pd.date_range("2020-01-01", "2020-01-10", freq="D")
+    >>> tedges = pd.date_range("2019-12-31 12:00", "2020-01-10 12:00", freq="D")
+    >>> cout_tedges = pd.date_range("2020-01-03 12:00", "2020-01-12 12:00", freq="D")
+    >>>
+    >>> # Flow and concentration data
+    >>> flow = np.full(len(dates), 100.0)  # m3/day
+    >>> cout = np.ones(len(cout_tedges) - 1) * 10.0  # ng/m3
+    >>>
+    >>> # Compute deposition rates
+    >>> dep = extraction_to_deposition(
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cout=cout,
+    ...     cout_tedges=cout_tedges,
+    ...     aquifer_pore_volume_value=500.0,
+    ...     porosity=0.3,
+    ...     thickness=10.0,
+    ... )
+    >>> print(f"Deposition rates shape: {dep.shape}")
+    >>> print(f"Mean deposition rate: {np.nanmean(dep):.2f} ng/m2/day")
+
+    With summed differences regularization for sparse solutions:
+
+    >>> dep_sparse = extraction_to_deposition(
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cout=cout,
+    ...     cout_tedges=cout_tedges,
+    ...     aquifer_pore_volume_value=500.0,
+    ...     porosity=0.3,
+    ...     thickness=10.0,
+    ...     nullspace_objective="summed_differences",
+    ... )
+
+    With custom regularization objective:
+
+    >>> def l2_norm_objective(coeffs, x_ls, nullspace_basis):
+    ...     x = x_ls + nullspace_basis @ coeffs
+    ...     return np.sum(x**2)  # Minimize L2 norm of solution
+    >>>
+    >>> dep_l2 = extraction_to_deposition(
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cout=cout,
+    ...     cout_tedges=cout_tedges,
+    ...     aquifer_pore_volume_value=500.0,
+    ...     porosity=0.3,
+    ...     thickness=10.0,
+    ...     nullspace_objective=l2_norm_objective,
+    ... )
+
+    Handling missing concentration data:
+
+    >>> # Concentration with some NaN values
+    >>> cout_nan = cout.copy()
+    >>> cout_nan[2:4] = np.nan  # Missing data for some time periods
+    >>>
+    >>> dep_robust = extraction_to_deposition(
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cout=cout_nan,
+    ...     cout_tedges=cout_tedges,
+    ...     aquifer_pore_volume_value=500.0,
+    ...     porosity=0.3,
+    ...     thickness=10.0,
+    ... )
+    """
+    tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
+    cout_values, flow_values = np.asarray(cout), np.asarray(flow)
+
+    # Validate input dimensions and values
+    if len(cout_tedges) != len(cout_values) + 1:
+        msg = "cout_tedges must have one more element than cout"
+        raise ValueError(msg)
+    if len(tedges) != len(flow_values) + 1:
+        msg = "tedges must have one more element than flow"
+        raise ValueError(msg)
+    if np.any(np.isnan(flow_values)):
+        msg = "flow array cannot contain NaN values"
+        raise ValueError(msg)
+
+    # Compute deposition weights
+    deposition_weights = compute_deposition_weights(
+        flow_values=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume_value=aquifer_pore_volume_value,
+        porosity=porosity,
+        thickness=thickness,
+        retardation_factor=retardation_factor,
+    )
+
+    # Solve underdetermined system using utils function
+    return solve_underdetermined_system(
+        coefficient_matrix=deposition_weights,
+        rhs_vector=cout_values,
+        nullspace_objective=nullspace_objective,
+    )

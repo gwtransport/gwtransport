@@ -12,6 +12,8 @@ import numpy.typing as npt
 import pandas as pd
 import requests
 from scipy import interpolate
+from scipy.linalg import null_space
+from scipy.optimize import minimize
 
 cache_dir = Path(__file__).parent.parent.parent / "cache"
 
@@ -714,3 +716,212 @@ def get_soil_temperature(station_number: int = 260, *, interpolate_missing_value
     # Save to cache for future use
     df.to_pickle(cache_path)
     return df
+
+
+def solve_underdetermined_system(
+    coefficient_matrix,
+    rhs_vector,
+    *,
+    nullspace_objective="squared_differences",
+    optimization_method="BFGS",
+):
+    """
+    Solve an underdetermined linear system with nullspace regularization.
+
+    For an underdetermined system Ax = b where A has more columns than rows,
+    multiple solutions exist. This function computes a least-squares solution
+    and then selects a specific solution from the nullspace based on a
+    regularization objective.
+
+    Parameters
+    ----------
+    coefficient_matrix : array_like
+        Coefficient matrix of shape (m, n) where m < n (underdetermined).
+        May contain NaN values in some rows, which will be excluded from the system.
+    rhs_vector : array_like
+        Right-hand side vector of length m. May contain NaN values corresponding
+        to NaN rows in coefficient_matrix, which will be excluded from the system.
+    nullspace_objective : str or callable, optional
+        Objective function to minimize in the nullspace. Options:
+
+        * "squared_differences" : Minimize sum of squared differences between
+          adjacent elements: sum((x[i+1] - x[i])**2)
+        * "summed_differences" : Minimize sum of absolute differences between
+          adjacent elements: sum(|x[i+1] - x[i]|)
+        * callable : Custom objective function with signature
+          ``objective(coeffs, x_ls, nullspace_basis)`` where:
+
+          - coeffs : optimization variables (nullspace coefficients)
+          - x_ls : least-squares solution
+          - nullspace_basis : nullspace basis matrix
+
+        Default is "squared_differences".
+    optimization_method : str, optional
+        Optimization method passed to scipy.optimize.minimize.
+        Default is "BFGS".
+
+    Returns
+    -------
+    numpy.ndarray
+        Solution vector that minimizes the specified nullspace objective.
+        Has length n (number of columns in coefficient_matrix).
+
+    Raises
+    ------
+    ValueError
+        If optimization fails, if coefficient_matrix and rhs_vector have incompatible shapes,
+        or if an unknown nullspace objective is specified.
+
+    Notes
+    -----
+    The algorithm follows these steps:
+
+    1. Remove rows with NaN values from both coefficient_matrix and rhs_vector
+    2. Compute least-squares solution: x_ls = pinv(valid_matrix) @ valid_rhs
+    3. Compute nullspace basis: N = null_space(valid_matrix)
+    4. Find nullspace coefficients: coeffs = argmin objective(x_ls + N @ coeffs)
+    5. Return final solution: x = x_ls + N @ coeffs
+
+    For the built-in objectives:
+
+    * "squared_differences" provides smooth solutions, minimizing rapid changes
+    * "summed_differences" provides sparse solutions, promoting piecewise constant behavior
+
+    Examples
+    --------
+    Basic usage with default squared differences objective:
+
+    >>> import numpy as np
+    >>> from gwtransport.utils import solve_underdetermined_system
+    >>>
+    >>> # Create underdetermined system (2 equations, 4 unknowns)
+    >>> matrix = np.array([[1, 2, 1, 0], [0, 1, 2, 1]])
+    >>> rhs = np.array([3, 4])
+    >>>
+    >>> # Solve with squared differences regularization
+    >>> x = solve_underdetermined_system(matrix, rhs)
+    >>> print(f"Solution: {x}")
+    >>> print(f"Residual: {np.linalg.norm(matrix @ x - rhs):.2e}")
+
+    With summed differences objective:
+
+    >>> x_sparse = solve_underdetermined_system(
+    ...     matrix, rhs, nullspace_objective="summed_differences"
+    ... )
+
+    With custom objective function:
+
+    >>> def custom_objective(coeffs, x_ls, nullspace_basis):
+    ...     x = x_ls + nullspace_basis @ coeffs
+    ...     return np.sum(x**2)  # Minimize L2 norm
+    >>>
+    >>> x_custom = solve_underdetermined_system(
+    ...     matrix, rhs, nullspace_objective=custom_objective
+    ... )
+
+    Handling NaN values:
+
+    >>> # System with missing data
+    >>> matrix_nan = np.array([
+    ...     [1, 2, 1, 0],
+    ...     [np.nan, np.nan, np.nan, np.nan],
+    ...     [0, 1, 2, 1],
+    ... ])
+    >>> rhs_nan = np.array([3, np.nan, 4])
+    >>>
+    >>> x_nan = solve_underdetermined_system(matrix_nan, rhs_nan)
+    """
+    matrix = np.asarray(coefficient_matrix)
+    rhs = np.asarray(rhs_vector)
+
+    if matrix.shape[0] != len(rhs):
+        msg = f"coefficient_matrix has {matrix.shape[0]} rows but rhs_vector has {len(rhs)} elements"
+        raise ValueError(msg)
+
+    # Identify valid rows (no NaN values in either matrix or rhs)
+    valid_rows = ~np.isnan(matrix).any(axis=1) & ~np.isnan(rhs)
+
+    if not np.any(valid_rows):
+        msg = "No valid rows found (all contain NaN values)"
+        raise ValueError(msg)
+
+    valid_matrix = matrix[valid_rows]
+    valid_rhs = rhs[valid_rows]
+
+    # Compute least-squares solution
+    x_ls, *_ = np.linalg.lstsq(valid_matrix, valid_rhs, rcond=None)
+
+    # Compute nullspace
+    nullspace_basis = null_space(valid_matrix, rcond=None)
+    nullrank = nullspace_basis.shape[1]
+
+    if nullrank == 0:
+        # System is determined, return least-squares solution
+        return x_ls
+
+    # Optimize in nullspace
+    coeffs = _optimize_nullspace_coefficients(
+        x_ls, nullspace_basis, nullspace_objective, optimization_method
+    )
+
+    return x_ls + nullspace_basis @ coeffs
+
+
+def _optimize_nullspace_coefficients(
+    x_ls, nullspace_basis, nullspace_objective, optimization_method
+):
+    """Optimize coefficients in the nullspace to minimize the objective."""
+    nullrank = nullspace_basis.shape[1]
+    objective_func = _get_nullspace_objective_function(nullspace_objective)
+    coeffs_0 = np.zeros(nullrank)
+
+    # For stability, always start with squared differences if using summed differences
+    if nullspace_objective == "summed_differences":
+        res_init = minimize(
+            _squared_differences_objective,
+            x0=coeffs_0,
+            args=(x_ls, nullspace_basis),
+            method=optimization_method,
+        )
+        if not res_init.success:
+            msg = f"Initial optimization failed: {res_init.message}"
+            raise ValueError(msg)
+        coeffs_0 = res_init.x
+
+    # Final optimization with target objective
+    res = minimize(
+        objective_func,
+        x0=coeffs_0,
+        args=(x_ls, nullspace_basis),
+        method=optimization_method,
+    )
+
+    if not res.success:
+        msg = f"Optimization failed: {res.message}"
+        raise ValueError(msg)
+
+    return res.x
+
+
+def _squared_differences_objective(coeffs, x_ls, nullspace_basis):
+    """Minimize sum of squared differences between adjacent elements."""
+    x = x_ls + nullspace_basis @ coeffs
+    return np.sum(np.square(x[1:] - x[:-1]))
+
+
+def _summed_differences_objective(coeffs, x_ls, nullspace_basis):
+    """Minimize sum of absolute differences between adjacent elements."""
+    x = x_ls + nullspace_basis @ coeffs
+    return np.sum(np.abs(x[1:] - x[:-1]))
+
+
+def _get_nullspace_objective_function(nullspace_objective):
+    """Get the objective function for nullspace optimization."""
+    if nullspace_objective == "squared_differences":
+        return _squared_differences_objective
+    if nullspace_objective == "summed_differences":
+        return _summed_differences_objective
+    if callable(nullspace_objective):
+        return nullspace_objective
+    msg = f"Unknown nullspace objective: {nullspace_objective}"
+    raise ValueError(msg)
