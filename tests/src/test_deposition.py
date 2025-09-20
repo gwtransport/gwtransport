@@ -67,9 +67,7 @@ def test_exact_analytical_constant_deposition():
 
     assert len(valid_result) >= 1, "Must have at least one valid result"
 
-    for actual, exp in zip(
-        valid_result,
-        valid_expected    ):
+    for actual, exp in zip(valid_result, valid_expected, strict=False):
         rel_error = abs(actual - exp) / exp
         assert rel_error < 1e-12, f"Expected {exp:.12f}, got {actual:.12f}, rel_error={rel_error:.2e}"
 
@@ -115,9 +113,7 @@ def test_exact_analytical_varying_flow():
     valid_expected = expected[: len(valid_result)]
 
     if len(valid_result) >= 1:
-        for actual, exp in zip(
-            valid_result,
-            valid_expected        ):
+        for actual, exp in zip(valid_result, valid_expected, strict=False):
             rel_error = abs(actual - exp) / exp
             # Slightly relaxed tolerance for varying flow
             assert rel_error < 1e-6, f"Expected {exp:.6f}, got {actual:.6f}, rel_error={rel_error:.2e}"
@@ -166,9 +162,7 @@ def test_exact_analytical_retardation_factor():
         valid_expected = expected[: len(valid_result)]
 
         if len(valid_result) >= 1:
-            for actual, exp in zip(
-                valid_result,
-                valid_expected            ):
+            for actual, exp in zip(valid_result, valid_expected, strict=False):
                 rel_error = abs(actual - exp) / exp
                 assert rel_error < 1e-12, f"R={retardation_factor}: Expected {exp:.12f}, got {actual:.12f}"
 
