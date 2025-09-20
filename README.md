@@ -91,6 +91,7 @@ Examples:
 - [Estimate aquifer pore volume from temperature response](https://gwtransport.github.io/gwtransport/examples/01_Aquifer_Characterization_Temperature.html)
 - [Estimate the residence time distribution](https://gwtransport.github.io/gwtransport/examples/02_Residence_Time_Analysis.html)
 - [Log removal efficiency analysis](https://gwtransport.github.io/gwtransport/examples/03_Pathogen_Removal_Bank_Filtration.html)
+- [Deposition analysis](https://gwtransport.github.io/gwtransport/examples/04_Deposition_Analysis_Bank_Filtration.html)
 
 Full documentation: [gwtransport.github.io/gwtransport](https://gwtransport.github.io/gwtransport)
 
