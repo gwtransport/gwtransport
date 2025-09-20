@@ -370,3 +370,47 @@ def extraction_to_deposition(
         nullspace_objective=nullspace_objective,
         optimization_method="Nelder-Mead",
     )
+
+def spinup_duration(
+    *,
+    flow: np.ndarray,
+    flow_tedges: pd.DatetimeIndex,
+    aquifer_pore_volume_value: float,
+    retardation_factor: float,
+) -> float:
+    """
+    Compute the spinup duration for deposition modeling.
+
+    The spinup duration is the residence time at the first time step, representing
+    the time needed for the system to become fully informed. Before this duration,
+    the extracted concentration lacks complete deposition history.
+
+    Parameters
+    ----------
+    flow : numpy.ndarray
+        Flow rate of water in the aquifer [m3/day].
+    flow_tedges : pandas.DatetimeIndex
+        Time edges for the flow data.
+    aquifer_pore_volume_value : float
+        Pore volume of the aquifer [m3].
+    retardation_factor : float
+        Retardation factor of the compound in the aquifer [dimensionless].
+
+    Returns
+    -------
+    float
+        Spinup duration in days.
+    """
+    rt = residence_time(
+        flow=flow,
+        flow_tedges=flow_tedges,
+        aquifer_pore_volume=aquifer_pore_volume_value,
+        retardation_factor=retardation_factor,
+        direction="infiltration_to_extraction",
+    )
+    if np.isnan(rt[0, 0]):
+        msg = "Residence time at the first time step is NaN. This indicates that the aquifer is not fully informed: flow timeseries too short."
+        raise ValueError(msg)
+
+    # Return the first residence time value
+    return float(rt[0, 0])
