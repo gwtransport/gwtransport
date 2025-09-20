@@ -860,16 +860,12 @@ def solve_underdetermined_system(
         return x_ls
 
     # Optimize in nullspace
-    coeffs = _optimize_nullspace_coefficients(
-        x_ls, nullspace_basis, nullspace_objective, optimization_method
-    )
+    coeffs = _optimize_nullspace_coefficients(x_ls, nullspace_basis, nullspace_objective, optimization_method)
 
     return x_ls + nullspace_basis @ coeffs
 
 
-def _optimize_nullspace_coefficients(
-    x_ls, nullspace_basis, nullspace_objective, optimization_method
-):
+def _optimize_nullspace_coefficients(x_ls, nullspace_basis, nullspace_objective, optimization_method):
     """Optimize coefficients in the nullspace to minimize the objective."""
     nullrank = nullspace_basis.shape[1]
     objective_func = _get_nullspace_objective_function(nullspace_objective)

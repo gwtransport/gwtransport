@@ -368,4 +368,5 @@ def extraction_to_deposition(
         coefficient_matrix=deposition_weights,
         rhs_vector=cout_values,
         nullspace_objective=nullspace_objective,
+        optimization_method="Nelder-Mead",
     )
