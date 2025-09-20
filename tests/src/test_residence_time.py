@@ -172,7 +172,7 @@ def test_return_pandas_series():
     flow_values = np.full(len(flow_tedges) - 1, 100.0)
     pore_volume = 200.0
 
-    with pytest.warns(DeprecationWarning, match="return_pandas_series parameter is deprecated"):
+    with pytest.warns(FutureWarning, match="return_pandas_series parameter is deprecated"):
         result = residence_time(
             flow=flow_values,
             flow_tedges=flow_tedges,

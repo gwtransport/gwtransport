@@ -67,7 +67,7 @@ def residence_time(
 
     flow_tedges = pd.DatetimeIndex(flow_tedges)
     if len(flow_tedges) != len(flow) + 1:
-        msg = "flow_tedges must have one more element than flow"
+        msg = "tedges must have one more element than flow"
         raise ValueError(msg)
 
     flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
@@ -100,15 +100,19 @@ def residence_time(
         raise ValueError(msg)
 
     if return_pandas_series:
-        warnings.warn(
-            "return_pandas_series parameter is deprecated and will be removed in a future version. "
-            "The function now returns numpy arrays by default.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        # If multiple pore volumes were provided, raise the explicit error first so that
+        # callers (and tests) see the ValueError before any deprecation warning. When
+        # running with warnings-as-errors, emitting the warning before the error would
+        # cause the test to fail on the warning instead of the intended ValueError.
         if len(aquifer_pore_volume) > 1:
             msg = "return_pandas_series=True is only supported for a single pore volume"
             raise ValueError(msg)
+        warnings.warn(
+            "return_pandas_series parameter is deprecated and will be removed in a future version. "
+            "The function now returns numpy arrays by default.",
+            FutureWarning,
+            stacklevel=2,
+        )
         return pd.Series(data=data[0], index=index, name=f"residence_time_{direction}")
     return data
 

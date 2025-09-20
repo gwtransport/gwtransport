@@ -72,7 +72,7 @@ def test_varying_extraction(constant_flow_data):
     """Test basic extraction scenario with constant flow."""
     flow_values, flow_tedges = constant_flow_data
     flow_values[5:] *= 2.0  # Double the flow after the 5th day
-    tedges_out_highres = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1H")
+    tedges_out_highres = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1h")
     tedges_out_lowres = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1D")
     pore_volume = 200.0
 
