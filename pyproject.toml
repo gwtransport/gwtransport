@@ -7,7 +7,7 @@ name = "gwtransport"
 description = "Timeseries analysis of groundwater transport of solutes and temperature"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = [
   "time-series",
   "analysis",
