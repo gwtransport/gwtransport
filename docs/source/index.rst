@@ -129,6 +129,7 @@ Documentation Contents
    examples/01_Aquifer_Characterization_Temperature.nblink
    examples/02_Residence_Time_Analysis.nblink
    examples/03_Pathogen_Removal_Bank_Filtration.nblink
+   examples/04_Deposition_Analysis_Bank_Filtration.nblink
 
 .. toctree::
    :maxdepth: 2
