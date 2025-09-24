@@ -745,9 +745,9 @@ def solve_underdetermined_system(
         Objective function to minimize in the nullspace. Options:
 
         * "squared_differences" : Minimize sum of squared differences between
-          adjacent elements: sum((x[i+1] - x[i])**2)
+          adjacent elements: ``sum((x[i+1] - x[i])**2)``
         * "summed_differences" : Minimize sum of absolute differences between
-          adjacent elements: sum(|x[i+1] - x[i]|)
+          adjacent elements: ``sum(|x[i+1] - x[i]|)``
         * callable : Custom objective function with signature
           ``objective(coeffs, x_ls, nullspace_basis)`` where:
 
