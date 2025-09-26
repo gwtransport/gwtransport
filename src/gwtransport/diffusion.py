@@ -10,14 +10,14 @@ from gwtransport.utils import compute_time_edges, diff
 
 
 def infiltration_to_extraction(
-    cin,
-    flow,
-    aquifer_pore_volume,
-    diffusivity=0.1,
-    retardation_factor=1.0,
-    aquifer_length=80.0,
-    porosity=0.35,
-):
+    cin: pd.Series,
+    flow: pd.Series,
+    aquifer_pore_volume: float,
+    diffusivity: float = 0.1,
+    retardation_factor: float = 1.0,
+    aquifer_length: float = 80.0,
+    porosity: float = 0.35,
+) -> pd.Series:
     """Compute the diffusion of a compound during 1D transport in the aquifer.
 
     This function represents infiltration to extraction modeling (equivalent to convolution).
@@ -100,8 +100,13 @@ def extraction_to_infiltration(
 
 
 def compute_sigma_array(
-    flow, aquifer_pore_volume, diffusivity=0.1, retardation_factor=1.0, aquifer_length=80.0, porosity=0.35
-):
+    flow: pd.Series,
+    aquifer_pore_volume: float,
+    diffusivity: float = 0.1,
+    retardation_factor: float = 1.0,
+    aquifer_length: float = 80.0,
+    porosity: float = 0.35,
+) -> np.ndarray:
     """Compute sigma values for diffusion based on flow and aquifer properties.
 
     Parameters
@@ -121,12 +126,12 @@ def compute_sigma_array(
 
     Returns
     -------
-    array
+    numpy.ndarray
         Array of sigma values for diffusion.
     """
     # Create flow tedges from the flow series index (assuming it's at the end of bins)
     flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow.index, number_of_bins=len(flow))
-    residence_time = residence_time(
+    residence_time_series = residence_time(
         flow=flow,
         flow_tedges=flow_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
@@ -134,12 +139,12 @@ def compute_sigma_array(
         direction="infiltration_to_extraction",
         return_pandas_series=True,
     )
-    residence_time = residence_time.interpolate(method="nearest").ffill().bfill()
+    residence_time_series = residence_time_series.interpolate(method="nearest").ffill().bfill()
     timedelta_at_departure = diff(flow.index, alignment="right") / pd.to_timedelta(1, unit="D")
     volume_infiltrated_at_departure = flow * timedelta_at_departure
     cross_sectional_area = aquifer_pore_volume / aquifer_length
     dx = volume_infiltrated_at_departure / cross_sectional_area / porosity
-    sigma_array = np.sqrt(2 * diffusivity * residence_time) / dx
+    sigma_array = np.sqrt(2 * diffusivity * residence_time_series) / dx
     return np.clip(a=sigma_array.values, a_min=0.0, a_max=100)
 
 
@@ -153,9 +158,9 @@ def convolve_diffusion(input_signal, sigma_array, truncate=4.0):
 
     Parameters
     ----------
-    input_signal : ndarray
+    input_signal : numpy.ndarray
         One-dimensional input array to be filtered.
-    sigma_array : ndarray
+    sigma_array : numpy.ndarray
         One-dimensional array of standard deviation values, must have same length
         as input_signal. Each value specifies the Gaussian kernel width at the
         corresponding position.
@@ -165,7 +170,7 @@ def convolve_diffusion(input_signal, sigma_array, truncate=4.0):
 
     Returns
     -------
-    ndarray
+    numpy.ndarray
         The filtered input signal. Has the same shape as input_signal.
 
     Notes
@@ -290,9 +295,9 @@ def deconvolve_diffusion(output_signal, sigma_array, truncate=4.0):
 
     Parameters
     ----------
-    output_signal : ndarray
+    output_signal : numpy.ndarray
         One-dimensional input array to be filtered.
-    sigma_array : ndarray
+    sigma_array : numpy.ndarray
         One-dimensional array of standard deviation values, must have same length
         as output_signal. Each value specifies the Gaussian kernel width at the
         corresponding position.
@@ -302,7 +307,7 @@ def deconvolve_diffusion(output_signal, sigma_array, truncate=4.0):
 
     Returns
     -------
-    ndarray
+    numpy.ndarray
         The filtered output signal. Has the same shape as output_signal.
     """
     msg = "Deconvolution is not implemented yet"
@@ -323,13 +328,13 @@ def create_example_data(nx=1000, domain_length=10.0, diffusivity=0.1):
 
     Returns
     -------
-    x : ndarray
+    x : numpy.ndarray
         Spatial coordinates.
-    signal : ndarray
+    signal : numpy.ndarray
         Initial signal (sum of two Gaussians).
-    sigma_array : ndarray
+    sigma_array : numpy.ndarray
         Array of sigma values varying in space.
-    dt : ndarray
+    dt : numpy.ndarray
         Array of time steps varying in space.
 
     Notes

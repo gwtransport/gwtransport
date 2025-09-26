@@ -20,9 +20,9 @@ def compute_average_heights(x_edges, y_edges, y_lower, y_upper):
 
     Parameters
     ----------
-    x_edges : ndarray
+    x_edges : numpy.ndarray
         1D array of x coordinates, shape (n_x,)
-    y_edges : ndarray
+    y_edges : numpy.ndarray
         2D array of y coordinates, shape (n_y, n_x)
     y_lower : float
         Lower horizontal clipping bound
@@ -31,7 +31,7 @@ def compute_average_heights(x_edges, y_edges, y_lower, y_upper):
 
     Returns
     -------
-    avg_heights : ndarray
+    avg_heights : numpy.ndarray
         2D array of average heights (area/width) for each clipped trapezoid,
         shape (n_y-1, n_x-1)
     """

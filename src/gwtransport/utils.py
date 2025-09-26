@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
@@ -18,7 +17,9 @@ from scipy.optimize import minimize
 cache_dir = Path(__file__).parent.parent.parent / "cache"
 
 
-def linear_interpolate(x_ref, y_ref, x_query, left=None, right=None):
+def linear_interpolate(
+    x_ref: npt.ArrayLike, y_ref: npt.ArrayLike, x_query: npt.ArrayLike, left=None, right=None
+) -> np.ndarray:
     """
     Linear interpolation on monotonically increasing data.
 
@@ -41,7 +42,7 @@ def linear_interpolate(x_ref, y_ref, x_query, left=None, right=None):
 
     Returns
     -------
-    array
+    numpy.ndarray
         Interpolated y-values.
     """
     x_ref = np.asarray(x_ref)
@@ -76,7 +77,7 @@ def linear_interpolate(x_ref, y_ref, x_query, left=None, right=None):
     return y_query
 
 
-def interp_series(series, index_new, **interp1d_kwargs):
+def interp_series(series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwargs) -> pd.Series:
     """
     Interpolate a pandas.Series to a new index.
 
@@ -98,10 +99,10 @@ def interp_series(series, index_new, **interp1d_kwargs):
     dt = (series.index - series.index[0]) / pd.to_timedelta(1, unit="D")
     dt_interp = (index_new - series.index[0]) / pd.to_timedelta(1, unit="D")
     interp_obj = interpolate.interp1d(dt, series.values, bounds_error=False, **interp1d_kwargs)
-    return interp_obj(dt_interp)
+    return pd.Series(interp_obj(dt_interp), index=index_new)
 
 
-def diff(a, alignment="centered"):
+def diff(a: npt.ArrayLike, alignment: str = "centered") -> np.ndarray:
     """Compute the cell widths for a given array of cell coordinates.
 
     If alignment is "centered", the coordinates are assumed to be centered in the cells.
@@ -115,7 +116,7 @@ def diff(a, alignment="centered"):
 
     Returns
     -------
-    array
+    numpy.ndarray
         Array with differences between elements.
     """
     if alignment == "centered":
@@ -131,9 +132,9 @@ def diff(a, alignment="centered"):
 
 
 def linear_average(  # noqa: C901
-    x_data: Sequence[float] | npt.NDArray[np.float64],
-    y_data: Sequence[float] | npt.NDArray[np.float64],
-    x_edges: Sequence[float] | npt.NDArray[np.float64],
+    x_data: npt.ArrayLike,
+    y_data: npt.ArrayLike,
+    x_edges: npt.ArrayLike,
     extrapolate_method: str = "nan",
 ) -> npt.NDArray[np.float64]:
     """
@@ -229,7 +230,9 @@ def linear_average(  # noqa: C901
     all_unique_x = np.unique(np.concatenate([x_data_clean, edges_processed.ravel()]))
 
     # Interpolate y values at all unique x points once
-    all_unique_y = np.interp(all_unique_x, x_data_clean, y_data_clean, left=np.nan, right=np.nan)
+    all_unique_y: npt.NDArray[np.float64] = np.interp(
+        all_unique_x, x_data_clean, y_data_clean, left=np.nan, right=np.nan
+    )
 
     # Compute cumulative integrals once using trapezoidal rule
     dx = np.diff(all_unique_x)
@@ -241,7 +244,7 @@ def linear_average(  # noqa: C901
 
     # Vectorized computation for all series
     # Find indices of all edges in the combined grid
-    edge_indices = np.searchsorted(all_unique_x, edges_processed)
+    edge_indices: npt.NDArray[np.intp] = np.searchsorted(all_unique_x, edges_processed)
 
     # Compute integral between consecutive edges for all series (vectorized)
     integral_values = cumulative_integral[edge_indices[:, 1:]] - cumulative_integral[edge_indices[:, :-1]]
@@ -271,7 +274,7 @@ def linear_average(  # noqa: C901
     return result
 
 
-def partial_isin(bin_edges_in, bin_edges_out):
+def partial_isin(bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -> np.ndarray:
     """
     Calculate the fraction of each input bin that overlaps with each output bin.
 
@@ -357,7 +360,7 @@ def partial_isin(bin_edges_in, bin_edges_out):
     return overlap_widths / in_width
 
 
-def time_bin_overlap(tedges, bin_tedges):
+def time_bin_overlap(tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> np.ndarray:
     """
     Calculate the fraction of each time bin that overlaps with each time range.
 
@@ -424,7 +427,7 @@ def time_bin_overlap(tedges, bin_tedges):
     )
 
 
-def generate_failed_coverage_badge():
+def generate_failed_coverage_badge() -> None:
     """Generate a badge indicating failed coverage."""
     from genbadge import Badge  # type: ignore # noqa: PLC0415
 
@@ -432,7 +435,13 @@ def generate_failed_coverage_badge():
     b.write_to("coverage_failed.svg", use_shields=False)
 
 
-def combine_bin_series(a, a_edges, b, b_edges, extrapolation=0.0):
+def combine_bin_series(
+    a: npt.ArrayLike,
+    a_edges: npt.ArrayLike,
+    b: npt.ArrayLike,
+    b_edges: npt.ArrayLike,
+    extrapolation: str | float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Combine two binned series onto a common set of unique edges.
 
@@ -536,7 +545,12 @@ def combine_bin_series(a, a_edges, b, b_edges, extrapolation=0.0):
     return c, c_edges, d, d_edges
 
 
-def compute_time_edges(tedges, tstart, tend, number_of_bins):
+def compute_time_edges(
+    tedges: pd.DatetimeIndex | None,
+    tstart: pd.DatetimeIndex | None,
+    tend: pd.DatetimeIndex | None,
+    number_of_bins: int,
+) -> pd.DatetimeIndex:
     """
     Compute time edges for binning data based on provided time parameters.
 
@@ -865,7 +879,9 @@ def solve_underdetermined_system(
     return x_ls + nullspace_basis @ coeffs
 
 
-def _optimize_nullspace_coefficients(x_ls, nullspace_basis, nullspace_objective, optimization_method):
+def _optimize_nullspace_coefficients(
+    x_ls: np.ndarray, nullspace_basis: np.ndarray, nullspace_objective: str, optimization_method: str
+) -> np.ndarray:
     """Optimize coefficients in the nullspace to minimize the objective."""
     nullrank = nullspace_basis.shape[1]
     objective_func = _get_nullspace_objective_function(nullspace_objective)
@@ -899,19 +915,19 @@ def _optimize_nullspace_coefficients(x_ls, nullspace_basis, nullspace_objective,
     return res.x
 
 
-def _squared_differences_objective(coeffs, x_ls, nullspace_basis):
+def _squared_differences_objective(coeffs: np.ndarray, x_ls: np.ndarray, nullspace_basis: np.ndarray) -> float:
     """Minimize sum of squared differences between adjacent elements."""
     x = x_ls + nullspace_basis @ coeffs
     return np.sum(np.square(x[1:] - x[:-1]))
 
 
-def _summed_differences_objective(coeffs, x_ls, nullspace_basis):
+def _summed_differences_objective(coeffs: np.ndarray, x_ls: np.ndarray, nullspace_basis: np.ndarray) -> float:
     """Minimize sum of absolute differences between adjacent elements."""
     x = x_ls + nullspace_basis @ coeffs
     return np.sum(np.abs(x[1:] - x[:-1]))
 
 
-def _get_nullspace_objective_function(nullspace_objective):
+def _get_nullspace_objective_function(nullspace_objective: str):
     """Get the objective function for nullspace optimization."""
     if nullspace_objective == "squared_differences":
         return _squared_differences_objective
