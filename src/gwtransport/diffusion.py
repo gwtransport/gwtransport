@@ -130,7 +130,9 @@ def compute_sigma_array(
         Array of sigma values for diffusion.
     """
     # Create flow tedges from the flow series index (assuming it's at the end of bins)
-    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=pd.DatetimeIndex(flow.index), number_of_bins=len(flow))
+    flow_tedges = compute_time_edges(
+        tedges=None, tstart=None, tend=pd.DatetimeIndex(flow.index), number_of_bins=len(flow)
+    )
     residence_time_series = residence_time(
         flow=flow,
         flow_tedges=flow_tedges,

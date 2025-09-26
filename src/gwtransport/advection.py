@@ -108,7 +108,9 @@ def infiltration_to_extraction(
     ... )
     """
     # Create flow tedges from the flow series index (assuming it's at the end of bins)
-    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=pd.DatetimeIndex(flow_series.index), number_of_bins=len(flow_series))
+    flow_tedges = compute_time_edges(
+        tedges=None, tstart=None, tend=pd.DatetimeIndex(flow_series.index), number_of_bins=len(flow_series)
+    )
     rt_array = residence_time(
         flow=flow_series,
         flow_tedges=flow_tedges,
