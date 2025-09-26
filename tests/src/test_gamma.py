@@ -70,7 +70,7 @@ def test_bins_basic(gamma_params):
     result = gamma_bins(**gamma_params)
 
     # Check all required keys are present
-    expected_keys = {"lower_bound", "upper_bound", "edges", "expected_value", "probability_mass"}
+    expected_keys = {"lower_bound", "upper_bound", "edges", "expected_values", "probability_mass"}
     assert set(result.keys()) == expected_keys
 
     # Check array lengths
@@ -78,7 +78,7 @@ def test_bins_basic(gamma_params):
     assert len(result["lower_bound"]) == n_bins
     assert len(result["upper_bound"]) == n_bins
     assert len(result["edges"]) == n_bins + 1
-    assert len(result["expected_value"]) == n_bins
+    assert len(result["expected_values"]) == n_bins
     assert len(result["probability_mass"]) == n_bins
 
     # Check probability masses sum to 1
@@ -88,7 +88,7 @@ def test_bins_basic(gamma_params):
     assert np.all(np.diff(result["edges"]) > 0)
 
     # Check if the sum of the expected value of each bin is equal to the expected value of the distribution (alpha * beta)
-    expected_value_bins = np.sum(result["expected_value"] * result["probability_mass"])
+    expected_value_bins = np.sum(result["expected_values"] * result["probability_mass"])
     expected_value_gamma = gamma_params["alpha"] * gamma_params["beta"]
     assert expected_value_gamma == expected_value_bins
 
@@ -97,8 +97,8 @@ def test_bins_expected_values(gamma_params):
     """Test that expected values are within their respective bins."""
     result = gamma_bins(**gamma_params)
 
-    for i in range(len(result["expected_value"])):
-        assert result["lower_bound"][i] <= result["expected_value"][i] <= result["upper_bound"][i]
+    for i in range(len(result["expected_values"])):
+        assert result["lower_bound"][i] <= result["expected_values"][i] <= result["upper_bound"][i]
 
 
 # Edge cases and error handling
@@ -115,11 +115,11 @@ def test_numerical_stability():
     """Test numerical stability with extreme parameters."""
     # Test with very small alpha and beta
     result_small = gamma_bins(alpha=1e-5, beta=1e-5, n_bins=10)
-    assert not np.any(np.isnan(result_small["expected_value"]))
+    assert not np.any(np.isnan(result_small["expected_values"]))
 
     # Test with very large alpha and beta
     result_large = gamma_bins(alpha=1e5, beta=1e5, n_bins=10)
-    assert not np.any(np.isnan(result_large["expected_value"]))
+    assert not np.any(np.isnan(result_large["expected_values"]))
 
 
 def test_gamma_mean_std_to_alpha_beta_basic():
@@ -170,7 +170,7 @@ def test_expected_bin_values_monte_carlo():
 
         # Get theoretical bin properties
         bin_result = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
-        theoretical_expected = bin_result["expected_value"]
+        theoretical_expected = bin_result["expected_values"]
         lower_bounds = bin_result["lower_bound"]
         upper_bounds = bin_result["upper_bound"]
 
@@ -216,7 +216,7 @@ def test_expected_bin_values_convergence():
 
     # Get theoretical values
     bin_result = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
-    theoretical_expected = bin_result["expected_value"]
+    theoretical_expected = bin_result["expected_values"]
     lower_bounds = bin_result["lower_bound"]
     upper_bounds = bin_result["upper_bound"]
 
@@ -277,7 +277,7 @@ def test_multiple_gamma_distributions_expected_values():
 
         # Get theoretical bin properties
         bin_result = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
-        theoretical_expected = bin_result["expected_value"]
+        theoretical_expected = bin_result["expected_values"]
         lower_bounds = bin_result["lower_bound"]
         upper_bounds = bin_result["upper_bound"]
 

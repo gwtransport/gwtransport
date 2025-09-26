@@ -1,11 +1,17 @@
 """Functions for working with gamma distributions."""
 
 import numpy as np
+import numpy.typing as npt
 from scipy.special import gammainc
 from scipy.stats import gamma as gamma_dist
 
 
-def parse_parameters(alpha=None, beta=None, mean=None, std=None):
+def parse_parameters(
+    alpha: float | None = None,
+    beta: float | None = None,
+    mean: float | None = None,
+    std: float | None = None,
+) -> tuple[float, float]:
     """
     Parse parameters for gamma distribution.
 
@@ -47,7 +53,7 @@ def parse_parameters(alpha=None, beta=None, mean=None, std=None):
     return alpha, beta
 
 
-def mean_std_to_alpha_beta(mean, std):
+def mean_std_to_alpha_beta(mean: float, std: float) -> tuple[float, float]:
     """
     Convert mean and standard deviation of gamma distribution to shape and scale parameters.
 
@@ -68,7 +74,7 @@ def mean_std_to_alpha_beta(mean, std):
     return alpha, beta
 
 
-def alpha_beta_to_mean_std(alpha, beta):
+def alpha_beta_to_mean_std(alpha: float, beta: float) -> tuple[float, float]:
     """
     Convert shape and scale parameters of gamma distribution to mean and standard deviation.
 
@@ -89,7 +95,15 @@ def alpha_beta_to_mean_std(alpha, beta):
     return mean, std
 
 
-def bins(*, alpha=None, beta=None, mean=None, std=None, n_bins=None, quantile_edges=None):
+def bins(
+    *,
+    alpha: float | None = None,
+    beta: float | None = None,
+    mean: float | None = None,
+    std: float | None = None,
+    n_bins: int | None = None,
+    quantile_edges: np.ndarray | None = None,
+):
     """
     Divide gamma distribution into bins and compute various bin properties.
 
@@ -121,7 +135,7 @@ def bins(*, alpha=None, beta=None, mean=None, std=None, n_bins=None, quantile_ed
         - lower_bound: lower bounds of bins (first one is 0)
         - upper_bound: upper bounds of bins (last one is inf)
         - edges: bin edges (lower_bound[0], upper_bound[0], ..., upper_bound[-1])
-        - expected_value: expected values in bins. Is what you would expect to observe if you repeatedly sampled from the probability distribution, but only considered samples that fall within that particular bin
+        - expected_values: expected values in bins. Is what you would expect to observe if you repeatedly sampled from the probability distribution, but only considered samples that fall within that particular bin
         - probability_mass: probability mass in bins
     """
     alpha, beta = parse_parameters(alpha=alpha, beta=beta, mean=mean, std=std)
@@ -134,8 +148,14 @@ def bins(*, alpha=None, beta=None, mean=None, std=None, n_bins=None, quantile_ed
     if quantile_edges is not None:
         n_bins = len(quantile_edges) - 1
     else:
+        if n_bins is None:
+            msg = "n_bins should not be None here due to earlier validation"
+            raise ValueError(msg)
         quantile_edges = np.linspace(0, 1, n_bins + 1)  # includes 0 and 1
 
+    if n_bins is None:
+        msg = "n_bins should not be None here"
+        raise ValueError(msg)
     if n_bins <= 1:
         msg = "Number of bins must be greater than 1"
         raise ValueError(msg)
@@ -151,12 +171,12 @@ def bins(*, alpha=None, beta=None, mean=None, std=None, n_bins=None, quantile_ed
         "lower_bound": bin_edges[:-1],
         "upper_bound": bin_edges[1:],
         "edges": bin_edges,
-        "expected_value": expected_values,
+        "expected_values": expected_values,
         "probability_mass": probability_mass,
     }
 
 
-def bin_masses(alpha, beta, bin_edges):
+def bin_masses(alpha: float, beta: float, bin_edges: npt.ArrayLike) -> np.ndarray:
     """
     Calculate probability mass for each bin in gamma distribution.
 

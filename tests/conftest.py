@@ -37,4 +37,4 @@ def pytest_configure(config):  # noqa: ARG001
     os.environ.setdefault("JUPYTER_PLATFORM_DIRS", "1")
 
     # Disable interactive input to prevent tests from hanging
-    builtins.input = lambda _: None
+    builtins.input = lambda _: None  # type: ignore[assignment]

@@ -175,7 +175,7 @@ def generate_example_deposition_timeseries(
     base: float = 0.8,
     seasonal_amplitude: float = 0.3,
     noise_scale: float = 0.1,
-    event_dates=None,
+    event_dates: list[str] | pd.DatetimeIndex | None = None,
     event_magnitude: float = 3.0,
     event_duration: int = 30,
     event_decay_scale: float = 10.0,
@@ -226,7 +226,7 @@ def generate_example_deposition_timeseries(
     # Default event dates if not provided
     if event_dates is None:
         event_dates = ["2020-06-15", "2021-03-20", "2021-09-10", "2022-07-05"]
-    event_dates = pd.to_datetime(event_dates)
+    event_dates = pd.DatetimeIndex(pd.to_datetime(event_dates))
 
     event = np.zeros(n_dates)
     for event_date in event_dates:
