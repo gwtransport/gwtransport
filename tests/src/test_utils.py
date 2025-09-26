@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import requests
+import requests.exceptions
 from numpy.testing import assert_array_almost_equal
 
 from gwtransport.utils import (
