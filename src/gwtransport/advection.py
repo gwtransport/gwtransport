@@ -108,11 +108,11 @@ def infiltration_to_extraction(
     ... )
     """
     # Create flow tedges from the flow series index (assuming it's at the end of bins)
-    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow_series.index, number_of_bins=len(flow_series))
+    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=pd.DatetimeIndex(flow_series.index), number_of_bins=len(flow_series))
     rt_array = residence_time(
         flow=flow_series,
         flow_tedges=flow_tedges,
-        index=cin_series.index,
+        index=pd.DatetimeIndex(cin_series.index),
         aquifer_pore_volume=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="infiltration_to_extraction",
@@ -124,10 +124,10 @@ def infiltration_to_extraction(
     cout = pd.Series(data=cin_series.values, index=index, name="cout")
 
     if cout_index == "cin":
-        return interp_series(cout, cin_series.index)
+        return interp_series(cout, pd.DatetimeIndex(cin_series.index))
     if cout_index == "flow":
         # If cout_index is 'flow', we need to resample cout to the flow index
-        return interp_series(cout, flow_series.index)
+        return interp_series(cout, pd.DatetimeIndex(flow_series.index))
     if cout_index == "cout":
         # If cout_index is 'cout', we return the cout as is
         return cout.values
