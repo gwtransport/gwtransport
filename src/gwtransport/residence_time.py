@@ -14,20 +14,21 @@ Main functions:
 import warnings
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 from gwtransport.utils import linear_average, linear_interpolate
 
 
 def residence_time(
-    flow=None,
-    flow_tedges=None,
-    aquifer_pore_volume=None,
-    index=None,
-    retardation_factor=1.0,
-    direction="extraction_to_infiltration",
+    flow: npt.ArrayLike | None = None,
+    flow_tedges: pd.DatetimeIndex | np.ndarray | None = None,
+    aquifer_pore_volume: npt.ArrayLike | None = None,
+    index: pd.DatetimeIndex | np.ndarray | None = None,
+    retardation_factor: float = 1.0,
+    direction: str = "extraction_to_infiltration",
     *,
-    return_pandas_series=False,
+    return_pandas_series: bool = False,
 ):
     """
     Compute the residence time of retarded compound in the water in the aquifer.
@@ -63,6 +64,10 @@ def residence_time(
 
     if flow_tedges is None:
         msg = "flow_tedges must be provided"
+        raise ValueError(msg)
+
+    if flow is None:
+        msg = "flow must be provided"
         raise ValueError(msg)
 
     flow_tedges = pd.DatetimeIndex(flow_tedges)
@@ -118,13 +123,13 @@ def residence_time(
 
 
 def residence_time_mean(
-    flow,
-    flow_tedges,
-    tedges_out,
-    aquifer_pore_volume,
+    flow: npt.ArrayLike,
+    flow_tedges: pd.DatetimeIndex | np.ndarray,
+    tedges_out: pd.DatetimeIndex | np.ndarray,
+    aquifer_pore_volume: npt.ArrayLike,
     *,
-    direction="extraction_to_infiltration",
-    retardation_factor=1.0,
+    direction: str = "extraction_to_infiltration",
+    retardation_factor: float = 1.0,
 ):
     """
     Compute the mean residence time of a retarded compound in the aquifer between specified time edges.
