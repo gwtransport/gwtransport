@@ -59,8 +59,9 @@ def infiltration_to_extraction(
 
     Returns
     -------
-    numpy.ndarray
+    pandas.Series or numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3].
+        Returns pandas.Series when cout_index is 'cin' or 'flow', or numpy.ndarray when cout_index is 'cout'.
 
     Examples
     --------
