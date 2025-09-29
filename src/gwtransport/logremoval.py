@@ -46,7 +46,7 @@ def residence_time_to_log_removal(residence_times: npt.ArrayLike, log_removal_ra
 
     Parameters
     ----------
-    residence_times : array_like
+    residence_times : array-like
         Array of residence times (in consistent units, e.g., hours, days).
         Must be positive values.
     log_removal_rate : float
@@ -113,13 +113,13 @@ def parallel_mean(log_removals: npt.ArrayLike, flow_fractions: npt.ArrayLike = N
 
     Parameters
     ----------
-    log_removals : array_like
+    log_removals : array-like
         Array of log removal values for each parallel flow.
         Each value represents the log10 reduction of pathogens.
         For multi-dimensional arrays, the parallel mean is computed along
         the specified axis.
 
-    flow_fractions : array_like, optional
+    flow_fractions : array-like, optional
         Array of flow fractions for each parallel flow.
         Must sum to 1.0 along the specified axis and have compatible shape
         with log_removals. If None, equal flow distribution is assumed
@@ -132,7 +132,7 @@ def parallel_mean(log_removals: npt.ArrayLike, flow_fractions: npt.ArrayLike = N
 
     Returns
     -------
-    float or array_like
+    float or array-like
         The combined log removal value for the parallel system.
         If log_removals is multi-dimensional and axis is specified,
         returns an array with the specified axis removed.
@@ -217,7 +217,7 @@ def gamma_pdf(r: npt.ArrayLike, rt_alpha: float, rt_beta: float, log_removal_rat
 
     Parameters
     ----------
-    r : array_like
+    r : array-like
         Log removal values at which to compute the PDF.
     rt_alpha : float
         Shape parameter of the gamma distribution for residence time.
@@ -249,7 +249,7 @@ def gamma_cdf(r: npt.ArrayLike, rt_alpha: float, rt_beta: float, log_removal_rat
 
     Parameters
     ----------
-    r : array_like
+    r : array-like
         Log removal values at which to compute the CDF.
     alpha : float
         Shape parameter of the gamma distribution for residence time.

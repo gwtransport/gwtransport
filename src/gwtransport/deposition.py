@@ -36,7 +36,7 @@ def compute_deposition_weights(
 
     Parameters
     ----------
-    flow_values : array_like
+    flow_values : array-like
         Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
     tedges : pandas.DatetimeIndex
         Time bin edges for flow data.
@@ -111,9 +111,9 @@ def deposition_to_extraction(
 
     Parameters
     ----------
-    dep : array_like
+    dep : array-like
         Deposition rates [ng/m2/day]. Length must equal len(tedges) - 1.
-    flow : array_like
+    flow : array-like
         Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
     tedges : pandas.DatetimeIndex
         Time bin edges for deposition and flow data.
@@ -202,13 +202,13 @@ def extraction_to_deposition(
 
     Parameters
     ----------
-    flow : array_like
+    flow : array-like
         Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
         Must not contain NaN values.
     tedges : pandas.DatetimeIndex
         Time bin edges for deposition and flow data. Length must equal
         len(flow) + 1.
-    cout : array_like
+    cout : array-like
         Concentration changes in extracted water [ng/m3]. Length must equal
         len(cout_tedges) - 1. May contain NaN values, which will be excluded
         from the computation along with corresponding rows in the weight matrix.

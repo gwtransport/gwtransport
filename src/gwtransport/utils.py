@@ -284,10 +284,10 @@ def partial_isin(bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -> n
 
     Parameters
     ----------
-    bin_edges_in : array_like
+    bin_edges_in : array-like
         1D array of input bin edges in ascending order. For n_in bins, there
         should be n_in+1 edges.
-    bin_edges_out : array_like
+    bin_edges_out : array-like
         1D array of output bin edges in ascending order. For n_out bins, there
         should be n_out+1 edges.
 
@@ -370,7 +370,7 @@ def time_bin_overlap(tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> np.ndarr
 
     Parameters
     ----------
-    tedges : array_like
+    tedges : array-like
         1D array of time bin edges in ascending order. For n bins, there
         should be n+1 edges.
     bin_tedges : list of tuples
@@ -749,10 +749,10 @@ def solve_underdetermined_system(
 
     Parameters
     ----------
-    coefficient_matrix : array_like
+    coefficient_matrix : array-like
         Coefficient matrix of shape (m, n) where m < n (underdetermined).
         May contain NaN values in some rows, which will be excluded from the system.
-    rhs_vector : array_like
+    rhs_vector : array-like
         Right-hand side vector of length m. May contain NaN values corresponding
         to NaN rows in coefficient_matrix, which will be excluded from the system.
     nullspace_objective : str or callable, optional
