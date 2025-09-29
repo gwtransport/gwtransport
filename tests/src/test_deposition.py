@@ -28,7 +28,7 @@ def test_exact_analytical_constant_deposition():
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     params = {
-        "aquifer_pore_volume_value": 500.0,  # m³
+        "aquifer_pore_volume": 500.0,  # m³
         "porosity": 0.25,  # dimensionless
         "thickness": 4.0,  # m
         "retardation_factor": 1.0,
@@ -54,7 +54,7 @@ def test_exact_analytical_constant_deposition():
         flow=flow_values,
         flow_tedges=tedges,
         index=cout_tedges,
-        aquifer_pore_volume=params["aquifer_pore_volume_value"],
+        aquifer_pore_volume=params["aquifer_pore_volume"],
         retardation_factor=params["retardation_factor"],
         direction="extraction_to_infiltration",
     )
@@ -80,7 +80,7 @@ def test_exact_analytical_varying_flow():
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     params = {
-        "aquifer_pore_volume_value": 300.0,
+        "aquifer_pore_volume": 300.0,
         "porosity": 0.3,
         "thickness": 5.0,
         "retardation_factor": 1.0,
@@ -102,7 +102,7 @@ def test_exact_analytical_varying_flow():
         flow=flow_values,
         flow_tedges=tedges,
         index=cout_tedges,
-        aquifer_pore_volume=params["aquifer_pore_volume_value"],
+        aquifer_pore_volume=params["aquifer_pore_volume"],
         retardation_factor=params["retardation_factor"],
         direction="extraction_to_infiltration",
     )
@@ -127,7 +127,7 @@ def test_exact_analytical_retardation_factor():
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     base_params = {
-        "aquifer_pore_volume_value": 400.0,
+        "aquifer_pore_volume": 400.0,
         "porosity": 0.2,
         "thickness": 8.0,
     }
@@ -151,7 +151,7 @@ def test_exact_analytical_retardation_factor():
             flow=flow_values,
             flow_tedges=tedges,
             index=cout_tedges,
-            aquifer_pore_volume=params["aquifer_pore_volume_value"],
+            aquifer_pore_volume=params["aquifer_pore_volume"],
             retardation_factor=retardation_factor,
             direction="extraction_to_infiltration",
         )
@@ -176,7 +176,7 @@ def test_perfect_roundtrip_square_system():
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     params = {
-        "aquifer_pore_volume_value": 400.0,  # Larger volume for better conditioning
+        "aquifer_pore_volume": 400.0,  # Larger volume for better conditioning
         "porosity": 0.25,
         "thickness": 4.0,
         "retardation_factor": 1.0,
@@ -226,7 +226,7 @@ def test_perfect_roundtrip_overdetermined_system():
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     params = {
-        "aquifer_pore_volume_value": 400.0,  # Larger volume for better conditioning
+        "aquifer_pore_volume": 400.0,  # Larger volume for better conditioning
         "porosity": 0.2,
         "thickness": 4.0,
         "retardation_factor": 1.0,
@@ -269,7 +269,7 @@ def test_zero_deposition_zero_concentration():
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     params = {
-        "aquifer_pore_volume_value": 300.0,
+        "aquifer_pore_volume": 300.0,
         "porosity": 0.3,
         "thickness": 5.0,
         "retardation_factor": 1.0,
@@ -294,7 +294,7 @@ def test_linearity_exact():
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     params = {
-        "aquifer_pore_volume_value": 320.0,
+        "aquifer_pore_volume": 320.0,
         "porosity": 0.2,
         "thickness": 8.0,
         "retardation_factor": 1.0,
@@ -330,7 +330,7 @@ def test_negative_deposition_linearity():
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     params = {
-        "aquifer_pore_volume_value": 240.0,
+        "aquifer_pore_volume": 240.0,
         "porosity": 0.3,
         "thickness": 4.0,
         "retardation_factor": 1.0,
@@ -365,7 +365,7 @@ def test_parameter_scaling_exact():
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     base_params = {
-        "aquifer_pore_volume_value": 200.0,
+        "aquifer_pore_volume": 200.0,
         "retardation_factor": 1.0,
     }
 
@@ -407,7 +407,7 @@ def test_input_validation():
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     params = {
-        "aquifer_pore_volume_value": 200.0,
+        "aquifer_pore_volume": 200.0,
         "porosity": 0.3,
         "thickness": 5.0,
         "retardation_factor": 1.0,
@@ -490,7 +490,7 @@ def test_extraction_to_deposition_sparse_weekly_sampling():
     thickness = 12.0
 
     params = {
-        "aquifer_pore_volume_value": aquifer_pore_volume,
+        "aquifer_pore_volume": aquifer_pore_volume,
         "porosity": porosity,
         "thickness": thickness,
         "retardation_factor": retardation_factor,

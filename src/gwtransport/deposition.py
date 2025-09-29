@@ -14,6 +14,7 @@ deposition_to_extraction : Compute concentrations from deposition rates
 """
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 from gwtransport.residence_time import residence_time
@@ -26,7 +27,7 @@ def compute_deposition_weights(
     flow_values,
     tedges,
     cout_tedges,
-    aquifer_pore_volume_value,
+    aquifer_pore_volume,
     porosity,
     thickness,
     retardation_factor=1.0,
@@ -35,13 +36,13 @@ def compute_deposition_weights(
 
     Parameters
     ----------
-    flow_values : array_like
+    flow_values : array-like
         Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
     tedges : pandas.DatetimeIndex
         Time bin edges for flow data.
     cout_tedges : pandas.DatetimeIndex
         Time bin edges for output concentration data.
-    aquifer_pore_volume_value : float
+    aquifer_pore_volume : float
         Aquifer pore volume [m3].
     porosity : float
         Aquifer porosity [dimensionless].
@@ -52,7 +53,7 @@ def compute_deposition_weights(
 
     Returns
     -------
-    ndarray
+    numpy.ndarray
         Deposition weights matrix with shape (len(cout_tedges) - 1, len(tedges) - 1).
         May contain NaN values where residence time cannot be computed.
 
@@ -72,7 +73,7 @@ def compute_deposition_weights(
         flow=flow_values,
         flow_tedges=tedges,
         index=cout_tedges,
-        aquifer_pore_volume=float(aquifer_pore_volume_value),
+        aquifer_pore_volume=float(aquifer_pore_volume),
         retardation_factor=retardation_factor,
         direction="extraction_to_infiltration",
     )
@@ -88,7 +89,7 @@ def compute_deposition_weights(
     # Compute deposition weights
     flow_cum_cout = flow_cum[None, :] - start_vol[:, None]
     volume_array = compute_average_heights(
-        tedges_days, flow_cum_cout, 0.0, retardation_factor * float(aquifer_pore_volume_value)
+        tedges_days, flow_cum_cout, 0.0, retardation_factor * float(aquifer_pore_volume)
     )
     area_array = volume_array / (porosity * thickness)
     extracted_volume = np.diff(end_vol)
@@ -97,28 +98,28 @@ def compute_deposition_weights(
 
 def deposition_to_extraction(
     *,
-    dep,
-    flow,
-    tedges,
-    cout_tedges,
-    aquifer_pore_volume_value,
-    porosity,
-    thickness,
-    retardation_factor=1.0,
-):
+    dep: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex | np.ndarray,
+    cout_tedges: pd.DatetimeIndex | np.ndarray,
+    aquifer_pore_volume: float,
+    porosity: float,
+    thickness: float,
+    retardation_factor: float = 1.0,
+) -> np.ndarray:
     """Compute concentrations from deposition rates (convolution).
 
     Parameters
     ----------
-    dep : array_like
+    dep : array-like
         Deposition rates [ng/m2/day]. Length must equal len(tedges) - 1.
-    flow : array_like
+    flow : array-like
         Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
     tedges : pandas.DatetimeIndex
         Time bin edges for deposition and flow data.
     cout_tedges : pandas.DatetimeIndex
         Time bin edges for output concentration data.
-    aquifer_pore_volume_value : float
+    aquifer_pore_volume : float
         Aquifer pore volume [m3].
     porosity : float
         Aquifer porosity [dimensionless].
@@ -129,7 +130,7 @@ def deposition_to_extraction(
 
     Returns
     -------
-    ndarray
+    numpy.ndarray
         Concentration changes [ng/m3] with length len(cout_tedges) - 1.
 
     Examples
@@ -146,7 +147,7 @@ def deposition_to_extraction(
     ...     flow=flow,
     ...     tedges=tedges,
     ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volume_value=500.0,
+    ...     aquifer_pore_volume=500.0,
     ...     porosity=0.3,
     ...     thickness=10.0,
     ... )
@@ -170,7 +171,7 @@ def deposition_to_extraction(
         flow_values=flow_values,
         tedges=tedges,
         cout_tedges=cout_tedges,
-        aquifer_pore_volume_value=aquifer_pore_volume_value,
+        aquifer_pore_volume=aquifer_pore_volume,
         porosity=porosity,
         thickness=thickness,
         retardation_factor=retardation_factor,
@@ -181,16 +182,16 @@ def deposition_to_extraction(
 
 def extraction_to_deposition(
     *,
-    flow,
-    tedges,
-    cout,
-    cout_tedges,
-    aquifer_pore_volume_value,
-    porosity,
-    thickness,
-    retardation_factor=1.0,
-    nullspace_objective="squared_differences",
-):
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex | np.ndarray,
+    cout: npt.ArrayLike,
+    cout_tedges: pd.DatetimeIndex | np.ndarray,
+    aquifer_pore_volume: float,
+    porosity: float,
+    thickness: float,
+    retardation_factor: float = 1.0,
+    nullspace_objective: str = "squared_differences",
+) -> np.ndarray:
     """
     Compute deposition rates from concentration changes (deconvolution).
 
@@ -201,20 +202,20 @@ def extraction_to_deposition(
 
     Parameters
     ----------
-    flow : array_like
+    flow : array-like
         Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
         Must not contain NaN values.
     tedges : pandas.DatetimeIndex
         Time bin edges for deposition and flow data. Length must equal
         len(flow) + 1.
-    cout : array_like
+    cout : array-like
         Concentration changes in extracted water [ng/m3]. Length must equal
         len(cout_tedges) - 1. May contain NaN values, which will be excluded
         from the computation along with corresponding rows in the weight matrix.
     cout_tedges : pandas.DatetimeIndex
         Time bin edges for output concentration data. Length must equal
         len(cout) + 1.
-    aquifer_pore_volume_value : float
+    aquifer_pore_volume : float
         Aquifer pore volume [m3].
     porosity : float
         Aquifer porosity [dimensionless].
@@ -285,7 +286,7 @@ def extraction_to_deposition(
     ...     tedges=tedges,
     ...     cout=cout,
     ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volume_value=500.0,
+    ...     aquifer_pore_volume=500.0,
     ...     porosity=0.3,
     ...     thickness=10.0,
     ... )
@@ -299,7 +300,7 @@ def extraction_to_deposition(
     ...     tedges=tedges,
     ...     cout=cout,
     ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volume_value=500.0,
+    ...     aquifer_pore_volume=500.0,
     ...     porosity=0.3,
     ...     thickness=10.0,
     ...     nullspace_objective="summed_differences",
@@ -316,7 +317,7 @@ def extraction_to_deposition(
     ...     tedges=tedges,
     ...     cout=cout,
     ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volume_value=500.0,
+    ...     aquifer_pore_volume=500.0,
     ...     porosity=0.3,
     ...     thickness=10.0,
     ...     nullspace_objective=l2_norm_objective,
@@ -333,7 +334,7 @@ def extraction_to_deposition(
     ...     tedges=tedges,
     ...     cout=cout_nan,
     ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volume_value=500.0,
+    ...     aquifer_pore_volume=500.0,
     ...     porosity=0.3,
     ...     thickness=10.0,
     ... )
@@ -357,7 +358,7 @@ def extraction_to_deposition(
         flow_values=flow_values,
         tedges=tedges,
         cout_tedges=cout_tedges,
-        aquifer_pore_volume_value=aquifer_pore_volume_value,
+        aquifer_pore_volume=aquifer_pore_volume,
         porosity=porosity,
         thickness=thickness,
         retardation_factor=retardation_factor,
@@ -376,7 +377,7 @@ def spinup_duration(
     *,
     flow: np.ndarray,
     flow_tedges: pd.DatetimeIndex,
-    aquifer_pore_volume_value: float,
+    aquifer_pore_volume: float,
     retardation_factor: float,
 ) -> float:
     """
@@ -392,7 +393,7 @@ def spinup_duration(
         Flow rate of water in the aquifer [m3/day].
     flow_tedges : pandas.DatetimeIndex
         Time edges for the flow data.
-    aquifer_pore_volume_value : float
+    aquifer_pore_volume : float
         Pore volume of the aquifer [m3].
     retardation_factor : float
         Retardation factor of the compound in the aquifer [dimensionless].
@@ -405,7 +406,7 @@ def spinup_duration(
     rt = residence_time(
         flow=flow,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=aquifer_pore_volume_value,
+        aquifer_pore_volume=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="infiltration_to_extraction",
     )

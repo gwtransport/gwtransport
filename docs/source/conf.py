@@ -1,6 +1,7 @@
 """Configuration file for the Sphinx documentation builder."""  # noqa: INP001
 
 import tomllib
+from datetime import date
 from pathlib import Path
 
 # Read project information from pyproject.toml
@@ -12,7 +13,7 @@ project_info = pyproject_data["project"]
 
 # -- Project information -----------------------------------------------------
 project = project_info["name"]
-copyright = "2025, Bas des Tombe"  # noqa: A001
+copyright = f"{date.today().year}, Bas des Tombe"  # noqa: A001, DTZ011
 author = ", ".join([author["name"] for author in project_info["authors"]])
 release = project_info["version"]
 
@@ -24,6 +25,7 @@ extensions = [
     "sphinx.ext.intersphinx",
     "sphinx.ext.mathjax",
     "sphinx.ext.napoleon",
+    "sphinx_autodoc_typehints",
     "sphinxext.opengraph",
     "sphinx.ext.viewcode",
     "sphinx_copybutton",
@@ -41,12 +43,12 @@ napoleon_use_admonition_for_references = False
 napoleon_use_ivar = False
 napoleon_use_param = True
 napoleon_use_rtype = True
+napoleon_preprocess_types = True
+napoleon_type_aliases = {
+    "array-like": ":py:data:`~numpy.typing.ArrayLike`",
+}
 
-# Templates path
 templates_path = ["_templates"]
-
-# List of patterns, relative to source directory, that match files and
-# directories to ignore when looking for source files.
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 # -- Options for HTML output -------------------------------------------------
@@ -87,16 +89,19 @@ autodoc_default_options = {
     "exclude-members": "__weakref__",
 }
 
-# Handle type annotation compatibility
+# Prevent type aliases from being expanded into their full definitions
 autodoc_type_aliases = {
-    "npt.NDArray": "numpy.ndarray",
-    "Sequence": "typing.Sequence",
+    "ArrayLike": "ArrayLike",
+    "NDArray": "NDArray",
 }
 
-# Mock imports for compatibility - empty for now to test actual imports
-autodoc_mock_imports = []
+# sphinx-autodoc-typehints configuration
+typehints_fully_qualified = False
+always_use_bars_union = True
+typehints_defaults = "comma"
+simplify_optional_unions = True
 
-# -- Options for intersphinx extension --------------------------------------
+# -- Options for intersphinx -------------------------------------------------
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3/", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
@@ -109,8 +114,6 @@ intersphinx_mapping = {
 nbsphinx_execute = "never"
 nbsphinx_allow_errors = True
 nbsphinx_kernel_name = "python3"
-
-# Set the path for notebooks
 nbsphinx_prolog = """
 .. note::
    This notebook is located in the ./examples directory of the gwtransport repository.
@@ -122,7 +125,6 @@ copybutton_prompt_is_regexp = True
 
 # -- Options for OpenGraph --------------------------------------------------
 ogp_site_url = "https://gwtransport.github.io/gwtransport/"
-# ogp_image = "https://gwtransport.github.io/gwtransport/_static/logo.png"
 ogp_description_length = 300
 ogp_type = "website"
 ogp_custom_meta_tags = [

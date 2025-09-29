@@ -28,11 +28,12 @@ and performs minimal validation for improved performance.
 """
 
 import numpy as np
+import numpy.typing as npt
 from scipy import stats
 from scipy.special import digamma, gamma
 
 
-def residence_time_to_log_removal(residence_times, log_removal_rate):
+def residence_time_to_log_removal(residence_times: npt.ArrayLike, log_removal_rate: float) -> np.ndarray:
     """
     Compute log removal given residence times and a log removal rate.
 
@@ -45,7 +46,7 @@ def residence_time_to_log_removal(residence_times, log_removal_rate):
 
     Parameters
     ----------
-    residence_times : array_like
+    residence_times : array-like
         Array of residence times (in consistent units, e.g., hours, days).
         Must be positive values.
     log_removal_rate : float
@@ -55,7 +56,7 @@ def residence_time_to_log_removal(residence_times, log_removal_rate):
 
     Returns
     -------
-    log_removals : ndarray
+    log_removals : numpy.ndarray
         Array of log removal values corresponding to the input residence times.
         Same shape as input residence_times.
 
@@ -94,7 +95,7 @@ def residence_time_to_log_removal(residence_times, log_removal_rate):
     return log_removal_rate * np.log10(residence_times)
 
 
-def parallel_mean(log_removals, flow_fractions=None, axis=None):
+def parallel_mean(log_removals: npt.ArrayLike, flow_fractions: npt.ArrayLike = None, axis=None) -> np.ndarray:
     """
     Calculate the weighted average log removal for a system with parallel flows.
 
@@ -112,13 +113,13 @@ def parallel_mean(log_removals, flow_fractions=None, axis=None):
 
     Parameters
     ----------
-    log_removals : array_like
+    log_removals : array-like
         Array of log removal values for each parallel flow.
         Each value represents the log10 reduction of pathogens.
         For multi-dimensional arrays, the parallel mean is computed along
         the specified axis.
 
-    flow_fractions : array_like, optional
+    flow_fractions : array-like, optional
         Array of flow fractions for each parallel flow.
         Must sum to 1.0 along the specified axis and have compatible shape
         with log_removals. If None, equal flow distribution is assumed
@@ -131,7 +132,7 @@ def parallel_mean(log_removals, flow_fractions=None, axis=None):
 
     Returns
     -------
-    float or array_like
+    float or array-like
         The combined log removal value for the parallel system.
         If log_removals is multi-dimensional and axis is specified,
         returns an array with the specified axis removed.
@@ -208,7 +209,7 @@ def parallel_mean(log_removals, flow_fractions=None, axis=None):
     return -np.log10(weighted_decimal_reduction)
 
 
-def gamma_pdf(r, rt_alpha, rt_beta, log_removal_rate):
+def gamma_pdf(r: npt.ArrayLike, rt_alpha: float, rt_beta: float, log_removal_rate: float) -> np.ndarray:
     """
     Compute the probability density function (PDF) of log removal given a gamma distribution for the residence time.
 
@@ -216,7 +217,7 @@ def gamma_pdf(r, rt_alpha, rt_beta, log_removal_rate):
 
     Parameters
     ----------
-    r : array_like
+    r : array-like
         Log removal values at which to compute the PDF.
     rt_alpha : float
         Shape parameter of the gamma distribution for residence time.
@@ -227,7 +228,7 @@ def gamma_pdf(r, rt_alpha, rt_beta, log_removal_rate):
 
     Returns
     -------
-    pdf_values : ndarray
+    pdf : numpy.ndarray
         PDF values corresponding to the input r values.
     """
     # Compute the transformed PDF
@@ -240,7 +241,7 @@ def gamma_pdf(r, rt_alpha, rt_beta, log_removal_rate):
     )
 
 
-def gamma_cdf(r, rt_alpha, rt_beta, log_removal_rate):
+def gamma_cdf(r: npt.ArrayLike, rt_alpha: float, rt_beta: float, log_removal_rate: float) -> np.ndarray:
     """
     Compute the cumulative distribution function (CDF) of log removal given a gamma distribution for the residence time.
 
@@ -248,7 +249,7 @@ def gamma_cdf(r, rt_alpha, rt_beta, log_removal_rate):
 
     Parameters
     ----------
-    r : array_like
+    r : array-like
         Log removal values at which to compute the CDF.
     alpha : float
         Shape parameter of the gamma distribution for residence time.
@@ -259,7 +260,7 @@ def gamma_cdf(r, rt_alpha, rt_beta, log_removal_rate):
 
     Returns
     -------
-    cdf_values : ndarray
+    cdf : numpy.ndarray
         CDF values corresponding to the input r values.
     """
     # Compute t values corresponding to r values
@@ -269,7 +270,7 @@ def gamma_cdf(r, rt_alpha, rt_beta, log_removal_rate):
     return stats.gamma.cdf(t_values, a=rt_alpha, scale=rt_beta)
 
 
-def gamma_mean(rt_alpha, rt_beta, log_removal_rate):
+def gamma_mean(rt_alpha: float, rt_beta: float, log_removal_rate: float) -> float:
     """
     Compute the mean of the log removal distribution given a gamma distribution for the residence time.
 
@@ -296,7 +297,9 @@ def gamma_mean(rt_alpha, rt_beta, log_removal_rate):
     return (log_removal_rate / np.log(10)) * (digamma(rt_alpha) + np.log(rt_beta))
 
 
-def gamma_find_flow_for_target_mean(target_mean, apv_alpha, apv_beta, log_removal_rate):
+def gamma_find_flow_for_target_mean(
+    target_mean: float, apv_alpha: float, apv_beta: float, log_removal_rate: float
+) -> float:
     """
     Find the flow rate flow that produces a specified target mean log removal given a gamma distribution for the residence time.
 

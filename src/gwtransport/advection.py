@@ -17,6 +17,7 @@ Main functions:
 """
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 from gwtransport import gamma
@@ -24,7 +25,13 @@ from gwtransport.residence_time import residence_time
 from gwtransport.utils import compute_time_edges, interp_series, partial_isin
 
 
-def infiltration_to_extraction(cin_series, flow_series, aquifer_pore_volume, retardation_factor=1.0, cout_index="cin"):
+def infiltration_to_extraction(
+    cin_series: pd.Series,
+    flow_series: pd.Series,
+    aquifer_pore_volume: float,
+    retardation_factor: float = 1.0,
+    cout_index: str = "cin",
+) -> pd.Series:
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.
 
@@ -52,8 +59,9 @@ def infiltration_to_extraction(cin_series, flow_series, aquifer_pore_volume, ret
 
     Returns
     -------
-    numpy.ndarray
+    pandas.Series or numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3].
+        Returns pandas.Series when cout_index is 'cin' or 'flow', or numpy.ndarray when cout_index is 'cout'.
 
     Examples
     --------
@@ -101,11 +109,13 @@ def infiltration_to_extraction(cin_series, flow_series, aquifer_pore_volume, ret
     ... )
     """
     # Create flow tedges from the flow series index (assuming it's at the end of bins)
-    flow_tedges = compute_time_edges(tedges=None, tstart=None, tend=flow_series.index, number_of_bins=len(flow_series))
+    flow_tedges = compute_time_edges(
+        tedges=None, tstart=None, tend=pd.DatetimeIndex(flow_series.index), number_of_bins=len(flow_series)
+    )
     rt_array = residence_time(
         flow=flow_series,
         flow_tedges=flow_tedges,
-        index=cin_series.index,
+        index=pd.DatetimeIndex(cin_series.index),
         aquifer_pore_volume=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="infiltration_to_extraction",
@@ -117,10 +127,10 @@ def infiltration_to_extraction(cin_series, flow_series, aquifer_pore_volume, ret
     cout = pd.Series(data=cin_series.values, index=index, name="cout")
 
     if cout_index == "cin":
-        return interp_series(cout, cin_series.index)
+        return interp_series(cout, pd.DatetimeIndex(cin_series.index))
     if cout_index == "flow":
         # If cout_index is 'flow', we need to resample cout to the flow index
-        return interp_series(cout, flow_series.index)
+        return interp_series(cout, pd.DatetimeIndex(flow_series.index))
     if cout_index == "cout":
         # If cout_index is 'cout', we return the cout as is
         return cout.values
@@ -129,7 +139,9 @@ def infiltration_to_extraction(cin_series, flow_series, aquifer_pore_volume, ret
     raise ValueError(msg)
 
 
-def extraction_to_infiltration(cout, flow, aquifer_pore_volume, retardation_factor=1.0, resample_dates=None):
+def extraction_to_infiltration(
+    cout: pd.Series, flow: pd.Series, aquifer_pore_volume: float, retardation_factor: float = 1.0, resample_dates=None
+) -> pd.Series:
     """
     Compute the concentration of the infiltrating water by shifting cout with its residence time.
 
@@ -283,7 +295,7 @@ def gamma_infiltration_to_extraction(
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
-        aquifer_pore_volumes=bins["expected_value"],
+        aquifer_pore_volumes=bins["expected_values"],
         retardation_factor=retardation_factor,
     )
 
@@ -320,13 +332,13 @@ def gamma_extraction_to_infiltration(cout, flow, alpha, beta, n_bins=100, retard
 
 def distribution_infiltration_to_extraction(
     *,
-    cin,
-    flow,
-    tedges,
-    cout_tedges,
-    aquifer_pore_volumes,
-    retardation_factor=1.0,
-):
+    cin: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    aquifer_pore_volumes: npt.ArrayLike,
+    retardation_factor: float = 1.0,
+) -> np.ndarray:
     """
     Compute the concentration of the extracted water using flow-weighted advection.
 
@@ -543,13 +555,13 @@ def _distribution_infiltration_to_extraction_weights(
 
 def distribution_extraction_to_infiltration(
     *,
-    cout,
-    flow,
-    tedges,
-    cin_tedges,
-    aquifer_pore_volumes,
-    retardation_factor=1.0,
-):
+    cout: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
+    cin_tedges: pd.DatetimeIndex,
+    aquifer_pore_volumes: npt.ArrayLike,
+    retardation_factor: float = 1.0,
+) -> np.ndarray:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
 

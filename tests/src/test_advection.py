@@ -53,7 +53,7 @@ def test_infiltration_to_extraction_basic_functionality(sample_time_series):
     )
 
     # Check output type and length
-    assert isinstance(cout, np.ndarray)
+    assert isinstance(cout, pd.Series)
     assert len(cout) == len(cin)
 
     # Check output values are non-negative (ignoring NaN values)
