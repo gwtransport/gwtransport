@@ -43,7 +43,7 @@ def residence_time(
     aquifer_pore_volume : float or array-like of float
         Pore volume of the aquifer [m3].
     index : pandas.DatetimeIndex, optional
-        Index at which to compute the residence time. If left to None, the index of `flow` is used.
+        Index at which to compute the residence time. If left to None, flow_tedges is used.
         Default is None.
     retardation_factor : float
         Retardation factor of the compound in the aquifer [dimensionless].
