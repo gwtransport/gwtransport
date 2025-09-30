@@ -1833,7 +1833,9 @@ def test_gamma_extraction_to_infiltration_roundtrip():
     assert len(valid_indices) >= 200, f"Need at least 200 valid bins, got {len(valid_indices)}"
 
     middle_indices = valid_indices[50:-50]
-    assert len(middle_indices) >= 100, f"Need at least 100 middle bins for stable region test, got {len(middle_indices)}"
+    assert len(middle_indices) >= 100, (
+        f"Need at least 100 middle bins for stable region test, got {len(middle_indices)}"
+    )
 
     middle_start = middle_indices[0]
     middle_end = middle_indices[-1] + 1

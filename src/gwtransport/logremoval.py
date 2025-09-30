@@ -95,7 +95,9 @@ def residence_time_to_log_removal(residence_times: npt.ArrayLike, log_removal_ra
     return log_removal_rate * np.log10(residence_times)
 
 
-def parallel_mean(log_removals: npt.ArrayLike, flow_fractions: npt.ArrayLike = None, axis=None) -> npt.NDArray[np.floating]:
+def parallel_mean(
+    log_removals: npt.ArrayLike, flow_fractions: npt.ArrayLike = None, axis=None
+) -> npt.NDArray[np.floating]:
     """
     Calculate the weighted average log removal for a system with parallel flows.
 
