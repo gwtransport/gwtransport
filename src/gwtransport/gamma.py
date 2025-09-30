@@ -30,8 +30,10 @@ def parse_parameters(
 
     Returns
     -------
-    tuple
-        Shape and scale parameters of the gamma distribution.
+    alpha : float
+        Shape parameter of gamma distribution
+    beta : float
+        Scale parameter of gamma distribution
 
     Raises
     ------
@@ -66,8 +68,10 @@ def mean_std_to_alpha_beta(mean: float, std: float) -> tuple[float, float]:
 
     Returns
     -------
-    tuple
-        Shape and scale parameters of the gamma distribution.
+    alpha : float
+        Shape parameter of gamma distribution
+    beta : float
+        Scale parameter of gamma distribution
     """
     alpha = mean**2 / std**2
     beta = std**2 / mean
@@ -87,8 +91,10 @@ def alpha_beta_to_mean_std(alpha: float, beta: float) -> tuple[float, float]:
 
     Returns
     -------
-    tuple
-        Mean and standard deviation of the gamma distribution.
+    mean : float
+        Mean of the gamma distribution.
+    std : float
+        Standard deviation of the gamma distribution.
     """
     mean = alpha * beta
     std = np.sqrt(alpha) * beta
@@ -103,7 +109,7 @@ def bins(
     std: float | None = None,
     n_bins: int | None = None,
     quantile_edges: np.ndarray | None = None,
-):
+) -> dict[str, npt.NDArray[np.floating]]:
     """
     Divide gamma distribution into bins and compute various bin properties.
 
@@ -131,7 +137,7 @@ def bins(
 
     Returns
     -------
-    dict of arrays with keys:
+    dict of numpy.ndarray with keys:
         - lower_bound: lower bounds of bins (first one is 0)
         - upper_bound: upper bounds of bins (last one is inf)
         - edges: bin edges (lower_bound[0], upper_bound[0], ..., upper_bound[-1])
@@ -194,7 +200,7 @@ def bin_masses(alpha: float, beta: float, bin_edges: npt.ArrayLike) -> npt.NDArr
 
     Returns
     -------
-    array
+    numpy.ndarray
         Probability mass for each bin
     """
     # Validate inputs
