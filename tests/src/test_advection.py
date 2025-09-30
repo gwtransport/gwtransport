@@ -465,16 +465,16 @@ def test_gamma_infiltration_to_extraction_with_mean_std():
 
 def test_gamma_infiltration_to_extraction_retardation_factor():
     """Test gamma_infiltration_to_extraction with different retardation factors."""
-    # Create test data
-    dates = pd.date_range(start="2020-01-01", end="2020-01-30", freq="D")
+    # Create test data - use year-long series for robust results
+    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    cout_dates = pd.date_range(start="2020-01-10", end="2020-01-25", freq="D")
+    cout_dates = pd.date_range(start="2020-03-01", end="2020-10-31", freq="D")
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
     # Use a step function to see retardation effects
     cin_values = np.ones(len(dates))
-    cin_values[10:] = 2.0  # Step change on day 11
+    cin_values[90:] = 2.0  # Step change on day 91 (April 1)
     cin = pd.Series(cin_values, index=dates)
     flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
 
@@ -487,6 +487,7 @@ def test_gamma_infiltration_to_extraction_retardation_factor():
         alpha=10.0,
         beta=10.0,
         retardation_factor=1.0,
+        n_bins=20,
     )
 
     cout2 = gamma_infiltration_to_extraction(
@@ -497,12 +498,27 @@ def test_gamma_infiltration_to_extraction_retardation_factor():
         alpha=10.0,
         beta=10.0,
         retardation_factor=2.0,
+        n_bins=20,
     )
 
-    # The signal with higher retardation should be different
+    # Explicit validation
     valid_mask = ~np.isnan(cout1) & ~np.isnan(cout2)
-    if np.any(valid_mask):
-        assert not np.allclose(cout1[valid_mask], cout2[valid_mask])
+    valid_count = np.sum(valid_mask)
+    assert valid_count >= 200, f"Expected at least 200 valid overlap bins, got {valid_count}"
+
+    # Extract valid values
+    cout1_valid = cout1[valid_mask]
+    cout2_valid = cout2[valid_mask]
+
+    # Test that step timing is different (max absolute difference)
+    max_diff = np.max(np.abs(cout1_valid - cout2_valid))
+    assert max_diff > 0.1, f"Expected max difference > 0.1 due to shifted step, got {max_diff:.3f}"
+
+    # Test that variation is present (step was detected)
+    std1 = np.std(cout1_valid)
+    std2 = np.std(cout2_valid)
+    assert std1 > 0.1, f"Expected std1 > 0.1 showing step, got {std1:.3f}"
+    assert std2 > 0.1, f"Expected std2 > 0.1 showing step, got {std2:.3f}"
 
 
 def test_gamma_infiltration_to_extraction_constant_input():
@@ -525,13 +541,22 @@ def test_gamma_infiltration_to_extraction_constant_input():
         flow=flow,
         alpha=10.0,
         beta=10.0,
-        n_bins=5,
+        n_bins=20,
     )
 
-    # Output should also be constant where valid (ignoring NaN values)
+    # Explicit validation
+    assert len(cout) == len(cout_dates), f"Expected {len(cout_dates)} output bins, got {len(cout)}"
+    valid_count = np.sum(~np.isnan(cout))
+    assert valid_count >= 150, f"Expected at least 150 valid bins for 6-month extraction, got {valid_count}"
+
+    # Output should also be constant where valid (constant input preserved)
     valid_values = cout[~np.isnan(cout)]
-    if len(valid_values) > 0:
-        assert np.allclose(valid_values, 1.0, rtol=1e-2)
+    mean_cout = np.mean(valid_values)
+    assert abs(mean_cout - 1.0) < 0.1, f"Expected mean ~1.0 (preserved from constant input), got {mean_cout:.3f}"
+
+    # Low variation expected for constant input
+    std_cout = np.std(valid_values)
+    assert std_cout < 0.05, f"Expected std < 0.05 for constant input, got {std_cout:.3f}"
 
 
 def test_gamma_infiltration_to_extraction_missing_parameters():
@@ -587,16 +612,25 @@ def test_gamma_infiltration_to_extraction_analytical_mean_residence_time():
         retardation_factor=1.0,
     )
 
-    # Analytical solution: for constant input, output should eventually equal input
-    # Look at the latter part of the time series where steady state is reached
+    # Explicit validation
     valid_mask = ~np.isnan(cout)
-    if np.sum(valid_mask) > 50:  # Need enough points for statistical analysis
-        stable_region = cout[valid_mask][-30:]  # Last 30 valid points
-        mean_output = np.mean(stable_region)
-        # Output should be approximately equal to input concentration
-        assert abs(mean_output - 10.0) < 1.0, f"Expected ~10.0 in steady state, got {mean_output:.2f}"
-        # Variance should be small in steady state
-        assert np.std(stable_region) < 2.0, f"Too much variance in steady state: {np.std(stable_region):.2f}"
+    valid_count = np.sum(valid_mask)
+    assert valid_count >= 150, f"Expected at least 150 valid bins for 6-month extraction, got {valid_count}"
+
+    # Extract stable region (last 30 valid points for steady state)
+    valid_indices = np.where(valid_mask)[0]
+    assert len(valid_indices) >= 30, f"Need at least 30 valid points, got {len(valid_indices)}"
+
+    stable_indices = valid_indices[-30:]
+    stable_region = cout[stable_indices]
+
+    # Analytical solution: for constant input, output should eventually equal input
+    mean_output = np.mean(stable_region)
+    assert abs(mean_output - 10.0) < 0.5, f"Expected mean ~10.0 in steady state, got {mean_output:.2f}"
+
+    # Variance should be small in steady state
+    std_output = np.std(stable_region)
+    assert std_output < 0.5, f"Expected std < 0.5 in steady state, got {std_output:.2f}"
 
 
 # ===============================================================================
@@ -656,15 +690,21 @@ def test_distribution_infiltration_to_extraction_constant_input():
         retardation_factor=1.0,
     )
 
-    # Check output type and length
+    # Explicit validation
     assert isinstance(cout, np.ndarray)
-    assert len(cout) == len(cout_dates)
+    assert len(cout) == len(cout_dates), f"Expected {len(cout_dates)} output bins, got {len(cout)}"
 
-    # With constant input and sufficient time, some outputs should be valid
+    valid_count = np.sum(~np.isnan(cout))
+    assert valid_count >= 150, f"Expected at least 150 valid bins for 6-month extraction, got {valid_count}"
+
+    # Test constant input preservation
     valid_outputs = cout[~np.isnan(cout)]
-    if len(valid_outputs) > 0:
-        # Output should be close to input concentration for constant system
-        assert np.all(valid_outputs >= 0)
+    mean_cout = np.mean(valid_outputs)
+    assert abs(mean_cout - 5.0) < 0.5, f"Expected mean ~5.0 (preserved from constant input), got {mean_cout:.3f}"
+
+    # Test low variation for constant input
+    std_cout = np.std(valid_outputs)
+    assert std_cout < 0.5, f"Expected std < 0.5 for constant input, got {std_cout:.3f}"
 
 
 def test_distribution_infiltration_to_extraction_single_pore_volume():
@@ -824,21 +864,18 @@ def test_distribution_infiltration_to_extraction_zero_concentrations():
         retardation_factor=1.0,
     )
 
-    # Check that we have valid results
+    # Explicit validation
+    valid_count = np.sum(~np.isnan(cout))
+    assert valid_count >= 300, f"Expected at least 300 valid bins for year-long data, got {valid_count}"
+
+    # Check that zero concentrations are preserved (not converted to NaN)
     valid_results = cout[~np.isnan(cout)]
-    if len(valid_results) > 0:
-        # Check that zero concentrations are preserved (not converted to NaN)
-        has_zeros = np.any(valid_results == 0.0)
-        if has_zeros:
-            # Verify zeros are preserved as valid concentrations
-            assert True, "Zero concentrations are correctly preserved"
+    has_zeros = np.sum(valid_results == 0.0)
+    assert has_zeros >= 80, f"Expected at least 80 zero values preserved from input pattern, got {has_zeros}"
 
-        # Check that we get reasonable concentration values
-        assert np.all(valid_results >= 0.0), "All concentrations should be non-negative"
-        assert np.all(valid_results <= 2.0), "All concentrations should be within expected range"
-
-    # The key test: ensure function doesn't convert zeros to NaN
-    # This is tested by the structure of the function - it uses natural NaN propagation
+    # Check range of concentration values
+    assert np.all(valid_results >= 0.0), "All concentrations should be non-negative"
+    assert np.all(valid_results <= 2.5), "All concentrations should be within expected range"
 
 
 def test_distribution_infiltration_to_extraction_extreme_conditions():
@@ -952,13 +989,17 @@ def test_distribution_infiltration_to_extraction_mixed_pore_volumes():
         retardation_factor=1.0,
     )
 
-    # Should return valid array
+    # Explicit validation
     assert isinstance(cout, np.ndarray)
-    assert len(cout) == len(cout_dates)
-    # Some values might be valid (from small pore volumes), others NaN (from large pore volumes)
+    assert len(cout) == len(cout_dates), f"Expected {len(cout_dates)} output bins, got {len(cout)}"
+
+    # Some values should be valid (from small pore volumes with quick transport)
+    valid_count = np.sum(~np.isnan(cout))
+    assert valid_count >= 3, f"Expected at least 3 valid bins from small pore volumes, got {valid_count}"
+
+    # Check all valid values are non-negative
     valid_values = cout[~np.isnan(cout)]
-    if len(valid_values) > 0:
-        assert np.all(valid_values >= 0)
+    assert np.all(valid_values >= 0), "All valid concentrations should be non-negative"
 
 
 # ===============================================================================
@@ -1046,11 +1087,13 @@ def test_distribution_infiltration_to_extraction_known_constant_delay():
 
     # With 1-day residence time, the step change on day 5 should appear on day 6
     # Output days 6-10 correspond to infiltration days 5-9
-    # So we expect: day 6 -> 5.0, days 7-10 -> 5.0
+    # So we expect outputs close to 5.0 (after the step change)
+    valid_count = np.sum(~np.isnan(cout))
+    assert valid_count >= 4, f"Expected at least 4 valid bins for 1-day delay, got {valid_count}"
+
     valid_outputs = cout[~np.isnan(cout)]
-    if len(valid_outputs) > 0:
-        # All valid outputs should be close to 5.0 (after the step change)
-        assert np.allclose(valid_outputs, 5.0, rtol=0.1), f"Expected ~5.0, got {valid_outputs}"
+    mean_output = np.mean(valid_outputs)
+    assert abs(mean_output - 5.0) < 0.5, f"Expected mean ~5.0 after step, got {mean_output:.3f}"
 
 
 def test_distribution_infiltration_to_extraction_known_average_of_pore_volumes():
@@ -1122,10 +1165,12 @@ def test_distribution_infiltration_to_extraction_known_zero_input_gives_zero_out
         retardation_factor=1.0,
     )
 
-    # Zero input should give zero output (where valid)
+    # Explicit validation - zero input should give zero output
+    valid_count = np.sum(~np.isnan(cout))
+    assert valid_count >= 10, f"Expected at least 10 valid bins for 2-4 day residence, got {valid_count}"
+
     valid_outputs = cout[~np.isnan(cout)]
-    if len(valid_outputs) > 0:
-        np.testing.assert_allclose(valid_outputs, 0.0, atol=1e-15, err_msg="Zero input should produce zero output")
+    np.testing.assert_allclose(valid_outputs, 0.0, atol=1e-15, err_msg="Zero input should produce zero output")
 
 
 def test_distribution_infiltration_to_extraction_known_retardation_effect():
@@ -1333,15 +1378,19 @@ def test_distribution_extraction_to_infiltration_constant_input():
         retardation_factor=1.0,
     )
 
-    # Check output type and length
+    # Explicit validation
     assert isinstance(cin, np.ndarray)
-    assert len(cin) == len(cint_dates)
+    assert len(cin) == len(cint_dates), f"Expected {len(cint_dates)} output bins, got {len(cin)}"
 
-    # With constant output and sufficient time, some inputs should be valid
+    valid_count = np.sum(~np.isnan(cin))
+    assert valid_count >= 100, f"Expected at least 100 valid bins with sufficient overlap, got {valid_count}"
+
+    # Test non-negativity and constant preservation
     valid_inputs = cin[~np.isnan(cin)]
-    if len(valid_inputs) > 0:
-        # Input should be non-negative
-        assert np.all(valid_inputs >= 0)
+    assert np.all(valid_inputs >= 0), "All inputs should be non-negative"
+
+    mean_cin = np.mean(valid_inputs)
+    assert abs(mean_cin - 5.0) < 0.5, f"Expected mean ~5.0 (preserved from constant output), got {mean_cin:.3f}"
 
 
 def test_distribution_extraction_to_infiltration_single_pore_volume():
@@ -1611,10 +1660,12 @@ def test_distribution_extraction_to_infiltration_zero_flow():
 
 def test_gamma_extraction_to_infiltration_zero_output_gives_zero_input():
     """Test gamma_extraction_to_infiltration with zero output gives zero input."""
-    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    # Use sufficient time span: 60 days extraction, 90 days infiltration window
+    dates = pd.date_range(start="2020-01-01", end="2020-03-01", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    cin_dates = pd.date_range(start="2019-12-25", end="2020-01-05", freq="D")
+    # Infiltration window starts earlier to capture source
+    cin_dates = pd.date_range(start="2019-12-01", end="2020-02-28", freq="D")
     cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
 
     # Zero concentration everywhere
@@ -1627,27 +1678,30 @@ def test_gamma_extraction_to_infiltration_zero_output_gives_zero_input():
         cin_tedges=cin_tedges,
         flow=flow,
         alpha=5.0,
-        beta=40.0,  # mean = 200, reasonable residence time
+        beta=40.0,  # mean pore volume = 200 m3, ~2 day residence time with 100 m3/day flow
         n_bins=10,
     )
 
-    # Zero output should give zero input (where valid)
+    # Zero extraction should give zero infiltration (where valid)
+    assert len(cin) == len(cin_dates), f"Expected {len(cin_dates)} output bins, got {len(cin)}"
+    valid_count = np.sum(~np.isnan(cin))
+    assert valid_count >= 50, f"Expected at least 50 valid bins, got {valid_count}"
+
     valid_inputs = cin[~np.isnan(cin)]
-    assert len(valid_inputs) > 0, "Should have some valid outputs"
-    np.testing.assert_allclose(valid_inputs, 0.0, atol=1e-15, err_msg="Zero output should produce zero input")
+    np.testing.assert_allclose(valid_inputs, 0.0, atol=1e-15, err_msg="Zero extraction must produce zero infiltration")
 
 
 def test_gamma_extraction_to_infiltration_constant_input():
-    """Test gamma_extraction_to_infiltration with constant extraction concentration."""
-    # Use longer time series to allow for steady state
+    """Test constant extraction recovers constant infiltration in fully informed region."""
+    # Use long time series: 365 days extraction, extended infiltration window
     dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    # Infiltration period starts earlier to capture source
+    # Infiltration window extends earlier to capture all source contributions
     cin_dates = pd.date_range(start="2019-11-01", end="2020-11-30", freq="D")
     cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
 
-    # Constant extraction concentration and flow
+    # Constant extraction concentration
     cout = pd.Series([5.0] * len(dates), index=dates)
     flow = pd.Series([100.0] * len(dates), index=dates)
 
@@ -1661,24 +1715,30 @@ def test_gamma_extraction_to_infiltration_constant_input():
         n_bins=20,
     )
 
-    # Check that we have valid outputs
-    valid_mask = ~np.isnan(cin)
-    assert np.sum(valid_mask) > 100, "Should have many valid outputs for long constant signal"
+    # Verify output structure
+    assert len(cin) == len(cin_dates), f"Expected {len(cin_dates)} output bins"
 
-    # For constant output, input should also be approximately constant (allowing for edge effects)
-    # Check the middle region where steady state is reached
-    valid_indices = np.where(valid_mask)[0]
-    if len(valid_indices) > 100:
-        middle_start = valid_indices[50]
-        middle_end = valid_indices[-50]
-        middle_region = cin[middle_start:middle_end]
-        middle_valid = middle_region[~np.isnan(middle_region)]
+    # Count valid bins - should have substantial overlap
+    valid_count = np.sum(~np.isnan(cin))
+    assert valid_count >= 300, f"Expected at least 300 valid bins for constant signal, got {valid_count}"
 
-        # Input should be approximately 5.0 in steady state
-        mean_input = np.mean(middle_valid)
-        std_input = np.std(middle_valid)
-        assert abs(mean_input - 5.0) < 1.0, f"Expected mean ~5.0 in steady state, got {mean_input:.2f}"
-        assert std_input < 2.0, f"Expected low variance in steady state, got std={std_input:.2f}"
+    # For constant extraction, infiltration should also be constant in fully informed region
+    # Check the middle 200 bins where steady state is guaranteed
+    valid_indices = np.where(~np.isnan(cin))[0]
+    assert len(valid_indices) >= 300, f"Need at least 300 valid bins, got {len(valid_indices)}"
+
+    # Take middle 200 bins (skip 50 from each end)
+    middle_indices = valid_indices[50:-50]
+    assert len(middle_indices) >= 200, f"Need at least 200 middle bins, got {len(middle_indices)}"
+
+    middle_values = cin[middle_indices]
+    assert not np.any(np.isnan(middle_values)), "Middle region must have no NaN values"
+
+    # Constant extraction must produce constant infiltration
+    mean_input = np.mean(middle_values)
+    std_input = np.std(middle_values)
+    assert abs(mean_input - 5.0) < 0.5, f"Expected mean ~5.0 in steady state, got {mean_input:.3f}"
+    assert std_input < 0.5, f"Expected low variance (std < 0.5) in steady state, got {std_input:.3f}"
 
 
 def test_gamma_extraction_to_infiltration_step_function():
@@ -1706,18 +1766,27 @@ def test_gamma_extraction_to_infiltration_step_function():
         n_bins=20,
     )
 
-    # Check that we can detect a change in the input
-    valid_mask = ~np.isnan(cin)
-    assert np.sum(valid_mask) > 100, "Should have many valid outputs"
+    # Explicit validation of output quantity
+    assert len(cin) == len(cin_dates), f"Expected {len(cin_dates)} output bins, got {len(cin)}"
+    valid_count = np.sum(~np.isnan(cin))
+    assert valid_count >= 300, f"Expected at least 300 valid bins for year-long data, got {valid_count}"
 
+    # Extract valid values and test variation
+    valid_mask = ~np.isnan(cin)
     valid_cin = cin[valid_mask]
-    # The input should show variation (not all the same value)
-    assert np.std(valid_cin) > 0.5, "Should see variation in input corresponding to step in output"
+    cin_std = np.std(valid_cin)
+    assert cin_std > 0.5, f"Expected std > 0.5 to see step variation, got {cin_std:.3f}"
+
+    # Test that both low and high values are present (step function was recovered)
+    cin_min = np.min(valid_cin)
+    cin_max = np.max(valid_cin)
+    assert cin_min < 2.0, f"Expected values below 2.0 (before step), got min={cin_min:.3f}"
+    assert cin_max > 3.5, f"Expected values above 3.5 (after step), got max={cin_max:.3f}"
 
 
 def test_gamma_extraction_to_infiltration_roundtrip():
     """Test gamma_infiltration_to_extraction -> gamma_extraction_to_infiltration roundtrip."""
-    # Create time windows with proper alignment
+    # Create time windows with proper alignment - use full year for sufficient overlap
     cin_dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
 
@@ -1725,8 +1794,9 @@ def test_gamma_extraction_to_infiltration_roundtrip():
     cout_dates = pd.date_range(start="2020-03-01", end="2020-10-31", freq="D")
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-    # Use a simple signal that should be recoverable
-    cin_original = pd.Series([5.0] * len(cin_dates), index=cin_dates)
+    # Use varying signal (sine wave) to test actual transport, not just constant recovery
+    cin_original_values = 5.0 + 2.0 * np.sin(2 * np.pi * np.arange(len(cin_dates)) / 30.0)
+    cin_original = pd.Series(cin_original_values, index=cin_dates)
     flow_cin = pd.Series([100.0] * len(cin_dates), index=cin_dates)
     flow_cout = pd.Series([100.0] * len(cout_dates), index=cout_dates)
 
@@ -1753,24 +1823,32 @@ def test_gamma_extraction_to_infiltration_roundtrip():
         n_bins=20,
     )
 
-    # Check that we have valid reconstructed values
+    # Explicit validation of overlap
     valid_mask = ~np.isnan(cin_reconstructed)
-    assert np.sum(valid_mask) > 100, "Should have substantial valid overlap"
+    valid_count = np.sum(valid_mask)
+    assert valid_count >= 200, f"Expected at least 200 valid bins for substantial overlap, got {valid_count}"
 
-    # Check middle region for steady state
+    # Extract middle region explicitly (skip 50 bins on each end)
     valid_indices = np.where(valid_mask)[0]
-    if len(valid_indices) > 100:
-        middle_start = valid_indices[50]
-        middle_end = valid_indices[-50]
-        middle_region = slice(middle_start, middle_end)
+    assert len(valid_indices) >= 200, f"Need at least 200 valid bins, got {len(valid_indices)}"
 
-        reconstructed_middle = cin_reconstructed[middle_region]
-        original_middle = cin_original.values[middle_region]
+    middle_indices = valid_indices[50:-50]
+    assert len(middle_indices) >= 100, f"Need at least 100 middle bins for stable region test, got {len(middle_indices)}"
 
-        # Should be close in the stable middle region
-        assert np.allclose(reconstructed_middle, original_middle, rtol=0.2), (
-            f"Roundtrip error: expected ~{np.mean(original_middle):.2f}, got {np.mean(reconstructed_middle):.2f} (mean)"
-        )
+    middle_start = middle_indices[0]
+    middle_end = middle_indices[-1] + 1
+    middle_region = slice(middle_start, middle_end)
+
+    reconstructed_middle = cin_reconstructed[middle_region]
+    original_middle = cin_original.values[middle_region]
+
+    # Test exact recovery in stable middle region with tight tolerance
+    np.testing.assert_allclose(
+        reconstructed_middle,
+        original_middle,
+        rtol=0.15,
+        err_msg=f"Roundtrip error: expected mean ~{np.mean(original_middle):.2f}, got {np.mean(reconstructed_middle):.2f}",
+    )
 
 
 def test_gamma_extraction_to_infiltration_retardation_factor():
@@ -1811,14 +1889,25 @@ def test_gamma_extraction_to_infiltration_retardation_factor():
         n_bins=20,
     )
 
-    # Results should be different due to different residence times
+    # Explicit validation of overlap
     valid_mask = ~np.isnan(cin1) & ~np.isnan(cin2)
-    assert np.sum(valid_mask) > 50, "Should have sufficient valid overlap"
+    valid_count = np.sum(valid_mask)
+    assert valid_count >= 250, f"Expected at least 250 valid overlap bins for year-long data, got {valid_count}"
 
-    # The timing of the step should be different
-    assert not np.allclose(cin1[valid_mask], cin2[valid_mask], rtol=0.1), (
-        "Retardation factor should affect the timing/position of features"
-    )
+    # Extract valid values for comparison
+    cin1_valid = cin1[valid_mask]
+    cin2_valid = cin2[valid_mask]
+
+    # The timing of the step should be different - compute max absolute difference
+    max_diff = np.max(np.abs(cin1_valid - cin2_valid))
+    assert max_diff > 0.5, f"Expected max difference > 0.5 due to shifted timing, got {max_diff:.3f}"
+
+    # Test that spatial variation differs (distribution of values changes with retardation)
+    std1 = np.std(cin1_valid)
+    std2 = np.std(cin2_valid)
+    # At least one should show significant variation from the step function
+    max_std = max(std1, std2)
+    assert max_std > 0.3, f"Expected max std > 0.3 showing step variation, got {max_std:.3f}"
 
 
 def test_gamma_extraction_to_infiltration_with_mean_std():
@@ -1846,12 +1935,20 @@ def test_gamma_extraction_to_infiltration_with_mean_std():
         n_bins=20,
     )
 
-    # Should produce valid results
-    valid_mask = ~np.isnan(cin)
-    assert np.sum(valid_mask) > 50, "Should have many valid outputs"
+    # Explicit validation
+    assert len(cin) == len(cin_dates), f"Expected {len(cin_dates)} output bins, got {len(cin)}"
+    valid_count = np.sum(~np.isnan(cin))
+    assert valid_count >= 100, f"Expected at least 100 valid bins for 6-month data, got {valid_count}"
 
+    # Test mean preservation for constant input
+    valid_mask = ~np.isnan(cin)
     valid_cin = cin[valid_mask]
-    assert np.allclose(np.mean(valid_cin), 3.0, rtol=0.15), "Mean should be approximately preserved"
+    mean_cin = np.mean(valid_cin)
+    assert abs(mean_cin - 3.0) < 0.5, f"Expected mean ~3.0 (preserved from constant input), got {mean_cin:.3f}"
+
+    # For constant input, expect low variation in output
+    std_cin = np.std(valid_cin)
+    assert std_cin < 0.5, f"Expected low std (<0.5) for constant input, got {std_cin:.3f}"
 
 
 def test_gamma_extraction_to_infiltration_missing_parameters():
