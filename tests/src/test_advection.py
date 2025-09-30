@@ -134,7 +134,7 @@ def test_infiltration_to_extraction_series_pandas_series_input():
 
 
 def test_infiltration_to_extraction_series_time_edges_consistency():
-    """Test output time edges are monotonically increasing for valid values."""
+    """Test output time edges are monotonically increasing in valid region."""
     dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
     cin = np.random.rand(len(dates)) * 10.0
@@ -147,21 +147,28 @@ def test_infiltration_to_extraction_series_time_edges_consistency():
         aquifer_pore_volume=500.0,
     )
 
-    # For valid (non-NaT) time edges, they should be monotonically increasing
-    valid_start = result["start"].notna()
-    if valid_start.sum() > 1:
-        start_diffs = result.loc[valid_start, "start"].diff()[1:]
-        assert (start_diffs > pd.Timedelta(0)).all()
+    # Forward direction: NaT values at the end (indices 6-9 have NaT start, indices 5-9 have NaT end)
+    # With pore_volume=500 and flow=100, residence time = 5 days
+    # Valid bins are 0-5 for start (6 bins), 0-4 for end (5 bins)
+    valid_start_count = result["start"].notna().sum()
+    valid_end_count = result["end"].notna().sum()
+    assert valid_start_count == 6, f"Expected 6 valid start times, got {valid_start_count}"
+    assert valid_end_count == 5, f"Expected 5 valid end times, got {valid_end_count}"
 
-    valid_end = result["end"].notna()
-    if valid_end.sum() > 1:
-        end_diffs = result.loc[valid_end, "end"].diff()[1:]
-        assert (end_diffs > pd.Timedelta(0)).all()
+    # Start times in valid region should be monotonically increasing
+    valid_starts = result.loc[result["start"].notna(), "start"]
+    start_diffs = valid_starts.diff()[1:]
+    assert (start_diffs > pd.Timedelta(0)).all(), "Valid start times must be monotonically increasing"
 
-    # Where both are valid, end should be after start
-    valid_both = valid_start & valid_end
-    if valid_both.any():
-        assert (result.loc[valid_both, "end"] > result.loc[valid_both, "start"]).all()
+    # End times in valid region should be monotonically increasing
+    valid_ends = result.loc[result["end"].notna(), "end"]
+    end_diffs = valid_ends.diff()[1:]
+    assert (end_diffs > pd.Timedelta(0)).all(), "Valid end times must be monotonically increasing"
+
+    # Where both start and end are valid, end should be after start
+    valid_both = result["start"].notna() & result["end"].notna()
+    assert valid_both.sum() == 5, f"Expected 5 bins with both valid, got {valid_both.sum()}"
+    assert (result.loc[valid_both, "end"] > result.loc[valid_both, "start"]).all()
 
 
 # ===============================================================================
@@ -171,7 +178,8 @@ def test_infiltration_to_extraction_series_time_edges_consistency():
 
 def test_extraction_to_infiltration_series_output_structure():
     """Test that extraction_to_infiltration_series returns correct DataFrame structure."""
-    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    # Use dates starting later to ensure we have valid backward data
+    dates = pd.date_range(start="2020-01-10", end="2020-01-20", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
     cout = np.ones(len(dates)) * 10.0
     flow = np.ones(len(dates)) * 100.0
@@ -186,13 +194,18 @@ def test_extraction_to_infiltration_series_output_structure():
     assert isinstance(result, pd.DataFrame)
     assert list(result.columns) == ["start", "end", "cin"]
     assert len(result) == len(dates)
-    # Check valid (non-NaT) timestamps
-    valid_start = result["start"].notna()
-    if valid_start.any():
-        assert isinstance(result.loc[valid_start, "start"].iloc[0], pd.Timestamp)
-    valid_end = result["end"].notna()
-    if valid_end.any():
-        assert isinstance(result.loc[valid_end, "end"].iloc[0], pd.Timestamp)
+
+    # For backward direction, we expect some NaT values at the beginning
+    # But we must have at least 6 valid entries (going back 5 days from 2020-01-10)
+    valid_start_count = result["start"].notna().sum()
+    assert valid_start_count >= 6, f"Expected at least 6 valid start times, got {valid_start_count}"
+
+    valid_end_count = result["end"].notna().sum()
+    assert valid_end_count >= 7, f"Expected at least 7 valid end times, got {valid_end_count}"
+
+    # Check that valid entries are Timestamps
+    assert isinstance(result["start"].dropna().iloc[0], pd.Timestamp)
+    assert isinstance(result["end"].dropna().iloc[0], pd.Timestamp)
 
 
 def test_extraction_to_infiltration_series_constant_input():
@@ -209,18 +222,18 @@ def test_extraction_to_infiltration_series_constant_input():
         aquifer_pore_volume=500.0,
     )
 
-    # Constant input should produce constant output
+    # Constant input should produce constant output (concentrations preserved)
     np.testing.assert_array_almost_equal(result["cin"].values, cout)
 
-    # Check valid time shifts (non-NaT entries)
-    # Expected: first 5 bins have NaT, then valid times starting at 2020-01-09
-    valid_idx = result["start"].notna()
-    assert valid_idx.sum() > 0, "Should have some valid time edges"
+    # With pore_volume=500 and flow=100, residence time = 5 days
+    # First valid start time should be at index 5: tedges[5] - 5 days = 2020-01-14 - 5 days = 2020-01-09
+    first_valid_idx = result["start"].notna().idxmax()
+    assert first_valid_idx == 5, f"First valid index should be 5, got {first_valid_idx}"
+    assert result["start"].iloc[5] == pd.Timestamp("2020-01-09")
 
-    # First valid start time should be 2020-01-09 (tedges[4] - 5 days, where tedges[4]=2020-01-14)
-    first_valid_idx = valid_idx.idxmax()
-    if first_valid_idx == 5:  # Index 5 corresponds to tedges[5] = 2020-01-14
-        assert result["start"].iloc[first_valid_idx] == pd.Timestamp("2020-01-09")
+    # Count NaT values - should be exactly 5 at the beginning
+    nat_count = result["start"].isna().sum()
+    assert nat_count == 5, f"Expected exactly 5 NaT values, got {nat_count}"
 
 
 def test_extraction_to_infiltration_series_retardation_factor():
@@ -246,25 +259,32 @@ def test_extraction_to_infiltration_series_retardation_factor():
         retardation_factor=2.0,
     )
 
-    # With retardation factor of 2, more bins will have NaT (longer residence time)
-    valid_no_retard = result_no_retard["start"].notna().sum()
-    valid_retard = result_retard["start"].notna().sum()
-    assert valid_retard < valid_no_retard, "Higher retardation should result in fewer valid bins"
+    # With retardation factor of 2, more bins will have NaT (longer residence time means going further back)
+    # retardation=1.0: 5 days back -> 5 NaT bins
+    # retardation=2.0: 10 days back -> 10 NaT bins
+    nat_no_retard = result_no_retard["start"].isna().sum()
+    nat_retard = result_retard["start"].isna().sum()
+    assert nat_no_retard == 5, f"Expected 5 NaT bins with retardation=1.0, got {nat_no_retard}"
+    assert nat_retard == 10, f"Expected 10 NaT bins with retardation=2.0, got {nat_retard}"
 
-    # For bins that are valid in both, check relative time shifts
-    both_valid = result_no_retard["start"].notna() & result_retard["start"].notna()
-    if both_valid.sum() > 0:
-        # Pick a bin valid in both
-        idx = both_valid.idxmax()
-        shift_no_retard = result_no_retard["start"].iloc[idx] - tedges[idx]
-        shift_retard = result_retard["start"].iloc[idx] - tedges[idx]
-        # Retardation factor of 2 should double the magnitude of time shift
-        assert abs(shift_retard) == abs(shift_no_retard) * 2
+    # For the last bin (index 10), check time shifts
+    # Both should have valid values for the last bin
+    assert pd.notna(result_no_retard["start"].iloc[10])
+    assert pd.notna(result_retard["start"].iloc[10])
+
+    shift_no_retard = result_no_retard["start"].iloc[10] - tedges[10]
+    shift_retard = result_retard["start"].iloc[10] - tedges[10]
+
+    # Retardation factor of 2 should double the magnitude of time shift
+    assert shift_retard == shift_no_retard * 2
+    assert shift_no_retard == pd.Timedelta(days=-5)
+    assert shift_retard == pd.Timedelta(days=-10)
 
 
 def test_extraction_to_infiltration_series_pandas_series_input():
     """Test function accepts pandas Series as input."""
-    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    # Use dates starting later to have enough backward data
+    dates = pd.date_range(start="2020-01-10", end="2020-01-20", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
     cout = pd.Series(np.ones(len(dates)) * 10.0, index=dates)
     flow = pd.Series(np.ones(len(dates)) * 100.0, index=dates)
@@ -282,8 +302,9 @@ def test_extraction_to_infiltration_series_pandas_series_input():
 
 
 def test_extraction_to_infiltration_series_time_edges_consistency():
-    """Test output time edges are monotonically increasing for valid values."""
-    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    """Test output time edges are monotonically increasing in valid region."""
+    # Use dates starting later to have sufficient backward data
+    dates = pd.date_range(start="2020-01-10", end="2020-01-20", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
     cout = np.random.rand(len(dates)) * 10.0
     flow = np.ones(len(dates)) * 100.0
@@ -295,30 +316,42 @@ def test_extraction_to_infiltration_series_time_edges_consistency():
         aquifer_pore_volume=500.0,
     )
 
-    # For valid (non-NaT) time edges, they should be monotonically increasing
+    # With pore_volume=500 and flow=100, we go back 5 days, so first 5 bins have NaT
+    # Bins 5-10 should have valid times
     valid_start = result["start"].notna()
-    if valid_start.sum() > 1:
-        start_diffs = result.loc[valid_start, "start"].diff()[1:]
-        assert (start_diffs > pd.Timedelta(0)).all()
-
     valid_end = result["end"].notna()
-    if valid_end.sum() > 1:
-        end_diffs = result.loc[valid_end, "end"].diff()[1:]
-        assert (end_diffs > pd.Timedelta(0)).all()
+
+    # Explicit count checks
+    assert valid_start.sum() == 6, f"Expected 6 valid start times, got {valid_start.sum()}"
+    assert valid_end.sum() == 7, f"Expected 7 valid end times, got {valid_end.sum()}"
+
+    # Check monotonicity in the valid region (indices 5-10)
+    valid_starts = result.loc[valid_start, "start"]
+    start_diffs = valid_starts.diff()[1:]
+    assert (start_diffs > pd.Timedelta(0)).all(), "Valid start times must be monotonically increasing"
+
+    valid_ends = result.loc[valid_end, "end"]
+    end_diffs = valid_ends.diff()[1:]
+    assert (end_diffs > pd.Timedelta(0)).all(), "Valid end times must be monotonically increasing"
 
     # Where both are valid, end should be after start
     valid_both = valid_start & valid_end
-    if valid_both.any():
-        assert (result.loc[valid_both, "end"] > result.loc[valid_both, "start"]).all()
+    assert valid_both.sum() == 6, f"Expected 6 bins with both valid, got {valid_both.sum()}"
+    assert (result.loc[valid_both, "end"] > result.loc[valid_both, "start"]).all()
 
 
 def test_extraction_to_infiltration_series_symmetry_with_infiltration():
-    """Test symmetry: infiltration -> extraction -> infiltration should recover original."""
-    dates = pd.date_range(start="2020-01-10", end="2020-01-20", freq="D")
+    """Test symmetry: roundtrip recovers center points exactly in fully informed region."""
+    # Use long time series: 30 days with 5-day residence time
+    # Forward loses last ~5 days (uninformed future), backward loses first ~5 days (uninformed past)
+    # Center 20 days should be fully informed in both directions, allowing perfect roundtrip
+    dates = pd.date_range(start="2020-01-01", end="2020-01-30", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    cin_original = np.ones(len(dates)) * 10.0
+
+    # Use non-trivial varying input to verify actual transport (not just constant)
+    cin_original = 10.0 + 5.0 * np.sin(2 * np.pi * np.arange(len(dates)) / 10.0)
     flow = np.ones(len(dates)) * 100.0
-    pore_volume = 500.0
+    pore_volume = 500.0  # 5 days residence time
 
     # Forward: infiltration -> extraction
     result_forward = infiltration_to_extraction_series(
@@ -328,21 +361,44 @@ def test_extraction_to_infiltration_series_symmetry_with_infiltration():
         aquifer_pore_volume=pore_volume,
     )
 
-    # Backward: extraction -> infiltration
-    # Use the output time edges from forward pass
-    tedges_out = pd.DatetimeIndex(list(result_forward["start"]) + [result_forward["end"].iloc[-1]])
+    # Forward direction: first part is fully informed, last ~5 bins have NaT
+    forward_valid = result_forward["start"].notna()
+    forward_valid_count = forward_valid.sum()
+    assert forward_valid_count >= 25, f"Expected at least 25 valid forward bins, got {forward_valid_count}"
+
+    # Backward: extraction -> infiltration using forward output
     result_backward = extraction_to_infiltration_series(
         cout=result_forward["cout"].values,
         flow=flow,
-        tedges=tedges_out,
+        tedges=pd.DatetimeIndex([*result_forward["start"], result_forward["end"].iloc[-1]]),
         aquifer_pore_volume=pore_volume,
     )
 
-    # The recovered infiltration times should match original (within valid range)
-    # Compare the start times
-    assert result_backward["start"].iloc[0] == tedges[0]
-    assert result_backward["end"].iloc[-1] == tedges[-1]
-    np.testing.assert_array_almost_equal(result_backward["cin"].values, cin_original)
+    # Backward direction: first ~5 bins have NaT, rest is informed
+    backward_valid = result_backward["start"].notna()
+    backward_valid_count = backward_valid.sum()
+    assert backward_valid_count >= 20, f"Expected at least 20 valid backward bins, got {backward_valid_count}"
+
+    # Find the fully informed region: where both forward and backward have valid data
+    # This is the center portion where we have enough history AND enough future data
+    fully_informed = forward_valid & backward_valid
+    fully_informed_count = fully_informed.sum()
+    assert fully_informed_count >= 20, f"Expected at least 20 fully informed bins, got {fully_informed_count}"
+
+    # In the fully informed region, the roundtrip MUST recover the original exactly
+    cin_recovered = result_backward["cin"].values[fully_informed]
+    cin_expected = cin_original[fully_informed]
+    np.testing.assert_array_almost_equal(
+        cin_recovered,
+        cin_expected,
+        decimal=10,
+        err_msg="Roundtrip must recover original values exactly in fully informed region",
+    )
+
+    # Verify time alignment is correct in fully informed region
+    first_informed_idx = fully_informed.idxmax()
+    assert first_informed_idx >= 5, f"First fully informed index should be >= 5, got {first_informed_idx}"
+    assert result_backward["start"].iloc[first_informed_idx] == tedges[first_informed_idx]
 
 
 def test_gamma_infiltration_to_extraction_basic_functionality():
