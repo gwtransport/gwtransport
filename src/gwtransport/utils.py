@@ -19,7 +19,7 @@ cache_dir = Path(__file__).parent.parent.parent / "cache"
 
 def linear_interpolate(
     x_ref: npt.ArrayLike, y_ref: npt.ArrayLike, x_query: npt.ArrayLike, left=None, right=None
-) -> np.ndarray:
+) -> npt.NDArray[np.floating]:
     """
     Linear interpolation on monotonically increasing data.
 
@@ -102,7 +102,7 @@ def interp_series(series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwa
     return pd.Series(interp_obj(dt_interp), index=index_new)
 
 
-def diff(a: npt.ArrayLike, alignment: str = "centered") -> np.ndarray:
+def diff(a: npt.ArrayLike, alignment: str = "centered") -> npt.NDArray[np.floating]:
     """Compute the cell widths for a given array of cell coordinates.
 
     If alignment is "centered", the coordinates are assumed to be centered in the cells.
@@ -274,7 +274,7 @@ def linear_average(  # noqa: C901
     return result
 
 
-def partial_isin(bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -> np.ndarray:
+def partial_isin(bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -> npt.NDArray[np.floating]:
     """
     Calculate the fraction of each input bin that overlaps with each output bin.
 
@@ -360,7 +360,7 @@ def partial_isin(bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -> n
     return overlap_widths / in_width
 
 
-def time_bin_overlap(tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> np.ndarray:
+def time_bin_overlap(tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.NDArray[np.floating]:
     """
     Calculate the fraction of each time bin that overlaps with each time range.
 
@@ -881,7 +881,7 @@ def solve_underdetermined_system(
 
 def _optimize_nullspace_coefficients(
     x_ls: np.ndarray, nullspace_basis: np.ndarray, nullspace_objective: str, optimization_method: str
-) -> np.ndarray:
+) -> npt.NDArray[np.floating]:
     """Optimize coefficients in the nullspace to minimize the objective."""
     nullrank = nullspace_basis.shape[1]
     objective_func = _get_nullspace_objective_function(nullspace_objective)

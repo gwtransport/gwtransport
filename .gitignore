@@ -168,3 +168,4 @@ cython_debug/
 /.vscode
 uv.lock
 **/.DS_Store
+CLAUDE.md

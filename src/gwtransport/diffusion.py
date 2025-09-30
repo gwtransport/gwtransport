@@ -2,6 +2,7 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 from scipy import ndimage, sparse
 
@@ -106,7 +107,7 @@ def compute_sigma_array(
     retardation_factor: float = 1.0,
     aquifer_length: float = 80.0,
     porosity: float = 0.35,
-) -> np.ndarray:
+) -> npt.NDArray[np.floating]:
     """Compute sigma values for diffusion based on flow and aquifer properties.
 
     Parameters

@@ -176,7 +176,7 @@ def bins(
     }
 
 
-def bin_masses(alpha: float, beta: float, bin_edges: npt.ArrayLike) -> np.ndarray:
+def bin_masses(alpha: float, beta: float, bin_edges: npt.ArrayLike) -> npt.NDArray[np.floating]:
     """
     Calculate probability mass for each bin in gamma distribution.
 

@@ -106,7 +106,7 @@ def deposition_to_extraction(
     porosity: float,
     thickness: float,
     retardation_factor: float = 1.0,
-) -> np.ndarray:
+) -> npt.NDArray[np.floating]:
     """Compute concentrations from deposition rates (convolution).
 
     Parameters
@@ -191,7 +191,7 @@ def extraction_to_deposition(
     thickness: float,
     retardation_factor: float = 1.0,
     nullspace_objective: str = "squared_differences",
-) -> np.ndarray:
+) -> npt.NDArray[np.floating]:
     """
     Compute deposition rates from concentration changes (deconvolution).
 

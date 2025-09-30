@@ -33,7 +33,7 @@ from scipy import stats
 from scipy.special import digamma, gamma
 
 
-def residence_time_to_log_removal(residence_times: npt.ArrayLike, log_removal_rate: float) -> np.ndarray:
+def residence_time_to_log_removal(residence_times: npt.ArrayLike, log_removal_rate: float) -> npt.NDArray[np.floating]:
     """
     Compute log removal given residence times and a log removal rate.
 
@@ -95,7 +95,7 @@ def residence_time_to_log_removal(residence_times: npt.ArrayLike, log_removal_ra
     return log_removal_rate * np.log10(residence_times)
 
 
-def parallel_mean(log_removals: npt.ArrayLike, flow_fractions: npt.ArrayLike = None, axis=None) -> np.ndarray:
+def parallel_mean(log_removals: npt.ArrayLike, flow_fractions: npt.ArrayLike = None, axis=None) -> npt.NDArray[np.floating]:
     """
     Calculate the weighted average log removal for a system with parallel flows.
 
@@ -209,7 +209,7 @@ def parallel_mean(log_removals: npt.ArrayLike, flow_fractions: npt.ArrayLike = N
     return -np.log10(weighted_decimal_reduction)
 
 
-def gamma_pdf(r: npt.ArrayLike, rt_alpha: float, rt_beta: float, log_removal_rate: float) -> np.ndarray:
+def gamma_pdf(r: npt.ArrayLike, rt_alpha: float, rt_beta: float, log_removal_rate: float) -> npt.NDArray[np.floating]:
     """
     Compute the probability density function (PDF) of log removal given a gamma distribution for the residence time.
 
@@ -241,7 +241,7 @@ def gamma_pdf(r: npt.ArrayLike, rt_alpha: float, rt_beta: float, log_removal_rat
     )
 
 
-def gamma_cdf(r: npt.ArrayLike, rt_alpha: float, rt_beta: float, log_removal_rate: float) -> np.ndarray:
+def gamma_cdf(r: npt.ArrayLike, rt_alpha: float, rt_beta: float, log_removal_rate: float) -> npt.NDArray[np.floating]:
     """
     Compute the cumulative distribution function (CDF) of log removal given a gamma distribution for the residence time.
 

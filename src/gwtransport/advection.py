@@ -32,7 +32,7 @@ def infiltration_to_extraction_series(
     tedges: pd.DatetimeIndex,
     aquifer_pore_volume: float,
     retardation_factor: float = 1.0,
-) -> npt.NDArray[np.floating]:
+) -> pd.DataFrame:
     """
     Compute extraction time series from infiltration concentration using residence time shifts.
 
@@ -268,7 +268,7 @@ def gamma_infiltration_to_extraction(
 
     Parameters
     ----------
-    cin : pandas.Series
+    cin : array-like
         Concentration of the compound in infiltrating water or temperature of infiltrating
         water.
     cin_tedges : pandas.DatetimeIndex
@@ -277,7 +277,7 @@ def gamma_infiltration_to_extraction(
     cout_tedges : pandas.DatetimeIndex
         Time edges for the output data. Used to compute the cumulative concentration.
         Has a length of one more than `flow`.
-    flow : pandas.Series
+    flow : array-like
         Flow rate of water in the aquifer [m3/day].
     flow_tedges : pandas.DatetimeIndex
         Time edges for the flow data. Used to compute the cumulative flow.
@@ -404,7 +404,7 @@ def gamma_extraction_to_infiltration(
 
     Parameters
     ----------
-    cout : pandas.Series
+    cout : array-like
         Concentration of the compound in extracted water or temperature of extracted
         water.
     tedges : pandas.DatetimeIndex
@@ -413,7 +413,7 @@ def gamma_extraction_to_infiltration(
     cin_tedges : pandas.DatetimeIndex
         Time edges for the output (infiltration) data. Used to compute the cumulative concentration.
         Has a length of one more than the desired output length.
-    flow : pandas.Series
+    flow : array-like
         Flow rate of water in the aquifer [m3/day].
     alpha : float, optional
         Shape parameter of gamma distribution of the aquifer pore volume (must be > 0)
@@ -514,7 +514,7 @@ def distribution_infiltration_to_extraction(
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
     retardation_factor: float = 1.0,
-) -> np.ndarray:
+) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the extracted water using flow-weighted advection.
 
@@ -737,7 +737,7 @@ def distribution_extraction_to_infiltration(
     cin_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
     retardation_factor: float = 1.0,
-) -> np.ndarray:
+) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
 
