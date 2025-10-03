@@ -1,6 +1,6 @@
 # gwtransport
 
-`gwtransport` assists with timeseries analysis of groundwater transport of solutes and temperature. Estimate two aquifer properties from a temperature tracer test, predict residence times and transport of other solutes, and assess pathogen removal efficiency. Alternatively, the aquifer properties can be estimated directly from the streamlines.
+`gwtransport` assists with timeseries analysis of groundwater transport of solutes and temperature. Estimate two aquifer properties from a temperature tracer test, predict residence times and transport of solutes, and assess pathogen removal efficiency. Alternatively, the aquifer properties can be estimated directly from the streamlines.
 
 |                        |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -13,7 +13,7 @@
 Once you have calibrated the aquifer pore volume distribution, you can:
 
 - **Predict residence time distributions** under varying flow conditions
-- **Forecast contaminant arrival times** and transport pathways
+- **Forecast contaminant arrival times** and extracted concentrations
 - **Design treatment systems** with quantified pathogen removal efficiency
 - **Assess groundwater vulnerability** to contamination
 - **Early warning systems** as digital twin for drinking water protection

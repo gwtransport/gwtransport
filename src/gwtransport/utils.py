@@ -6,6 +6,7 @@ import io
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import numpy.typing as npt
@@ -83,7 +84,7 @@ def linear_interpolate(
     return y_query
 
 
-def interp_series(*, series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwargs) -> pd.Series:
+def interp_series(*, series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwargs: object) -> pd.Series:
     """
     Interpolate a pandas.Series to a new index.
 
@@ -749,7 +750,7 @@ def solve_underdetermined_system(
     *,
     coefficient_matrix: npt.ArrayLike,
     rhs_vector: npt.ArrayLike,
-    nullspace_objective: str | Callable[[npt.NDArray[np.floating]], float] = "squared_differences",
+    nullspace_objective: str | Callable[[np.ndarray, np.ndarray, np.ndarray], float] = "squared_differences",
     optimization_method: str = "BFGS",
 ) -> npt.NDArray[np.floating]:
     """
@@ -887,20 +888,26 @@ def solve_underdetermined_system(
         return x_ls
 
     # Optimize in nullspace
-    coeffs = _optimize_nullspace_coefficients(x_ls, nullspace_basis, nullspace_objective, optimization_method)
+    coeffs = _optimize_nullspace_coefficients(
+        x_ls=x_ls,
+        nullspace_basis=nullspace_basis,
+        nullspace_objective=nullspace_objective,
+        optimization_method=optimization_method,
+    )
 
     return x_ls + nullspace_basis @ coeffs
 
 
 def _optimize_nullspace_coefficients(
+    *,
     x_ls: np.ndarray,
     nullspace_basis: np.ndarray,
-    nullspace_objective: str | Callable[[npt.NDArray[np.floating]], float],
+    nullspace_objective: str | Callable[[np.ndarray, np.ndarray, np.ndarray], float],
     optimization_method: str,
 ) -> npt.NDArray[np.floating]:
     """Optimize coefficients in the nullspace to minimize the objective."""
     nullrank = nullspace_basis.shape[1]
-    objective_func = _get_nullspace_objective_function(nullspace_objective)
+    objective_func = _get_nullspace_objective_function(nullspace_objective=nullspace_objective)
     coeffs_0 = np.zeros(nullrank)
 
     # For stability, always start with squared differences if using summed differences
@@ -943,13 +950,16 @@ def _summed_differences_objective(coeffs: np.ndarray, x_ls: np.ndarray, nullspac
     return np.sum(np.abs(x[1:] - x[:-1]))
 
 
-def _get_nullspace_objective_function(nullspace_objective: str | Callable[[npt.NDArray[np.floating]], float]):
+def _get_nullspace_objective_function(
+    *,
+    nullspace_objective: str | Callable[[np.ndarray, np.ndarray, np.ndarray], float],
+) -> Callable[[np.ndarray, np.ndarray, np.ndarray], float]:
     """Get the objective function for nullspace optimization."""
     if nullspace_objective == "squared_differences":
         return _squared_differences_objective
     if nullspace_objective == "summed_differences":
         return _summed_differences_objective
     if callable(nullspace_objective):
-        return nullspace_objective
+        return cast(Callable[[np.ndarray, np.ndarray, np.ndarray], float], nullspace_objective)
     msg = f"Unknown nullspace objective: {nullspace_objective}"
     raise ValueError(msg)

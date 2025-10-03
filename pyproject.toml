@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gwtransport"
-description = "Timeseries analysis of groundwater transport of solutes and temperature"
+description = "Timeseries analysis for groundwater transport of solutes and heat"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
@@ -47,13 +47,13 @@ dependencies = [
   "requests",
   "scipy",
 ]
-version = "0.15.0"
+version = "0.16.0"
 [project.optional-dependencies]
 test = [
   "nbconvert",
   "nbformat",
   "pytest",
-  "ruff==0.11.0",
+  "ruff==0.13.2",
   "ty",
   "validate-pyproject[all,store]",
   "pytest-cov",

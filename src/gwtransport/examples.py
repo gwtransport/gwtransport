@@ -16,21 +16,21 @@ from gwtransport.utils import compute_time_edges, get_soil_temperature
 
 def generate_example_data(
     *,
-    date_start="2020-01-01",
-    date_end="2021-12-31",
-    date_freq="D",
-    flow_mean=100.0,  # m3/day
-    flow_amplitude=30.0,  # m3/day
-    flow_noise=10.0,  # m3/day
-    temp_infiltration_method="synthetic",  # Method for generating infiltration temperature
-    temp_infiltration_mean=12.0,  # °C
-    temp_infiltration_amplitude=8.0,  # °C
-    temp_measurement_noise=1.0,  # °C
-    aquifer_pore_volume_gamma_mean=1000.0,  # m3
-    aquifer_pore_volume_gamma_std=200.0,  # m3
-    aquifer_pore_volume_gamma_nbins=250,  # Discretization resolution
-    retardation_factor=1.0,
-):
+    date_start: str = "2020-01-01",
+    date_end: str = "2021-12-31",
+    date_freq: str = "D",
+    flow_mean: float = 100.0,  # m3/day
+    flow_amplitude: float = 30.0,  # m3/day
+    flow_noise: float = 10.0,  # m3/day
+    temp_infiltration_method: str = "synthetic",  # Method for generating infiltration temperature
+    temp_infiltration_mean: float = 12.0,  # °C
+    temp_infiltration_amplitude: float = 8.0,  # °C
+    temp_measurement_noise: float = 1.0,  # °C
+    aquifer_pore_volume_gamma_mean: float = 1000.0,  # m3
+    aquifer_pore_volume_gamma_std: float = 200.0,  # m3
+    aquifer_pore_volume_gamma_nbins: int = 250,  # Discretization resolution
+    retardation_factor: float = 1.0,
+) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
     """
     Generate synthetic temperature and flow data for groundwater transport examples.
 
@@ -169,9 +169,10 @@ def generate_example_data(
 
 
 def generate_example_deposition_timeseries(
-    date_start="2018-01-01",
-    date_end="2023-12-31",
-    freq="D",
+    *,
+    date_start: str = "2018-01-01",
+    date_end: str = "2023-12-31",
+    freq: str = "D",
     base: float = 0.8,
     seasonal_amplitude: float = 0.3,
     noise_scale: float = 0.1,
@@ -179,9 +180,8 @@ def generate_example_deposition_timeseries(
     event_magnitude: float = 3.0,
     event_duration: int = 30,
     event_decay_scale: float = 10.0,
-    *,
     ensure_non_negative: bool = True,
-):
+) -> tuple[pd.Series, pd.DatetimeIndex]:
     """
     Generate synthetic deposition timeseries for groundwater transport examples.
 

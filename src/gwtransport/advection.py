@@ -27,6 +27,7 @@ from gwtransport.utils import partial_isin
 
 
 def infiltration_to_extraction_series(
+    *,
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
     aquifer_pore_volume: float,
@@ -136,6 +137,7 @@ def infiltration_to_extraction_series(
 
 
 def extraction_to_infiltration_series(
+    *,
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
     aquifer_pore_volume: float,
@@ -247,17 +249,17 @@ def extraction_to_infiltration_series(
 
 def gamma_infiltration_to_extraction(
     *,
-    cin,
-    flow,
-    tedges,
-    cout_tedges,
-    alpha=None,
-    beta=None,
-    mean=None,
-    std=None,
-    n_bins=100,
-    retardation_factor=1.0,
-):
+    cin: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    alpha: float | None = None,
+    beta: float | None = None,
+    mean: float | None = None,
+    std: float | None = None,
+    n_bins: int = 100,
+    retardation_factor: float = 1.0,
+) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.
 
@@ -382,17 +384,17 @@ def gamma_infiltration_to_extraction(
 
 def gamma_extraction_to_infiltration(
     *,
-    cout,
-    flow,
-    tedges,
-    cin_tedges,
-    alpha=None,
-    beta=None,
-    mean=None,
-    std=None,
-    n_bins=100,
-    retardation_factor=1.0,
-):
+    cout: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
+    cin_tedges: pd.DatetimeIndex,
+    alpha: float | None = None,
+    beta: float | None = None,
+    mean: float | None = None,
+    std: float | None = None,
+    n_bins: int = 100,
+    retardation_factor: float = 1.0,
+) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
 
@@ -683,14 +685,14 @@ def infiltration_to_extraction(
 
     # Initialize accumulator
     normalized_weights = _infiltration_to_extraction_weights(
-        cout_tedges,
-        aquifer_pore_volumes,
-        cin_values,
-        flow_values,
-        cin_tedges_days,
-        infiltration_tedges_2d,
-        valid_bins_2d,
-        valid_pv_count,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        cin_values=cin_values,
+        flow_values=flow_values,
+        cin_tedges_days=cin_tedges_days,
+        infiltration_tedges_2d=infiltration_tedges_2d,
+        valid_bins_2d=valid_bins_2d,
+        valid_pv_count=valid_pv_count,
     )
 
     # Apply to concentrations and handle NaN for periods with no contributions
@@ -701,15 +703,16 @@ def infiltration_to_extraction(
 
 
 def _infiltration_to_extraction_weights(
-    cout_tedges,
-    aquifer_pore_volumes,
-    cin_values,
-    flow_values,
-    cin_tedges_days,
-    infiltration_tedges_2d,
-    valid_bins_2d,
-    valid_pv_count,
-):
+    *,
+    cout_tedges: pd.DatetimeIndex,
+    aquifer_pore_volumes: npt.NDArray[np.floating],
+    cin_values: npt.NDArray[np.floating],
+    flow_values: npt.NDArray[np.floating],
+    cin_tedges_days: npt.NDArray[np.floating],
+    infiltration_tedges_2d: npt.NDArray[np.floating],
+    valid_bins_2d: npt.NDArray[np.bool_],
+    valid_pv_count: npt.NDArray[np.intp],
+) -> npt.NDArray[np.floating]:
     accumulated_weights = np.zeros((len(cout_tedges) - 1, len(cin_values)))
 
     # Loop over each pore volume
@@ -910,14 +913,14 @@ def extraction_to_infiltration(
 
     # Initialize accumulator
     normalized_weights = _extraction_to_infiltration_weights(
-        cin_tedges,
-        aquifer_pore_volumes,
-        cout_values,
-        flow_values,
-        cout_tedges_days,
-        extraction_tedges_2d,
-        valid_bins_2d,
-        valid_pv_count,
+        cin_tedges=cin_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        cout_values=cout_values,
+        flow_values=flow_values,
+        cout_tedges_days=cout_tedges_days,
+        extraction_tedges_2d=extraction_tedges_2d,
+        valid_bins_2d=valid_bins_2d,
+        valid_pv_count=valid_pv_count,
     )
 
     # Apply to concentrations and handle NaN for periods with no contributions
@@ -928,15 +931,16 @@ def extraction_to_infiltration(
 
 
 def _extraction_to_infiltration_weights(
-    cin_tedges,
-    aquifer_pore_volumes,
-    cout_values,
-    flow_values,
-    cout_tedges_days,
-    extraction_tedges_2d,
-    valid_bins_2d,
-    valid_pv_count,
-):
+    *,
+    cin_tedges: pd.DatetimeIndex,
+    aquifer_pore_volumes: npt.NDArray[np.floating],
+    cout_values: npt.NDArray[np.floating],
+    flow_values: npt.NDArray[np.floating],
+    cout_tedges_days: npt.NDArray[np.floating],
+    extraction_tedges_2d: npt.NDArray[np.floating],
+    valid_bins_2d: npt.NDArray[np.bool_],
+    valid_pv_count: npt.NDArray[np.intp],
+) -> npt.NDArray[np.floating]:
     """
     Compute extraction to infiltration transformation weights matrix.
 
