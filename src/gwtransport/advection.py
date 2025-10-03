@@ -715,7 +715,7 @@ def _infiltration_to_extraction_weights(
     # Loop over each pore volume
     for i in range(len(aquifer_pore_volumes)):
         if np.any(valid_bins_2d[i, :]):
-            overlap_matrix = partial_isin(infiltration_tedges_2d[i, :], cin_tedges_days)
+            overlap_matrix = partial_isin(bin_edges_in=infiltration_tedges_2d[i, :], bin_edges_out=cin_tedges_days)
             accumulated_weights[valid_bins_2d[i, :], :] += overlap_matrix[valid_bins_2d[i, :], :]
 
     # Average across valid pore volumes and apply flow weighting
@@ -985,7 +985,7 @@ def _extraction_to_infiltration_weights(
             # SYMMETRIC temporal overlap computation:
             # Infiltration to extraction: maps infiltration → cout time windows
             # Extraction to infiltration: maps extraction → cout time windows (transposed relationship)
-            overlap_matrix = partial_isin(extraction_tedges_2d[i, :], cout_tedges_days)
+            overlap_matrix = partial_isin(bin_edges_in=extraction_tedges_2d[i, :], bin_edges_out=cout_tedges_days)
             accumulated_weights[valid_bins_2d[i, :], :] += overlap_matrix[valid_bins_2d[i, :], :]
 
     # Average across valid pore volumes (symmetric to infiltration_to_extraction)

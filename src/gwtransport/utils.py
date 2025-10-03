@@ -18,7 +18,12 @@ cache_dir = Path(__file__).parent.parent.parent / "cache"
 
 
 def linear_interpolate(
-    x_ref: npt.ArrayLike, y_ref: npt.ArrayLike, x_query: npt.ArrayLike, left=None, right=None
+    *,
+    x_ref: npt.ArrayLike,
+    y_ref: npt.ArrayLike,
+    x_query: npt.ArrayLike,
+    left: float | None = None,
+    right: float | None = None,
 ) -> npt.NDArray[np.floating]:
     """
     Linear interpolation on monotonically increasing data.
@@ -77,7 +82,7 @@ def linear_interpolate(
     return y_query
 
 
-def interp_series(series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwargs) -> pd.Series:
+def interp_series(*, series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwargs) -> pd.Series:
     """
     Interpolate a pandas.Series to a new index.
 
@@ -102,7 +107,7 @@ def interp_series(series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwa
     return pd.Series(interp_obj(dt_interp), index=index_new)
 
 
-def diff(a: npt.ArrayLike, alignment: str = "centered") -> npt.NDArray[np.floating]:
+def diff(*, a: npt.ArrayLike, alignment: str = "centered") -> npt.NDArray[np.floating]:
     """Compute the cell widths for a given array of cell coordinates.
 
     If alignment is "centered", the coordinates are assumed to be centered in the cells.
@@ -132,6 +137,7 @@ def diff(a: npt.ArrayLike, alignment: str = "centered") -> npt.NDArray[np.floati
 
 
 def linear_average(  # noqa: C901
+    *,
     x_data: npt.ArrayLike,
     y_data: npt.ArrayLike,
     x_edges: npt.ArrayLike,
@@ -274,7 +280,7 @@ def linear_average(  # noqa: C901
     return result
 
 
-def partial_isin(bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -> npt.NDArray[np.floating]:
+def partial_isin(*, bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -> npt.NDArray[np.floating]:
     """
     Calculate the fraction of each input bin that overlaps with each output bin.
 
@@ -360,7 +366,7 @@ def partial_isin(bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -> n
     return overlap_widths / in_width
 
 
-def time_bin_overlap(tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.NDArray[np.floating]:
+def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.NDArray[np.floating]:
     """
     Calculate the fraction of each time bin that overlaps with each time range.
 
@@ -436,6 +442,7 @@ def generate_failed_coverage_badge() -> None:
 
 
 def combine_bin_series(
+    *,
     a: npt.ArrayLike,
     a_edges: npt.ArrayLike,
     b: npt.ArrayLike,
@@ -546,6 +553,7 @@ def combine_bin_series(
 
 
 def compute_time_edges(
+    *,
     tedges: pd.DatetimeIndex | None,
     tstart: pd.DatetimeIndex | None,
     tend: pd.DatetimeIndex | None,
@@ -627,7 +635,7 @@ def compute_time_edges(
     return tedges
 
 
-def get_soil_temperature(station_number: int = 260, *, interpolate_missing_values: bool = True) -> pd.DataFrame:
+def get_soil_temperature(*, station_number: int = 260, interpolate_missing_values: bool = True) -> pd.DataFrame:
     """
     Download soil temperature data from the KNMI and return it as a pandas DataFrame.
 
@@ -733,12 +741,12 @@ def get_soil_temperature(station_number: int = 260, *, interpolate_missing_value
 
 
 def solve_underdetermined_system(
-    coefficient_matrix,
-    rhs_vector,
     *,
-    nullspace_objective="squared_differences",
-    optimization_method="BFGS",
-):
+    coefficient_matrix: npt.ArrayLike,
+    rhs_vector: npt.ArrayLike,
+    nullspace_objective: str | callable = "squared_differences",
+    optimization_method: str = "BFGS",
+) -> npt.NDArray[np.floating]:
     """
     Solve an underdetermined linear system with nullspace regularization.
 

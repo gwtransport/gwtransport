@@ -438,7 +438,9 @@ def test_regularization_objectives():
     rhs = np.array([5.0, 4.0])
 
     # Test that squared differences objective works
-    result = solve_underdetermined_system(matrix, rhs, nullspace_objective="squared_differences")
+    result = solve_underdetermined_system(
+        coefficient_matrix=matrix, rhs_vector=rhs, nullspace_objective="squared_differences"
+    )
 
     # Should satisfy the original equations
     assert np.allclose(matrix @ result, rhs, atol=1e-10), "Solution should satisfy Ax=b"

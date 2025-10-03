@@ -21,15 +21,15 @@ from gwtransport.utils import linear_average, linear_interpolate
 
 
 def residence_time(
+    *,
     flow: npt.ArrayLike | None = None,
     flow_tedges: pd.DatetimeIndex | np.ndarray | None = None,
     aquifer_pore_volume: npt.ArrayLike | None = None,
     index: pd.DatetimeIndex | np.ndarray | None = None,
     retardation_factor: float = 1.0,
     direction: str = "extraction_to_infiltration",
-    *,
     return_pandas_series: bool = False,
-):
+) -> npt.NDArray[np.floating] | pd.Series:
     """
     Compute the residence time of retarded compound in the water in the aquifer.
 
@@ -87,18 +87,18 @@ def residence_time(
     else:
         index_dates_days_extraction = np.asarray((index - flow_tedges[0]) / np.timedelta64(1, "D"))
         flow_cum_at_index = linear_interpolate(
-            flow_tedges_days, flow_cum, index_dates_days_extraction, left=np.nan, right=np.nan
+            x_ref=flow_tedges_days, y_ref=flow_cum, x_query=index_dates_days_extraction, left=np.nan, right=np.nan
         )
 
     if direction == "extraction_to_infiltration":
         # How many days ago was the extraced water infiltrated
         a = flow_cum_at_index[None, :] - retardation_factor * aquifer_pore_volume[:, None]
-        days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
+        days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
         data = index_dates_days_extraction - days
     elif direction == "infiltration_to_extraction":
         # In how many days the water that is infiltrated now be extracted
         a = flow_cum_at_index[None, :] + retardation_factor * aquifer_pore_volume[:, None]
-        days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
+        days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
         data = days - index_dates_days_extraction
     else:
         msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
@@ -123,14 +123,14 @@ def residence_time(
 
 
 def residence_time_mean(
+    *,
     flow: npt.ArrayLike,
     flow_tedges: pd.DatetimeIndex | np.ndarray,
     tedges_out: pd.DatetimeIndex | np.ndarray,
     aquifer_pore_volume: npt.ArrayLike,
-    *,
     direction: str = "extraction_to_infiltration",
     retardation_factor: float = 1.0,
-):
+) -> npt.NDArray[np.floating]:
     """
     Compute the mean residence time of a retarded compound in the aquifer between specified time edges.
 
@@ -217,21 +217,25 @@ def residence_time_mean(
     if direction == "extraction_to_infiltration":
         # How many days ago was the extraced water infiltrated
         a = flow_cum[None, :] - retardation_factor * aquifer_pore_volume[:, None]
-        days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
+        days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
         data_edges = flow_tedges_days - days
         # Process each pore volume (row) separately. Although linear_average supports 2D x_edges,
         # our use case is different: multiple time series (different y_data) with same edges,
         # rather than same time series with multiple edge sets.
-        data_avg = np.array([linear_average(flow_tedges_days, y, tedges_out_days)[0] for y in data_edges])
+        data_avg = np.array([
+            linear_average(x_data=flow_tedges_days, y_data=y, x_edges=tedges_out_days)[0] for y in data_edges
+        ])
     elif direction == "infiltration_to_extraction":
         # In how many days the water that is infiltrated now be extracted
         a = flow_cum[None, :] + retardation_factor * aquifer_pore_volume[:, None]
-        days = linear_interpolate(flow_cum, flow_tedges_days, a, left=np.nan, right=np.nan)
+        days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
         data_edges = days - flow_tedges_days
         # Process each pore volume (row) separately. Although linear_average supports 2D x_edges,
         # our use case is different: multiple time series (different y_data) with same edges,
         # rather than same time series with multiple edge sets.
-        data_avg = np.array([linear_average(flow_tedges_days, y, tedges_out_days)[0] for y in data_edges])
+        data_avg = np.array([
+            linear_average(x_data=flow_tedges_days, y_data=y, x_edges=tedges_out_days)[0] for y in data_edges
+        ])
     else:
         msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
         raise ValueError(msg)
@@ -239,14 +243,15 @@ def residence_time_mean(
 
 
 def fraction_explained(
-    rt=None,
-    flow=None,
-    flow_tedges=None,
-    aquifer_pore_volume=None,
-    index=None,
-    retardation_factor=1.0,
-    direction="extraction_to_infiltration",
-):
+    *,
+    rt: npt.NDArray[np.floating] | None = None,
+    flow: npt.ArrayLike | None = None,
+    flow_tedges: pd.DatetimeIndex | np.ndarray | None = None,
+    aquifer_pore_volume: npt.ArrayLike | None = None,
+    index: pd.DatetimeIndex | np.ndarray | None = None,
+    retardation_factor: float = 1.0,
+    direction: str = "extraction_to_infiltration",
+) -> npt.NDArray[np.floating]:
     """
     Compute the fraction of the aquifer that is informed with respect to the retarded flow.
 

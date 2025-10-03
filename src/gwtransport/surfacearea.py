@@ -6,9 +6,12 @@ of geometric shapes used in groundwater transport calculations.
 """
 
 import numpy as np
+import numpy.typing as npt
 
 
-def compute_average_heights(x_edges, y_edges, y_lower, y_upper):
+def compute_average_heights(
+    *, x_edges: npt.ArrayLike, y_edges: npt.ArrayLike, y_lower: float, y_upper: float
+) -> npt.NDArray[np.floating]:
     """
     Compute average heights of clipped trapezoids.
 

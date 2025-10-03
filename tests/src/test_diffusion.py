@@ -160,7 +160,7 @@ def test_gaussian_pulse_constant_time():
     sigma_array = np.full_like(x, sigma)
 
     # Apply our filter
-    numerical = convolve_diffusion(initial, sigma_array)
+    numerical = convolve_diffusion(input_signal=initial, sigma_array=sigma_array)
 
     # Calculate analytical solution
     analytical = AnalyticalSolutions.gaussian_pulse(x, t, diffusivity, x0, amplitude, width)
@@ -194,7 +194,7 @@ def test_gaussian_pulse_variable_time():
     sigma_array = np.sqrt(2 * diffusivity * dt) / dx
 
     # Apply our filter
-    numerical = convolve_diffusion(initial, sigma_array)
+    numerical = convolve_diffusion(input_signal=initial, sigma_array=sigma_array)
 
     # Calculate analytical solution at each point with its local time
     analytical = AnalyticalSolutions.gaussian_pulse(x, dt, diffusivity, x0, amplitude, width)
@@ -224,7 +224,7 @@ def test_step_function():
     sigma_array = np.full_like(x, sigma)
 
     # Apply our filter
-    numerical = convolve_diffusion(initial, sigma_array, truncate=10.0)
+    numerical = convolve_diffusion(input_signal=initial, sigma_array=sigma_array, truncate=10.0)
 
     # Calculate analytical solution
     analytical = AnalyticalSolutions.step_function(x, t, diffusivity, 0.0)
@@ -257,7 +257,7 @@ def test_delta_function():
     sigma_array = np.full_like(x, sigma)
 
     # Apply our filter
-    numerical = convolve_diffusion(initial, sigma_array)
+    numerical = convolve_diffusion(input_signal=initial, sigma_array=sigma_array)
 
     # Calculate analytical solution
     analytical = AnalyticalSolutions.delta_function(x, t, diffusivity, x0)
@@ -275,7 +275,7 @@ def test_zero_sigma():
     sigma_array = np.zeros_like(x)
 
     # Filter should return identical signal when sigma is zero
-    result = convolve_diffusion(signal, sigma_array)
+    result = convolve_diffusion(input_signal=signal, sigma_array=sigma_array)
     assert_allclose(result, signal)
 
 
@@ -288,7 +288,7 @@ def test_input_validation():
     # Test mismatched lengths
     sigma_array = np.zeros(len(x) + 1)
     with pytest.raises(ValueError):
-        convolve_diffusion(signal, sigma_array)
+        convolve_diffusion(input_signal=signal, sigma_array=sigma_array)
 
 
 class TestGaussianComparison:
@@ -345,7 +345,7 @@ class TestGaussianComparison:
             sigma_array = np.full_like(signal, sigma)
 
             # Apply both filters
-            result_variable = convolve_diffusion(signal, sigma_array, truncate=truncate)
+            result_variable = convolve_diffusion(input_signal=signal, sigma_array=sigma_array, truncate=truncate)
             result_scipy = ndimage.gaussian_filter1d(signal, sigma, mode="nearest", truncate=truncate)
 
             # Compare results
@@ -367,7 +367,7 @@ class TestGaussianComparison:
         sigma_constant = np.mean(sigma_variable)
 
         # Apply both filters
-        result_variable = convolve_diffusion(signal, sigma_variable)
+        result_variable = convolve_diffusion(input_signal=signal, sigma_array=sigma_variable)
         result_constant = ndimage.gaussian_filter1d(signal, sigma_constant)
 
         # Calculate difference
@@ -397,14 +397,14 @@ class TestGaussianComparison:
 
         # Test zero sigma
         sigma_zero = np.zeros_like(signal)
-        result_zero = convolve_diffusion(signal, sigma_zero)
+        result_zero = convolve_diffusion(input_signal=signal, sigma_array=sigma_zero)
         assert_allclose(result_zero, signal, err_msg="Failed for zero sigma")
 
         # Test various sigmas
         sigmas = [1e-10, 1e-5, 1.0, 1e-3]
         for sigma in sigmas:
             sigma_array = np.full_like(signal, sigma)
-            result_small_variable = convolve_diffusion(signal, sigma_array, truncate=4.0)
+            result_small_variable = convolve_diffusion(input_signal=signal, sigma_array=sigma_array, truncate=4.0)
             result_small_scipy = ndimage.gaussian_filter1d(signal, sigma, mode="nearest", truncate=4.0)
             assert_allclose(result_small_variable, result_small_scipy, rtol=1e-6, err_msg=f"Failed for sigma={sigma}")
 

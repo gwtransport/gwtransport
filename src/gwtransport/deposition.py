@@ -83,13 +83,13 @@ def compute_deposition_weights(
     flow_cum = (np.concatenate(([0.0], flow_values)) * flow_tdelta).cumsum()
 
     # Interpolate volumes at concentration time edges
-    start_vol = linear_interpolate(tedges_days, flow_cum, cout_tedges_days_infiltration)
-    end_vol = linear_interpolate(tedges_days, flow_cum, cout_tedges_days)
+    start_vol = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days_infiltration)
+    end_vol = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days)
 
     # Compute deposition weights
     flow_cum_cout = flow_cum[None, :] - start_vol[:, None]
     volume_array = compute_average_heights(
-        tedges_days, flow_cum_cout, 0.0, retardation_factor * float(aquifer_pore_volume)
+        x_edges=tedges_days, y_edges=flow_cum_cout, y_lower=0.0, y_upper=retardation_factor * float(aquifer_pore_volume)
     )
     area_array = volume_array / (porosity * thickness)
     extracted_volume = np.diff(end_vol)

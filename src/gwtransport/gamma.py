@@ -7,6 +7,7 @@ from scipy.stats import gamma as gamma_dist
 
 
 def parse_parameters(
+    *,
     alpha: float | None = None,
     beta: float | None = None,
     mean: float | None = None,
@@ -46,7 +47,7 @@ def parse_parameters(
             msg = "Either alpha and beta or mean and std must be provided."
             raise ValueError(msg)
 
-        alpha, beta = mean_std_to_alpha_beta(mean, std)
+        alpha, beta = mean_std_to_alpha_beta(mean=mean, std=std)
 
     if alpha <= 0 or beta <= 0:
         msg = "Alpha and beta must be positive"
@@ -55,7 +56,7 @@ def parse_parameters(
     return alpha, beta
 
 
-def mean_std_to_alpha_beta(mean: float, std: float) -> tuple[float, float]:
+def mean_std_to_alpha_beta(*, mean: float, std: float) -> tuple[float, float]:
     """
     Convert mean and standard deviation of gamma distribution to shape and scale parameters.
 
@@ -78,7 +79,7 @@ def mean_std_to_alpha_beta(mean: float, std: float) -> tuple[float, float]:
     return alpha, beta
 
 
-def alpha_beta_to_mean_std(alpha: float, beta: float) -> tuple[float, float]:
+def alpha_beta_to_mean_std(*, alpha: float, beta: float) -> tuple[float, float]:
     """
     Convert shape and scale parameters of gamma distribution to mean and standard deviation.
 
@@ -170,7 +171,7 @@ def bins(
     probability_mass = np.diff(quantile_edges)  # probability mass for each bin
 
     # Calculate expected value for each bin
-    diff_alpha_plus_1 = bin_masses(alpha + 1, beta, bin_edges)
+    diff_alpha_plus_1 = bin_masses(alpha=alpha + 1, beta=beta, bin_edges=bin_edges)
     expected_values = beta * alpha * diff_alpha_plus_1 / probability_mass
 
     return {
@@ -182,7 +183,7 @@ def bins(
     }
 
 
-def bin_masses(alpha: float, beta: float, bin_edges: npt.ArrayLike) -> npt.NDArray[np.floating]:
+def bin_masses(*, alpha: float, beta: float, bin_edges: npt.ArrayLike) -> npt.NDArray[np.floating]:
     """
     Calculate probability mass for each bin in gamma distribution.
 
