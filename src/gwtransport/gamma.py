@@ -7,6 +7,7 @@ from scipy.stats import gamma as gamma_dist
 
 
 def parse_parameters(
+    *,
     alpha: float | None = None,
     beta: float | None = None,
     mean: float | None = None,
@@ -30,8 +31,10 @@ def parse_parameters(
 
     Returns
     -------
-    tuple
-        Shape and scale parameters of the gamma distribution.
+    alpha : float
+        Shape parameter of gamma distribution
+    beta : float
+        Scale parameter of gamma distribution
 
     Raises
     ------
@@ -44,7 +47,7 @@ def parse_parameters(
             msg = "Either alpha and beta or mean and std must be provided."
             raise ValueError(msg)
 
-        alpha, beta = mean_std_to_alpha_beta(mean, std)
+        alpha, beta = mean_std_to_alpha_beta(mean=mean, std=std)
 
     if alpha <= 0 or beta <= 0:
         msg = "Alpha and beta must be positive"
@@ -53,7 +56,7 @@ def parse_parameters(
     return alpha, beta
 
 
-def mean_std_to_alpha_beta(mean: float, std: float) -> tuple[float, float]:
+def mean_std_to_alpha_beta(*, mean: float, std: float) -> tuple[float, float]:
     """
     Convert mean and standard deviation of gamma distribution to shape and scale parameters.
 
@@ -66,15 +69,17 @@ def mean_std_to_alpha_beta(mean: float, std: float) -> tuple[float, float]:
 
     Returns
     -------
-    tuple
-        Shape and scale parameters of the gamma distribution.
+    alpha : float
+        Shape parameter of gamma distribution
+    beta : float
+        Scale parameter of gamma distribution
     """
     alpha = mean**2 / std**2
     beta = std**2 / mean
     return alpha, beta
 
 
-def alpha_beta_to_mean_std(alpha: float, beta: float) -> tuple[float, float]:
+def alpha_beta_to_mean_std(*, alpha: float, beta: float) -> tuple[float, float]:
     """
     Convert shape and scale parameters of gamma distribution to mean and standard deviation.
 
@@ -87,8 +92,10 @@ def alpha_beta_to_mean_std(alpha: float, beta: float) -> tuple[float, float]:
 
     Returns
     -------
-    tuple
-        Mean and standard deviation of the gamma distribution.
+    mean : float
+        Mean of the gamma distribution.
+    std : float
+        Standard deviation of the gamma distribution.
     """
     mean = alpha * beta
     std = np.sqrt(alpha) * beta
@@ -103,7 +110,7 @@ def bins(
     std: float | None = None,
     n_bins: int | None = None,
     quantile_edges: np.ndarray | None = None,
-):
+) -> dict[str, npt.NDArray[np.floating]]:
     """
     Divide gamma distribution into bins and compute various bin properties.
 
@@ -131,7 +138,7 @@ def bins(
 
     Returns
     -------
-    dict of arrays with keys:
+    dict of numpy.ndarray with keys:
         - lower_bound: lower bounds of bins (first one is 0)
         - upper_bound: upper bounds of bins (last one is inf)
         - edges: bin edges (lower_bound[0], upper_bound[0], ..., upper_bound[-1])
@@ -164,7 +171,7 @@ def bins(
     probability_mass = np.diff(quantile_edges)  # probability mass for each bin
 
     # Calculate expected value for each bin
-    diff_alpha_plus_1 = bin_masses(alpha + 1, beta, bin_edges)
+    diff_alpha_plus_1 = bin_masses(alpha=alpha + 1, beta=beta, bin_edges=bin_edges)
     expected_values = beta * alpha * diff_alpha_plus_1 / probability_mass
 
     return {
@@ -176,7 +183,7 @@ def bins(
     }
 
 
-def bin_masses(alpha: float, beta: float, bin_edges: npt.ArrayLike) -> np.ndarray:
+def bin_masses(*, alpha: float, beta: float, bin_edges: npt.ArrayLike) -> npt.NDArray[np.floating]:
     """
     Calculate probability mass for each bin in gamma distribution.
 
@@ -194,7 +201,7 @@ def bin_masses(alpha: float, beta: float, bin_edges: npt.ArrayLike) -> np.ndarra
 
     Returns
     -------
-    array
+    numpy.ndarray
         Probability mass for each bin
     """
     # Validate inputs

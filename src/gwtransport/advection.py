@@ -13,7 +13,8 @@ extracted ('cout').
 Main functions:
 - infiltration_to_extraction: Compute the concentration of the extracted water by shifting cin with its residence time. This corresponds to a convolution operation.
 - gamma_infiltration_to_extraction: Similar to infiltration_to_extraction, but for a gamma distribution of aquifer pore volumes.
-- distribution_infiltration_to_extraction: Similar to infiltration_to_extraction, but for an arbitrary distribution of aquifer pore volumes.
+- gamma_extraction_to_infiltration: Symmetric to gamma_infiltration_to_extraction, computing infiltration concentration from extraction data (deconvolution).
+- infiltration_to_extraction: Similar to infiltration_to_extraction_series, but for an arbitrary distribution of aquifer pore volumes.
 """
 
 import numpy as np
@@ -22,147 +23,226 @@ import pandas as pd
 
 from gwtransport import gamma
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import compute_time_edges, interp_series, partial_isin
+from gwtransport.utils import partial_isin
 
 
-def infiltration_to_extraction(
-    cin_series: pd.Series,
-    flow_series: pd.Series,
+def infiltration_to_extraction_series(
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
     aquifer_pore_volume: float,
     retardation_factor: float = 1.0,
-    cout_index: str = "cin",
-) -> pd.Series:
+) -> pd.DatetimeIndex:
     """
-    Compute the concentration of the extracted water by shifting cin with its residence time.
+    Compute extraction time edges from infiltration time edges using residence time shifts.
 
-    The compound is retarded in the aquifer with a retardation factor. The residence
-    time is computed based on the flow rate of the water in the aquifer and the pore volume
-    of the aquifer.
+    This function shifts infiltration time edges forward in time based on residence
+    times computed from flow rates and aquifer properties. The concentration values remain
+    unchanged (cout equals cin), only the time edges are shifted. This assumes a single pore
+    volume (no distribution) and deterministic advective transport.
 
-    This function represents infiltration to extraction modeling (equivalent to convolution).
+    NOTE: This function is specifically designed for single aquifer pore volumes and does not
+    support custom output time edges (cout_tedges). For distributions of aquifer pore volumes
+    or custom output time grids, use `infiltration_to_extraction` instead.
 
     Parameters
     ----------
-    cin_series : pandas.Series
-        Concentration of the compound in the infiltrating water [ng/m3]. The cin_series should be the average concentration of a time bin. The index should be a pandas.DatetimeIndex
-        and is labeled at the end of the time bin.
-    flow_series : pandas.Series
-        Flow rate of water in the aquifer [m3/day]. The flow_series should be the average flow of a time bin. The index should be a pandas.DatetimeIndex
-        and is labeled at the end of the time bin.
+    flow : array-like
+        Flow rate values in the aquifer [m3/day].
+        Length must match the number of time bins defined by tedges (len(tedges) - 1).
+    tedges : pandas.DatetimeIndex
+        Time edges defining bins for both cin and flow data. Has length of len(flow) + 1.
     aquifer_pore_volume : float
-        Pore volume of the aquifer [m3].
-    cout_index : str, optional
-        The index of the output series. Can be 'cin', 'flow', or 'cout'. Default is 'cin'.
-        - 'cin': The output series will have the same index as `cin_series`.
-        - 'flow': The output series will have the same index as `flow_series`.
-        - 'cout': The output series will have the same index as `cin_series + residence_time`.
+        Single aquifer pore volume [m3] used to compute residence times.
+    retardation_factor : float, optional
+        Retardation factor of the compound in the aquifer (default 1.0).
+        Values > 1.0 indicate slower transport due to sorption/interaction.
 
     Returns
     -------
-    pandas.Series or numpy.ndarray
-        Concentration of the compound in the extracted water [ng/m3].
-        Returns pandas.Series when cout_index is 'cin' or 'flow', or numpy.ndarray when cout_index is 'cout'.
+    pandas.DatetimeIndex
+        Time edges for the extracted water concentration. Same length as tedges.
+        The concentration values in the extracted water (cout) equal cin, but are
+        aligned with these shifted time edges.
 
     Examples
     --------
-    Basic usage with single pore volume:
+    Basic usage with constant flow:
 
     >>> import pandas as pd
     >>> import numpy as np
-    >>> from gwtransport.advection import infiltration_to_extraction
+    >>> from gwtransport.utils import compute_time_edges
+    >>> from gwtransport.advection import infiltration_to_extraction_series
     >>>
     >>> # Create input data
     >>> dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
-    >>> cin = pd.Series(np.ones(len(dates)), index=dates)
-    >>> flow = pd.Series(np.ones(len(dates)) * 100, index=dates)  # 100 m3/day
+    >>> tedges = compute_time_edges(
+    ...     tedges=None, tstart=None, tend=dates, number_of_bins=len(dates)
+    ... )
     >>>
-    >>> # Single aquifer pore volume
-    >>> aquifer_pore_volume = 500.0  # m3
+    >>> # Constant concentration and flow
+    >>> cin = np.ones(len(dates)) * 10.0
+    >>> flow = np.ones(len(dates)) * 100.0  # 100 m3/day
     >>>
-    >>> # Run infiltration to extraction model (default returns on cin index)
-    >>> cout = infiltration_to_extraction(cin, flow, aquifer_pore_volume)
-    >>> len(cout) == len(cin)
-    True
+    >>> # Run infiltration_to_extraction_series with 500 m3 pore volume
+    >>> tedges_out = infiltration_to_extraction_series(
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     aquifer_pore_volume=500.0,
+    ... )
+    >>> len(tedges_out)
+    11
+    >>> # Time shift should be residence time = pore_volume / flow = 500 / 100 = 5 days
+    >>> tedges_out[0] - tedges[0]
+    Timedelta('5 days 00:00:00')
 
-    Different output index options:
+    Plotting the input and output concentrations:
 
-    >>> # Output on cin index (default)
-    >>> cout_cin = infiltration_to_extraction(
-    ...     cin, flow, aquifer_pore_volume, cout_index="cin"
-    ... )
+    >>> import matplotlib.pyplot as plt
+    >>> # Prepare data for step plot (repeat values for visualization)
+    >>> xplot_in = np.repeat(tedges, 2)[1:-1]
+    >>> yplot_in = np.repeat(cin, 2)
+    >>> plt.plot(xplot_in, yplot_in, label="Concentration of infiltrated water")
     >>>
-    >>> # Output on flow index
-    >>> cout_flow = infiltration_to_extraction(
-    ...     cin, flow, aquifer_pore_volume, cout_index="flow"
-    ... )
-    >>>
-    >>> # Output on shifted time index (cin + residence_time)
-    >>> cout_shifted = infiltration_to_extraction(
-    ...     cin, flow, aquifer_pore_volume, cout_index="cout"
-    ... )
+    >>> # cout equals cin, just with shifted time edges
+    >>> xplot_out = np.repeat(tedges_out, 2)[1:-1]
+    >>> yplot_out = np.repeat(cin, 2)
+    >>> plt.plot(xplot_out, yplot_out, label="Concentration of extracted water")
+    >>> plt.xlabel("Time")
+    >>> plt.ylabel("Concentration")
+    >>> plt.legend()
+    >>> plt.show()
 
     With retardation factor:
 
-    >>> # Compound moves twice as slowly due to sorption
-    >>> cout = infiltration_to_extraction(
-    ...     cin, flow, aquifer_pore_volume, retardation_factor=2.0
+    >>> tedges_out = infiltration_to_extraction_series(
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     aquifer_pore_volume=500.0,
+    ...     retardation_factor=2.0,  # Doubles residence time
     ... )
+    >>> # Time shift is doubled: 500 * 2.0 / 100 = 10 days
+    >>> tedges_out[0] - tedges[0]
+    Timedelta('10 days 00:00:00')
     """
-    # Create flow tedges from the flow series index (assuming it's at the end of bins)
-    flow_tedges = compute_time_edges(
-        tedges=None, tstart=None, tend=pd.DatetimeIndex(flow_series.index), number_of_bins=len(flow_series)
-    )
     rt_array = residence_time(
-        flow=flow_series,
-        flow_tedges=flow_tedges,
-        index=pd.DatetimeIndex(cin_series.index),
+        flow=flow,
+        flow_tedges=tedges,
+        index=tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="infiltration_to_extraction",
     )
-
-    rt = pd.to_timedelta(rt_array[0], unit="D", errors="coerce")
-    index = cin_series.index + rt
-
-    cout = pd.Series(data=cin_series.values, index=index, name="cout")
-
-    if cout_index == "cin":
-        return interp_series(cout, pd.DatetimeIndex(cin_series.index))
-    if cout_index == "flow":
-        # If cout_index is 'flow', we need to resample cout to the flow index
-        return interp_series(cout, pd.DatetimeIndex(flow_series.index))
-    if cout_index == "cout":
-        # If cout_index is 'cout', we return the cout as is
-        return cout.values
-
-    msg = f"Invalid cout_index: {cout_index}. Must be 'cin', 'flow', or 'cout'."
-    raise ValueError(msg)
+    return tedges + pd.to_timedelta(rt_array[0], unit="D", errors="coerce")
 
 
-def extraction_to_infiltration(
-    cout: pd.Series, flow: pd.Series, aquifer_pore_volume: float, retardation_factor: float = 1.0, resample_dates=None
-) -> pd.Series:
+def extraction_to_infiltration_series(
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
+    aquifer_pore_volume: float,
+    retardation_factor: float = 1.0,
+) -> pd.DatetimeIndex:
     """
-    Compute the concentration of the infiltrating water by shifting cout with its residence time.
+    Compute infiltration time edges from extraction time edges (deconvolution).
 
-    This function represents extraction to infiltration modeling (equivalent to deconvolution).
+    This function shifts extraction time edges backward in time based on residence
+    times computed from flow rates and aquifer properties. The concentration values remain
+    unchanged (cin equals cout), only the time edges are shifted. This assumes a single pore
+    volume (no distribution) and deterministic advective transport. This is the inverse
+    operation of infiltration_to_extraction_series.
+
+    NOTE: This function is specifically designed for single aquifer pore volumes and does not
+    support custom output time edges (cin_tedges). For distributions of aquifer pore volumes
+    or custom output time grids, use `extraction_to_infiltration` instead.
 
     Parameters
     ----------
-    cout : pandas.Series
-        Concentration of the compound in the extracted water [ng/m3].
-    flow : pandas.Series
-        Flow rate of water in the aquifer [m3/day].
+    flow : array-like
+        Flow rate values in the aquifer [m3/day].
+        Length must match the number of time bins defined by tedges (len(tedges) - 1).
+    tedges : pandas.DatetimeIndex
+        Time edges defining bins for both cout and flow data. Has length of len(flow) + 1.
     aquifer_pore_volume : float
-        Pore volume of the aquifer [m3].
+        Single aquifer pore volume [m3] used to compute residence times.
+    retardation_factor : float, optional
+        Retardation factor of the compound in the aquifer (default 1.0).
+        Values > 1.0 indicate slower transport due to sorption/interaction.
 
     Returns
     -------
-    numpy.ndarray
-        Concentration of the compound in the infiltrating water [ng/m3].
+    pandas.DatetimeIndex
+        Time edges for the infiltrating water concentration. Same length as tedges.
+        The concentration values in the infiltrating water (cin) equal cout, but are
+        aligned with these shifted time edges.
+
+    Examples
+    --------
+    Basic usage with constant flow:
+
+    >>> import pandas as pd
+    >>> import numpy as np
+    >>> from gwtransport.utils import compute_time_edges
+    >>> from gwtransport.advection import extraction_to_infiltration_series
+    >>>
+    >>> # Create input data
+    >>> dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    >>> tedges = compute_time_edges(
+    ...     tedges=None, tstart=None, tend=dates, number_of_bins=len(dates)
+    ... )
+    >>>
+    >>> # Constant concentration and flow
+    >>> cout = np.ones(len(dates)) * 10.0
+    >>> flow = np.ones(len(dates)) * 100.0  # 100 m3/day
+    >>>
+    >>> # Run extraction_to_infiltration_series with 500 m3 pore volume
+    >>> tedges_out = extraction_to_infiltration_series(
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     aquifer_pore_volume=500.0,
+    ... )
+    >>> len(tedges_out)
+    11
+    >>> # Time shift should be residence time = pore_volume / flow = 500 / 100 = 5 days (backward)
+    >>> tedges[0] - tedges_out[0]
+    Timedelta('5 days 00:00:00')
+
+    Plotting the input and output concentrations:
+
+    >>> import matplotlib.pyplot as plt
+    >>> # Prepare data for step plot (repeat values for visualization)
+    >>> xplot_in = np.repeat(tedges, 2)[1:-1]
+    >>> yplot_in = np.repeat(cout, 2)
+    >>> plt.plot(xplot_in, yplot_in, label="Concentration of extracted water")
+    >>>
+    >>> # cin equals cout, just with shifted time edges
+    >>> xplot_out = np.repeat(tedges_out, 2)[1:-1]
+    >>> yplot_out = np.repeat(cout, 2)
+    >>> plt.plot(xplot_out, yplot_out, label="Concentration of infiltrated water")
+    >>> plt.xlabel("Time")
+    >>> plt.ylabel("Concentration")
+    >>> plt.legend()
+    >>> plt.show()
+
+    With retardation factor:
+
+    >>> tedges_out = extraction_to_infiltration_series(
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     aquifer_pore_volume=500.0,
+    ...     retardation_factor=2.0,  # Doubles residence time
+    ... )
+    >>> # Time shift is doubled: 500 * 2.0 / 100 = 10 days (backward)
+    >>> tedges[0] - tedges_out[0]
+    Timedelta('10 days 00:00:00')
     """
-    msg = "Extraction to infiltration advection (deconvolution) is not implemented yet"
-    raise NotImplementedError(msg)
+    rt_array = residence_time(
+        flow=flow,
+        flow_tedges=tedges,
+        index=tedges,
+        aquifer_pore_volume=aquifer_pore_volume,
+        retardation_factor=retardation_factor,
+        direction="extraction_to_infiltration",
+    )
+    return tedges - pd.to_timedelta(rt_array[0], unit="D", errors="coerce")
 
 
 def gamma_infiltration_to_extraction(
@@ -192,7 +272,7 @@ def gamma_infiltration_to_extraction(
 
     Parameters
     ----------
-    cin : pandas.Series
+    cin : array-like
         Concentration of the compound in infiltrating water or temperature of infiltrating
         water.
     cin_tedges : pandas.DatetimeIndex
@@ -201,7 +281,7 @@ def gamma_infiltration_to_extraction(
     cout_tedges : pandas.DatetimeIndex
         Time edges for the output data. Used to compute the cumulative concentration.
         Has a length of one more than `flow`.
-    flow : pandas.Series
+    flow : array-like
         Flow rate of water in the aquifer [m3/day].
     flow_tedges : pandas.DatetimeIndex
         Time edges for the flow data. Used to compute the cumulative flow.
@@ -290,7 +370,7 @@ def gamma_infiltration_to_extraction(
     ... )
     """
     bins = gamma.bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
-    return distribution_infiltration_to_extraction(
+    return infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
@@ -300,22 +380,53 @@ def gamma_infiltration_to_extraction(
     )
 
 
-def gamma_extraction_to_infiltration(cout, flow, alpha, beta, n_bins=100, retardation_factor=1.0):
+def gamma_extraction_to_infiltration(
+    *,
+    cout,
+    flow,
+    tedges,
+    cin_tedges,
+    alpha=None,
+    beta=None,
+    mean=None,
+    std=None,
+    n_bins=100,
+    retardation_factor=1.0,
+):
     """
-    Compute the concentration of the infiltrating water by shifting cout with its residence time.
+    Compute the concentration of the infiltrating water from extracted water (deconvolution).
+
+    The compound is retarded in the aquifer with a retardation factor. The residence
+    time is computed based on the flow rate of the water in the aquifer and the pore volume
+    of the aquifer. The aquifer pore volume is approximated by a gamma distribution, with
+    parameters alpha and beta.
 
     This function represents extraction to infiltration modeling (equivalent to deconvolution).
+    It is symmetric to gamma_infiltration_to_extraction.
+
+    Provide either alpha and beta or mean and std.
 
     Parameters
     ----------
-    cout : pandas.Series
-        Concentration of the compound in the extracted water [ng/m3].
-    flow : pandas.Series
+    cout : array-like
+        Concentration of the compound in extracted water or temperature of extracted
+        water.
+    tedges : pandas.DatetimeIndex
+        Time edges for the cout and flow data. Used to compute the cumulative concentration.
+        Has a length of one more than `cout` and `flow`.
+    cin_tedges : pandas.DatetimeIndex
+        Time edges for the output (infiltration) data. Used to compute the cumulative concentration.
+        Has a length of one more than the desired output length.
+    flow : array-like
         Flow rate of water in the aquifer [m3/day].
-    alpha : float
+    alpha : float, optional
         Shape parameter of gamma distribution of the aquifer pore volume (must be > 0)
-    beta : float
+    beta : float, optional
         Scale parameter of gamma distribution of the aquifer pore volume (must be > 0)
+    mean : float, optional
+        Mean of the gamma distribution.
+    std : float, optional
+        Standard deviation of the gamma distribution.
     n_bins : int
         Number of bins to discretize the gamma distribution.
     retardation_factor : float
@@ -323,14 +434,83 @@ def gamma_extraction_to_infiltration(cout, flow, alpha, beta, n_bins=100, retard
 
     Returns
     -------
-    NotImplementedError
-        This function is not yet implemented.
+    numpy.ndarray
+        Concentration of the compound in the infiltrating water [ng/m3] or temperature.
+
+    Examples
+    --------
+    Basic usage with alpha and beta parameters:
+
+    >>> import pandas as pd
+    >>> import numpy as np
+    >>> from gwtransport.utils import compute_time_edges
+    >>> from gwtransport.advection import gamma_extraction_to_infiltration
+    >>>
+    >>> # Create input data with aligned time edges
+    >>> dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
+    >>> tedges = compute_time_edges(
+    ...     tedges=None, tstart=None, tend=dates, number_of_bins=len(dates)
+    ... )
+    >>>
+    >>> # Create output time edges (can be different alignment)
+    >>> cin_dates = pd.date_range(start="2019-12-25", end="2020-01-15", freq="D")
+    >>> cin_tedges = compute_time_edges(
+    ...     tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates)
+    ... )
+    >>>
+    >>> # Input concentration and flow (same length, aligned with tedges)
+    >>> cout = pd.Series(np.ones(len(dates)), index=dates)
+    >>> flow = pd.Series(np.ones(len(dates)) * 100, index=dates)  # 100 m3/day
+    >>>
+    >>> # Run gamma_extraction_to_infiltration with alpha/beta parameters
+    >>> cin = gamma_extraction_to_infiltration(
+    ...     cout=cout,
+    ...     tedges=tedges,
+    ...     cin_tedges=cin_tedges,
+    ...     flow=flow,
+    ...     alpha=10.0,
+    ...     beta=10.0,
+    ...     n_bins=5,
+    ... )
+    >>> cin.shape
+    (22,)
+
+    Using mean and std parameters instead:
+
+    >>> cin = gamma_extraction_to_infiltration(
+    ...     cout=cout,
+    ...     tedges=tedges,
+    ...     cin_tedges=cin_tedges,
+    ...     flow=flow,
+    ...     mean=100.0,
+    ...     std=20.0,
+    ...     n_bins=5,
+    ... )
+
+    With retardation factor:
+
+    >>> cin = gamma_extraction_to_infiltration(
+    ...     cout=cout,
+    ...     tedges=tedges,
+    ...     cin_tedges=cin_tedges,
+    ...     flow=flow,
+    ...     alpha=10.0,
+    ...     beta=10.0,
+    ...     retardation_factor=2.0,  # Doubles residence time
+    ... )
     """
-    msg = "Extraction to infiltration advection gamma (deconvolution) is not implemented yet"
-    raise NotImplementedError(msg)
+    bins = gamma.bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
+    return extraction_to_infiltration(
+        cout=cout,
+        flow=flow,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        aquifer_pore_volumes=bins["expected_values"],
+        retardation_factor=retardation_factor,
+    )
 
 
-def distribution_infiltration_to_extraction(
+def infiltration_to_extraction(
     *,
     cin: npt.ArrayLike,
     flow: npt.ArrayLike,
@@ -338,7 +518,7 @@ def distribution_infiltration_to_extraction(
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
     retardation_factor: float = 1.0,
-) -> np.ndarray:
+) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the extracted water using flow-weighted advection.
 
@@ -393,7 +573,7 @@ def distribution_infiltration_to_extraction(
     >>> import pandas as pd
     >>> import numpy as np
     >>> from gwtransport.utils import compute_time_edges
-    >>> from gwtransport.advection import distribution_infiltration_to_extraction
+    >>> from gwtransport.advection import infiltration_to_extraction
     >>>
     >>> # Create input data
     >>> dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
@@ -414,8 +594,8 @@ def distribution_infiltration_to_extraction(
     >>> # Define distribution of aquifer pore volumes
     >>> aquifer_pore_volumes = np.array([50, 100, 200])  # m3
     >>>
-    >>> # Run distribution_infiltration_to_extraction
-    >>> cout = distribution_infiltration_to_extraction(
+    >>> # Run infiltration_to_extraction
+    >>> cout = infiltration_to_extraction(
     ...     cin=cin,
     ...     flow=flow,
     ...     tedges=tedges,
@@ -431,7 +611,7 @@ def distribution_infiltration_to_extraction(
     >>> cin_values = cin.values
     >>> flow_values = flow.values
     >>>
-    >>> cout = distribution_infiltration_to_extraction(
+    >>> cout = infiltration_to_extraction(
     ...     cin=cin_values,
     ...     flow=flow_values,
     ...     tedges=tedges,
@@ -441,7 +621,7 @@ def distribution_infiltration_to_extraction(
 
     With retardation factor:
 
-    >>> cout = distribution_infiltration_to_extraction(
+    >>> cout = infiltration_to_extraction(
     ...     cin=cin,
     ...     flow=flow,
     ...     tedges=tedges,
@@ -453,7 +633,7 @@ def distribution_infiltration_to_extraction(
     Using single pore volume:
 
     >>> single_volume = np.array([100])  # Single 100 m3 pore volume
-    >>> cout = distribution_infiltration_to_extraction(
+    >>> cout = infiltration_to_extraction(
     ...     cin=cin,
     ...     flow=flow,
     ...     tedges=tedges,
@@ -502,7 +682,7 @@ def distribution_infiltration_to_extraction(
     valid_pv_count = np.sum(valid_bins_2d, axis=0)
 
     # Initialize accumulator
-    normalized_weights = _distribution_infiltration_to_extraction_weights(
+    normalized_weights = _infiltration_to_extraction_weights(
         cout_tedges,
         aquifer_pore_volumes,
         cin_values,
@@ -520,7 +700,7 @@ def distribution_infiltration_to_extraction(
     return out
 
 
-def _distribution_infiltration_to_extraction_weights(
+def _infiltration_to_extraction_weights(
     cout_tedges,
     aquifer_pore_volumes,
     cin_values,
@@ -535,7 +715,7 @@ def _distribution_infiltration_to_extraction_weights(
     # Loop over each pore volume
     for i in range(len(aquifer_pore_volumes)):
         if np.any(valid_bins_2d[i, :]):
-            overlap_matrix = partial_isin(infiltration_tedges_2d[i, :], cin_tedges_days)
+            overlap_matrix = partial_isin(bin_edges_in=infiltration_tedges_2d[i, :], bin_edges_out=cin_tedges_days)
             accumulated_weights[valid_bins_2d[i, :], :] += overlap_matrix[valid_bins_2d[i, :], :]
 
     # Average across valid pore volumes and apply flow weighting
@@ -553,7 +733,7 @@ def _distribution_infiltration_to_extraction_weights(
     return normalized_weights
 
 
-def distribution_extraction_to_infiltration(
+def extraction_to_infiltration(
     *,
     cout: npt.ArrayLike,
     flow: npt.ArrayLike,
@@ -561,18 +741,18 @@ def distribution_extraction_to_infiltration(
     cin_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
     retardation_factor: float = 1.0,
-) -> np.ndarray:
+) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
 
-    This function implements an extraction to infiltration advection model (inverse of distribution_infiltration_to_extraction)
+    This function implements an extraction to infiltration advection model (inverse of infiltration_to_extraction)
     where cout and flow values correspond to the same aligned time bins defined by tedges.
 
     SYMMETRIC RELATIONSHIP:
-    - distribution_infiltration_to_extraction: cin + tedges → cout + cout_tedges
-    - distribution_extraction_to_infiltration: cout + tedges → cin + cin_tedges
+    - infiltration_to_extraction: cin + tedges → cout + cout_tedges
+    - extraction_to_infiltration: cout + tedges → cin + cin_tedges
 
-    The algorithm (symmetric to distribution_infiltration_to_extraction):
+    The algorithm (symmetric to infiltration_to_extraction):
     1. Computes residence times for each pore volume at cint time edges
     2. Calculates extraction time edges by adding residence times (reverse of infiltration_to_extraction)
     3. Determines temporal overlaps between extraction and cout time windows
@@ -620,7 +800,7 @@ def distribution_extraction_to_infiltration(
     >>> import pandas as pd
     >>> import numpy as np
     >>> from gwtransport.utils import compute_time_edges
-    >>> from gwtransport.advection import distribution_extraction_to_infiltration
+    >>> from gwtransport.advection import extraction_to_infiltration
     >>>
     >>> # Create input data
     >>> dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
@@ -641,8 +821,8 @@ def distribution_extraction_to_infiltration(
     >>> # Define distribution of aquifer pore volumes
     >>> aquifer_pore_volumes = np.array([50, 100, 200])  # m3
     >>>
-    >>> # Run distribution_extraction_to_infiltration
-    >>> cin = distribution_extraction_to_infiltration(
+    >>> # Run extraction_to_infiltration
+    >>> cin = extraction_to_infiltration(
     ...     cout=cout,
     ...     flow=flow,
     ...     tedges=tedges,
@@ -658,7 +838,7 @@ def distribution_extraction_to_infiltration(
     >>> cout_values = cout.values
     >>> flow_values = flow.values
     >>>
-    >>> cin = distribution_extraction_to_infiltration(
+    >>> cin = extraction_to_infiltration(
     ...     cout=cout_values,
     ...     flow=flow_values,
     ...     tedges=tedges,
@@ -668,7 +848,7 @@ def distribution_extraction_to_infiltration(
 
     With retardation factor:
 
-    >>> cin = distribution_extraction_to_infiltration(
+    >>> cin = extraction_to_infiltration(
     ...     cout=cout,
     ...     flow=flow,
     ...     tedges=tedges,
@@ -680,7 +860,7 @@ def distribution_extraction_to_infiltration(
     Using single pore volume:
 
     >>> single_volume = np.array([100])  # Single 100 m3 pore volume
-    >>> cin = distribution_extraction_to_infiltration(
+    >>> cin = extraction_to_infiltration(
     ...     cout=cout,
     ...     flow=flow,
     ...     tedges=tedges,
@@ -729,7 +909,7 @@ def distribution_extraction_to_infiltration(
     valid_pv_count = np.sum(valid_bins_2d, axis=0)
 
     # Initialize accumulator
-    normalized_weights = _distribution_extraction_to_infiltration_weights(
+    normalized_weights = _extraction_to_infiltration_weights(
         cin_tedges,
         aquifer_pore_volumes,
         cout_values,
@@ -747,7 +927,7 @@ def distribution_extraction_to_infiltration(
     return out
 
 
-def _distribution_extraction_to_infiltration_weights(
+def _extraction_to_infiltration_weights(
     cin_tedges,
     aquifer_pore_volumes,
     cout_values,
@@ -769,7 +949,7 @@ def _distribution_extraction_to_infiltration_weights(
     - Extraction to infiltration weights: W_extraction_to_infiltration maps cout → cin
     - Mathematical constraint: W_extraction_to_infiltration should be the pseudo-inverse of W_infiltration_to_extraction
 
-    The algorithm mirrors _distribution_infiltration_to_extraction_weights but with transposed
+    The algorithm mirrors _infiltration_to_extraction_weights but with transposed
     temporal overlap computations to ensure mathematical consistency.
 
     Parameters
@@ -805,7 +985,7 @@ def _distribution_extraction_to_infiltration_weights(
             # SYMMETRIC temporal overlap computation:
             # Infiltration to extraction: maps infiltration → cout time windows
             # Extraction to infiltration: maps extraction → cout time windows (transposed relationship)
-            overlap_matrix = partial_isin(extraction_tedges_2d[i, :], cout_tedges_days)
+            overlap_matrix = partial_isin(bin_edges_in=extraction_tedges_2d[i, :], bin_edges_out=cout_tedges_days)
             accumulated_weights[valid_bins_2d[i, :], :] += overlap_matrix[valid_bins_2d[i, :], :]
 
     # Average across valid pore volumes (symmetric to infiltration_to_extraction)

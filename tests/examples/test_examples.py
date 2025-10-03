@@ -5,7 +5,7 @@ import tempfile
 
 import nbformat
 import pytest
-from nbconvert import PythonExporter
+from nbconvert import PythonExporter  # type: ignore[attr-defined]
 
 
 def test_pythonscript(pythonfile_path):
@@ -29,7 +29,9 @@ def test_pythonscript(pythonfile_path):
     result = subprocess.run(
         [sys.executable, pythonfile_path], capture_output=True, text=True, check=False, env=env, timeout=30
     )
-    assert result.returncode == 0, result.stderr
+    if result.returncode != 0:
+        msg = f"Script {pythonfile_path} failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        raise AssertionError(msg)
 
 
 def test_ipynb(ipynb_path):

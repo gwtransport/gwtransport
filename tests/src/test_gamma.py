@@ -125,12 +125,12 @@ def test_numerical_stability():
 def test_gamma_mean_std_to_alpha_beta_basic():
     """Test gamma_mean_std_to_alpha_beta with typical input values."""
     mean, std = 10.0, 2.0
-    alpha, beta = mean_std_to_alpha_beta(mean, std)
+    alpha, beta = mean_std_to_alpha_beta(mean=mean, std=std)
     assert alpha > 0
     assert beta > 0
 
     # Convert back and check if we get approximately the same mean/std
-    mean_back, std_back = alpha_beta_to_mean_std(alpha, beta)
+    mean_back, std_back = alpha_beta_to_mean_std(alpha=alpha, beta=beta)
     assert np.isclose(mean, mean_back, rtol=1e-7), f"Expected mean ~ {mean}, got {mean_back}"
     assert np.isclose(std, std_back, rtol=1e-7), f"Expected std ~ {std}, got {std_back}"
 
@@ -139,14 +139,14 @@ def test_gamma_mean_std_to_alpha_beta_zero_std():
     """Test gamma_mean_std_to_alpha_beta when std is zero."""
     mean, std = 10.0, 0.0
     with pytest.raises(ZeroDivisionError):
-        mean_std_to_alpha_beta(mean, std)
+        mean_std_to_alpha_beta(mean=mean, std=std)
 
 
 def test_gamma_alpha_beta_to_mean_std_basic():
     """Test gamma_alpha_beta_to_mean_std with typical alpha/beta."""
     alpha, beta = 4.0, 2.0
     mean_expected = alpha * beta
-    mean, std = alpha_beta_to_mean_std(alpha, beta)
+    mean, std = alpha_beta_to_mean_std(alpha=alpha, beta=beta)
     assert mean == mean_expected, f"Expected mean = {mean_expected}, got {mean}"
     assert np.isclose(std, 4.0, rtol=1e-7), f"Expected std ~ 4.0, got {std}"
 

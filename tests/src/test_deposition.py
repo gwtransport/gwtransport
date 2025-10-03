@@ -46,7 +46,14 @@ def test_exact_analytical_constant_deposition():
 
     # Calculate actual concentration
     cout_result = deposition_to_extraction(
-        dep=dep_values, flow=flow_values, tedges=tedges, cout_tedges=cout_tedges, **params
+        dep=dep_values,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=params["aquifer_pore_volume"],
+        porosity=params["porosity"],
+        thickness=params["thickness"],
+        retardation_factor=params["retardation_factor"],
     )
 
     # Calculate expected using exact formula
@@ -94,7 +101,14 @@ def test_exact_analytical_varying_flow():
     cout_tedges = tedges[5:7]  # Test in stable period
 
     cout_result = deposition_to_extraction(
-        dep=dep_values, flow=flow_values, tedges=tedges, cout_tedges=cout_tedges, **params
+        dep=dep_values,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=params["aquifer_pore_volume"],
+        porosity=params["porosity"],
+        thickness=params["thickness"],
+        retardation_factor=params["retardation_factor"],
     )
 
     # Calculate expected using exact residence time
@@ -144,7 +158,14 @@ def test_exact_analytical_retardation_factor():
         params = {**base_params, "retardation_factor": retardation_factor}
 
         cout_result = deposition_to_extraction(
-            dep=dep_values, flow=flow_values, tedges=tedges, cout_tedges=cout_tedges, **params
+            dep=dep_values,
+            flow=flow_values,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volume=params["aquifer_pore_volume"],
+            porosity=params["porosity"],
+            thickness=params["thickness"],
+            retardation_factor=params["retardation_factor"],
         )
 
         rt = residence_time(
@@ -191,7 +212,14 @@ def test_perfect_roundtrip_square_system():
 
     # Forward: deposition → concentration
     concentration = deposition_to_extraction(
-        dep=original_deposition, flow=flow_values, tedges=tedges, cout_tedges=cout_tedges, **params
+        dep=original_deposition,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=params["aquifer_pore_volume"],
+        porosity=params["porosity"],
+        thickness=params["thickness"],
+        retardation_factor=params["retardation_factor"],
     )
 
     # Only proceed if we got valid concentrations
@@ -199,7 +227,14 @@ def test_perfect_roundtrip_square_system():
     if len(valid_concentration) >= 3:
         # Backward: concentration → deposition
         recovered_deposition = extraction_to_deposition(
-            flow=flow_values, tedges=tedges, cout=concentration, cout_tedges=cout_tedges, **params
+            flow=flow_values,
+            tedges=tedges,
+            cout=concentration,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volume=params["aquifer_pore_volume"],
+            porosity=params["porosity"],
+            thickness=params["thickness"],
+            retardation_factor=params["retardation_factor"],
         )
 
         # Check roundtrip consistency
@@ -241,7 +276,14 @@ def test_perfect_roundtrip_overdetermined_system():
 
     # Forward: deposition → concentration
     concentration = deposition_to_extraction(
-        dep=original_deposition, flow=flow_values, tedges=tedges, cout_tedges=cout_tedges, **params
+        dep=original_deposition,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=params["aquifer_pore_volume"],
+        porosity=params["porosity"],
+        thickness=params["thickness"],
+        retardation_factor=params["retardation_factor"],
     )
 
     # Only proceed if we got valid concentrations
@@ -249,7 +291,14 @@ def test_perfect_roundtrip_overdetermined_system():
     if len(valid_concentration) >= 2:
         # Backward: concentration → deposition
         recovered_deposition = extraction_to_deposition(
-            flow=flow_values, tedges=tedges, cout=concentration, cout_tedges=cout_tedges, **params
+            flow=flow_values,
+            tedges=tedges,
+            cout=concentration,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volume=params["aquifer_pore_volume"],
+            porosity=params["porosity"],
+            thickness=params["thickness"],
+            retardation_factor=params["retardation_factor"],
         )
 
         # For constant input, should recover reasonably smooth output
@@ -280,7 +329,14 @@ def test_zero_deposition_zero_concentration():
     cout_tedges = tedges[2:5]
 
     cout_result = deposition_to_extraction(
-        dep=dep_values, flow=flow_values, tedges=tedges, cout_tedges=cout_tedges, **params
+        dep=dep_values,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=params["aquifer_pore_volume"],
+        porosity=params["porosity"],
+        thickness=params["thickness"],
+        retardation_factor=params["retardation_factor"],
     )
 
     valid_results = cout_result[~np.isnan(cout_result)]
@@ -307,10 +363,24 @@ def test_linearity_exact():
 
     # Test both directions
     cout_base = deposition_to_extraction(
-        dep=base_deposition, flow=flow_values, tedges=tedges, cout_tedges=cout_tedges, **params
+        dep=base_deposition,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=params["aquifer_pore_volume"],
+        porosity=params["porosity"],
+        thickness=params["thickness"],
+        retardation_factor=params["retardation_factor"],
     )
     cout_double = deposition_to_extraction(
-        dep=double_deposition, flow=flow_values, tedges=tedges, cout_tedges=cout_tedges, **params
+        dep=double_deposition,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=params["aquifer_pore_volume"],
+        porosity=params["porosity"],
+        thickness=params["thickness"],
+        retardation_factor=params["retardation_factor"],
     )
 
     valid_base = cout_base[~np.isnan(cout_base)]
@@ -342,10 +412,24 @@ def test_negative_deposition_linearity():
     cout_tedges = tedges[3:5]
 
     cout_positive = deposition_to_extraction(
-        dep=positive_dep, flow=flow_values, tedges=tedges, cout_tedges=cout_tedges, **params
+        dep=positive_dep,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=params["aquifer_pore_volume"],
+        porosity=params["porosity"],
+        thickness=params["thickness"],
+        retardation_factor=params["retardation_factor"],
     )
     cout_negative = deposition_to_extraction(
-        dep=negative_dep, flow=flow_values, tedges=tedges, cout_tedges=cout_tedges, **params
+        dep=negative_dep,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=params["aquifer_pore_volume"],
+        porosity=params["porosity"],
+        thickness=params["thickness"],
+        retardation_factor=params["retardation_factor"],
     )
 
     valid_pos = cout_positive[~np.isnan(cout_positive)]
@@ -383,10 +467,24 @@ def test_parameter_scaling_exact():
     params_2 = {**base_params, "porosity": porosity_2, "thickness": 5.0}
 
     cout_1 = deposition_to_extraction(
-        dep=dep_values, flow=flow_values, tedges=tedges, cout_tedges=cout_tedges, **params_1
+        dep=dep_values,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=params_1["aquifer_pore_volume"],
+        porosity=params_1["porosity"],
+        thickness=params_1["thickness"],
+        retardation_factor=params_1["retardation_factor"],
     )
     cout_2 = deposition_to_extraction(
-        dep=dep_values, flow=flow_values, tedges=tedges, cout_tedges=cout_tedges, **params_2
+        dep=dep_values,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=params_2["aquifer_pore_volume"],
+        porosity=params_2["porosity"],
+        thickness=params_2["thickness"],
+        retardation_factor=params_2["retardation_factor"],
     )
 
     valid_1 = cout_1[~np.isnan(cout_1)]
@@ -415,17 +513,42 @@ def test_input_validation():
 
     # Test tedges length mismatch
     with pytest.raises(ValueError, match="tedges must have one more element than flow"):
-        deposition_to_extraction(dep=np.ones(3), flow=np.ones(4), tedges=tedges[:4], cout_tedges=tedges[1:3], **params)
+        deposition_to_extraction(
+            dep=np.ones(3),
+            flow=np.ones(4),
+            tedges=tedges[:4],
+            cout_tedges=tedges[1:3],
+            aquifer_pore_volume=params["aquifer_pore_volume"],
+            porosity=params["porosity"],
+            thickness=params["thickness"],
+            retardation_factor=params["retardation_factor"],
+        )
 
     # Test cout_tedges length mismatch in extraction_to_deposition
     with pytest.raises(ValueError, match="cout_tedges must have one more element than cout"):
-        extraction_to_deposition(flow=np.ones(3), tedges=tedges[:4], cout=np.ones(3), cout_tedges=tedges[:3], **params)
+        extraction_to_deposition(
+            flow=np.ones(3),
+            tedges=tedges[:4],
+            cout=np.ones(3),
+            cout_tedges=tedges[:3],
+            aquifer_pore_volume=params["aquifer_pore_volume"],
+            porosity=params["porosity"],
+            thickness=params["thickness"],
+            retardation_factor=params["retardation_factor"],
+        )
 
     # Test NaN in flow (should be rejected)
     flow_with_nan = np.array([50.0, np.nan, 60.0])
     with pytest.raises(ValueError, match="flow array cannot contain NaN values"):
         extraction_to_deposition(
-            flow=flow_with_nan, tedges=tedges[:4], cout=np.ones(2), cout_tedges=tedges[1:4], **params
+            flow=flow_with_nan,
+            tedges=tedges[:4],
+            cout=np.ones(2),
+            cout_tedges=tedges[1:4],
+            aquifer_pore_volume=params["aquifer_pore_volume"],
+            porosity=params["porosity"],
+            thickness=params["thickness"],
+            retardation_factor=params["retardation_factor"],
         )
 
 
@@ -438,7 +561,9 @@ def test_regularization_objectives():
     rhs = np.array([5.0, 4.0])
 
     # Test that squared differences objective works
-    result = solve_underdetermined_system(matrix, rhs, nullspace_objective="squared_differences")
+    result = solve_underdetermined_system(
+        coefficient_matrix=matrix, rhs_vector=rhs, nullspace_objective="squared_differences"
+    )
 
     # Should satisfy the original equations
     assert np.allclose(matrix @ result, rhs, atol=1e-10), "Solution should satisfy Ax=b"
@@ -508,7 +633,10 @@ def test_extraction_to_deposition_sparse_weekly_sampling():
         flow=flow_series.values,
         tedges=deposition_tedges,
         cout_tedges=weekly_cout_tedges,
-        **params,
+        aquifer_pore_volume=params["aquifer_pore_volume"],
+        porosity=params["porosity"],
+        thickness=params["thickness"],
+        retardation_factor=params["retardation_factor"],
     )
 
     # Prepare flow data for inverse modeling
@@ -522,7 +650,10 @@ def test_extraction_to_deposition_sparse_weekly_sampling():
         flow=weekly_flow_for_inverse,
         tedges=weekly_cout_tedges,
         cout_tedges=weekly_cout_tedges,
-        **params,
+        aquifer_pore_volume=params["aquifer_pore_volume"],
+        porosity=params["porosity"],
+        thickness=params["thickness"],
+        retardation_factor=params["retardation_factor"],
     )
 
     # Document that this test covers the same scenario as the notebook failure

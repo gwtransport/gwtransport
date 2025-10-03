@@ -3,10 +3,12 @@ import pandas as pd
 import pytest
 
 from gwtransport.advection import (
-    distribution_extraction_to_infiltration,
-    distribution_infiltration_to_extraction,
+    extraction_to_infiltration,
+    extraction_to_infiltration_series,
+    gamma_extraction_to_infiltration,
     gamma_infiltration_to_extraction,
     infiltration_to_extraction,
+    infiltration_to_extraction_series,
 )
 from gwtransport.utils import compute_time_edges
 
@@ -35,254 +37,255 @@ def gamma_params():
 
 
 # ===============================================================================
-# INFILTRATION_TO_EXTRACTION FUNCTION TESTS
+# INFILTRATION_TO_EXTRACTION_SERIES FUNCTION TESTS
 # ===============================================================================
 
 
-def test_infiltration_to_extraction_basic_functionality(sample_time_series):
-    """Test basic functionality of infiltration_to_extraction function."""
-    cin, flow = sample_time_series
-    aquifer_pore_volume = 1000.0
+def test_infiltration_to_extraction_series_output_structure():
+    """Test that infiltration_to_extraction_series returns correct DatetimeIndex structure."""
+    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+    flow = np.ones(len(dates)) * 100.0
 
-    cout = infiltration_to_extraction(
-        cin_series=cin,
-        flow_series=flow,
-        aquifer_pore_volume=aquifer_pore_volume,
+    tedges_out = infiltration_to_extraction_series(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=500.0,
+    )
+
+    assert isinstance(tedges_out, pd.DatetimeIndex)
+    assert len(tedges_out) == len(tedges)
+    assert isinstance(tedges_out[0], pd.Timestamp)
+
+
+def test_infiltration_to_extraction_series_constant_input():
+    """Test constant concentration produces constant output with proper time shift."""
+    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+    flow = np.ones(len(dates)) * 100.0
+
+    tedges_out = infiltration_to_extraction_series(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=500.0,
+    )
+
+    # Time shift should be residence time = pore_volume / flow = 500 / 100 = 5 days
+    expected_shift = pd.Timedelta(days=5)
+    actual_shift = tedges_out[0] - tedges[0]
+    assert actual_shift == expected_shift
+
+
+def test_infiltration_to_extraction_series_retardation_factor():
+    """Test retardation factor doubles residence time."""
+    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+    flow = np.ones(len(dates)) * 100.0
+
+    tedges_out_no_retard = infiltration_to_extraction_series(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=500.0,
         retardation_factor=1.0,
-        cout_index="cin",
     )
 
-    # Check output type and length
-    assert isinstance(cout, pd.Series)
-    assert len(cout) == len(cin)
-
-    # Check output values are non-negative (ignoring NaN values)
-    valid_values = cout[~np.isnan(cout)]
-    assert np.all(valid_values >= 0)
-
-
-def test_infiltration_to_extraction_cout_index_options(sample_time_series):
-    """Test infiltration_to_extraction function with different cout_index options."""
-    cin, flow = sample_time_series
-    aquifer_pore_volume = 1000.0
-
-    # Test cout_index="cin"
-    cout_cin = infiltration_to_extraction(
-        cin_series=cin, flow_series=flow, aquifer_pore_volume=aquifer_pore_volume, cout_index="cin"
-    )
-    assert len(cout_cin) == len(cin)
-
-    # Test cout_index="flow"
-    cout_flow = infiltration_to_extraction(
-        cin_series=cin, flow_series=flow, aquifer_pore_volume=aquifer_pore_volume, cout_index="flow"
-    )
-    assert len(cout_flow) == len(flow)
-
-    # Test cout_index="cout"
-    cout_cout = infiltration_to_extraction(
-        cin_series=cin, flow_series=flow, aquifer_pore_volume=aquifer_pore_volume, cout_index="cout"
-    )
-    # This should have a shifted time series
-    assert len(cout_cout) == len(cin)
-
-
-def test_infiltration_to_extraction_invalid_cout_index(sample_time_series):
-    """Test infiltration_to_extraction function raises ValueError for invalid cout_index."""
-    cin, flow = sample_time_series
-    aquifer_pore_volume = 1000.0
-
-    with pytest.raises(ValueError, match="Invalid cout_index"):
-        infiltration_to_extraction(
-            cin_series=cin, flow_series=flow, aquifer_pore_volume=aquifer_pore_volume, cout_index="invalid"
-        )
-
-
-def test_infiltration_to_extraction_retardation_factor(sample_time_series):
-    """Test infiltration_to_extraction function with different retardation factors."""
-    cin, flow = sample_time_series
-    aquifer_pore_volume = 1000.0
-
-    # Compare results with different retardation factors
-    cout1 = infiltration_to_extraction(
-        cin_series=cin,
-        flow_series=flow,
-        aquifer_pore_volume=aquifer_pore_volume,
-        retardation_factor=1.0,
-        cout_index="cin",
-    )
-
-    cout2 = infiltration_to_extraction(
-        cin_series=cin,
-        flow_series=flow,
-        aquifer_pore_volume=aquifer_pore_volume,
+    tedges_out_retard = infiltration_to_extraction_series(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=500.0,
         retardation_factor=2.0,
-        cout_index="cin",
     )
 
-    # The signal with higher retardation should be different
-    # We need to check where both have valid values
-    valid_mask = ~np.isnan(cout1) & ~np.isnan(cout2)
-    if np.any(valid_mask):
-        assert not np.allclose(cout1[valid_mask], cout2[valid_mask])
+    # Retardation factor of 2 should double time shift
+    shift_no_retard = tedges_out_no_retard[0] - tedges[0]
+    shift_retard = tedges_out_retard[0] - tedges[0]
+    assert shift_retard == shift_no_retard * 2
+
+
+def test_infiltration_to_extraction_series_pandas_series_input():
+    """Test function accepts pandas Series as input."""
+    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+    flow = pd.Series(np.ones(len(dates)) * 100.0, index=dates)
+
+    tedges_out = infiltration_to_extraction_series(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=500.0,
+    )
+
+    assert isinstance(tedges_out, pd.DatetimeIndex)
+    assert len(tedges_out) == len(tedges)
+
+
+def test_infiltration_to_extraction_series_time_edges_consistency():
+    """Test output time edges are monotonically increasing (excluding NaT values)."""
+    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+    flow = np.ones(len(dates)) * 100.0
+
+    tedges_out = infiltration_to_extraction_series(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=500.0,
+    )
+
+    # Output time edges should be monotonically increasing (excluding NaT values)
+    time_diffs = tedges_out.to_series().diff()[1:]
+    valid_diffs = time_diffs.dropna()
+    assert (valid_diffs > pd.Timedelta(0)).all(), "Valid output time edges must be monotonically increasing"
 
 
 # ===============================================================================
-# INFILTRATION_TO_EXTRACTION FUNCTION - ANALYTICAL SOLUTION TESTS
+# EXTRACTION_TO_INFILTRATION_SERIES FUNCTION TESTS
 # ===============================================================================
 
 
-def test_infiltration_to_extraction_analytical_impulse_response():
-    """Test infiltration_to_extraction function with analytical impulse response (Dirac delta)."""
-    # Create impulse input: single spike at t=0
-    dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
-    cin_values = np.zeros(len(dates))
-    cin_values[5] = 10.0  # Impulse at day 6 (index 5)
-    cin = pd.Series(cin_values, index=dates)
+def test_extraction_to_infiltration_series_output_structure():
+    """Test that extraction_to_infiltration_series returns correct DatetimeIndex structure."""
+    # Use dates starting later to ensure we have valid backward data
+    dates = pd.date_range(start="2020-01-10", end="2020-01-20", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+    flow = np.ones(len(dates)) * 100.0
 
-    # Constant flow
-    flow = pd.Series([100.0] * len(dates), index=dates)
+    tedges_out = extraction_to_infiltration_series(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=500.0,
+    )
 
-    # Pore volume that gives exactly 3 days residence time
-    pore_volume = 300.0  # 300 m3 / 100 m3/day = 3 days
-
-    # Run infiltration_to_extraction model
-    cout = infiltration_to_extraction(cin, flow, pore_volume, cout_index="cin")
-
-    # Analytical solution: impulse should appear 3 days later
-    # Input impulse at day 6 -> output impulse at day 9
-    expected_output_day = 5 + 3  # Index 8 (day 9)
-
-    # Find the peak in the output
-    valid_mask = ~np.isnan(cout)
-    if np.any(valid_mask):
-        max_idx = np.nanargmax(cout)
-        # Allow some tolerance due to interpolation
-        assert abs(max_idx - expected_output_day) <= 1, f"Expected peak at index {expected_output_day}, got {max_idx}"
-        # Peak should be approximately the input magnitude
-        assert abs(cout[max_idx] - 10.0) < 2.0, f"Expected peak ~10.0, got {cout[max_idx]}"
+    assert isinstance(tedges_out, pd.DatetimeIndex)
+    assert len(tedges_out) == len(tedges)
+    # Check that we have at least some valid timestamps (not all NaT)
+    assert tedges_out.notna().any()
 
 
-def test_infiltration_to_extraction_analytical_step_response():
-    """Test infiltration_to_extraction function with analytical step response."""
-    # Create step input: constant after t=5
+def test_extraction_to_infiltration_series_constant_input():
+    """Test constant concentration produces constant output with proper time shift backward."""
+    dates = pd.date_range(start="2020-01-10", end="2020-01-20", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+    flow = np.ones(len(dates)) * 100.0
+
+    tedges_out = extraction_to_infiltration_series(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=500.0,
+    )
+
+    # Time shift should be residence time = pore_volume / flow = 500 / 100 = 5 days (backward)
+    # Check using the last valid index instead of first (which may be NaT)
+    expected_shift = pd.Timedelta(days=5)
+    actual_shift = tedges[-1] - tedges_out[-1]
+    assert actual_shift == expected_shift
+
+
+def test_extraction_to_infiltration_series_retardation_factor():
+    """Test retardation factor doubles residence time (backward shift)."""
+    dates = pd.date_range(start="2020-01-15", end="2020-01-25", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+    flow = np.ones(len(dates)) * 100.0
+
+    tedges_out_no_retard = extraction_to_infiltration_series(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=500.0,
+        retardation_factor=1.0,
+    )
+
+    tedges_out_retard = extraction_to_infiltration_series(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=500.0,
+        retardation_factor=2.0,
+    )
+
+    # Retardation factor of 2 should double time shift (backward)
+    # Check using the last valid index instead of first (which may be NaT)
+    shift_no_retard = tedges[-1] - tedges_out_no_retard[-1]
+    shift_retard = tedges[-1] - tedges_out_retard[-1]
+    assert shift_retard == shift_no_retard * 2
+
+
+def test_extraction_to_infiltration_series_pandas_series_input():
+    """Test function accepts pandas Series as input."""
+    # Use dates starting later to have enough backward data
+    dates = pd.date_range(start="2020-01-10", end="2020-01-20", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+    flow = pd.Series(np.ones(len(dates)) * 100.0, index=dates)
+
+    tedges_out = extraction_to_infiltration_series(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=500.0,
+    )
+
+    assert isinstance(tedges_out, pd.DatetimeIndex)
+    assert len(tedges_out) == len(tedges)
+
+
+def test_extraction_to_infiltration_series_time_edges_consistency():
+    """Test output time edges are monotonically increasing (excluding NaT values)."""
+    # Use dates starting later to have sufficient backward data
+    dates = pd.date_range(start="2020-01-10", end="2020-01-20", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+    flow = np.ones(len(dates)) * 100.0
+
+    tedges_out = extraction_to_infiltration_series(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=500.0,
+    )
+
+    # Output time edges should be monotonically increasing (excluding NaT values)
+    time_diffs = tedges_out.to_series().diff()[1:]
+    valid_diffs = time_diffs.dropna()
+    assert (valid_diffs > pd.Timedelta(0)).all(), "Valid output time edges must be monotonically increasing"
+
+
+def test_extraction_to_infiltration_series_symmetry_with_infiltration():
+    """Test symmetry: roundtrip time shift recovers original time edges in valid region."""
+    # Test that forward shift (infiltration → extraction) followed by
+    # backward shift (extraction → infiltration) recovers original time edges
+    # in the region where both operations have sufficient data (analytical solution)
     dates = pd.date_range(start="2020-01-01", end="2020-01-30", freq="D")
-    cin_values = np.zeros(len(dates))
-    cin_values[10:] = 5.0  # Step at day 11 (index 10)
-    cin = pd.Series(cin_values, index=dates)
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    # Constant flow
-    flow = pd.Series([50.0] * len(dates), index=dates)
+    flow = np.ones(len(dates)) * 100.0
+    pore_volume = 500.0  # 5 days residence time
+    retardation_factor = 1.5  # 7.5 days effective residence time
 
-    # Pore volume that gives exactly 2 days residence time
-    pore_volume = 100.0  # 100 m3 / 50 m3/day = 2 days
+    # Forward: infiltration → extraction (shift forward in time)
+    tedges_extraction = infiltration_to_extraction_series(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=pore_volume,
+        retardation_factor=retardation_factor,
+    )
 
-    # Run infiltration_to_extraction model
-    cout = infiltration_to_extraction(cin, flow, pore_volume, cout_index="cin")
+    # Backward: extraction → infiltration (shift backward in time)
+    tedges_recovered = extraction_to_infiltration_series(
+        flow=flow,
+        tedges=tedges_extraction,
+        aquifer_pore_volume=pore_volume,
+        retardation_factor=retardation_factor,
+    )
 
-    # Analytical solution: step should appear 2 days later
-    # Input step at day 11 -> output step at day 13
-    expected_step_day = 10 + 2  # Index 12 (day 13)
+    # Find valid (non-NaT) region in recovered time edges
+    valid_mask = tedges_recovered.notna()
 
-    # Check that output is near zero before step
-    pre_step_mask = ~np.isnan(cout[:expected_step_day])
-    if np.any(pre_step_mask):
-        assert np.all(np.abs(cout[:expected_step_day][pre_step_mask]) < 1.0), "Output should be near zero before step"
+    # In the valid region, roundtrip must recover original exactly (analytical solution)
+    # Verify at least some central portion is recovered (residence time is ~7.5 days,
+    # so we lose edges but keep center)
+    valid_count = valid_mask.sum()
+    assert valid_count >= 15, f"Expected at least 15 valid recovered time edges, got {valid_count}"
 
-    # Check that output approaches 5.0 after step (with some tolerance)
-    post_step_mask = ~np.isnan(cout[expected_step_day + 2 :])
-    if np.any(post_step_mask):
-        post_step_values = cout[expected_step_day + 2 :][post_step_mask]
-        assert np.mean(post_step_values) > 3.0, f"Expected output ~5.0 after step, got mean {np.mean(post_step_values)}"
-
-
-def test_infiltration_to_extraction_analytical_exponential_decay():
-    """Test infiltration_to_extraction function with analytical exponential decay input."""
-    # Create exponential decay input: C(t) = C0 * exp(-t/tau)
-    dates = pd.date_range(start="2020-01-01", periods=50, freq="D")
-    t = np.arange(len(dates))
-    tau = 10.0  # decay time constant (days)
-    c0 = 20.0  # initial concentration
-    cin_values = c0 * np.exp(-t / tau)
-    cin = pd.Series(cin_values, index=dates)
-
-    # Constant flow
-    flow = pd.Series([200.0] * len(dates), index=dates)
-
-    # Pore volume that gives 1 day residence time
-    pore_volume = 200.0  # 200 m3 / 200 m3/day = 1 day
-
-    # Run infiltration_to_extraction model
-    cout = infiltration_to_extraction(cin, flow, pore_volume, cout_index="cin")
-
-    # Analytical solution: exponential decay shifted by residence time
-    # C_out(t) = c0 * exp(-(t - residence_time)/tau) for t >= residence_time
-    t_shifted = t - 1.0  # 1 day residence time
-    expected_cout = np.where(t_shifted >= 0, c0 * np.exp(-t_shifted / tau), 0.0)
-
-    # Compare with numerical solution (allow some tolerance)
-    valid_mask = ~np.isnan(cout) & (t >= 5)  # Skip early times with edge effects
-    if np.any(valid_mask):
-        numerical = cout[valid_mask]
-        analytical = expected_cout[valid_mask]
-        # Allow 20% relative error due to discretization
-        relative_error = np.abs(numerical - analytical) / (analytical + 1e-10)
-        assert np.mean(relative_error) < 0.2, f"Mean relative error {np.mean(relative_error):.3f} > 0.2"
-
-
-def test_infiltration_to_extraction_analytical_retardation_factor():
-    """Test infiltration_to_extraction function analytical retardation factor effect."""
-    # Create impulse input
-    dates = pd.date_range(start="2020-01-01", end="2020-01-30", freq="D")
-    cin_values = np.zeros(len(dates))
-    cin_values[5] = 15.0  # Impulse at day 6
-    cin = pd.Series(cin_values, index=dates)
-
-    # Constant flow
-    flow = pd.Series([100.0] * len(dates), index=dates)
-
-    # Pore volume that gives 2 days residence time without retardation
-    pore_volume = 200.0  # 200 m3 / 100 m3/day = 2 days
-
-    # Test different retardation factors
-    cout_no_retard = infiltration_to_extraction(cin, flow, pore_volume, retardation_factor=1.0, cout_index="cin")
-    cout_retard_2x = infiltration_to_extraction(cin, flow, pore_volume, retardation_factor=2.0, cout_index="cin")
-    cout_retard_3x = infiltration_to_extraction(cin, flow, pore_volume, retardation_factor=3.0, cout_index="cin")
-
-    # Find peak positions
-    def find_peak_position(arr):
-        valid_mask = ~np.isnan(arr)
-        if np.any(valid_mask):
-            return np.nanargmax(arr)
-        return -1
-
-    peak_no_retard = find_peak_position(cout_no_retard)
-    peak_retard_2x = find_peak_position(cout_retard_2x)
-    peak_retard_3x = find_peak_position(cout_retard_3x)
-
-    # Analytical solution: retardation factor multiplies residence time
-    # No retardation: peak at day 6 + 2 = day 8 (index 7)
-    # 2x retardation: peak at day 6 + 4 = day 10 (index 9)
-    # 3x retardation: peak at day 6 + 6 = day 12 (index 11)
-
-    if peak_no_retard >= 0 and peak_retard_2x >= 0:
-        # Check that retardation delays the peak
-        assert peak_retard_2x > peak_no_retard, "Retardation should delay peak arrival"
-
-        # Check approximate timing (allow ±1 day tolerance)
-        expected_delay = 2  # 2x retardation doubles residence time
-        actual_delay = peak_retard_2x - peak_no_retard
-        assert abs(actual_delay - expected_delay) <= 1, f"Expected delay ~{expected_delay}, got {actual_delay}"
-
-    if peak_retard_3x >= 0 and peak_no_retard >= 0:
-        # Check 3x retardation
-        expected_delay = 4  # 3x retardation triples residence time (2 -> 6 days)
-        actual_delay = peak_retard_3x - peak_no_retard
-        assert abs(actual_delay - expected_delay) <= 2, f"Expected delay ~{expected_delay}, got {actual_delay}"
-
-
-# ===============================================================================
-# GAMMA_INFILTRATION_TO_EXTRACTION FUNCTION TESTS
-# ===============================================================================
+    # Compare only valid elements - these must match exactly
+    pd.testing.assert_index_equal(
+        tedges_recovered[valid_mask],
+        tedges[valid_mask],
+        check_exact=True,
+        obj="Roundtrip time edges must exactly match original in valid region",
+    )
 
 
 def test_gamma_infiltration_to_extraction_basic_functionality():
@@ -349,16 +352,16 @@ def test_gamma_infiltration_to_extraction_with_mean_std():
 
 def test_gamma_infiltration_to_extraction_retardation_factor():
     """Test gamma_infiltration_to_extraction with different retardation factors."""
-    # Create test data
-    dates = pd.date_range(start="2020-01-01", end="2020-01-30", freq="D")
+    # Create test data - use year-long series for robust results
+    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    cout_dates = pd.date_range(start="2020-01-10", end="2020-01-25", freq="D")
+    cout_dates = pd.date_range(start="2020-03-01", end="2020-10-31", freq="D")
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
     # Use a step function to see retardation effects
     cin_values = np.ones(len(dates))
-    cin_values[10:] = 2.0  # Step change on day 11
+    cin_values[90:] = 2.0  # Step change on day 91 (April 1)
     cin = pd.Series(cin_values, index=dates)
     flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
 
@@ -371,6 +374,7 @@ def test_gamma_infiltration_to_extraction_retardation_factor():
         alpha=10.0,
         beta=10.0,
         retardation_factor=1.0,
+        n_bins=20,
     )
 
     cout2 = gamma_infiltration_to_extraction(
@@ -381,12 +385,27 @@ def test_gamma_infiltration_to_extraction_retardation_factor():
         alpha=10.0,
         beta=10.0,
         retardation_factor=2.0,
+        n_bins=20,
     )
 
-    # The signal with higher retardation should be different
+    # Explicit validation
     valid_mask = ~np.isnan(cout1) & ~np.isnan(cout2)
-    if np.any(valid_mask):
-        assert not np.allclose(cout1[valid_mask], cout2[valid_mask])
+    valid_count = np.sum(valid_mask)
+    assert valid_count >= 200, f"Expected at least 200 valid overlap bins, got {valid_count}"
+
+    # Extract valid values
+    cout1_valid = cout1[valid_mask]
+    cout2_valid = cout2[valid_mask]
+
+    # Test that step timing is different (max absolute difference)
+    max_diff = np.max(np.abs(cout1_valid - cout2_valid))
+    assert max_diff > 0.1, f"Expected max difference > 0.1 due to shifted step, got {max_diff:.3f}"
+
+    # Test that variation is present (step was detected)
+    std1 = np.std(cout1_valid)
+    std2 = np.std(cout2_valid)
+    assert std1 > 0.1, f"Expected std1 > 0.1 showing step, got {std1:.3f}"
+    assert std2 > 0.1, f"Expected std2 > 0.1 showing step, got {std2:.3f}"
 
 
 def test_gamma_infiltration_to_extraction_constant_input():
@@ -409,13 +428,22 @@ def test_gamma_infiltration_to_extraction_constant_input():
         flow=flow,
         alpha=10.0,
         beta=10.0,
-        n_bins=5,
+        n_bins=20,
     )
 
-    # Output should also be constant where valid (ignoring NaN values)
+    # Explicit validation
+    assert len(cout) == len(cout_dates), f"Expected {len(cout_dates)} output bins, got {len(cout)}"
+    valid_count = np.sum(~np.isnan(cout))
+    assert valid_count >= 150, f"Expected at least 150 valid bins for 6-month extraction, got {valid_count}"
+
+    # Output should also be constant where valid (constant input preserved)
     valid_values = cout[~np.isnan(cout)]
-    if len(valid_values) > 0:
-        assert np.allclose(valid_values, 1.0, rtol=1e-2)
+    mean_cout = np.mean(valid_values)
+    assert abs(mean_cout - 1.0) < 0.1, f"Expected mean ~1.0 (preserved from constant input), got {mean_cout:.3f}"
+
+    # Low variation expected for constant input
+    std_cout = np.std(valid_values)
+    assert std_cout < 0.05, f"Expected std < 0.05 for constant input, got {std_cout:.3f}"
 
 
 def test_gamma_infiltration_to_extraction_missing_parameters():
@@ -471,16 +499,25 @@ def test_gamma_infiltration_to_extraction_analytical_mean_residence_time():
         retardation_factor=1.0,
     )
 
-    # Analytical solution: for constant input, output should eventually equal input
-    # Look at the latter part of the time series where steady state is reached
+    # Explicit validation
     valid_mask = ~np.isnan(cout)
-    if np.sum(valid_mask) > 50:  # Need enough points for statistical analysis
-        stable_region = cout[valid_mask][-30:]  # Last 30 valid points
-        mean_output = np.mean(stable_region)
-        # Output should be approximately equal to input concentration
-        assert abs(mean_output - 10.0) < 1.0, f"Expected ~10.0 in steady state, got {mean_output:.2f}"
-        # Variance should be small in steady state
-        assert np.std(stable_region) < 2.0, f"Too much variance in steady state: {np.std(stable_region):.2f}"
+    valid_count = np.sum(valid_mask)
+    assert valid_count >= 150, f"Expected at least 150 valid bins for 6-month extraction, got {valid_count}"
+
+    # Extract stable region (last 30 valid points for steady state)
+    valid_indices = np.where(valid_mask)[0]
+    assert len(valid_indices) >= 30, f"Need at least 30 valid points, got {len(valid_indices)}"
+
+    stable_indices = valid_indices[-30:]
+    stable_region = cout[stable_indices]
+
+    # Analytical solution: for constant input, output should eventually equal input
+    mean_output = np.mean(stable_region)
+    assert abs(mean_output - 10.0) < 0.5, f"Expected mean ~10.0 in steady state, got {mean_output:.2f}"
+
+    # Variance should be small in steady state
+    std_output = np.std(stable_region)
+    assert std_output < 0.5, f"Expected std < 0.5 in steady state, got {std_output:.2f}"
 
 
 # ===============================================================================
@@ -488,8 +525,8 @@ def test_gamma_infiltration_to_extraction_analytical_mean_residence_time():
 # ===============================================================================
 
 
-def test_distribution_infiltration_to_extraction_basic_functionality():
-    """Test basic functionality of distribution_infiltration_to_extraction."""
+def test_infiltration_to_extraction_basic_functionality():
+    """Test basic functionality of infiltration_to_extraction."""
     # Create test data with aligned cin and flow
     dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -503,7 +540,7 @@ def test_distribution_infiltration_to_extraction_basic_functionality():
     # Use smaller pore volumes for reasonable residence times (1-3 days)
     aquifer_pore_volumes = np.array([100.0, 200.0, 300.0])
 
-    cout = distribution_infiltration_to_extraction(
+    cout = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -517,8 +554,8 @@ def test_distribution_infiltration_to_extraction_basic_functionality():
     assert len(cout) == len(cout_dates)
 
 
-def test_distribution_infiltration_to_extraction_constant_input():
-    """Test distribution_infiltration_to_extraction with constant input concentration."""
+def test_infiltration_to_extraction_constant_input():
+    """Test infiltration_to_extraction with constant input concentration."""
     # Create longer time series for better testing
     dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -531,7 +568,7 @@ def test_distribution_infiltration_to_extraction_constant_input():
     flow = pd.Series(np.ones(len(dates)) * 100, index=dates)  # Constant flow
     aquifer_pore_volumes = np.array([500.0, 1000.0])  # Two pore volumes
 
-    cout = distribution_infiltration_to_extraction(
+    cout = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -540,19 +577,25 @@ def test_distribution_infiltration_to_extraction_constant_input():
         retardation_factor=1.0,
     )
 
-    # Check output type and length
+    # Explicit validation
     assert isinstance(cout, np.ndarray)
-    assert len(cout) == len(cout_dates)
+    assert len(cout) == len(cout_dates), f"Expected {len(cout_dates)} output bins, got {len(cout)}"
 
-    # With constant input and sufficient time, some outputs should be valid
+    valid_count = np.sum(~np.isnan(cout))
+    assert valid_count >= 150, f"Expected at least 150 valid bins for 6-month extraction, got {valid_count}"
+
+    # Test constant input preservation
     valid_outputs = cout[~np.isnan(cout)]
-    if len(valid_outputs) > 0:
-        # Output should be close to input concentration for constant system
-        assert np.all(valid_outputs >= 0)
+    mean_cout = np.mean(valid_outputs)
+    assert abs(mean_cout - 5.0) < 0.5, f"Expected mean ~5.0 (preserved from constant input), got {mean_cout:.3f}"
+
+    # Test low variation for constant input
+    std_cout = np.std(valid_outputs)
+    assert std_cout < 0.5, f"Expected std < 0.5 for constant input, got {std_cout:.3f}"
 
 
-def test_distribution_infiltration_to_extraction_single_pore_volume():
-    """Test distribution_infiltration_to_extraction with single pore volume."""
+def test_infiltration_to_extraction_single_pore_volume():
+    """Test infiltration_to_extraction with single pore volume."""
     dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
@@ -564,7 +607,7 @@ def test_distribution_infiltration_to_extraction_single_pore_volume():
     # Use smaller pore volume for reasonable residence time (5 days)
     aquifer_pore_volumes = np.array([500.0])  # Single pore volume
 
-    cout = distribution_infiltration_to_extraction(
+    cout = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -577,8 +620,8 @@ def test_distribution_infiltration_to_extraction_single_pore_volume():
     assert len(cout) == len(cout_dates)
 
 
-def test_distribution_infiltration_to_extraction_retardation_factor():
-    """Test distribution_infiltration_to_extraction with different retardation factors."""
+def test_infiltration_to_extraction_retardation_factor():
+    """Test infiltration_to_extraction with different retardation factors."""
     dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
@@ -590,7 +633,7 @@ def test_distribution_infiltration_to_extraction_retardation_factor():
     aquifer_pore_volumes = np.array([1000.0, 2000.0])
 
     # Test different retardation factors
-    cout1 = distribution_infiltration_to_extraction(
+    cout1 = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -599,7 +642,7 @@ def test_distribution_infiltration_to_extraction_retardation_factor():
         retardation_factor=1.0,
     )
 
-    cout2 = distribution_infiltration_to_extraction(
+    cout2 = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -614,8 +657,8 @@ def test_distribution_infiltration_to_extraction_retardation_factor():
     assert len(cout1) == len(cout2)
 
 
-def test_distribution_infiltration_to_extraction_error_conditions():
-    """Test distribution_infiltration_to_extraction error conditions."""
+def test_infiltration_to_extraction_error_conditions():
+    """Test infiltration_to_extraction error conditions."""
     dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -627,7 +670,7 @@ def test_distribution_infiltration_to_extraction_error_conditions():
     # Test mismatched tedges length
     wrong_tedges = tedges[:-2]  # Too short
     with pytest.raises(ValueError, match="tedges must have one more element than cin"):
-        distribution_infiltration_to_extraction(
+        infiltration_to_extraction(
             cin=cin.values,
             flow=flow.values,
             tedges=wrong_tedges,
@@ -638,7 +681,7 @@ def test_distribution_infiltration_to_extraction_error_conditions():
     # Test mismatched flow and tedges
     wrong_flow = flow[:-2]  # Too short
     with pytest.raises(ValueError, match="tedges must have one more element than flow"):
-        distribution_infiltration_to_extraction(
+        infiltration_to_extraction(
             cin=cin.values,
             flow=wrong_flow.values,
             tedges=tedges,
@@ -652,8 +695,8 @@ def test_distribution_infiltration_to_extraction_error_conditions():
 # ===============================================================================
 
 
-def test_distribution_infiltration_to_extraction_no_temporal_overlap():
-    """Test distribution_infiltration_to_extraction returns NaN when no temporal overlap exists."""
+def test_infiltration_to_extraction_no_temporal_overlap():
+    """Test infiltration_to_extraction returns NaN when no temporal overlap exists."""
     # Create cin/flow in early 2020
     early_dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=early_dates, number_of_bins=len(early_dates))
@@ -667,7 +710,7 @@ def test_distribution_infiltration_to_extraction_no_temporal_overlap():
     aquifer_pore_volumes = np.array([100.0])  # Small pore volume
 
     # No temporal overlap should return all NaN values
-    cout = distribution_infiltration_to_extraction(
+    cout = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -682,24 +725,27 @@ def test_distribution_infiltration_to_extraction_no_temporal_overlap():
     assert np.all(np.isnan(cout))
 
 
-def test_distribution_infiltration_to_extraction_zero_concentrations():
-    """Test distribution_infiltration_to_extraction preserves zero concentrations and handles NaNs."""
+def test_infiltration_to_extraction_zero_concentrations():
+    """Test infiltration_to_extraction preserves zero concentrations with aligned residence time."""
     # Create longer time series for realistic residence times
     dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    # cout_tedges later to allow residence time effects, with smaller pore volume for faster transport
+    # cout_tedges later to allow residence time effects
     cout_dates = pd.date_range(start="2020-01-10", end="2020-12-20", freq="D")  # Overlap with input period
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-    # Create cin with zeros, ones, and twos (no NaNs for this test to ensure clear results)
+    # Create cin with repeating pattern: [1.0, 0.0, 2.0] (3-day period)
     cin_pattern = np.array([1.0, 0.0, 2.0])
     cin_values = np.tile(cin_pattern, len(dates) // len(cin_pattern) + 1)[: len(dates)]
     cin = pd.Series(cin_values, index=dates)
     flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
-    aquifer_pore_volumes = np.array([50.0])  # Small pore volume for quick transport
 
-    cout = distribution_infiltration_to_extraction(
+    # Use pore volume that gives residence time matching pattern period (3 days)
+    # This ensures zeros align and are preserved in output
+    aquifer_pore_volumes = np.array([300.0])  # 300/100 = 3 day residence time
+
+    cout = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -708,25 +754,29 @@ def test_distribution_infiltration_to_extraction_zero_concentrations():
         retardation_factor=1.0,
     )
 
-    # Check that we have valid results
+    # Explicit validation
+    valid_count = np.sum(~np.isnan(cout))
+    assert valid_count == len(cout_dates), f"Expected {len(cout_dates)} valid bins, got {valid_count}"
+
+    # Check that zero concentrations are preserved (not converted to NaN)
     valid_results = cout[~np.isnan(cout)]
-    if len(valid_results) > 0:
-        # Check that zero concentrations are preserved (not converted to NaN)
-        has_zeros = np.any(valid_results == 0.0)
-        if has_zeros:
-            # Verify zeros are preserved as valid concentrations
-            assert True, "Zero concentrations are correctly preserved"
+    has_zeros = np.sum(valid_results == 0.0)
+    assert has_zeros >= 80, f"Expected at least 80 zero values preserved from input pattern, got {has_zeros}"
 
-        # Check that we get reasonable concentration values
-        assert np.all(valid_results >= 0.0), "All concentrations should be non-negative"
-        assert np.all(valid_results <= 2.0), "All concentrations should be within expected range"
+    # Check range of concentration values matches input pattern
+    assert np.all(valid_results >= 0.0), "All concentrations should be non-negative"
+    assert np.all(valid_results <= 2.0), "All concentrations should be within input range [0, 2]"
 
-    # The key test: ensure function doesn't convert zeros to NaN
-    # This is tested by the structure of the function - it uses natural NaN propagation
+    # Verify output pattern matches input pattern (exact preservation with aligned residence time)
+    unique_values = np.unique(valid_results)
+    expected_values = np.array([0.0, 1.0, 2.0])
+    np.testing.assert_allclose(
+        unique_values, expected_values, rtol=1e-10, err_msg="Output should preserve exact input pattern values"
+    )
 
 
-def test_distribution_infiltration_to_extraction_extreme_conditions():
-    """Test distribution_infiltration_to_extraction handles extreme conditions gracefully."""
+def test_infiltration_to_extraction_extreme_conditions():
+    """Test infiltration_to_extraction handles extreme conditions gracefully."""
     dates = pd.date_range(start="2020-01-01", end="2020-01-05", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
     cout_tedges = tedges.copy()
@@ -736,7 +786,7 @@ def test_distribution_infiltration_to_extraction_extreme_conditions():
     aquifer_pore_volumes = np.array([10.0, 100000.0, 50.0])
 
     # Should handle extreme conditions gracefully
-    cout = distribution_infiltration_to_extraction(
+    cout = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -750,8 +800,8 @@ def test_distribution_infiltration_to_extraction_extreme_conditions():
     assert len(cout) == len(dates)
 
 
-def test_distribution_infiltration_to_extraction_extreme_pore_volumes():
-    """Test distribution_infiltration_to_extraction handles extremely large pore volumes gracefully."""
+def test_infiltration_to_extraction_extreme_pore_volumes():
+    """Test infiltration_to_extraction handles extremely large pore volumes gracefully."""
     dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
@@ -765,7 +815,7 @@ def test_distribution_infiltration_to_extraction_extreme_pore_volumes():
     aquifer_pore_volumes = np.array([1e10, 1e12, 1e15])
 
     # Should handle extreme pore volumes gracefully
-    cout = distribution_infiltration_to_extraction(
+    cout = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -781,8 +831,8 @@ def test_distribution_infiltration_to_extraction_extreme_pore_volumes():
     assert np.all(np.isnan(cout))
 
 
-def test_distribution_infiltration_to_extraction_zero_flow():
-    """Test distribution_infiltration_to_extraction handles zero flow values gracefully."""
+def test_infiltration_to_extraction_zero_flow():
+    """Test infiltration_to_extraction handles zero flow values gracefully."""
     dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
@@ -794,7 +844,7 @@ def test_distribution_infiltration_to_extraction_zero_flow():
     aquifer_pore_volumes = np.array([1000.0])
 
     # Zero flow creates infinite residence times but should be handled gracefully
-    cout = distribution_infiltration_to_extraction(
+    cout = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -810,8 +860,8 @@ def test_distribution_infiltration_to_extraction_zero_flow():
     assert np.all(np.isnan(cout))
 
 
-def test_distribution_infiltration_to_extraction_mixed_pore_volumes():
-    """Test distribution_infiltration_to_extraction handles mixed pore volumes with varying overlaps."""
+def test_infiltration_to_extraction_mixed_pore_volumes():
+    """Test infiltration_to_extraction handles mixed pore volumes with varying overlaps."""
     # Longer time series for cin/flow
     dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -827,7 +877,7 @@ def test_distribution_infiltration_to_extraction_mixed_pore_volumes():
     aquifer_pore_volumes = np.array([10.0, 100.0, 50000.0, 100000.0])
 
     # Should handle mixed pore volumes gracefully
-    cout = distribution_infiltration_to_extraction(
+    cout = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -836,13 +886,17 @@ def test_distribution_infiltration_to_extraction_mixed_pore_volumes():
         retardation_factor=1.0,
     )
 
-    # Should return valid array
+    # Explicit validation
     assert isinstance(cout, np.ndarray)
-    assert len(cout) == len(cout_dates)
-    # Some values might be valid (from small pore volumes), others NaN (from large pore volumes)
+    assert len(cout) == len(cout_dates), f"Expected {len(cout_dates)} output bins, got {len(cout)}"
+
+    # Some values should be valid (from small pore volumes with quick transport)
+    valid_count = np.sum(~np.isnan(cout))
+    assert valid_count >= 3, f"Expected at least 3 valid bins from small pore volumes, got {valid_count}"
+
+    # Check all valid values are non-negative
     valid_values = cout[~np.isnan(cout)]
-    if len(valid_values) > 0:
-        assert np.all(valid_values >= 0)
+    assert np.all(valid_values >= 0), "All valid concentrations should be non-negative"
 
 
 # ===============================================================================
@@ -850,54 +904,8 @@ def test_distribution_infiltration_to_extraction_mixed_pore_volumes():
 # ===============================================================================
 
 
-def test_distribution_infiltration_to_extraction_analytical_single_pore_volume():
-    """Test distribution_infiltration_to_extraction with single pore volume matches infiltration_to_extraction function."""
-    # Create test data
-    dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-
-    cout_dates = pd.date_range(start="2020-01-05", end="2020-01-15", freq="D")
-    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
-
-    # Sine wave input
-    cin_values = 3.0 + 2.0 * np.sin(2 * np.pi * np.arange(len(dates)) / 10.0)
-    cin = pd.Series(cin_values, index=dates)
-    flow = pd.Series([150.0] * len(dates), index=dates)
-
-    # Single pore volume
-    pore_volume = 450.0  # 450 m3 / 150 m3/day = 3 days residence time
-
-    # Run both functions
-    cout_infiltration_to_extraction = infiltration_to_extraction(cin, flow, pore_volume, cout_index="cin")
-    cout_distribution = distribution_infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=np.array([pore_volume]),
-        retardation_factor=1.0,
-    )
-
-    # Interpolate infiltration_to_extraction result to distribution output times
-    infiltration_to_extraction_interp = np.interp(
-        cout_dates.values.astype("datetime64[D]").astype(int),
-        dates.values.astype("datetime64[D]").astype(int),
-        cout_infiltration_to_extraction,
-    )
-
-    # Compare results where both are valid
-    valid_mask = ~np.isnan(cout_distribution) & ~np.isnan(infiltration_to_extraction_interp)
-    if np.any(valid_mask):
-        np.testing.assert_allclose(
-            cout_distribution[valid_mask],
-            infiltration_to_extraction_interp[valid_mask],
-            rtol=0.1,
-            err_msg="Single pore volume distribution_infiltration_to_extraction should match infiltration_to_extraction function",
-        )
-
-
-def test_distribution_infiltration_to_extraction_analytical_mass_conservation():
-    """Test distribution_infiltration_to_extraction mass conservation with pulse input."""
+def test_infiltration_to_extraction_analytical_mass_conservation():
+    """Test infiltration_to_extraction mass conservation with pulse input."""
     # Create pulse input (finite mass)
     dates = pd.date_range(start="2020-01-01", end="2020-01-30", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -917,8 +925,8 @@ def test_distribution_infiltration_to_extraction_analytical_mass_conservation():
     # Multiple pore volumes
     aquifer_pore_volumes = np.array([100.0, 200.0, 300.0])  # 1, 2, 3 day residence times
 
-    # Run distribution_infiltration_to_extraction
-    cout = distribution_infiltration_to_extraction(
+    # Run infiltration_to_extraction
+    cout = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -944,8 +952,8 @@ def test_distribution_infiltration_to_extraction_analytical_mass_conservation():
         assert mass_error < 0.3, f"Mass conservation error {mass_error:.2f} > 0.3"
 
 
-def test_distribution_infiltration_to_extraction_known_constant_delay():
-    """Test distribution_infiltration_to_extraction with known constant delay scenario."""
+def test_infiltration_to_extraction_known_constant_delay():
+    """Test infiltration_to_extraction with known constant delay scenario."""
     # Create a simple scenario where we know the exact outcome
     # 10 days of data, constant flow, single pore volume
     dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
@@ -965,7 +973,7 @@ def test_distribution_infiltration_to_extraction_known_constant_delay():
     flow = pd.Series([flow_rate] * len(dates), index=dates)
     aquifer_pore_volumes = np.array([pore_volume])
 
-    cout = distribution_infiltration_to_extraction(
+    cout = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -976,15 +984,17 @@ def test_distribution_infiltration_to_extraction_known_constant_delay():
 
     # With 1-day residence time, the step change on day 5 should appear on day 6
     # Output days 6-10 correspond to infiltration days 5-9
-    # So we expect: day 6 -> 5.0, days 7-10 -> 5.0
+    # So we expect outputs close to 5.0 (after the step change)
+    valid_count = np.sum(~np.isnan(cout))
+    assert valid_count >= 4, f"Expected at least 4 valid bins for 1-day delay, got {valid_count}"
+
     valid_outputs = cout[~np.isnan(cout)]
-    if len(valid_outputs) > 0:
-        # All valid outputs should be close to 5.0 (after the step change)
-        assert np.allclose(valid_outputs, 5.0, rtol=0.1), f"Expected ~5.0, got {valid_outputs}"
+    mean_output = np.mean(valid_outputs)
+    assert abs(mean_output - 5.0) < 0.5, f"Expected mean ~5.0 after step, got {mean_output:.3f}"
 
 
-def test_distribution_infiltration_to_extraction_known_average_of_pore_volumes():
-    """Test distribution_infiltration_to_extraction averages multiple pore volumes correctly."""
+def test_infiltration_to_extraction_known_average_of_pore_volumes():
+    """Test infiltration_to_extraction averages multiple pore volumes correctly."""
     # Simple scenario where we can predict the averaging behavior
     dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -1001,7 +1011,7 @@ def test_distribution_infiltration_to_extraction_known_average_of_pore_volumes()
     single_pv = np.array([500.0])
     double_pv = np.array([500.0, 500.0])
 
-    cout_single = distribution_infiltration_to_extraction(
+    cout_single = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -1010,7 +1020,7 @@ def test_distribution_infiltration_to_extraction_known_average_of_pore_volumes()
         retardation_factor=1.0,
     )
 
-    cout_double = distribution_infiltration_to_extraction(
+    cout_double = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -1030,8 +1040,8 @@ def test_distribution_infiltration_to_extraction_known_average_of_pore_volumes()
         )
 
 
-def test_distribution_infiltration_to_extraction_known_zero_input_gives_zero_output():
-    """Test distribution_infiltration_to_extraction with zero input gives zero output."""
+def test_infiltration_to_extraction_known_zero_input_gives_zero_output():
+    """Test infiltration_to_extraction with zero input gives zero output."""
     dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
@@ -1043,7 +1053,7 @@ def test_distribution_infiltration_to_extraction_known_zero_input_gives_zero_out
     flow = pd.Series([100.0] * len(dates), index=dates)
     aquifer_pore_volumes = np.array([200.0, 400.0])
 
-    cout = distribution_infiltration_to_extraction(
+    cout = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -1052,14 +1062,16 @@ def test_distribution_infiltration_to_extraction_known_zero_input_gives_zero_out
         retardation_factor=1.0,
     )
 
-    # Zero input should give zero output (where valid)
+    # Explicit validation - zero input should give zero output
+    valid_count = np.sum(~np.isnan(cout))
+    assert valid_count == len(cout_dates), f"Expected {len(cout_dates)} valid bins, got {valid_count}"
+
     valid_outputs = cout[~np.isnan(cout)]
-    if len(valid_outputs) > 0:
-        np.testing.assert_allclose(valid_outputs, 0.0, atol=1e-15, err_msg="Zero input should produce zero output")
+    np.testing.assert_allclose(valid_outputs, 0.0, atol=1e-15, err_msg="Zero input should produce zero output")
 
 
-def test_distribution_infiltration_to_extraction_known_retardation_effect():
-    """Test distribution_infiltration_to_extraction retardation factor effect."""
+def test_infiltration_to_extraction_known_retardation_effect():
+    """Test infiltration_to_extraction retardation factor effect."""
     # Create longer time series to capture retardation effects
     dates = pd.date_range(start="2020-01-01", end="2020-01-30", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -1080,7 +1092,7 @@ def test_distribution_infiltration_to_extraction_known_retardation_effect():
     aquifer_pore_volumes = np.array([pore_volume])
 
     # Test different retardation factors
-    cout_no_retard = distribution_infiltration_to_extraction(
+    cout_no_retard = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -1089,7 +1101,7 @@ def test_distribution_infiltration_to_extraction_known_retardation_effect():
         retardation_factor=1.0,
     )
 
-    cout_retarded = distribution_infiltration_to_extraction(
+    cout_retarded = infiltration_to_extraction(
         cin=cin.values,
         flow=flow.values,
         tedges=tedges,
@@ -1107,228 +1119,6 @@ def test_distribution_infiltration_to_extraction_known_retardation_effect():
 
 # ===============================================================================
 # COMPARISON TESTS BETWEEN FORWARD AND DISTRIBUTION_FORWARD
-# ===============================================================================
-
-
-def test_infiltration_to_extraction_vs_distribution_infiltration_to_extraction_single_pore_volume():
-    """Test that infiltration_to_extraction and distribution_infiltration_to_extraction give identical results with single pore volume."""
-    # Create test data
-    dates = pd.date_range(start="2020-01-01", end="2020-01-30", freq="D")
-    cin = pd.Series(3.0 + 2.0 * np.sin(2 * np.pi * np.arange(len(dates)) / 15.0), index=dates)
-    flow = pd.Series([200.0] * len(dates), index=dates)
-    pore_volume = 600.0  # 3 days residence time
-
-    # Create tedges for distribution_infiltration_to_extraction
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    cout_tedges = tedges.copy()  # Same alignment for direct comparison
-
-    # Run infiltration_to_extraction function
-    cout_infiltration_to_extraction = infiltration_to_extraction(cin, flow, pore_volume, cout_index="cin")
-
-    # Run distribution_infiltration_to_extraction with single pore volume
-    cout_distribution = distribution_infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=np.array([pore_volume]),
-        retardation_factor=1.0,
-    )
-
-    # Compare results exactly - both should have same NaN pattern and values
-    np.testing.assert_array_equal(
-        np.isnan(cout_infiltration_to_extraction),
-        np.isnan(cout_distribution),
-        err_msg="NaN patterns should be identical between infiltration_to_extraction and distribution_infiltration_to_extraction",
-    )
-
-    # Compare non-NaN values exactly
-    non_nan_mask = ~np.isnan(cout_infiltration_to_extraction)
-    if np.any(non_nan_mask):
-        np.testing.assert_array_equal(
-            cout_infiltration_to_extraction[non_nan_mask],
-            cout_distribution[non_nan_mask],
-            err_msg="infiltration_to_extraction and distribution_infiltration_to_extraction should give identical results with single pore volume",
-        )
-
-
-def test_infiltration_to_extraction_vs_distribution_infiltration_to_extraction_retardation_effects():
-    """Test that infiltration_to_extraction and distribution_infiltration_to_extraction handle retardation consistently."""
-    dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
-
-    # Step function to clearly see retardation effects
-    cin_values = np.ones(len(dates))
-    cin_values[10:] = 5.0  # Step change on day 11
-    cin = pd.Series(cin_values, index=dates)
-    flow = pd.Series([100.0] * len(dates), index=dates)
-    pore_volume = 300.0  # 3 days residence time
-    retardation_factor = 2.0
-
-    # Create tedges for distribution_infiltration_to_extraction
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    cout_tedges = tedges.copy()
-
-    # Run both functions with retardation
-    cout_infiltration_to_extraction = infiltration_to_extraction(
-        cin, flow, pore_volume, retardation_factor=retardation_factor, cout_index="cin"
-    )
-    cout_distribution = distribution_infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=np.array([pore_volume]),
-        retardation_factor=retardation_factor,
-    )
-
-    # Compare NaN patterns
-    np.testing.assert_array_equal(
-        np.isnan(cout_infiltration_to_extraction),
-        np.isnan(cout_distribution),
-        err_msg="NaN patterns should be identical for retardation test",
-    )
-
-    # Compare non-NaN values exactly
-    non_nan_mask = ~np.isnan(cout_infiltration_to_extraction)
-    if np.any(non_nan_mask):
-        np.testing.assert_array_equal(
-            cout_infiltration_to_extraction[non_nan_mask],
-            cout_distribution[non_nan_mask],
-            err_msg="infiltration_to_extraction and distribution_infiltration_to_extraction should handle retardation identically",
-        )
-
-
-def test_infiltration_to_extraction_vs_distribution_infiltration_to_extraction_impulse_response():
-    """Test that infiltration_to_extraction and distribution_infiltration_to_extraction handle impulse response consistently."""
-    dates = pd.date_range(start="2020-01-01", end="2020-01-25", freq="D")
-
-    # Impulse response: single spike
-    cin_values = np.zeros(len(dates))
-    cin_values[5] = 10.0  # Impulse at day 6
-    cin = pd.Series(cin_values, index=dates)
-    flow = pd.Series([150.0] * len(dates), index=dates)
-    pore_volume = 450.0  # 3 days residence time
-
-    # Create tedges for distribution_infiltration_to_extraction
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    cout_tedges = tedges.copy()
-
-    # Run both functions
-    cout_infiltration_to_extraction = infiltration_to_extraction(cin, flow, pore_volume, cout_index="cin")
-    cout_distribution = distribution_infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=np.array([pore_volume]),
-        retardation_factor=1.0,
-    )
-
-    # Compare NaN patterns
-    np.testing.assert_array_equal(
-        np.isnan(cout_infiltration_to_extraction),
-        np.isnan(cout_distribution),
-        err_msg="NaN patterns should be identical for impulse response test",
-    )
-
-    # Compare non-NaN values exactly
-    non_nan_mask = ~np.isnan(cout_infiltration_to_extraction)
-    if np.any(non_nan_mask):
-        np.testing.assert_array_equal(
-            cout_infiltration_to_extraction[non_nan_mask],
-            cout_distribution[non_nan_mask],
-            err_msg="infiltration_to_extraction and distribution_infiltration_to_extraction should handle impulse response identically",
-        )
-
-
-def test_infiltration_to_extraction_vs_distribution_infiltration_to_extraction_constant_input():
-    """Test that infiltration_to_extraction and distribution_infiltration_to_extraction handle constant input consistently."""
-    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
-    cin = pd.Series([7.5] * len(dates), index=dates)  # Constant concentration
-    flow = pd.Series([100.0] * len(dates), index=dates)  # Constant flow
-    pore_volume = 1000.0  # 10 days residence time
-
-    # Create tedges for distribution_infiltration_to_extraction
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    cout_tedges = tedges.copy()
-
-    # Run both functions
-    cout_infiltration_to_extraction = infiltration_to_extraction(cin, flow, pore_volume, cout_index="cin")
-    cout_distribution = distribution_infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=np.array([pore_volume]),
-        retardation_factor=1.0,
-    )
-
-    # Compare NaN patterns
-    np.testing.assert_array_equal(
-        np.isnan(cout_infiltration_to_extraction),
-        np.isnan(cout_distribution),
-        err_msg="NaN patterns should be identical for constant input test",
-    )
-
-    # Compare non-NaN values exactly
-    non_nan_mask = ~np.isnan(cout_infiltration_to_extraction)
-    if np.any(non_nan_mask):
-        np.testing.assert_array_equal(
-            cout_infiltration_to_extraction[non_nan_mask],
-            cout_distribution[non_nan_mask],
-            err_msg="infiltration_to_extraction and distribution_infiltration_to_extraction should handle constant input identically",
-        )
-
-
-def test_infiltration_to_extraction_vs_distribution_infiltration_to_extraction_with_arrays():
-    """Test that infiltration_to_extraction and distribution_infiltration_to_extraction work with numpy arrays as inputs."""
-    dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
-
-    # Use numpy arrays instead of pandas Series
-    cin_values = 2.0 + np.sin(np.linspace(0, 4 * np.pi, len(dates)))
-    flow_values = np.full(len(dates), 80.0)
-    pore_volume = 240.0  # 3 days residence time
-
-    # Create Series for infiltration_to_extraction function (since it requires pandas Series)
-    cin_series = pd.Series(cin_values, index=dates)
-    flow_series = pd.Series(flow_values, index=dates)
-
-    # Create tedges for distribution_infiltration_to_extraction
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    cout_tedges = tedges.copy()
-
-    # Run infiltration_to_extraction function with Series
-    cout_infiltration_to_extraction = infiltration_to_extraction(cin_series, flow_series, pore_volume, cout_index="cin")
-
-    # Run distribution_infiltration_to_extraction with arrays
-    cout_distribution = distribution_infiltration_to_extraction(
-        cin=cin_values,  # numpy array
-        flow=flow_values,  # numpy array
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=np.array([pore_volume]),
-        retardation_factor=1.0,
-    )
-
-    # Compare NaN patterns
-    np.testing.assert_array_equal(
-        np.isnan(cout_infiltration_to_extraction),
-        np.isnan(cout_distribution),
-        err_msg="NaN patterns should be identical when using arrays vs Series",
-    )
-
-    # Compare non-NaN values exactly
-    non_nan_mask = ~np.isnan(cout_infiltration_to_extraction)
-    if np.any(non_nan_mask):
-        np.testing.assert_array_equal(
-            cout_infiltration_to_extraction[non_nan_mask],
-            cout_distribution[non_nan_mask],
-            err_msg="infiltration_to_extraction and distribution_infiltration_to_extraction should give identical results with arrays",
-        )
-
-
-# ===============================================================================
-# UTILITY AND INTEGRATION TESTS
 # ===============================================================================
 
 
@@ -1398,7 +1188,9 @@ def test_empty_series():
     # This should handle gracefully or raise appropriate error
     with pytest.raises((ValueError, IndexError)):
         # Create tedges - this should fail for empty series
-        compute_time_edges(tedges=None, tstart=None, tend=empty_cin.index, number_of_bins=len(empty_cin))
+        compute_time_edges(
+            tedges=None, tstart=None, tend=pd.DatetimeIndex(empty_cin.index), number_of_bins=len(empty_cin)
+        )
 
 
 def test_mismatched_series_lengths():
@@ -1433,8 +1225,8 @@ def test_mismatched_series_lengths():
 # ===============================================================================
 
 
-def test_distribution_extraction_to_infiltration_basic_functionality():
-    """Test basic functionality of distribution_extraction_to_infiltration."""
+def test_extraction_to_infiltration_basic_functionality():
+    """Test basic functionality of extraction_to_infiltration."""
     # Create test data with aligned cout and flow
     dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -1448,7 +1240,7 @@ def test_distribution_extraction_to_infiltration_basic_functionality():
     # Use smaller pore volumes for reasonable residence times (1-3 days)
     aquifer_pore_volumes = np.array([100.0, 200.0, 300.0])
 
-    cin = distribution_extraction_to_infiltration(
+    cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
         tedges=tedges,
@@ -1462,21 +1254,22 @@ def test_distribution_extraction_to_infiltration_basic_functionality():
     assert len(cin) == len(cint_dates)
 
 
-def test_distribution_extraction_to_infiltration_constant_input():
-    """Test distribution_extraction_to_infiltration with constant output concentration."""
+def test_extraction_to_infiltration_constant_input():
+    """Test extraction_to_infiltration with constant output concentration."""
     # Create longer time series for better testing
     dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    # Create cin_tedges starting earlier to capture residence time effects
-    cint_dates = pd.date_range(start="2019-06-01", end="2019-11-30", freq="D")
+    # Create cin_tedges that properly overlaps with required infiltration times
+    # With residence times of 5-10 days, we need cin dates ending around Dec 22-27 to catch Jan 1 cout
+    cint_dates = pd.date_range(start="2019-12-15", end="2020-12-25", freq="D")
     cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cint_dates, number_of_bins=len(cint_dates))
 
     cout = pd.Series(np.ones(len(dates)) * 5.0, index=dates)  # Constant concentration
     flow = pd.Series(np.ones(len(dates)) * 100, index=dates)  # Constant flow
-    aquifer_pore_volumes = np.array([500.0, 1000.0])  # Two pore volumes
+    aquifer_pore_volumes = np.array([500.0, 1000.0])  # 5 and 10 day residence times
 
-    cin = distribution_extraction_to_infiltration(
+    cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
         tedges=tedges,
@@ -1485,19 +1278,23 @@ def test_distribution_extraction_to_infiltration_constant_input():
         retardation_factor=1.0,
     )
 
-    # Check output type and length
+    # Explicit validation
     assert isinstance(cin, np.ndarray)
-    assert len(cin) == len(cint_dates)
+    assert len(cin) == len(cint_dates), f"Expected {len(cint_dates)} output bins, got {len(cin)}"
 
-    # With constant output and sufficient time, some inputs should be valid
+    valid_count = np.sum(~np.isnan(cin))
+    assert valid_count >= 300, f"Expected at least 300 valid bins with proper overlap, got {valid_count}"
+
+    # Test non-negativity and constant preservation
     valid_inputs = cin[~np.isnan(cin)]
-    if len(valid_inputs) > 0:
-        # Input should be non-negative
-        assert np.all(valid_inputs >= 0)
+    assert np.all(valid_inputs >= 0), "All inputs should be non-negative"
+
+    mean_cin = np.mean(valid_inputs)
+    assert abs(mean_cin - 5.0) < 0.5, f"Expected mean ~5.0 (preserved from constant output), got {mean_cin:.3f}"
 
 
-def test_distribution_extraction_to_infiltration_single_pore_volume():
-    """Test distribution_extraction_to_infiltration with single pore volume."""
+def test_extraction_to_infiltration_single_pore_volume():
+    """Test extraction_to_infiltration with single pore volume."""
     dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
@@ -1509,7 +1306,7 @@ def test_distribution_extraction_to_infiltration_single_pore_volume():
     # Use smaller pore volume for reasonable residence time (5 days)
     aquifer_pore_volumes = np.array([500.0])  # Single pore volume
 
-    cin = distribution_extraction_to_infiltration(
+    cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
         tedges=tedges,
@@ -1522,8 +1319,8 @@ def test_distribution_extraction_to_infiltration_single_pore_volume():
     assert len(cin) == len(cint_dates)
 
 
-def test_distribution_extraction_to_infiltration_retardation_factor():
-    """Test distribution_extraction_to_infiltration with different retardation factors."""
+def test_extraction_to_infiltration_retardation_factor():
+    """Test extraction_to_infiltration with different retardation factors."""
     dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
@@ -1535,7 +1332,7 @@ def test_distribution_extraction_to_infiltration_retardation_factor():
     aquifer_pore_volumes = np.array([1000.0, 2000.0])
 
     # Test different retardation factors
-    cin1 = distribution_extraction_to_infiltration(
+    cin1 = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
         tedges=tedges,
@@ -1544,7 +1341,7 @@ def test_distribution_extraction_to_infiltration_retardation_factor():
         retardation_factor=1.0,
     )
 
-    cin2 = distribution_extraction_to_infiltration(
+    cin2 = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
         tedges=tedges,
@@ -1559,8 +1356,8 @@ def test_distribution_extraction_to_infiltration_retardation_factor():
     assert len(cin1) == len(cin2)
 
 
-def test_distribution_extraction_to_infiltration_error_conditions():
-    """Test distribution_extraction_to_infiltration error conditions."""
+def test_extraction_to_infiltration_error_conditions():
+    """Test extraction_to_infiltration error conditions."""
     dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
     cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -1572,7 +1369,7 @@ def test_distribution_extraction_to_infiltration_error_conditions():
     # Test mismatched tedges length
     wrong_tedges = tedges[:-2]  # Too short
     with pytest.raises(ValueError, match="tedges must have one more element than cout"):
-        distribution_extraction_to_infiltration(
+        extraction_to_infiltration(
             cout=cout.values,
             flow=flow.values,
             tedges=wrong_tedges,
@@ -1583,7 +1380,7 @@ def test_distribution_extraction_to_infiltration_error_conditions():
     # Test mismatched flow and tedges
     wrong_flow = flow[:-2]  # Too short
     with pytest.raises(ValueError, match="tedges must have one more element than flow"):
-        distribution_extraction_to_infiltration(
+        extraction_to_infiltration(
             cout=cout.values,
             flow=wrong_flow.values,
             tedges=tedges,
@@ -1597,224 +1394,8 @@ def test_distribution_extraction_to_infiltration_error_conditions():
 # ===============================================================================
 
 
-def test_infiltration_to_extraction_extraction_to_infiltration_perfect_roundtrip_impulse_same_tedges():
-    """Test infiltration_to_extraction ∘ extraction_to_infiltration = identity with same time edges for cin and cout."""
-    # Create test data with same time edges for both input and output
-    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-
-    # Impulse input signal
-    cin_values = np.zeros(len(dates))
-    cin_values[5] = 10.0  # Impulse at day 6 (index 5)
-    flow_values = np.ones(len(dates)) * 100  # Constant flow
-    aquifer_pore_volumes = np.array([100.0])  # 1 day residence time
-
-    # Forward transformation (same tedges for input and output)
-    cout = distribution_infiltration_to_extraction(
-        cin=cin_values,
-        flow=flow_values,
-        tedges=tedges,
-        cout_tedges=tedges,  # Same time edges
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=1.0,
-    )
-
-    # Backward transformation (same tedges for input and output)
-    # Replace NaN values with 0 for roundtrip testing (NaN means no data contribution)
-    cout_clean = np.where(np.isnan(cout), 0.0, cout)
-    cin_recovered = distribution_extraction_to_infiltration(
-        cout=cout_clean,
-        flow=flow_values,
-        tedges=tedges,  # Same time edges
-        cin_tedges=tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=1.0,
-    )
-
-    # Check that we can recover the impulse
-    valid_mask = ~np.isnan(cin_recovered)
-    if np.any(valid_mask):
-        # Find the peak in both original and recovered
-        original_peak_idx = np.argmax(cin_values)
-        original_peak_val = cin_values[original_peak_idx]
-
-        recovered_finite = np.where(np.isfinite(cin_recovered), cin_recovered, 0)
-        if np.max(recovered_finite) > 0:
-            recovered_peak_idx = np.argmax(recovered_finite)
-            recovered_peak_val = cin_recovered[recovered_peak_idx]
-
-            # Check that impulse is recovered at correct position with reasonable magnitude
-            assert recovered_peak_idx == original_peak_idx, (
-                f"Peak position: expected {original_peak_idx}, got {recovered_peak_idx}"
-            )
-            assert recovered_peak_val >= original_peak_val * 0.5, (
-                f"Peak magnitude: expected >={original_peak_val * 0.5:.1f}, got {recovered_peak_val:.1f}"
-            )
-        else:
-            pytest.fail("No finite impulse recovered")
-    else:
-        pytest.fail("No valid values in recovered signal")
-
-
-def test_infiltration_to_extraction_extraction_to_infiltration_perfect_roundtrip_impulse():
-    """Test that infiltration_to_extraction ∘ extraction_to_infiltration = identity for impulse signal with different time edges."""
-    # Create test data with proper temporal alignment
-    cin_dates = pd.date_range(start="2020-01-01", end="2020-01-15", freq="D")
-    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
-
-    # Output period shifted to accommodate residence time
-    cout_dates = pd.date_range(start="2020-01-04", end="2020-01-18", freq="D")
-    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
-
-    # Impulse input signal
-    cin_values = np.zeros(len(cin_dates))
-    cin_values[7] = 10.0  # Impulse at day 8 (index 7)
-    cin_flow = np.ones(len(cin_dates)) * 100
-    cout_flow = np.ones(len(cout_dates)) * 100
-    aquifer_pore_volumes = np.array([300.0])  # 3 days residence time
-
-    # Forward transformation
-    cout = distribution_infiltration_to_extraction(
-        cin=cin_values,
-        flow=cin_flow,
-        tedges=cin_tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=1.0,
-    )
-
-    # Backward transformation
-    # Replace NaN values with 0 for roundtrip testing (NaN means no data contribution)
-    cout_clean = np.where(np.isnan(cout), 0.0, cout)
-    cin_recovered = distribution_extraction_to_infiltration(
-        cout=cout_clean,
-        flow=cout_flow,
-        tedges=cout_tedges,
-        cin_tedges=cin_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=1.0,
-    )
-
-    # Check that we can recover the impulse (allowing for some numerical error)
-    valid_mask = ~np.isnan(cin_recovered)
-    if np.any(valid_mask):
-        # Find finite values only
-        recovered_finite = np.where(np.isfinite(cin_recovered), cin_recovered, 0)
-        max_recovered = np.max(recovered_finite)
-        assert max_recovered > 0, "Should recover some signal from impulse"
-
-        # Check that peak is recovered at approximately correct position
-        if max_recovered > 5:  # Reasonable threshold
-            recovered_peak_idx = np.argmax(recovered_finite)
-            original_peak_idx = 7
-            # Allow some tolerance in position due to temporal discretization
-            position_error = abs(recovered_peak_idx - original_peak_idx)
-            assert position_error <= 2, f"Peak position error: {position_error} (expected ≤2)"
-    else:
-        pytest.fail("No valid values in recovered signal")
-
-
-def test_infiltration_to_extraction_extraction_to_infiltration_perfect_roundtrip_step():
-    """Test that infiltration_to_extraction ∘ extraction_to_infiltration = identity for step signal."""
-    # Create test data
-    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-
-    # Output period with good overlap
-    cout_dates = pd.date_range(start="2020-06-01", end="2020-11-30", freq="D")
-    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
-
-    # Step input signal
-    cin_values = np.ones(len(dates))
-    cin_values[100:] = 5.0  # Step change
-    cin = pd.Series(cin_values, index=dates)
-    flow = pd.Series([100.0] * len(dates), index=dates)
-    aquifer_pore_volumes = np.array([500.0])  # 5 days residence time
-
-    # Forward transformation
-    cout = distribution_infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=1.0,
-    )
-
-    # Backward transformation
-    # Need to provide flow for the cout time period
-    cout_flow = pd.Series([100.0] * len(cout_dates), index=cout_dates)
-    cin_recovered = distribution_extraction_to_infiltration(
-        cout=cout,
-        flow=cout_flow.values,
-        tedges=cout_tedges,
-        cin_tedges=tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=1.0,
-    )
-
-    # Check that we can recover the step pattern
-    valid_mask = ~np.isnan(cin_recovered)
-    if np.sum(valid_mask) > 50:  # Need enough points
-        # Check that we have reasonable values in the expected range
-        valid_values = cin_recovered[valid_mask]
-        assert np.all(valid_values >= 0), "All recovered values should be non-negative"
-        assert np.max(valid_values) > 1, "Should recover some of the step change"
-
-
-def test_infiltration_to_extraction_extraction_to_infiltration_roundtrip_constant():
-    """Test infiltration_to_extraction-extraction_to_infiltration roundtrip with constant concentration."""
-    # Create long time series for steady-state conditions
-    dates = pd.date_range(start="2020-01-01", end="2021-12-31", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-
-    # Output period in the middle of the time series
-    cout_dates = pd.date_range(start="2021-01-01", end="2021-11-30", freq="D")
-    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
-
-    # Constant input
-    cin = pd.Series([7.5] * len(dates), index=dates)
-    flow = pd.Series([100.0] * len(dates), index=dates)
-    aquifer_pore_volumes = np.array([500.0])  # 5 days residence time
-
-    # Forward transformation
-    cout = distribution_infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=1.0,
-    )
-
-    # Backward transformation
-    # Need to provide flow for the cout time period
-    cout_flow = pd.Series([100.0] * len(cout_dates), index=cout_dates)
-    cin_recovered = distribution_extraction_to_infiltration(
-        cout=cout,
-        flow=cout_flow.values,
-        tedges=cout_tedges,
-        cin_tedges=tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=1.0,
-    )
-
-    # For constant input, should recover constant output
-    valid_mask = ~np.isnan(cin_recovered)
-    if np.sum(valid_mask) > 100:  # Need enough points for statistical analysis
-        valid_values = cin_recovered[valid_mask]
-        mean_recovered = np.mean(valid_values)
-        # Should be reasonably close to original constant value
-        assert abs(mean_recovered - 7.5) < 2.0, f"Expected ~7.5, got {mean_recovered:.2f}"
-
-
-# ===============================================================================
-# SYMMETRIC ANALYTICAL SOLUTION TESTS
-# ===============================================================================
-
-
-def test_distribution_extraction_to_infiltration_analytical_simple_delay():
-    """Test distribution_extraction_to_infiltration with known simple delay scenario."""
+def test_extraction_to_infiltration_analytical_simple_delay():
+    """Test extraction_to_infiltration with known simple delay scenario."""
     # Create a scenario where we know the exact relationship
     dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -1833,7 +1414,7 @@ def test_distribution_extraction_to_infiltration_analytical_simple_delay():
     flow = pd.Series([flow_rate] * len(dates), index=dates)
     aquifer_pore_volumes = np.array([pore_volume])
 
-    cin = distribution_extraction_to_infiltration(
+    cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
         tedges=tedges,
@@ -1849,8 +1430,8 @@ def test_distribution_extraction_to_infiltration_analytical_simple_delay():
         assert np.all(valid_inputs >= 0), f"All inputs should be non-negative, got {valid_inputs}"
 
 
-def test_distribution_extraction_to_infiltration_zero_output_gives_zero_input():
-    """Test distribution_extraction_to_infiltration with zero output gives zero input."""
+def test_extraction_to_infiltration_zero_output_gives_zero_input():
+    """Test extraction_to_infiltration with zero output gives zero input."""
     dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
@@ -1862,7 +1443,7 @@ def test_distribution_extraction_to_infiltration_zero_output_gives_zero_input():
     flow = pd.Series([100.0] * len(dates), index=dates)
     aquifer_pore_volumes = np.array([200.0, 400.0])
 
-    cin = distribution_extraction_to_infiltration(
+    cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
         tedges=tedges,
@@ -1882,8 +1463,8 @@ def test_distribution_extraction_to_infiltration_zero_output_gives_zero_input():
 # ===============================================================================
 
 
-def test_distribution_extraction_to_infiltration_no_temporal_overlap():
-    """Test distribution_extraction_to_infiltration returns NaN when no temporal overlap exists."""
+def test_extraction_to_infiltration_no_temporal_overlap():
+    """Test extraction_to_infiltration returns NaN when no temporal overlap exists."""
     # Create cout in early 2020
     early_dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=early_dates, number_of_bins=len(early_dates))
@@ -1897,7 +1478,7 @@ def test_distribution_extraction_to_infiltration_no_temporal_overlap():
     aquifer_pore_volumes = np.array([100.0])  # Small pore volume
 
     # No temporal overlap should return all NaN values
-    cin = distribution_extraction_to_infiltration(
+    cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
         tedges=tedges,
@@ -1912,8 +1493,8 @@ def test_distribution_extraction_to_infiltration_no_temporal_overlap():
     assert np.all(np.isnan(cin))
 
 
-def test_distribution_extraction_to_infiltration_extreme_pore_volumes():
-    """Test distribution_extraction_to_infiltration handles extremely large pore volumes gracefully."""
+def test_extraction_to_infiltration_extreme_pore_volumes():
+    """Test extraction_to_infiltration handles extremely large pore volumes gracefully."""
     dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
@@ -1927,7 +1508,7 @@ def test_distribution_extraction_to_infiltration_extreme_pore_volumes():
     aquifer_pore_volumes = np.array([1e10, 1e12, 1e15])
 
     # Should handle extreme pore volumes gracefully
-    cin = distribution_extraction_to_infiltration(
+    cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
         tedges=tedges,
@@ -1943,8 +1524,8 @@ def test_distribution_extraction_to_infiltration_extreme_pore_volumes():
     assert np.all(np.isnan(cin))
 
 
-def test_distribution_extraction_to_infiltration_zero_flow():
-    """Test distribution_extraction_to_infiltration handles zero flow values gracefully."""
+def test_extraction_to_infiltration_zero_flow():
+    """Test extraction_to_infiltration handles zero flow values gracefully."""
     dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
@@ -1956,7 +1537,7 @@ def test_distribution_extraction_to_infiltration_zero_flow():
     aquifer_pore_volumes = np.array([1000.0])
 
     # Zero flow creates infinite residence times but should be handled gracefully
-    cin = distribution_extraction_to_infiltration(
+    cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
         tedges=tedges,
@@ -1970,3 +1551,319 @@ def test_distribution_extraction_to_infiltration_zero_flow():
     assert len(cin) == len(cint_dates)
     # With zero flow, all outputs should be NaN
     assert np.all(np.isnan(cin))
+
+
+# ===============================================================================
+# GAMMA_EXTRACTION_TO_INFILTRATION FUNCTION TESTS
+# ===============================================================================
+
+
+def test_gamma_extraction_to_infiltration_zero_output_gives_zero_input():
+    """Test gamma_extraction_to_infiltration with zero output gives zero input."""
+    # Use sufficient time span: 60 days extraction, 90 days infiltration window
+    dates = pd.date_range(start="2020-01-01", end="2020-03-01", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # Infiltration window starts earlier to capture source
+    cin_dates = pd.date_range(start="2019-12-01", end="2020-02-28", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    # Zero concentration everywhere
+    cout = pd.Series([0.0] * len(dates), index=dates)
+    flow = pd.Series([100.0] * len(dates), index=dates)
+
+    cin = gamma_extraction_to_infiltration(
+        cout=cout,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        flow=flow,
+        alpha=5.0,
+        beta=40.0,  # mean pore volume = 200 m3, ~2 day residence time with 100 m3/day flow
+        n_bins=10,
+    )
+
+    # Zero extraction should give zero infiltration (where valid)
+    assert len(cin) == len(cin_dates), f"Expected {len(cin_dates)} output bins, got {len(cin)}"
+    valid_count = np.sum(~np.isnan(cin))
+    assert valid_count >= 50, f"Expected at least 50 valid bins, got {valid_count}"
+
+    valid_inputs = cin[~np.isnan(cin)]
+    np.testing.assert_allclose(valid_inputs, 0.0, atol=1e-15, err_msg="Zero extraction must produce zero infiltration")
+
+
+def test_gamma_extraction_to_infiltration_constant_input():
+    """Test constant extraction recovers constant infiltration in fully informed region."""
+    # Use long time series: 365 days extraction, extended infiltration window
+    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # Infiltration window extends earlier to capture all source contributions
+    cin_dates = pd.date_range(start="2019-11-01", end="2020-11-30", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    # Constant extraction concentration
+    cout = pd.Series([5.0] * len(dates), index=dates)
+    flow = pd.Series([100.0] * len(dates), index=dates)
+
+    cin = gamma_extraction_to_infiltration(
+        cout=cout,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        flow=flow,
+        alpha=10.0,
+        beta=10.0,  # mean pore volume = 100 m3, ~1 day residence time
+        n_bins=20,
+    )
+
+    # Verify output structure
+    assert len(cin) == len(cin_dates), f"Expected {len(cin_dates)} output bins"
+
+    # Count valid bins - should have substantial overlap
+    valid_count = np.sum(~np.isnan(cin))
+    assert valid_count >= 300, f"Expected at least 300 valid bins for constant signal, got {valid_count}"
+
+    # For constant extraction, infiltration should also be constant in fully informed region
+    # Check the middle 200 bins where steady state is guaranteed
+    valid_indices = np.where(~np.isnan(cin))[0]
+    assert len(valid_indices) >= 300, f"Need at least 300 valid bins, got {len(valid_indices)}"
+
+    # Take middle 200 bins (skip 50 from each end)
+    middle_indices = valid_indices[50:-50]
+    assert len(middle_indices) >= 200, f"Need at least 200 middle bins, got {len(middle_indices)}"
+
+    middle_values = cin[middle_indices]
+    assert not np.any(np.isnan(middle_values)), "Middle region must have no NaN values"
+
+    # Constant extraction must produce constant infiltration
+    mean_input = np.mean(middle_values)
+    std_input = np.std(middle_values)
+    assert abs(mean_input - 5.0) < 0.5, f"Expected mean ~5.0 in steady state, got {mean_input:.3f}"
+    assert std_input < 0.5, f"Expected low variance (std < 0.5) in steady state, got {std_input:.3f}"
+
+
+def test_gamma_extraction_to_infiltration_step_function():
+    """Test gamma_extraction_to_infiltration can handle step function in extraction."""
+    # Create sufficient time period
+    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cin_dates = pd.date_range(start="2019-11-01", end="2020-11-30", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    # Step function: extraction concentration changes from 1 to 5
+    cout_values = np.ones(len(dates))
+    cout_values[180:] = 5.0  # Step on day 180
+    cout = pd.Series(cout_values, index=dates)
+    flow = pd.Series([100.0] * len(dates), index=dates)
+
+    cin = gamma_extraction_to_infiltration(
+        cout=cout,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        flow=flow,
+        alpha=10.0,
+        beta=10.0,  # ~1 day mean residence time
+        n_bins=20,
+    )
+
+    # Explicit validation of output quantity
+    assert len(cin) == len(cin_dates), f"Expected {len(cin_dates)} output bins, got {len(cin)}"
+    valid_count = np.sum(~np.isnan(cin))
+    assert valid_count >= 300, f"Expected at least 300 valid bins for year-long data, got {valid_count}"
+
+    # Extract valid values and test variation
+    valid_mask = ~np.isnan(cin)
+    valid_cin = cin[valid_mask]
+    cin_std = np.std(valid_cin)
+    assert cin_std > 0.5, f"Expected std > 0.5 to see step variation, got {cin_std:.3f}"
+
+    # Test that both low and high values are present (step function was recovered)
+    cin_min = np.min(valid_cin)
+    cin_max = np.max(valid_cin)
+    assert cin_min < 2.0, f"Expected values below 2.0 (before step), got min={cin_min:.3f}"
+    assert cin_max > 3.5, f"Expected values above 3.5 (after step), got max={cin_max:.3f}"
+
+
+def test_gamma_extraction_to_infiltration_roundtrip():
+    """Test gamma_infiltration_to_extraction -> gamma_extraction_to_infiltration roundtrip."""
+    # Create time windows with proper alignment - use full year for sufficient overlap
+    cin_dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    # Output window overlaps with input
+    cout_dates = pd.date_range(start="2020-03-01", end="2020-10-31", freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Use varying signal (sine wave) to test actual transport, not just constant recovery
+    cin_original_values = 5.0 + 2.0 * np.sin(2 * np.pi * np.arange(len(cin_dates)) / 30.0)
+    cin_original = pd.Series(cin_original_values, index=cin_dates)
+    flow_cin = pd.Series([100.0] * len(cin_dates), index=cin_dates)
+    flow_cout = pd.Series([100.0] * len(cout_dates), index=cout_dates)
+
+    # Forward pass: infiltration -> extraction
+    cout = gamma_infiltration_to_extraction(
+        cin=cin_original,
+        tedges=cin_tedges,
+        cout_tedges=cout_tedges,
+        flow=flow_cin,
+        alpha=10.0,
+        beta=10.0,
+        n_bins=20,
+    )
+
+    # Backward pass: extraction -> infiltration
+    cout_series = pd.Series(cout, index=cout_dates)
+    cin_reconstructed = gamma_extraction_to_infiltration(
+        cout=cout_series,
+        tedges=cout_tedges,
+        cin_tedges=cin_tedges,
+        flow=flow_cout,
+        alpha=10.0,
+        beta=10.0,
+        n_bins=20,
+    )
+
+    # Explicit validation of overlap
+    valid_mask = ~np.isnan(cin_reconstructed)
+    valid_count = np.sum(valid_mask)
+    assert valid_count >= 200, f"Expected at least 200 valid bins for substantial overlap, got {valid_count}"
+
+    # Extract middle region explicitly (skip 50 bins on each end)
+    valid_indices = np.where(valid_mask)[0]
+    assert len(valid_indices) >= 200, f"Need at least 200 valid bins, got {len(valid_indices)}"
+
+    middle_indices = valid_indices[50:-50]
+    assert len(middle_indices) >= 100, (
+        f"Need at least 100 middle bins for stable region test, got {len(middle_indices)}"
+    )
+
+    middle_start = middle_indices[0]
+    middle_end = middle_indices[-1] + 1
+    middle_region = slice(middle_start, middle_end)
+
+    reconstructed_middle = cin_reconstructed[middle_region]
+    original_middle = cin_original.values[middle_region]
+
+    # Test exact recovery in stable middle region with tight tolerance
+    np.testing.assert_allclose(
+        reconstructed_middle,
+        original_middle,
+        rtol=0.15,
+        err_msg=f"Roundtrip error: expected mean ~{np.mean(original_middle):.2f}, got {np.mean(reconstructed_middle):.2f}",
+    )
+
+
+def test_gamma_extraction_to_infiltration_retardation_factor():
+    """Test gamma_extraction_to_infiltration with different retardation factors."""
+    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cin_dates = pd.date_range(start="2019-11-01", end="2020-11-30", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    # Step function
+    cout_values = np.ones(len(dates))
+    cout_values[180:] = 3.0
+    cout = pd.Series(cout_values, index=dates)
+    flow = pd.Series([100.0] * len(dates), index=dates)
+
+    # Test with retardation factor = 1.0
+    cin1 = gamma_extraction_to_infiltration(
+        cout=cout,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        flow=flow,
+        alpha=10.0,
+        beta=10.0,
+        retardation_factor=1.0,
+        n_bins=20,
+    )
+
+    # Test with retardation factor = 2.0 (doubles residence time)
+    cin2 = gamma_extraction_to_infiltration(
+        cout=cout,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        flow=flow,
+        alpha=10.0,
+        beta=10.0,
+        retardation_factor=2.0,
+        n_bins=20,
+    )
+
+    # Explicit validation of overlap
+    valid_mask = ~np.isnan(cin1) & ~np.isnan(cin2)
+    valid_count = np.sum(valid_mask)
+    assert valid_count >= 250, f"Expected at least 250 valid overlap bins for year-long data, got {valid_count}"
+
+    # Extract valid values for comparison
+    cin1_valid = cin1[valid_mask]
+    cin2_valid = cin2[valid_mask]
+
+    # The timing of the step should be different - compute max absolute difference
+    max_diff = np.max(np.abs(cin1_valid - cin2_valid))
+    assert max_diff > 0.5, f"Expected max difference > 0.5 due to shifted timing, got {max_diff:.3f}"
+
+    # Test that spatial variation differs (distribution of values changes with retardation)
+    std1 = np.std(cin1_valid)
+    std2 = np.std(cin2_valid)
+    # At least one should show significant variation from the step function
+    max_std = max(std1, std2)
+    assert max_std > 0.3, f"Expected max std > 0.3 showing step variation, got {max_std:.3f}"
+
+
+def test_gamma_extraction_to_infiltration_with_mean_std():
+    """Test gamma_extraction_to_infiltration using mean and std parameters."""
+    dates = pd.date_range(start="2020-01-01", end="2020-06-30", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cin_dates = pd.date_range(start="2019-12-01", end="2020-05-31", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    cout = pd.Series([3.0] * len(dates), index=dates)
+    flow = pd.Series([100.0] * len(dates), index=dates)
+
+    # Use mean/std instead of alpha/beta
+    mean = 100.0  # mean pore volume
+    std = 20.0
+
+    cin = gamma_extraction_to_infiltration(
+        cout=cout,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        flow=flow,
+        mean=mean,
+        std=std,
+        n_bins=20,
+    )
+
+    # Explicit validation
+    assert len(cin) == len(cin_dates), f"Expected {len(cin_dates)} output bins, got {len(cin)}"
+    valid_count = np.sum(~np.isnan(cin))
+    assert valid_count >= 100, f"Expected at least 100 valid bins for 6-month data, got {valid_count}"
+
+    # Test mean preservation for constant input
+    valid_mask = ~np.isnan(cin)
+    valid_cin = cin[valid_mask]
+    mean_cin = np.mean(valid_cin)
+    assert abs(mean_cin - 3.0) < 0.5, f"Expected mean ~3.0 (preserved from constant input), got {mean_cin:.3f}"
+
+    # For constant input, expect low variation in output
+    std_cin = np.std(valid_cin)
+    assert std_cin < 0.5, f"Expected low std (<0.5) for constant input, got {std_cin:.3f}"
+
+
+def test_gamma_extraction_to_infiltration_missing_parameters():
+    """Test that gamma_extraction_to_infiltration raises appropriate errors for missing parameters."""
+    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cin_dates = pd.date_range(start="2019-12-28", end="2020-01-08", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    cout = pd.Series(np.ones(len(dates)), index=dates)
+    flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
+
+    # Test missing both alpha/beta and mean/std
+    with pytest.raises(ValueError):
+        gamma_extraction_to_infiltration(cout=cout, tedges=tedges, cin_tedges=cin_tedges, flow=flow)

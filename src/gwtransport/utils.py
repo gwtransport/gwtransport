@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -18,8 +19,13 @@ cache_dir = Path(__file__).parent.parent.parent / "cache"
 
 
 def linear_interpolate(
-    x_ref: npt.ArrayLike, y_ref: npt.ArrayLike, x_query: npt.ArrayLike, left=None, right=None
-) -> np.ndarray:
+    *,
+    x_ref: npt.ArrayLike,
+    y_ref: npt.ArrayLike,
+    x_query: npt.ArrayLike,
+    left: float | None = None,
+    right: float | None = None,
+) -> npt.NDArray[np.floating]:
     """
     Linear interpolation on monotonically increasing data.
 
@@ -77,7 +83,7 @@ def linear_interpolate(
     return y_query
 
 
-def interp_series(series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwargs) -> pd.Series:
+def interp_series(*, series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwargs) -> pd.Series:
     """
     Interpolate a pandas.Series to a new index.
 
@@ -102,7 +108,7 @@ def interp_series(series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwa
     return pd.Series(interp_obj(dt_interp), index=index_new)
 
 
-def diff(a: npt.ArrayLike, alignment: str = "centered") -> np.ndarray:
+def diff(*, a: npt.ArrayLike, alignment: str = "centered") -> npt.NDArray[np.floating]:
     """Compute the cell widths for a given array of cell coordinates.
 
     If alignment is "centered", the coordinates are assumed to be centered in the cells.
@@ -132,6 +138,7 @@ def diff(a: npt.ArrayLike, alignment: str = "centered") -> np.ndarray:
 
 
 def linear_average(  # noqa: C901
+    *,
     x_data: npt.ArrayLike,
     y_data: npt.ArrayLike,
     x_edges: npt.ArrayLike,
@@ -230,9 +237,9 @@ def linear_average(  # noqa: C901
     all_unique_x = np.unique(np.concatenate([x_data_clean, edges_processed.ravel()]))
 
     # Interpolate y values at all unique x points once
-    all_unique_y: npt.NDArray[np.float64] = np.interp(
-        all_unique_x, x_data_clean, y_data_clean, left=np.nan, right=np.nan
-    )
+    all_unique_y_result = np.interp(all_unique_x, x_data_clean, y_data_clean, left=np.nan, right=np.nan)
+    # Ensure it's an array for type checker
+    all_unique_y: npt.NDArray[np.float64] = np.asarray(all_unique_y_result, dtype=np.float64)
 
     # Compute cumulative integrals once using trapezoidal rule
     dx = np.diff(all_unique_x)
@@ -244,7 +251,9 @@ def linear_average(  # noqa: C901
 
     # Vectorized computation for all series
     # Find indices of all edges in the combined grid
-    edge_indices: npt.NDArray[np.intp] = np.searchsorted(all_unique_x, edges_processed)
+    edge_indices_result = np.searchsorted(all_unique_x, edges_processed)
+    # Ensure it's a 2D array for type checker
+    edge_indices: npt.NDArray[np.intp] = np.asarray(edge_indices_result, dtype=np.intp).reshape(edges_processed.shape)
 
     # Compute integral between consecutive edges for all series (vectorized)
     integral_values = cumulative_integral[edge_indices[:, 1:]] - cumulative_integral[edge_indices[:, :-1]]
@@ -274,7 +283,7 @@ def linear_average(  # noqa: C901
     return result
 
 
-def partial_isin(bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -> np.ndarray:
+def partial_isin(*, bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -> npt.NDArray[np.floating]:
     """
     Calculate the fraction of each input bin that overlaps with each output bin.
 
@@ -360,7 +369,7 @@ def partial_isin(bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -> n
     return overlap_widths / in_width
 
 
-def time_bin_overlap(tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> np.ndarray:
+def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.NDArray[np.floating]:
     """
     Calculate the fraction of each time bin that overlaps with each time range.
 
@@ -436,6 +445,7 @@ def generate_failed_coverage_badge() -> None:
 
 
 def combine_bin_series(
+    *,
     a: npt.ArrayLike,
     a_edges: npt.ArrayLike,
     b: npt.ArrayLike,
@@ -506,7 +516,9 @@ def combine_bin_series(
     # Vectorized mapping using searchsorted - find which original bin each combined bin belongs to
     # For series a: find which original bin each combined bin center falls into
     combined_bin_centers = (combined_edges[:-1] + combined_edges[1:]) / 2
-    a_bin_assignment = np.searchsorted(a_edges, combined_bin_centers, side="right") - 1
+    a_bin_assignment_result = np.searchsorted(a_edges, combined_bin_centers, side="right") - 1
+    # Ensure it's an array for type checker
+    a_bin_assignment: npt.NDArray[np.intp] = np.asarray(a_bin_assignment_result, dtype=np.intp)
     a_bin_assignment = np.clip(a_bin_assignment, 0, len(a) - 1)
 
     # Handle extrapolation for series a
@@ -523,7 +535,9 @@ def combine_bin_series(
         c[~a_valid_mask] = extrapolation
 
     # Handle extrapolation for series b
-    b_bin_assignment = np.searchsorted(b_edges, combined_bin_centers, side="right") - 1
+    b_bin_assignment_result = np.searchsorted(b_edges, combined_bin_centers, side="right") - 1
+    # Ensure it's an array for type checker
+    b_bin_assignment: npt.NDArray[np.intp] = np.asarray(b_bin_assignment_result, dtype=np.intp)
     b_bin_assignment = np.clip(b_bin_assignment, 0, len(b) - 1)
 
     if extrapolation == "nearest":
@@ -546,6 +560,7 @@ def combine_bin_series(
 
 
 def compute_time_edges(
+    *,
     tedges: pd.DatetimeIndex | None,
     tstart: pd.DatetimeIndex | None,
     tend: pd.DatetimeIndex | None,
@@ -598,36 +613,34 @@ def compute_time_edges(
     - All input time data is converted to pandas.DatetimeIndex for consistency.
     """
     if tedges is not None:
-        tedges = pd.DatetimeIndex(tedges)
         if number_of_bins != len(tedges) - 1:
             msg = "tedges must have one more element than flow"
             raise ValueError(msg)
+        return pd.DatetimeIndex(tedges)
 
-    elif tstart is not None:
+    if tstart is not None:
         # Assume the index refers to the time at the start of the measurement interval
         tstart = pd.DatetimeIndex(tstart)
         if number_of_bins != len(tstart):
             msg = "tstart must have the same number of elements as flow"
             raise ValueError(msg)
 
-        tedges = tstart.append(tstart[[-1]] + (tstart[-1] - tstart[-2]))
+        return pd.DatetimeIndex(tstart.append(tstart[[-1]] + (tstart[-1] - tstart[-2])))
 
-    elif tend is not None:
+    if tend is not None:
         # Assume the index refers to the time at the end of the measurement interval
         tend = pd.DatetimeIndex(tend)
         if number_of_bins != len(tend):
             msg = "tend must have the same number of elements as flow"
             raise ValueError(msg)
 
-        tedges = (tend[[0]] - (tend[1] - tend[0])).append(tend)
+        return pd.DatetimeIndex((tend[[0]] - (tend[1] - tend[0])).append(tend))
 
-    else:
-        msg = "Either provide tedges, tstart, and tend"
-        raise ValueError(msg)
-    return tedges
+    msg = "Either provide tedges, tstart, and tend"
+    raise ValueError(msg)
 
 
-def get_soil_temperature(station_number: int = 260, *, interpolate_missing_values: bool = True) -> pd.DataFrame:
+def get_soil_temperature(*, station_number: int = 260, interpolate_missing_values: bool = True) -> pd.DataFrame:
     """
     Download soil temperature data from the KNMI and return it as a pandas DataFrame.
 
@@ -733,12 +746,12 @@ def get_soil_temperature(station_number: int = 260, *, interpolate_missing_value
 
 
 def solve_underdetermined_system(
-    coefficient_matrix,
-    rhs_vector,
     *,
-    nullspace_objective="squared_differences",
-    optimization_method="BFGS",
-):
+    coefficient_matrix: npt.ArrayLike,
+    rhs_vector: npt.ArrayLike,
+    nullspace_objective: str | Callable[[npt.NDArray[np.floating]], float] = "squared_differences",
+    optimization_method: str = "BFGS",
+) -> npt.NDArray[np.floating]:
     """
     Solve an underdetermined linear system with nullspace regularization.
 
@@ -880,8 +893,11 @@ def solve_underdetermined_system(
 
 
 def _optimize_nullspace_coefficients(
-    x_ls: np.ndarray, nullspace_basis: np.ndarray, nullspace_objective: str, optimization_method: str
-) -> np.ndarray:
+    x_ls: np.ndarray,
+    nullspace_basis: np.ndarray,
+    nullspace_objective: str | Callable[[npt.NDArray[np.floating]], float],
+    optimization_method: str,
+) -> npt.NDArray[np.floating]:
     """Optimize coefficients in the nullspace to minimize the objective."""
     nullrank = nullspace_basis.shape[1]
     objective_func = _get_nullspace_objective_function(nullspace_objective)
@@ -927,7 +943,7 @@ def _summed_differences_objective(coeffs: np.ndarray, x_ls: np.ndarray, nullspac
     return np.sum(np.abs(x[1:] - x[:-1]))
 
 
-def _get_nullspace_objective_function(nullspace_objective: str):
+def _get_nullspace_objective_function(nullspace_objective: str | Callable[[npt.NDArray[np.floating]], float]):
     """Get the objective function for nullspace optimization."""
     if nullspace_objective == "squared_differences":
         return _squared_differences_objective

@@ -2,32 +2,36 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 from scipy import ndimage, sparse
 
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import compute_time_edges, diff
 
 
 def infiltration_to_extraction(
-    cin: pd.Series,
-    flow: pd.Series,
+    *,
+    cin: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
     aquifer_pore_volume: float,
     diffusivity: float = 0.1,
     retardation_factor: float = 1.0,
     aquifer_length: float = 80.0,
     porosity: float = 0.35,
-) -> pd.Series:
+) -> npt.NDArray[np.floating]:
     """Compute the diffusion of a compound during 1D transport in the aquifer.
 
     This function represents infiltration to extraction modeling (equivalent to convolution).
 
     Parameters
     ----------
-    cin : pandas.Series
+    cin : array-like
         Concentration or temperature of the compound in the infiltrating water [ng/m3].
-    flow : pandas.Series
+    flow : array-like
         Flow rate of water in the aquifer [m3/day].
+    tedges : pandas.DatetimeIndex
+        Time edges corresponding to the flow values.
     aquifer_pore_volume : float
         Pore volume of the aquifer [m3].
     diffusivity : float, optional
@@ -44,35 +48,40 @@ def infiltration_to_extraction(
     numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3].
     """
+    cin = np.asarray(cin)
+    flow = np.asarray(flow)
+
     sigma_array = compute_sigma_array(
         flow=flow,
+        tedges=tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         diffusivity=diffusivity,
         retardation_factor=retardation_factor,
         aquifer_length=aquifer_length,
         porosity=porosity,
     )
-    return convolve_diffusion(cin.values, sigma_array, truncate=30.0)
+    return convolve_diffusion(input_signal=cin, sigma_array=sigma_array, truncate=30.0)
 
 
 def extraction_to_infiltration(
-    cout,
-    flow,
-    aquifer_pore_volume,
-    diffusivity=0.1,
-    retardation_factor=1.0,
-    aquifer_length=80.0,
-    porosity=0.35,
-):
+    *,
+    cout: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    aquifer_pore_volume: float,
+    diffusivity: float = 0.1,
+    retardation_factor: float = 1.0,
+    aquifer_length: float = 80.0,
+    porosity: float = 0.35,
+) -> npt.NDArray[np.floating]:
     """Compute the reverse diffusion of a compound during 1D transport in the aquifer.
 
     This function represents extraction to infiltration modeling (equivalent to deconvolution).
 
     Parameters
     ----------
-    cout : pandas.Series
+    cout : array-like
         Concentration or temperature of the compound in the extracted water [ng/m3].
-    flow : pandas.Series
+    flow : array-like
         Flow rate of water in the aquifer [m3/day].
     aquifer_pore_volume : float
         Pore volume of the aquifer [m3].
@@ -100,19 +109,23 @@ def extraction_to_infiltration(
 
 
 def compute_sigma_array(
-    flow: pd.Series,
+    *,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
     aquifer_pore_volume: float,
     diffusivity: float = 0.1,
     retardation_factor: float = 1.0,
     aquifer_length: float = 80.0,
     porosity: float = 0.35,
-) -> np.ndarray:
+) -> npt.NDArray[np.floating]:
     """Compute sigma values for diffusion based on flow and aquifer properties.
 
     Parameters
     ----------
-    flow : pandas.Series
+    flow : array-like
         Flow rate of water in the aquifer [m3/day].
+    tedges : pandas.DatetimeIndex
+        Time edges corresponding to the flow values.
     aquifer_pore_volume : float
         Pore volume of the aquifer [m3].
     diffusivity : float, optional
@@ -129,20 +142,16 @@ def compute_sigma_array(
     numpy.ndarray
         Array of sigma values for diffusion.
     """
-    # Create flow tedges from the flow series index (assuming it's at the end of bins)
-    flow_tedges = compute_time_edges(
-        tedges=None, tstart=None, tend=pd.DatetimeIndex(flow.index), number_of_bins=len(flow)
-    )
     residence_time_series = residence_time(
         flow=flow,
-        flow_tedges=flow_tedges,
+        flow_tedges=tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="infiltration_to_extraction",
         return_pandas_series=True,
     )
     residence_time_series = residence_time_series.interpolate(method="nearest").ffill().bfill()
-    timedelta_at_departure = diff(flow.index, alignment="right") / pd.to_timedelta(1, unit="D")
+    timedelta_at_departure = np.diff(tedges) / pd.to_timedelta(1, unit="D")
     volume_infiltrated_at_departure = flow * timedelta_at_departure
     cross_sectional_area = aquifer_pore_volume / aquifer_length
     dx = volume_infiltrated_at_departure / cross_sectional_area / porosity
@@ -150,7 +159,9 @@ def compute_sigma_array(
     return np.clip(a=sigma_array.values, a_min=0.0, a_max=100)
 
 
-def convolve_diffusion(input_signal, sigma_array, truncate=4.0):
+def convolve_diffusion(
+    *, input_signal: npt.ArrayLike, sigma_array: npt.ArrayLike, truncate: float = 4.0
+) -> npt.NDArray[np.floating]:
     """Apply Gaussian filter with position-dependent sigma values.
 
     This function extends scipy.ndimage.gaussian_filter1d by allowing the standard
@@ -287,7 +298,9 @@ def convolve_diffusion(input_signal, sigma_array, truncate=4.0):
     return conv_matrix.dot(input_signal)
 
 
-def deconvolve_diffusion(output_signal, sigma_array, truncate=4.0):
+def deconvolve_diffusion(
+    *, output_signal: npt.ArrayLike, sigma_array: npt.ArrayLike, truncate: float = 4.0
+) -> npt.NDArray[np.floating]:
     """Apply Gaussian deconvolution with position-dependent sigma values.
 
     This function extends scipy.ndimage.gaussian_filter1d by allowing the standard
@@ -316,7 +329,9 @@ def deconvolve_diffusion(output_signal, sigma_array, truncate=4.0):
     raise NotImplementedError(msg)
 
 
-def create_example_data(nx=1000, domain_length=10.0, diffusivity=0.1):
+def create_example_data(
+    *, nx: int = 1000, domain_length: float = 10.0, diffusivity: float = 0.1
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]]:
     """Create example data for demonstrating variable-sigma diffusion.
 
     Parameters
@@ -369,7 +384,7 @@ if __name__ == "__main__":
     x, signal, sigma_array, dt = create_example_data()
 
     # Apply variable-sigma filtering
-    filtered = convolve_diffusion(signal, sigma_array * 5)
+    filtered = convolve_diffusion(input_signal=signal, sigma_array=sigma_array * 5)
 
     # Compare with regular Gaussian filter
     avg_sigma = np.mean(sigma_array)
