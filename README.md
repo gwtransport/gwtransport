@@ -27,7 +27,7 @@ The aquifer pore volume distribution can be obtained using:
 Compute the area between streamlines from flow field data to directly estimate the pore volume distribution parameters.
 
 ```python
-from gwtransport.advection import distribution_infiltration_to_extraction
+from gwtransport.advection import infiltration_to_extraction
 
 # Measurements
 cin_data = [1.0, 2.0, 3.0]  # Example concentration infiltrated water
@@ -39,7 +39,7 @@ depth_aquifer = 2.0  # Convert areas between 2d streamlines to 3d aquifer pore v
 porosity = 0.35
 aquifer_pore_volumes = areas_between_streamlines * depth_aquifer * porosity
 
-cout = distribution_infiltration_to_extraction(
+cout = infiltration_to_extraction(
     cin=cin_data,
     flow=flow_data,
     tedges=tedges,

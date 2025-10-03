@@ -49,7 +49,7 @@ estimate the pore volume distribution parameters.
 
 .. code:: python
 
-   from gwtransport.advection import distribution_infiltration_to_extraction
+   from gwtransport.advection import infiltration_to_extraction
 
    # Measurements
    cin_data = [1.0, 2.0, 3.0]  # Example concentration infiltrated water
@@ -60,7 +60,7 @@ estimate the pore volume distribution parameters.
    depth_aquifer = 2.0  # Convert areas between 2d streamlines to 3d aquifer pore volumes.
    aquifer_pore_volumes = areas_between_streamlines * depth_aquifer
 
-   cout = distribution_infiltration_to_extraction(
+   cout = infiltration_to_extraction(
        cin=cin_data,
        flow=flow_data,
        tedges=tedges,

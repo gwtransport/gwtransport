@@ -95,11 +95,11 @@ Step 1: Compute Streamlines
 
 .. code-block:: python
 
-   from gwtransport.advection import distribution_infiltration_to_extraction
-   
+   from gwtransport.advection import infiltration_to_extraction
+
    # Compute areas between streamlines (from flow modeling)
    areas_between_streamlines = compute_streamline_areas(flow_field)
-   
+
    # Convert to 3D pore volumes
    depth_aquifer = 200.0  # [m]
    aquifer_pore_volumes = areas_between_streamlines * depth_aquifer
@@ -110,7 +110,7 @@ Step 2: Direct Transport Calculation
 .. code-block:: python
 
    # Use pore volumes directly
-   cout = distribution_infiltration_to_extraction(
+   cout = infiltration_to_extraction(
        cin=cin_data,
        flow=flow_data,
        tedges=tedges,
