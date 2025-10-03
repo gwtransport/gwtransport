@@ -24,14 +24,14 @@ from gwtransport.utils import linear_interpolate, solve_underdetermined_system
 
 def compute_deposition_weights(
     *,
-    flow_values,
-    tedges,
-    cout_tedges,
-    aquifer_pore_volume,
-    porosity,
-    thickness,
-    retardation_factor=1.0,
-):
+    flow_values: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    aquifer_pore_volume: float,
+    porosity: float,
+    thickness: float,
+    retardation_factor: float = 1.0,
+) -> npt.NDArray[np.floating]:
     """Compute deposition weights for concentration-deposition convolution.
 
     Parameters
