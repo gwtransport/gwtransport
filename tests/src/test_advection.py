@@ -839,21 +839,24 @@ def test_distribution_infiltration_to_extraction_no_temporal_overlap():
 
 
 def test_distribution_infiltration_to_extraction_zero_concentrations():
-    """Test distribution_infiltration_to_extraction preserves zero concentrations and handles NaNs."""
+    """Test distribution_infiltration_to_extraction preserves zero concentrations with aligned residence time."""
     # Create longer time series for realistic residence times
     dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    # cout_tedges later to allow residence time effects, with smaller pore volume for faster transport
+    # cout_tedges later to allow residence time effects
     cout_dates = pd.date_range(start="2020-01-10", end="2020-12-20", freq="D")  # Overlap with input period
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-    # Create cin with zeros, ones, and twos (no NaNs for this test to ensure clear results)
+    # Create cin with repeating pattern: [1.0, 0.0, 2.0] (3-day period)
     cin_pattern = np.array([1.0, 0.0, 2.0])
     cin_values = np.tile(cin_pattern, len(dates) // len(cin_pattern) + 1)[: len(dates)]
     cin = pd.Series(cin_values, index=dates)
     flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
-    aquifer_pore_volumes = np.array([50.0])  # Small pore volume for quick transport
+
+    # Use pore volume that gives residence time matching pattern period (3 days)
+    # This ensures zeros align and are preserved in output
+    aquifer_pore_volumes = np.array([300.0])  # 300/100 = 3 day residence time
 
     cout = distribution_infiltration_to_extraction(
         cin=cin.values,
@@ -866,16 +869,23 @@ def test_distribution_infiltration_to_extraction_zero_concentrations():
 
     # Explicit validation
     valid_count = np.sum(~np.isnan(cout))
-    assert valid_count >= 300, f"Expected at least 300 valid bins for year-long data, got {valid_count}"
+    assert valid_count == len(cout_dates), f"Expected {len(cout_dates)} valid bins, got {valid_count}"
 
     # Check that zero concentrations are preserved (not converted to NaN)
     valid_results = cout[~np.isnan(cout)]
     has_zeros = np.sum(valid_results == 0.0)
     assert has_zeros >= 80, f"Expected at least 80 zero values preserved from input pattern, got {has_zeros}"
 
-    # Check range of concentration values
+    # Check range of concentration values matches input pattern
     assert np.all(valid_results >= 0.0), "All concentrations should be non-negative"
-    assert np.all(valid_results <= 2.5), "All concentrations should be within expected range"
+    assert np.all(valid_results <= 2.0), "All concentrations should be within input range [0, 2]"
+
+    # Verify output pattern matches input pattern (exact preservation with aligned residence time)
+    unique_values = np.unique(valid_results)
+    expected_values = np.array([0.0, 1.0, 2.0])
+    np.testing.assert_allclose(
+        unique_values, expected_values, rtol=1e-10, err_msg="Output should preserve exact input pattern values"
+    )
 
 
 def test_distribution_infiltration_to_extraction_extreme_conditions():
@@ -1167,7 +1177,7 @@ def test_distribution_infiltration_to_extraction_known_zero_input_gives_zero_out
 
     # Explicit validation - zero input should give zero output
     valid_count = np.sum(~np.isnan(cout))
-    assert valid_count >= 10, f"Expected at least 10 valid bins for 2-4 day residence, got {valid_count}"
+    assert valid_count == len(cout_dates), f"Expected {len(cout_dates)} valid bins, got {valid_count}"
 
     valid_outputs = cout[~np.isnan(cout)]
     np.testing.assert_allclose(valid_outputs, 0.0, atol=1e-15, err_msg="Zero input should produce zero output")
@@ -1361,13 +1371,14 @@ def test_distribution_extraction_to_infiltration_constant_input():
     dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    # Create cin_tedges starting earlier to capture residence time effects
-    cint_dates = pd.date_range(start="2019-06-01", end="2019-11-30", freq="D")
+    # Create cin_tedges that properly overlaps with required infiltration times
+    # With residence times of 5-10 days, we need cin dates ending around Dec 22-27 to catch Jan 1 cout
+    cint_dates = pd.date_range(start="2019-12-15", end="2020-12-25", freq="D")
     cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cint_dates, number_of_bins=len(cint_dates))
 
     cout = pd.Series(np.ones(len(dates)) * 5.0, index=dates)  # Constant concentration
     flow = pd.Series(np.ones(len(dates)) * 100, index=dates)  # Constant flow
-    aquifer_pore_volumes = np.array([500.0, 1000.0])  # Two pore volumes
+    aquifer_pore_volumes = np.array([500.0, 1000.0])  # 5 and 10 day residence times
 
     cin = distribution_extraction_to_infiltration(
         cout=cout.values,
@@ -1383,7 +1394,7 @@ def test_distribution_extraction_to_infiltration_constant_input():
     assert len(cin) == len(cint_dates), f"Expected {len(cint_dates)} output bins, got {len(cin)}"
 
     valid_count = np.sum(~np.isnan(cin))
-    assert valid_count >= 100, f"Expected at least 100 valid bins with sufficient overlap, got {valid_count}"
+    assert valid_count >= 300, f"Expected at least 300 valid bins with proper overlap, got {valid_count}"
 
     # Test non-negativity and constant preservation
     valid_inputs = cin[~np.isnan(cin)]
