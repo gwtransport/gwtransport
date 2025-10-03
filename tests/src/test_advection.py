@@ -1188,7 +1188,9 @@ def test_empty_series():
     # This should handle gracefully or raise appropriate error
     with pytest.raises((ValueError, IndexError)):
         # Create tedges - this should fail for empty series
-        compute_time_edges(tedges=None, tstart=None, tend=empty_cin.index, number_of_bins=len(empty_cin))
+        compute_time_edges(
+            tedges=None, tstart=None, tend=pd.DatetimeIndex(empty_cin.index), number_of_bins=len(empty_cin)
+        )
 
 
 def test_mismatched_series_lengths():

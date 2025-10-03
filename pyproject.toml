@@ -54,6 +54,7 @@ test = [
   "nbformat",
   "pytest",
   "ruff==0.11.0",
+  "ty",
   "validate-pyproject[all,store]",
   "pytest-cov",
   "pytest-xdist",

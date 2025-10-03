@@ -384,7 +384,7 @@ if __name__ == "__main__":
     x, signal, sigma_array, dt = create_example_data()
 
     # Apply variable-sigma filtering
-    filtered = convolve_diffusion(signal, sigma_array * 5)
+    filtered = convolve_diffusion(input_signal=signal, sigma_array=sigma_array * 5)
 
     # Compare with regular Gaussian filter
     avg_sigma = np.mean(sigma_array)
