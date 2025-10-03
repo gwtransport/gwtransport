@@ -243,64 +243,49 @@ def test_extraction_to_infiltration_series_time_edges_consistency():
 
 
 def test_extraction_to_infiltration_series_symmetry_with_infiltration():
-    """Test symmetry: roundtrip recovers center points exactly in fully informed region."""
-    # Use long time series: 30 days with 5-day residence time
-    # Forward loses last ~5 days (uninformed future), backward loses first ~5 days (uninformed past)
-    # Center 20 days should be fully informed in both directions, allowing perfect roundtrip
+    """Test symmetry: roundtrip time shift recovers original time edges in valid region."""
+    # Test that forward shift (infiltration → extraction) followed by
+    # backward shift (extraction → infiltration) recovers original time edges
+    # in the region where both operations have sufficient data (analytical solution)
     dates = pd.date_range(start="2020-01-01", end="2020-01-30", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    # Use non-trivial varying input to verify actual transport (not just constant)
-    cin_original = 10.0 + 5.0 * np.sin(2 * np.pi * np.arange(len(dates)) / 10.0)
     flow = np.ones(len(dates)) * 100.0
     pore_volume = 500.0  # 5 days residence time
+    retardation_factor = 1.5  # 7.5 days effective residence time
 
-    # Forward: infiltration -> extraction
-    result_forward = infiltration_to_extraction_series(
-        cin=cin_original,
+    # Forward: infiltration → extraction (shift forward in time)
+    tedges_extraction = infiltration_to_extraction_series(
         flow=flow,
         tedges=tedges,
         aquifer_pore_volume=pore_volume,
+        retardation_factor=retardation_factor,
     )
 
-    # Forward direction: first part is fully informed, last ~5 bins have NaT
-    forward_valid = result_forward["start"].notna()
-    forward_valid_count = forward_valid.sum()
-    assert forward_valid_count >= 25, f"Expected at least 25 valid forward bins, got {forward_valid_count}"
-
-    # Backward: extraction -> infiltration using forward output
-    result_backward = extraction_to_infiltration_series(
-        cout=result_forward["cout"].values,
+    # Backward: extraction → infiltration (shift backward in time)
+    tedges_recovered = extraction_to_infiltration_series(
         flow=flow,
-        tedges=pd.DatetimeIndex([*result_forward["start"], result_forward["end"].iloc[-1]]),
+        tedges=tedges_extraction,
         aquifer_pore_volume=pore_volume,
+        retardation_factor=retardation_factor,
     )
 
-    # Backward direction: first ~5 bins have NaT, rest is informed
-    backward_valid = result_backward["start"].notna()
-    backward_valid_count = backward_valid.sum()
-    assert backward_valid_count >= 20, f"Expected at least 20 valid backward bins, got {backward_valid_count}"
+    # Find valid (non-NaT) region in recovered time edges
+    valid_mask = tedges_recovered.notna()
 
-    # Find the fully informed region: where both forward and backward have valid data
-    # This is the center portion where we have enough history AND enough future data
-    fully_informed = forward_valid & backward_valid
-    fully_informed_count = fully_informed.sum()
-    assert fully_informed_count >= 20, f"Expected at least 20 fully informed bins, got {fully_informed_count}"
+    # In the valid region, roundtrip must recover original exactly (analytical solution)
+    # Verify at least some central portion is recovered (residence time is ~7.5 days,
+    # so we lose edges but keep center)
+    valid_count = valid_mask.sum()
+    assert valid_count >= 15, f"Expected at least 15 valid recovered time edges, got {valid_count}"
 
-    # In the fully informed region, the roundtrip MUST recover the original exactly
-    cin_recovered = result_backward["cin"].values[fully_informed]
-    cin_expected = cin_original[fully_informed]
-    np.testing.assert_array_almost_equal(
-        cin_recovered,
-        cin_expected,
-        decimal=10,
-        err_msg="Roundtrip must recover original values exactly in fully informed region",
+    # Compare only valid elements - these must match exactly
+    pd.testing.assert_index_equal(
+        tedges_recovered[valid_mask],
+        tedges[valid_mask],
+        check_exact=True,
+        obj="Roundtrip time edges must exactly match original in valid region",
     )
-
-    # Verify time alignment is correct in fully informed region
-    first_informed_idx = fully_informed.idxmax()
-    assert first_informed_idx >= 5, f"First fully informed index should be >= 5, got {first_informed_idx}"
-    assert result_backward["start"].iloc[first_informed_idx] == tedges[first_informed_idx]
 
 
 def test_gamma_infiltration_to_extraction_basic_functionality():
