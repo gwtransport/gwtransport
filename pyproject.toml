@@ -69,6 +69,7 @@ config-path = "ruff.toml"
 addopts = [
     "--import-mode=importlib",
     "-n=auto",
+    "--doctest-modules",
 ]
 filterwarnings = [
     "ignore:.*Jupyter is migrating.*:DeprecationWarning",

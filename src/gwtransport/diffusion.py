@@ -255,7 +255,7 @@ def convolve_diffusion(
     >>> sigma_array = np.sqrt(2 * diffusivity * dt) / dx
 
     >>> # Apply the filter
-    >>> filtered = convolve_diffusion(signal, sigma_array)
+    >>> filtered = convolve_diffusion(input_signal=signal, sigma_array=sigma_array)
     """
     if len(input_signal) != len(sigma_array):
         msg = "Input signal and sigma array must have the same length"

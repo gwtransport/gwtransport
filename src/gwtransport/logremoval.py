@@ -101,16 +101,20 @@ def residence_time_to_log_removal(
     >>> import numpy as np
     >>> residence_times = np.array([1.0, 10.0, 100.0])
     >>> log_removal_rate = 2.0
-    >>> residence_time_to_log_removal(residence_times, log_removal_rate)
-    array([0.   , 2.   , 4.   ])
+    >>> residence_time_to_log_removal(
+    ...     residence_times=residence_times, log_removal_rate=log_removal_rate
+    ... )  # doctest: +NORMALIZE_WHITESPACE
+    array([0., 2., 4.])
 
     >>> # Single residence time
-    >>> residence_time_to_log_removal(5.0, 1.5)
-    1.0484550065040283
+    >>> residence_time_to_log_removal(residence_times=5.0, log_removal_rate=1.5)
+    np.float64(1.0484550065040283)
 
     >>> # 2D array of residence times
     >>> residence_times_2d = np.array([[1.0, 10.0], [100.0, 1000.0]])
-    >>> residence_time_to_log_removal(residence_times_2d, 1.0)
+    >>> residence_time_to_log_removal(
+    ...     residence_times=residence_times_2d, log_removal_rate=1.0
+    ... )
     array([[0., 1.],
            [2., 3.]])
     """
@@ -186,18 +190,18 @@ def parallel_mean(
     >>> import numpy as np
     >>> # Three parallel streams with equal flow and log removals of 3, 4, and 5
     >>> log_removals = np.array([3, 4, 5])
-    >>> parallel_mean(log_removals)
-    3.431798275933005
+    >>> parallel_mean(log_removals=log_removals)
+    np.float64(3.431798275933005)
 
     >>> # Two parallel streams with weighted flow
     >>> log_removals = np.array([3, 5])
     >>> flow_fractions = np.array([0.7, 0.3])
-    >>> parallel_mean(log_removals, flow_fractions)
-    3.153044674980176
+    >>> parallel_mean(log_removals=log_removals, flow_fractions=flow_fractions)
+    np.float64(3.153044674980176)
 
     >>> # Multi-dimensional array: parallel mean along axis 1
     >>> log_removals_2d = np.array([[3, 4, 5], [2, 3, 4]])
-    >>> parallel_mean(log_removals_2d, axis=1)
+    >>> parallel_mean(log_removals=log_removals_2d, axis=1)
     array([3.43179828, 2.43179828])
 
     See Also

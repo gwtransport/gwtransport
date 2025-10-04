@@ -230,12 +230,15 @@ def linear_average(  # noqa: C901
     >>> x_data = [0, 1, 2, 3]
     >>> y_data = [0, 1, 1, 0]
     >>> x_edges = [0, 1.5, 3]
-    >>> linear_average(x_data, y_data, x_edges)
-    array([[0.667, 0.667]])
+    >>> linear_average(
+    ...     x_data=x_data, y_data=y_data, x_edges=x_edges
+    ... )  # doctest: +ELLIPSIS
+    array([[0.666..., 0.666...]])
 
     >>> x_edges_2d = [[0, 1.5, 3], [0.5, 2, 3]]
-    >>> linear_average(x_data, y_data, x_edges_2d)
-    array([[0.667, 0.667], [0.75, 0.5]])
+    >>> linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges_2d)
+    array([[0.66666667, 0.66666667],
+           [0.91666667, 0.5       ]])
     """
     # Convert inputs to numpy arrays
     x_data = np.asarray(x_data, dtype=float)
@@ -372,10 +375,12 @@ def partial_isin(*, bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -
     --------
     >>> bin_edges_in = np.array([0, 10, 20, 30])
     >>> bin_edges_out = np.array([5, 15, 25])
-    >>> partial_isin(bin_edges_in, bin_edges_out)
-    array([[0.5, 0.0],
+    >>> partial_isin(
+    ...     bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out
+    ... )  # doctest: +NORMALIZE_WHITESPACE
+    array([[0.5, 0. ],
            [0.5, 0.5],
-           [0.0, 0.5]])
+           [0. , 0.5]])
     """
     # Convert inputs to numpy arrays
     bin_edges_in = np.asarray(bin_edges_in, dtype=float)
@@ -457,9 +462,11 @@ def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.N
     --------
     >>> tedges = np.array([0, 10, 20, 30])
     >>> bin_tedges = [(5, 15), (25, 35)]
-    >>> time_bin_overlap(tedges, bin_tedges)
-    array([[0.5, 0.5, 0.0],
-           [0.0, 0.0, 0.5]])
+    >>> time_bin_overlap(
+    ...     tedges=tedges, bin_tedges=bin_tedges
+    ... )  # doctest: +NORMALIZE_WHITESPACE
+    array([[0.5, 0.5, 0. ],
+           [0. , 0. , 0.5]])
     """
     # Convert inputs to numpy arrays
     tedges = np.asarray(tedges)
@@ -879,14 +886,18 @@ def solve_underdetermined_system(
     >>> rhs = np.array([3, 4])
     >>>
     >>> # Solve with squared differences regularization
-    >>> x = solve_underdetermined_system(matrix, rhs)
-    >>> print(f"Solution: {x}")
-    >>> print(f"Residual: {np.linalg.norm(matrix @ x - rhs):.2e}")
+    >>> x = solve_underdetermined_system(coefficient_matrix=matrix, rhs_vector=rhs)
+    >>> print(f"Solution: {x}")  # doctest: +SKIP
+    >>> print(
+    ...     f"Residual: {np.linalg.norm(matrix @ x - rhs):.2e}"
+    ... )  # doctest: +SKIP
 
     With summed differences objective:
 
-    >>> x_sparse = solve_underdetermined_system(
-    ...     matrix, rhs, nullspace_objective="summed_differences"
+    >>> x_sparse = solve_underdetermined_system(  # doctest: +SKIP
+    ...     coefficient_matrix=matrix,
+    ...     rhs_vector=rhs,
+    ...     nullspace_objective="summed_differences",
     ... )
 
     With custom objective function:
@@ -895,8 +906,10 @@ def solve_underdetermined_system(
     ...     x = x_ls + nullspace_basis @ coeffs
     ...     return np.sum(x**2)  # Minimize L2 norm
     >>>
-    >>> x_custom = solve_underdetermined_system(
-    ...     matrix, rhs, nullspace_objective=custom_objective
+    >>> x_custom = solve_underdetermined_system(  # doctest: +SKIP
+    ...     coefficient_matrix=matrix,
+    ...     rhs_vector=rhs,
+    ...     nullspace_objective=custom_objective,
     ... )
 
     Handling NaN values:
@@ -909,7 +922,9 @@ def solve_underdetermined_system(
     ... ])
     >>> rhs_nan = np.array([3, np.nan, 4])
     >>>
-    >>> x_nan = solve_underdetermined_system(matrix_nan, rhs_nan)
+    >>> x_nan = solve_underdetermined_system(
+    ...     coefficient_matrix=matrix_nan, rhs_vector=rhs_nan
+    ... )  # doctest: +SKIP
     """
     matrix = np.asarray(coefficient_matrix)
     rhs = np.asarray(rhs_vector)
