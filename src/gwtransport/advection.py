@@ -8,38 +8,37 @@ groundwater flow where water infiltrates with concentration ``cin``, flows throu
 with pore volume distribution, compounds are transported with retarded velocity (retardation
 factor >= 1.0), and water is extracted with concentration ``cout``.
 
-Functions
----------
-infiltration_to_extraction_series
-    Single pore volume, time-shift only. Shifts infiltration time edges forward by residence
-    time. Concentration values remain unchanged (cout = cin). No support for custom output
-    time edges. Use case: Deterministic transport with single flow path.
+Available functions:
 
-infiltration_to_extraction
-    Arbitrary pore volume distribution, convolution. Supports explicit distribution of aquifer
-    pore volumes with flow-weighted averaging. Flexible output time resolution via cout_tedges.
-    Use case: Known pore volume distribution from streamline analysis.
+- :func:`infiltration_to_extraction_series` - Single pore volume, time-shift only. Shifts
+  infiltration time edges forward by residence time. Concentration values remain unchanged
+  (cout = cin). No support for custom output time edges. Use case: Deterministic transport
+  with single flow path.
 
-gamma_infiltration_to_extraction
-    Gamma-distributed pore volumes, convolution. Models aquifer heterogeneity with 2-parameter
-    gamma distribution. Parameterizable via (alpha, beta) or (mean, std). Discretizes gamma
-    distribution into equal-probability bins. Use case: Heterogeneous aquifer with calibrated
-    gamma parameters.
+- :func:`infiltration_to_extraction` - Arbitrary pore volume distribution, convolution.
+  Supports explicit distribution of aquifer pore volumes with flow-weighted averaging.
+  Flexible output time resolution via cout_tedges. Use case: Known pore volume distribution
+  from streamline analysis.
 
-extraction_to_infiltration_series
-    Single pore volume, time-shift only (deconvolution). Shifts extraction time edges backward
-    by residence time. Concentration values remain unchanged (cin = cout). Symmetric inverse
-    of infiltration_to_extraction_series. Use case: Backward tracing with single flow path.
+- :func:`gamma_infiltration_to_extraction` - Gamma-distributed pore volumes, convolution.
+  Models aquifer heterogeneity with 2-parameter gamma distribution. Parameterizable via
+  (alpha, beta) or (mean, std). Discretizes gamma distribution into equal-probability bins.
+  Use case: Heterogeneous aquifer with calibrated gamma parameters.
 
-extraction_to_infiltration
-    Arbitrary pore volume distribution, deconvolution. Inverts forward transport for arbitrary
-    pore volume distributions. Symmetric inverse of infiltration_to_extraction. Flow-weighted
-    averaging in reverse direction. Use case: Estimating infiltration history from extraction data.
+- :func:`extraction_to_infiltration_series` - Single pore volume, time-shift only
+  (deconvolution). Shifts extraction time edges backward by residence time. Concentration
+  values remain unchanged (cin = cout). Symmetric inverse of infiltration_to_extraction_series.
+  Use case: Backward tracing with single flow path.
 
-gamma_extraction_to_infiltration
-    Gamma-distributed pore volumes, deconvolution. Inverts forward transport for gamma-distributed
-    pore volumes. Symmetric inverse of gamma_infiltration_to_extraction. Use case: Calibrating
-    infiltration conditions from extraction measurements.
+- :func:`extraction_to_infiltration` - Arbitrary pore volume distribution, deconvolution.
+  Inverts forward transport for arbitrary pore volume distributions. Symmetric inverse of
+  infiltration_to_extraction. Flow-weighted averaging in reverse direction. Use case:
+  Estimating infiltration history from extraction data.
+
+- :func:`gamma_extraction_to_infiltration` - Gamma-distributed pore volumes, deconvolution.
+  Inverts forward transport for gamma-distributed pore volumes. Symmetric inverse of
+  gamma_infiltration_to_extraction. Use case: Calibrating infiltration conditions from
+  extraction measurements.
 """
 
 import numpy as np

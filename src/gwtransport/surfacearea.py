@@ -6,14 +6,13 @@ heights between streamlines in heterogeneous aquifer systems. These calculations
 support direct estimation of pore volume distributions from streamline analysis,
 providing an alternative to gamma distribution approximations.
 
-Available Functions
--------------------
-:func:`compute_average_heights`
-    Compute average heights of clipped trapezoids formed by streamlines. Trapezoids
-    have vertical sides defined by x_edges and top/bottom edges defined by y_edges
-    (2D array). Clipping bounds (y_lower, y_upper) restrict the integration domain.
-    Returns area/width ratios representing average heights for use in pore volume
-    calculations from streamline geometry.
+Available functions:
+
+- :func:`compute_average_heights` - Compute average heights of clipped trapezoids formed by
+  streamlines. Trapezoids have vertical sides defined by x_edges and top/bottom edges defined
+  by y_edges (2D array). Clipping bounds (y_lower, y_upper) restrict the integration domain.
+  Returns area/width ratios representing average heights for use in pore volume calculations
+  from streamline geometry.
 """
 
 import numpy as np

@@ -9,25 +9,22 @@ flow rate (higher flow yields shorter residence time), pore volume (larger volum
 longer residence time), and retardation factor (interaction with matrix yields longer
 residence time).
 
-Functions
----------
-residence_time
-    Compute residence times at specific time indices. Supports both forward (infiltration to
-    extraction) and reverse (extraction to infiltration) directions. Handles single or multiple
-    pore volumes (2D output for multiple volumes). Returns residence times in days using
-    cumulative flow integration for accurate time-varying flow handling.
+Available functions:
 
-residence_time_mean
-    Compute mean residence times over time intervals. Calculates average residence time between
-    specified time edges using linear averaging to properly weight time-varying residence times.
-    Supports same directional options as residence_time. Particularly useful for time-binned
-    analysis.
+- :func:`residence_time` - Compute residence times at specific time indices. Supports both
+  forward (infiltration to extraction) and reverse (extraction to infiltration) directions.
+  Handles single or multiple pore volumes (2D output for multiple volumes). Returns residence
+  times in days using cumulative flow integration for accurate time-varying flow handling.
 
-fraction_explained
-    Compute fraction of aquifer pore volumes with valid residence times. Indicates how many
-    pore volumes have sufficient flow history to compute residence time. Returns values in
-    [0, 1] where 1.0 means all volumes are fully informed. Useful for assessing spin-up
-    periods and data coverage. NaN residence times indicate insufficient flow history.
+- :func:`residence_time_mean` - Compute mean residence times over time intervals. Calculates
+  average residence time between specified time edges using linear averaging to properly weight
+  time-varying residence times. Supports same directional options as residence_time. Particularly
+  useful for time-binned analysis.
+
+- :func:`fraction_explained` - Compute fraction of aquifer pore volumes with valid residence
+  times. Indicates how many pore volumes have sufficient flow history to compute residence time.
+  Returns values in [0, 1] where 1.0 means all volumes are fully informed. Useful for assessing
+  spin-up periods and data coverage. NaN residence times indicate insufficient flow history.
 """
 
 import warnings

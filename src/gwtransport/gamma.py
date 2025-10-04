@@ -8,29 +8,25 @@ and residence times within aquifer systems. In heterogeneous aquifers, water tra
 multiple flow paths with different pore volumes, and the gamma distribution provides a
 realistic representation of this heterogeneity.
 
-Functions
----------
-parse_parameters
-    Parse and validate gamma distribution parameters from either (alpha, beta) or (mean, std).
-    Ensures exactly one parameter pair is provided and validates positivity constraints.
+Available functions:
 
-mean_std_to_alpha_beta
-    Convert physically intuitive (mean, std) parameters to gamma shape/scale parameters.
-    Uses formulas: alpha = mean^2 / std^2 and beta = std^2 / mean.
+- :func:`parse_parameters` - Parse and validate gamma distribution parameters from either
+  (alpha, beta) or (mean, std). Ensures exactly one parameter pair is provided and validates
+  positivity constraints.
 
-alpha_beta_to_mean_std
-    Convert gamma (alpha, beta) parameters back to (mean, std) for physical interpretation.
-    Uses formulas: mean = alpha * beta and std = sqrt(alpha) * beta.
+- :func:`mean_std_to_alpha_beta` - Convert physically intuitive (mean, std) parameters to
+  gamma shape/scale parameters. Uses formulas: alpha = mean^2 / std^2 and beta = std^2 / mean.
 
-bins
-    Primary function for transport modeling. Creates discrete probability bins from continuous
-    gamma distribution with equal-probability bins (default) or custom quantile edges. Returns
-    bin edges, expected values (mean pore volume within each bin), and probability masses
-    (weight in transport calculations).
+- :func:`alpha_beta_to_mean_std` - Convert gamma (alpha, beta) parameters back to (mean, std)
+  for physical interpretation. Uses formulas: mean = alpha * beta and std = sqrt(alpha) * beta.
 
-bin_masses
-    Calculate probability mass for custom bin edges using incomplete gamma function. Lower-level
-    function used internally by bins().
+- :func:`bins` - Primary function for transport modeling. Creates discrete probability bins from
+  continuous gamma distribution with equal-probability bins (default) or custom quantile edges.
+  Returns bin edges, expected values (mean pore volume within each bin), and probability masses
+  (weight in transport calculations).
+
+- :func:`bin_masses` - Calculate probability mass for custom bin edges using incomplete gamma
+  function. Lower-level function used internally by bins().
 """
 
 import numpy as np

@@ -7,35 +7,30 @@ temperature fronts as they travel through the aquifer. While advection moves com
 with water flow, diffusion causes spreading due to molecular diffusion, mechanical
 dispersion, and thermal diffusion (for temperature).
 
-Available Functions
--------------------
-:func:`infiltration_to_extraction`
-    Apply diffusion during infiltration to extraction transport. Combines advection
-    (via residence time) with diffusion (via Gaussian smoothing). Computes position-dependent
-    diffusion based on local residence time and returns concentration or temperature in
-    extracted water.
+Available functions:
 
-:func:`extraction_to_infiltration`
-    NOT YET IMPLEMENTED. Inverse diffusion is numerically unstable and requires
-    regularization techniques. Placeholder for future implementation.
+- :func:`infiltration_to_extraction` - Apply diffusion during infiltration to extraction
+  transport. Combines advection (via residence time) with diffusion (via Gaussian smoothing).
+  Computes position-dependent diffusion based on local residence time and returns concentration
+  or temperature in extracted water.
 
-:func:`compute_sigma_array`
-    Calculate position-dependent diffusion parameters. Computes standard deviation (sigma)
-    for Gaussian smoothing at each time step based on residence time, diffusivity, and
-    spatial discretization: sigma = sqrt(2 * diffusivity * residence_time) / dx.
+- :func:`extraction_to_infiltration` - NOT YET IMPLEMENTED. Inverse diffusion is numerically
+  unstable and requires regularization techniques. Placeholder for future implementation.
 
-:func:`convolve_diffusion`
-    Apply variable-sigma Gaussian filtering. Extends scipy.ndimage.gaussian_filter1d to
-    position-dependent sigma using sparse matrix representation for efficiency. Handles
-    boundary conditions via nearest-neighbor extrapolation.
+- :func:`compute_sigma_array` - Calculate position-dependent diffusion parameters. Computes
+  standard deviation (sigma) for Gaussian smoothing at each time step based on residence time,
+  diffusivity, and spatial discretization: sigma = sqrt(2 * diffusivity * residence_time) / dx.
 
-:func:`deconvolve_diffusion`
-    NOT YET IMPLEMENTED. Inverse filtering placeholder for future diffusion deconvolution
-    with required regularization for stability.
+- :func:`convolve_diffusion` - Apply variable-sigma Gaussian filtering. Extends
+  scipy.ndimage.gaussian_filter1d to position-dependent sigma using sparse matrix representation
+  for efficiency. Handles boundary conditions via nearest-neighbor extrapolation.
 
-:func:`create_example_data`
-    Generate test data for demonstrating diffusion effects with signals having varying
-    time steps and corresponding sigma arrays. Useful for testing and validation.
+- :func:`deconvolve_diffusion` - NOT YET IMPLEMENTED. Inverse filtering placeholder for future
+  diffusion deconvolution with required regularization for stability.
+
+- :func:`create_example_data` - Generate test data for demonstrating diffusion effects with
+  signals having varying time steps and corresponding sigma arrays. Useful for testing and
+  validation.
 """
 
 import matplotlib.pyplot as plt
