@@ -1,9 +1,32 @@
 """
-Example data generation for groundwater transport modeling.
+Example Data Generation for Groundwater Transport Modeling.
 
-This module provides utilities to generate synthetic temperature and flow data
-for demonstrating and testing groundwater transport models. It was separated
-from the utils module to resolve circular import dependencies.
+This module provides utilities to generate synthetic datasets for demonstrating
+and testing groundwater transport models. It creates realistic flow patterns,
+temperature/concentration time series, and deposition events suitable for testing
+advection, diffusion, and deposition analysis functions.
+
+Available Functions
+-------------------
+:func:`generate_example_data`
+    Generate comprehensive synthetic dataset with flow and temperature time series.
+    Creates seasonal flow patterns with optional spill events, temperature data via
+    synthetic sinusoidal patterns or real KNMI soil temperature, and extracted temperature
+    computed through gamma-distributed pore volume transport. Returns DataFrame with
+    flow, temp_infiltration, temp_extraction columns plus attrs containing generation
+    parameters and aquifer properties.
+
+    **Temperature generation methods:**
+        * 'synthetic': Seasonal sinusoidal pattern with configurable mean, amplitude, noise
+        * 'constant': Constant temperature with measurement noise
+        * 'soil_temperature': Real data from KNMI weather station 260
+
+:func:`generate_example_deposition_timeseries`
+    Generate synthetic deposition time series for pathogen/contaminant deposition analysis.
+    Combines baseline deposition, seasonal patterns, random noise, and episodic contamination
+    events with exponential decay. Returns Series with deposition rates [ng/m²/day] and
+    attrs containing generation parameters. Useful for testing extraction_to_deposition
+    deconvolution and deposition_to_extraction convolution functions.
 """
 
 import numpy as np

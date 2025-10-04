@@ -1,4 +1,91 @@
-"""General utilities for the 1D groundwater transport model."""
+"""
+General Utilities for 1D Groundwater Transport Modeling.
+
+This module provides general-purpose utility functions for time series manipulation,
+interpolation, numerical operations, and data processing used throughout the gwtransport
+package. Functions include linear interpolation/averaging, bin overlap calculations,
+underdetermined system solvers, and external data retrieval.
+
+Available Functions
+-------------------
+
+Interpolation and Averaging
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+:func:`linear_interpolate`
+    Linear interpolation on monotonically increasing data with configurable extrapolation
+    (None for clamping, float for constant values). Handles multi-dimensional query arrays.
+
+:func:`interp_series`
+    Interpolate pandas Series to new DatetimeIndex using scipy.interpolate.interp1d.
+    Automatically filters NaN values and converts datetime to numerical representation.
+
+:func:`linear_average`
+    Compute average values of piecewise linear time series between specified x-edges.
+    Supports 1D or 2D edge arrays for batch processing. Handles NaN values and offers
+    multiple extrapolation methods ('nan', 'outer', 'raise').
+
+Bin and Time Series Operations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+:func:`diff`
+    Compute cell widths from cell coordinate arrays with configurable alignment
+    ('centered', 'left', 'right'). Returns widths matching input array length.
+
+:func:`partial_isin`
+    Calculate fraction of each input bin overlapping with each output bin. Returns
+    dense matrix where element (i,j) represents overlap fraction. Uses vectorized
+    operations for efficiency.
+
+:func:`time_bin_overlap`
+    Calculate fraction of time bins overlapping with specified time ranges. Similar to
+    partial_isin but for time-based bin overlaps with list of (start, end) tuples.
+
+:func:`combine_bin_series`
+    Combine two binned series onto common set of unique edges. Maps values from original
+    bins to new combined structure with configurable extrapolation ('nearest' or float value).
+
+:func:`compute_time_edges`
+    Compute DatetimeIndex of time bin edges from explicit edges, start times, or end times.
+    Validates consistency with expected number of bins and handles uniform spacing extrapolation.
+
+Numerical Solvers
+~~~~~~~~~~~~~~~~~
+:func:`solve_underdetermined_system`
+    Solve underdetermined linear system (Ax = b, m < n) with nullspace regularization.
+    Handles NaN values by row exclusion. Supports built-in objectives ('squared_differences',
+    'summed_differences') or custom callable objectives. Uses scipy.optimize.minimize for
+    nullspace coefficient optimization.
+
+External Data
+~~~~~~~~~~~~~
+:func:`get_soil_temperature`
+    Download soil temperature data from KNMI weather stations with automatic caching.
+    Supports stations 260 (De Bilt), 273 (Marknesse), 286 (Nieuw Beerta), 323 (Wilhelminadorp).
+    Returns DataFrame with columns TB1-TB5, TNB1-TNB2, TXB1-TXB2 at various depths. Daily
+    cache prevents redundant downloads.
+
+Miscellaneous
+~~~~~~~~~~~~~
+:func:`generate_failed_coverage_badge`
+    Generate SVG badge indicating failed coverage using genbadge library. Used in CI/CD workflows.
+
+Internal Functions
+~~~~~~~~~~~~~~~~~~
+:func:`_optimize_nullspace_coefficients`
+    Optimize nullspace coefficients for underdetermined system solver. Internal helper
+    for solve_underdetermined_system.
+
+:func:`_squared_differences_objective`
+    Minimize sum of squared differences between adjacent elements. Objective function
+    for smooth solutions in nullspace optimization.
+
+:func:`_summed_differences_objective`
+    Minimize sum of absolute differences between adjacent elements. Objective function
+    for sparse/piecewise constant solutions in nullspace optimization.
+
+:func:`_get_nullspace_objective_function`
+    Return appropriate objective function based on string identifier or custom callable.
+    Internal helper for validating and retrieving objective functions.
+"""
 
 from __future__ import annotations
 

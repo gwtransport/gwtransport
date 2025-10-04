@@ -1,8 +1,19 @@
 """
-Surface area computation utilities for groundwater transport analysis.
+Surface Area Calculations for Streamline-Based Transport Analysis.
 
-This module provides functions for computing surface areas and average heights
-of geometric shapes used in groundwater transport calculations.
+This module provides geometric utilities for computing surface areas and average
+heights between streamlines in heterogeneous aquifer systems. These calculations
+support direct estimation of pore volume distributions from streamline analysis,
+providing an alternative to gamma distribution approximations.
+
+Available Functions
+-------------------
+:func:`compute_average_heights`
+    Compute average heights of clipped trapezoids formed by streamlines. Trapezoids
+    have vertical sides defined by x_edges and top/bottom edges defined by y_edges
+    (2D array). Clipping bounds (y_lower, y_upper) restrict the integration domain.
+    Returns area/width ratios representing average heights for use in pore volume
+    calculations from streamline geometry.
 """
 
 import numpy as np
