@@ -306,6 +306,13 @@ def gamma_infiltration_to_extraction(
     numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3] or temperature.
 
+    See Also
+    --------
+    infiltration_to_extraction : Transport with explicit pore volume distribution
+    gamma_extraction_to_infiltration : Reverse operation (deconvolution)
+    gwtransport.gamma.bins : Create gamma distribution bins
+    gwtransport.residence_time.residence_time : Compute residence times
+
     Examples
     --------
     Basic usage with alpha and beta parameters:
@@ -567,6 +574,13 @@ def infiltration_to_extraction(
     ValueError
         If tedges length doesn't match cin/flow arrays plus one, or if
         infiltration time edges become non-monotonic (invalid input conditions).
+
+    See Also
+    --------
+    gamma_infiltration_to_extraction : Transport with gamma-distributed pore volumes
+    extraction_to_infiltration : Reverse operation (deconvolution)
+    infiltration_to_extraction_series : Simple time-shift for single pore volume
+    gwtransport.residence_time.residence_time : Compute residence times from flow and pore volume
 
     Examples
     --------

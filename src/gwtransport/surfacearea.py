@@ -37,6 +37,26 @@ def compute_average_heights(
     avg_heights : numpy.ndarray
         2D array of average heights (area/width) for each clipped trapezoid,
         shape (n_y-1, n_x-1)
+
+    See Also
+    --------
+    surface_area_between_streamlines : Compute surface area between streamlines
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from gwtransport.surfacearea import compute_average_heights
+    >>> # Create simple grid
+    >>> x_edges = np.array([0.0, 1.0, 2.0])
+    >>> y_edges = np.array([[0.0, 0.5, 1.0],
+    ...                     [1.0, 1.5, 2.0],
+    ...                     [2.0, 2.5, 3.0]])
+    >>> # Compute average heights with clipping bounds
+    >>> avg_heights = compute_average_heights(
+    ...     x_edges=x_edges, y_edges=y_edges, y_lower=0.5, y_upper=2.5
+    ... )
+    >>> print(f"Shape: {avg_heights.shape}")
+    Shape: (2, 2)
     """
     y_tl, y_tr = y_edges[:-1, :-1], y_edges[:-1, 1:]
     y_bl, y_br = y_edges[1:, :-1], y_edges[1:, 1:]

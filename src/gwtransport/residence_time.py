@@ -59,6 +59,12 @@ def residence_time(
     -------
     numpy.ndarray
         Residence time of the retarded compound in the aquifer [days].
+
+    See Also
+    --------
+    residence_time_mean : Compute mean residence time over time intervals
+    gwtransport.advection.gamma_infiltration_to_extraction : Use residence times for transport
+    gwtransport.logremoval.residence_time_to_log_removal : Convert residence time to log removal
     """
     aquifer_pore_volume = np.atleast_1d(aquifer_pore_volume)
 

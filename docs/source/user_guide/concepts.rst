@@ -45,7 +45,7 @@ The retardation factor :math:`R` quantifies how much slower a compound moves com
 For temperature, the retardation factor can be estimated from aquifer properties (see :doc:`/examples/01_Aquifer_Characterization_Temperature`) or calibrated alongside pore volume parameters. For reactive solutes, :math:`R = 1 + \frac{\rho_b K_d}{\theta}` where :math:`\rho_b` is bulk density and :math:`\theta` is porosity.
 
 Temperature as a Natural Tracer
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Temperature variations in infiltrated water serve as an effective natural tracer for aquifer characterization. Unlike artificial tracers, temperature:
 
@@ -110,17 +110,17 @@ Applications
 ------------
 
 Bank Filtration and Managed Aquifer Recharge
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Predict pathogen removal efficiency in bank filtration systems by coupling residence time distributions with pathogen attenuation rates. See :doc:`/examples/03_Pathogen_Removal_Bank_Filtration` and :doc:`/examples/04_Deposition_Analysis_Bank_Filtration`. Use :py:func:`gwtransport.logremoval.residence_time_to_log_removal` to convert residence times to log removal values.
 
 Contaminant Transport Forecasting
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Forecast contaminant arrival times and breakthrough curves at extraction wells. Once pore volume parameters are calibrated, predict transport of conservative solutes under varying flow conditions. Useful for risk assessment and treatment design.
 
 Aquifer Characterization
-~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~
 
 Estimate effective pore volume distributions from temperature tracer tests (:doc:`/examples/01_Aquifer_Characterization_Temperature`). Infer aquifer heterogeneity without costly artificial tracer tests. Validate numerical groundwater models against observed transport behavior.
 

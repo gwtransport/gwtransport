@@ -62,6 +62,13 @@ def residence_time_to_log_removal(
         Array of log removal values corresponding to the input residence times.
         Same shape as input residence_times.
 
+    See Also
+    --------
+    gamma_mean : Compute mean log removal for gamma-distributed residence times
+    gamma_find_flow_for_target_mean : Find flow rate to achieve target log removal
+    parallel_mean : Calculate weighted average for parallel flow systems
+    gwtransport.residence_time.residence_time : Compute residence times from flow and pore volume
+
     Notes
     -----
     Log removal is a logarithmic measure of pathogen reduction:

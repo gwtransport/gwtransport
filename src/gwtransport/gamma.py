@@ -73,6 +73,22 @@ def mean_std_to_alpha_beta(*, mean: float, std: float) -> tuple[float, float]:
         Shape parameter of gamma distribution
     beta : float
         Scale parameter of gamma distribution
+
+    See Also
+    --------
+    alpha_beta_to_mean_std : Convert shape and scale parameters to mean and std
+    parse_parameters : Parse and validate gamma distribution parameters
+
+    Examples
+    --------
+    >>> from gwtransport.gamma import mean_std_to_alpha_beta
+    >>> mean_pore_volume = 30000.0  # m³
+    >>> std_pore_volume = 8100.0    # m³
+    >>> alpha, beta = mean_std_to_alpha_beta(mean=mean_pore_volume, std=std_pore_volume)
+    >>> print(f"Shape parameter (alpha): {alpha:.2f}")
+    Shape parameter (alpha): 13.72
+    >>> print(f"Scale parameter (beta): {beta:.2f}")
+    Scale parameter (beta): 2187.00
     """
     alpha = mean**2 / std**2
     beta = std**2 / mean
@@ -96,6 +112,22 @@ def alpha_beta_to_mean_std(*, alpha: float, beta: float) -> tuple[float, float]:
         Mean of the gamma distribution.
     std : float
         Standard deviation of the gamma distribution.
+
+    See Also
+    --------
+    mean_std_to_alpha_beta : Convert mean and std to shape and scale parameters
+    parse_parameters : Parse and validate gamma distribution parameters
+
+    Examples
+    --------
+    >>> from gwtransport.gamma import alpha_beta_to_mean_std
+    >>> alpha = 13.72  # shape parameter
+    >>> beta = 2187.0  # scale parameter
+    >>> mean, std = alpha_beta_to_mean_std(alpha=alpha, beta=beta)
+    >>> print(f"Mean pore volume: {mean:.0f} m³")
+    Mean pore volume: 30000 m³
+    >>> print(f"Std pore volume: {std:.0f} m³")
+    Std pore volume: 8100 m³
     """
     mean = alpha * beta
     std = np.sqrt(alpha) * beta
@@ -144,6 +176,30 @@ def bins(
         - edges: bin edges (lower_bound[0], upper_bound[0], ..., upper_bound[-1])
         - expected_values: expected values in bins. Is what you would expect to observe if you repeatedly sampled from the probability distribution, but only considered samples that fall within that particular bin
         - probability_mass: probability mass in bins
+
+    See Also
+    --------
+    bin_masses : Calculate probability mass for bins
+    mean_std_to_alpha_beta : Convert mean/std to alpha/beta parameters
+
+    Examples
+    --------
+    Create equal-mass bins for a gamma distribution:
+
+    >>> from gwtransport.gamma import bins
+    >>> # Define gamma distribution using mean and std
+    >>> result = bins(mean=30000.0, std=8100.0, n_bins=5)
+    >>> print(f"Bin edges: {result['edges'][:3]}...")  # Show first 3
+    >>> print(f"Expected values: {result['expected_values'][:2]}...")  # Show first 2
+    >>> print(f"Probability masses: {result['probability_mass'][:2]}...")  # Show first 2
+
+    Create bins with custom quantile edges:
+
+    >>> import numpy as np
+    >>> quantiles = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+    >>> result = bins(mean=30000.0, std=8100.0, quantile_edges=quantiles)
+    >>> print(f"Number of bins: {len(result['probability_mass'])}")
+    Number of bins: 4
     """
     alpha, beta = parse_parameters(alpha=alpha, beta=beta, mean=mean, std=std)
 

@@ -4,7 +4,7 @@ Common Workflows
 This section describes typical workflows for using ``gwtransport`` in different scenarios. Each workflow is illustrated with code examples and links to complete demonstrations.
 
 Temperature Tracer Test Workflow
----------------------------------
+--------------------------------
 
 Calibrate aquifer pore volume distribution using temperature measurements from infiltration and extraction points. Temperature provides a continuous, non-invasive tracer signal for aquifer characterization.
 
@@ -69,7 +69,7 @@ Optimize pore volume parameters (mean, std) and temperature retardation factor b
    print(f"Optimized: mean={mean_opt:.0f} m³, std={std_opt:.0f} m³, R={R_opt:.2f}")
 
 Step 3: Prediction for Conservative Solutes
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Use calibrated pore volumes to predict transport of conservative solutes (e.g., contaminants). Conservative solutes have :math:`R = 1.0` unlike temperature's :math:`R \approx 2.0`.
 
@@ -90,12 +90,12 @@ Use calibrated pore volumes to predict transport of conservative solutes (e.g., 
 The key insight: calibrate using temperature (R ≈ 2.0), then predict solutes (R = 1.0) using the same pore volume distribution. See :doc:`/examples/02_Residence_Time_Analysis` for applications.
 
 Streamline Analysis Workflow
------------------------------
+----------------------------
 
 Compute pore volumes directly from numerical flow fields when detailed groundwater models are available. This bypasses the gamma distribution assumption.
 
 Step 1: Extract Pore Volumes from Flow Field
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -115,7 +115,7 @@ Step 1: Extract Pore Volumes from Flow Field
    aquifer_pore_volumes = areas * depth_aquifer * porosity
 
 Step 2: Transport Calculation Without Distribution Assumption
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -132,14 +132,14 @@ Step 2: Transport Calculation Without Distribution Assumption
 This approach is more accurate when the true pore volume distribution is multi-modal or highly irregular. See :py:func:`gwtransport.advection.distribution_infiltration_to_extraction` for details.
 
 Residence Time Analysis Workflow
----------------------------------
+--------------------------------
 
 Compute residence time distributions to understand water age and assess treatment effectiveness. Residence times are essential for pathogen removal calculations.
 
 **See the complete example:** :doc:`/examples/02_Residence_Time_Analysis`
 
 Step 1: Compute Residence Times
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -191,14 +191,14 @@ Evaluate how residence times change under varying operational conditions:
 Residence time directly impacts pathogen removal efficiency (next section).
 
 Pathogen Removal Analysis Workflow
------------------------------------
+----------------------------------
 
 Assess pathogen removal efficiency in bank filtration systems by combining residence time distributions with pathogen attenuation rates.
 
 **See complete examples:** :doc:`/examples/03_Pathogen_Removal_Bank_Filtration` and :doc:`/examples/04_Deposition_Analysis_Bank_Filtration`
 
 Step 1: Compute Log Removal from Residence Time
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -217,7 +217,7 @@ Step 1: Compute Log Removal from Residence Time
 Log removal represents orders of magnitude reduction: LR=3 means 99.9% (3-log) removal.
 
 Step 2: Assess Treatment Effectiveness
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -238,7 +238,7 @@ Best Practices
 --------------
 
 Data Quality and Preparation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **High-resolution measurements**: Temperature and flow data should have sufficient temporal resolution to capture dynamic variations. Daily or sub-daily measurements are typically required.
 
@@ -249,7 +249,7 @@ Data Quality and Preparation
 **Account for seasonal cycles**: Ensure calibration data spans sufficient time to capture seasonal temperature variations in natural systems.
 
 Model Selection and Calibration
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Choose appropriate parameterization**: Use gamma distribution for simple cases; use direct pore volume distributions when flow heterogeneity is complex or multi-modal.
 
