@@ -48,9 +48,7 @@ def compute_average_heights(
     >>> from gwtransport.surfacearea import compute_average_heights
     >>> # Create simple grid
     >>> x_edges = np.array([0.0, 1.0, 2.0])
-    >>> y_edges = np.array([[0.0, 0.5, 1.0],
-    ...                     [1.0, 1.5, 2.0],
-    ...                     [2.0, 2.5, 3.0]])
+    >>> y_edges = np.array([[0.0, 0.5, 1.0], [1.0, 1.5, 2.0], [2.0, 2.5, 3.0]])
     >>> # Compute average heights with clipping bounds
     >>> avg_heights = compute_average_heights(
     ...     x_edges=x_edges, y_edges=y_edges, y_lower=0.5, y_upper=2.5

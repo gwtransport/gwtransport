@@ -83,7 +83,7 @@ def mean_std_to_alpha_beta(*, mean: float, std: float) -> tuple[float, float]:
     --------
     >>> from gwtransport.gamma import mean_std_to_alpha_beta
     >>> mean_pore_volume = 30000.0  # m³
-    >>> std_pore_volume = 8100.0    # m³
+    >>> std_pore_volume = 8100.0  # m³
     >>> alpha, beta = mean_std_to_alpha_beta(mean=mean_pore_volume, std=std_pore_volume)
     >>> print(f"Shape parameter (alpha): {alpha:.2f}")
     Shape parameter (alpha): 13.72
@@ -191,7 +191,9 @@ def bins(
     >>> result = bins(mean=30000.0, std=8100.0, n_bins=5)
     >>> print(f"Bin edges: {result['edges'][:3]}...")  # Show first 3
     >>> print(f"Expected values: {result['expected_values'][:2]}...")  # Show first 2
-    >>> print(f"Probability masses: {result['probability_mass'][:2]}...")  # Show first 2
+    >>> print(
+    ...     f"Probability masses: {result['probability_mass'][:2]}..."
+    ... )  # Show first 2
 
     Create bins with custom quantile edges:
 
