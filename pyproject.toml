@@ -9,17 +9,17 @@ readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 keywords = [
-  "time-series",
   "analysis",
-  "groundwater",
-  "transport",
-  "contaminant",
-  "temperature",
   "aquifer",
-  "hydrology",
-  "residence-time",
-  "pathogen-removal",
   "bank-filtration",
+  "contaminant",
+  "groundwater",
+  "hydrology",
+  "pathogen-removal",
+  "residence-time",
+  "temperature",
+  "time-series",
+  "transport",
   "water-treatment",
 ]
 authors = [
@@ -31,7 +31,6 @@ classifiers = [
   "License :: OSI Approved :: GNU Affero General Public License v3",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -47,17 +46,17 @@ dependencies = [
   "requests",
   "scipy",
 ]
-version = "0.16.0"
+version = "0.17.0"
 [project.optional-dependencies]
 test = [
   "nbconvert",
   "nbformat",
   "pytest",
+  "pytest-cov",
+  "pytest-xdist",
   "ruff==0.13.2",
   "ty",
   "validate-pyproject[all,store]",
-  "pytest-cov",
-  "pytest-xdist",
 ]
 
 [project.urls]
@@ -82,8 +81,8 @@ sigterm = true
 
 [tool.coverage.report]
 exclude_lines = [
-    "pragma: no cover",
     "def __repr__",
+    "pragma: no cover",
     "raise AssertionError",
     "raise NotImplementedError",
 ]
