@@ -1,30 +1,47 @@
 """
-Functions for calculating log removal efficiency in water treatment systems.
+Log Removal Efficiency Calculations for Water Treatment Systems.
 
-This module provides utilities to calculate log removal values for different
-configurations of water treatment systems, including both basic log removal
-calculations and parallel flow arrangements where multiple treatment processes
-operate simultaneously on different fractions of the total flow.
+This module provides utilities to calculate log removal values for different configurations
+of water treatment systems, including basic log removal calculations and parallel flow
+arrangements where multiple treatment processes operate simultaneously on different fractions
+of the total flow. Log removal is a standard measure in water treatment that represents the
+reduction of pathogen concentration on a logarithmic scale (e.g., log removal of 3 represents
+99.9% reduction). For systems in series, log removals are typically summed directly, while
+for parallel systems, a weighted average based on flow distribution is required.
 
-Log removal is a standard measure in water treatment that represents the
-reduction of pathogen concentration on a logarithmic scale. For example,
-a log removal of 3 represents a 99.9% reduction in pathogen concentration.
+Available functions:
 
-Functions
----------
-residence_time_to_log_removal : Calculate log removal from residence times and removal rate
-parallel_mean : Calculate weighted average log removal for parallel flow systems
-gamma_pdf : Compute PDF of log removal given gamma-distributed residence time
-gamma_cdf : Compute CDF of log removal given gamma-distributed residence time
-gamma_mean : Compute mean log removal for gamma-distributed residence time
-gamma_find_flow_for_target_mean : Find flow rate for target mean log removal
+- :func:`residence_time_to_log_removal` - Calculate log removal from residence times and
+  removal rate coefficient. Uses formula: Log Removal = log_removal_rate * log10(residence_time).
+  Handles single values, 1D arrays, or multi-dimensional arrays of residence times. Returns
+  log removal values with same shape as input.
 
-Notes
------
-For systems in series, log removals are typically summed directly, while for
-parallel systems, a weighted average based on flow distribution is required.
-The parallel_mean function supports multi-dimensional arrays via the axis parameter
-and performs minimal validation for improved performance.
+- :func:`parallel_mean` - Calculate weighted average log removal for parallel flow systems.
+  Computes overall efficiency when multiple treatment paths operate in parallel with different
+  log removal values and flow fractions. Uses formula: Total Log Removal = -log10(sum(F_i * 10^(-LR_i)))
+  where F_i is flow fraction and LR_i is log removal for path i. Supports multi-dimensional
+  arrays via axis parameter for batch processing. Assumes equal flow distribution if flow_fractions
+  not provided.
+
+- :func:`gamma_pdf` - Compute probability density function (PDF) of log removal given
+  gamma-distributed residence time. Transforms gamma distribution gamma(rt_alpha, rt_beta) to
+  log removal distribution using log_removal_rate coefficient. Useful for uncertainty quantification
+  and probabilistic risk assessment.
+
+- :func:`gamma_cdf` - Compute cumulative distribution function (CDF) of log removal given
+  gamma-distributed residence time. Returns probability that log removal is less than or equal
+  to specified values. Uses scipy.stats.gamma.cdf internally with transformed residence time
+  values t = 10^(r/log_removal_rate).
+
+- :func:`gamma_mean` - Compute mean log removal for gamma-distributed residence time. Returns
+  expected value E[R] = (log_removal_rate/ln(10)) * (digamma(rt_alpha) + ln(rt_beta)). More
+  efficient than numerical integration of PDF. Useful for design calculations and performance
+  prediction.
+
+- :func:`gamma_find_flow_for_target_mean` - Find flow rate that produces specified target mean
+  log removal given gamma-distributed aquifer pore volume. Solves inverse problem analytically
+  using relationship: flow = apv_beta * exp(digamma(apv_alpha) - (ln(10)*target_mean)/log_removal_rate).
+  Useful for designing systems to meet regulatory requirements.
 """
 
 import numpy as np

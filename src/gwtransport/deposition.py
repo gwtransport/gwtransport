@@ -1,16 +1,37 @@
-"""Deposition analysis for 1D aquifer systems.
+"""
+Deposition Analysis for 1D Aquifer Systems.
 
-Analyze compound transport by deposition in aquifer systems with tools for
-computing concentrations and deposition rates based on aquifer properties.
+This module analyzes compound transport by deposition in aquifer systems with tools for
+computing concentrations and deposition rates based on aquifer properties. The model assumes
+1D groundwater flow where compound deposition occurs along the flow path, enriching the water.
+Deposition processes include pathogen attachment to aquifer matrix, particle filtration, or
+chemical precipitation. The module follows advection module patterns for consistency in
+forward (deposition to extraction) and reverse (extraction to deposition) calculations.
 
-The model assumes 1D groundwater flow where compound deposition occurs along
-the flow path, enriching the water. Follows advection module patterns for
-consistency.
+Available functions:
 
-Functions
----------
-extraction_to_deposition : Compute deposition rates from concentration changes
-deposition_to_extraction : Compute concentrations from deposition rates
+- :func:`deposition_to_extraction` - Compute concentrations from deposition rates (convolution).
+  Given deposition rate time series [ng/m²/day], computes resulting concentration changes in
+  extracted water [ng/m³]. Uses flow-weighted integration over contact area between water and
+  aquifer matrix. Accounts for aquifer geometry (porosity, thickness) and residence time
+  distribution.
+
+- :func:`extraction_to_deposition` - Compute deposition rates from concentration changes
+  (deconvolution). Given concentration change time series in extracted water [ng/m³], estimates
+  deposition rate history [ng/m²/day] that produced those changes. Solves underdetermined
+  inverse problem using nullspace regularization with configurable objectives ('squared_differences'
+  for smooth solutions, 'summed_differences' for sparse solutions). Handles NaN values in
+  concentration data by excluding corresponding time periods.
+
+- :func:`compute_deposition_weights` - Internal helper function. Compute weight matrix relating
+  deposition rates to concentration changes. Used by both deposition_to_extraction (forward) and
+  extraction_to_deposition (reverse). Calculates contact area between water parcels and aquifer
+  matrix based on streamline geometry and residence times.
+
+- :func:`spinup_duration` - Compute spinup duration for deposition modeling. Returns residence
+  time at first time step, representing time needed for system to become fully informed. Before
+  this duration, extracted concentration lacks complete deposition history. Useful for determining
+  valid analysis period and identifying when boundary effects are negligible.
 """
 
 import numpy as np
