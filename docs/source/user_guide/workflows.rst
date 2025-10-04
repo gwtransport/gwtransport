@@ -1,47 +1,49 @@
 Common Workflows
 ================
 
-This section describes typical workflows for using gwtransport in different scenarios.
+This section describes typical workflows for using ``gwtransport`` in different scenarios. Each workflow is illustrated with code examples and links to complete demonstrations.
 
 Temperature Tracer Test Workflow
 ---------------------------------
 
-This is the most common workflow for aquifer characterization using temperature data.
+Calibrate aquifer pore volume distribution using temperature measurements from infiltration and extraction points. Temperature provides a continuous, non-invasive tracer signal for aquifer characterization.
+
+**See the complete example:** :doc:`/examples/01_Aquifer_Characterization_Temperature`
 
 Step 1: Data Preparation
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-Collect and prepare your data:
+Organize temperature and flow measurements into the format required by ``gwtransport``. Time series are represented using ``tedges`` (time edges) with values defined between consecutive edges.
 
 .. code-block:: python
 
    import numpy as np
    import pandas as pd
    from gwtransport.advection import gamma_infiltration_to_extraction
-   
-   # Load your data
-   data = pd.read_csv('temperature_data.csv')
-   
-   # Extract time series
-   cin_data = data['temp_infiltration'].values
-   flow_data = data['flow_rate'].values
-   time_data = data['time'].values
-   
-   # Create time edges
-   tedges = np.concatenate([[time_data[0]], time_data])
+
+   # Load temperature and flow data
+   data = pd.read_csv('temperature_data.csv', parse_dates=['time'])
+
+   # Extract time series (values represent intervals between tedges)
+   cin_data = data['temp_infiltration'].values  # °C
+   cout_observed = data['temp_extraction'].values  # °C (for calibration)
+   flow_data = data['flow_rate'].values  # m³/day
+
+   # Create time edges (one more element than data arrays)
+   tedges = pd.DatetimeIndex(data['time'])
 
 Step 2: Model Calibration
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Fit model parameters to observed data:
+Optimize pore volume parameters (mean, std) and temperature retardation factor by minimizing mismatch between observed and predicted extraction temperatures. See :py:func:`gwtransport.advection.gamma_infiltration_to_extraction` for the forward model.
 
 .. code-block:: python
 
    from scipy.optimize import minimize
-   
+
    def objective_function(params):
        mean_vol, std_vol, retardation = params
-       
+
        # Compute model prediction
        cout_model = gamma_infiltration_to_extraction(
            cin=cin_data,
@@ -52,65 +54,73 @@ Fit model parameters to observed data:
            std=std_vol,
            retardation_factor=retardation,
        )
-       
-       # Compare with observations
-       error = np.sum((cout_model - cout_observed) ** 2)
+
+       # Sum of squared errors (skip NaN values at start)
+       mask = ~np.isnan(cout_model)
+       error = np.sum((cout_model[mask] - cout_observed[mask]) ** 2)
        return error
-   
-   # Initial parameter guess
-   initial_params = [30000, 8100, 2.0]
-   
-   # Optimize parameters
+
+   # Initial guess: [mean (m³), std (m³), retardation (-)]
+   initial_params = [30000.0, 8100.0, 2.0]
+
+   # Optimize using Nelder-Mead (derivative-free)
    result = minimize(objective_function, initial_params, method='Nelder-Mead')
-   optimal_params = result.x
+   mean_opt, std_opt, R_opt = result.x
+   print(f"Optimized: mean={mean_opt:.0f} m³, std={std_opt:.0f} m³, R={R_opt:.2f}")
 
-Step 3: Validation and Prediction
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Step 3: Prediction for Conservative Solutes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Validate the model and make predictions:
+Use calibrated pore volumes to predict transport of conservative solutes (e.g., contaminants). Conservative solutes have :math:`R = 1.0` unlike temperature's :math:`R \approx 2.0`.
 
 .. code-block:: python
 
-   # Use optimized parameters for predictions
-   mean_vol, std_vol, retardation = optimal_params
-   
-   # Predict for new conditions
-   cout_prediction = gamma_infiltration_to_extraction(
-       cin=cin_new,
-       flow=flow_new,
-       tedges=tedges_new,
-       cout_tedges=tedges_new,
-       mean=mean_vol,
-       std=std_vol,
-       retardation_factor=retardation,
+   # Predict conservative solute transport using calibrated pore volumes
+   # but with retardation_factor=1.0
+   solute_concentration = gamma_infiltration_to_extraction(
+       cin=cin_solute,  # Solute concentration at infiltration [mg/L]
+       flow=flow_data,
+       tedges=tedges,
+       cout_tedges=tedges,
+       mean=mean_opt,  # Use calibrated mean pore volume
+       std=std_opt,    # Use calibrated std pore volume
+       retardation_factor=1.0,  # Conservative tracer (not temperature!)
    )
+
+The key insight: calibrate using temperature (R ≈ 2.0), then predict solutes (R = 1.0) using the same pore volume distribution. See :doc:`/examples/02_Residence_Time_Analysis` for applications.
 
 Streamline Analysis Workflow
 -----------------------------
 
-For cases where you have detailed flow field data.
+Compute pore volumes directly from numerical flow fields when detailed groundwater models are available. This bypasses the gamma distribution assumption.
 
-Step 1: Compute Streamlines
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   from gwtransport.advection import infiltration_to_extraction
-
-   # Compute areas between streamlines (from flow modeling)
-   areas_between_streamlines = compute_streamline_areas(flow_field)
-
-   # Convert to 3D pore volumes
-   depth_aquifer = 200.0  # [m]
-   aquifer_pore_volumes = areas_between_streamlines * depth_aquifer
-
-Step 2: Direct Transport Calculation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Step 1: Extract Pore Volumes from Flow Field
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   # Use pore volumes directly
-   cout = infiltration_to_extraction(
+   from gwtransport.surfacearea import surface_area_between_streamlines
+   from gwtransport.advection import distribution_infiltration_to_extraction
+
+   # Compute streamline geometry from your flow model
+   # (implementation depends on your modeling software)
+   streamline_coords = extract_streamlines_from_model(flow_model)
+
+   # Calculate cross-sectional areas between adjacent streamlines
+   areas = surface_area_between_streamlines(streamline_coords)
+
+   # Convert 2D areas to 3D pore volumes
+   depth_aquifer = 200.0  # [m] vertical extent
+   porosity = 0.35  # [-] effective porosity
+   aquifer_pore_volumes = areas * depth_aquifer * porosity
+
+Step 2: Transport Calculation Without Distribution Assumption
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # Use actual pore volume distribution (no gamma assumption)
+   cout = distribution_infiltration_to_extraction(
        cin=cin_data,
        flow=flow_data,
        tedges=tedges,
@@ -119,112 +129,154 @@ Step 2: Direct Transport Calculation
        retardation_factor=1.0,
    )
 
+This approach is more accurate when the true pore volume distribution is multi-modal or highly irregular. See :py:func:`gwtransport.advection.distribution_infiltration_to_extraction` for details.
+
 Residence Time Analysis Workflow
 ---------------------------------
 
-Analyze residence time distributions for different scenarios.
+Compute residence time distributions to understand water age and assess treatment effectiveness. Residence times are essential for pathogen removal calculations.
 
-Step 1: Compute Base Residence Times
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**See the complete example:** :doc:`/examples/02_Residence_Time_Analysis`
+
+Step 1: Compute Residence Times
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   from gwtransport.residence_time import compute_residence_time_distribution
-   
-   # Compute residence time distribution
-   residence_times = compute_residence_time_distribution(
-       aquifer_pore_volumes=aquifer_pore_volumes,
-       flow_rates=flow_data,
-       tedges=tedges,
+   from gwtransport.residence_time import residence_time
+
+   # Compute residence time at each time step
+   rt = residence_time(
+       flow=flow_data,
+       flow_tedges=tedges,
+       aquifer_pore_volume=mean_opt,  # Can be scalar or array
+       retardation_factor=1.0,  # For conservative tracers
+       direction='extraction_to_infiltration',
+       index=tedges,
    )
+
+For gamma-distributed pore volumes, the mean residence time is :math:`\overline{t_r} = \frac{\mu \cdot R}{Q}` where :math:`\mu` is the mean pore volume.
 
 Step 2: Scenario Analysis
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
+Evaluate how residence times change under varying operational conditions:
+
 .. code-block:: python
 
-   # Analyze different flow scenarios
+   import matplotlib.pyplot as plt
+
+   # Define flow scenarios
    scenarios = {
-       'low_flow': flow_data * 0.5,
-       'normal_flow': flow_data,
-       'high_flow': flow_data * 2.0,
+       'Low flow (50%)': flow_data * 0.5,
+       'Normal flow': flow_data,
+       'High flow (200%)': flow_data * 2.0,
    }
-   
-   residence_results = {}
-   for scenario, flows in scenarios.items():
-       residence_results[scenario] = compute_residence_time_distribution(
-           aquifer_pore_volumes=aquifer_pore_volumes,
-           flow_rates=flows,
-           tedges=tedges,
+
+   # Compute residence times for each scenario
+   for name, flows in scenarios.items():
+       rt_scenario = residence_time(
+           flow=flows,
+           flow_tedges=tedges,
+           aquifer_pore_volume=mean_opt,
+           retardation_factor=1.0,
+           index=tedges,
        )
+       plt.plot(tedges, rt_scenario, label=name)
+
+   plt.xlabel('Time')
+   plt.ylabel('Residence Time [days]')
+   plt.legend()
+
+Residence time directly impacts pathogen removal efficiency (next section).
 
 Pathogen Removal Analysis Workflow
 -----------------------------------
 
-Assess pathogen removal efficiency for treatment design.
+Assess pathogen removal efficiency in bank filtration systems by combining residence time distributions with pathogen attenuation rates.
 
-Step 1: Define Pathogen Properties
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**See complete examples:** :doc:`/examples/03_Pathogen_Removal_Bank_Filtration` and :doc:`/examples/04_Deposition_Analysis_Bank_Filtration`
 
-.. code-block:: python
-
-   from gwtransport.logremoval import compute_log_removal
-   
-   # Define pathogen removal parameters
-   pathogen_params = {
-       'decay_rate': 0.1,  # [1/day]
-       'attachment_rate': 0.05,  # [1/day]
-       'detachment_rate': 0.01,  # [1/day]
-   }
-
-Step 2: Compute Removal Efficiency
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Step 1: Compute Log Removal from Residence Time
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   # Compute log removal for different residence times
-   log_removal = compute_log_removal(
-       residence_times=residence_times,
-       decay_rate=pathogen_params['decay_rate'],
-       attachment_rate=pathogen_params['attachment_rate'],
-       detachment_rate=pathogen_params['detachment_rate'],
+   from gwtransport.logremoval import residence_time_to_log_removal
+
+   # Define pathogen-specific log removal rate
+   # Typical values: 0.5-2.0 for bacteria, 1.0-3.0 for viruses
+   log_removal_rate = 1.5  # [dimensionless]
+
+   # Compute log removal from residence times
+   log_removal = residence_time_to_log_removal(
+       residence_times=rt,  # [days] from previous section
+       log_removal_rate=log_removal_rate,
    )
-   
-   # Assess treatment effectiveness
+
+Log removal represents orders of magnitude reduction: LR=3 means 99.9% (3-log) removal.
+
+Step 2: Assess Treatment Effectiveness
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # Convert log removal to removal efficiency percentage
    removal_efficiency = 1 - 10**(-log_removal)
-   print(f"Pathogen removal efficiency: {removal_efficiency:.2%}")
+
+   # Check compliance with treatment targets
+   target_log_removal = 4.0  # Example: 4-log virus removal requirement
+   meets_target = log_removal >= target_log_removal
+
+   print(f"Log removal: {log_removal:.2f}")
+   print(f"Removal efficiency: {removal_efficiency:.2%}")
+   print(f"Meets 4-log target: {meets_target}")
+
+For gamma-distributed residence times, use :py:func:`gwtransport.logremoval.gamma_mean` to compute mean log removal analytically, or :py:func:`gwtransport.logremoval.gamma_find_flow_for_target_mean` to determine required flow rates for treatment targets.
 
 Best Practices
 --------------
 
-Data Quality
-~~~~~~~~~~~~
+Data Quality and Preparation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- Ensure high-resolution time series data
-- Check for data gaps and outliers
-- Validate measurement accuracy
-- Consider seasonal variations
+**High-resolution measurements**: Temperature and flow data should have sufficient temporal resolution to capture dynamic variations. Daily or sub-daily measurements are typically required.
 
-Model Validation
-~~~~~~~~~~~~~~~~
+**Handle missing data**: Use :py:func:`gwtransport.utils.linear_interpolate` for small gaps, but avoid interpolating across long periods that may introduce bias.
 
-- Use independent data for validation
-- Check residual patterns
-- Perform sensitivity analysis
-- Compare with physical expectations
+**Validate sensor accuracy**: Temperature sensor drift can systematically bias calibrated parameters. Cross-check against independent measurements.
 
-Parameter Uncertainty
-~~~~~~~~~~~~~~~~~~~~~
+**Account for seasonal cycles**: Ensure calibration data spans sufficient time to capture seasonal temperature variations in natural systems.
 
-- Quantify parameter uncertainty
-- Propagate uncertainty to predictions
-- Use ensemble approaches when appropriate
-- Document assumptions and limitations
+Model Selection and Calibration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Documentation
-~~~~~~~~~~~~~
+**Choose appropriate parameterization**: Use gamma distribution for simple cases; use direct pore volume distributions when flow heterogeneity is complex or multi-modal.
 
-- Document data sources and processing
-- Record model assumptions
-- Save parameter values and fits
-- Create reproducible workflows
+**Validate on independent data**: Reserve a portion of data for validation. Calibrate on one time period, validate on another.
+
+**Check residual patterns**: Systematic residuals indicate model structural error. Random residuals suggest adequate model complexity.
+
+**Sensitivity analysis**: Test how predictions change with parameter variations. Identify which parameters most strongly influence results.
+
+**Physical plausibility**: Verify that calibrated parameters are physically reasonable (e.g., pore volumes consistent with aquifer geometry, retardation factors within expected ranges).
+
+Uncertainty Quantification
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Parameter uncertainty**: Use ensemble methods or Bayesian calibration to quantify uncertainty in mean, std, and retardation factor.
+
+**Propagate uncertainty**: Run models with parameter samples to generate prediction intervals, not just point predictions.
+
+**Report limitations**: Document model assumptions (e.g., gamma distribution, neglecting transverse dispersion, steady-state flow approximation).
+
+Workflow Documentation
+~~~~~~~~~~~~~~~~~~~~~~
+
+**Version control**: Track code, parameters, and data provenance using git or similar tools.
+
+**Reproducible scripts**: Ensure analyses can be reproduced by others. Use Jupyter notebooks or documented scripts.
+
+**Save calibrated parameters**: Store optimized parameter values with metadata (calibration period, objective function, convergence criteria).
+
+**Link to examples**: Reference the example notebooks in your documentation to demonstrate usage patterns.

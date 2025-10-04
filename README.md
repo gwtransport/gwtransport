@@ -1,6 +1,6 @@
 # gwtransport
 
-`gwtransport` assists with timeseries analysis of groundwater transport of solutes and temperature. Estimate two aquifer properties from a temperature tracer test, predict residence times and transport of solutes, and assess pathogen removal efficiency. Alternatively, the aquifer properties can be estimated directly from the streamlines.
+`gwtransport` enables timeseries analysis of groundwater transport of solutes and temperature. Estimate aquifer properties from temperature tracer tests or streamline analysis, predict residence times and solute transport, and assess pathogen removal efficiency in bank filtration systems.
 
 |                        |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -16,7 +16,7 @@ Once you have calibrated the aquifer pore volume distribution, you can:
 - **Forecast contaminant arrival times** and extracted concentrations
 - **Design treatment systems** with quantified pathogen removal efficiency
 - **Assess groundwater vulnerability** to contamination
-- **Early warning systems** as digital twin for drinking water protection
+- **Enable early warning systems** as digital twins for drinking water protection
 
 ## Two ways to obtain model parameters
 
@@ -35,7 +35,7 @@ flow_data = [100.0, 150.0, 100.0]  # Example flow rates
 tedges = pd.date_range(start="2020-01-05", end="2020-01-08", freq="D")  # Example time edges
 
 areas_between_streamlines = np.array([100.0, 90.0, 110.0])  # Example areas
-depth_aquifer = 2.0  # Convert areas between 2d streamlines to 3d aquifer pore volumes.
+depth_aquifer = 2.0  # Convert areas between 2D streamlines to 3D aquifer pore volumes
 porosity = 0.35
 aquifer_pore_volumes = areas_between_streamlines * depth_aquifer * porosity
 
@@ -48,12 +48,12 @@ cout = infiltration_to_extraction(
     retardation_factor=1.0,
 )
 
-# Note that the first values are NaN, as no cin values have fully passed through the aquifer yet.
+# Note: Initial output values are NaN until cin values fully pass through the aquifer
 ```
 
 ### 2. Temperature Tracer Test
 
-Approximate the aquifer pore volume distribution with a two-parameter gamma distribution. Estimate these parameters from the measured temperature of the infiltrated and extracted water. Temperature acts as a natural tracer, revealing how water flows through different paths in heterogeneous aquifers through calibration.
+Approximate the aquifer pore volume distribution with a two-parameter gamma distribution. Estimate these parameters from measured temperatures of infiltrated and extracted water. Temperature acts as a natural tracer, revealing flow paths through heterogeneous aquifers via calibration.
 
 ```python
 from gwtransport.advection import gamma_infiltration_to_extraction
@@ -63,7 +63,7 @@ cin_data = [11.0, 12.0, 13.0]  # Example temperature infiltrated water
 flow_data = [100.0, 150.0, 100.0]  # Example flow rates
 tedges = pd.date_range(start="2020-01-05", end="2020-01-08", freq="D")  # Example time edges
 
-cout_data = [10.5, 11.0, 11.5]  # Example temperature extracted water. Only required for the calibration period.
+cout_data = [10.5, 11.0, 11.5]  # Example temperature extracted water (required for calibration only)
 
 cout_model = gamma_infiltration_to_extraction(
     cin=cin_data,
@@ -75,7 +75,7 @@ cout_model = gamma_infiltration_to_extraction(
     retardation_factor=2.0,  # [-] Retardation factor for the temperature tracer
 )
 
-# Compare model output with measured data to calibrate the mean and std parameters. See Example 1.
+# Compare model output with measured data to calibrate mean and std parameters (see Example 1)
 ```
 
 ## Installation
