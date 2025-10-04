@@ -14,7 +14,7 @@ Key parameters:
 - **Standard deviation**: Variability in pore volumes across different paths (m³)
 - **Distribution shape**: Commonly approximated using a two-parameter gamma distribution
 
-The gamma distribution model is implemented in :py:func:`gwtransport.advection.gamma_infiltration_to_extraction`. For cases with known streamline geometry, pore volumes can be computed directly using :py:func:`gwtransport.surfacearea.surface_area_between_streamlines` and passed to :py:func:`gwtransport.advection.distribution_infiltration_to_extraction`.
+The gamma distribution model is implemented in :py:func:`gwtransport.advection.gamma_infiltration_to_extraction`. For cases with known streamline geometry, pore volumes can be computed directly using :py:func:`gwtransport.surfacearea.surface_area_between_streamlines` and passed to :py:func:`gwtransport.advection.infiltration_to_extraction`.
 
 Residence Time
 ~~~~~~~~~~~~~~
@@ -85,7 +85,7 @@ When detailed flow field data are available (e.g., from numerical groundwater mo
 1. Compute streamlines from infiltration to extraction points using flow field data
 2. Calculate cross-sectional areas between adjacent streamlines (:py:func:`gwtransport.surfacearea.surface_area_between_streamlines`)
 3. Convert 2D streamline areas to 3D pore volumes: :math:`V_i = A_i \times d \times \theta`, where :math:`d` is aquifer depth and :math:`\theta` is porosity
-4. Pass volumes directly to :py:func:`gwtransport.advection.distribution_infiltration_to_extraction`
+4. Pass volumes directly to :py:func:`gwtransport.advection.infiltration_to_extraction`
 
 This approach captures the actual distribution of flow paths, including multi-modal or irregular patterns that cannot be represented by a gamma distribution. The tradeoff is requiring detailed flow field information.
 

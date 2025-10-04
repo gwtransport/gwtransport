@@ -99,8 +99,7 @@ Step 1: Extract Pore Volumes from Flow Field
 
 .. code-block:: python
 
-   from gwtransport.surfacearea import surface_area_between_streamlines
-   from gwtransport.advection import distribution_infiltration_to_extraction
+   from gwtransport.advection import infiltration_to_extraction
 
    # Compute streamline geometry from your flow model
    # (implementation depends on your modeling software)
@@ -120,7 +119,7 @@ Step 2: Transport Calculation Without Distribution Assumption
 .. code-block:: python
 
    # Use actual pore volume distribution (no gamma assumption)
-   cout = distribution_infiltration_to_extraction(
+   cout = infiltration_to_extraction(
        cin=cin_data,
        flow=flow_data,
        tedges=tedges,
@@ -129,7 +128,7 @@ Step 2: Transport Calculation Without Distribution Assumption
        retardation_factor=1.0,
    )
 
-This approach is more accurate when the true pore volume distribution is multi-modal or highly irregular. See :py:func:`gwtransport.advection.distribution_infiltration_to_extraction` for details.
+This approach is more accurate when the true pore volume distribution is multi-modal or highly irregular. See :py:func:`gwtransport.advection.infiltration_to_extraction` for details.
 
 Residence Time Analysis Workflow
 --------------------------------
