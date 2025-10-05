@@ -244,6 +244,8 @@ def convolve_diffusion(
 
     Examples
     --------
+    >>> import numpy as np
+    >>> from gwtransport.diffusion import convolve_diffusion
     >>> # Create a sample signal
     >>> x = np.linspace(0, 10, 1000)
     >>> signal = np.exp(-((x - 3) ** 2)) + 0.5 * np.exp(-((x - 7) ** 2) / 0.5)

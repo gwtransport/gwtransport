@@ -207,6 +207,7 @@ def residence_time_mean(
     --------
     >>> import pandas as pd
     >>> import numpy as np
+    >>> from gwtransport.residence_time import residence_time_mean
     >>> # Create sample flow data
     >>> flow_dates = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
     >>> flow_values = np.full(len(flow_dates) - 1, 100.0)  # Constant flow of 100 m³/day

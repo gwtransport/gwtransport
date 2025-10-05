@@ -227,6 +227,8 @@ def linear_average(  # noqa: C901
 
     Examples
     --------
+    >>> import numpy as np
+    >>> from gwtransport.utils import linear_average
     >>> x_data = [0, 1, 2, 3]
     >>> y_data = [0, 1, 1, 0]
     >>> x_edges = [0, 1.5, 3]
@@ -373,6 +375,8 @@ def partial_isin(*, bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -
 
     Examples
     --------
+    >>> import numpy as np
+    >>> from gwtransport.utils import partial_isin
     >>> bin_edges_in = np.array([0, 10, 20, 30])
     >>> bin_edges_out = np.array([5, 15, 25])
     >>> partial_isin(
@@ -460,6 +464,8 @@ def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.N
 
     Examples
     --------
+    >>> import numpy as np
+    >>> from gwtransport.utils import time_bin_overlap
     >>> tedges = np.array([0, 10, 20, 30])
     >>> bin_tedges = [(5, 15), (25, 35)]
     >>> time_bin_overlap(
@@ -888,9 +894,7 @@ def solve_underdetermined_system(
     >>> # Solve with squared differences regularization
     >>> x = solve_underdetermined_system(coefficient_matrix=matrix, rhs_vector=rhs)
     >>> print(f"Solution: {x}")  # doctest: +SKIP
-    >>> print(
-    ...     f"Residual: {np.linalg.norm(matrix @ x - rhs):.2e}"
-    ... )  # doctest: +SKIP
+    >>> print(f"Residual: {np.linalg.norm(matrix @ x - rhs):.2e}")  # doctest: +SKIP
 
     With summed differences objective:
 

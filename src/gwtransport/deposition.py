@@ -158,6 +158,7 @@ def deposition_to_extraction(
     --------
     >>> import pandas as pd
     >>> import numpy as np
+    >>> from gwtransport.deposition import deposition_to_extraction
     >>> dates = pd.date_range("2020-01-01", "2020-01-10", freq="D")
     >>> tedges = pd.date_range("2019-12-31 12:00", "2020-01-10 12:00", freq="D")
     >>> cout_tedges = pd.date_range("2020-01-03 12:00", "2020-01-12 12:00", freq="D")

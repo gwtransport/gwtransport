@@ -22,7 +22,7 @@ Organize temperature and flow measurements into the format required by ``gwtrans
    from gwtransport.advection import gamma_infiltration_to_extraction
 
    # Load temperature and flow data
-   data = pd.read_csv('temperature_data.csv', parse_dates=['time'])
+   data = pd.read_csv('temperature_data.csv', parse_dates=['time'])  # doctest: +SKIP
 
    # Extract time series (values represent intervals between tedges)
    cin_data = data['temp_infiltration'].values  # °C
@@ -140,9 +140,16 @@ Compute residence time distributions to understand water age and assess treatmen
 Step 1: Compute Residence Times
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. code-block:: python
+.. testcode::
 
+   import pandas as pd
+   import numpy as np
    from gwtransport.residence_time import residence_time
+
+   # Example data
+   tedges = pd.date_range("2023-01-01", "2023-01-05", freq="D")
+   flow_data = np.array([100.0, 120.0, 110.0, 105.0])  # m³/day
+   mean_opt = 250.0  # m³
 
    # Compute residence time at each time step
    rt = residence_time(
@@ -153,6 +160,13 @@ Step 1: Compute Residence Times
        direction='extraction_to_infiltration',
        index=tedges,
    )
+
+   print(f"Residence times (days): {rt}")
+
+.. testoutput::
+   :options: +ELLIPSIS
+
+   Residence times (days): ...
 
 For gamma-distributed pore volumes, the mean residence time is :math:`\overline{t_r} = \frac{\mu \cdot R}{Q}` where :math:`\mu` is the mean pore volume.
 

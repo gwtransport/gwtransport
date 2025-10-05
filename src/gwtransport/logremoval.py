@@ -99,6 +99,7 @@ def residence_time_to_log_removal(
     Examples
     --------
     >>> import numpy as np
+    >>> from gwtransport.logremoval import residence_time_to_log_removal
     >>> residence_times = np.array([1.0, 10.0, 100.0])
     >>> log_removal_rate = 2.0
     >>> residence_time_to_log_removal(
@@ -188,6 +189,7 @@ def parallel_mean(
     Examples
     --------
     >>> import numpy as np
+    >>> from gwtransport.logremoval import parallel_mean
     >>> # Three parallel streams with equal flow and log removals of 3, 4, and 5
     >>> log_removals = np.array([3, 4, 5])
     >>> parallel_mean(log_removals=log_removals)
