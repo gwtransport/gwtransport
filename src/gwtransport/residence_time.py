@@ -207,6 +207,7 @@ def residence_time_mean(
     --------
     >>> import pandas as pd
     >>> import numpy as np
+    >>> from gwtransport.residence_time import residence_time_mean
     >>> # Create sample flow data
     >>> flow_dates = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
     >>> flow_values = np.full(len(flow_dates) - 1, 100.0)  # Constant flow of 100 m³/day
@@ -221,7 +222,8 @@ def residence_time_mean(
     ... )
     >>> # With constant flow of 100 m³/day and pore volume of 200 m³,
     >>> # mean residence time should be approximately 2 days
-    >>> print(mean_times)  # Output: [np.nan, np.nan, 2.0, 2.0, 2.0, ..., 2.0]
+    >>> print(mean_times)  # doctest: +NORMALIZE_WHITESPACE
+    [[nan nan  2.  2.  2.  2.  2.  2.  2.]]
     """
     flow = np.asarray(flow)
     flow_tedges = pd.DatetimeIndex(flow_tedges)

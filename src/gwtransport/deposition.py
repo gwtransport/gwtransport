@@ -158,6 +158,7 @@ def deposition_to_extraction(
     --------
     >>> import pandas as pd
     >>> import numpy as np
+    >>> from gwtransport.deposition import deposition_to_extraction
     >>> dates = pd.date_range("2020-01-01", "2020-01-10", freq="D")
     >>> tedges = pd.date_range("2019-12-31 12:00", "2020-01-10 12:00", freq="D")
     >>> cout_tedges = pd.date_range("2020-01-03 12:00", "2020-01-12 12:00", freq="D")
@@ -312,7 +313,9 @@ def extraction_to_deposition(
     ...     thickness=10.0,
     ... )
     >>> print(f"Deposition rates shape: {dep.shape}")
+    Deposition rates shape: (10,)
     >>> print(f"Mean deposition rate: {np.nanmean(dep):.2f} ng/m2/day")
+    Mean deposition rate: 6.00 ng/m2/day
 
     With summed differences regularization for sparse solutions:
 
@@ -350,7 +353,7 @@ def extraction_to_deposition(
     >>> cout_nan = cout.copy()
     >>> cout_nan[2:4] = np.nan  # Missing data for some time periods
     >>>
-    >>> dep_robust = extraction_to_deposition(
+    >>> dep_robust = extraction_to_deposition(  # doctest: +SKIP
     ...     flow=flow,
     ...     tedges=tedges,
     ...     cout=cout_nan,

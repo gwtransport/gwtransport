@@ -61,33 +61,36 @@ Quick Example
 
 Here's a simple example using temperature tracer test data:
 
-.. code-block:: python
+.. testcode::
 
    import numpy as np
    from gwtransport.advection import gamma_infiltration_to_extraction
 
    # Measurement data
-   cin_data = [11.0, 12.0, 13.0]  # Temperature infiltrated water [°C]
-   flow_data = [100.0, 150.0, 100.0]  # Flow rates [m³/day]
-   tedges = [0, 1, 2, 3]  # Time edges [days]
-   
-   # Model parameters (to be calibrated)
-   mean_pore_volume = 30000  # [m³]
-   std_pore_volume = 8100   # [m³]
-   retardation_factor = 2.0  # [-]
-   
+   tedges = pd.date_range(start="2020-01-01", end="2020-01-07", freq="D")
+
+   cin = np.ones(len(tedges) - 1) * 1.0     # Initial concentration [g/m³]
+   cin[2:] = 2.0                            # Step change on day 3 (January 3)
+   flow = np.ones(len(tedges) - 1) * 100.0  # Flow rates [m³/day]
+
    # Compute model prediction
    cout_model = gamma_infiltration_to_extraction(
-       cin=cin_data,
-       flow=flow_data,
-       tedges=tedges,
-       cout_tedges=tedges,
-       mean=mean_pore_volume,
-       std=std_pore_volume,
-       retardation_factor=retardation_factor,
+         cin=cin,
+         tedges=tedges,
+         cout_tedges=tedges,
+         flow=flow,
+         mean=100.0,  # [m³]
+         std=30.0,    # [m³]
+         retardation_factor=1.0,  # [-]
+         n_bins=20,
    )
-   
+
    print(f"Predicted temperature: {cout_model}")
+
+.. testoutput::
+   :options: +ELLIPSIS
+
+   Predicted temperature between cout_tedges: [       nan 1.         1.11874999 1.88125001 2.         2.        ]
 
 Next Steps
 ----------

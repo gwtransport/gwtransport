@@ -126,16 +126,20 @@ def infiltration_to_extraction_series(
     >>> # Prepare data for step plot (repeat values for visualization)
     >>> xplot_in = np.repeat(tedges, 2)[1:-1]
     >>> yplot_in = np.repeat(cin, 2)
-    >>> plt.plot(xplot_in, yplot_in, label="Concentration of infiltrated water")
+    >>> plt.plot(
+    ...     xplot_in, yplot_in, label="Concentration of infiltrated water"
+    ... )  # doctest: +SKIP
     >>>
     >>> # cout equals cin, just with shifted time edges
     >>> xplot_out = np.repeat(tedges_out, 2)[1:-1]
     >>> yplot_out = np.repeat(cin, 2)
-    >>> plt.plot(xplot_out, yplot_out, label="Concentration of extracted water")
-    >>> plt.xlabel("Time")
-    >>> plt.ylabel("Concentration")
-    >>> plt.legend()
-    >>> plt.show()
+    >>> plt.plot(
+    ...     xplot_out, yplot_out, label="Concentration of extracted water"
+    ... )  # doctest: +SKIP
+    >>> plt.xlabel("Time")  # doctest: +SKIP
+    >>> plt.ylabel("Concentration")  # doctest: +SKIP
+    >>> plt.legend()  # doctest: +SKIP
+    >>> plt.show()  # doctest: +SKIP
 
     With retardation factor:
 
@@ -228,7 +232,8 @@ def extraction_to_infiltration_series(
     >>> len(tedges_out)
     11
     >>> # Time shift should be residence time = pore_volume / flow = 500 / 100 = 5 days (backward)
-    >>> tedges[0] - tedges_out[0]
+    >>> # First few elements are NaT due to insufficient history, check a valid index
+    >>> tedges[5] - tedges_out[5]
     Timedelta('5 days 00:00:00')
 
     Plotting the input and output concentrations:
@@ -237,16 +242,20 @@ def extraction_to_infiltration_series(
     >>> # Prepare data for step plot (repeat values for visualization)
     >>> xplot_in = np.repeat(tedges, 2)[1:-1]
     >>> yplot_in = np.repeat(cout, 2)
-    >>> plt.plot(xplot_in, yplot_in, label="Concentration of extracted water")
+    >>> plt.plot(
+    ...     xplot_in, yplot_in, label="Concentration of extracted water"
+    ... )  # doctest: +SKIP
     >>>
     >>> # cin equals cout, just with shifted time edges
     >>> xplot_out = np.repeat(tedges_out, 2)[1:-1]
     >>> yplot_out = np.repeat(cout, 2)
-    >>> plt.plot(xplot_out, yplot_out, label="Concentration of infiltrated water")
-    >>> plt.xlabel("Time")
-    >>> plt.ylabel("Concentration")
-    >>> plt.legend()
-    >>> plt.show()
+    >>> plt.plot(
+    ...     xplot_out, yplot_out, label="Concentration of infiltrated water"
+    ... )  # doctest: +SKIP
+    >>> plt.xlabel("Time")  # doctest: +SKIP
+    >>> plt.ylabel("Concentration")  # doctest: +SKIP
+    >>> plt.legend()  # doctest: +SKIP
+    >>> plt.show()  # doctest: +SKIP
 
     With retardation factor:
 
@@ -257,7 +266,8 @@ def extraction_to_infiltration_series(
     ...     retardation_factor=2.0,  # Doubles residence time
     ... )
     >>> # Time shift is doubled: 500 * 2.0 / 100 = 10 days (backward)
-    >>> tedges[0] - tedges_out[0]
+    >>> # With longer residence time, more elements are NaT, check the last valid index
+    >>> tedges[10] - tedges_out[10]
     Timedelta('10 days 00:00:00')
     """
     rt_array = residence_time(
@@ -301,17 +311,14 @@ def gamma_infiltration_to_extraction(
     cin : array-like
         Concentration of the compound in infiltrating water or temperature of infiltrating
         water.
-    cin_tedges : pandas.DatetimeIndex
-        Time edges for the concentration data. Used to compute the cumulative concentration.
-        Has a length of one more than `cin`.
-    cout_tedges : pandas.DatetimeIndex
-        Time edges for the output data. Used to compute the cumulative concentration.
-        Has a length of one more than `flow`.
     flow : array-like
         Flow rate of water in the aquifer [m3/day].
-    flow_tedges : pandas.DatetimeIndex
-        Time edges for the flow data. Used to compute the cumulative flow.
-        Has a length of one more than `flow`.
+    tedges : pandas.DatetimeIndex
+        Time edges for both cin and flow data. Used to compute the cumulative concentration.
+        Has a length of one more than `cin` and `flow`.
+    cout_tedges : pandas.DatetimeIndex
+        Time edges for the output data. Used to compute the cumulative concentration.
+        Has a length of one more than the desired output length.
     alpha : float, optional
         Shape parameter of gamma distribution of the aquifer pore volume (must be > 0)
     beta : float, optional
@@ -365,10 +372,9 @@ def gamma_infiltration_to_extraction(
     >>> # Run gamma_infiltration_to_extraction with alpha/beta parameters
     >>> cout = gamma_infiltration_to_extraction(
     ...     cin=cin,
-    ...     cin_tedges=tedges,
-    ...     cout_tedges=cout_tedges,
     ...     flow=flow,
-    ...     flow_tedges=tedges,  # Must be identical to cin_tedges
+    ...     tedges=tedges,
+    ...     cout_tedges=cout_tedges,
     ...     alpha=10.0,
     ...     beta=10.0,
     ...     n_bins=5,
@@ -380,10 +386,9 @@ def gamma_infiltration_to_extraction(
 
     >>> cout = gamma_infiltration_to_extraction(
     ...     cin=cin,
-    ...     cin_tedges=tedges,
-    ...     cout_tedges=cout_tedges,
     ...     flow=flow,
-    ...     flow_tedges=tedges,
+    ...     tedges=tedges,
+    ...     cout_tedges=cout_tedges,
     ...     mean=100.0,
     ...     std=20.0,
     ...     n_bins=5,
@@ -393,10 +398,9 @@ def gamma_infiltration_to_extraction(
 
     >>> cout = gamma_infiltration_to_extraction(
     ...     cin=cin,
-    ...     cin_tedges=tedges,
-    ...     cout_tedges=cout_tedges,
     ...     flow=flow,
-    ...     flow_tedges=tedges,
+    ...     tedges=tedges,
+    ...     cout_tedges=cout_tedges,
     ...     alpha=10.0,
     ...     beta=10.0,
     ...     retardation_factor=2.0,  # Doubles residence time
