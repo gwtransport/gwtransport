@@ -11,8 +11,8 @@ aquifer properties can be estimated directly from the streamlines.
 | Testing of source code | |Functional Testing| |Test Coverage|       |
 |                        | |Linting| |Build and release package|      |
 +------------------------+--------------------------------------------+
-| Testing of examples    | |Testing of examples| |Coverage by         |
-|                        | examples|                                  |
+| Testing of examples    | |Testing of examples|                      |
+|                        |                                            |
 +------------------------+--------------------------------------------+
 | Package                | |PyPI - Python Version| |PyPI - Version|   |
 |                        | |GitHub commits since latest release|      |
@@ -159,8 +159,6 @@ Indices and tables
    :target: https://github.com/gwtransport/gwtransport/actions/workflows/release.yml
 .. |Testing of examples| image:: https://github.com/gwtransport/gwtransport/actions/workflows/examples_testing.yml/badge.svg?branch=main
    :target: https://github.com/gwtransport/gwtransport/actions/workflows/examples_testing.yml
-.. |Coverage by examples| image:: https://gwtransport.github.io/gwtransport/coverage_examples-badge.svg
-   :target: https://gwtransport.github.io/gwtransport/htmlcov_examples/
 .. |PyPI - Python Version| image:: https://img.shields.io/pypi/pyversions/gwtransport.svg?logo=python&label=Python&logoColor=gold
    :target: https://pypi.org/project/gwtransport/
 .. |PyPI - Version| image:: https://img.shields.io/pypi/v/gwtransport.svg?logo=pypi&label=PyPI&logoColor=gold
