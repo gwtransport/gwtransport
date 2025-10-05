@@ -46,7 +46,7 @@ dependencies = [
   "requests",
   "scipy",
 ]
-version = "0.17.0"
+version = "0.18.0"
 [project.optional-dependencies]
 test = [
   "nbconvert",
