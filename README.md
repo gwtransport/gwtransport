@@ -10,7 +10,7 @@
 
 ## What you can do with a calibrated model
 
-Once you have calibrated the aquifer pore volume distribution, you can:
+Calibration refers to the estimation of the aquifer pore volume distribution. Once you have estimated this, you can:
 
 - **Predict residence time distributions** under varying flow conditions
 - **Forecast contaminant arrival times** and extracted concentrations
@@ -20,54 +20,55 @@ Once you have calibrated the aquifer pore volume distribution, you can:
 
 ## Two ways to obtain model parameters
 
-The aquifer pore volume distribution can be obtained using:
+The aquifer pore volume distribution is constant over time and can be obtained using:
 
 ### 1. Streamline Analysis
 
-Compute the area between streamlines from flow field data to directly estimate the pore volume distribution parameters.
+You already have computed the groundwater flow with an analytical solution or a numerical groundwater flow model. Compute the area between streamlines from flow field data to directly estimate the pore volume distribution parameters.
 
 ```python
 from gwtransport.advection import infiltration_to_extraction
 
 # Measurements
-cin_data = [1.0, 2.0, 3.0]  # Example concentration infiltrated water
-flow_data = [100.0, 150.0, 100.0]  # Example flow rates
-tedges = pd.date_range(start="2020-01-05", end="2020-01-08", freq="D")  # Example time edges
+cin = [1.0, 2.0, 3.0]  # Concentration infiltrated water [g/l]
+flow = [100.0, 150.0, 100.0]  # Flow rates [m3/day]
+tedges = pd.date_range(start="2020-01-05", end="2020-01-08", freq="D")  # Time edges for cin and flow bins
 
-areas_between_streamlines = np.array([100.0, 90.0, 110.0])  # Example areas
-depth_aquifer = 2.0  # Convert areas between 2D streamlines to 3D aquifer pore volumes
-porosity = 0.35
-aquifer_pore_volumes = areas_between_streamlines * depth_aquifer * porosity
+# Information from groundwater flow model
+areas_between_streamlines = np.array([100.0, 90.0, 110.0])  # [m2]
+depth_aquifer = 2.0  # [m] Convert areas between 2D streamlines to 3D aquifer pore volumes
+porosity = 0.35  # [-]
+aquifer_pore_volumes = areas_between_streamlines * depth_aquifer * porosity  # [m3]
 
 cout = infiltration_to_extraction(
-    cin=cin_data,
-    flow=flow_data,
+    cin=cin,
+    flow=flow,
     tedges=tedges,
     cout_tedges=tedges,
     aquifer_pore_volumes=aquifer_pore_volumes,
     retardation_factor=1.0,
-)
+)  # [g/l] same units as cin
 
-# Note: Initial output values are NaN until cin values fully pass through the aquifer
+# Note: Initial output values are NaN until the first cin value has fully passed the aquifer
 ```
 
 ### 2. Temperature Tracer Test
 
-Approximate the aquifer pore volume distribution with a two-parameter gamma distribution. Estimate these parameters from measured temperatures of infiltrated and extracted water. Temperature acts as a natural tracer, revealing flow paths through heterogeneous aquifers via calibration.
+Approximate the aquifer pore volume distribution with a two-parameter gamma distribution. Estimate these parameters from measured temperatures of infiltrated and extracted water. Temperature acts as a natural tracer, revealing flow paths through heterogeneous aquifers via calibration. No groundwater model is required.
 
 ```python
 from gwtransport.advection import gamma_infiltration_to_extraction
 
 # Measurements
-cin_data = [11.0, 12.0, 13.0]  # Example temperature infiltrated water
-flow_data = [100.0, 150.0, 100.0]  # Example flow rates
-tedges = pd.date_range(start="2020-01-05", end="2020-01-08", freq="D")  # Example time edges
+cin = [11.0, 12.0, 13.0]  # [degC] Measured temperature infiltrated water
+flow = [100.0, 150.0, 100.0]  # Flow rates
+tedges = pd.date_range(start="2020-01-05", end="2020-01-08", freq="D")  # Time edges for cin and flow bins
 
-cout_data = [10.5, 11.0, 11.5]  # Example temperature extracted water (required for calibration only)
+cout_measured = [10.5, 11.0, 11.5]  # [degC] Measured temperature extracted water (required for calibration only)
 
 cout_model = gamma_infiltration_to_extraction(
-    cin=cin_data,
-    flow=flow_data,
+    cin=cin,
+    flow=flow,
     tedges=tedges,
     cout_tedges=tedges,
     mean=200.0,  # [m3] Adjust such that cout_model matches the measured cout
@@ -88,10 +89,10 @@ pip install gwtransport
 
 Examples:
 
-- [Estimate aquifer pore volume from temperature response](https://gwtransport.github.io/gwtransport/examples/01_Aquifer_Characterization_Temperature.html)
-- [Estimate the residence time distribution](https://gwtransport.github.io/gwtransport/examples/02_Residence_Time_Analysis.html)
-- [Log removal efficiency analysis](https://gwtransport.github.io/gwtransport/examples/03_Pathogen_Removal_Bank_Filtration.html)
-- [Deposition analysis](https://gwtransport.github.io/gwtransport/examples/04_Deposition_Analysis_Bank_Filtration.html)
+1. [Estimate aquifer pore volume from temperature response](https://gwtransport.github.io/gwtransport/examples/01_Aquifer_Characterization_Temperature.html)
+2. [Estimate the residence time distribution](https://gwtransport.github.io/gwtransport/examples/02_Residence_Time_Analysis.html)
+3. [Log removal efficiency analysis](https://gwtransport.github.io/gwtransport/examples/03_Pathogen_Removal_Bank_Filtration.html)
+4. [Deposition analysis](https://gwtransport.github.io/gwtransport/examples/04_Deposition_Analysis_Bank_Filtration.html)
 
 Full documentation: [gwtransport.github.io/gwtransport](https://gwtransport.github.io/gwtransport)
 
