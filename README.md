@@ -98,4 +98,27 @@ Full documentation: [gwtransport.github.io/gwtransport](https://gwtransport.gith
 
 ## License
 
-GNU Affero General Public License v3.0
+This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0), a strong copyleft license that requires making source code of any modifications available. This ensures improvements remain available to the community.
+
+### Permissions
+
+- ✓ Commercial use
+- ✓ Distribution
+- ✓ Modification
+- ✓ Patent use
+- ✓ Private use
+
+### Conditions
+
+- ℹ Disclose source
+- ℹ License and copyright notice
+- ℹ Network use is distribution
+- ℹ Same license
+- ℹ State changes
+
+### Limitations
+
+- ✗ Liability
+- ✗ Warranty
+
+For more details about this license, see the [full AGPL-3.0 license text](https://choosealicense.com/licenses/agpl-3.0/).
