@@ -1,43 +1,89 @@
 [build-system]
-requires = ["hatchling>=1.24.2", "hatch-vcs>=0.3.0"]
+requires = ["hatchling >= 1.26"]
 build-backend = "hatchling.build"
 
 [project]
-name = "gwtransport1d"
-description = "Transport of contaminants in 1D groundwater flow system"
+name = "gwtransport"
+description = "Timeseries analysis for groundwater transport of solutes and heat"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = [
+  "analysis",
+  "aquifer",
+  "bank-filtration",
+  "contaminant",
   "groundwater",
+  "hydrology",
+  "pathogen-removal",
+  "residence-time",
+  "temperature",
+  "time-series",
   "transport",
-  "1D",
-  "deposition",
+  "water-treatment",
 ]
 authors = [
-  { name = "Bas des Tombe", email = "bdestombe@gmail.com" },
+  { name = "Bas des Tombe"},
 ]
 classifiers = [
-  "Programming Language :: Python :: 3.10",
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: GNU Affero General Public License v3",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Scientific/Engineering :: Hydrology",
+  "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
-  "pandas",
-  "scipy",
+  "ipykernel",
   "matplotlib",
   "numpy",
+  "pandas",
+  "requests",
+  "scipy",
 ]
-version = "0.5.1"
+version = "0.18.0"
 [project.optional-dependencies]
 test = [
+  "nbconvert",
+  "nbformat",
   "pytest",
-  "ruff==0.6.8",
+  "pytest-cov",
+  "pytest-xdist",
+  "ruff==0.13.2",
+  "ty",
   "validate-pyproject[all,store]",
 ]
 
 [project.urls]
-Homepage = "https://github.com/bdestombe/python_gwtransport1d"
+Homepage = "https://github.com/gwtransport/gwtransport"
 
 [tool.hatch.envs.hatch-static-analysis]
 config-path = "ruff.toml"
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+    "-n=auto",
+    "--doctest-modules",
+]
+filterwarnings = [
+    "ignore:.*Jupyter is migrating.*:DeprecationWarning",
+]
+
+[tool.coverage.run]
+concurrency = ["multiprocessing"]
+parallel = true
+sigterm = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "def __repr__",
+    "pragma: no cover",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]

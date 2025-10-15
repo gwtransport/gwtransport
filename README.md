@@ -1,27 +1,124 @@
-|         |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CI/CD   | [![Functional Testing](https://github.com/bdestombe/python_gwtransport1d/actions/workflows/functional_testing.yml/badge.svg?branch=main)](https://github.com/bdestombe/python_gwtransport1d/actions/workflows/functional_testing.yml) [![Linting](https://github.com/bdestombe/python_gwtransport1d/actions/workflows/linting.yml/badge.svg?branch=main)](https://github.com/bdestombe/python_gwtransport1d/actions/workflows/linting.yml) [![Build and release package](https://github.com/bdestombe/python-gwtransport1d/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/bdestombe/python-gwtransport1d/actions/workflows/release.yml) |
-| Package | [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/gwtransport1d.svg?logo=python&label=Python&logoColor=gold)](https://pypi.org/project/gwtransport1d/) [![PyPI - Version](https://img.shields.io/pypi/v/gwtransport1d.svg?logo=pypi&label=PyPI&logoColor=gold)](https://pypi.org/project/gwtransport1d/) [![GitHub commits since latest release](https://img.shields.io/github/commits-since/bdestombe/python-gwtransport1d/latest?logo=github&logoColor=lightgrey)](https://github.com/bdestombe/python-gwtransport1d/compare/)                                                                                                                   |
-|         |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+# gwtransport
 
-# gwtransport1d
+`gwtransport` enables timeseries analysis of groundwater transport of solutes and temperature. Estimate aquifer properties from temperature tracer tests or streamline analysis, predict residence times and solute transport, and assess pathogen removal efficiency in bank filtration systems.
 
-Transport of temperature and contaminants in 1D groundwater flow system. This code is used for the bank filtration systems operated by PWN, drinkingwater company in the Netherlands.
+|                        |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Testing of source code | [![Functional Testing](https://github.com/gwtransport/gwtransport/actions/workflows/functional_testing.yml/badge.svg?branch=main)](https://github.com/gwtransport/gwtransport/actions/workflows/functional_testing.yml) [![Test Coverage](https://gwtransport.github.io/gwtransport/coverage-badge.svg)](https://gwtransport.github.io/gwtransport/htmlcov/) [![Linting](https://github.com/gwtransport/gwtransport/actions/workflows/linting.yml/badge.svg?branch=main)](https://github.com/gwtransport/gwtransport/actions/workflows/linting.yml) [![Build and release package](https://github.com/gwtransport/gwtransport/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/gwtransport/gwtransport/actions/workflows/release.yml) |
+| Testing of examples    | [![Testing of examples](https://github.com/gwtransport/gwtransport/actions/workflows/examples_testing.yml/badge.svg?branch=main)](https://github.com/gwtransport/gwtransport/actions/workflows/examples_testing.yml)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Package                | [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/gwtransport.svg?logo=python&label=Python&logoColor=gold)](https://pypi.org/project/gwtransport/) [![PyPI - Version](https://img.shields.io/pypi/v/gwtransport.svg?logo=pypi&label=PyPI&logoColor=gold)](https://pypi.org/project/gwtransport/) [![GitHub commits since latest release](https://img.shields.io/github/commits-since/gwtransport/gwtransport/latest?logo=github&logoColor=lightgrey)](https://github.com/gwtransport/gwtransport/compare/)                                                                                                                                                                                                                                    |
 
-- Compute residence times with forward and backward tracking
-- Compute the temperature / concentration of a contaminant at the extraction well if advection is the main transport mechanism
-- Compute the areal deposition that explains the difference between the inlet and outlet concentration
+## What you can do with a calibrated model
 
-## Multi-1d transport
+Calibration refers to the estimation of the aquifer pore volume distribution. Once you have estimated this, you can:
 
-Aquifers are often not 1D, but 2D or 3D. The code is extended to multi-1D transport, where the 1D transport is computed for each layer. Currently implemented is gamma distribution to compute the residence time distribution in the aquifer. It assumes the flow is distributed as a gamma distribution over the layers, resulting in a gamma distribution of the residence times.
+- **Predict residence time distributions** under varying flow conditions
+- **Forecast contaminant arrival times** and extracted concentrations
+- **Design treatment systems** with quantified pathogen removal efficiency
+- **Assess groundwater vulnerability** to contamination
+- **Enable early warning systems** as digital twins for drinking water protection
 
-## Aquifer pore volume
+## Two ways to obtain model parameters
 
-Flow may vary over time while the aquifer pore volume does not. The aquifer pore volume, or its distribution in multi-1d, is used to compute the residence time distribution.
+The aquifer pore volume distribution is constant over time and can be obtained using:
+
+### 1. Streamline Analysis
+
+You already have computed the groundwater flow with an analytical solution or a numerical groundwater flow model. Compute the area between streamlines from flow field data to directly estimate the pore volume distribution parameters.
+
+```python
+from gwtransport.advection import infiltration_to_extraction
+
+# Measurements
+cin = [1.0, 2.0, 3.0]  # Concentration infiltrated water [g/l]
+flow = [100.0, 150.0, 100.0]  # Flow rates [m3/day]
+tedges = pd.date_range(start="2020-01-05", end="2020-01-08", freq="D")  # Time edges for cin and flow bins
+
+# Information from groundwater flow model
+areas_between_streamlines = np.array([100.0, 90.0, 110.0])  # [m2]
+depth_aquifer = 2.0  # [m] Convert areas between 2D streamlines to 3D aquifer pore volumes
+porosity = 0.35  # [-]
+aquifer_pore_volumes = areas_between_streamlines * depth_aquifer * porosity  # [m3]
+
+cout = infiltration_to_extraction(
+    cin=cin,
+    flow=flow,
+    tedges=tedges,
+    cout_tedges=tedges,
+    aquifer_pore_volumes=aquifer_pore_volumes,
+    retardation_factor=1.0,
+)  # [g/l] same units as cin
+
+# Note: Initial output values are NaN until the first cin value has fully passed the aquifer
+```
+
+### 2. Temperature Tracer Test
+
+Approximate the aquifer pore volume distribution with a two-parameter gamma distribution. Estimate these parameters from measured temperatures of infiltrated and extracted water. Temperature acts as a natural tracer, revealing flow paths through heterogeneous aquifers via calibration. No groundwater model is required.
+
+```python
+from gwtransport.advection import gamma_infiltration_to_extraction
+
+# Measurements
+cin = [11.0, 12.0, 13.0]  # [degC] Measured temperature infiltrated water
+flow = [100.0, 150.0, 100.0]  # Flow rates
+tedges = pd.date_range(start="2020-01-05", end="2020-01-08", freq="D")  # Time edges for cin and flow bins
+
+cout_measured = [10.5, 11.0, 11.5]  # [degC] Measured temperature extracted water (required for calibration only)
+
+cout_model = gamma_infiltration_to_extraction(
+    cin=cin,
+    flow=flow,
+    tedges=tedges,
+    cout_tedges=tedges,
+    mean=200.0,  # [m3] Adjust such that cout_model matches the measured cout
+    std=16.0,    # [m3] Adjust such that cout_model matches the measured cout
+    retardation_factor=2.0,  # [-] Retardation factor for the temperature tracer
+)
+
+# Compare model output with measured data to calibrate mean and std parameters (see Example 1)
+```
 
 ## Installation
 
 ```bash
-pip install gwtransport1d
+pip install gwtransport
 ```
+
+## Examples and Documentation
+
+Examples:
+
+1. [Estimate aquifer pore volume from temperature response](https://gwtransport.github.io/gwtransport/examples/01_Aquifer_Characterization_Temperature.html)
+2. [Estimate the residence time distribution](https://gwtransport.github.io/gwtransport/examples/02_Residence_Time_Analysis.html)
+3. [Log removal efficiency analysis](https://gwtransport.github.io/gwtransport/examples/03_Pathogen_Removal_Bank_Filtration.html)
+4. [Deposition analysis](https://gwtransport.github.io/gwtransport/examples/04_Deposition_Analysis_Bank_Filtration.html)
+
+Full documentation: [gwtransport.github.io/gwtransport](https://gwtransport.github.io/gwtransport)
+
+## License
+
+This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0), a strong copyleft license that requires making source code of any modifications available. This ensures improvements remain available to the community.
+
+**Permissions**
+
+- ✓ Commercial use
+- ✓ Distribution
+- ✓ Modification
+- ✓ Patent use
+- ✓ Private use
+
+**Conditions**
+
+- ℹ Disclose source
+- ℹ License and copyright notice
+- ℹ Network use is distribution
+- ℹ Same license
+- ℹ State changes
+
+**Limitations**
+
+- ✗ Liability
+- ✗ Warranty
+
+For more details about this license, see the [full AGPL-3.0 license text](https://choosealicense.com/licenses/agpl-3.0/).

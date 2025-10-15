@@ -1,4 +1,4 @@
-name: Functional Testing
+name: Testing of examples
 
 on:
   push:
@@ -7,12 +7,12 @@ on:
     branches: ["main"]
 
 concurrency:
-  group: "functional"
+  group: "examples"
   cancel-in-progress: false
 
 jobs:
-  pytest:
-    name: python
+  pytest-examples:
+    name: Pytest examples
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -23,27 +23,27 @@ jobs:
       - name: Install the project
         run: uv sync --extra test
       - name: Run tests with coverage
-        run: uv run pytest tests/src --cov=src --cov-report=xml:coverage/coverage.xml --cov-report=html:coverage/htmlcov --cov-append
+        run: uv run pytest tests/examples --cov=src --cov-report=xml:coverage/coverage_examples.xml --cov-report=html:coverage/htmlcov_examples --cov-append
       - name: Create coverage badge
         run: |
           uv tool install "genbadge[coverage]"
-          uv run genbadge coverage -i coverage/coverage.xml -o coverage/coverage-badge.svg
+          uv run genbadge coverage -i coverage/coverage_examples.xml -o coverage/coverage_examples-badge.svg
       - name: Use the failed badge if coverage creation failed
         if: ${{ failure() }}
         run: |
-          mkdir -p coverage/htmlcov
-          cp .github/assets/coverage_failed.svg coverage/coverage-badge.svg
-      - name: Pack functional coverage results
+          mkdir -p coverage/htmlcov_examples
+          cp .github/assets/coverage_failed.svg coverage/coverage_examples-badge.svg
+      - name: Pack example coverage results
         run: |
-          zip -FSr coverage-functional.zip coverage/coverage-badge.svg coverage/htmlcov coverage/coverage.xml
-          mv coverage-functional.zip coverage
-      - name: Download examples coverage results and documentation
+          zip -FSr coverage-examples.zip coverage/coverage_examples-badge.svg coverage/htmlcov_examples coverage/coverage_examples.xml
+          mv coverage-examples.zip coverage
+      - name: Download functional coverage results and documentation
         run: |
-          curl https://gwtransport.github.io/gwtransport/coverage-examples.zip -L -o coverage-examples.zip
+          curl https://gwtransport.github.io/gwtransport/coverage-functional.zip -L -o coverage-functional.zip
           curl https://gwtransport.github.io/gwtransport/documentation.zip -L -o documentation.zip
-          unzip -o coverage-examples.zip || true
+          unzip -o coverage-functional.zip || true
           unzip -o documentation.zip || true
-          mv coverage-examples.zip coverage || true
+          mv coverage-functional.zip coverage || true
           mv documentation.zip coverage || true
       - name: Upload both coverage results
         if: ${{ always() }}
@@ -51,9 +51,9 @@ jobs:
         with:
           path: coverage
 
-  deploy:
+  deploy-examples:
     if: ${{ github.ref == 'refs/heads/main' && always() }}
-    needs: pytest
+    needs: pytest-examples
     runs-on: ubuntu-latest
     environment:
       name: github-pages

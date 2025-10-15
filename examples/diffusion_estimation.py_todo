@@ -1,0 +1,32 @@
+"""Compute the diffusivity from the temperature profile in the aquifer."""
+
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import pandas as pd
+
+from gwtransport.diffusion import compute_diffusion
+
+fp = Path(
+    "/Users/bdestombe/Projects/bdestombe/python-pwn-productiecapaciteit-infiltratiegebieden/productiecapaciteit/data/Merged/IK93.feather"
+)
+df = pd.read_feather(fp).set_index("Datum")
+# df = df.groupby(df.index.date).mean()
+df.index = pd.to_datetime(df.index)
+df.Q *= 24.0  # m3/day
+df.spui *= 24.0  # m3/day
+
+aquifer_pore_volume = 216000
+retardation_factor = 2.0
+aquifer_length = 80.0  # [m] average stream flow length
+porosity = 0.35  # [-] porosity of the aquifer
+diffusivity_heat = (
+    4.85 ** (1 - porosity) * 0.58**porosity / ((1 - porosity) * 2710 * 835 + porosity * 1000 * 4183) * 3600 * 24
+)
+diffusivity = diffusivity_heat
+
+cout = compute_diffusion(df.T_bodem, df.Q, aquifer_pore_volume, diffusivity, retardation_factor)
+df["cout"] = cout
+
+df[["T_bodem", "cout"]].plot()
+plt.show()

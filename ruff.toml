@@ -43,13 +43,28 @@ extend-select = ["D", "E4", "E7", "E9", "F", "C901"]
 convention = "numpy"
 
 [lint.per-file-ignores]
+'**/*.py' = [
+    "RUF001",
+    "TC003",    # Type checking is fine.
+]
 'modelscripts/**/*.py' = [
     'INP001',  # Missing return type annotation for public function
+]
+"examples/**/*.py" = [
+    "INP001",  # __init__.py is not needed for the examples folder
+    "T201",  # Allow for print statements
+]
+"examples/**/*.ipynb" = [
+    "INP001",  # __init__.py is not needed for the examples folder
+    "T201",  # Allow for print statements
+    "B018", # allow notebooks printing out variables in the mid cell with variable names only
+    "PLR2004",
+    "E402",
 ]
 "tests/**/test_*.py" = [
     "S101", # asserts allowed in tests
     "D",
-]
-"**/*.ipynb" = [
-    "B018", # allow notebooks printing out variables in the mid cell with variable names only
+    "PT011",  # Valueerror should be allowed
+    "PLR2004",
+    "INP001",  # __init__.py is not needed for the test folders
 ]

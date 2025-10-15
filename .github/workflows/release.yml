@@ -12,26 +12,26 @@ jobs:
     name: Build distribution
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: false
       - name: Build a binary wheel and a source tarball
         run: uv build --no-sources
       - name: Install the built wheel
-        run: uv run --with `find dist -name "*.whl"` --refresh-package gwtransport1d --no-project -- python -c "import importlib.metadata as m;print(m.version('gwtransport1d'))"
+        run: uv run --with `find dist -name "*.whl"` --refresh-package gwtransport --no-project -- python -c "import importlib.metadata as m;print(m.version('gwtransport'))"
       - name: Install the built source tarball
-        run: uv run --with `find dist -name "*.tar.gz"` --refresh-package gwtransport1d --no-project -- python -c "import importlib.metadata as m;print(m.version('gwtransport1d'))"
+        run: uv run --with `find dist -name "*.tar.gz"` --refresh-package gwtransport --no-project -- python -c "import importlib.metadata as m;print(m.version('gwtransport'))"
       - name: Compare release tag with pyproject.toml version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           TAG_VERSION=${GITHUB_REF#refs/tags/}
           echo "Git tag version: $TAG_VERSION"
 
-          PYPROJECT_VERSION=$(uv run --with `find dist -name "*.tar.gz"` --refresh-package gwtransport1d --no-project -- python -c "import importlib.metadata as m; print(m.version('gwtransport1d'))")
+          PYPROJECT_VERSION=$(uv run --with `find dist -name "*.tar.gz"` --refresh-package gwtransport --no-project -- python -c "import importlib.metadata as m; print(m.version('gwtransport'))")
           echo "pyproject.toml version: $PYPROJECT_VERSION"
 
           # Compare versions
@@ -53,12 +53,12 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/gwtransport1d
+      url: https://pypi.org/p/gwtransport
     permissions:
       id-token: write # IMPORTANT: mandatory for trusted publishing
     steps:
       - name: Download all the dists
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: python-package-distributions
           path: dist/
@@ -73,12 +73,12 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: testpypi
-      url: https://test.pypi.org/p/gwtransport1d
+      url: https://test.pypi.org/p/gwtransport
     permissions:
       id-token: write # IMPORTANT: mandatory for trusted publishing
     steps:
       - name: Download all the dists
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: python-package-distributions
           path: dist/
