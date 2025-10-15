@@ -58,6 +58,21 @@ test = [
   "ty",
   "validate-pyproject[all,store]",
 ]
+docs = [
+  "ipykernel",
+  "jupyter",
+  "matplotlib",
+  "nbsphinx",
+  "nbsphinx-link",
+  "numpy",
+  "pandas",
+  "scipy",
+  "sphinx>=7.0",
+  "sphinx-autodoc-typehints",
+  "sphinx-book-theme>=1.0.0",
+  "sphinx-copybutton",
+  "sphinxext-opengraph[social_cards]",
+]
 
 [project.urls]
 Homepage = "https://github.com/gwtransport/gwtransport"

@@ -28,7 +28,7 @@ jobs:
       - name: Install Pandoc
         uses: pandoc/actions/setup@v1
       - name: Build documentation with sphinx and uv
-        run: uv tool run --from sphinx --with-requirements docs/requirements.txt --with-editable "." sphinx-build -M html docs/source docs/build
+        run: uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -M html docs/source docs/build
       - name: Zip documentation
         run: |
           mv docs/build/html coverage
