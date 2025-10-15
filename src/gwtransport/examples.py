@@ -25,6 +25,7 @@ Available functions:
 """
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 from gwtransport.advection import gamma_infiltration_to_extraction
@@ -194,7 +195,7 @@ def generate_example_deposition_timeseries(
     base: float = 0.8,
     seasonal_amplitude: float = 0.3,
     noise_scale: float = 0.1,
-    event_dates: list[str] | pd.DatetimeIndex | None = None,
+    event_dates: npt.ArrayLike | pd.DatetimeIndex | None = None,
     event_magnitude: float = 3.0,
     event_duration: int = 30,
     event_decay_scale: float = 10.0,

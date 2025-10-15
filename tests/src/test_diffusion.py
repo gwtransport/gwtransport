@@ -316,7 +316,11 @@ class TestGaussianComparison:
         # Create a range of x values
         x = np.linspace(-10, 10, 1000)
 
-        signals = {
+        # Create impulse signal
+        impulse_signal = np.zeros_like(x)
+        impulse_signal[len(x) // 2] = 1
+
+        return {
             "gaussian": {"signal": np.exp(-(x**2) / 2), "description": "Single Gaussian peak"},
             "two_gaussians": {
                 "signal": np.exp(-((x - 2) ** 2) / 2) + np.exp(-((x + 2) ** 2) / 2),
@@ -324,13 +328,8 @@ class TestGaussianComparison:
             },
             "step": {"signal": np.heaviside(x, 1), "description": "Step function"},
             "sine": {"signal": np.sin(2 * np.pi * x / 5), "description": "Sinusoidal wave"},
-            "impulse": {"signal": np.zeros_like(x), "description": "Delta function approximation"},
+            "impulse": {"signal": impulse_signal, "description": "Delta function approximation"},
         }
-
-        # Add impulse in the middle
-        signals["impulse"]["signal"][len(x) // 2] = 1
-
-        return signals
 
     def test_constant_sigma_equivalence(self):
         """Test that our implementation matches scipy for constant sigma."""

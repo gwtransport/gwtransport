@@ -166,7 +166,9 @@ def test_expected_bin_values_monte_carlo():
     tolerance = 0.005  # 0.5% tolerance for convergence
 
     for params in test_cases:
-        alpha, beta, n_bins = params["alpha"], params["beta"], params["n_bins"]
+        alpha = float(params["alpha"])
+        beta = float(params["beta"])
+        n_bins = int(params["n_bins"])
 
         # Get theoretical bin properties
         bin_result = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
@@ -273,7 +275,8 @@ def test_multiple_gamma_distributions_expected_values():
     tolerance = 0.01
 
     for dist_params in distributions:
-        alpha, beta = dist_params["alpha"], dist_params["beta"]
+        alpha = float(dist_params["alpha"])
+        beta = float(dist_params["beta"])
 
         # Get theoretical bin properties
         bin_result = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
