@@ -101,6 +101,7 @@ typehints_fully_qualified = False
 always_use_bars_union = True
 typehints_defaults = "comma"
 simplify_optional_unions = True
+nitpicky = True
 
 # -- Options for intersphinx -------------------------------------------------
 intersphinx_mapping = {
