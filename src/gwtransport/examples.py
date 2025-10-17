@@ -22,6 +22,9 @@ Available functions:
   random noise, and episodic contamination events with exponential decay. Returns Series with
   deposition rates [ng/m²/day] and attrs containing generation parameters. Useful for testing
   extraction_to_deposition deconvolution and deposition_to_extraction convolution functions.
+
+This file is part of gwtransport which is released under AGPL-3.0 license.
+See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
 import numpy as np

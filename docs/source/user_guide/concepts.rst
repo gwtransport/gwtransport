@@ -14,7 +14,7 @@ Key parameters:
 - **Standard deviation**: Variability in pore volumes across different paths (m³)
 - **Distribution shape**: Commonly approximated using a two-parameter gamma distribution
 
-The gamma distribution model is implemented in :py:func:`gwtransport.advection.gamma_infiltration_to_extraction`. For cases with known streamline geometry, pore volumes can be computed directly using :py:func:`gwtransport.surfacearea.surface_area_between_streamlines` and passed to :py:func:`gwtransport.advection.infiltration_to_extraction`.
+The gamma distribution model is implemented in :py:func:`gwtransport.advection.gamma_infiltration_to_extraction`. For cases with known streamline geometry, pore volumes can be computed directly using :py:func:`gwtransport.surfacearea.compute_average_heights` and passed to :py:func:`gwtransport.advection.infiltration_to_extraction`.
 
 Residence Time
 ~~~~~~~~~~~~~~
@@ -75,7 +75,7 @@ where:
 - Mean pore volume: :math:`\mu = k \cdot \theta`
 - Standard deviation: :math:`\sigma = \sqrt{k} \cdot \theta`
 
-In practice, ``gwtransport`` parameterizes using mean and standard deviation directly (see :py:func:`gwtransport.gamma.gamma_distribution`), which are more intuitive than shape and scale. The gamma model works well for moderately heterogeneous aquifers but may not capture multi-modal distributions or extreme heterogeneity.
+In practice, ``gwtransport`` parameterizes using mean and standard deviation directly (see :py:func:`gwtransport.gamma.bins`), which are more intuitive than shape and scale. The gamma model works well for moderately heterogeneous aquifers but may not capture multi-modal distributions or extreme heterogeneity.
 
 Streamline Analysis
 ~~~~~~~~~~~~~~~~~~~
@@ -83,7 +83,7 @@ Streamline Analysis
 When detailed flow field data are available (e.g., from numerical groundwater models), pore volumes can be computed directly without assuming a parametric distribution:
 
 1. Compute streamlines from infiltration to extraction points using flow field data
-2. Calculate cross-sectional areas between adjacent streamlines (:py:func:`gwtransport.surfacearea.surface_area_between_streamlines`)
+2. Calculate cross-sectional areas between adjacent streamlines (:py:func:`gwtransport.surfacearea.compute_average_heights`)
 3. Convert 2D streamline areas to 3D pore volumes: :math:`V_i = A_i \times d \times \theta`, where :math:`d` is aquifer depth and :math:`\theta` is porosity
 4. Pass volumes directly to :py:func:`gwtransport.advection.infiltration_to_extraction`
 

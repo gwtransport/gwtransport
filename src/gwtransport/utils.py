@@ -8,9 +8,9 @@ underdetermined system solvers, and external data retrieval.
 
 Available functions:
 
-- :func:`linear_interpolate` - Linear interpolation on monotonically increasing data with
-  configurable extrapolation (None for clamping, float for constant values). Handles
-  multi-dimensional query arrays.
+- :func:`linear_interpolate` - Linear interpolation using numpy's optimized interp function.
+  Automatically handles unsorted data with configurable extrapolation (None for clamping,
+  float for constant values). Handles multi-dimensional query arrays.
 
 - :func:`interp_series` - Interpolate pandas Series to new DatetimeIndex using
   scipy.interpolate.interp1d. Automatically filters NaN values and converts datetime to
@@ -50,6 +50,9 @@ Available functions:
 
 - :func:`generate_failed_coverage_badge` - Generate SVG badge indicating failed coverage using
   genbadge library. Used in CI/CD workflows.
+
+This file is part of gwtransport which is released under AGPL-3.0 license.
+See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
 from __future__ import annotations
@@ -80,60 +83,72 @@ def linear_interpolate(
     right: float | None = None,
 ) -> npt.NDArray[np.floating]:
     """
-    Linear interpolation on monotonically increasing data.
+    Linear interpolation using numpy's optimized interp function.
+
+    Automatically handles unsorted reference data by sorting it first.
 
     Parameters
     ----------
     x_ref : array-like
-        Reference vector with sorted x-values.
+        Reference x-values. If unsorted, will be automatically sorted.
     y_ref : array-like
-        Reference vector with y-values.
+        Reference y-values corresponding to x_ref.
     x_query : array-like
-        Query x-values. Array may have any shape.
+        Query x-values where interpolation is needed. Array may have any shape.
     left : float, optional
         Value to return for x_query < x_ref[0].
-        - If `left` is set to None, x_query = x_ref[0].
-        - If `left` is set to a float, such as np.nan, this value is returned.
+
+        - If ``left=None``: clamp to y_ref[0] (default)
+        - If ``left=float``: use specified value (e.g., ``np.nan``)
+
     right : float, optional
         Value to return for x_query > x_ref[-1].
-        - If `right` is set to None, x_query = x_ref[-1].
-        - If `right` is set to a float, such as np.nan, this value is returned.
+
+        - If ``right=None``: clamp to y_ref[-1] (default)
+        - If ``right=float``: use specified value (e.g., ``np.nan``)
 
     Returns
     -------
     numpy.ndarray
-        Interpolated y-values.
+        Interpolated y-values with the same shape as x_query.
+
+    Examples
+    --------
+    Basic interpolation with clamping (default):
+
+    >>> import numpy as np
+    >>> from gwtransport.utils import linear_interpolate
+    >>> x_ref = np.array([1.0, 2.0, 3.0, 4.0])
+    >>> y_ref = np.array([10.0, 20.0, 30.0, 40.0])
+    >>> x_query = np.array([0.5, 1.5, 2.5, 3.5, 4.5])
+    >>> linear_interpolate(x_ref=x_ref, y_ref=y_ref, x_query=x_query)
+    array([10., 15., 25., 35., 40.])
+
+    Using NaN for extrapolation:
+
+    >>> linear_interpolate(
+    ...     x_ref=x_ref, y_ref=y_ref, x_query=x_query, left=np.nan, right=np.nan
+    ... )
+    array([nan, 15., 25., 35., nan])
+
+    Handles unsorted reference data automatically:
+
+    >>> x_unsorted = np.array([3.0, 1.0, 4.0, 2.0])
+    >>> y_unsorted = np.array([30.0, 10.0, 40.0, 20.0])
+    >>> linear_interpolate(x_ref=x_unsorted, y_ref=y_unsorted, x_query=x_query)
+    array([10., 15., 25., 35., 40.])
+
+    See Also
+    --------
+    interp_series : Interpolate pandas Series with datetime index
     """
-    x_ref = np.asarray(x_ref)
-    y_ref = np.asarray(y_ref)
-    x_query = np.asarray(x_query)
+    # Sort reference data to ensure monotonic ordering
+    sort_idx = np.argsort(x_ref)
+    x_ref_sorted = x_ref[sort_idx]
+    y_ref_sorted = y_ref[sort_idx]
 
-    # Find indices where x_query would be inserted in x_ref
-    idx_no_edges = np.searchsorted(x_ref, x_query)
-
-    idx = np.clip(idx_no_edges, 1, len(x_ref) - 1)
-
-    # Calculate interpolation weights
-    x0 = x_ref[idx - 1]
-    x1 = x_ref[idx]
-    y0 = y_ref[idx - 1]
-    y1 = y_ref[idx]
-
-    # Perform linear interpolation
-    weights = (x_query - x0) / (x1 - x0)
-    y_query = y0 + weights * (y1 - y0)
-
-    # Handle edge cases
-    if left is None:
-        y_query = np.where(x_query < x_ref[0], y_ref[0], y_query)
-    if right is None:
-        y_query = np.where(x_query > x_ref[-1], y_ref[-1], y_query)
-    if isinstance(left, float):
-        y_query = np.where(x_query < x_ref[0], left, y_query)
-    if isinstance(right, float):
-        y_query = np.where(x_query > x_ref[-1], right, y_query)
-
-    return y_query
+    # Default behavior (left=None, right=None) clamps to boundary values
+    return np.interp(x_query, x_ref_sorted, y_ref_sorted, left=left, right=right)
 
 
 def interp_series(*, series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwargs: object) -> pd.Series:
@@ -444,8 +459,8 @@ def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.N
     tedges : array-like
         1D array of time bin edges in ascending order. For n bins, there
         should be n+1 edges.
-    bin_tedges : list of tuples
-        List of tuples where each tuple contains (start_time, end_time)
+    bin_tedges : list of tuple
+        List of tuples where each tuple contains ``(start_time, end_time)``
         defining a time range.
 
     Returns

@@ -47,6 +47,7 @@ napoleon_use_rtype = True
 napoleon_preprocess_types = True
 napoleon_type_aliases = {
     "array-like": ":py:data:`~numpy.typing.ArrayLike`",
+    "callable": ":py:class:`~collections.abc.Callable`",
 }
 
 templates_path = ["_templates"]

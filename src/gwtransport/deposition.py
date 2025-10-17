@@ -32,6 +32,9 @@ Available functions:
   time at first time step, representing time needed for system to become fully informed. Before
   this duration, extracted concentration lacks complete deposition history. Useful for determining
   valid analysis period and identifying when boundary effects are negligible.
+
+This file is part of gwtransport which is released under AGPL-3.0 license.
+See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
 import numpy as np

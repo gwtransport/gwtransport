@@ -27,6 +27,9 @@ Available functions:
 
 - :func:`bin_masses` - Calculate probability mass for custom bin edges using incomplete gamma
   function. Lower-level function used internally by bins().
+
+This file is part of gwtransport which is released under AGPL-3.0 license.
+See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
 import numpy as np
@@ -199,12 +202,14 @@ def bins(
 
     Returns
     -------
-    dict of numpy.ndarray with keys:
-        - lower_bound: lower bounds of bins (first one is 0)
-        - upper_bound: upper bounds of bins (last one is inf)
-        - edges: bin edges (lower_bound[0], upper_bound[0], ..., upper_bound[-1])
-        - expected_values: expected values in bins. Is what you would expect to observe if you repeatedly sampled from the probability distribution, but only considered samples that fall within that particular bin
-        - probability_mass: probability mass in bins
+    dict
+        Dictionary with keys of type str and values of type numpy.ndarray:
+
+        - ``lower_bound``: lower bounds of bins (first one is 0)
+        - ``upper_bound``: upper bounds of bins (last one is inf)
+        - ``edges``: bin edges (lower_bound[0], upper_bound[0], ..., upper_bound[-1])
+        - ``expected_values``: expected values in bins. Is what you would expect to observe if you repeatedly sampled from the probability distribution, but only considered samples that fall within that particular bin
+        - ``probability_mass``: probability mass in bins
 
     See Also
     --------
