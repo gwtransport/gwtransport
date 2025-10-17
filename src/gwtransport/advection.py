@@ -757,11 +757,37 @@ def _infiltration_to_extraction_weights(
 ) -> npt.NDArray[np.floating]:
     accumulated_weights = np.zeros((len(cout_tedges) - 1, len(cin_values)))
 
+    # Pre-compute cin time range for clip optimization (computed once, used n_bins times)
+    cin_time_min = cin_tedges_days[0]
+    cin_time_max = cin_tedges_days[-1]
+
     # Loop over each pore volume
     for i in range(len(aquifer_pore_volumes)):
-        if np.any(valid_bins_2d[i, :]):
-            overlap_matrix = partial_isin(bin_edges_in=infiltration_tedges_2d[i, :], bin_edges_out=cin_tedges_days)
-            accumulated_weights[valid_bins_2d[i, :], :] += overlap_matrix[valid_bins_2d[i, :], :]
+        if not np.any(valid_bins_2d[i, :]):
+            continue
+
+        # Clip optimization: Check for temporal overlap before expensive computation
+        # Get the range of infiltration times for this pore volume (only valid bins)
+        infiltration_times = infiltration_tedges_2d[i, :]
+        valid_infiltration_times = infiltration_times[~np.isnan(infiltration_times)]
+
+        if len(valid_infiltration_times) == 0:
+            continue
+
+        infiltration_min = valid_infiltration_times[0]  # Min is first element (monotonic)
+        infiltration_max = valid_infiltration_times[-1]  # Max is last element (monotonic)
+
+        # Check if infiltration window overlaps with cin window
+        # Two intervals [a1, a2] and [b1, b2] overlap if: max(a1, b1) < min(a2, b2)
+        has_overlap = max(infiltration_min, cin_time_min) < min(infiltration_max, cin_time_max)
+
+        if not has_overlap:
+            # No temporal overlap - this bin contributes nothing, skip expensive computation
+            continue
+
+        # Only compute overlap matrix if there's potential contribution
+        overlap_matrix = partial_isin(bin_edges_in=infiltration_tedges_2d[i, :], bin_edges_out=cin_tedges_days)
+        accumulated_weights[valid_bins_2d[i, :], :] += overlap_matrix[valid_bins_2d[i, :], :]
 
     # Average across valid pore volumes and apply flow weighting
     averaged_weights = np.zeros_like(accumulated_weights)
@@ -1025,14 +1051,39 @@ def _extraction_to_infiltration_weights(
     """
     accumulated_weights = np.zeros((len(cin_tedges) - 1, len(cout_values)))
 
+    # Pre-compute cout time range for clip optimization (computed once, used n_bins times)
+    cout_time_min = cout_tedges_days[0]
+    cout_time_max = cout_tedges_days[-1]
+
     # Loop over each pore volume (same structure as infiltration_to_extraction)
     for i in range(len(aquifer_pore_volumes)):
-        if np.any(valid_bins_2d[i, :]):
-            # SYMMETRIC temporal overlap computation:
-            # Infiltration to extraction: maps infiltration → cout time windows
-            # Extraction to infiltration: maps extraction → cout time windows (transposed relationship)
-            overlap_matrix = partial_isin(bin_edges_in=extraction_tedges_2d[i, :], bin_edges_out=cout_tedges_days)
-            accumulated_weights[valid_bins_2d[i, :], :] += overlap_matrix[valid_bins_2d[i, :], :]
+        if not np.any(valid_bins_2d[i, :]):
+            continue
+
+        # Clip optimization: Check for temporal overlap before expensive computation
+        # Get the range of extraction times for this pore volume (only valid bins)
+        extraction_times = extraction_tedges_2d[i, :]
+        valid_extraction_times = extraction_times[~np.isnan(extraction_times)]
+
+        if len(valid_extraction_times) == 0:
+            continue
+
+        extraction_min = valid_extraction_times[0]  # Min is first element (monotonic)
+        extraction_max = valid_extraction_times[-1]  # Max is last element (monotonic)
+
+        # Check if extraction window overlaps with cout window
+        # Two intervals [a1, a2] and [b1, b2] overlap if: max(a1, b1) < min(a2, b2)
+        has_overlap = max(extraction_min, cout_time_min) < min(extraction_max, cout_time_max)
+
+        if not has_overlap:
+            # No temporal overlap - this bin contributes nothing, skip expensive computation
+            continue
+
+        # SYMMETRIC temporal overlap computation:
+        # Infiltration to extraction: maps infiltration → cout time windows
+        # Extraction to infiltration: maps extraction → cout time windows (transposed relationship)
+        overlap_matrix = partial_isin(bin_edges_in=extraction_tedges_2d[i, :], bin_edges_out=cout_tedges_days)
+        accumulated_weights[valid_bins_2d[i, :], :] += overlap_matrix[valid_bins_2d[i, :], :]
 
     # Average across valid pore volumes (symmetric to infiltration_to_extraction)
     averaged_weights = np.zeros_like(accumulated_weights)
