@@ -53,7 +53,7 @@ def compute_average_heights(
 
     See Also
     --------
-    surface_area_between_streamlines : Compute surface area between streamlines
+    gwtransport.advection.infiltration_to_extraction : Use computed areas in transport calculations
 
     Examples
     --------

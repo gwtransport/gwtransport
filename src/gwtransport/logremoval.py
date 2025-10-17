@@ -211,6 +211,10 @@ def parallel_mean(
 
     See Also
     --------
+    residence_time_to_log_removal : Compute log removal from residence times
+
+    Notes
+    -----
     For systems in series, log removals would be summed directly.
     """
     # Convert log_removals to numpy array if it isn't already

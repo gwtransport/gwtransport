@@ -202,12 +202,14 @@ def bins(
 
     Returns
     -------
-    dict of numpy.ndarray with keys:
-        - lower_bound: lower bounds of bins (first one is 0)
-        - upper_bound: upper bounds of bins (last one is inf)
-        - edges: bin edges (lower_bound[0], upper_bound[0], ..., upper_bound[-1])
-        - expected_values: expected values in bins. Is what you would expect to observe if you repeatedly sampled from the probability distribution, but only considered samples that fall within that particular bin
-        - probability_mass: probability mass in bins
+    dict
+        Dictionary with keys of type str and values of type numpy.ndarray:
+
+        - ``lower_bound``: lower bounds of bins (first one is 0)
+        - ``upper_bound``: upper bounds of bins (last one is inf)
+        - ``edges``: bin edges (lower_bound[0], upper_bound[0], ..., upper_bound[-1])
+        - ``expected_values``: expected values in bins. Is what you would expect to observe if you repeatedly sampled from the probability distribution, but only considered samples that fall within that particular bin
+        - ``probability_mass``: probability mass in bins
 
     See Also
     --------

@@ -54,6 +54,14 @@ residence_time
    :undoc-members:
    :show-inheritance:
 
+surfacearea
+===========
+
+.. automodule:: gwtransport.surfacearea
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 utils
 =====
 

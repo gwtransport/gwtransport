@@ -459,8 +459,8 @@ def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.N
     tedges : array-like
         1D array of time bin edges in ascending order. For n bins, there
         should be n+1 edges.
-    bin_tedges : list of tuples
-        List of tuples where each tuple contains (start_time, end_time)
+    bin_tedges : list of tuple
+        List of tuples where each tuple contains ``(start_time, end_time)``
         defining a time range.
 
     Returns
