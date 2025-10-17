@@ -97,9 +97,17 @@ def residence_time(
         msg = "tedges must have one more element than flow"
         raise ValueError(msg)
 
+    # Check for negative flow values - physically invalid
+    flow_array = np.asarray(flow)
+    if np.any(flow_array < 0):
+        # Return NaN array with correct shape
+        n_output = len(flow_tedges) - 1 if index is None else len(index)
+        n_pore_volumes = len(aquifer_pore_volume)
+        return np.full((n_pore_volumes, n_output), np.nan)
+
     flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
     flow_tdelta = np.diff(flow_tedges_days, prepend=0.0)
-    flow_values = np.concatenate(([0.0], np.asarray(flow)))
+    flow_values = np.concatenate(([0.0], flow_array))
     flow_cum = (flow_values * flow_tdelta).cumsum()  # at flow_tedges and flow_tedges_days. First value is 0.
 
     if index is None:
@@ -229,6 +237,13 @@ def residence_time_mean(
     flow_tedges = pd.DatetimeIndex(flow_tedges)
     tedges_out = pd.DatetimeIndex(tedges_out)
     aquifer_pore_volume = np.atleast_1d(aquifer_pore_volume)
+
+    # Check for negative flow values - physically invalid
+    if np.any(flow < 0):
+        # Return NaN array with correct shape
+        n_pore_volumes = len(aquifer_pore_volume)
+        n_output_bins = len(tedges_out) - 1
+        return np.full((n_pore_volumes, n_output_bins), np.nan)
 
     flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
     tedges_out_days = np.asarray((tedges_out - flow_tedges[0]) / np.timedelta64(1, "D"))
