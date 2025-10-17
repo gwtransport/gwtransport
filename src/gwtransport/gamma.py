@@ -27,6 +27,9 @@ Available functions:
 
 - :func:`bin_masses` - Calculate probability mass for custom bin edges using incomplete gamma
   function. Lower-level function used internally by bins().
+
+This file is part of gwtransport which is released under AGPL-3.0 license.
+See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
 import numpy as np

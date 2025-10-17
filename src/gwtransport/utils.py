@@ -50,6 +50,9 @@ Available functions:
 
 - :func:`generate_failed_coverage_badge` - Generate SVG badge indicating failed coverage using
   genbadge library. Used in CI/CD workflows.
+
+This file is part of gwtransport which is released under AGPL-3.0 license.
+See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
 from __future__ import annotations

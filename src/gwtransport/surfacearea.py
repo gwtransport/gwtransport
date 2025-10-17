@@ -13,6 +13,9 @@ Available functions:
   by y_edges (2D array). Clipping bounds (y_lower, y_upper) restrict the integration domain.
   Returns area/width ratios representing average heights for use in pore volume calculations
   from streamline geometry.
+
+This file is part of gwtransport which is released under AGPL-3.0 license.
+See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
 import numpy as np

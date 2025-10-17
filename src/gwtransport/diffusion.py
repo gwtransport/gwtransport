@@ -31,6 +31,9 @@ Available functions:
 - :func:`create_example_data` - Generate test data for demonstrating diffusion effects with
   signals having varying time steps and corresponding sigma arrays. Useful for testing and
   validation.
+
+This file is part of gwtransport which is released under AGPL-3.0 license.
+See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
 import matplotlib.pyplot as plt

@@ -39,6 +39,9 @@ Available functions:
   Inverts forward transport for gamma-distributed pore volumes. Symmetric inverse of
   gamma_infiltration_to_extraction. Use case: Calibrating infiltration conditions from
   extraction measurements.
+
+This file is part of gwtransport which is released under AGPL-3.0 license.
+See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
 import numpy as np

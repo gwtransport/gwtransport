@@ -25,6 +25,9 @@ Available functions:
   times. Indicates how many pore volumes have sufficient flow history to compute residence time.
   Returns values in [0, 1] where 1.0 means all volumes are fully informed. Useful for assessing
   spin-up periods and data coverage. NaN residence times indicate insufficient flow history.
+
+This file is part of gwtransport which is released under AGPL-3.0 license.
+See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
 import warnings

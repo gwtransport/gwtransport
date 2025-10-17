@@ -42,6 +42,9 @@ Available functions:
   log removal given gamma-distributed aquifer pore volume. Solves inverse problem analytically
   using relationship: flow = apv_beta * exp(digamma(apv_alpha) - (ln(10)*target_mean)/log_removal_rate).
   Useful for designing systems to meet regulatory requirements.
+
+This file is part of gwtransport which is released under AGPL-3.0 license.
+See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
 import numpy as np
