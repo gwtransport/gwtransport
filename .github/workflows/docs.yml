@@ -32,7 +32,7 @@ jobs:
           uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck
       - name: Build documentation with sphinx and uv
         run: |
-          uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b html docs/source docs/build
+          uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -M html docs/source docs/build
       - name: Zip documentation
         run: |
           mv docs/build/html coverage
