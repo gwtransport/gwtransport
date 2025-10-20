@@ -945,16 +945,16 @@ def extraction_to_infiltration(
     tedges = pd.DatetimeIndex(tedges)
     cin_tedges = pd.DatetimeIndex(cin_tedges)
 
+    # Convert to arrays for vectorized operations
+    cout = np.asarray(cout)
+    flow = np.asarray(flow)
+
     if len(tedges) != len(cout) + 1:
         msg = "tedges must have one more element than cout"
         raise ValueError(msg)
     if len(tedges) != len(flow) + 1:
         msg = "tedges must have one more element than flow"
         raise ValueError(msg)
-
-    # Convert to arrays for vectorized operations
-    cout = np.asarray(cout)
-    flow = np.asarray(flow)
 
     # Validate inputs do not contain NaN values
     if np.any(np.isnan(cout)):

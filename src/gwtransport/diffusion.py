@@ -195,12 +195,15 @@ def compute_sigma_array(
         return_pandas_series=True,
     )
     residence_time_series = residence_time_series.interpolate(method="nearest").ffill().bfill()
+    if np.any(valid_mask):
+        rt_array = np.interp(np.arange(len(rt_array)), np.where(valid_mask)[0], rt_array[valid_mask])
+
     timedelta_at_departure = np.diff(tedges) / pd.to_timedelta(1, unit="D")
     volume_infiltrated_at_departure = flow * timedelta_at_departure
     cross_sectional_area = aquifer_pore_volume / aquifer_length
     dx = volume_infiltrated_at_departure / cross_sectional_area / porosity
-    sigma_array = np.sqrt(2 * diffusivity * residence_time_series) / dx
-    return np.clip(a=sigma_array.values, a_min=0.0, a_max=100)
+    sigma_array = np.sqrt(2 * diffusivity * rt_array) / dx
+    return np.clip(sigma_array, 0.0, 100.0)
 
 
 def convolve_diffusion(
