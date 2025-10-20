@@ -83,6 +83,14 @@ def infiltration_to_extraction(
     -------
     numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3].
+
+    Notes
+    -----
+    Common values for saturated sand in m²/day:
+
+    * Lower end (finer sand/silt): ~0.007-0.01 m²/day
+    * Typical saturated sand: ~0.01-0.05 m²/day
+    * Upper end (coarse sand/gravel): ~0.05-0.10 m²/day
     """
     cin = np.asarray(cin)
     flow = np.asarray(flow)
@@ -262,6 +270,10 @@ def convolve_diffusion(
     >>> # Apply the filter
     >>> filtered = convolve_diffusion(input_signal=signal, sigma_array=sigma_array)
     """
+    # Convert to arrays for type safety
+    input_signal = np.asarray(input_signal)
+    sigma_array = np.asarray(sigma_array)
+
     if len(input_signal) != len(sigma_array):
         msg = "Input signal and sigma array must have the same length"
         raise ValueError(msg)
@@ -395,6 +407,7 @@ def create_example_data(
     Notes
     -----
     This function creates a test case with:
+
     - A signal composed of two Gaussian peaks
     - Sinusoidally varying time steps
     - Corresponding sigma values for diffusion
