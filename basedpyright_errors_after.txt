@@ -1,0 +1,891 @@
+/Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:167:12 - warning: Return type is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:167:21 - warning: Type of "to_timedelta" is partially unknown
+    Type of "to_timedelta" is "Overload[(arg: str | float | timedelta, unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> Timedelta, (arg: Series[Any], unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> Series[Timedelta], (arg: SequenceNotStr[Unknown] | Sequence[float | timedelta] | tuple[str | float | timedelta, ...] | range | ExtensionArray | ndarray[tuple[Any, ...], dtype[Any]] | Index[Any], unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> TimedeltaIndex]" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:167:37 - warning: Argument type is Any
+    Argument corresponds to parameter "arg" in function "to_timedelta" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:284:12 - warning: Return type is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:284:21 - warning: Type of "to_timedelta" is partially unknown
+    Type of "to_timedelta" is "Overload[(arg: str | float | timedelta, unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> Timedelta, (arg: Series[Any], unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> Series[Timedelta], (arg: SequenceNotStr[Unknown] | Sequence[float | timedelta] | tuple[str | float | timedelta, ...] | range | ExtensionArray | ndarray[tuple[Any, ...], dtype[Any]] | Index[Any], unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> TimedeltaIndex]" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:284:37 - warning: Argument type is Any
+    Argument corresponds to parameter "arg" in function "to_timedelta" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:729:5 - warning: Type of "valid_pv_count" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:740:24 - warning: Argument type is Any
+    Argument corresponds to parameter "valid_pv_count" in function "_infiltration_to_extraction_weights" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:744:5 - warning: Type of "out" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:747:12 - warning: Return type is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:764:5 - warning: Type of "cin_time_min" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:765:5 - warning: Type of "cin_time_max" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:780:9 - warning: Type of "infiltration_min" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:781:9 - warning: Type of "infiltration_max" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:785:9 - warning: Type of "has_overlap" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:785:27 - warning: Argument type is Any
+    Argument corresponds to parameter "arg1" in function "max" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:785:45 - warning: Argument type is Any
+    Argument corresponds to parameter "arg2" in function "max" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:785:65 - warning: Argument type is Any
+    Argument corresponds to parameter "arg1" in function "min" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:785:83 - warning: Argument type is Any
+    Argument corresponds to parameter "arg2" in function "min" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:803:5 - warning: Type of "total_weights" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:804:5 - warning: Type of "valid_weights" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:983:5 - warning: Type of "valid_pv_count" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:994:24 - warning: Argument type is Any
+    Argument corresponds to parameter "valid_pv_count" in function "_extraction_to_infiltration_weights" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:998:5 - warning: Type of "out" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:1001:12 - warning: Return type is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:1058:5 - warning: Type of "cout_time_min" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:1059:5 - warning: Type of "cout_time_max" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:1074:9 - warning: Type of "extraction_min" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:1075:9 - warning: Type of "extraction_max" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:1079:9 - warning: Type of "has_overlap" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:1079:27 - warning: Argument type is Any
+    Argument corresponds to parameter "arg1" in function "max" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:1079:43 - warning: Argument type is Any
+    Argument corresponds to parameter "arg2" in function "max" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:1079:64 - warning: Argument type is Any
+    Argument corresponds to parameter "arg1" in function "min" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:1079:80 - warning: Argument type is Any
+    Argument corresponds to parameter "arg2" in function "min" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:1100:5 - warning: Type of "total_weights" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/advection.py:1101:5 - warning: Type of "valid_weights" is Any (reportAny)
+/Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/deposition.py
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/deposition.py:104:5 - warning: Type of "cout_tedges_days_infiltration" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/deposition.py:110:79 - warning: Argument type is Any
+    Argument corresponds to parameter "x_query" in function "linear_interpolate" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/deposition.py:205:12 - warning: Return type is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/deposition.py:445:18 - error: Argument of type "Any | Series[Any]" cannot be assigned to parameter "x" of type "ConvertibleToFloat" in function "__new__"
+    Type "Any | Series[Any]" is not assignable to type "ConvertibleToFloat"
+      Type "Series[Any]" is not assignable to type "ConvertibleToFloat"
+        "Series[Any]" is not assignable to "str"
+        "Series[Any]" is incompatible with protocol "Buffer"
+          "__buffer__" is not present
+        "Series[Any]" is incompatible with protocol "SupportsFloat"
+          "__float__" is not present
+        "Series[Any]" is incompatible with protocol "SupportsIndex"
+    ... (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/deposition.py:445:18 - error: Argument of type "Any | Series[Any]" cannot be assigned to parameter "x" of type "ConvertibleToFloat" in function "__new__"
+    Type "Any | Series[Any]" is not assignable to type "ConvertibleToFloat"
+      Type "Series[Any]" is not assignable to type "ConvertibleToFloat"
+        "Series[Any]" is not assignable to "str"
+        "Series[Any]" is incompatible with protocol "Buffer"
+          "__buffer__" is not present
+        "Series[Any]" is incompatible with protocol "SupportsFloat"
+          "__float__" is not present
+        "Series[Any]" is incompatible with protocol "SupportsIndex" (reportArgumentType)
+/Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:112:5 - warning: "cout" is not accessed (reportUnusedParameter)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:113:5 - warning: "flow" is not accessed (reportUnusedParameter)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:114:5 - warning: "aquifer_pore_volume" is not accessed (reportUnusedParameter)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:115:5 - warning: "diffusivity" is not accessed (reportUnusedParameter)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:116:5 - warning: "retardation_factor" is not accessed (reportUnusedParameter)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:117:5 - warning: "aquifer_length" is not accessed (reportUnusedParameter)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:118:5 - warning: "porosity" is not accessed (reportUnusedParameter)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:197:5 - warning: Type of "residence_time_series" is partially unknown
+    Type of "residence_time_series" is "Series[Any] | Unknown" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:197:29 - warning: Type of "interpolate" is partially unknown
+    Type of "interpolate" is "Unknown | Overload[(method: Literal['linear', 'time', 'index', 'values', 'nearest', 'zero', 'slinear', 'quadratic', 'cubic', 'barycentric', 'polynomial', 'krogh', 'piecewise_polynomial', 'spline', 'pchip', 'akima', 'cubicspline', 'from_derivatives'] = ..., *, axis: Literal['index', 0] | None = 0, limit: int | None = ..., inplace: Literal[True], limit_direction: Literal['forward', 'backward', 'both'] | None = ..., limit_area: Literal['inside', 'outside'] | None = ..., **kwargs: Any) -> None, (method: Literal['linear', 'time', 'index', 'values', 'nearest', 'zero', 'slinear', 'quadratic', 'cubic', 'barycentric', 'polynomial', 'krogh', 'piecewise_polynomial', 'spline', 'pchip', 'akima', 'cubicspline', 'from_derivatives'] = ..., *, axis: Literal['index', 0] | None = 0, limit: int | None = ..., inplace: Literal[False] = ..., limit_direction: Literal['forward', 'backward', 'both'] | None = ..., limit_area: Literal['inside', 'outside'] | None = ..., **kwargs: Any) -> Series[Any]]" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:197:29 - warning: Type of "ffill" is partially unknown
+    Type of "ffill" is "Overload[(*, axis: Literal['index', 0] | None = 0, inplace: Literal[True], limit: int | None = ..., limit_area: Literal['inside', 'outside'] | None = ...) -> None, (*, axis: Literal['index', 0] | None = 0, inplace: Literal[False] = ..., limit: int | None = ..., limit_area: Literal['inside', 'outside'] | None = ...) -> Series[Any]] | Unknown" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:197:29 - warning: Type of "bfill" is partially unknown
+    Type of "bfill" is "Overload[(*, axis: Literal['index', 0] | None = 0, inplace: Literal[True], limit: int | None = ..., limit_area: Literal['inside', 'outside'] | None = ...) -> None, (*, axis: Literal['index', 0] | None = 0, inplace: Literal[False] = ..., limit: int | None = ..., limit_area: Literal['inside', 'outside'] | None = ...) -> Series[Any]] | Unknown" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:197:51 - error: Cannot access attribute "interpolate" for class "NDArray[floating[Any]]"
+    Attribute "interpolate" is unknown (reportAttributeAccessIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:198:5 - warning: Type of "timedelta_at_departure" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:198:48 - warning: Type of "to_timedelta" is partially unknown
+    Type of "to_timedelta" is "Overload[(arg: str | float | timedelta, unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> Timedelta, (arg: Series[Any], unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> Series[Timedelta], (arg: SequenceNotStr[Unknown] | Sequence[float | timedelta] | tuple[str | float | timedelta, ...] | range | ExtensionArray | ndarray[tuple[Any, ...], dtype[Any]] | Index[Any], unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> TimedeltaIndex]" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:199:5 - warning: Type of "volume_infiltrated_at_departure" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:201:5 - warning: Type of "dx" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:202:5 - warning: Type of "sigma_array" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:202:27 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "__x1" in function "__call__"
+    Argument type is "Series[Any] | Unknown" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:203:12 - warning: Return type is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:203:22 - warning: Type of "values" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:203:22 - warning: Argument type is Any
+    Argument corresponds to parameter "a" in function "clip" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:284:5 - warning: Type of "zero_mask" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:285:15 - warning: Argument type is Any
+    Argument corresponds to parameter "a" in function "all" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:289:5 - warning: Type of "max_sigma" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:290:22 - warning: Argument type is Any
+    Argument corresponds to parameter "x" in function "__new__" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:296:5 - warning: Type of "valid_sigma" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:297:30 - warning: Argument type is Any
+    Argument corresponds to parameter "condition" in function "where" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:315:5 - warning: Type of "weights" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:324:40 - warning: Type of "shape" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:324:40 - warning: Argument type is Any
+    Argument corresponds to parameter "repeats" in function "repeat" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:326:5 - warning: Type of "data" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:326:12 - warning: Type of "ravel" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:329:5 - warning: Type of "nonzero_mask" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:332:5 - warning: Type of "data" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:335:15 - warning: Argument type is Any
+    Argument corresponds to parameter "a" in function "any" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:336:33 - warning: Argument type is Any
+    Argument corresponds to parameter "condition" in function "where" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:342:19 - error: No overloads for "__init__" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:342:37 - error: Argument of type "tuple[NDArray[float64] | Any, tuple[NDArray[intp], NDArray[intp] | ndarray[_AnyShape, dtype[signedinteger[Any]]]]]" cannot be assigned to parameter "arg1" of type "ToComplex2D" in function "__init__"
+    Type "tuple[NDArray[float64] | Any, tuple[NDArray[intp], NDArray[intp] | ndarray[_AnyShape, dtype[signedinteger[Any]]]]]" is not assignable to type "ToComplex2D"
+      "tuple[NDArray[float64] | Any, tuple[NDArray[intp], NDArray[intp] | ndarray[_AnyShape, dtype[signedinteger[Any]]]]]" is incompatible with protocol "_CanArrayND[complexfloating_co]"
+        "__array__" is not present
+      "tuple[NDArray[float64] | Any, tuple[NDArray[intp], NDArray[intp] | ndarray[_AnyShape, dtype[signedinteger[Any]]]]]" is not assignable to "Sequence[_To1D2[complex, complexfloating_co]]"
+        Type parameter "_T_co@Sequence" is covariant, but "NDArray[float64] | Any | tuple[NDArray[intp], NDArray[intp] | ndarray[_AnyShape, dtype[signedinteger[Any]]]]" is not a subtype of "_To1D2[complex, complexfloating_co]"
+          Type "NDArray[float64] | Any | tuple[NDArray[intp], NDArray[intp] | ndarray[_AnyShape, dtype[signedinteger[Any]]]]" is not assignable to type "_To1D2[complex, complexfloating_co]"
+            Type "tuple[NDArray[intp], NDArray[intp] | ndarray[_AnyShape, dtype[signedinteger[Any]]]]" is not assignable to type "_To1D2[complex, complexfloating_co]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:352:8 - warning: "output_signal" is not accessed (reportUnusedParameter)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:352:38 - warning: "sigma_array" is not accessed (reportUnusedParameter)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:352:66 - warning: "truncate" is not accessed (reportUnusedParameter)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:417:5 - warning: Type of "dx" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:426:5 - warning: Type of "sigma_array" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:443:5 - warning: Type of "figure" is partially unknown
+    Type of "figure" is "(num: int | str | Figure | SubFigure | None = None, figsize: Buffer | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | complex | bytes | str | _NestedSequence[complex | bytes | str] | None = None, dpi: float | None = None, *, facecolor: tuple[float, float, float] | str | tuple[float, float, float, float] | tuple[tuple[float, float, float] | str, float] | tuple[tuple[float, float, float, float], float] | None = None, edgecolor: tuple[float, float, float] | str | tuple[float, float, float, float] | tuple[tuple[float, float, float] | str, float] | tuple[tuple[float, float, float, float], float] | None = None, frameon: bool = True, FigureClass: type[Figure] = Figure, clear: bool = False, **kwargs: Unknown) -> Figure" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:443:5 - warning: Result of call expression is of type "Figure" and is not used; assign to variable "_" if this is intentional (reportUnusedCallResult)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:444:5 - warning: Type of "plot" is partially unknown
+    Type of "plot" is "(*args: float | Buffer | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | complex | bytes | str | _NestedSequence[complex | bytes | str], scalex: bool = True, scaley: bool = True, data: Unknown | None = None, **kwargs: Unknown) -> list[Line2D]" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:444:5 - warning: Result of call expression is of type "list[Line2D]" and is not used; assign to variable "_" if this is intentional (reportUnusedCallResult)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:445:5 - warning: Type of "plot" is partially unknown
+    Type of "plot" is "(*args: float | Buffer | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | complex | bytes | str | _NestedSequence[complex | bytes | str], scalex: bool = True, scaley: bool = True, data: Unknown | None = None, **kwargs: Unknown) -> list[Line2D]" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:445:5 - warning: Result of call expression is of type "list[Line2D]" and is not used; assign to variable "_" if this is intentional (reportUnusedCallResult)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:447:5 - warning: Type of "plot" is partially unknown
+    Type of "plot" is "(*args: float | Buffer | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | complex | bytes | str | _NestedSequence[complex | bytes | str], scalex: bool = True, scaley: bool = True, data: Unknown | None = None, **kwargs: Unknown) -> list[Line2D]" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/diffusion.py:447:5 - warning: Result of call expression is of type "list[Line2D]" and is not used; assign to variable "_" if this is intentional (reportUnusedCallResult)
+/Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/examples.py
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/examples.py:151:13 - error: Argument of type "ArrayLike | ndarray[_AnyShape, dtype[float64]] | ndarray[tuple[int], dtype[Any]]" cannot be assigned to parameter "cin" of type "ArrayLike" in function "gamma_infiltration_to_extraction"
+    Type "ArrayLike | ndarray[_AnyShape, dtype[float64]] | ndarray[tuple[int], dtype[Any]]" is not assignable to type "ArrayLike"
+      Type "ExtensionArray" is not assignable to type "ArrayLike"
+        "ExtensionArray" is incompatible with protocol "Buffer"
+          "__buffer__" is not present
+        "ExtensionArray" is incompatible with protocol "_SupportsArray[dtype[Any]]"
+          "__array__" is not present
+        "ExtensionArray" is incompatible with protocol "_NestedSequence[_SupportsArray[dtype[Any]]]"
+          "__reversed__" is not present
+    ... (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/examples.py:251:36 - error: No overloads for "to_datetime" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/examples.py:251:36 - warning: Argument type is unknown
+    Argument corresponds to parameter "data" in function "__new__" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/examples.py:251:51 - error: Argument of type "ArrayLike | list[str] | DatetimeIndex" cannot be assigned to parameter "arg" of type "Sequence[float | date] | list[str] | tuple[float | str | date, ...] | NDArray[datetime64[date | int | None]] | NDArray[str_] | NDArray[int_] | Index[Any] | ExtensionArray" in function "to_datetime"
+    Type "ArrayLike | list[str] | DatetimeIndex" is not assignable to type "Sequence[float | date] | list[str] | tuple[float | str | date, ...] | NDArray[datetime64[date | int | None]] | NDArray[str_] | NDArray[int_] | Index[Any] | ExtensionArray"
+      Type "Buffer" is not assignable to type "Sequence[float | date] | list[str] | tuple[float | str | date, ...] | NDArray[datetime64[date | int | None]] | NDArray[str_] | NDArray[int_] | Index[Any] | ExtensionArray"
+        "Buffer" is not assignable to "Sequence[float | date]"
+        "Buffer" is not assignable to "list[str]"
+        "Buffer" is not assignable to "tuple[float | str | date, ...]"
+        "Buffer" is not assignable to "ndarray[_AnyShape, dtype[datetime64[date | int | None]]]"
+        "Buffer" is not assignable to "ndarray[_AnyShape, dtype[str_]]"
+        "Buffer" is not assignable to "ndarray[_AnyShape, dtype[int_]]"
+    ... (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/examples.py:255:9 - warning: Type of "event_idx" is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/examples.py:255:21 - warning: Type of "get_indexer" is partially unknown
+    Type of "get_indexer" is "(target: Unknown, method: Literal['backfill', 'bfill', 'ffill', 'pad', 'nearest'] | None = ..., limit: ... = ..., tolerance: ... = ...) -> Unknown" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/examples.py:256:9 - warning: Type of "event_indices" is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/examples.py:256:35 - warning: Argument type is unknown
+    Argument corresponds to parameter "start" in function "arange" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/examples.py:256:50 - warning: Argument type is unknown
+    Argument corresponds to parameter "arg1" in function "min" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/examples.py:257:65 - warning: Argument type is unknown
+    Argument corresponds to parameter "obj" in function "len" (reportUnknownArgumentType)
+/Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/gamma.py
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/gamma.py:165:5 - warning: Type of "std" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/gamma.py:250:8 - warning: Condition will always evaluate to False since the types "int" and "None" have no overlap (reportUnnecessaryComparison)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/gamma.py:251:9 - warning: Code is unreachable (reportUnreachable)
+/Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:232:13 - warning: Type of "n" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:235:45 - warning: Argument type is Any
+    Argument corresponds to parameter "fill_value" in function "full" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:247:5 - warning: Type of "weighted_decimal_reduction" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:250:12 - warning: Return type is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:250:22 - warning: Argument type is Any
+    Argument corresponds to parameter "__x1" in function "__call__" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:278:5 - warning: Type of "t_values" is partially unknown
+    Type of "t_values" is "Unknown | complex" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:278:22 - error: Operator "/" not supported for types "ArrayLike" and "float"
+    Operator "/" not supported for types "Buffer" and "float"
+    Operator "/" not supported for types "_SupportsArray[dtype[Any]]" and "float"
+    Operator "/" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "float"
+    Operator "/" not supported for types "bytes" and "float"
+    Operator "/" not supported for types "str" and "float"
+    Operator "/" not supported for types "_NestedSequence[complex | bytes | str]" and "float" (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:280:12 - warning: Return type, "Unknown | Any", is partially unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:283:18 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "__x1" in function "__call__"
+    Argument type is "Unknown | complex" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:312:5 - warning: Type of "t_values" is partially unknown
+    Type of "t_values" is "Unknown | complex" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:312:22 - error: Operator "/" not supported for types "ArrayLike" and "float"
+    Operator "/" not supported for types "Buffer" and "float"
+    Operator "/" not supported for types "_SupportsArray[dtype[Any]]" and "float"
+    Operator "/" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "float"
+    Operator "/" not supported for types "bytes" and "float"
+    Operator "/" not supported for types "str" and "float"
+    Operator "/" not supported for types "_NestedSequence[complex | bytes | str]" and "float" (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:315:12 - error: No overloads for "cdf" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:315:12 - warning: Return type is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:315:28 - error: Argument of type "Unknown | complex" cannot be assigned to parameter "x" of type "_ToFloatOrND" in function "cdf"
+    Type "Unknown | complex" is not assignable to type "_ToFloatOrND"
+      Type "complex" is not assignable to type "_ToFloatOrND"
+        "complex" is not assignable to "float"
+        "complex" is not assignable to "floating[Any]"
+        "complex" is not assignable to "integer[Any]"
+        "complex" is not assignable to "numpy.bool[builtins.bool]"
+        "complex" is incompatible with protocol "_CanArrayND[floating_co]"
+          "__len__" is not present
+    ... (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:342:12 - warning: Return type is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:380:12 - warning: Return type is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/logremoval.py:380:30 - warning: Argument type is Any
+    Argument corresponds to parameter "__x1" in function "__call__" (reportAny)
+/Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:88:5 - warning: Type of "aquifer_pore_volume" is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:88:27 - error: No overloads for "atleast_1d" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:88:41 - error: Argument of type "ArrayLike | None" cannot be assigned to parameter "a0" of type "ArrayLike" in function "atleast_1d"
+    Type "ArrayLike | None" is not assignable to type "ArrayLike"
+      Type "None" is not assignable to type "ArrayLike"
+        "None" is incompatible with protocol "Buffer"
+          "__buffer__" is not present
+        "None" is incompatible with protocol "_SupportsArray[dtype[Any]]"
+          "__array__" is not present
+        "None" is incompatible with protocol "_NestedSequence[_SupportsArray[dtype[Any]]]"
+          "__len__" is not present
+    ... (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:114:5 - warning: Type of "flow_tedges_days" is partially unknown
+    Type of "flow_tedges_days" is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:114:35 - error: Operator "/" not supported for types "TimedeltaIndex" and "timedelta64[timedelta]" (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:114:35 - warning: Argument type is unknown
+    Argument corresponds to parameter "a" in function "asarray" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:115:27 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "a" in function "diff"
+    Argument type is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:124:9 - warning: Type of "index_dates_days_extraction" is partially unknown
+    Type of "index_dates_days_extraction" is "ndarray[tuple[Any, ...], dtype[Unknown | Any]]" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:124:50 - error: Operator "/" not supported for types "TimedeltaIndex | Any" and "timedelta64[timedelta]"
+    Operator "/" not supported for types "TimedeltaIndex" and "timedelta64[timedelta]" when expected type is "_ArrayLike[Unknown | Any]" (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:124:50 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "a" in function "asarray"
+    Argument type is "Unknown | Any" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:126:19 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "x_ref" in function "linear_interpolate"
+    Argument type is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:126:61 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "x_query" in function "linear_interpolate"
+    Argument type is "ndarray[tuple[Any, ...], dtype[Unknown | Any]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:132:57 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "y_ref" in function "linear_interpolate"
+    Argument type is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:137:57 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "y_ref" in function "linear_interpolate"
+    Argument type is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:148:16 - error: Argument of type "ArrayLike | Unknown | None" cannot be assigned to parameter "obj" of type "Sized" in function "len"
+    Type "ArrayLike | Unknown | None" is not assignable to type "Sized"
+      "Buffer" is incompatible with protocol "Sized"
+        "__len__" is not present (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:152:13 - warning: Implicit string concatenation not allowed (reportImplicitStringConcatenation)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:157:31 - warning: Argument type is Any
+    Argument corresponds to parameter "data" in function "__new__" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:254:5 - warning: Type of "flow_tedges_days" is partially unknown
+    Type of "flow_tedges_days" is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:254:35 - error: Operator "/" not supported for types "TimedeltaIndex" and "timedelta64[timedelta]" (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:254:35 - warning: Argument type is unknown
+    Argument corresponds to parameter "a" in function "asarray" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:255:5 - warning: Type of "tedges_out_days" is partially unknown
+    Type of "tedges_out_days" is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:255:34 - error: Operator "/" not supported for types "TimedeltaIndex" and "timedelta64[timedelta]" (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:255:34 - warning: Argument type is unknown
+    Argument corresponds to parameter "a" in function "asarray" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:258:24 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "a" in function "diff"
+    Argument type is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:265:57 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "y_ref" in function "linear_interpolate"
+    Argument type is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:271:35 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "x_data" in function "linear_average"
+    Argument type is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:271:60 - warning: Argument type is Any
+    Argument corresponds to parameter "y_data" in function "linear_average" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:271:71 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "x_edges" in function "linear_average"
+    Argument type is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:271:95 - warning: Type of "y" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:276:57 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "y_ref" in function "linear_interpolate"
+    Argument type is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:282:35 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "x_data" in function "linear_average"
+    Argument type is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:282:60 - warning: Argument type is Any
+    Argument corresponds to parameter "y_data" in function "linear_average" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:282:71 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "x_edges" in function "linear_average"
+    Argument type is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:282:95 - warning: Type of "y" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:333:14 - error: Type "NDArray[floating[Any]] | Series[Any]" is not assignable to declared type "NDArray[floating[Any]] | None"
+    Type "NDArray[floating[Any]] | Series[Any]" is not assignable to type "NDArray[floating[Any]] | None"
+      Type "Series[Any]" is not assignable to type "NDArray[floating[Any]] | None"
+        "Series[Any]" is not assignable to "ndarray[_AnyShape, dtype[floating[Any]]]"
+        "Series[Any]" is not assignable to "None" (reportAssignmentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:342:5 - warning: Type of "n_aquifer_pore_volume" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:342:32 - error: "shape" is not a known attribute of "None" (reportOptionalMemberAccess)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:343:12 - warning: Return type is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:343:37 - error: No overloads for "__call__" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:343:37 - warning: Type of "sum" is unknown (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/residence_time.py:343:46 - error: Argument of type "NDArray[floating[Any]] | None" cannot be assigned to parameter "__x1" of type "_SupportsArrayUFunc" in function "__call__"
+    Type "NDArray[floating[Any]] | None" is not assignable to type "_SupportsArrayUFunc"
+      "None" is incompatible with protocol "_SupportsArrayUFunc"
+        "__array_ufunc__" is not present (reportArgumentType)
+/Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:5 - warning: Type of "y_tl" is partially unknown
+    Type of "y_tl" is "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:11 - warning: Type of "y_tr" is partially unknown
+    Type of "y_tr" is "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:18 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:18 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:18 - error: Argument of type "tuple[slice[None, Literal[-1], None], slice[None, Literal[-1], None]]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "tuple[slice[None, Literal[-1], None], slice[None, Literal[-1], None]]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:18 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:18 - error: No overloads for "__getitem__" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:18 - error: Argument of type "tuple[slice[None, Literal[-1], None], slice[None, Literal[-1], None]]" cannot be assigned to parameter "key" of type "slice[Any, Any, Any]" in function "__getitem__"
+    "tuple[slice[None, Literal[-1], None], slice[None, Literal[-1], None]]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:18 - error: Argument of type "tuple[slice[None, Literal[-1], None], slice[None, Literal[-1], None]]" cannot be assigned to parameter "key" of type "SupportsIndex | slice[Any, Any, Any]" in function "__getitem__"
+    Type "tuple[slice[None, Literal[-1], None], slice[None, Literal[-1], None]]" is not assignable to type "SupportsIndex | slice[Any, Any, Any]"
+      "tuple[slice[None, Literal[-1], None], slice[None, Literal[-1], None]]" is incompatible with protocol "SupportsIndex"
+        "__index__" is not present
+      "tuple[slice[None, Literal[-1], None], slice[None, Literal[-1], None]]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:37 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:37 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:37 - error: Argument of type "tuple[slice[None, Literal[-1], None], slice[Literal[1], None, None]]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "tuple[slice[None, Literal[-1], None], slice[Literal[1], None, None]]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:37 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:37 - error: No overloads for "__getitem__" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:37 - error: Argument of type "tuple[slice[None, Literal[-1], None], slice[Literal[1], None, None]]" cannot be assigned to parameter "key" of type "slice[Any, Any, Any]" in function "__getitem__"
+    "tuple[slice[None, Literal[-1], None], slice[Literal[1], None, None]]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:72:37 - error: Argument of type "tuple[slice[None, Literal[-1], None], slice[Literal[1], None, None]]" cannot be assigned to parameter "key" of type "SupportsIndex | slice[Any, Any, Any]" in function "__getitem__"
+    Type "tuple[slice[None, Literal[-1], None], slice[Literal[1], None, None]]" is not assignable to type "SupportsIndex | slice[Any, Any, Any]"
+      "tuple[slice[None, Literal[-1], None], slice[Literal[1], None, None]]" is incompatible with protocol "SupportsIndex"
+        "__index__" is not present
+      "tuple[slice[None, Literal[-1], None], slice[Literal[1], None, None]]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:5 - warning: Type of "y_bl" is partially unknown
+    Type of "y_bl" is "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:11 - warning: Type of "y_br" is partially unknown
+    Type of "y_br" is "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:18 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:18 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:18 - error: Argument of type "tuple[slice[Literal[1], None, None], slice[None, Literal[-1], None]]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "tuple[slice[Literal[1], None, None], slice[None, Literal[-1], None]]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:18 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:18 - error: No overloads for "__getitem__" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:18 - error: Argument of type "tuple[slice[Literal[1], None, None], slice[None, Literal[-1], None]]" cannot be assigned to parameter "key" of type "slice[Any, Any, Any]" in function "__getitem__"
+    "tuple[slice[Literal[1], None, None], slice[None, Literal[-1], None]]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:18 - error: Argument of type "tuple[slice[Literal[1], None, None], slice[None, Literal[-1], None]]" cannot be assigned to parameter "key" of type "SupportsIndex | slice[Any, Any, Any]" in function "__getitem__"
+    Type "tuple[slice[Literal[1], None, None], slice[None, Literal[-1], None]]" is not assignable to type "SupportsIndex | slice[Any, Any, Any]"
+      "tuple[slice[Literal[1], None, None], slice[None, Literal[-1], None]]" is incompatible with protocol "SupportsIndex"
+        "__index__" is not present
+      "tuple[slice[Literal[1], None, None], slice[None, Literal[-1], None]]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:36 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:36 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:36 - error: Argument of type "tuple[slice[Literal[1], None, None], slice[Literal[1], None, None]]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "tuple[slice[Literal[1], None, None], slice[Literal[1], None, None]]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:36 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:36 - error: No overloads for "__getitem__" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:36 - error: Argument of type "tuple[slice[Literal[1], None, None], slice[Literal[1], None, None]]" cannot be assigned to parameter "key" of type "slice[Any, Any, Any]" in function "__getitem__"
+    "tuple[slice[Literal[1], None, None], slice[Literal[1], None, None]]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:73:36 - error: Argument of type "tuple[slice[Literal[1], None, None], slice[Literal[1], None, None]]" cannot be assigned to parameter "key" of type "SupportsIndex | slice[Any, Any, Any]" in function "__getitem__"
+    Type "tuple[slice[Literal[1], None, None], slice[Literal[1], None, None]]" is not assignable to type "SupportsIndex | slice[Any, Any, Any]"
+      "tuple[slice[Literal[1], None, None], slice[Literal[1], None, None]]" is incompatible with protocol "SupportsIndex"
+        "__index__" is not present
+      "tuple[slice[Literal[1], None, None], slice[Literal[1], None, None]]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:77:28 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "arrays" in function "stack"
+    Argument type is "list[Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:78:5 - warning: Type of "outside_mask" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:81:30 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "a" in function "clip"
+    Argument type is "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:81:63 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "a" in function "clip"
+    Argument type is "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:82:30 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "a" in function "clip"
+    Argument type is "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:82:63 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "a" in function "clip"
+    Argument type is "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:90:5 - warning: Type of "top_crosses" is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:90:19 - error: Operator "<" not supported for types "Unknown | complex" and "Literal[0]"
+    Operator "<" not supported for types "complex" and "Literal[0]" (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:90:20 - error: Operator "-" not supported for types "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" and "float"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "float"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "float"
+    Operator "-" not supported for types "str" and "float"
+    Operator "-" not supported for types "bytes" and "float"
+    Operator "-" not supported for types "_NestedSequence[complex | bytes | str]" and "float" (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:90:39 - error: Operator "-" not supported for types "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" and "float"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "float"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "float"
+    Operator "-" not supported for types "str" and "float"
+    Operator "-" not supported for types "bytes" and "float"
+    Operator "-" not supported for types "_NestedSequence[complex | bytes | str]" and "float" (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:92:9 - warning: Argument type is unknown
+    Argument corresponds to parameter "condition" in function "where" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:92:23 - error: Operator ">" not supported for types "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" and "float"
+    Operator ">" not supported for types "_SupportsArray[dtype[Any]]" and "float"
+    Operator ">" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "float"
+    Operator ">" not supported for types "str" and "float"
+    Operator ">" not supported for types "complex" and "float"
+    Operator ">" not supported for types "bytes" and "float"
+    Operator ">" not supported for types "_NestedSequence[complex | bytes | str]" and "float" (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:92:42 - error: Operator "<" not supported for types "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" and "float"
+    Operator "<" not supported for types "_SupportsArray[dtype[Any]]" and "float"
+    Operator "<" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "float"
+    Operator "<" not supported for types "str" and "float"
+    Operator "<" not supported for types "complex" and "float"
+    Operator "<" not supported for types "bytes" and "float"
+    Operator "<" not supported for types "_NestedSequence[complex | bytes | str]" and "float" (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:93:9 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "x" in function "where"
+    Argument type is "Unknown | Any" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:93:18 - error: Operator "-" not supported for types "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" and "float"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "float"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "float"
+    Operator "-" not supported for types "str" and "float"
+    Operator "-" not supported for types "bytes" and "float"
+    Operator "-" not supported for types "_NestedSequence[complex | bytes | str]" and "float" (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:93:58 - error: Operator "-" not supported for types "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" and "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_SupportsArray[dtype[Any]]" when expected type is "_ScalarLike_co"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]" when expected type is "_ScalarLike_co"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "str" when expected type is "_ScalarLike_co"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "complex" when expected type is "_ScalarLike_co"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "bytes" when expected type is "_ScalarLike_co"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[complex | bytes | str]" when expected type is "_ScalarLike_co"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_SupportsArray[dtype[Any]]" when expected type is "_ScalarLike_co"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]" when expected type is "_ScalarLike_co"
+    ... (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:93:58 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "x1" in function "__call__"
+    Argument type is "Unknown | complex" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/surfacearea.py:97:22 - warning: Argument type is Any
+    Argument corresponds to parameter "condition" in function "where" (reportAny)
+/Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:147:5 - warning: Type of "x_ref_sorted" is partially unknown
+    Type of "x_ref_sorted" is "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | int | str | complex | bytes | _NestedSequence[complex | bytes | str]" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:147:20 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:147:20 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:147:20 - error: Argument of type "NDArray[intp]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "ndarray[_AnyShape, dtype[intp]]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:147:20 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:148:5 - warning: Type of "y_ref_sorted" is partially unknown
+    Type of "y_ref_sorted" is "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | int | str | complex | bytes | _NestedSequence[complex | bytes | str]" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:148:20 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:148:20 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:148:20 - error: Argument of type "NDArray[intp]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "ndarray[_AnyShape, dtype[intp]]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:148:20 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:151:12 - error: No overloads for "interp" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:151:12 - warning: Return type is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:151:22 - error: Argument of type "ArrayLike" cannot be assigned to parameter "x" of type "_ArrayLikeFloat_co" in function "interp"
+    Type "ArrayLike" is not assignable to type "_ArrayLikeFloat_co"
+      Type "Buffer" is not assignable to type "_ArrayLikeFloat_co"
+        "Buffer" is incompatible with protocol "_SupportsArray[dtype[numpy.bool[builtins.bool] | integer[Any] | floating[Any]]]"
+          "__array__" is not present
+        "Buffer" is incompatible with protocol "_NestedSequence[_SupportsArray[dtype[numpy.bool[builtins.bool] | integer[Any] | floating[Any]]]]"
+          "__len__" is not present
+          "__getitem__" is not present
+          "__contains__" is not present
+    ... (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:151:31 - error: Argument of type "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | int | str | complex | bytes | _NestedSequence[complex | bytes | str]" cannot be assigned to parameter "xp" of type "_ArrayLikeFloat_co" in function "interp"
+    Type "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | int | str | complex | bytes | _NestedSequence[complex | bytes | str]" is not assignable to type "_ArrayLikeFloat_co"
+      Type "bytes" is not assignable to type "_ArrayLikeFloat_co"
+        "bytes" is incompatible with protocol "_SupportsArray[dtype[numpy.bool[builtins.bool] | integer[Any] | floating[Any]]]"
+          "__array__" is not present
+        "bytes" is incompatible with protocol "_NestedSequence[_SupportsArray[dtype[numpy.bool[builtins.bool] | integer[Any] | floating[Any]]]]"
+          "__getitem__" is an incompatible type
+            No overloaded function matches type "(index: int, /) -> (_T_co@_NestedSequence | _NestedSequence[_T_co@_NestedSequence])"
+          "__contains__" is an incompatible type
+    ... (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:151:45 - error: Argument of type "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | int | str | complex | bytes | _NestedSequence[complex | bytes | str]" cannot be assigned to parameter "fp" of type "_ArrayLikeNumber_co" in function "interp"
+    Type "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | int | str | complex | bytes | _NestedSequence[complex | bytes | str]" is not assignable to type "_ArrayLikeNumber_co"
+      Type "bytes" is not assignable to type "_ArrayLikeNumber_co"
+        "bytes" is incompatible with protocol "_SupportsArray[dtype[numpy.bool[builtins.bool] | number[Any, int | float | complex]]]"
+          "__array__" is not present
+        "bytes" is incompatible with protocol "_NestedSequence[_SupportsArray[dtype[numpy.bool[builtins.bool] | number[Any, int | float | complex]]]]"
+          "__getitem__" is an incompatible type
+            No overloaded function matches type "(index: int, /) -> (_T_co@_NestedSequence | _NestedSequence[_T_co@_NestedSequence])"
+          "__contains__" is an incompatible type
+    ... (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:172:21 - warning: Type of "notna" is partially unknown
+    Type of "notna" is "() -> Unknown" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:173:5 - warning: Type of "dt" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:173:45 - warning: Type of "to_timedelta" is partially unknown
+    Type of "to_timedelta" is "Overload[(arg: str | float | timedelta, unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> Timedelta, (arg: Series[Any], unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> Series[Timedelta], (arg: SequenceNotStr[Unknown] | Sequence[float | timedelta] | tuple[str | float | timedelta, ...] | range | ExtensionArray | ndarray[tuple[Any, ...], dtype[Any]] | Index[Any], unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> TimedeltaIndex]" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:174:5 - warning: Type of "dt_interp" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:174:49 - warning: Type of "to_timedelta" is partially unknown
+    Type of "to_timedelta" is "Overload[(arg: str | float | timedelta, unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> Timedelta, (arg: Series[Any], unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> Series[Timedelta], (arg: SequenceNotStr[Unknown] | Sequence[float | timedelta] | tuple[str | float | timedelta, ...] | range | ExtensionArray | ndarray[tuple[Any, ...], dtype[Any]] | Index[Any], unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> TimedeltaIndex]" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:175:39 - warning: Argument type is Any
+    Argument corresponds to parameter "x" in function "__init__" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:175:43 - error: Argument of type "ArrayLike" cannot be assigned to parameter "y" of type "ToFloatND" in function "__init__"
+    Type "ArrayLike" is not assignable to type "ToFloatND"
+      Type "ExtensionArray" is not assignable to type "ToFloatND"
+        "ExtensionArray" is incompatible with protocol "_CanArrayND[floating_co]"
+          "__array__" is not present
+        "ExtensionArray" is incompatible with protocol "SequenceND[float | _CanArray[floating_co]]"
+          "__reversed__" is not present
+          "count" is not present
+          "index" is not present
+    ... (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:175:80 - error: Argument of type "object" cannot be assigned to parameter "kind" of type "_Interp1dKind | int" in function "__init__"
+    Type "object" is not assignable to type "_Interp1dKind | int"
+      "object" is not assignable to "int"
+      "object" is not assignable to "Literal['linear']"
+      "object" is not assignable to "Literal['nearest']"
+      "object" is not assignable to "Literal['nearest-up']"
+      "object" is not assignable to "Literal['zero']"
+      "object" is not assignable to "Literal['slinear']"
+      "object" is not assignable to "Literal['quadratic']" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:175:80 - error: Argument of type "object" cannot be assigned to parameter "axis" of type "_ToAxis" in function "__init__"
+    Type "object" is not assignable to type "_ToAxis"
+      "object" is not assignable to "int"
+      "object" is not assignable to "integer[Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:175:80 - error: Argument of type "object" cannot be assigned to parameter "copy" of type "bool" in function "__init__"
+    "object" is not assignable to "bool" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:175:80 - error: Argument of type "object" cannot be assigned to parameter "fill_value" of type "_Interp1dFillValue | Literal['extrapolate']" in function "__init__"
+    Type "object" is not assignable to type "_Interp1dFillValue | Literal['extrapolate']"
+      "object" is not assignable to "float"
+      "object" is not assignable to "floating[Any]"
+      "object" is not assignable to "integer[Any]"
+      "object" is not assignable to "numpy.bool[builtins.bool]"
+      "object" is incompatible with protocol "_CanArrayND[floating_co]"
+        "__len__" is not present
+        "__array__" is not present (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:175:80 - error: Argument of type "object" cannot be assigned to parameter "assume_sorted" of type "bool" in function "__init__"
+    "object" is not assignable to "bool" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:176:33 - warning: Argument type is Any
+    Argument corresponds to parameter "x" in function "__call__" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:9 - warning: Type of "mid" is partially unknown
+    Type of "mid" is "Unknown | complex" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:15 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:15 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:15 - error: Argument of type "slice[None, Literal[-1], None]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "slice[None, Literal[-1], None]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:15 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:15 - error: Operator "+" not supported for types "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | bytes | str | complex | _NestedSequence[complex | bytes | str]" and "Unknown | complex"
+    Operator "+" not supported for types "_SupportsArray[dtype[Any]]" and "complex"
+    Operator "+" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "complex"
+    Operator "+" not supported for types "bytes" and "complex"
+    Operator "+" not supported for types "str" and "complex"
+    Operator "+" not supported for types "_NestedSequence[complex | bytes | str]" and "complex" (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:24 - error: Operator "-" not supported for types "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | bytes | str | complex | _NestedSequence[complex | bytes | str]" and "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | bytes | str | complex | _NestedSequence[complex | bytes | str]"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_SupportsArray[dtype[Any]]"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "bytes"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "str"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "complex"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[complex | bytes | str]"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_SupportsArray[dtype[Any]]"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]"
+    ... (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:25 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:25 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:25 - error: Argument of type "slice[Literal[1], None, None]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "slice[Literal[1], None, None]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:25 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:33 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:33 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:33 - error: Argument of type "slice[None, Literal[-1], None]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "slice[None, Literal[-1], None]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:197:33 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:31 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "arrays" in function "concatenate"
+    Argument type is "tuple[Unknown | complex, Unknown, Unknown | complex]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:32 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:32 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:32 - error: Argument of type "list[int]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "list[int]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:32 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:32 - error: No overloads for "__getitem__" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:32 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "slice[Any, Any, Any]" in function "__getitem__"
+    "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:32 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "SupportsIndex | slice[Any, Any, Any]" in function "__getitem__"
+    Type "list[int]" is not assignable to type "SupportsIndex | slice[Any, Any, Any]"
+      "list[int]" is incompatible with protocol "SupportsIndex"
+        "__index__" is not present
+      "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:32 - error: Operator "-" not supported for types "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" and "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_SupportsArray[dtype[Any]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "str" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "complex" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "bytes" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[complex | bytes | str]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_SupportsArray[dtype[Any]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]" when expected type is "ArrayLike"
+    ... (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:41 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:41 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:41 - error: Argument of type "list[int]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "list[int]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:41 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:41 - error: No overloads for "__getitem__" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:41 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "slice[Any, Any, Any]" in function "__getitem__"
+    "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:41 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "SupportsIndex | slice[Any, Any, Any]" in function "__getitem__"
+    Type "list[int]" is not assignable to type "SupportsIndex | slice[Any, Any, Any]"
+      "list[int]" is incompatible with protocol "SupportsIndex"
+        "__index__" is not present
+      "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:49 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:59 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:69 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:69 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:69 - error: Argument of type "list[int]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "list[int]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:69 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:69 - error: No overloads for "__getitem__" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:69 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "slice[Any, Any, Any]" in function "__getitem__"
+    "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:69 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "SupportsIndex | slice[Any, Any, Any]" in function "__getitem__"
+    Type "list[int]" is not assignable to type "SupportsIndex | slice[Any, Any, Any]"
+      "list[int]" is incompatible with protocol "SupportsIndex"
+        "__index__" is not present
+      "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:69 - error: Operator "-" not supported for types "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" and "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_SupportsArray[dtype[Any]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "str" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "complex" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "bytes" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[complex | bytes | str]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_SupportsArray[dtype[Any]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]" when expected type is "ArrayLike"
+    ... (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:79 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:79 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:79 - error: Argument of type "list[int]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "list[int]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:79 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:79 - error: No overloads for "__getitem__" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:79 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "slice[Any, Any, Any]" in function "__getitem__"
+    "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:198:79 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "SupportsIndex | slice[Any, Any, Any]" in function "__getitem__"
+    Type "list[int]" is not assignable to type "SupportsIndex | slice[Any, Any, Any]"
+      "list[int]" is incompatible with protocol "SupportsIndex"
+        "__index__" is not present
+      "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:31 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "arrays" in function "concatenate"
+    Argument type is "tuple[Unknown | complex, Unknown | complex]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:32 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:32 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:32 - error: Argument of type "slice[Literal[1], None, None]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "slice[Literal[1], None, None]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:32 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:32 - error: Operator "-" not supported for types "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | bytes | str | complex | _NestedSequence[complex | bytes | str]" and "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | bytes | str | complex | _NestedSequence[complex | bytes | str]"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_SupportsArray[dtype[Any]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "bytes" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "str" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "complex" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[complex | bytes | str]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_SupportsArray[dtype[Any]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]" when expected type is "ArrayLike"
+    ... (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:40 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:40 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:40 - error: Argument of type "slice[None, Literal[-1], None]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "slice[None, Literal[-1], None]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:40 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:48 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:48 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:48 - error: Argument of type "list[int]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "list[int]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:48 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:48 - error: No overloads for "__getitem__" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:48 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "slice[Any, Any, Any]" in function "__getitem__"
+    "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:48 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "SupportsIndex | slice[Any, Any, Any]" in function "__getitem__"
+    Type "list[int]" is not assignable to type "SupportsIndex | slice[Any, Any, Any]"
+      "list[int]" is incompatible with protocol "SupportsIndex"
+        "__index__" is not present
+      "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:48 - error: Operator "-" not supported for types "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" and "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_SupportsArray[dtype[Any]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "str" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "complex" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "bytes" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[complex | bytes | str]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_SupportsArray[dtype[Any]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]" when expected type is "ArrayLike"
+    ... (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:58 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:58 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:58 - error: Argument of type "list[int]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "list[int]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:58 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:58 - error: No overloads for "__getitem__" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:58 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "slice[Any, Any, Any]" in function "__getitem__"
+    "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:200:58 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "SupportsIndex | slice[Any, Any, Any]" in function "__getitem__"
+    Type "list[int]" is not assignable to type "SupportsIndex | slice[Any, Any, Any]"
+      "list[int]" is incompatible with protocol "SupportsIndex"
+        "__index__" is not present
+      "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:31 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "arrays" in function "concatenate"
+    Argument type is "tuple[Unknown | complex, Unknown | complex]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:32 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:32 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:32 - error: Argument of type "list[int]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "list[int]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:32 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:32 - error: No overloads for "__getitem__" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:32 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "slice[Any, Any, Any]" in function "__getitem__"
+    "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:32 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "SupportsIndex | slice[Any, Any, Any]" in function "__getitem__"
+    Type "list[int]" is not assignable to type "SupportsIndex | slice[Any, Any, Any]"
+      "list[int]" is incompatible with protocol "SupportsIndex"
+        "__index__" is not present
+      "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:32 - error: Operator "-" not supported for types "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]" and "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | str | complex | bytes | _NestedSequence[complex | bytes | str]"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_SupportsArray[dtype[Any]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "str" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "complex" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "bytes" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[complex | bytes | str]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_SupportsArray[dtype[Any]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]" when expected type is "ArrayLike"
+    ... (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:41 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:41 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:41 - error: Argument of type "list[int]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "list[int]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:41 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:41 - error: No overloads for "__getitem__" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:41 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "slice[Any, Any, Any]" in function "__getitem__"
+    "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:41 - error: Argument of type "list[int]" cannot be assigned to parameter "key" of type "SupportsIndex | slice[Any, Any, Any]" in function "__getitem__"
+    Type "list[int]" is not assignable to type "SupportsIndex | slice[Any, Any, Any]"
+      "list[int]" is incompatible with protocol "SupportsIndex"
+        "__index__" is not present
+      "list[int]" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:49 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:49 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:49 - error: Argument of type "slice[Literal[1], None, None]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "slice[Literal[1], None, None]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:49 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:49 - error: Operator "-" not supported for types "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | bytes | str | complex | _NestedSequence[complex | bytes | str]" and "Unknown | _SupportsArray[dtype[Any]] | _NestedSequence[_SupportsArray[dtype[Any]]] | bytes | str | complex | _NestedSequence[complex | bytes | str]"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_SupportsArray[dtype[Any]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "bytes" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "str" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "complex" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_SupportsArray[dtype[Any]]" and "_NestedSequence[complex | bytes | str]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_SupportsArray[dtype[Any]]" when expected type is "ArrayLike"
+    Operator "-" not supported for types "_NestedSequence[_SupportsArray[dtype[Any]]]" and "_NestedSequence[_SupportsArray[dtype[Any]]]" when expected type is "ArrayLike"
+    ... (reportOperatorIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:57 - error: "__getitem__" method not defined on type "Buffer" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:57 - error: "__getitem__" method not defined on type "_SupportsArray[dtype[Any]]" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:57 - error: Argument of type "slice[None, Literal[-1], None]" cannot be assigned to parameter "index" of type "int" in function "__getitem__"
+    "slice[None, Literal[-1], None]" is not assignable to "int" (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:202:57 - error: "__getitem__" method not defined on type "complex" (reportIndexIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:291:13 - warning: Type of "constant_value" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:292:87 - warning: Argument type is Any
+    Argument corresponds to parameter "fill_value" in function "full" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:300:44 - warning: Argument type is Any
+    Argument corresponds to parameter "a_min" in function "clip" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:300:64 - warning: Argument type is Any
+    Argument corresponds to parameter "a_max" in function "clip" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:302:19 - warning: Argument type is Any
+    Argument corresponds to parameter "a" in function "any" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:302:59 - warning: Argument type is Any
+    Argument corresponds to parameter "a" in function "any" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:338:5 - warning: Type of "zero_width_mask" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:342:5 - warning: Type of "non_zero_mask" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:346:15 - warning: Argument type is Any
+    Argument corresponds to parameter "a" in function "any" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:353:9 - warning: Type of "bins_within_range" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:449:48 - warning: Type of parameter "bin_tedges" is partially unknown
+    Parameter type is "list[tuple[Unknown, ...]]" (reportUnknownParameterType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:449:65 - error: Expected type arguments for generic class "tuple" (reportMissingTypeArgument)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:494:5 - warning: Type of "bin_tedges_array" is partially unknown
+    Type of "bin_tedges_array" is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:494:35 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "a" in function "asarray"
+    Argument type is "list[tuple[Unknown, ...]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:508:31 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "x1" in function "__call__"
+    Argument type is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:509:32 - warning: Argument type is partially unknown
+    Argument corresponds to parameter "x1" in function "__call__"
+    Argument type is "ndarray[tuple[Any, ...], dtype[Unknown]]" (reportUnknownArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:516:93 - warning: Argument type is Any
+    Argument corresponds to parameter "where" in function "__call__" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:522:10 - error: Import "genbadge" could not be resolved (reportMissingImports)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:522:26 - warning: Type of "Badge" is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:524:5 - warning: Type of "b" is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:525:5 - warning: Type of "write_to" is unknown (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:772:16 - warning: Return type is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:798:10 - warning: Type of "read_csv" is partially unknown
+    Type of "read_csv" is "Overload[(filepath_or_buffer: str | PathLike[str] | ReadCsvBuffer[bytes] | ReadCsvBuffer[str], *, sep: str | None = ..., delimiter: str | None = ..., header: int | Sequence[int] | Literal['infer'] | None = ..., names: MutableSequence[Unknown] | ndarray[tuple[Any, ...], dtype[Any]] | tuple[Unknown, ...] | range | None = ..., index_col: int | str | Sequence[str | int] | Literal[False] | None = ..., usecols: SequenceNotStr[Hashable] | range | ExtensionArray | ndarray[tuple[Any, ...], dtype[Any]] | Index[Any] | Series[Any] | ((HashableT@read_csv) -> bool) | None = ..., dtype: ExtensionDtype | str | dtype[generic[Any]] | type[str] | type[complex] | type[bool] | type[object] | Mapping[Hashable, ExtensionDtype | str | dtype[generic[Any]] | type[str] | type[complex] | type[bool] | type[object]] | defaultdict[Unknown, Unknown] | None = ..., engine: Literal['c', 'python', 'pyarrow', 'python-fwf'] | None = ..., converters: Mapping[int | str, (str) -> Any] | Mapping[int, (str) -> Any] | Mapping[str, (str) -> Any] | None = ..., true_values: list[str] | None = ..., false_values: list[str] | None = ..., skipinitialspace: bool = ..., skiprows: int | Sequence[int] | ((int) -> bool) | None = ..., skipfooter: int = ..., nrows: int | None = ..., na_values: Sequence[str] | Mapping[str, Sequence[str]] | None = ..., keep_default_na: bool = ..., na_filter: bool = ..., verbose: bool = ..., skip_blank_lines: bool = ..., parse_dates: bool | list[int] | list[str] | Sequence[Sequence[int]] | Mapping[str, Sequence[int | str]] | None = ..., keep_date_col: bool = ..., date_format: dict[Hashable, str] | str | None = ..., dayfirst: bool = ..., cache_dates: bool = ..., iterator: Literal[True], chunksize: int | None = ..., compression: dict[str, Any] | Literal['infer', 'gzip', 'bz2', 'zip', 'xz', 'zstd', 'tar'] | None = ..., thousands: str | None = ..., decimal: str = ..., lineterminator: str | None = ..., quotechar: str = ..., quoting: Literal[0, 1, 2, 3, 4, 5] = ..., doublequote: bool = ..., escapechar: str | None = ..., comment: str | None = ..., encoding: str | None = ..., encoding_errors: str | None = ..., dialect: str | Dialect | None = ..., on_bad_lines: ((list[str]) -> (list[str] | None)) | Literal['error', 'warn', 'skip'] = ..., delim_whitespace: bool = ..., low_memory: bool = ..., memory_map: bool = ..., float_precision: Literal['high', 'legacy', 'round_trip'] | None = ..., storage_options: dict[str, Any] | None = ..., dtype_backend: Literal['pyarrow', 'numpy_nullable', _NoDefault.no_default] = ...) -> TextFileReader, (filepath_or_buffer: str | PathLike[str] | ReadCsvBuffer[bytes] | ReadCsvBuffer[str], *, sep: str | None = ..., delimiter: str | None = ..., header: int | Sequence[int] | Literal['infer'] | None = ..., names: MutableSequence[Unknown] | ndarray[tuple[Any, ...], dtype[Any]] | tuple[Unknown, ...] | range | None = ..., index_col: int | str | Sequence[str | int] | Literal[False] | None = ..., usecols: SequenceNotStr[Hashable] | range | ExtensionArray | ndarray[tuple[Any, ...], dtype[Any]] | Index[Any] | Series[Any] | ((HashableT@read_csv) -> bool) | None = ..., dtype: ExtensionDtype | str | dtype[generic[Any]] | type[str] | type[complex] | type[bool] | type[object] | Mapping[Hashable, ExtensionDtype | str | dtype[generic[Any]] | type[str] | type[complex] | type[bool] | type[object]] | defaultdict[Unknown, Unknown] | None = ..., engine: Literal['c', 'python', 'pyarrow', 'python-fwf'] | None = ..., converters: Mapping[int | str, (str) -> Any] | Mapping[int, (str) -> Any] | Mapping[str, (str) -> Any] | None = ..., true_values: list[str] | None = ..., false_values: list[str] | None = ..., skipinitialspace: bool = ..., skiprows: int | Sequence[int] | ((int) -> bool) | None = ..., skipfooter: int = ..., nrows: int | None = ..., na_values: Sequence[str] | Mapping[str, Sequence[str]] | None = ..., keep_default_na: bool = ..., na_filter: bool = ..., verbose: bool = ..., skip_blank_lines: bool = ..., parse_dates: bool | list[int] | list[str] | Sequence[Sequence[int]] | Mapping[str, Sequence[int | str]] | None = ..., keep_date_col: bool = ..., date_format: dict[Hashable, str] | str | None = ..., dayfirst: bool = ..., cache_dates: bool = ..., iterator: bool = ..., chunksize: int, compression: dict[str, Any] | Literal['infer', 'gzip', 'bz2', 'zip', 'xz', 'zstd', 'tar'] | None = ..., thousands: str | None = ..., decimal: str = ..., lineterminator: str | None = ..., quotechar: str = ..., quoting: Literal[0, 1, 2, 3, 4, 5] = ..., doublequote: bool = ..., escapechar: str | None = ..., comment: str | None = ..., encoding: str | None = ..., encoding_errors: str | None = ..., dialect: str | Dialect | None = ..., on_bad_lines: ((list[str]) -> (list[str] | None)) | Literal['error', 'warn', 'skip'] = ..., delim_whitespace: bool = ..., low_memory: bool = ..., memory_map: bool = ..., float_precision: Literal['high', 'legacy', 'round_trip'] | None = ..., storage_options: dict[str, Any] | None = ..., dtype_backend: Literal['pyarrow', 'numpy_nullable', _NoDefault.no_default] = ...) -> TextFileReader, (filepath_or_buffer: str | PathLike[str] | ReadCsvBuffer[bytes] | ReadCsvBuffer[str], *, sep: str | None = ..., delimiter: str | None = ..., header: int | Sequence[int] | Literal['infer'] | None = ..., names: MutableSequence[Unknown] | ndarray[tuple[Any, ...], dtype[Any]] | tuple[Unknown, ...] | range | None = ..., index_col: int | str | Sequence[str | int] | Literal[False] | None = ..., usecols: SequenceNotStr[Hashable] | range | ExtensionArray | ndarray[tuple[Any, ...], dtype[Any]] | Index[Any] | Series[Any] | ((HashableT@read_csv) -> bool) | None = ..., dtype: ExtensionDtype | str | dtype[generic[Any]] | type[str] | type[complex] | type[bool] | type[object] | Mapping[Hashable, ExtensionDtype | str | dtype[generic[Any]] | type[str] | type[complex] | type[bool] | type[object]] | defaultdict[Unknown, Unknown] | None = ..., engine: Literal['c', 'python', 'pyarrow', 'python-fwf'] | None = ..., converters: Mapping[int | str, (str) -> Any] | Mapping[int, (str) -> Any] | Mapping[str, (str) -> Any] | None = ..., true_values: list[str] | None = ..., false_values: list[str] | None = ..., skipinitialspace: bool = ..., skiprows: int | Sequence[int] | ((int) -> bool) | None = ..., skipfooter: int = ..., nrows: int | None = ..., na_values: Sequence[str] | Mapping[str, Sequence[str]] | None = ..., keep_default_na: bool = ..., na_filter: bool = ..., verbose: bool = ..., skip_blank_lines: bool = ..., parse_dates: bool | list[int] | list[str] | Sequence[Sequence[int]] | Mapping[str, Sequence[int | str]] | None = ..., keep_date_col: bool = ..., date_format: dict[Hashable, str] | str | None = ..., dayfirst: bool = ..., cache_dates: bool = ..., iterator: Literal[False] = ..., chunksize: None = ..., compression: dict[str, Any] | Literal['infer', 'gzip', 'bz2', 'zip', 'xz', 'zstd', 'tar'] | None = ..., thousands: str | None = ..., decimal: str = ..., lineterminator: str | None = ..., quotechar: str = ..., quoting: Literal[0, 1, 2, 3, 4, 5] = ..., doublequote: bool = ..., escapechar: str | None = ..., comment: str | None = ..., encoding: str | None = ..., encoding_errors: str | None = ..., dialect: str | Dialect | None = ..., on_bad_lines: ((list[str]) -> (list[str] | None)) | Literal['error', 'warn', 'skip'] = ..., delim_whitespace: bool = ..., low_memory: bool = ..., memory_map: bool = ..., float_precision: Literal['high', 'legacy', 'round_trip'] | None = ..., storage_options: dict[str, Any] | None = ..., dtype_backend: Literal['pyarrow', 'numpy_nullable', _NoDefault.no_default] = ...) -> DataFrame]" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:801:15 - error: Argument of type "dict[str, str]" cannot be assigned to parameter "dtype" of type "DtypeArg | defaultdict[Unknown, Unknown] | None" in function "read_csv"
+    Type "dict[str, str]" is not assignable to type "DtypeArg | defaultdict[Unknown, Unknown] | None"
+      "dict[str, str]" is not assignable to "ExtensionDtype"
+      "dict[str, str]" is not assignable to "str"
+      "dict[str, str]" is not assignable to "dtype[generic[Any]]"
+      Type "dict[str, str]" is not assignable to type "type[str]"
+      Type "dict[str, str]" is not assignable to type "type[complex]"
+      Type "dict[str, str]" is not assignable to type "type[bool]"
+      Type "dict[str, str]" is not assignable to type "type[object]"
+    ... (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:802:17 - error: Argument of type "dict_keys[str, str]" cannot be assigned to parameter "usecols" of type "UsecolsArgType[HashableT@read_csv]" in function "read_csv"
+    Type "dict_keys[str, str]" is not assignable to type "UsecolsArgType[HashableT@read_csv]"
+      "dict_keys[str, str]" is not assignable to "ExtensionArray"
+      "dict_keys[str, str]" is not assignable to "range"
+      "dict_keys[str, str]" is not assignable to "Index[Any]"
+      "dict_keys[str, str]" is incompatible with protocol "SequenceNotStr[Hashable]"
+        "__getitem__" is not present
+        "index" is not present
+        "count" is not present
+    ... (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:811:93 - warning: Type of "to_timedelta" is partially unknown
+    Type of "to_timedelta" is "Overload[(arg: str | float | timedelta, unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> Timedelta, (arg: Series[Any], unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> Series[Timedelta], (arg: SequenceNotStr[Unknown] | Sequence[float | timedelta] | tuple[str | float | timedelta, ...] | range | ExtensionArray | ndarray[tuple[Any, ...], dtype[Any]] | Index[Any], unit: Literal['W', 'w', 'D', 'd', 'days', 'day', 'hours', 'hour', 'hr', 'h', 'm', 'minute', 'min', 'minutes', 's', 'seconds', 'sec', 'second', 'ms', 'milliseconds', 'millisecond', 'milli', 'millis', 'us', 'microseconds', 'microsecond', 'µs', 'micro', 'micros', 'ns', 'nanoseconds', 'nano', 'nanos', 'nanosecond'] | None = ..., errors: Literal['raise', 'coerce'] = ...) -> TimedeltaIndex]" (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:970:5 - warning: Type of "nullrank" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:995:5 - warning: Type of "nullrank" is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:997:25 - warning: Argument type is Any
+    Argument corresponds to parameter "shape" in function "__call__" (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1001:9 - warning: Type of "res_init" is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1001:20 - error: No overloads for "minimize" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1005:20 - error: Argument of type "str" cannot be assigned to parameter "method" of type "MethodMimimize | _MinimizeMethodFun | None" in function "minimize"
+    Type "str" is not assignable to type "MethodMimimize | _MinimizeMethodFun | None"
+      "str" is incompatible with protocol "_MinimizeMethodFun"
+        "__call__" is not present
+      "str" is not assignable to "None"
+      "str" is not assignable to type "Literal['Nelder-Mead']"
+      "str" is not assignable to type "Literal['nelder-mead']"
+      "str" is not assignable to type "Literal['Powell']"
+      "str" is not assignable to type "Literal['powell']"
+    ... (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1007:16 - warning: Type of "success" is unknown (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1008:51 - warning: Type of "message" is unknown (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1010:9 - warning: Type of "coeffs_0" is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1010:20 - warning: Type of "x" is unknown (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1013:5 - warning: Type of "res" is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1013:11 - error: No overloads for "minimize" match the provided arguments (reportCallIssue)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1017:16 - error: Argument of type "str" cannot be assigned to parameter "method" of type "MethodMimimize | _MinimizeMethodFun | None" in function "minimize"
+    Type "str" is not assignable to type "MethodMimimize | _MinimizeMethodFun | None"
+      "str" is incompatible with protocol "_MinimizeMethodFun"
+        "__call__" is not present
+      "str" is not assignable to "None"
+      "str" is not assignable to type "Literal['Nelder-Mead']"
+      "str" is not assignable to type "Literal['nelder-mead']"
+      "str" is not assignable to type "Literal['Powell']"
+      "str" is not assignable to type "Literal['powell']"
+    ... (reportArgumentType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1020:12 - warning: Type of "success" is unknown (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1021:39 - warning: Type of "message" is unknown (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1024:12 - warning: Type of "x" is unknown (reportUnknownMemberType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1024:12 - warning: Return type is unknown (reportUnknownVariableType)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1030:12 - warning: Return type is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1036:12 - warning: Return type is Any (reportAny)
+  /Users/bdestombe/Projects/gwtransport/gwtransport/src/gwtransport/utils.py:1049:16 - warning: Unnecessary "cast" call; type is already "(ndarray[_AnyShape, dtype[Any]], ndarray[_AnyShape, dtype[Any]], ndarray[_AnyShape, dtype[Any]]) -> float" (reportUnnecessaryCast)
+178 errors, 207 warnings, 0 notes

@@ -186,15 +186,16 @@ def compute_sigma_array(
     numpy.ndarray
         Array of sigma values for diffusion.
     """
-    residence_time_series = residence_time(
+    rt_array = residence_time(
         flow=flow,
         flow_tedges=tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="infiltration_to_extraction",
-        return_pandas_series=True,
-    )
-    residence_time_series = residence_time_series.interpolate(method="nearest").ffill().bfill()
+    )[0]  # Extract first pore volume
+
+    # Interpolate NaN values using linear interpolation with nearest extrapolation
+    valid_mask = ~np.isnan(rt_array)
     if np.any(valid_mask):
         rt_array = np.interp(np.arange(len(rt_array)), np.where(valid_mask)[0], rt_array[valid_mask])
 

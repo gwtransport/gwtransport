@@ -1,0 +1,13 @@
+Installed 1 package in 3ms
+error[unsupported-operator]: Operator `*` is unsupported between objects of type `Unknown | int | float | str` and `int | float`
+  --> examples/05_Testing_Assumptions.ipynb:cell 18:31:26
+   |
+30 |     # Diffusion standard deviation
+31 |     sigma_diff = np.sqrt(2 * params["diffusivity"] * rt_mean) / velocity
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+32 |     
+33 |     # Variance ratio
+   |
+info: rule `unsupported-operator` is enabled by default
+
+Found 1 diagnostic
