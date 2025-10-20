@@ -291,6 +291,9 @@ def bin_masses(*, alpha: float, beta: float, bin_edges: npt.ArrayLike) -> npt.ND
     numpy.ndarray
         Probability mass for each bin
     """
+    # Convert inputs to numpy arrays
+    bin_edges = np.asarray(bin_edges)
+
     # Validate inputs
     if alpha <= 0 or beta <= 0:
         msg = "Alpha and beta must be positive"
@@ -304,8 +307,5 @@ def bin_masses(*, alpha: float, beta: float, bin_edges: npt.ArrayLike) -> npt.ND
     if np.any(bin_edges < 0):
         msg = "Bin edges must be positive"
         raise ValueError(msg)
-
-    # Convert inputs to numpy arrays
-    bin_edges = np.asarray(bin_edges)
     val = gammainc(alpha, bin_edges / beta)
     return val[1:] - val[:-1]

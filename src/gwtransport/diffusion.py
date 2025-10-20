@@ -83,6 +83,14 @@ def infiltration_to_extraction(
     -------
     numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3].
+
+    Notes
+    -----
+    Common values for heat in saturated sand in m²/day:
+
+    * Lower end (finer sand/silt): ~0.007-0.01 m²/day
+    * Typical saturated sand: ~0.01-0.05 m²/day
+    * Upper end (coarse sand/gravel): ~0.05-0.10 m²/day
     """
     cin = np.asarray(cin)
     flow = np.asarray(flow)
@@ -178,21 +186,25 @@ def compute_sigma_array(
     numpy.ndarray
         Array of sigma values for diffusion.
     """
-    residence_time_series = residence_time(
+    rt_array = residence_time(
         flow=flow,
         flow_tedges=tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="infiltration_to_extraction",
-        return_pandas_series=True,
-    )
-    residence_time_series = residence_time_series.interpolate(method="nearest").ffill().bfill()
+    )[0]  # Extract first pore volume
+
+    # Interpolate NaN values using linear interpolation with nearest extrapolation
+    valid_mask = ~np.isnan(rt_array)
+    if np.any(valid_mask):
+        rt_array = np.interp(np.arange(len(rt_array)), np.where(valid_mask)[0], rt_array[valid_mask])
+
     timedelta_at_departure = np.diff(tedges) / pd.to_timedelta(1, unit="D")
     volume_infiltrated_at_departure = flow * timedelta_at_departure
     cross_sectional_area = aquifer_pore_volume / aquifer_length
     dx = volume_infiltrated_at_departure / cross_sectional_area / porosity
-    sigma_array = np.sqrt(2 * diffusivity * residence_time_series) / dx
-    return np.clip(a=sigma_array.values, a_min=0.0, a_max=100)
+    sigma_array = np.sqrt(2 * diffusivity * rt_array) / dx
+    return np.clip(sigma_array, 0.0, 100.0)
 
 
 def convolve_diffusion(
@@ -262,6 +274,10 @@ def convolve_diffusion(
     >>> # Apply the filter
     >>> filtered = convolve_diffusion(input_signal=signal, sigma_array=sigma_array)
     """
+    # Convert to arrays for type safety
+    input_signal = np.asarray(input_signal)
+    sigma_array = np.asarray(sigma_array)
+
     if len(input_signal) != len(sigma_array):
         msg = "Input signal and sigma array must have the same length"
         raise ValueError(msg)
@@ -395,6 +411,7 @@ def create_example_data(
     Notes
     -----
     This function creates a test case with:
+
     - A signal composed of two Gaussian peaks
     - Sinusoidally varying time steps
     - Corresponding sigma values for diffusion

@@ -437,9 +437,10 @@ def spinup_duration(
         retardation_factor=retardation_factor,
         direction="infiltration_to_extraction",
     )
-    if np.isnan(rt[0, 0]):
+    rt_value: float = float(np.asarray(rt[0, 0]))
+    if np.isnan(rt_value):
         msg = "Residence time at the first time step is NaN. This indicates that the aquifer is not fully informed: flow timeseries too short."
         raise ValueError(msg)
 
     # Return the first residence time value
-    return float(rt[0, 0])
+    return rt_value

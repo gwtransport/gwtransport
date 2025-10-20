@@ -61,7 +61,6 @@ import io
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 import numpy.typing as npt
@@ -1002,7 +1001,7 @@ def _optimize_nullspace_coefficients(
             _squared_differences_objective,
             x0=coeffs_0,
             args=(x_ls, nullspace_basis),
-            method=optimization_method,
+            method=optimization_method,  # type: ignore[arg-type]
         )
         if not res_init.success:
             msg = f"Initial optimization failed: {res_init.message}"
@@ -1014,7 +1013,7 @@ def _optimize_nullspace_coefficients(
         objective_func,
         x0=coeffs_0,
         args=(x_ls, nullspace_basis),
-        method=optimization_method,
+        method=optimization_method,  # type: ignore[arg-type]
     )
 
     if not res.success:
@@ -1046,6 +1045,6 @@ def _get_nullspace_objective_function(
     if nullspace_objective == "summed_differences":
         return _summed_differences_objective
     if callable(nullspace_objective):
-        return cast(Callable[[np.ndarray, np.ndarray, np.ndarray], float], nullspace_objective)
+        return nullspace_objective  # type: ignore[return-value]
     msg = f"Unknown nullspace objective: {nullspace_objective}"
     raise ValueError(msg)
