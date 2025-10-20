@@ -86,7 +86,7 @@ def infiltration_to_extraction(
 
     Notes
     -----
-    Common values for saturated sand in m²/day:
+    Common values for heat in saturated sand in m²/day:
 
     * Lower end (finer sand/silt): ~0.007-0.01 m²/day
     * Typical saturated sand: ~0.01-0.05 m²/day
