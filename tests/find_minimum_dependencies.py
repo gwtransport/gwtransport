@@ -762,7 +762,7 @@ def load_dependencies(
     return unique_names
 
 
-def main():
+def main():  # noqa: C901
     """Find minimum compatible versions for package dependencies."""
     parser = argparse.ArgumentParser(description="Find minimum compatible versions for package dependencies")
     parser.add_argument("--dependency", help="Test only this specific dependency")
