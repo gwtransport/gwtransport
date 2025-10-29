@@ -1,8 +1,41 @@
 {
   "name": "gwtransport - Python 3.14",
   "image": "mcr.microsoft.com/devcontainers/python:3.14",
+  "waitFor": "postCreateCommand",
   "features": {
-    "ghcr.io/devcontainers-extra/features/uv": {}
+    "ghcr.io/devcontainers-extra/features/uv": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "installOhMyZsh": true,
+      "username": "vscode",
+      "userUid": 1000,
+      "userGid": 1000,
+      "upgradePackages": false
+    }
   },
-  "postCreateCommand": "uv sync --extra test --python 3.14"
+  "postCreateCommand": "uv sync --extra test --python 3.14 --cache-dir .uv_cache && . .venv/bin/activate",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.testing.unittestEnabled": false,
+        "python.testing.pytestEnabled": true,
+        "python.defaultInterpreterPath": "./.venv/bin/python",
+        "[python]": {
+          "editor.codeActionsOnSave": [
+            "source.organizeImports",
+            "source.fixAll"
+          ],
+          "editor.defaultFormatter": "charliermarsh.ruff",
+          "editor.formatOnSave": true
+        }
+      },
+      "extensions": [
+        "github.codespaces",
+        "ms-python.python",
+        "ms-toolsai.jupyter",
+        "charliermarsh.ruff"
+      ]
+    }
+  }
 }
