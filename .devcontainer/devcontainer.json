@@ -15,6 +15,7 @@
     }
   },
   "postCreateCommand": "uv sync --extra test --python 3.14 --cache-dir .uv_cache && . .venv/bin/activate",
+  "postAttachCommand": ". .venv/bin/activate",
   "customizations": {
     "vscode": {
       "settings": {
