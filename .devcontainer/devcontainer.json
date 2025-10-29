@@ -22,10 +22,6 @@
         "python.testing.pytestEnabled": true,
         "python.defaultInterpreterPath": "./.venv/bin/python",
         "[python]": {
-          "editor.codeActionsOnSave": [
-            "source.organizeImports",
-            "source.fixAll"
-          ],
           "editor.defaultFormatter": "charliermarsh.ruff",
           "editor.formatOnSave": true
         }
