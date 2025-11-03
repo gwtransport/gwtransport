@@ -30,8 +30,6 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
-import warnings
-
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -47,8 +45,7 @@ def residence_time(
     index: pd.DatetimeIndex | np.ndarray | None = None,
     retardation_factor: float = 1.0,
     direction: str = "extraction_to_infiltration",
-    return_pandas_series: bool = False,
-) -> npt.NDArray[np.floating] | pd.Series:
+) -> npt.NDArray[np.floating]:
     """
     Compute the residence time of retarded compound in the water in the aquifer.
 
@@ -71,8 +68,6 @@ def residence_time(
         * 'extraction_to_infiltration': Extraction to infiltration modeling - how many days ago was the extracted water infiltrated
         * 'infiltration_to_extraction': Infiltration to extraction modeling - how many days until the infiltrated water is extracted
         Default is 'extraction_to_infiltration'.
-    return_pandas_series : bool, optional
-        If True, return a pandas Series with the residence time at the index provided. Only supported for a single aquifer pore volume. This parameter is deprecated and will be removed in a future version.
 
     Returns
     -------
@@ -141,21 +136,6 @@ def residence_time(
         msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
         raise ValueError(msg)
 
-    if return_pandas_series:
-        # If multiple pore volumes were provided, raise the explicit error first so that
-        # callers (and tests) see the ValueError before any deprecation warning. When
-        # running with warnings-as-errors, emitting the warning before the error would
-        # cause the test to fail on the warning instead of the intended ValueError.
-        if len(aquifer_pore_volume) > 1:
-            msg = "return_pandas_series=True is only supported for a single pore volume"
-            raise ValueError(msg)
-        warnings.warn(
-            "return_pandas_series parameter is deprecated and will be removed in a future version. "
-            "The function now returns numpy arrays by default.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        return pd.Series(data=data[0], index=index, name=f"residence_time_{direction}")
     return data
 
 
@@ -322,8 +302,6 @@ def fraction_explained(
         * 'extraction_to_infiltration': Extraction to infiltration modeling - how many days ago was the extracted water infiltrated
         * 'infiltration_to_extraction': Infiltration to extraction modeling - how many days until the infiltrated water is extracted
         Default is 'extraction_to_infiltration'.
-    return_pandas_series : bool, optional
-        If True, return a pandas Series with the residence time at the index provided. Only supported for a single aquifer pore volume. This parameter is deprecated and will be removed in a future version.
 
     Returns
     -------

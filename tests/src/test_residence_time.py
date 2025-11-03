@@ -166,28 +166,6 @@ def test_return_numpy_array():
     assert result.shape == (1, expected_length)
 
 
-def test_return_pandas_series():
-    """Test returning results as pandas Series (deprecated functionality)."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
-    pore_volume = 200.0
-
-    with pytest.warns(FutureWarning, match="return_pandas_series parameter is deprecated"):
-        result = residence_time(
-            flow=flow_values,
-            flow_tedges=flow_tedges,
-            aquifer_pore_volume=pore_volume,
-            direction="extraction_to_infiltration",
-            return_pandas_series=True,
-        )
-
-    assert isinstance(result, pd.Series)
-    assert result.name == "residence_time_extraction_to_infiltration"
-    # Should return for the center points of flow bins
-    expected_length = len(flow_tedges) - 1
-    assert len(result) == expected_length
-
-
 def test_multiple_pore_volumes():
     """Test handling of multiple pore volumes."""
     flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
@@ -265,22 +243,6 @@ def test_flow_tend_length_validation():
     with pytest.raises(ValueError, match="tend must have the same number of elements as flow"):
         # This should fail during compute_time_edges
         compute_time_edges(tedges=None, tstart=None, tend=flow_tend, number_of_bins=len(flow_values))
-
-
-def test_multiple_pore_volumes_pandas_series_error():
-    """Test that return_pandas_series=True with multiple pore volumes raises error."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
-    pore_volumes = np.array([200.0, 300.0])
-
-    with pytest.raises(ValueError, match="return_pandas_series=True is only supported for a single pore volume"):
-        residence_time(
-            flow=flow_values,
-            flow_tedges=flow_tedges,
-            aquifer_pore_volume=pore_volumes,
-            direction="extraction_to_infiltration",
-            return_pandas_series=True,
-        )
 
 
 def test_edge_cases_zero_flow():
