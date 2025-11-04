@@ -998,9 +998,40 @@ def infiltration_to_extraction(
     if np.any(np.isnan(flow)):
         msg = "flow contains NaN values, which are not allowed"
         raise ValueError(msg)
+
+    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
+
+    # Compute normalized weights (includes all pre-computation)
+    normalized_weights = _infiltration_to_extraction_weights(
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        cin=cin,
+        flow=flow,
+        retardation_factor=retardation_factor,
+    )
+
+    # Apply to concentrations and handle NaN for periods with no contributions
+    out = normalized_weights.dot(cin)
+    # Set NaN where no valid pore volumes contributed
+    total_weights = np.sum(normalized_weights, axis=1)
+    out[total_weights == 0] = np.nan
+
+    return out
+
+
+def _infiltration_to_extraction_weights(
+    *,
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    aquifer_pore_volumes: npt.NDArray[np.floating],
+    cin: npt.NDArray[np.floating],
+    flow: npt.NDArray[np.floating],
+    retardation_factor: float | npt.ArrayLike,
+) -> npt.NDArray[np.floating]:
+    # Convert time edges to days
     cin_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
     cout_tedges_days = ((cout_tedges - tedges[0]) / pd.Timedelta(days=1)).values
-    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
 
     # Pre-compute all residence times and infiltration edges
     rt_edges_2d = residence_time(
@@ -1017,36 +1048,6 @@ def infiltration_to_extraction(
     valid_bins_2d = ~(np.isnan(infiltration_tedges_2d[:, :-1]) | np.isnan(infiltration_tedges_2d[:, 1:]))
     valid_pv_count = np.sum(valid_bins_2d, axis=0)
 
-    # Initialize accumulator
-    normalized_weights = _infiltration_to_extraction_weights(
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        cin=cin,
-        flow=flow,
-        cin_tedges_days=cin_tedges_days,
-        infiltration_tedges_2d=infiltration_tedges_2d,
-        valid_bins_2d=valid_bins_2d,
-        valid_pv_count=valid_pv_count,
-    )
-
-    # Apply to concentrations and handle NaN for periods with no contributions
-    out = normalized_weights.dot(cin)
-    out[valid_pv_count == 0] = np.nan
-
-    return out
-
-
-def _infiltration_to_extraction_weights(
-    *,
-    cout_tedges: pd.DatetimeIndex,
-    aquifer_pore_volumes: npt.NDArray[np.floating],
-    cin: npt.NDArray[np.floating],
-    flow: npt.NDArray[np.floating],
-    cin_tedges_days: npt.NDArray[np.floating],
-    infiltration_tedges_2d: npt.NDArray[np.floating],
-    valid_bins_2d: npt.NDArray[np.bool_],
-    valid_pv_count: npt.NDArray[np.intp],
-) -> npt.NDArray[np.floating]:
     accumulated_weights = np.zeros((len(cout_tedges) - 1, len(cin)))
 
     # Pre-compute cin time range for clip optimization (computed once, used n_bins times)
@@ -1252,54 +1253,36 @@ def extraction_to_infiltration(
     if np.any(np.isnan(flow)):
         msg = "flow contains NaN values, which are not allowed"
         raise ValueError(msg)
-    cout_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
-    cin_tedges_days = ((cin_tedges - tedges[0]) / pd.Timedelta(days=1)).values
+
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
 
-    # Pre-compute all residence times and extraction edges (symmetric to infiltration_to_extraction)
-    rt_edges_2d = residence_time(
-        flow=flow,
-        flow_tedges=tedges,
-        index=cin_tedges,
-        aquifer_pore_volume=aquifer_pore_volumes,
-        retardation_factor=retardation_factor,
-        direction="infiltration_to_extraction",  # Computing from infiltration perspective
-    )
-    extraction_tedges_2d = cin_tedges_days[None, :] + rt_edges_2d
-
-    # Pre-compute valid bins and count
-    valid_bins_2d = ~(np.isnan(extraction_tedges_2d[:, :-1]) | np.isnan(extraction_tedges_2d[:, 1:]))
-    valid_pv_count = np.sum(valid_bins_2d, axis=0)
-
-    # Initialize accumulator
+    # Compute normalized weights (includes all pre-computation)
     normalized_weights = _extraction_to_infiltration_weights(
+        tedges=tedges,
         cin_tedges=cin_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         cout=cout,
         flow=flow,
-        cout_tedges_days=cout_tedges_days,
-        extraction_tedges_2d=extraction_tedges_2d,
-        valid_bins_2d=valid_bins_2d,
-        valid_pv_count=valid_pv_count,
+        retardation_factor=retardation_factor,
     )
 
     # Apply to concentrations and handle NaN for periods with no contributions
     out = normalized_weights.dot(cout)
-    out[valid_pv_count == 0] = np.nan
+    # Set NaN where no valid pore volumes contributed
+    total_weights = np.sum(normalized_weights, axis=1)
+    out[total_weights == 0] = np.nan
 
     return out
 
 
 def _extraction_to_infiltration_weights(
     *,
+    tedges: pd.DatetimeIndex,
     cin_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.NDArray[np.floating],
     cout: npt.NDArray[np.floating],
     flow: npt.NDArray[np.floating],
-    cout_tedges_days: npt.NDArray[np.floating],
-    extraction_tedges_2d: npt.NDArray[np.floating],
-    valid_bins_2d: npt.NDArray[np.bool_],
-    valid_pv_count: npt.NDArray[np.intp],
+    retardation_factor: float,
 ) -> npt.NDArray[np.floating]:
     """
     Compute extraction to infiltration transformation weights matrix.
@@ -1318,6 +1301,8 @@ def _extraction_to_infiltration_weights(
 
     Parameters
     ----------
+    tedges : pandas.DatetimeIndex
+        Time edges for cout and flow data bins.
     cin_tedges : pandas.DatetimeIndex
         Time edges for output (infiltration) data bins.
     aquifer_pore_volumes : array-like
@@ -1326,14 +1311,8 @@ def _extraction_to_infiltration_weights(
         Concentration values of extracted water.
     flow : array-like
         Flow rate values in the aquifer [m3/day].
-    cout_tedges_days : array-like
-        Time edges for cout data in days since reference.
-    extraction_tedges_2d : array-like
-        2D array of extraction time edges for each pore volume.
-    valid_bins_2d : array-like
-        2D boolean array indicating valid time bins for each pore volume.
-    valid_pv_count : array-like
-        Count of valid pore volumes for each output time bin.
+    retardation_factor : float
+        Retardation factor of the compound in the aquifer.
 
     Returns
     -------
@@ -1341,6 +1320,25 @@ def _extraction_to_infiltration_weights(
         Normalized weight matrix for extraction to infiltration transformation.
         Shape: (len(cin_tedges) - 1, len(cout))
     """
+    # Convert time edges to days
+    cout_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    cin_tedges_days = ((cin_tedges - tedges[0]) / pd.Timedelta(days=1)).values
+
+    # Pre-compute all residence times and extraction edges (symmetric to infiltration_to_extraction)
+    rt_edges_2d = residence_time(
+        flow=flow,
+        flow_tedges=tedges,
+        index=cin_tedges,
+        aquifer_pore_volume=aquifer_pore_volumes,
+        retardation_factor=retardation_factor,
+        direction="infiltration_to_extraction",  # Computing from infiltration perspective
+    )
+    extraction_tedges_2d = cin_tedges_days[None, :] + rt_edges_2d
+
+    # Pre-compute valid bins and count
+    valid_bins_2d = ~(np.isnan(extraction_tedges_2d[:, :-1]) | np.isnan(extraction_tedges_2d[:, 1:]))
+    valid_pv_count = np.sum(valid_bins_2d, axis=0)
+
     accumulated_weights = np.zeros((len(cin_tedges) - 1, len(cout)))
 
     # Pre-compute cout time range for clip optimization (computed once, used n_bins times)
