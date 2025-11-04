@@ -108,9 +108,11 @@ def residence_time(
         return np.full((n_pore_volumes, n_output), np.nan)
 
     flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
-    flow_tdelta = np.diff(flow_tedges_days, prepend=0.0)
-    flow_values = np.concatenate(([0.0], flow))
-    flow_cum = (flow_values * flow_tdelta).cumsum()  # at flow_tedges and flow_tedges_days. First value is 0.
+    flow_tdelta = np.diff(flow_tedges_days)
+    flow_cum = np.concatenate((
+        [0.0],
+        (flow * flow_tdelta).cumsum(),
+    ))  # at flow_tedges and flow_tedges_days. First value is 0.
 
     if index is None:
         # If index is not provided return the residence time that matches with the index of the flow; at the center of the flow bin.
@@ -320,3 +322,60 @@ def fraction_explained(
 
     n_aquifer_pore_volume = rt.shape[0]
     return (n_aquifer_pore_volume - np.isnan(rt).sum(axis=0)) / n_aquifer_pore_volume
+
+
+def freundlich_retardation(
+    *,
+    concentration: npt.ArrayLike,
+    freundlich_k: float,
+    freundlich_n: float,
+    bulk_density: float,
+    porosity: float,
+) -> npt.NDArray[np.floating]:
+    """
+    Compute concentration-dependent retardation factors using Freundlich isotherm.
+
+    The Freundlich isotherm relates sorbed concentration S to aqueous concentration C:
+        S = rho_f * C^n
+
+    The retardation factor is computed as:
+        R = 1 + (rho_b/θ) * dS/dC = 1 + (rho_b/θ) * rho_f * n * C^(n-1)
+
+    Parameters
+    ----------
+    concentration : array-like
+        Concentration of compound in water [mass/volume].
+        Length should match flow (i.e., len(flow_tedges) - 1).
+    freundlich_k : float
+        Freundlich sorption constant [(mass/mass)*(volume/mass)^n].
+    freundlich_n : float
+        Freundlich sorption exponent [dimensionless].
+    bulk_density : float
+        Bulk density of aquifer material [mass/volume].
+    porosity : float
+        Porosity of aquifer [dimensionless, 0-1].
+
+    Returns
+    -------
+    numpy.ndarray
+        Retardation factors for each flow interval.
+        Length equals len(concentration) for use as retardation_factor in residence_time.
+
+    Examples
+    --------
+    >>> concentration = np.array([0.1, 0.2, 0.3])  # same length as flow
+    >>> R = freundlich_retardation(
+    ...     concentration=concentration,
+    ...     freundlich_k=0.5,
+    ...     freundlich_n=0.9,
+    ...     bulk_density=1600,  # kg/m3
+    ...     porosity=0.35,
+    ... )
+    >>> # Use R in residence_time as retardation_factor
+
+    See Also
+    --------
+    residence_time : Compute residence times with retardation
+    """
+    concentration = np.asarray(concentration)
+    return 1.0 + (bulk_density / porosity) * freundlich_k * freundlich_n * np.power(concentration, freundlich_n - 1)
