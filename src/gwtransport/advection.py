@@ -550,6 +550,295 @@ def gamma_extraction_to_infiltration(
     )
 
 
+def infiltration_to_extraction_nonlinear(
+    *,
+    cin: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    aquifer_pore_volumes: npt.ArrayLike,
+    retardation_factors: npt.ArrayLike,
+) -> npt.NDArray[np.floating]:
+    """
+    Compute extraction concentration with concentration-dependent (nonlinear) retardation.
+
+    This function implements forward method of characteristics for nonlinear sorption (e.g.,
+    Freundlich or Langmuir isotherms). Each infiltrating parcel travels with its own
+    retardation factor based on its concentration. When faster-moving high-concentration
+    parcels overtake slower low-concentration parcels, they mix at extraction through
+    flow-weighted averaging, naturally capturing shock formation without spurious oscillations.
+
+    Algorithm:
+    1. For each infiltration time bin, compute forward residence time using R(C_in)
+    2. Map infiltration times to extraction times for each pore volume
+    3. Create temporal overlap matrix (infiltration → extraction)
+    4. Flow-weight and average contributions to each extraction time bin
+
+    This approach is elegant because it:
+    - Maintains parcel concentration along characteristics (MOC physics)
+    - Naturally handles shock formation through mixing
+    - Avoids spurious oscillations (like TVD but simpler)
+    - Minimally extends existing code structure
+
+    Parameters
+    ----------
+    cin : array-like
+        Concentration values of infiltrating water [concentration units].
+        Length must match the number of time bins defined by tedges.
+    flow : array-like
+        Flow rate values in the aquifer [m3/day].
+        Length must match cin.
+    tedges : pandas.DatetimeIndex
+        Time edges for infiltration bins. Length = len(cin) + 1.
+    cout_tedges : pandas.DatetimeIndex
+        Time edges for extraction bins. Length = len(cout) + 1.
+    aquifer_pore_volumes : array-like
+        Distribution of pore volumes [m3] for aquifer heterogeneity.
+    retardation_factors : array-like
+        Concentration-dependent retardation factor for each infiltration time bin.
+        Shape: [len(cin)] - one retardation per time bin.
+        Typically computed from Freundlich/Langmuir isotherm.
+
+    Returns
+    -------
+    numpy.ndarray
+        Flow-weighted concentration at extraction. Length = len(cout_tedges) - 1.
+        NaN values indicate periods with no infiltration contributions.
+
+    See Also
+    --------
+    infiltration_to_extraction : Linear sorption (constant retardation)
+    residence_time.freundlich_retardation : Compute Freundlich retardation factors
+
+    Examples
+    --------
+    Freundlich sorption with concentration-dependent retardation:
+
+    >>> import pandas as pd
+    >>> import numpy as np
+    >>> from gwtransport.advection import infiltration_to_extraction_nonlinear
+    >>> from gwtransport.residence_time import freundlich_retardation
+    >>> from gwtransport.utils import compute_time_edges
+    >>>
+    >>> # Setup
+    >>> dates = pd.date_range(start="2020-01-01", end="2020-01-30", freq="D")
+    >>> tedges = compute_time_edges(
+    ...     tedges=None, tstart=None, tend=dates, number_of_bins=len(dates)
+    ... )
+    >>> cout_tedges = tedges.copy()
+    >>>
+    >>> # Gaussian concentration pulse
+    >>> cin = 100.0 * np.exp(-0.5 * ((np.arange(len(dates)) - 15) / 5) ** 2)
+    >>> flow = np.full(len(dates), 100.0)
+    >>> pore_volume = np.array([800.0])
+    >>>
+    >>> # Compute concentration-dependent retardation (Freundlich)
+    >>> R_nonlinear = freundlich_retardation(
+    ...     concentration=np.maximum(cin, 0.1),
+    ...     freundlich_k=0.02,
+    ...     freundlich_n=0.75,
+    ...     bulk_density=1600.0,
+    ...     porosity=0.35,
+    ... )
+    >>>
+    >>> # Transport with nonlinear sorption
+    >>> cout = infiltration_to_extraction_nonlinear(
+    ...     cin=cin,
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cout_tedges=cout_tedges,
+    ...     aquifer_pore_volumes=pore_volume,
+    ...     retardation_factors=R_nonlinear,
+    ... )
+    >>>
+    >>> # High-C front arrives early, low-C tail arrives late → asymmetric plume
+    >>> # Peak may be compressed (higher) or dispersed (lower) depending on isotherm
+
+    Notes
+    -----
+    **Physical Interpretation:**
+
+    For Freundlich isotherm with n < 1 (favorable sorption):
+    - R(C) = 1 + (rho_b/θ) * K_f * n * C^(n-1)
+    - Higher concentration → lower R → faster travel
+    - Creates asymmetric breakthrough: sharp front, long tail
+    - Mixing at extraction regularizes shocks (prevents multi-valued solutions)
+
+    **Comparison with TVD Schemes:**
+
+    This MOC approach with mixing provides similar benefits to TVD schemes:
+    - No spurious oscillations (monotonicity-preserving)
+    - Captures shock physics through natural mixing
+    - Computationally efficient (no spatial grid required)
+    - Trade-off: Some numerical diffusion at shocks (but physically reasonable as mixing)
+
+    For applications requiring sharper shock resolution, consider implementing
+    a full spatial TVD scheme (e.g., MUSCL with flux limiters).
+    """
+    tedges = pd.DatetimeIndex(tedges)
+    cout_tedges = pd.DatetimeIndex(cout_tedges)
+
+    # Convert to arrays
+    cin = np.asarray(cin)
+    flow = np.asarray(flow)
+    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
+    retardation_factors = np.asarray(retardation_factors)
+
+    # Validation
+    if len(tedges) != len(cin) + 1:
+        msg = "tedges must have one more element than cin"
+        raise ValueError(msg)
+    if len(tedges) != len(flow) + 1:
+        msg = "tedges must have one more element than flow"
+        raise ValueError(msg)
+    if len(retardation_factors) != len(cin):
+        msg = "retardation_factors must match cin length"
+        raise ValueError(msg)
+    if np.any(np.isnan(cin)):
+        msg = "cin contains NaN values"
+        raise ValueError(msg)
+    if np.any(np.isnan(flow)):
+        msg = "flow contains NaN values"
+        raise ValueError(msg)
+
+    # Convert to days
+    cin_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    cout_tedges_days = ((cout_tedges - tedges[0]) / pd.Timedelta(days=1)).values
+
+    # FORWARD PARCEL TRACKING with shock handling
+    # Key insight: track infiltration BINS (parcels) not edges
+    # Each parcel has concentration, mass, and arrival time
+    # When parcels overlap at extraction → mix (captures shocks naturally)
+
+    n_cin_bins = len(cin)
+    n_cout_bins = len(cout_tedges) - 1
+    n_pv = len(aquifer_pore_volumes)
+
+    # NOTE: For forward tracking, cout_tedges should extend beyond tedges
+    # to capture delayed arrivals due to retardation.
+    # Rule of thumb: extend cout_tedges by max_residence_time
+    # where max_residence_time ≈ max(pore_volumes) * max(retardation_factors) / min(flow)
+
+    # Accumulate contributions from all pore volumes
+    cout_accumulator_final = np.zeros(n_cout_bins)
+    cout_weight_final = np.zeros(n_cout_bins)
+
+    # For each pore volume (aquifer heterogeneity)
+    for i_pv in range(n_pv):
+        pv = aquifer_pore_volumes[i_pv]
+
+        # STEP 1: Compute residence times for all edges
+        # Strategy: Call residence_time once per edge with its retardation
+        rt_bin_edges = np.zeros(n_cin_bins + 1)
+
+        # Interpolate retardation to edges (vectorized)
+        # NOTE: Edge interpolation for concentration-dependent retardation
+        #
+        # Physical principle: R = f(C), so we should:
+        #   1. Interpolate concentration to edges
+        #   2. Compute retardation from edge concentration
+        #
+        # This is more accurate than directly averaging R values, especially
+        # for nonlinear isotherms where R(C_avg) ≠ avg(R(C)).
+        #
+        # For sharp concentration steps, this still has limitations (O(Δt) error),
+        # but is significantly better than arithmetic averaging of R.
+        #
+        # Compute retardation at edges
+        # NOTE: Ideally we would interpolate concentration first, then compute R(C_edge).
+        # However, that requires knowing the isotherm parameters, which aren't passed to
+        # this function. For now, we use arithmetic averaging of R values.
+        #
+        # TODO: Consider adding optional isotherm parameters to enable proper C interpolation.
+        # This would be more accurate: R_edge = f(0.5*(C[i-1] + C[i]))
+        # vs current: R_edge = 0.5*(R[i-1] + R[i])
+        #
+        # For smooth concentration variations, the error is O(Δt²).
+        # For sharp steps, this can introduce significant errors.
+        r_at_edges = np.zeros(n_cin_bins + 1)
+        r_at_edges[0] = retardation_factors[0]
+        r_at_edges[-1] = retardation_factors[-1]
+        r_at_edges[1:-1] = 0.5 * (retardation_factors[:-1] + retardation_factors[1:])
+
+        for i_edge in range(n_cin_bins + 1):
+            rt_val = residence_time(
+                flow=flow,
+                flow_tedges=tedges,
+                index=tedges[i_edge : i_edge + 1],
+                aquifer_pore_volume=np.array([pv]),
+                retardation_factor=float(r_at_edges[i_edge]),
+                direction="infiltration_to_extraction",
+            )
+            rt_bin_edges[i_edge] = rt_val[0, 0]
+
+        # Compute extraction times for all edges
+        extraction_times = cin_tedges_days + rt_bin_edges
+
+        # STEP 2: VECTORIZED temporal overlap computation
+        # Shape: [n_cin_bins, n_cout_bins]
+        # Extract parcel boundaries
+        t_out_starts = extraction_times[:-1]  # [n_cin_bins]
+        t_out_ends = extraction_times[1:]  # [n_cin_bins]
+
+        # Extract cout bin boundaries
+        t_cout_starts = cout_tedges_days[:-1]  # [n_cout_bins]
+        t_cout_ends = cout_tedges_days[1:]  # [n_cout_bins]
+
+        # Broadcast to compute all overlaps at once
+        # overlap_start[i, j] = max(t_out_start[i], t_cout_start[j])
+        overlap_starts = np.maximum(t_out_starts[:, None], t_cout_starts[None, :])  # [n_cin, n_cout]
+        overlap_ends = np.minimum(t_out_ends[:, None], t_cout_ends[None, :])  # [n_cin, n_cout]
+        overlap_durations = np.maximum(0, overlap_ends - overlap_starts)  # [n_cin, n_cout]
+
+        # Compute parcel durations
+        parcel_durations = t_out_ends - t_out_starts  # [n_cin_bins]
+
+        # Compute fractions: fraction[i, j] = overlap_duration[i, j] / parcel_duration[i]
+        # Handle division by zero
+        fractions = np.zeros_like(overlap_durations)
+        valid_parcels = parcel_durations > 0
+        fractions[valid_parcels, :] = overlap_durations[valid_parcels, :] / parcel_durations[valid_parcels, None]
+
+        # For instantaneous parcels (duration == 0), assign to bin that contains start time
+        instantaneous = ~valid_parcels
+        if np.any(instantaneous):
+            # Check if t_out_start falls within cout bin
+            inst_contained = (t_out_starts[instantaneous, None] >= t_cout_starts[None, :]) & (
+                t_out_starts[instantaneous, None] < t_cout_ends[None, :]
+            )
+            fractions[instantaneous, :] = inst_contained.astype(float)
+
+        # Zero out fractions where overlap_duration is 0 (no overlap)
+        fractions[overlap_durations == 0] = 0
+
+        # Compute mass and flow contributions
+        # mass_contrib[i, j] = mass[i] * fraction[i, j]
+        masses = cin * flow  # [n_cin_bins]
+        mass_contrib = masses[:, None] * fractions  # [n_cin, n_cout]
+        flow_contrib = flow[:, None] * fractions  # [n_cin, n_cout]
+
+        # Sum over infiltration bins to get cout bins
+        cout_pv = np.sum(mass_contrib, axis=0)  # [n_cout_bins]
+        weight_pv = np.sum(flow_contrib, axis=0)  # [n_cout_bins]
+
+        # Convert to concentration
+        conc_pv = np.zeros(n_cout_bins)
+        valid_pv = weight_pv > 0
+        conc_pv[valid_pv] = cout_pv[valid_pv] / weight_pv[valid_pv]
+
+        # Accumulate across pore volumes
+        cout_accumulator_final += conc_pv
+        cout_weight_final[valid_pv] += 1
+
+    # Average across pore volumes
+    out = np.zeros(n_cout_bins)
+    valid = cout_weight_final > 0
+    out[valid] = cout_accumulator_final[valid] / cout_weight_final[valid]
+    out[~valid] = np.nan
+
+    return out
+
+
 def infiltration_to_extraction(
     *,
     cin: npt.ArrayLike,
@@ -557,7 +846,7 @@ def infiltration_to_extraction(
     tedges: pd.DatetimeIndex,
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
-    retardation_factor: float = 1.0,
+    retardation_factor: float | npt.ArrayLike = 1.0,
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the extracted water using flow-weighted advection.
