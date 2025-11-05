@@ -431,7 +431,7 @@ def gamma_extraction_to_infiltration(
     mean: float | None = None,
     std: float | None = None,
     n_bins: int = 100,
-    retardation_factor: float = 1.0,
+    retardation_factor: float | npt.ArrayLike = 1.0,
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
@@ -469,8 +469,10 @@ def gamma_extraction_to_infiltration(
         Standard deviation of the gamma distribution.
     n_bins : int
         Number of bins to discretize the gamma distribution.
-    retardation_factor : float
-        Retardation factor of the compound in the aquifer.
+    retardation_factor : float or array-like, optional
+        Retardation factor of the compound in the aquifer (default 1.0).
+        Can be scalar for linear sorption or array for concentration-dependent
+        nonlinear sorption. See :func:`extraction_to_infiltration` for details.
 
     Returns
     -------
@@ -716,6 +718,182 @@ def _infiltration_to_extraction_nonlinear_weights(
     averaged_weights = np.zeros_like(accumulated_weights)
     valid_cout = pv_count > 0
     averaged_weights[valid_cout, :] = accumulated_weights[valid_cout, :] / pv_count[valid_cout, None]
+
+    # Normalize by total weights per output bin
+    total_weights = np.sum(averaged_weights, axis=1)
+    valid_weights = total_weights > 0
+    normalized_weights = np.zeros_like(averaged_weights)
+    normalized_weights[valid_weights, :] = averaged_weights[valid_weights, :] / total_weights[valid_weights, None]
+
+    return normalized_weights
+
+
+def _extraction_to_infiltration_nonlinear_weights(
+    *,
+    tedges: pd.DatetimeIndex,
+    cin_tedges: pd.DatetimeIndex,
+    aquifer_pore_volumes: npt.NDArray[np.floating],
+    cout: npt.NDArray[np.floating],
+    flow: npt.NDArray[np.floating],
+    retardation_factors: npt.NDArray[np.floating],
+) -> npt.NDArray[np.floating]:
+    """
+    Compute normalized weights for nonlinear extraction to infiltration transformation.
+
+    This helper function computes the weight matrix for concentration-dependent retardation
+    in the backward (deconvolution) direction. The algorithm tracks extraction parcels backward
+    in time using concentration-dependent retardation factors, computes temporal overlaps with
+    infiltration bins, and constructs flow-weighted transformation matrix.
+
+    Parameters
+    ----------
+    tedges : pandas.DatetimeIndex
+        Time edges for extraction bins.
+    cin_tedges : pandas.DatetimeIndex
+        Time edges for infiltration bins.
+    aquifer_pore_volumes : array-like
+        Distribution of pore volumes [m3].
+    cout : array-like
+        Concentration values (needed for dimensions).
+    flow : array-like
+        Flow rate values [m3/day].
+    retardation_factors : array-like
+        Concentration-dependent retardation factors aligned with cout.
+
+    Returns
+    -------
+    numpy.ndarray
+        Normalized weight matrix. Shape: (len(cin_tedges) - 1, len(cout))
+    """
+    # Convert to days
+    cout_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    cin_tedges_days = ((cin_tedges - tedges[0]) / pd.Timedelta(days=1)).values
+
+    # BACKWARD PARCEL TRACKING with shock handling
+    # Key insight: track extraction BINS (parcels) not edges
+    # Each parcel has concentration, mass, and origin time
+    # When parcels map to infiltration → mix (captures shocks naturally)
+
+    n_cout_bins = len(cout)
+    n_cin_bins = len(cin_tedges) - 1
+    n_pv = len(aquifer_pore_volumes)
+
+    # NOTE: For backward tracking, cin_tedges should extend before tedges
+    # to capture early infiltration times that contribute to observed extraction.
+    # Rule of thumb: extend cin_tedges backward by max_residence_time
+    # where max_residence_time ≈ max(pore_volumes) * max(retardation_factors) / min(flow)
+
+    # Accumulate weights from all pore volumes
+    accumulated_weights = np.zeros((n_cin_bins, n_cout_bins))
+    pv_count = np.zeros(n_cin_bins)
+
+    # For each pore volume (aquifer heterogeneity)
+    for i_pv in range(n_pv):
+        pv = aquifer_pore_volumes[i_pv]
+
+        # STEP 1: Compute residence times for all edges
+        # Strategy: Call residence_time once per edge with its retardation
+        rt_bin_edges = np.zeros(n_cout_bins + 1)
+
+        # Interpolate retardation to edges (vectorized)
+        # NOTE: Edge interpolation for concentration-dependent retardation
+        #
+        # Physical principle: R = f(C), so we should:
+        #   1. Interpolate concentration to edges
+        #   2. Compute retardation from edge concentration
+        #
+        # This is more accurate than directly averaging R values, especially
+        # for nonlinear isotherms where R(C_avg) ≠ avg(R(C)).
+        #
+        # For sharp concentration steps, this still has limitations (O(Δt) error),
+        # but is significantly better than arithmetic averaging of R.
+        #
+        # Compute retardation at edges
+        # NOTE: Ideally we would interpolate concentration first, then compute R(C_edge).
+        # However, that requires knowing the isotherm parameters, which aren't passed to
+        # this function. For now, we use arithmetic averaging of R values.
+        #
+        # TODO: Consider adding optional isotherm parameters to enable proper C interpolation.
+        # This would be more accurate: R_edge = f(0.5*(C[i-1] + C[i]))
+        # vs current: R_edge = 0.5*(R[i-1] + R[i])
+        #
+        # For smooth concentration variations, the error is O(Δt²).
+        # For sharp steps, this can introduce significant errors.
+        r_at_edges = np.zeros(n_cout_bins + 1)
+        r_at_edges[0] = retardation_factors[0]
+        r_at_edges[-1] = retardation_factors[-1]
+        r_at_edges[1:-1] = 0.5 * (retardation_factors[:-1] + retardation_factors[1:])
+
+        for i_edge in range(n_cout_bins + 1):
+            rt_val = residence_time(
+                flow=flow,
+                flow_tedges=tedges,
+                index=tedges[i_edge : i_edge + 1],
+                aquifer_pore_volume=np.array([pv]),
+                retardation_factor=float(r_at_edges[i_edge]),
+                direction="extraction_to_infiltration",
+            )
+            rt_bin_edges[i_edge] = rt_val[0, 0]
+
+        # Compute infiltration times for all edges (BACKWARD: subtract residence times)
+        infiltration_times = cout_tedges_days - rt_bin_edges
+
+        # STEP 2: VECTORIZED temporal overlap computation
+        # Shape: [n_cout_bins, n_cin_bins]
+        # Extract parcel boundaries (extraction parcels tracked backward)
+        t_in_starts = infiltration_times[:-1]  # [n_cout_bins]
+        t_in_ends = infiltration_times[1:]  # [n_cout_bins]
+
+        # Extract cin bin boundaries
+        t_cin_starts = cin_tedges_days[:-1]  # [n_cin_bins]
+        t_cin_ends = cin_tedges_days[1:]  # [n_cin_bins]
+
+        # Broadcast to compute all overlaps at once
+        # overlap_start[i, j] = max(t_in_start[i], t_cin_start[j])
+        overlap_starts = np.maximum(t_in_starts[:, None], t_cin_starts[None, :])  # [n_cout, n_cin]
+        overlap_ends = np.minimum(t_in_ends[:, None], t_cin_ends[None, :])  # [n_cout, n_cin]
+        overlap_durations = np.maximum(0, overlap_ends - overlap_starts)  # [n_cout, n_cin]
+
+        # Compute parcel durations
+        parcel_durations = t_in_ends - t_in_starts  # [n_cout_bins]
+
+        # Compute fractions: fraction[i, j] = overlap_duration[i, j] / parcel_duration[i]
+        # Handle division by zero
+        fractions = np.zeros_like(overlap_durations)
+        valid_parcels = parcel_durations > 0
+        fractions[valid_parcels, :] = overlap_durations[valid_parcels, :] / parcel_durations[valid_parcels, None]
+
+        # For instantaneous parcels (duration == 0), assign to bin that contains start time
+        instantaneous = ~valid_parcels
+        if np.any(instantaneous):
+            # Check if t_in_start falls within cin bin
+            inst_contained = (t_in_starts[instantaneous, None] >= t_cin_starts[None, :]) & (
+                t_in_starts[instantaneous, None] < t_cin_ends[None, :]
+            )
+            fractions[instantaneous, :] = inst_contained.astype(float)
+
+        # Zero out fractions where overlap_duration is 0 (no overlap)
+        fractions[overlap_durations == 0] = 0
+
+        # Compute flow-weighted fractions
+        # flow_weighted_fractions[i, j] = flow[i] * fraction[i, j]
+        # Shape: [n_cout_bins, n_cin_bins]
+        flow_weighted_fractions = flow[:, None] * fractions  # [n_cout, n_cin]
+
+        # Transpose to get [n_cin_bins, n_cout_bins] for accumulation
+        flow_weighted_fractions_t = flow_weighted_fractions.T  # [n_cin, n_cout]
+
+        # Accumulate weights across pore volumes
+        accumulated_weights += flow_weighted_fractions_t
+
+        # Track which cin bins have contributions from this pore volume
+        has_contribution = np.sum(fractions, axis=0) > 0  # [n_cin_bins]
+        pv_count[has_contribution] += 1
+
+    # Average across valid pore volumes
+    averaged_weights = np.zeros_like(accumulated_weights)
+    valid_cin = pv_count > 0
+    averaged_weights[valid_cin, :] = accumulated_weights[valid_cin, :] / pv_count[valid_cin, None]
 
     # Normalize by total weights per output bin
     total_weights = np.sum(averaged_weights, axis=1)
@@ -1066,7 +1244,7 @@ def extraction_to_infiltration(
     tedges: pd.DatetimeIndex,
     cin_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
-    retardation_factor: float = 1.0,
+    retardation_factor: float | npt.ArrayLike = 1.0,
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
@@ -1085,6 +1263,31 @@ def extraction_to_infiltration(
     4. Creates flow-weighted overlap matrices normalized by total weights
     5. Computes weighted contributions and averages across pore volumes
 
+    .. note:: **Nonlinear Sorption and Concentration-Dependent Retardation (Deconvolution)**
+
+       When ``retardation_factor`` is provided as an array (one value per time bin), this function
+       models **nonlinear sorption deconvolution** where retardation depends on the observed
+       extraction concentrations. This is the inverse operation of forward nonlinear transport.
+
+       **Physical Behavior:**
+
+       For deconvolution with Freundlich sorption:
+
+       - Retardation is based on **observed extraction concentrations** (cout), not unknown infiltration
+       - Backward tracking: extraction parcels traced to infiltration times using R(cout)
+       - Recovers infiltration history from mixed extraction observations
+       - Handles shock waves in reverse direction
+
+       **Implementation:**
+
+       Uses backward method of characteristics where each extraction parcel is tracked backward
+       with retardation R(cout). The algorithm reconstructs infiltration concentrations by
+       inverting the flow-weighted mixing that occurred during forward transport.
+
+       **Important:** For deconvolution, retardation_factor array should be computed from cout,
+       not cin (which is unknown). Use :func:`gwtransport.residence_time.freundlich_retardation`
+       with cout as input.
+
     Parameters
     ----------
     cout : array-like
@@ -1102,9 +1305,15 @@ def extraction_to_infiltration(
     aquifer_pore_volumes : array-like
         Array of aquifer pore volumes [m3] representing the distribution
         of residence times in the aquifer system.
-    retardation_factor : float, optional
+    retardation_factor : float or array-like, optional
         Retardation factor of the compound in the aquifer (default 1.0).
-        Values > 1.0 indicate slower transport due to sorption/interaction.
+
+        - **Scalar (float)**: Linear sorption with constant retardation.
+          Values > 1.0 indicate slower transport due to sorption/interaction.
+
+        - **Array**: Nonlinear sorption with concentration-dependent retardation.
+          Must have length matching cout. For deconvolution, compute from cout using
+          :func:`gwtransport.residence_time.freundlich_retardation` with cout as input.
 
     Returns
     -------
@@ -1117,7 +1326,16 @@ def extraction_to_infiltration(
     ------
     ValueError
         If tedges length doesn't match cout/flow arrays plus one, or if
-        extraction time edges become non-monotonic (invalid input conditions).
+        extraction time edges become non-monotonic (invalid input conditions),
+        or if retardation_factor array length doesn't match cout.
+
+    See Also
+    --------
+    gamma_extraction_to_infiltration : Deconvolution with gamma-distributed pore volumes
+    infiltration_to_extraction : Forward operation (convolution)
+    extraction_to_infiltration_series : Simple time-shift for single pore volume
+    gwtransport.residence_time.residence_time : Compute residence times from flow and pore volume
+    gwtransport.residence_time.freundlich_retardation : Compute concentration-dependent retardation
 
     Examples
     --------
@@ -1193,6 +1411,39 @@ def extraction_to_infiltration(
     ...     cin_tedges=cin_tedges,
     ...     aquifer_pore_volumes=single_volume,
     ... )
+
+    With concentration-dependent retardation (nonlinear sorption deconvolution):
+
+    >>> from gwtransport.residence_time import freundlich_retardation
+    >>> # Observed extraction concentrations (asymmetric due to nonlinear transport)
+    >>> cout_observed = pd.Series(np.ones(len(dates)) * 50.0, index=dates)
+    >>> # Compute Freundlich retardation from OBSERVED concentrations (cout)
+    >>> R_freundlich = freundlich_retardation(
+    ...     concentration=np.maximum(cout_observed.values, 0.1),
+    ...     freundlich_k=0.02,
+    ...     freundlich_n=0.75,
+    ...     bulk_density=1600.0,
+    ...     porosity=0.35,
+    ... )
+    >>> # Extend cin_tedges backward to capture early infiltration
+    >>> cin_dates_extended = pd.date_range(
+    ...     start="2019-12-15", end="2020-01-15", freq="D"
+    ... )
+    >>> cin_tedges_extended = compute_time_edges(
+    ...     tedges=None,
+    ...     tstart=None,
+    ...     tend=cin_dates_extended,
+    ...     number_of_bins=len(cin_dates_extended),
+    ... )
+    >>> cin_reconstructed = extraction_to_infiltration(
+    ...     cout=cout_observed,
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cin_tedges=cin_tedges_extended,
+    ...     aquifer_pore_volumes=aquifer_pore_volumes,
+    ...     retardation_factor=R_freundlich,  # Array enables nonlinear deconvolution
+    ... )
+    >>> # Result: reconstructed infiltration history from extraction observations
     """
     tedges = pd.DatetimeIndex(tedges)
     cin_tedges = pd.DatetimeIndex(cin_tedges)
@@ -1218,15 +1469,37 @@ def extraction_to_infiltration(
 
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
 
-    # Compute normalized weights (includes all pre-computation)
-    normalized_weights = _extraction_to_infiltration_weights(
-        tedges=tedges,
-        cin_tedges=cin_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        cout=cout,
-        flow=flow,
-        retardation_factor=retardation_factor,
-    )
+    # Check if retardation_factor is array-like (nonlinear case)
+    is_linear = isinstance(retardation_factor, (float, int))
+
+    if is_linear:
+        # Linear sorption: constant retardation
+        # Compute normalized weights (includes all pre-computation)
+        normalized_weights = _extraction_to_infiltration_weights(
+            tedges=tedges,
+            cin_tedges=cin_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            cout=cout,
+            flow=flow,
+            retardation_factor=retardation_factor,
+        )
+    else:
+        # Nonlinear sorption: concentration-dependent retardation
+        retardation_factor = np.asarray(retardation_factor)
+
+        if len(retardation_factor) != len(cout):
+            msg = f"retardation_factor array must match cout length ({len(cout)}), got {len(retardation_factor)}"
+            raise ValueError(msg)
+
+        # Use nonlinear weights computation
+        normalized_weights = _extraction_to_infiltration_nonlinear_weights(
+            tedges=tedges,
+            cin_tedges=cin_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            cout=cout,
+            flow=flow,
+            retardation_factors=retardation_factor,
+        )
 
     # Apply to concentrations and handle NaN for periods with no contributions
     out = normalized_weights.dot(cout)

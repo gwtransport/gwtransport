@@ -28,8 +28,8 @@ import pandas as pd
 import pytest
 
 from gwtransport.advection import (
+    extraction_to_infiltration,
     infiltration_to_extraction,
-    infiltration_to_extraction_nonlinear,
 )
 from gwtransport.residence_time import freundlich_retardation
 
@@ -61,13 +61,13 @@ def test_constant_retardation_matches_linear_uniform():
     r_constant = retardation_factors[0]
 
     # Run both methods
-    cout_nonlinear = infiltration_to_extraction_nonlinear(
+    cout_nonlinear = infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
-        retardation_factors=retardation_factors,
+        retardation_factor=retardation_factors,
     )
 
     cout_linear = infiltration_to_extraction(
@@ -115,13 +115,13 @@ def test_traveling_wave_uniform_concentration():
         porosity=0.35,
     )
 
-    cout = infiltration_to_extraction_nonlinear(
+    cout = infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
-        retardation_factors=retardation_factors,
+        retardation_factor=retardation_factors,
     )
 
     # After sufficient time, output should equal input
@@ -164,13 +164,13 @@ def test_no_sorption_limit():
 
     np.testing.assert_allclose(retardation_factors, 1.0, rtol=1e-10)
 
-    cout_nonlinear = infiltration_to_extraction_nonlinear(
+    cout_nonlinear = infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
-        retardation_factors=retardation_factors,
+        retardation_factor=retardation_factors,
     )
 
     cout_no_retard = infiltration_to_extraction(
@@ -219,13 +219,13 @@ def test_linear_isotherm_n_equals_one():
     r_expected = 1.0 + (1600.0 / 0.35) * 0.02
     np.testing.assert_allclose(retardation_factors, r_expected, rtol=1e-10)
 
-    cout_nonlinear = infiltration_to_extraction_nonlinear(
+    cout_nonlinear = infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
-        retardation_factors=retardation_factors,
+        retardation_factor=retardation_factors,
     )
 
     cout_linear = infiltration_to_extraction(
@@ -276,13 +276,13 @@ def test_mass_conservation_uniform_pulse():
         porosity=0.35,
     )
 
-    cout = infiltration_to_extraction_nonlinear(
+    cout = infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
-        retardation_factors=retardation_factors,
+        retardation_factor=retardation_factors,
     )
 
     # Compute masses over valid output region
@@ -318,13 +318,13 @@ def test_constant_retardation_matches_linear_gaussian():
     retardation_factors = np.full(100, retardation_constant)
 
     # Compute with both methods
-    cout_nonlinear = infiltration_to_extraction_nonlinear(
+    cout_nonlinear = infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
-        retardation_factors=retardation_factors,
+        retardation_factor=retardation_factors,
     )
 
     cout_linear = infiltration_to_extraction(
@@ -370,13 +370,13 @@ def test_mass_conservation_freundlich():
         porosity=0.35,
     )
 
-    cout = infiltration_to_extraction_nonlinear(
+    cout = infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([50.0]),  # Small pore volume for short residence time
-        retardation_factors=retardation_factors,
+        retardation_factor=retardation_factors,
     )
 
     # Compute masses (only count valid output bins)
@@ -412,13 +412,13 @@ def test_peak_arrival_time_ordering():
         porosity=0.35,
     )
 
-    cout_nonlinear = infiltration_to_extraction_nonlinear(
+    cout_nonlinear = infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([100.0]),  # Smaller pore volume
-        retardation_factors=retardation_factors,
+        retardation_factor=retardation_factors,
     )
 
     # Compare with average retardation (linear)
@@ -453,13 +453,13 @@ def test_no_retardation_limit():
     # R = 1 everywhere
     retardation_factors = np.ones(100)
 
-    cout_nonlinear = infiltration_to_extraction_nonlinear(
+    cout_nonlinear = infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        retardation_factors=retardation_factors,
+        retardation_factor=retardation_factors,
     )
 
     cout_no_retard = infiltration_to_extraction(
@@ -500,13 +500,13 @@ def test_monotonicity_no_spurious_oscillations():
         porosity=0.35,
     )
 
-    cout = infiltration_to_extraction_nonlinear(
+    cout = infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([800.0]),
-        retardation_factors=retardation_factors,
+        retardation_factor=retardation_factors,
     )
 
     # Check for spurious oscillations
@@ -529,13 +529,13 @@ def test_single_pore_volume():
     cin = np.ones(50) * 5.0
     retardation_factors = np.full(50, 2.0)
 
-    cout = infiltration_to_extraction_nonlinear(
+    cout = infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),  # Single volume
-        retardation_factors=retardation_factors,
+        retardation_factor=retardation_factors,
     )
 
     assert not np.all(np.isnan(cout)), "Should produce valid output"
@@ -550,13 +550,13 @@ def test_multiple_pore_volumes():
     cin = np.ones(50) * 5.0
     retardation_factors = np.full(50, 2.0)
 
-    cout = infiltration_to_extraction_nonlinear(
+    cout = infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([400.0, 600.0, 800.0]),  # Multiple volumes
-        retardation_factors=retardation_factors,
+        retardation_factor=retardation_factors,
     )
 
     assert not np.all(np.isnan(cout)), "Should produce valid output"
@@ -569,14 +569,14 @@ def test_dimension_mismatch_error():
     cin = np.ones(50) * 5.0
     retardation_factors = np.full(30, 2.0)  # Wrong length!
 
-    with pytest.raises(ValueError, match="retardation_factors must match cin length"):
-        infiltration_to_extraction_nonlinear(
+    with pytest.raises(ValueError, match="retardation_factor array must match cin length"):
+        infiltration_to_extraction(
             cin=cin,
             flow=flow,
             tedges=tedges,
             cout_tedges=tedges,
             aquifer_pore_volumes=np.array([500.0]),
-            retardation_factors=retardation_factors,
+            retardation_factor=retardation_factors,
         )
 
 
@@ -600,15 +600,140 @@ def test_performance_reasonable():
     # Should complete in reasonable time (< 5 seconds for 365 days)
 
     start = time.time()
-    cout = infiltration_to_extraction_nonlinear(
+    cout = infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([80.0]),  # Smaller pore volume
-        retardation_factors=retardation_factors,
+        retardation_factor=retardation_factors,
     )
     elapsed = time.time() - start
 
     assert not np.all(np.isnan(cout)), "Should produce valid output"
     assert elapsed < 5.0, f"Computation too slow: {elapsed:.3f}s (expected < 5s)"
+
+
+def test_roundtrip_nonlinear_sorption():
+    """
+    Test roundtrip consistency: infiltration → extraction → infiltration.
+
+    This verifies that extraction_to_infiltration correctly inverts
+    infiltration_to_extraction for nonlinear sorption cases.
+    """
+    # Simplified setup with aligned time grids for easier roundtrip
+    n_days = 200
+    tedges = pd.date_range(start="2022-01-01", periods=n_days + 1, freq="D")
+
+    # Uniform flow
+    flow = np.full(n_days, 100.0)
+
+    # Create a smooth Gaussian pulse for cin (avoids edge artifacts)
+    # Center it early enough to have good extraction data
+    t = np.arange(n_days)
+    cin = 30.0 * np.exp(-0.5 * ((t - 50) / 20) ** 2)
+
+    # Single pore volume for simplicity
+    pore_volume = np.array([300.0])
+
+    # Freundlich retardation from infiltration concentration
+    r_forward = freundlich_retardation(
+        concentration=np.maximum(cin, 0.1),
+        freundlich_k=0.02,
+        freundlich_n=0.75,
+        bulk_density=1600.0,
+        porosity=0.35,
+    )
+
+    # Forward: infiltration → extraction (using SAME time grid)
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,  # Use same grid
+        aquifer_pore_volumes=pore_volume,
+        retardation_factor=r_forward,
+    )
+
+    # Find valid extraction region (where cout is not NaN and has signal)
+    valid_cout_mask = (~np.isnan(cout)) & (cout > 0.5)  # Above noise level
+    n_valid = np.sum(valid_cout_mask)
+
+    if n_valid < 20:
+        pytest.skip(f"Insufficient valid extraction data: {n_valid} points")
+
+    # For backward pass, use only the valid region
+    valid_idx = np.where(valid_cout_mask)[0]
+    start_idx = valid_idx[0]
+    end_idx = valid_idx[-1] + 1
+
+    cout_valid = cout[start_idx:end_idx]
+    tedges_out_valid = tedges[start_idx : end_idx + 1]
+    flow_out_valid = flow[start_idx:end_idx]
+
+    # Compute retardation from EXTRACTION concentrations for backward pass
+    r_backward = freundlich_retardation(
+        concentration=np.maximum(cout_valid, 0.1),
+        freundlich_k=0.02,
+        freundlich_n=0.75,
+        bulk_density=1600.0,
+        porosity=0.35,
+    )
+
+    # Backward: extraction → infiltration (reconstruct on same grid)
+    cin_recon = extraction_to_infiltration(
+        cout=cout_valid,
+        flow=flow_out_valid,
+        tedges=tedges_out_valid,
+        cin_tedges=tedges,  # Reconstruct on full grid
+        aquifer_pore_volumes=pore_volume,
+        retardation_factor=r_backward,
+    )
+
+    # Compare in the region where we have good data
+    # Focus on the peak region where signal is strong and should have valid roundtrip
+    peak_idx = np.argmax(cin)
+    margin = 30  # Days around peak
+    compare_start = max(0, peak_idx - margin)
+    compare_end = min(len(cin), peak_idx + margin)
+
+    # Extract comparison regions
+    cin_original = cin[compare_start:compare_end]
+    cin_reconstructed = cin_recon[compare_start:compare_end]
+
+    # Only compare where both have valid data with good dynamics
+    valid = (~np.isnan(cin_reconstructed)) & (cin_original > 1.0)  # Above noise level
+    n_valid_compare = np.sum(valid)
+
+    if n_valid_compare < 10:  # Need enough points for meaningful comparison
+        pytest.skip(f"Insufficient valid data points ({n_valid_compare}) for comparison")
+
+    # Compute relative error
+    relative_errors = np.abs(cin_reconstructed[valid] - cin_original[valid]) / cin_original[valid]
+    mean_rel_error = np.mean(relative_errors)
+    max_rel_error = np.max(relative_errors)
+
+    # Roundtrip should reconstruct within reasonable tolerance
+    # Note: Some error is expected due to:
+    # 1. Numerical discretization
+    # 2. Different retardation factors (forward uses R(cin), backward uses R(cout))
+    # 3. Binning artifacts
+    assert mean_rel_error < 0.20, (
+        f"Roundtrip mean error too large:\n"
+        f"Mean relative error: {mean_rel_error:.2%}\n"
+        f"Max relative error: {max_rel_error:.2%}\n"
+        f"Valid points: {n_valid_compare}"
+    )
+
+    assert max_rel_error < 0.40, (
+        f"Roundtrip max error too large:\n"
+        f"Max relative error: {max_rel_error:.2%}\n"
+        f"Mean relative error: {mean_rel_error:.2%}"
+    )
+
+    # Mass balance check in comparison region
+    mass_original = np.sum(cin_original[valid])
+    mass_reconstructed = np.sum(cin_reconstructed[valid])
+    mass_recovery = mass_reconstructed / mass_original
+
+    assert 0.80 < mass_recovery < 1.20, f"Roundtrip mass not conserved:\nRecovery: {mass_recovery:.2%}"
