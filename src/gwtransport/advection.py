@@ -769,27 +769,6 @@ def infiltration_to_extraction(
        they mix at extraction through flow-weighted averaging, naturally capturing shock formation
        without spurious oscillations.
 
-       **Usage Example:**
-
-       >>> from gwtransport.residence_time import freundlich_retardation
-       >>> # Compute concentration-dependent retardation
-       >>> R_array = freundlich_retardation(
-       ...     concentration=cin,
-       ...     freundlich_k=0.02,
-       ...     freundlich_n=0.75,
-       ...     bulk_density=1600.0,
-       ...     porosity=0.35,
-       ... )
-       >>> # Pass array to enable nonlinear transport
-       >>> cout = infiltration_to_extraction(
-       ...     cin=cin,
-       ...     flow=flow,
-       ...     tedges=tedges,
-       ...     cout_tedges=cout_tedges,
-       ...     aquifer_pore_volumes=pore_volume,
-       ...     retardation_factor=R_array,  # Array, not scalar!
-       ... )
-
        See Example 6 (Freundlich Sorption) for detailed demonstration.
 
     Parameters
