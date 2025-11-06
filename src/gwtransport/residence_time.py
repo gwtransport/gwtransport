@@ -30,8 +30,6 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
-import warnings
-
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -47,8 +45,7 @@ def residence_time(
     index: pd.DatetimeIndex | np.ndarray | None = None,
     retardation_factor: float = 1.0,
     direction: str = "extraction_to_infiltration",
-    return_pandas_series: bool = False,
-) -> npt.NDArray[np.floating] | pd.Series:
+) -> npt.NDArray[np.floating]:
     """
     Compute the residence time of retarded compound in the water in the aquifer.
 
@@ -71,8 +68,6 @@ def residence_time(
         * 'extraction_to_infiltration': Extraction to infiltration modeling - how many days ago was the extracted water infiltrated
         * 'infiltration_to_extraction': Infiltration to extraction modeling - how many days until the infiltrated water is extracted
         Default is 'extraction_to_infiltration'.
-    return_pandas_series : bool, optional
-        If True, return a pandas Series with the residence time at the index provided. Only supported for a single aquifer pore volume. This parameter is deprecated and will be removed in a future version.
 
     Returns
     -------
@@ -113,9 +108,11 @@ def residence_time(
         return np.full((n_pore_volumes, n_output), np.nan)
 
     flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
-    flow_tdelta = np.diff(flow_tedges_days, prepend=0.0)
-    flow_values = np.concatenate(([0.0], flow))
-    flow_cum = (flow_values * flow_tdelta).cumsum()  # at flow_tedges and flow_tedges_days. First value is 0.
+    flow_tdelta = np.diff(flow_tedges_days)
+    flow_cum = np.concatenate((
+        [0.0],
+        (flow * flow_tdelta).cumsum(),
+    ))  # at flow_tedges and flow_tedges_days. First value is 0.
 
     if index is None:
         # If index is not provided return the residence time that matches with the index of the flow; at the center of the flow bin.
@@ -141,21 +138,6 @@ def residence_time(
         msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
         raise ValueError(msg)
 
-    if return_pandas_series:
-        # If multiple pore volumes were provided, raise the explicit error first so that
-        # callers (and tests) see the ValueError before any deprecation warning. When
-        # running with warnings-as-errors, emitting the warning before the error would
-        # cause the test to fail on the warning instead of the intended ValueError.
-        if len(aquifer_pore_volume) > 1:
-            msg = "return_pandas_series=True is only supported for a single pore volume"
-            raise ValueError(msg)
-        warnings.warn(
-            "return_pandas_series parameter is deprecated and will be removed in a future version. "
-            "The function now returns numpy arrays by default.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        return pd.Series(data=data[0], index=index, name=f"residence_time_{direction}")
     return data
 
 
@@ -322,8 +304,6 @@ def fraction_explained(
         * 'extraction_to_infiltration': Extraction to infiltration modeling - how many days ago was the extracted water infiltrated
         * 'infiltration_to_extraction': Infiltration to extraction modeling - how many days until the infiltrated water is extracted
         Default is 'extraction_to_infiltration'.
-    return_pandas_series : bool, optional
-        If True, return a pandas Series with the residence time at the index provided. Only supported for a single aquifer pore volume. This parameter is deprecated and will be removed in a future version.
 
     Returns
     -------
@@ -342,3 +322,63 @@ def fraction_explained(
 
     n_aquifer_pore_volume = rt.shape[0]
     return (n_aquifer_pore_volume - np.isnan(rt).sum(axis=0)) / n_aquifer_pore_volume
+
+
+def freundlich_retardation(
+    *,
+    concentration: npt.ArrayLike,
+    freundlich_k: float,
+    freundlich_n: float,
+    bulk_density: float,
+    porosity: float,
+) -> npt.NDArray[np.floating]:
+    """
+    Compute concentration-dependent retardation factors using Freundlich isotherm.
+
+    The Freundlich isotherm relates sorbed concentration S to aqueous concentration C:
+        S = rho_f * C^n
+
+    The retardation factor is computed as:
+        R = 1 + (rho_b/θ) * dS/dC = 1 + (rho_b/θ) * rho_f * n * C^(n-1)
+
+    Parameters
+    ----------
+    concentration : array-like
+        Concentration of compound in water [mass/volume].
+        Length should match flow (i.e., len(flow_tedges) - 1).
+    freundlich_k : float
+        Freundlich sorption constant [(mass/mass)*(volume/mass)^n].
+    freundlich_n : float
+        Freundlich sorption exponent [dimensionless].
+    bulk_density : float
+        Bulk density of aquifer material [mass/volume].
+    porosity : float
+        Porosity of aquifer [dimensionless, 0-1].
+
+    Returns
+    -------
+    numpy.ndarray
+        Retardation factors for each flow interval.
+        Length equals len(concentration) for use as retardation_factor in residence_time.
+
+    Examples
+    --------
+    >>> concentration = np.array([0.1, 0.2, 0.3])  # same length as flow
+    >>> R = freundlich_retardation(
+    ...     concentration=concentration,
+    ...     freundlich_k=0.5,
+    ...     freundlich_n=0.9,
+    ...     bulk_density=1600,  # kg/m3
+    ...     porosity=0.35,
+    ... )
+    >>> # Use R in residence_time as retardation_factor
+
+    See Also
+    --------
+    residence_time : Compute residence times with retardation
+    """
+    concentration = np.asarray(concentration)
+    concentration_safe = np.maximum(concentration, 1e-12)  # Avoid zero concentration issues
+    return 1.0 + (bulk_density / porosity) * freundlich_k * freundlich_n * np.power(
+        concentration_safe, freundlich_n - 1
+    )
