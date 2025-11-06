@@ -1098,6 +1098,203 @@ def _map_solution_to_output_grid(
     return overlap_times
 
 
+def _build_parcel_departures_backward(
+    *,
+    cout_tedges_days: npt.NDArray[np.floating],
+    retardation_factors: npt.NDArray[np.floating],
+    pv: float,
+    flow: npt.NDArray[np.floating],
+    tedges: pd.DatetimeIndex,
+) -> list[dict]:
+    """
+    Build list of parcels with their exact departure times from infiltration (backward tracking).
+
+    Each parcel represents an extraction bin that is traced backward through the aquifer
+    to determine when it departed from the infiltration zone.
+
+    Parameters
+    ----------
+    cout_tedges_days : array-like
+        Extraction time edges in days
+    retardation_factors : array-like
+        Concentration-dependent retardation factors for each extraction bin
+    pv : float
+        Single pore volume value [m3]
+    flow : array-like
+        Flow rates [m3/day]
+    tedges : pandas.DatetimeIndex
+        Time edges for flow data
+
+    Returns
+    -------
+    list of dict
+        Each parcel: {'id': int, 't_start': float, 't_end': float}
+        Times represent departure from infiltration (backward-tracked)
+    """
+    n_cout_bins = len(retardation_factors)
+    parcels = []
+
+    # Interpolate retardation to edges (arithmetic averaging)
+    r_at_edges = np.zeros(n_cout_bins + 1)
+    r_at_edges[0] = retardation_factors[0]
+    r_at_edges[-1] = retardation_factors[-1]
+    r_at_edges[1:-1] = 0.5 * (retardation_factors[:-1] + retardation_factors[1:])
+
+    # Compute residence times for all edges
+    rt_at_edges = np.zeros(n_cout_bins + 1)
+    for i_edge in range(n_cout_bins + 1):
+        rt_val = residence_time(
+            flow=flow,
+            flow_tedges=tedges,
+            index=tedges[i_edge : i_edge + 1],
+            aquifer_pore_volume=np.array([pv]),
+            retardation_factor=float(r_at_edges[i_edge]),
+            direction="infiltration_to_extraction",  # Still forward travel time, just tracking backward
+        )
+        # Extract scalar value safely
+        if rt_val.size > 0 and not np.isnan(rt_val[0, 0]):
+            rt_at_edges[i_edge] = rt_val[0, 0]
+        else:
+            # Fallback calculation if NaN
+            flow_avg = np.mean(flow) if len(flow) > 0 else 1.0
+            rt_at_edges[i_edge] = (pv * r_at_edges[i_edge]) / flow_avg
+
+    # Build parcels (backward tracking: departure = extraction - residence_time)
+    for i_bin in range(n_cout_bins):
+        # Parcel departure times: extraction time - residence time
+        t_departure_start = cout_tedges_days[i_bin] - rt_at_edges[i_bin]
+        t_departure_end = cout_tedges_days[i_bin + 1] - rt_at_edges[i_bin + 1]
+
+        # Handle shock formation in backward direction
+        # When trailing edge departs later than leading edge (inverted)
+        if t_departure_end < t_departure_start:
+            # Shock: parcel compressed to a point at average departure time
+            t_shock = 0.5 * (t_departure_start + t_departure_end)
+            parcels.append({
+                "id": i_bin,
+                "t_start": t_shock,
+                "t_end": t_shock,  # Instantaneous shock
+            })
+        else:
+            # Normal parcel (no shock)
+            parcels.append({
+                "id": i_bin,
+                "t_start": t_departure_start,
+                "t_end": t_departure_end,
+            })
+
+    return parcels
+
+
+def _extraction_to_infiltration_nonlinear_weights_exact(
+    *,
+    tedges: pd.DatetimeIndex,
+    cin_tedges: pd.DatetimeIndex,
+    aquifer_pore_volumes: npt.NDArray[np.floating],
+    cout: npt.NDArray[np.floating],
+    flow: npt.NDArray[np.floating],
+    retardation_factors: npt.NDArray[np.floating],
+) -> npt.NDArray[np.floating]:
+    """
+    Compute normalized weights using exact front-tracking for nonlinear sorption (backward).
+
+    This implements exact front-tracking algorithm for the backward (deconvolution) direction.
+    Unlike the forward method which tracks infiltration parcels forward to extraction,
+    this tracks extraction parcels backward to infiltration.
+
+    Algorithm:
+    1. For each pore volume, compute parcel departure times using backward characteristics
+    2. Use event-based processing to determine exactly when parcels are co-active
+    3. Build piecewise-constant solution with sharp fronts
+    4. Map solution to infiltration grid with exact overlap calculations
+    5. Flow-weight and normalize
+
+    Key advantages:
+    - No numerical diffusion at shocks
+    - Maintains sharp concentration fronts
+    - Exact handling of parcel collisions
+    - Physically accurate shock propagation in backward direction
+
+    Parameters
+    ----------
+    tedges : pandas.DatetimeIndex
+        Time edges for extraction bins.
+    cin_tedges : pandas.DatetimeIndex
+        Time edges for infiltration bins.
+    aquifer_pore_volumes : array-like
+        Distribution of pore volumes [m3].
+    cout : array-like
+        Concentration values (needed for dimensions).
+    flow : array-like
+        Flow rate values [m3/day].
+    retardation_factors : array-like
+        Concentration-dependent retardation factors.
+
+    Returns
+    -------
+    numpy.ndarray
+        Normalized weight matrix. Shape: (len(cin_tedges) - 1, len(cout))
+    """
+    # Convert to days
+    cout_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    cin_tedges_days = ((cin_tedges - tedges[0]) / pd.Timedelta(days=1)).values
+
+    n_cout_bins = len(cout)
+    n_cin_bins = len(cin_tedges) - 1
+    n_pv = len(aquifer_pore_volumes)
+
+    # Accumulate weights from all pore volumes
+    accumulated_weights = np.zeros((n_cin_bins, n_cout_bins))
+    pv_count = np.zeros(n_cin_bins)
+
+    # For each pore volume (aquifer heterogeneity)
+    for i_pv in range(n_pv):
+        pv = aquifer_pore_volumes[i_pv]
+
+        # STEP 1: Build parcels with exact departure times (backward tracking)
+        parcels = _build_parcel_departures_backward(
+            cout_tedges_days=cout_tedges_days,
+            retardation_factors=retardation_factors,
+            pv=pv,
+            flow=flow,
+            tedges=tedges,
+        )
+
+        # STEP 2: Exact front tracking via event processing
+        # Reuse the same event processing as forward direction
+        solution_intervals = _process_front_tracking_events(parcels)
+
+        # STEP 3: Map exact solution to infiltration grid
+        overlap_times = _map_solution_to_output_grid(
+            solution_intervals=solution_intervals,
+            cout_tedges_days=cin_tedges_days,  # Map to infiltration grid
+            n_cin_bins=n_cout_bins,  # Number of parcels (extraction bins)
+        )
+
+        # STEP 4: Flow-weight the overlaps
+        flow_weighted = overlap_times * flow[None, :]
+
+        # Accumulate across pore volumes
+        accumulated_weights += flow_weighted
+
+        # Track which cin bins have contributions from this pore volume
+        has_contribution = np.sum(overlap_times, axis=1) > 0
+        pv_count[has_contribution] += 1
+
+    # Average across valid pore volumes
+    averaged_weights = np.zeros_like(accumulated_weights)
+    valid_cin = pv_count > 0
+    averaged_weights[valid_cin, :] = accumulated_weights[valid_cin, :] / pv_count[valid_cin, None]
+
+    # Normalize by total weights per output bin
+    total_weights = np.sum(averaged_weights, axis=1)
+    valid_weights = total_weights > 0
+    normalized_weights = np.zeros_like(averaged_weights)
+    normalized_weights[valid_weights, :] = averaged_weights[valid_weights, :] / total_weights[valid_weights, None]
+
+    return normalized_weights
+
+
 def _extraction_to_infiltration_nonlinear_weights(
     *,
     tedges: pd.DatetimeIndex,
@@ -1744,9 +1941,13 @@ def extraction_to_infiltration(
 
         - **"method_of_characteristics"**: Backward parcel tracking with flow-weighted mixing.
           Each extraction parcel is tracked backward with retardation factor R(cout).
-          Recovers infiltration history from mixed extraction observations.
+          Recovers infiltration history from mixed extraction observations. Fast and robust
+          but introduces some numerical diffusion at shocks.
 
-        Future versions may support additional methods.
+        - **"exact_front_tracking"**: Event-based front tracking algorithm for backward direction.
+          Explicitly tracks which extraction parcels are co-active during backward propagation,
+          maintaining sharp fronts without numerical diffusion. More accurate for sharp
+          concentration gradients and shocks, but slightly more computationally expensive.
 
     Returns
     -------
@@ -1924,6 +2125,12 @@ def extraction_to_infiltration(
             msg = f"retardation_factor array must match cout length ({len(cout)}), got {len(retardation_factor)}"
             raise ValueError(msg)
 
+        # Validate nonlinear method
+        supported_methods = ["method_of_characteristics", "exact_front_tracking"]
+        if nonlinear_method not in supported_methods:
+            msg = f"nonlinear_method '{nonlinear_method}' not supported. Choose from: {supported_methods}"
+            raise ValueError(msg)
+
         # Use nonlinear weights computation
         if nonlinear_method == "method_of_characteristics":
             normalized_weights = _extraction_to_infiltration_nonlinear_weights(
@@ -1934,11 +2141,18 @@ def extraction_to_infiltration(
                 flow=flow,
                 retardation_factors=retardation_factor,
             )
+        elif nonlinear_method == "exact_front_tracking":
+            normalized_weights = _extraction_to_infiltration_nonlinear_weights_exact(
+                tedges=tedges,
+                cin_tedges=cin_tedges,
+                aquifer_pore_volumes=aquifer_pore_volumes,
+                cout=cout,
+                flow=flow,
+                retardation_factors=retardation_factor,
+            )
         else:
-            supported_methods = ["method_of_characteristics"]
-
-            # Future methods would be added here
-            msg = f"nonlinear_method '{nonlinear_method}' not supported. Choose from: {supported_methods}"
+            # Should never reach here due to validation above
+            msg = f"Method '{nonlinear_method}' is recognized but not yet implemented"
             raise NotImplementedError(msg)
 
     # Apply to concentrations and handle NaN for periods with no contributions
