@@ -1,6 +1,6 @@
 # gwtransport
 
-`gwtransport` enables timeseries analysis of groundwater transport of solutes and temperature. Estimate aquifer properties from temperature tracer tests or streamline analysis, predict residence times and solute transport, and assess pathogen removal efficiency in bank filtration systems.
+`gwtransport` enables timeseries analysis of groundwater transport of solutes and temperature. 1) Estimate aquifer properties either from temperature tracer tests or streamline analysis. 2) Predict residence times and solute transport, and assess pathogen removal efficiency in bank filtration systems.
 
 |                        |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -15,7 +15,7 @@ Calibration refers to the estimation of the aquifer pore volume distribution. On
 - **Predict residence time distributions** under varying flow conditions
 - **Forecast contaminant arrival times** and extracted concentrations
 - **Design treatment systems** with quantified pathogen removal efficiency
-- **Assess groundwater vulnerability** to contamination
+- **Assess groundwater vulnerability** to contamination with a retardation that may depend on its concentration (non-linear sorption)
 - **Enable early warning systems** as digital twins for drinking water protection
 
 ## Two ways to obtain model parameters
