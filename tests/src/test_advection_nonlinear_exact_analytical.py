@@ -968,7 +968,9 @@ def test_roundtrip_nonlinear_gaussian_pulse(nonlinear_method):
     n_skip = max(20, int(0.2 * len(valid_indices)))
     middle_indices = valid_indices[n_skip:-n_skip] if len(valid_indices) > 2 * n_skip else valid_indices
 
-    assert len(middle_indices) >= 100, f"Need at least 100 middle bins for stable region test, got {len(middle_indices)}"
+    assert len(middle_indices) >= 100, (
+        f"Need at least 100 middle bins for stable region test, got {len(middle_indices)}"
+    )
 
     # Compare reconstructed vs original in middle region
     reconstructed_middle = cin_reconstructed[middle_indices]
