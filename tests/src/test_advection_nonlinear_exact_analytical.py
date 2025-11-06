@@ -67,13 +67,16 @@ This approximation introduces O(ΔC) errors that compound over time. These
 tests quantify those errors against exact analytical solutions.
 """
 
+import logging
+
 import numpy as np
 import pandas as pd
 import pytest
-from scipy import interpolate
 
 from gwtransport.advection import infiltration_to_extraction
 from gwtransport.residence_time import freundlich_retardation
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.mark.parametrize("nonlinear_method", ["method_of_characteristics", "exact_front_tracking"])
@@ -124,18 +127,18 @@ def test_shock_wave_step_input_exact(nonlinear_method):
     # For safety, use n_days (same as input)
     cout_tedges = pd.date_range(start="2022-01-01", periods=n_days + 1, freq="D")
 
-    # Step input: 0 → C_0 at day 100
-    C_0 = 50.0  # mg/L
+    # Step input: 0 → conc_0 at day 100
+    conc_0 = 50.0  # mg/L
     step_day = 100
     cin = np.zeros(n_days)
-    cin[step_day:] = C_0
+    cin[step_day:] = conc_0
 
     # Constant flow
     flow = np.full(n_days, 100.0)  # m³/day
     pore_volume = np.array([500.0])  # m³
 
     # Freundlich parameters (moderate nonlinearity)
-    K_f = 0.02
+    freundlich_k = 0.02
     n_freundlich = 0.75
     bulk_density = 1600.0  # kg/m³
     porosity = 0.35
@@ -143,19 +146,19 @@ def test_shock_wave_step_input_exact(nonlinear_method):
     # Compute retardation factors
     retardation_factors = freundlich_retardation(
         concentration=np.maximum(cin, 0.01),  # Avoid division issues
-        freundlich_k=K_f,
+        freundlich_k=freundlich_k,
         freundlich_n=n_freundlich,
         bulk_density=bulk_density,
         porosity=porosity,
     )
 
     # Key analytical predictions
-    R_at_C0 = retardation_factors[step_day + 10]  # R at C=C_0
+    retardation_at_conc_0 = retardation_factors[step_day + 10]  # R at C=conc_0
     base_residence_time = pore_volume[0] / flow[0]  # days
 
     # CRITICAL: Material entering at step_day has residence time base_RT * R
     # It arrives at: step_day + base_RT * R (measured from t=0)
-    t_arrival_analytical = step_day + base_residence_time * R_at_C0  # days from t=0
+    t_arrival_analytical = step_day + base_residence_time * retardation_at_conc_0  # days from t=0
 
     # Run numerical simulation
     cout = infiltration_to_extraction(
@@ -169,8 +172,8 @@ def test_shock_wave_step_input_exact(nonlinear_method):
     )
 
     # Analysis 1: Breakthrough time
-    # Find when output reaches 50% of C_0
-    breakthrough_threshold = 0.5 * C_0
+    # Find when output reaches 50% of conc_0
+    breakthrough_threshold = 0.5 * conc_0
     breakthrough_indices = np.where(cout > breakthrough_threshold)[0]
 
     if len(breakthrough_indices) == 0:
@@ -179,11 +182,11 @@ def test_shock_wave_step_input_exact(nonlinear_method):
     t_arrival_numerical = breakthrough_indices[0]  # days after start
     t_arrival_error = abs(t_arrival_numerical - t_arrival_analytical) / t_arrival_analytical
 
-    print(f"\nShock Wave Test Results ({nonlinear_method}):")
-    print(f"  Analytical arrival time: {t_arrival_analytical:.2f} days")
-    print(f"  Numerical arrival time:  {t_arrival_numerical:.2f} days")
-    print(f"  Relative error:          {t_arrival_error:.2%}")
-    print(f"  R(C_0):                  {R_at_C0:.3f}")
+    logger.info("\nShock Wave Test Results (%s):", nonlinear_method)
+    logger.info("  Analytical arrival time: %.2f days", t_arrival_analytical)
+    logger.info("  Numerical arrival time:  %.2f days", t_arrival_numerical)
+    logger.info("  Relative error:          %.2f%%", t_arrival_error * 100)
+    logger.info("  R(C_0):                  %.3f", retardation_at_conc_0)
 
     # Analysis 2: Steady-state concentration
     # After shock passes, output should equal C_0
@@ -197,16 +200,16 @@ def test_shock_wave_step_input_exact(nonlinear_method):
 
         if len(steady_cout_valid) > 10:
             mean_steady = np.mean(steady_cout_valid)
-            steady_error = abs(mean_steady - C_0) / C_0
+            steady_error = abs(mean_steady - conc_0) / conc_0
 
-            print(f"  Steady-state C:          {mean_steady:.2f} mg/L")
-            print(f"  Expected C:              {C_0:.2f} mg/L")
-            print(f"  Steady-state error:      {steady_error:.2%}")
+            logger.info("  Steady-state C:          %.2f mg/L", mean_steady)
+            logger.info("  Expected C:              %.2f mg/L", conc_0)
+            logger.info("  Steady-state error:      %.2f%%", steady_error * 100)
 
             # EXACT solution assertion: <1% error
             assert steady_error < 0.01, (
                 f"Steady-state concentration error {steady_error:.2%} exceeds 1%\n"
-                f"Expected: {C_0:.2f}, Got: {mean_steady:.2f}"
+                f"Expected: {conc_0:.2f}, Got: {mean_steady:.2f}"
             )
 
     # EXACT solution assertion: <2% error on breakthrough time
@@ -263,17 +266,17 @@ def test_method_of_characteristics_concentration_tracking_exact(nonlinear_method
     # Gaussian pulse centered at day 50
     t_center = 50
     sigma = 12
-    C_peak = 80.0  # mg/L
+    conc_peak = 80.0  # mg/L
 
     t = np.arange(n_days)
-    cin = C_peak * np.exp(-0.5 * ((t - t_center) / sigma) ** 2)
+    cin = conc_peak * np.exp(-0.5 * ((t - t_center) / sigma) ** 2)
 
     # Constant flow
     flow = np.full(n_days, 100.0)  # m³/day
     pore_volume = np.array([600.0])  # m³
 
     # Freundlich parameters (strong nonlinearity)
-    K_f = 0.03
+    freundlich_k = 0.03
     n_freundlich = 0.6  # Strong nonlinearity → large R variation
     bulk_density = 1600.0
     porosity = 0.35
@@ -281,7 +284,7 @@ def test_method_of_characteristics_concentration_tracking_exact(nonlinear_method
     # Compute retardation factors
     retardation_factors = freundlich_retardation(
         concentration=np.maximum(cin, 0.01),
-        freundlich_k=K_f,
+        freundlich_k=freundlich_k,
         freundlich_n=n_freundlich,
         bulk_density=bulk_density,
         porosity=porosity,
@@ -291,16 +294,16 @@ def test_method_of_characteristics_concentration_tracking_exact(nonlinear_method
     base_residence_time = pore_volume[0] / flow[0]  # days
 
     # Analytical prediction for PEAK arrival
-    R_peak = freundlich_retardation(
-        concentration=np.array([C_peak]),
-        freundlich_k=K_f,
+    retardation_peak = freundlich_retardation(
+        concentration=np.array([conc_peak]),
+        freundlich_k=freundlich_k,
         freundlich_n=n_freundlich,
         bulk_density=bulk_density,
         porosity=porosity,
     )[0]
 
     # Peak enters at t_center, arrives at t_center + RT
-    t_peak_analytical = t_center + base_residence_time * R_peak
+    t_peak_analytical = t_center + base_residence_time * retardation_peak
 
     # Run numerical simulation
     cout = infiltration_to_extraction(
@@ -315,17 +318,17 @@ def test_method_of_characteristics_concentration_tracking_exact(nonlinear_method
 
     # Find numerical peak
     t_peak_numerical = np.nanargmax(cout)
-    C_peak_numerical = cout[t_peak_numerical]
+    conc_peak_numerical = cout[t_peak_numerical]
 
-    print(f"\nPeak Arrival Test Results ({nonlinear_method}):")
-    print(f"  Input peak:            {C_peak:.2f} mg/L at day {t_center}")
-    print(f"  R(C_peak):             {R_peak:.3f}")
-    print(f"  Base residence time:   {base_residence_time:.2f} days")
-    print(f"  Analytical arrival:    {t_peak_analytical:.2f} days")
-    print(f"  Numerical arrival:     {t_peak_numerical:.2f} days")
-    print(f"  Peak timing error:     {abs(t_peak_numerical - t_peak_analytical) / t_peak_analytical:.2%}")
-    print(f"  Numerical peak conc:   {C_peak_numerical:.2f} mg/L")
-    print(f"  Peak conc error:       {abs(C_peak_numerical - C_peak) / C_peak:.2%}")
+    logger.info("\nPeak Arrival Test Results (%s):", nonlinear_method)
+    logger.info("  Input peak:            %.2f mg/L at day %d", conc_peak, t_center)
+    logger.info("  R(C_peak):             %.3f", retardation_peak)
+    logger.info("  Base residence time:   %.2f days", base_residence_time)
+    logger.info("  Analytical arrival:    %.2f days", t_peak_analytical)
+    logger.info("  Numerical arrival:     %.2f days", t_peak_numerical)
+    logger.info("  Peak timing error:     %.2f%%", abs(t_peak_numerical - t_peak_analytical) / t_peak_analytical * 100)
+    logger.info("  Numerical peak conc:   %.2f mg/L", conc_peak_numerical)
+    logger.info("  Peak conc error:       %.2f%%", abs(conc_peak_numerical - conc_peak) / conc_peak * 100)
 
     # Validation 1: Peak arrival time
     peak_time_error = abs(t_peak_numerical - t_peak_analytical) / t_peak_analytical
@@ -336,11 +339,11 @@ def test_method_of_characteristics_concentration_tracking_exact(nonlinear_method
     )
 
     # Validation 2: Peak concentration (allow more tolerance due to discretization/mixing)
-    peak_conc_error = abs(C_peak_numerical - C_peak) / C_peak
+    peak_conc_error = abs(conc_peak_numerical - conc_peak) / conc_peak
     assert peak_conc_error < 0.15, (  # 15% tolerance
         f"Peak concentration error {peak_conc_error:.2%} exceeds 15%\n"
-        f"Expected: {C_peak:.2f} mg/L\n"
-        f"Numerical: {C_peak_numerical:.2f} mg/L"
+        f"Expected: {conc_peak:.2f} mg/L\n"
+        f"Numerical: {conc_peak_numerical:.2f} mg/L"
     )
 
 
@@ -389,20 +392,20 @@ def test_power_law_decay_asymptotic_exact():
     # Very long output window to capture late-time decay
     cout_tedges = pd.date_range(start="2022-01-01", periods=600 + 1, freq="D")
 
-    # Narrow Gaussian pulse (σ small → approximates delta function)
+    # Narrow Gaussian pulse (sigma small → approximates delta function)
     t_center = 50
     sigma = 3  # Narrow pulse
-    C_peak = 100.0  # mg/L (high peak for good signal-to-noise at late times)
+    conc_peak = 100.0  # mg/L (high peak for good signal-to-noise at late times)
 
     t = np.arange(n_days)
-    cin = C_peak * np.exp(-0.5 * ((t - t_center) / sigma) ** 2)
+    cin = conc_peak * np.exp(-0.5 * ((t - t_center) / sigma) ** 2)
 
     # Constant flow
     flow = np.full(n_days, 100.0)  # m³/day
     pore_volume = np.array([300.0])  # m³
 
     # Freundlich parameters
-    K_f = 0.025
+    freundlich_k = 0.025
     n_freundlich = 0.6  # Strong nonlinearity
     bulk_density = 1600.0
     porosity = 0.35
@@ -413,7 +416,7 @@ def test_power_law_decay_asymptotic_exact():
     # Compute retardation factors
     retardation_factors = freundlich_retardation(
         concentration=np.maximum(cin, 0.01),
-        freundlich_k=K_f,
+        freundlich_k=freundlich_k,
         freundlich_n=n_freundlich,
         bulk_density=bulk_density,
         porosity=porosity,
@@ -453,29 +456,29 @@ def test_power_law_decay_asymptotic_exact():
 
     # Log-log fit: log(C) = log(A) - alpha * log(t)
     log_t = np.log(t_tail_valid)
-    log_C = np.log(cout_tail_valid)
+    log_conc = np.log(cout_tail_valid)
 
     # Linear regression in log-log space
-    coeffs = np.polyfit(log_t, log_C, deg=1)
+    coeffs = np.polyfit(log_t, log_conc, deg=1)
     alpha_fit = -coeffs[0]  # Negative of slope
 
     # R² calculation
-    log_C_pred = np.polyval(coeffs, log_t)
-    ss_res = np.sum((log_C - log_C_pred) ** 2)
-    ss_tot = np.sum((log_C - np.mean(log_C)) ** 2)
+    log_conc_pred = np.polyval(coeffs, log_t)
+    ss_res = np.sum((log_conc - log_conc_pred) ** 2)
+    ss_tot = np.sum((log_conc - np.mean(log_conc)) ** 2)
     r_squared = 1 - (ss_res / ss_tot)
 
     # Error in exponent
     alpha_error = abs(alpha_fit - alpha_theory) / alpha_theory
 
-    print("\nPower-Law Decay Test Results:")
-    print(f"  Freundlich n:          {n_freundlich:.2f}")
-    print(f"  Theoretical alpha:         {alpha_theory:.3f}")
-    print(f"  Fitted alpha:              {alpha_fit:.3f}")
-    print(f"  Relative error:        {alpha_error:.2%}")
-    print(f"  R² of log-log fit:     {r_squared:.4f}")
-    print(f"  Data points in fit:    {len(t_tail_valid)}")
-    print(f"  Time range:            {t_tail_valid[0]:.0f} - {t_tail_valid[-1]:.0f} days")
+    logger.info("\nPower-Law Decay Test Results:")
+    logger.info("  Freundlich n:          %.2f", n_freundlich)
+    logger.info("  Theoretical alpha:         %.3f", alpha_theory)
+    logger.info("  Fitted alpha:              %.3f", alpha_fit)
+    logger.info("  Relative error:        %.2f%%", alpha_error * 100)
+    logger.info("  R² of log-log fit:     %.4f", r_squared)
+    logger.info("  Data points in fit:    %d", len(t_tail_valid))
+    logger.info("  Time range:            %.0f - %.0f days", t_tail_valid[0], t_tail_valid[-1])
 
     # EXACT asymptotic solution assertions
     assert r_squared > 0.90, f"Log-log fit R² = {r_squared:.4f} < 0.90\nPower-law behavior not clearly established"
@@ -531,17 +534,17 @@ def test_semi_analytical_gaussian_integration(nonlinear_method):
     # Gaussian input
     t_center = 80
     sigma = 15
-    C_peak = 60.0  # mg/L
+    conc_peak = 60.0  # mg/L
 
     t = np.arange(n_days)
-    cin = C_peak * np.exp(-0.5 * ((t - t_center) / sigma) ** 2)
+    cin = conc_peak * np.exp(-0.5 * ((t - t_center) / sigma) ** 2)
 
     # Constant flow
     flow = np.full(n_days, 100.0)  # m³/day
     pore_volume = np.array([400.0])  # m³
 
     # Freundlich parameters
-    K_f = 0.02
+    freundlich_k = 0.02
     n_freundlich = 0.7
     bulk_density = 1600.0
     porosity = 0.35
@@ -549,7 +552,7 @@ def test_semi_analytical_gaussian_integration(nonlinear_method):
     # Compute retardation factors
     retardation_factors = freundlich_retardation(
         concentration=np.maximum(cin, 0.01),
-        freundlich_k=K_f,
+        freundlich_k=freundlich_k,
         freundlich_n=n_freundlich,
         bulk_density=bulk_density,
         porosity=porosity,
@@ -608,32 +611,32 @@ def test_semi_analytical_gaussian_integration(nonlinear_method):
     cout_analytical_v2 = np.zeros(n_out)
 
     # Discretize concentration levels
-    C_levels = np.linspace(0.01, C_peak, 100)
+    conc_levels = np.linspace(0.01, conc_peak, 100)
 
-    for C_level in C_levels:
+    for conc_level in conc_levels:
         # Find when input equals this concentration level
-        indices = np.where((cin >= C_level * 0.95) & (cin <= C_level * 1.05))[0]
+        indices = np.where((cin >= conc_level * 0.95) & (cin <= conc_level * 1.05))[0]
 
         if len(indices) > 0:
             # Retardation for this concentration
-            R_C = freundlich_retardation(
-                concentration=np.array([C_level]),
-                freundlich_k=K_f,
+            retardation_conc = freundlich_retardation(
+                concentration=np.array([conc_level]),
+                freundlich_k=freundlich_k,
                 freundlich_n=n_freundlich,
                 bulk_density=bulk_density,
                 porosity=porosity,
             )[0]
 
             # Arrival time
-            t_arrival_C = base_residence_time * R_C
+            t_arrival_conc = base_residence_time * retardation_conc
 
             # For each input occurrence, mark output
             for idx in indices:
-                t_out_C = idx + t_arrival_C
-                if 0 <= t_out_C < n_out:
-                    out_idx = int(np.round(t_out_C))
+                t_out_conc = idx + t_arrival_conc
+                if 0 <= t_out_conc < n_out:
+                    out_idx = int(np.round(t_out_conc))
                     if out_idx < n_out:
-                        cout_analytical_v2[out_idx] = max(cout_analytical_v2[out_idx], C_level)
+                        cout_analytical_v2[out_idx] = max(cout_analytical_v2[out_idx], conc_level)
 
     # Analysis: Compare numerical vs semi-analytical
     # Use version 2 (concentration tracking) as reference
@@ -644,32 +647,32 @@ def test_semi_analytical_gaussian_integration(nonlinear_method):
     peak_num_value = cout_numerical[peak_num_idx]
 
     # Peak arrival time
-    R_peak = freundlich_retardation(
-        concentration=np.array([C_peak]),
-        freundlich_k=K_f,
+    retardation_peak = freundlich_retardation(
+        concentration=np.array([conc_peak]),
+        freundlich_k=freundlich_k,
         freundlich_n=n_freundlich,
         bulk_density=bulk_density,
         porosity=porosity,
     )[0]
-    t_peak_expected = t_center + base_residence_time * R_peak
+    t_peak_expected = t_center + base_residence_time * retardation_peak
 
     peak_time_error = abs(peak_num_idx - t_peak_expected) / t_peak_expected
-    peak_conc_error = abs(peak_num_value - C_peak) / C_peak
+    peak_conc_error = abs(peak_num_value - conc_peak) / conc_peak
 
     # Mass conservation
     mass_in = np.sum(cin * flow[: len(cin)])
     mass_out_num = np.nansum(cout_numerical[: len(cout_numerical)] * flow[0])
     mass_recovery = mass_out_num / mass_in
 
-    print(f"\nSemi-Analytical Integration Test Results ({nonlinear_method}):")
-    print(f"  Input peak:            {C_peak:.2f} mg/L at day {t_center}")
-    print(f"  R(C_peak):             {R_peak:.3f}")
-    print(f"  Expected peak time:    {t_peak_expected:.2f} days")
-    print(f"  Numerical peak time:   {peak_num_idx:.2f} days")
-    print(f"  Peak time error:       {peak_time_error:.2%}")
-    print(f"  Numerical peak conc:   {peak_num_value:.2f} mg/L")
-    print(f"  Peak conc error:       {peak_conc_error:.2%}")
-    print(f"  Mass recovery:         {mass_recovery:.2%}")
+    logger.info("\nSemi-Analytical Integration Test Results (%s):", nonlinear_method)
+    logger.info("  Input peak:            %.2f mg/L at day %d", conc_peak, t_center)
+    logger.info("  R(C_peak):             %.3f", retardation_peak)
+    logger.info("  Expected peak time:    %.2f days", t_peak_expected)
+    logger.info("  Numerical peak time:   %.2f days", peak_num_idx)
+    logger.info("  Peak time error:       %.2f%%", peak_time_error * 100)
+    logger.info("  Numerical peak conc:   %.2f mg/L", peak_num_value)
+    logger.info("  Peak conc error:       %.2f%%", peak_conc_error * 100)
+    logger.info("  Mass recovery:         %.2f%%", mass_recovery * 100)
 
     # Validation assertions
     assert peak_time_error < 0.05, (  # 5% tolerance
@@ -680,7 +683,7 @@ def test_semi_analytical_gaussian_integration(nonlinear_method):
 
     assert peak_conc_error < 0.10, (  # 10% tolerance
         f"Peak concentration error {peak_conc_error:.2%} exceeds 10%\n"
-        f"Expected: {C_peak:.2f} mg/L\n"
+        f"Expected: {conc_peak:.2f} mg/L\n"
         f"Numerical: {peak_num_value:.2f} mg/L"
     )
 
@@ -725,16 +728,16 @@ def test_multiple_n_values_consistency(nonlinear_method):
     # Gaussian input
     t_center = 80
     sigma = 12
-    C_peak = 50.0
+    conc_peak = 50.0
 
     t = np.arange(n_days)
-    cin = C_peak * np.exp(-0.5 * ((t - t_center) / sigma) ** 2)
+    cin = conc_peak * np.exp(-0.5 * ((t - t_center) / sigma) ** 2)
 
     flow = np.full(n_days, 100.0)
     pore_volume = np.array([400.0])
 
     # Fixed parameters
-    K_f = 0.025
+    freundlich_k = 0.025
     bulk_density = 1600.0
     porosity = 0.35
 
@@ -742,15 +745,15 @@ def test_multiple_n_values_consistency(nonlinear_method):
     n_values = [0.3, 0.5, 0.7, 0.9]
     results = []
 
-    print(f"\nMultiple n Values Test Results ({nonlinear_method}):")
-    print(f"  {'n':>6} {'R_peak':>8} {'t_peak [d]':>12} {'C_peak [mg/L]':>15} {'Asymmetry':>10}")
-    print(f"  {'-' * 6} {'-' * 8} {'-' * 12} {'-' * 15} {'-' * 10}")
+    logger.info("\nMultiple n Values Test Results (%s):", nonlinear_method)
+    logger.info("  %6s %8s %12s %15s %10s", "n", "R_peak", "t_peak [d]", "C_peak [mg/L]", "Asymmetry")
+    logger.info("  %s %s %s %s %s", "-" * 6, "-" * 8, "-" * 12, "-" * 15, "-" * 10)
 
     for n_val in n_values:
         # Compute retardation
         retardation_factors = freundlich_retardation(
             concentration=np.maximum(cin, 0.01),
-            freundlich_k=K_f,
+            freundlich_k=freundlich_k,
             freundlich_n=n_val,
             bulk_density=bulk_density,
             porosity=porosity,
@@ -783,17 +786,17 @@ def test_multiple_n_values_consistency(nonlinear_method):
             asymmetry = np.nan
 
         # R at peak concentration
-        R_peak = retardation_factors[np.argmax(cin)]
+        retardation_peak = retardation_factors[np.argmax(cin)]
 
         results.append({
             "n": n_val,
-            "R_peak": R_peak,
+            "R_peak": retardation_peak,
             "t_peak": peak_idx,
             "C_peak": peak_value,
             "asymmetry": asymmetry,
         })
 
-        print(f"  {n_val:>6.2f} {R_peak:>8.3f} {peak_idx:>12.1f} {peak_value:>15.2f} {asymmetry:>10.2f}")
+        logger.info("  %6.2f %8.3f %12.1f %15.2f %10.2f", n_val, retardation_peak, peak_idx, peak_value, asymmetry)
 
     # Validation 1: Peak arrival times should increase with n
     peak_times = [r["t_peak"] for r in results]
@@ -808,10 +811,9 @@ def test_multiple_n_values_consistency(nonlinear_method):
     # (though not strictly monotonic due to discretization effects)
     asymmetries = [r["asymmetry"] for r in results]
 
-    if len(asymmetries) >= 2 and not any(np.isnan(asymmetries)):
+    if len(asymmetries) >= 2 and not any(np.isnan(asymmetries)) and asymmetries[0] < asymmetries[-1]:
         # Just check that lowest n has higher asymmetry than highest n
         # (don't enforce strict monotonicity due to numerical artifacts)
-        if asymmetries[0] < asymmetries[-1]:
-            print(f"\n  Warning: Asymmetry not strictly decreasing (may be discretization effect)")
+        logger.info("\n  Warning: Asymmetry not strictly decreasing (may be discretization effect)")
 
-    print("\n  Note: n=1.0 (linear) case validated in other tests")
+    logger.info("\n  Note: n=1.0 (linear) case validated in other tests")

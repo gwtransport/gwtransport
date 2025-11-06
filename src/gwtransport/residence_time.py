@@ -379,4 +379,6 @@ def freundlich_retardation(
     """
     concentration = np.asarray(concentration)
     concentration_safe = np.maximum(concentration, 1e-12)  # Avoid zero concentration issues
-    return 1.0 + (bulk_density / porosity) * freundlich_k * freundlich_n * np.power(concentration_safe, freundlich_n - 1)
+    return 1.0 + (bulk_density / porosity) * freundlich_k * freundlich_n * np.power(
+        concentration_safe, freundlich_n - 1
+    )
