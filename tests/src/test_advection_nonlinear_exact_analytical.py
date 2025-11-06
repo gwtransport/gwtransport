@@ -992,10 +992,9 @@ def test_roundtrip_nonlinear_gaussian_pulse(nonlinear_method):
 
     # Validation: With fixed parameters, both methods should achieve near-perfect reconstruction
     # Debug output showed 0.33% mean error, with max ~1.2% at boundaries
-    if nonlinear_method == "exact_front_tracking":
-        tolerance = 0.015  # 1.5% for exact method (mean: ~0.33%, max: ~1.2%)
-    else:
-        tolerance = 0.015  # 1.5% for MoC (mean: ~0.33%, max: ~1.2%)
+    # 1.5% for exact method (mean: ~0.33%, max: ~1.2%)
+    # 1.5% for MoC (mean: ~0.33%, max: ~1.2%)
+    tolerance = 0.015 if nonlinear_method == "exact_front_tracking" else 0.015  # 1.5% for both methods
 
     # Test exact recovery in stable middle region
     np.testing.assert_allclose(
