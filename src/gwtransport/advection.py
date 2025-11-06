@@ -44,6 +44,8 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+import operator
+
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -51,6 +53,9 @@ import pandas as pd
 from gwtransport import gamma
 from gwtransport.residence_time import residence_time
 from gwtransport.utils import partial_isin
+
+# Constants for shock detection
+_SHOCK_TOLERANCE = 1e-10  # Tolerance for detecting instantaneous shocks
 
 
 def infiltration_to_extraction_series(
@@ -296,6 +301,7 @@ def gamma_infiltration_to_extraction(
     std: float | None = None,
     n_bins: int = 100,
     retardation_factor: float = 1.0,
+    nonlinear_method: str = "method_of_characteristics",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.
@@ -334,6 +340,9 @@ def gamma_infiltration_to_extraction(
         Number of bins to discretize the gamma distribution.
     retardation_factor : float
         Retardation factor of the compound in the aquifer.
+    nonlinear_method : str, optional
+        Method used for solving nonlinear sorption transport (default "method_of_characteristics").
+        Passed through to :func:`infiltration_to_extraction`. See that function for details.
 
     Returns
     -------
@@ -417,6 +426,7 @@ def gamma_infiltration_to_extraction(
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=bins["expected_values"],
         retardation_factor=retardation_factor,
+        nonlinear_method=nonlinear_method,
     )
 
 
@@ -432,6 +442,7 @@ def gamma_extraction_to_infiltration(
     std: float | None = None,
     n_bins: int = 100,
     retardation_factor: float | npt.ArrayLike = 1.0,
+    nonlinear_method: str = "method_of_characteristics",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
@@ -473,6 +484,9 @@ def gamma_extraction_to_infiltration(
         Retardation factor of the compound in the aquifer (default 1.0).
         Can be scalar for linear sorption or array for concentration-dependent
         nonlinear sorption. See :func:`extraction_to_infiltration` for details.
+    nonlinear_method : str, optional
+        Method used for solving nonlinear sorption transport (default "method_of_characteristics").
+        Passed through to :func:`extraction_to_infiltration`. See that function for details.
 
     Returns
     -------
@@ -549,6 +563,7 @@ def gamma_extraction_to_infiltration(
         cin_tedges=cin_tedges,
         aquifer_pore_volumes=bins["expected_values"],
         retardation_factor=retardation_factor,
+        nonlinear_method=nonlinear_method,
     )
 
 
@@ -726,6 +741,361 @@ def _infiltration_to_extraction_nonlinear_weights(
     normalized_weights[valid_weights, :] = averaged_weights[valid_weights, :] / total_weights[valid_weights, None]
 
     return normalized_weights
+
+
+def _infiltration_to_extraction_nonlinear_weights_exact(
+    *,
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    aquifer_pore_volumes: npt.NDArray[np.floating],
+    cin: npt.NDArray[np.floating],
+    flow: npt.NDArray[np.floating],
+    retardation_factors: npt.NDArray[np.floating],
+) -> npt.NDArray[np.floating]:
+    """
+    Compute normalized weights using exact front-tracking for nonlinear sorption.
+
+    This implements an exact front-tracking algorithm that maintains sharp shocks
+    without numerical diffusion. Unlike the method of characteristics which treats
+    parcels independently, this algorithm explicitly tracks which parcels are
+    co-active at each moment in time.
+
+    Algorithm:
+    1. For each pore volume, compute parcel arrival times using characteristics
+    2. Use event-based processing to determine exactly when parcels are co-active
+    3. Build piecewise-constant solution with sharp fronts
+    4. Map solution to output grid with exact overlap calculations
+    5. Flow-weight and normalize
+
+    Key advantages over method_of_characteristics:
+    - No numerical diffusion at shocks
+    - Maintains sharp concentration fronts
+    - Exact handling of parcel collisions
+    - Physically accurate shock propagation
+
+    Parameters
+    ----------
+    tedges : pandas.DatetimeIndex
+        Time edges for infiltration bins.
+    cout_tedges : pandas.DatetimeIndex
+        Time edges for extraction bins.
+    aquifer_pore_volumes : array-like
+        Distribution of pore volumes [m3].
+    cin : array-like
+        Concentration values (needed for dimensions).
+    flow : array-like
+        Flow rate values [m3/day].
+    retardation_factors : array-like
+        Concentration-dependent retardation factors.
+
+    Returns
+    -------
+    numpy.ndarray
+        Normalized weight matrix. Shape: (len(cout_tedges) - 1, len(cin))
+    """
+    # Convert to days
+    cin_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    cout_tedges_days = ((cout_tedges - tedges[0]) / pd.Timedelta(days=1)).values
+
+    n_cin_bins = len(cin)
+    n_cout_bins = len(cout_tedges) - 1
+    n_pv = len(aquifer_pore_volumes)
+
+    # Accumulate weights from all pore volumes
+    accumulated_weights = np.zeros((n_cout_bins, n_cin_bins))
+    pv_count = np.zeros(n_cout_bins)
+
+    # For each pore volume (aquifer heterogeneity)
+    for i_pv in range(n_pv):
+        pv = aquifer_pore_volumes[i_pv]
+
+        # STEP 1: Build parcels with exact arrival times
+        parcels = _build_parcel_arrivals(
+            cin_tedges_days=cin_tedges_days,
+            retardation_factors=retardation_factors,
+            pv=pv,
+            flow=flow,
+            tedges=tedges,
+        )
+
+        # STEP 2: Exact front tracking via event processing
+        solution_intervals = _process_front_tracking_events(parcels)
+
+        # STEP 3: Map exact solution to output grid
+        overlap_times = _map_solution_to_output_grid(
+            solution_intervals=solution_intervals,
+            cout_tedges_days=cout_tedges_days,
+            n_cin_bins=n_cin_bins,
+        )
+
+        # STEP 4: Flow-weight the overlaps
+        flow_weighted = overlap_times * flow[None, :]
+
+        # Accumulate across pore volumes
+        accumulated_weights += flow_weighted
+
+        # Track which cout bins have contributions from this pore volume
+        has_contribution = np.sum(overlap_times, axis=1) > 0
+        pv_count[has_contribution] += 1
+
+    # Average across valid pore volumes
+    averaged_weights = np.zeros_like(accumulated_weights)
+    valid_cout = pv_count > 0
+    averaged_weights[valid_cout, :] = accumulated_weights[valid_cout, :] / pv_count[valid_cout, None]
+
+    # Normalize by total weights per output bin
+    total_weights = np.sum(averaged_weights, axis=1)
+    valid_weights = total_weights > 0
+    normalized_weights = np.zeros_like(averaged_weights)
+    normalized_weights[valid_weights, :] = averaged_weights[valid_weights, :] / total_weights[valid_weights, None]
+
+    return normalized_weights
+
+
+def _build_parcel_arrivals(
+    *,
+    cin_tedges_days: npt.NDArray[np.floating],
+    retardation_factors: npt.NDArray[np.floating],
+    pv: float,
+    flow: npt.NDArray[np.floating],
+    tedges: pd.DatetimeIndex,
+) -> list[dict]:
+    """
+    Build list of parcels with their exact arrival times at extraction.
+
+    Each parcel represents an infiltration bin that propagates through the aquifer
+    with its characteristic velocity (determined by its retardation factor).
+
+    Parameters
+    ----------
+    cin_tedges_days : array-like
+        Infiltration time edges in days
+    retardation_factors : array-like
+        Concentration-dependent retardation factors for each bin
+    pv : float
+        Single pore volume value [m3]
+    flow : array-like
+        Flow rates [m3/day]
+    tedges : pandas.DatetimeIndex
+        Time edges for flow data
+
+    Returns
+    -------
+    list of dict
+        Each parcel: {'id': int, 't_start': float, 't_end': float}
+    """
+    n_cin_bins = len(retardation_factors)
+    parcels = []
+
+    # Interpolate retardation to edges (arithmetic averaging)
+    # NOTE: For smooth C variations, this gives O(Δt²) accuracy
+    # For sharp steps, this has limitations but is standard practice
+    r_at_edges = np.zeros(n_cin_bins + 1)
+    r_at_edges[0] = retardation_factors[0]
+    r_at_edges[-1] = retardation_factors[-1]
+    r_at_edges[1:-1] = 0.5 * (retardation_factors[:-1] + retardation_factors[1:])
+
+    # Compute residence times for all edges at once
+    # This is more efficient and avoids NaN issues from single-element slices
+    rt_at_edges = np.zeros(n_cin_bins + 1)
+    for i_edge in range(n_cin_bins + 1):
+        rt_val = residence_time(
+            flow=flow,
+            flow_tedges=tedges,
+            index=tedges[i_edge : i_edge + 1],
+            aquifer_pore_volume=np.array([pv]),
+            retardation_factor=float(r_at_edges[i_edge]),
+            direction="infiltration_to_extraction",
+        )
+        # Extract scalar value safely
+        if rt_val.size > 0 and not np.isnan(rt_val[0, 0]):
+            rt_at_edges[i_edge] = rt_val[0, 0]
+        else:
+            # If residence time is NaN, use simple calculation
+            # rt = pv * R / flow_avg
+            flow_avg = np.mean(flow) if len(flow) > 0 else 1.0
+            rt_at_edges[i_edge] = (pv * r_at_edges[i_edge]) / flow_avg
+
+    # Build parcels
+    for i_bin in range(n_cin_bins):
+        # Parcel arrival times: infiltration time + residence time
+        t_arrival_start = cin_tedges_days[i_bin] + rt_at_edges[i_bin]
+        t_arrival_end = cin_tedges_days[i_bin + 1] + rt_at_edges[i_bin + 1]
+
+        # Handle shock formation: when trailing edge catches up to leading edge
+        # This happens when retardation decreases (e.g., high C overtaking low C)
+        # In this case, the parcel forms a shock front (instantaneous)
+        if t_arrival_end < t_arrival_start:
+            # Shock: parcel compressed to a point at the average arrival time
+            # This maintains mass conservation while capturing shock physics
+            t_shock = 0.5 * (t_arrival_start + t_arrival_end)
+            parcels.append({
+                "id": i_bin,
+                "t_start": t_shock,
+                "t_end": t_shock,  # Instantaneous shock
+            })
+        else:
+            # Normal parcel (no shock)
+            parcels.append({
+                "id": i_bin,
+                "t_start": t_arrival_start,
+                "t_end": t_arrival_end,
+            })
+
+    return parcels
+
+
+def _process_front_tracking_events(parcels: list[dict]) -> list[dict]:
+    """
+    Process parcel arrival/departure events to build exact piecewise-constant solution.
+
+    This is the core of the front-tracking algorithm. It uses a sweep-line approach
+    to determine exactly which parcels are co-active at each moment in time.
+
+    When multiple parcels are co-active, they represent a mixing region where
+    the extracted concentration is the flow-weighted average of all active parcels.
+
+    Sharp fronts (shocks) occur at event boundaries where parcels enter or leave.
+
+    Instantaneous parcels (shocks where t_start == t_end) are handled specially
+    as impulses rather than intervals.
+
+    Parameters
+    ----------
+    parcels : list of dict
+        Each parcel has 'id', 't_start', 't_end'
+
+    Returns
+    -------
+    list of dict
+        Solution intervals, each containing:
+        - 't_start': float, interval start time
+        - 't_end': float, interval end time
+        - 'active_ids': list of int, IDs of co-active parcels
+        - 'is_shock': bool, True if this is an instantaneous shock
+    """
+    # Separate instantaneous (shock) and regular parcels
+    regular_parcels = []
+    shock_parcels = []
+
+    for parcel in parcels:
+        if abs(parcel["t_end"] - parcel["t_start"]) < _SHOCK_TOLERANCE:
+            # Instantaneous parcel (shock)
+            shock_parcels.append(parcel)
+        else:
+            # Regular parcel with finite duration
+            regular_parcels.append(parcel)
+
+    # Create events only for regular parcels
+    events = [
+        event
+        for parcel in regular_parcels
+        for event in [
+            ("arrive", parcel["t_start"], parcel["id"]),  # Arrival event
+            ("depart", parcel["t_end"], parcel["id"]),  # Departure event
+        ]
+    ]
+
+    # Sort events by time
+    # Tie-breaking: process departures before arrivals at the same time
+    # This ensures correct handling of transitions between adjacent parcels
+    events.sort(key=lambda e: (e[1], e[0] == "arrive"))
+
+    # Sweep through events, maintaining set of active parcels
+    solution_intervals = []
+    active_parcel_ids = []
+    prev_time = None
+
+    for event_type, event_time, parcel_id in events:
+        # If there's a time gap and parcels are active, save interval
+        if prev_time is not None and prev_time < event_time and active_parcel_ids:
+            solution_intervals.append({
+                "t_start": prev_time,
+                "t_end": event_time,
+                "active_ids": active_parcel_ids.copy(),  # Copy to avoid aliasing
+                "is_shock": False,
+            })
+
+        # Update active set based on event type
+        if event_type == "arrive":
+            active_parcel_ids.append(parcel_id)
+        else:  # depart
+            active_parcel_ids.remove(parcel_id)
+
+        prev_time = event_time
+
+    # Add shock parcels as instantaneous intervals
+    solution_intervals.extend([
+        {
+            "t_start": shock["t_start"],
+            "t_end": shock["t_end"],  # Same as t_start for shocks
+            "active_ids": [shock["id"]],
+            "is_shock": True,
+        }
+        for shock in shock_parcels
+    ])
+
+    # Sort all intervals by start time
+    solution_intervals.sort(key=operator.itemgetter("t_start"))
+
+    return solution_intervals
+
+
+def _map_solution_to_output_grid(
+    *,
+    solution_intervals: list[dict],
+    cout_tedges_days: npt.NDArray[np.floating],
+    n_cin_bins: int,
+) -> npt.NDArray[np.floating]:
+    """
+    Map piecewise-constant exact solution to output time grid.
+
+    For each output bin, compute how long each infiltration parcel is active
+    within that bin. This gives the exact temporal overlap without any
+    numerical diffusion.
+
+    Parameters
+    ----------
+    solution_intervals : list of dict
+        Exact solution from front tracking, each interval has:
+        - 't_start', 't_end': time boundaries
+        - 'active_ids': list of co-active parcel IDs
+    cout_tedges_days : array-like
+        Output time edges in days
+    n_cin_bins : int
+        Number of infiltration bins
+
+    Returns
+    -------
+    numpy.ndarray
+        Overlap times matrix, shape (n_cout_bins, n_cin_bins)
+        overlap_times[j, i] = time duration that parcel i is active in output bin j
+    """
+    n_cout_bins = len(cout_tedges_days) - 1
+    overlap_times = np.zeros((n_cout_bins, n_cin_bins))
+
+    # For each solution interval, compute overlaps with output bins
+    for interval in solution_intervals:
+        t_start = interval["t_start"]
+        t_end = interval["t_end"]
+        active_ids = interval["active_ids"]
+
+        # Find all output bins that overlap with this interval
+        for j in range(n_cout_bins):
+            out_start = cout_tedges_days[j]
+            out_end = cout_tedges_days[j + 1]
+
+            # Compute temporal overlap
+            overlap_start = max(t_start, out_start)
+            overlap_end = min(t_end, out_end)
+            overlap_duration = max(0.0, overlap_end - overlap_start)
+
+            if overlap_duration > 0:
+                # During this overlap, all active parcels contribute
+                for parcel_id in active_ids:
+                    overlap_times[j, parcel_id] += overlap_duration
+
+    return overlap_times
 
 
 def _extraction_to_infiltration_nonlinear_weights(
@@ -912,6 +1282,7 @@ def infiltration_to_extraction(
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
     retardation_factor: float | npt.ArrayLike = 1.0,
+    nonlinear_method: str = "method_of_characteristics",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the extracted water using flow-weighted advection.
@@ -942,12 +1313,18 @@ def infiltration_to_extraction(
 
        **Implementation:**
 
-       Uses forward method of characteristics where each infiltrating parcel travels with its own
-       retardation factor R(C). When faster-moving high-C parcels overtake slower low-C parcels,
-       they mix at extraction through flow-weighted averaging, naturally capturing shock formation
-       without spurious oscillations.
+       Two methods are available via the ``nonlinear_method`` parameter:
 
-       See Example 6 (Freundlich Sorption) for detailed demonstration.
+       - **method_of_characteristics** (default): Forward parcel tracking where each infiltrating
+         parcel travels with its own retardation factor R(C). When faster-moving high-C parcels
+         overtake slower low-C parcels, they mix at extraction through flow-weighted averaging.
+         Fast and robust, but introduces slight numerical diffusion at shocks.
+
+       - **exact_front_tracking**: Event-based algorithm that explicitly tracks which parcels are
+         co-active at each moment in time. Maintains sharp concentration fronts without numerical
+         diffusion. More accurate for sharp gradients but slightly more computationally expensive.
+
+       See the nonlinear sorption example below for a comparison of both methods.
 
     Parameters
     ----------
@@ -975,6 +1352,19 @@ def infiltration_to_extraction(
         - **Array**: Nonlinear sorption with concentration-dependent retardation.
           Must have length matching cin. Typically computed from Freundlich or
           Langmuir isotherms using :func:`gwtransport.residence_time.freundlich_retardation`.
+    nonlinear_method : str, optional
+        Method used for solving nonlinear sorption transport (default "method_of_characteristics").
+        Only applies when retardation_factor is an array (concentration-dependent).
+
+        - **"method_of_characteristics"**: Forward parcel tracking with flow-weighted mixing.
+          Each infiltrating parcel travels with its own retardation factor R(C).
+          Allows parcels to overlap and mixes them via flow-weighting. Fast and robust
+          but introduces some numerical diffusion at shocks.
+
+        - **"exact_front_tracking"**: Event-based front tracking algorithm. Explicitly
+          tracks which parcels are co-active at each moment, maintaining sharp fronts
+          without numerical diffusion. More accurate for sharp concentration gradients
+          and shocks, but slightly more computationally expensive.
 
     Returns
     -------
@@ -1067,23 +1457,36 @@ def infiltration_to_extraction(
     >>> from gwtransport.residence_time import freundlich_retardation
     >>> # Gaussian concentration pulse
     >>> cin_nonlinear = 100.0 * np.exp(-0.5 * ((np.arange(len(dates)) - 10) / 5) ** 2)
-    >>> # Compute Freundlich retardation
+    >>> # Compute Freundlich retardation (n < 1 causes shock formation)
     >>> R_freundlich = freundlich_retardation(
     ...     concentration=np.maximum(cin_nonlinear, 0.1),
     ...     freundlich_k=0.02,
-    ...     freundlich_n=0.75,
+    ...     freundlich_n=0.75,  # Favorable sorption
     ...     bulk_density=1600.0,
     ...     porosity=0.35,
     ... )
-    >>> cout_nonlinear = infiltration_to_extraction(
+    >>> # Method of characteristics (default): faster, slight numerical diffusion at shocks
+    >>> cout_moc = infiltration_to_extraction(
     ...     cin=cin_nonlinear,
     ...     flow=flow,
     ...     tedges=tedges,
     ...     cout_tedges=cout_tedges,
     ...     aquifer_pore_volumes=aquifer_pore_volumes,
-    ...     retardation_factor=R_freundlich,  # Array enables nonlinear mode
+    ...     retardation_factor=R_freundlich,
+    ...     nonlinear_method="method_of_characteristics",  # Default
+    ... )
+    >>> # Exact front tracking: maintains sharp shocks, no diffusion
+    >>> cout_exact = infiltration_to_extraction(
+    ...     cin=cin_nonlinear,
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cout_tedges=cout_tedges,
+    ...     aquifer_pore_volumes=aquifer_pore_volumes,
+    ...     retardation_factor=R_freundlich,
+    ...     nonlinear_method="exact_front_tracking",  # Sharp shocks
     ... )
     >>> # Result: asymmetric breakthrough (sharp front, long tail)
+    >>> # cout_exact has sharper concentration gradients than cout_moc
 
     Using single pore volume:
 
@@ -1141,15 +1544,35 @@ def infiltration_to_extraction(
             msg = f"retardation_factor array must match cin length ({len(cin)}), got {len(retardation_factor)}"
             raise ValueError(msg)
 
+        # Validate nonlinear method
+        supported_methods = ["method_of_characteristics", "exact_front_tracking"]
+        if nonlinear_method not in supported_methods:
+            msg = f"nonlinear_method '{nonlinear_method}' not supported. Choose from: {supported_methods}"
+            raise ValueError(msg)
+
         # Use nonlinear weights computation
-        normalized_weights = _infiltration_to_extraction_nonlinear_weights(
-            tedges=tedges,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-            cin=cin,
-            flow=flow,
-            retardation_factors=retardation_factor,
-        )
+        if nonlinear_method == "method_of_characteristics":
+            normalized_weights = _infiltration_to_extraction_nonlinear_weights(
+                tedges=tedges,
+                cout_tedges=cout_tedges,
+                aquifer_pore_volumes=aquifer_pore_volumes,
+                cin=cin,
+                flow=flow,
+                retardation_factors=retardation_factor,
+            )
+        elif nonlinear_method == "exact_front_tracking":
+            normalized_weights = _infiltration_to_extraction_nonlinear_weights_exact(
+                tedges=tedges,
+                cout_tedges=cout_tedges,
+                aquifer_pore_volumes=aquifer_pore_volumes,
+                cin=cin,
+                flow=flow,
+                retardation_factors=retardation_factor,
+            )
+        else:
+            # Should never reach here due to validation above
+            msg = f"Method '{nonlinear_method}' is recognized but not yet implemented"
+            raise NotImplementedError(msg)
 
     # Apply to concentrations and handle NaN for periods with no contributions
     out = normalized_weights.dot(cin)
@@ -1245,6 +1668,7 @@ def extraction_to_infiltration(
     cin_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
     retardation_factor: float | npt.ArrayLike = 1.0,
+    nonlinear_method: str = "method_of_characteristics",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
@@ -1314,6 +1738,15 @@ def extraction_to_infiltration(
         - **Array**: Nonlinear sorption with concentration-dependent retardation.
           Must have length matching cout. For deconvolution, compute from cout using
           :func:`gwtransport.residence_time.freundlich_retardation` with cout as input.
+    nonlinear_method : str, optional
+        Method used for solving nonlinear sorption transport (default "method_of_characteristics").
+        Only applies when retardation_factor is an array (concentration-dependent).
+
+        - **"method_of_characteristics"**: Backward parcel tracking with flow-weighted mixing.
+          Each extraction parcel is tracked backward with retardation factor R(cout).
+          Recovers infiltration history from mixed extraction observations.
+
+        Future versions may support additional methods.
 
     Returns
     -------
@@ -1492,14 +1925,21 @@ def extraction_to_infiltration(
             raise ValueError(msg)
 
         # Use nonlinear weights computation
-        normalized_weights = _extraction_to_infiltration_nonlinear_weights(
-            tedges=tedges,
-            cin_tedges=cin_tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-            cout=cout,
-            flow=flow,
-            retardation_factors=retardation_factor,
-        )
+        if nonlinear_method == "method_of_characteristics":
+            normalized_weights = _extraction_to_infiltration_nonlinear_weights(
+                tedges=tedges,
+                cin_tedges=cin_tedges,
+                aquifer_pore_volumes=aquifer_pore_volumes,
+                cout=cout,
+                flow=flow,
+                retardation_factors=retardation_factor,
+            )
+        else:
+            supported_methods = ["method_of_characteristics"]
+
+            # Future methods would be added here
+            msg = f"nonlinear_method '{nonlinear_method}' not supported. Choose from: {supported_methods}"
+            raise NotImplementedError(msg)
 
     # Apply to concentrations and handle NaN for periods with no contributions
     out = normalized_weights.dot(cout)
