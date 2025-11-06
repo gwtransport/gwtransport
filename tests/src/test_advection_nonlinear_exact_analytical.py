@@ -76,7 +76,8 @@ from gwtransport.advection import infiltration_to_extraction
 from gwtransport.residence_time import freundlich_retardation
 
 
-def test_shock_wave_step_input_exact():
+@pytest.mark.parametrize("nonlinear_method", ["method_of_characteristics", "exact_front_tracking"])
+def test_shock_wave_step_input_exact(nonlinear_method):
     """
     Test 1: Shock wave propagation with step input (EXACT).
 
@@ -109,6 +110,11 @@ def test_shock_wave_step_input_exact():
     ------------------
     - Breakthrough time: |t_numerical - t_analytical| / t_analytical < 1%
     - Steady-state concentration: |C_ss - C_0| / C_0 < 1%
+
+    Tested Methods
+    --------------
+    - method_of_characteristics: Fast, slight diffusion at shocks
+    - exact_front_tracking: Sharp shocks, no diffusion
     """
     # Setup: Long-duration step input
     n_days = 500
@@ -159,6 +165,7 @@ def test_shock_wave_step_input_exact():
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=retardation_factors,
+        nonlinear_method=nonlinear_method,
     )
 
     # Analysis 1: Breakthrough time
@@ -172,7 +179,7 @@ def test_shock_wave_step_input_exact():
     t_arrival_numerical = breakthrough_indices[0]  # days after start
     t_arrival_error = abs(t_arrival_numerical - t_arrival_analytical) / t_arrival_analytical
 
-    print("\nShock Wave Test Results:")
+    print(f"\nShock Wave Test Results ({nonlinear_method}):")
     print(f"  Analytical arrival time: {t_arrival_analytical:.2f} days")
     print(f"  Numerical arrival time:  {t_arrival_numerical:.2f} days")
     print(f"  Relative error:          {t_arrival_error:.2%}")
@@ -211,7 +218,8 @@ def test_shock_wave_step_input_exact():
     )
 
 
-def test_method_of_characteristics_concentration_tracking_exact():
+@pytest.mark.parametrize("nonlinear_method", ["method_of_characteristics", "exact_front_tracking"])
+def test_method_of_characteristics_concentration_tracking_exact(nonlinear_method):
     """
     Test 2: Peak arrival time with method of characteristics (EXACT).
 
@@ -302,13 +310,14 @@ def test_method_of_characteristics_concentration_tracking_exact():
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=retardation_factors,
+        nonlinear_method=nonlinear_method,
     )
 
     # Find numerical peak
     t_peak_numerical = np.nanargmax(cout)
     C_peak_numerical = cout[t_peak_numerical]
 
-    print("\nPeak Arrival Test Results:")
+    print(f"\nPeak Arrival Test Results ({nonlinear_method}):")
     print(f"  Input peak:            {C_peak:.2f} mg/L at day {t_center}")
     print(f"  R(C_peak):             {R_peak:.3f}")
     print(f"  Base residence time:   {base_residence_time:.2f} days")
@@ -479,7 +488,8 @@ def test_power_law_decay_asymptotic_exact():
     )
 
 
-def test_semi_analytical_gaussian_integration():
+@pytest.mark.parametrize("nonlinear_method", ["method_of_characteristics", "exact_front_tracking"])
+def test_semi_analytical_gaussian_integration(nonlinear_method):
     """
     Test 4: Semi-analytical solution via concentration-level integration.
 
@@ -553,6 +563,7 @@ def test_semi_analytical_gaussian_integration():
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=retardation_factors,
+        nonlinear_method=nonlinear_method,
     )
 
     # Semi-analytical solution
@@ -650,7 +661,7 @@ def test_semi_analytical_gaussian_integration():
     mass_out_num = np.nansum(cout_numerical[: len(cout_numerical)] * flow[0])
     mass_recovery = mass_out_num / mass_in
 
-    print("\nSemi-Analytical Integration Test Results:")
+    print(f"\nSemi-Analytical Integration Test Results ({nonlinear_method}):")
     print(f"  Input peak:            {C_peak:.2f} mg/L at day {t_center}")
     print(f"  R(C_peak):             {R_peak:.3f}")
     print(f"  Expected peak time:    {t_peak_expected:.2f} days")
@@ -683,7 +694,8 @@ def test_semi_analytical_gaussian_integration():
     )
 
 
-def test_multiple_n_values_consistency():
+@pytest.mark.parametrize("nonlinear_method", ["method_of_characteristics", "exact_front_tracking"])
+def test_multiple_n_values_consistency(nonlinear_method):
     """
     Test 5: Consistency across different Freundlich exponents.
 
@@ -730,7 +742,7 @@ def test_multiple_n_values_consistency():
     n_values = [0.3, 0.5, 0.7, 0.9]
     results = []
 
-    print("\nMultiple n Values Test Results:")
+    print(f"\nMultiple n Values Test Results ({nonlinear_method}):")
     print(f"  {'n':>6} {'R_peak':>8} {'t_peak [d]':>12} {'C_peak [mg/L]':>15} {'Asymmetry':>10}")
     print(f"  {'-' * 6} {'-' * 8} {'-' * 12} {'-' * 15} {'-' * 10}")
 
@@ -752,6 +764,7 @@ def test_multiple_n_values_consistency():
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=pore_volume,
             retardation_factor=retardation_factors,
+            nonlinear_method=nonlinear_method,
         )
 
         # Extract metrics
