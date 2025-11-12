@@ -10,17 +10,17 @@ calculations.
 import numpy as np
 import pytest
 
-from gwtransport.front_tracking_math import FreundlichSorption, ConstantRetardation
-from gwtransport.front_tracking_waves import CharacteristicWave, ShockWave, RarefactionWave
 from gwtransport.front_tracking_events import (
     Event,
     EventType,
     find_characteristic_intersection,
-    find_shock_shock_intersection,
-    find_shock_characteristic_intersection,
-    find_rarefaction_boundary_intersections,
     find_outlet_crossing,
+    find_rarefaction_boundary_intersections,
+    find_shock_characteristic_intersection,
+    find_shock_shock_intersection,
 )
+from gwtransport.front_tracking_math import ConstantRetardation, FreundlichSorption
+from gwtransport.front_tracking_waves import CharacteristicWave, RarefactionWave, ShockWave
 
 
 @pytest.fixture

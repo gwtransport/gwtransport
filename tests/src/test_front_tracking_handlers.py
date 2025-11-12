@@ -7,23 +7,21 @@ All tests verify physical correctness: entropy conditions, mass conservation,
 and proper wave state transitions.
 """
 
-import numpy as np
 import pytest
 
-from gwtransport.front_tracking_math import FreundlichSorption, ConstantRetardation
+from gwtransport.front_tracking_handlers import (
+    create_inlet_waves_at_time,
+    handle_characteristic_collision,
+    handle_outlet_crossing,
+    handle_shock_characteristic_collision,
+    handle_shock_collision,
+    handle_shock_rarefaction_collision,
+)
+from gwtransport.front_tracking_math import ConstantRetardation, FreundlichSorption
 from gwtransport.front_tracking_waves import (
     CharacteristicWave,
-    ShockWave,
     RarefactionWave,
-)
-from gwtransport.front_tracking_handlers import (
-    handle_characteristic_collision,
-    handle_shock_collision,
-    handle_shock_characteristic_collision,
-    handle_shock_rarefaction_collision,
-    handle_rarefaction_characteristic_collision,
-    handle_outlet_crossing,
-    create_inlet_waves_at_time,
+    ShockWave,
 )
 
 

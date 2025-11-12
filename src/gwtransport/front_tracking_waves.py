@@ -153,8 +153,9 @@ class CharacteristicWave(Wave):
     Examples
     --------
     >>> sorption = ConstantRetardation(retardation_factor=2.0)
-    >>> char = CharacteristicWave(t_start=0.0, v_start=0.0, flow=100.0,
-    ...                           concentration=5.0, sorption=sorption)
+    >>> char = CharacteristicWave(
+    ...     t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=sorption
+    ... )
     >>> char.velocity()
     50.0
     >>> char.position_at_time(10.0)
@@ -289,9 +290,17 @@ class ShockWave(Wave):
 
     Examples
     --------
-    >>> sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-    >>> shock = ShockWave(t_start=0.0, v_start=0.0, flow=100.0,
-    ...                   c_left=10.0, c_right=2.0, sorption=sorption)
+    >>> sorption = FreundlichSorption(
+    ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+    ... )
+    >>> shock = ShockWave(
+    ...     t_start=0.0,
+    ...     v_start=0.0,
+    ...     flow=100.0,
+    ...     c_left=10.0,
+    ...     c_right=2.0,
+    ...     sorption=sorption,
+    ... )
     >>> shock.velocity > 0
     True
     >>> shock.satisfies_entropy()
@@ -368,12 +377,11 @@ class ShockWave(Wave):
         if v < v_shock - tol:
             # Upstream of shock
             return self.c_left
-        elif v > v_shock + tol:
+        if v > v_shock + tol:
             # Downstream of shock
             return self.c_right
-        else:
-            # Exactly at shock (rarely happens in practice)
-            return 0.5 * (self.c_left + self.c_right)
+        # Exactly at shock (rarely happens in practice)
+        return 0.5 * (self.c_left + self.c_right)
 
     def satisfies_entropy(self) -> bool:
         """
@@ -455,9 +463,17 @@ class RarefactionWave(Wave):
 
     Examples
     --------
-    >>> sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-    >>> raref = RarefactionWave(t_start=0.0, v_start=0.0, flow=100.0,
-    ...                         c_head=10.0, c_tail=2.0, sorption=sorption)
+    >>> sorption = FreundlichSorption(
+    ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+    ... )
+    >>> raref = RarefactionWave(
+    ...     t_start=0.0,
+    ...     v_start=0.0,
+    ...     flow=100.0,
+    ...     c_head=10.0,
+    ...     c_tail=2.0,
+    ...     sorption=sorption,
+    ... )
     >>> raref.head_velocity() > raref.tail_velocity()
     True
     >>> raref.contains_point(v=150.0, t=20.0)
@@ -622,7 +638,9 @@ class RarefactionWave(Wave):
 
         Examples
         --------
-        >>> sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        >>> sorption = FreundlichSorption(
+        ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+        ... )
         >>> raref = RarefactionWave(0.0, 0.0, 100.0, 10.0, 2.0, sorption)
         >>> c = raref.concentration_at_point(v=150.0, t=20.0)
         >>> c is not None

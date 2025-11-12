@@ -15,10 +15,8 @@ Handlers modify wave states in-place by deactivating parent waves and
 creating new child waves.
 """
 
-from typing import Optional
-
-from gwtransport.front_tracking_math import FreundlichSorption, ConstantRetardation
-from gwtransport.front_tracking_waves import CharacteristicWave, ShockWave, RarefactionWave
+from gwtransport.front_tracking_math import ConstantRetardation, FreundlichSorption
+from gwtransport.front_tracking_waves import CharacteristicWave, RarefactionWave, ShockWave
 
 
 def handle_characteristic_collision(
@@ -320,7 +318,7 @@ def handle_shock_rarefaction_collision(
     Examples
     --------
     >>> waves = handle_shock_rarefaction_collision(
-    ...     shock, raref, t=30.0, v=400.0, boundary_type='tail'
+    ...     shock, raref, t=30.0, v=400.0, boundary_type="tail"
     ... )
     """
     if boundary_type == "tail":
@@ -341,28 +339,26 @@ def handle_shock_rarefaction_collision(
             raref.is_active = False
             shock.is_active = False
             return [new_shock]
-        else:
-            # No shock forms - complex interaction
-            return []
+        # No shock forms - complex interaction
+        return []
 
-    else:  # boundary_type == 'head'
-        # Rarefaction head catching shock
-        # This creates compression between rarefaction and shock
-        # May form new shock between rarefaction head and shock left state
-        new_shock = ShockWave(
-            t_start=t_event,
-            v_start=v_event,
-            flow=raref.flow,
-            c_left=raref.c_head,
-            c_right=shock.c_left,
-            sorption=raref.sorption,
-        )
+    # boundary_type == 'head'
+    # Rarefaction head catching shock
+    # This creates compression between rarefaction and shock
+    # May form new shock between rarefaction head and shock left state
+    new_shock = ShockWave(
+        t_start=t_event,
+        v_start=v_event,
+        flow=raref.flow,
+        c_left=raref.c_head,
+        c_right=shock.c_left,
+        sorption=raref.sorption,
+    )
 
-        if new_shock.satisfies_entropy():
-            return [new_shock]
-        else:
-            # No shock forms - waves may pass through each other
-            return []
+    if new_shock.satisfies_entropy():
+        return [new_shock]
+    # No shock forms - waves may pass through each other
+    return []
 
 
 def handle_rarefaction_characteristic_collision(
@@ -406,9 +402,7 @@ def handle_rarefaction_characteristic_collision(
     return []
 
 
-def handle_outlet_crossing(
-    wave, t_event: float, v_outlet: float
-) -> dict:
+def handle_outlet_crossing(wave, t_event: float, v_outlet: float) -> dict:
     """
     Handle wave crossing outlet boundary.
 
@@ -537,7 +531,7 @@ def create_inlet_waves_at_time(
 
         return [shock]
 
-    elif vel_new < vel_prev - 1e-15:  # Expansion
+    if vel_new < vel_prev - 1e-15:  # Expansion
         # New water is slower - will fall behind old water - create rarefaction
         raref = RarefactionWave(
             t_start=t,
@@ -549,14 +543,14 @@ def create_inlet_waves_at_time(
         )
         return [raref]
 
-    else:  # Same velocity - contact discontinuity
-        # This only happens if R(c_new) == R(c_prev), which is rare
-        # Create a characteristic with the new concentration
-        char = CharacteristicWave(
-            t_start=t,
-            v_start=v_inlet,
-            flow=flow,
-            concentration=c_new,
-            sorption=sorption,
-        )
-        return [char]
+    # Same velocity - contact discontinuity
+    # This only happens if R(c_new) == R(c_prev), which is rare
+    # Create a characteristic with the new concentration
+    char = CharacteristicWave(
+        t_start=t,
+        v_start=v_inlet,
+        flow=flow,
+        concentration=c_new,
+        sorption=sorption,
+    )
+    return [char]

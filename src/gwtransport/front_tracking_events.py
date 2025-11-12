@@ -20,8 +20,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
-import numpy as np
-
 
 class EventType(Enum):
     """
@@ -430,8 +428,8 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> Optional[fl
     >>> if t_cross:
     ...     print(f"Shock exits at t={t_cross:.3f} days")
     """
-    from gwtransport.front_tracking_waves import CharacteristicWave, ShockWave, RarefactionWave
     from gwtransport.front_tracking_math import characteristic_velocity
+    from gwtransport.front_tracking_waves import CharacteristicWave, RarefactionWave, ShockWave
 
     if not wave.is_active:
         return None
@@ -457,7 +455,7 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> Optional[fl
         dt = (v_outlet - v_current) / vel
         return t_current + dt
 
-    elif isinstance(wave, ShockWave):
+    if isinstance(wave, ShockWave):
         # Current position
         v_current = wave.v_start + wave.velocity * (t_current - wave.t_start)
 
@@ -471,7 +469,7 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> Optional[fl
         dt = (v_outlet - v_current) / wave.velocity
         return t_current + dt
 
-    elif isinstance(wave, RarefactionWave):
+    if isinstance(wave, RarefactionWave):
         # Head crosses first (leading edge)
         vel_head = characteristic_velocity(wave.c_head, wave.flow, wave.sorption)
 

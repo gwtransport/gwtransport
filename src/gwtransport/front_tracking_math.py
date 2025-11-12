@@ -74,7 +74,9 @@ class FreundlichSorption:
 
     Examples
     --------
-    >>> sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+    >>> sorption = FreundlichSorption(
+    ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+    ... )
     >>> r = sorption.retardation(5.0)
     >>> c_back = sorption.concentration_from_retardation(r)
     >>> np.isclose(c_back, 5.0)
@@ -140,7 +142,9 @@ class FreundlichSorption:
 
         Examples
         --------
-        >>> sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        >>> sorption = FreundlichSorption(
+        ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+        ... )
         >>> sorption.retardation(0.0)
         1.0
         >>> r = sorption.retardation(5.0)
@@ -155,9 +159,7 @@ class FreundlichSorption:
 
         # R = 1 + (ρ_b*k_f)/(n_por*n) * C^exponent
         coefficient = (self.bulk_density * self.k_f) / (self.porosity * self.n)
-        r = 1.0 + coefficient * (c**exponent)
-
-        return r
+        return 1.0 + coefficient * (c**exponent)
 
     def total_concentration(self, c: float) -> float:
         """
@@ -187,7 +189,9 @@ class FreundlichSorption:
 
         Examples
         --------
-        >>> sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        >>> sorption = FreundlichSorption(
+        ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+        ... )
         >>> sorption.total_concentration(0.0)
         0.0
         >>> c_total = sorption.total_concentration(5.0)
@@ -199,9 +203,7 @@ class FreundlichSorption:
 
         # C_total = C + (ρ_b/n_por) * k_f * C^(1/n)
         sorbed_mass_per_pore_volume = (self.bulk_density / self.porosity) * self.k_f * (c ** (1.0 / self.n))
-        c_total = c + sorbed_mass_per_pore_volume
-
-        return c_total
+        return c + sorbed_mass_per_pore_volume
 
     def concentration_from_retardation(self, r: float) -> float:
         """
@@ -233,7 +235,9 @@ class FreundlichSorption:
 
         Examples
         --------
-        >>> sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        >>> sorption = FreundlichSorption(
+        ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+        ... )
         >>> r = sorption.retardation(5.0)
         >>> c = sorption.concentration_from_retardation(r)
         >>> np.isclose(c, 5.0, rtol=1e-14)
@@ -262,9 +266,7 @@ class FreundlichSorption:
 
         # Inversion exponent: 1/exponent = n/(1-n)
         inversion_exponent = 1.0 / exponent
-        c = base**inversion_exponent
-
-        return c
+        return base**inversion_exponent
 
     def shock_velocity(self, c_left: float, c_right: float, flow: float) -> float:
         """
@@ -301,7 +303,9 @@ class FreundlichSorption:
 
         Examples
         --------
-        >>> sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        >>> sorption = FreundlichSorption(
+        ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+        ... )
         >>> v_shock = sorption.shock_velocity(c_left=10.0, c_right=2.0, flow=100.0)
         >>> v_shock > 0
         True
@@ -321,9 +325,7 @@ class FreundlichSorption:
 
         # Rankine-Hugoniot condition
         # s_shock = Δflux / ΔC_total
-        s_shock = (flux_right - flux_left) / (c_total_right - c_total_left)
-
-        return s_shock
+        return (flux_right - flux_left) / (c_total_right - c_total_left)
 
     def check_entropy_condition(self, c_left: float, c_right: float, shock_vel: float, flow: float) -> bool:
         """
@@ -369,7 +371,9 @@ class FreundlichSorption:
 
         Examples
         --------
-        >>> sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        >>> sorption = FreundlichSorption(
+        ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+        ... )
         >>> # Physical shock (compression for n>1)
         >>> v_shock = sorption.shock_velocity(10.0, 2.0, 100.0)
         >>> sorption.check_entropy_condition(10.0, 2.0, v_shock, 100.0)
@@ -387,9 +391,7 @@ class FreundlichSorption:
         # Use small tolerance for floating-point comparison
         tolerance = 1e-14 * max(abs(lambda_left), abs(lambda_right), abs(shock_vel))
 
-        satisfies = (lambda_left > shock_vel + tolerance) and (shock_vel > lambda_right - tolerance)
-
-        return satisfies
+        return (lambda_left > shock_vel + tolerance) and (shock_vel > lambda_right - tolerance)
 
 
 @dataclass
@@ -580,7 +582,9 @@ def characteristic_velocity(c: float, flow: float, sorption: FreundlichSorption 
 
     Examples
     --------
-    >>> sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+    >>> sorption = FreundlichSorption(
+    ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+    ... )
     >>> v = characteristic_velocity(c=5.0, flow=100.0, sorption=sorption)
     >>> v > 0
     True
@@ -622,8 +626,9 @@ def characteristic_position(
     Examples
     --------
     >>> sorption = ConstantRetardation(retardation_factor=2.0)
-    >>> v = characteristic_position(c=5.0, flow=100.0, sorption=sorption,
-    ...                             t_start=0.0, v_start=0.0, t=10.0)
+    >>> v = characteristic_position(
+    ...     c=5.0, flow=100.0, sorption=sorption, t_start=0.0, v_start=0.0, t=10.0
+    ... )
     >>> np.isclose(v, 500.0)  # v = 100/2 * 10 = 500
     True
     """
@@ -631,9 +636,7 @@ def characteristic_position(
         return None
 
     velocity = characteristic_velocity(c, flow, sorption)
-    position = v_start + velocity * (t - t_start)
-
-    return position
+    return v_start + velocity * (t - t_start)
 
 
 def compute_first_arrival_time(
@@ -704,7 +707,7 @@ def compute_first_arrival_time(
 
     idx_first = nonzero_indices[0]
     c_first = cin[idx_first]
-    t_start = tedges[idx_first]
+    tedges[idx_first]
 
     # Compute retardation for this concentration
     r_first = sorption.retardation(c_first)
@@ -723,8 +726,7 @@ def compute_first_arrival_time(
             # First arrival occurs during this bin
             remaining_volume = target_volume - cumulative_volume
             dt_partial = remaining_volume / flow[i]
-            t_arrival = tedges[i] + dt_partial
-            return t_arrival
+            return tedges[i] + dt_partial
 
         cumulative_volume += volume_in_bin
 
