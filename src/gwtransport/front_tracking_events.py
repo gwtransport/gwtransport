@@ -435,11 +435,12 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> Optional[fl
         return None
 
     if isinstance(wave, CharacteristicWave):
-        # Get current position
+        # Get current position (use wave start time if not yet active)
         from gwtransport.front_tracking_math import characteristic_position
 
+        t_eval = max(t_current, wave.t_start)
         v_current = characteristic_position(
-            wave.concentration, wave.flow, wave.sorption, wave.t_start, wave.v_start, t_current
+            wave.concentration, wave.flow, wave.sorption, wave.t_start, wave.v_start, t_eval
         )
 
         if v_current is None or v_current >= v_outlet:
@@ -451,13 +452,14 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> Optional[fl
         if vel <= 0:
             return None  # Moving backward (unphysical)
 
-        # Solve: v_current + vel*(t - t_current) = v_outlet
+        # Solve: v_current + vel*(t - t_eval) = v_outlet
         dt = (v_outlet - v_current) / vel
-        return t_current + dt
+        return t_eval + dt
 
     if isinstance(wave, ShockWave):
-        # Current position
-        v_current = wave.v_start + wave.velocity * (t_current - wave.t_start)
+        # Current position (use wave start time if not yet active)
+        t_eval = max(t_current, wave.t_start)
+        v_current = wave.v_start + wave.velocity * (t_eval - wave.t_start)
 
         if v_current >= v_outlet:
             return None  # Already past outlet
@@ -465,17 +467,18 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> Optional[fl
         if wave.velocity <= 0:
             return None  # Moving backward (unphysical)
 
-        # Solve: v_current + velocity*(t - t_current) = v_outlet
+        # Solve: v_current + velocity*(t - t_eval) = v_outlet
         dt = (v_outlet - v_current) / wave.velocity
-        return t_current + dt
+        return t_eval + dt
 
     if isinstance(wave, RarefactionWave):
         # Head crosses first (leading edge)
+        t_eval = max(t_current, wave.t_start)
         vel_head = characteristic_velocity(wave.c_head, wave.flow, wave.sorption)
 
         from gwtransport.front_tracking_math import characteristic_position
 
-        v_head = characteristic_position(wave.c_head, wave.flow, wave.sorption, wave.t_start, wave.v_start, t_current)
+        v_head = characteristic_position(wave.c_head, wave.flow, wave.sorption, wave.t_start, wave.v_start, t_eval)
 
         if v_head is None or v_head >= v_outlet:
             return None
@@ -484,6 +487,6 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> Optional[fl
             return None
 
         dt = (v_outlet - v_head) / vel_head
-        return t_current + dt
+        return t_eval + dt
 
     return None
