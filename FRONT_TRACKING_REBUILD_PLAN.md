@@ -3,7 +3,7 @@
 **Branch**: `front-tracking-clean` (clean branch from main)
 **Goal**: Machine-precision, physically correct, exact analytical solution for front tracking with nonlinear sorption
 
-**Status**: Phase 2 COMPLETE ✅
+**Status**: Phase 3 COMPLETE ✅
 
 ---
 
@@ -24,15 +24,25 @@
   - RarefactionWave class with self-similar solution
   - **All 33 unit tests passing** (total: 72 tests passing)
 
+- ✅ Phase 3.1-3.2: Event Detection (front_tracking_events.py)
+  - Event and EventType dataclasses
+  - find_characteristic_intersection (exact analytical)
+  - find_shock_shock_intersection (exact analytical)
+  - find_shock_characteristic_intersection (exact analytical)
+  - find_rarefaction_boundary_intersections (head/tail detection)
+  - find_outlet_crossing (for all wave types)
+  - **All 20 unit tests passing** with machine precision (rtol=1e-14)
+  - **Total: 125 tests passing** (72 + 20 + 33 integration tests)
+
 ### Next Steps
-- Phase 3: Event Detection (exact analytical intersections)
 - Phase 4: Wave Interactions (event handlers)
 - Phase 5: Front Tracker (main solver)
+- Phase 6: Concentration Extraction (output computation)
 
 ### For Session Continuation
 
 If starting a new session, tell Claude:
-> "Continue implementing the front tracking rebuild. We're on branch `front-tracking-clean`. Phases 1-2 (Mathematical Foundation + Wave Representation) complete with 72 tests passing. Next: implement Phase 3 (Event Detection). See FRONT_TRACKING_REBUILD_PLAN.md for the full plan."
+> "Continue implementing the front tracking rebuild. We're on branch `front-tracking-clean`. Phases 1-3 (Mathematical Foundation + Wave Representation + Event Detection) complete with 125 tests passing. Next: implement Phase 4 (Wave Interactions - Event Handlers). See FRONT_TRACKING_REBUILD_PLAN.md for the full plan."
 
 ---
 
