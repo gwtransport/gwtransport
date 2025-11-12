@@ -2167,6 +2167,23 @@ Contents:
 This section documents TODOs and known limitations in the current implementation.
 All items are tracked for future enhancement phases.
 
+### ✅ Resolved in Phase 6
+
+**Rarefaction Tail Exit Detection** - **COMPLETED** ✅
+   - Location: `front_tracking_output.py:247-275`
+   - Resolution: `identify_outlet_segments()` now detects both head and tail crossings
+   - Implementation: Tracks both rarefaction head and tail crossing events at outlet
+   - Impact: Rarefaction waves are properly handled when exiting domain
+
+**Output Mass Balance Verification** - **PARTIALLY COMPLETED** 🟡
+   - Location: `front_tracking_output.py`, `test_front_tracking_output.py`
+   - What's done:
+     - Output mass conservation verified to ~1e-13 relative error
+     - `compute_bin_averaged_concentration_exact()` conserves mass to machine precision
+     - Test suite includes `test_bin_averaging_conserves_mass()`
+   - What remains: Runtime `verify_physics()` doesn't compute total mass during simulation
+   - Next step: Add analytical domain integration to `verify_physics()` for runtime checks
+
 ### High Priority
 
 1. **Rarefaction-Rarefaction Intersections** (`front_tracking_events.py:390`)
@@ -2187,11 +2204,12 @@ All items are tracked for future enhancement phases.
    - Impact: Complex shock-rarefaction interactions may not be fully accurate
    - Solution: Implement full wave splitting logic as described in LeVeque (2002)
 
-4. **Exact Mass Balance Verification** (`front_tracking_solver.py:535`)
+4. **Runtime Mass Balance Verification** (`front_tracking_solver.py:535`)
    - Location: `verify_physics()`
-   - Issue: Only checks entropy, not mass balance
-   - Impact: Cannot verify mass conservation during simulation
+   - Issue: Only checks entropy, not mass balance during simulation
+   - Impact: Cannot verify mass conservation at runtime
    - Solution: Implement analytical integration over domain to compute total mass
+   - Note: Output mass conservation is already verified in tests (Phase 6)
 
 ### Medium Priority
 
@@ -2201,13 +2219,7 @@ All items are tracked for future enhancement phases.
    - Impact: May handle wrong boundary in some cases
    - Solution: Add boundary_type field to Event dataclass
 
-6. **Rarefaction Tail Exit Detection** (`front_tracking.py:1478`)
-   - Location: Old FrontTracker implementation
-   - Issue: Only detects head exit, not tail exit
-   - Impact: Rarefaction waves remain partially active after tail exits
-   - Solution: Add tail crossing detection to outlet crossing logic
-
-7. **Sophisticated Rarefaction Boundary Modification** (`front_tracking_handlers.py:401`)
+6. **Sophisticated Rarefaction Boundary Modification** (`front_tracking_handlers.py:401`)
    - Location: `handle_rarefaction_characteristic_collision()`
    - Issue: Current implementation just absorbs characteristic
    - Impact: May not correctly represent wave structure
@@ -2215,40 +2227,40 @@ All items are tracked for future enhancement phases.
 
 ### Low Priority
 
-8. **Rarefaction-Rarefaction Collisions**
+7. **Rarefaction-Rarefaction Collisions**
    - Status: Not implemented
    - Impact: Rare case, limited practical impact
    - Solution: Extend event detection to handle rarefaction fan mergers
 
-9. **Adaptive Time Stepping**
+8. **Adaptive Time Stepping**
    - Status: Uses event-driven (exact) time stepping
    - Impact: Many events may slow down simulation
-   - Solution: Consider adaptive refinement for dense event regions (post-Phase 7)
+   - Solution: Consider adaptive refinement for dense event regions (post-Phase 8)
 
-10. **Parallel Event Processing**
+9. **Parallel Event Processing**
     - Status: Sequential event processing
     - Impact: Cannot leverage parallelism
     - Solution: Implement space-time domain decomposition (research topic)
 
 ### Implementation Priority Order
 
-**Phase 5 (Current)**: Items blocking basic functionality
-- Item #4: Mass balance verification (for validation)
-- Item #5: Correct boundary type handling
+**Phase 7 (Next)**: API Integration
+- Create public interface in `advection.py`
+- Integrate with existing API patterns
+- Add documentation and examples
 
-**Phase 6 (Next)**: Items affecting accuracy
+**Phase 8 (Future)**: Items affecting accuracy and completeness
 - Item #1: Rarefaction-rarefaction intersections
 - Item #3: Full shock-rarefaction splitting
 - Item #2: Rarefaction creation from invalid shocks
-
-**Phase 7 (Polish)**: Completeness and edge cases
-- Item #6: Tail exit detection
-- Item #7: Sophisticated boundary modification
-- Item #8: Rarefaction-rarefaction collisions
+- Item #4: Runtime mass balance verification
+- Item #5: Correct boundary type handling
+- Item #6: Sophisticated boundary modification
+- Item #7: Rarefaction-rarefaction collisions
 
 **Future Work**: Performance and advanced features
-- Item #9: Adaptive time stepping
-- Item #10: Parallel processing
+- Item #8: Adaptive time stepping
+- Item #9: Parallel processing
 
 ---
 
