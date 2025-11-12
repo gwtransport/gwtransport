@@ -2144,6 +2144,96 @@ Contents:
 
 ---
 
+## Known Issues and Future Improvements
+
+This section documents TODOs and known limitations in the current implementation.
+All items are tracked for future enhancement phases.
+
+### High Priority
+
+1. **Rarefaction-Rarefaction Intersections** (`front_tracking_events.py:390`)
+   - Location: `find_rarefaction_boundary_intersections()`
+   - Issue: Not yet implemented
+   - Impact: Cannot handle rarefaction fan interactions
+   - Solution: Implement boundary-boundary intersection logic for raref-raref collisions
+
+2. **Rarefaction Creation from Invalid Shock** (`front_tracking_handlers.py:264`)
+   - Location: `handle_shock_characteristic_collision()`
+   - Issue: When entropy violated, waves just disappear instead of creating rarefaction
+   - Impact: Mass balance may not be preserved in some edge cases
+   - Solution: Detect compression-to-rarefaction transitions and create appropriate waves
+
+3. **Full Shock-Rarefaction Wave Splitting** (`front_tracking_handlers.py:318`)
+   - Location: `handle_shock_rarefaction_collision()`
+   - Issue: Simplified implementation without wave splitting
+   - Impact: Complex shock-rarefaction interactions may not be fully accurate
+   - Solution: Implement full wave splitting logic as described in LeVeque (2002)
+
+4. **Exact Mass Balance Verification** (`front_tracking_solver.py:535`)
+   - Location: `verify_physics()`
+   - Issue: Only checks entropy, not mass balance
+   - Impact: Cannot verify mass conservation during simulation
+   - Solution: Implement analytical integration over domain to compute total mass
+
+### Medium Priority
+
+5. **Rarefaction Boundary Type in Events** (`front_tracking_solver.py:396, 405`)
+   - Location: `handle_event()` dispatcher
+   - Issue: Hardcoded "head" and "tail" instead of extracting from event
+   - Impact: May handle wrong boundary in some cases
+   - Solution: Add boundary_type field to Event dataclass
+
+6. **Rarefaction Tail Exit Detection** (`front_tracking.py:1478`)
+   - Location: Old FrontTracker implementation
+   - Issue: Only detects head exit, not tail exit
+   - Impact: Rarefaction waves remain partially active after tail exits
+   - Solution: Add tail crossing detection to outlet crossing logic
+
+7. **Sophisticated Rarefaction Boundary Modification** (`front_tracking_handlers.py:401`)
+   - Location: `handle_rarefaction_characteristic_collision()`
+   - Issue: Current implementation just absorbs characteristic
+   - Impact: May not correctly represent wave structure
+   - Solution: Modify rarefaction head/tail concentrations instead of deactivating
+
+### Low Priority
+
+8. **Rarefaction-Rarefaction Collisions**
+   - Status: Not implemented
+   - Impact: Rare case, limited practical impact
+   - Solution: Extend event detection to handle rarefaction fan mergers
+
+9. **Adaptive Time Stepping**
+   - Status: Uses event-driven (exact) time stepping
+   - Impact: Many events may slow down simulation
+   - Solution: Consider adaptive refinement for dense event regions (post-Phase 7)
+
+10. **Parallel Event Processing**
+    - Status: Sequential event processing
+    - Impact: Cannot leverage parallelism
+    - Solution: Implement space-time domain decomposition (research topic)
+
+### Implementation Priority Order
+
+**Phase 5 (Current)**: Items blocking basic functionality
+- Item #4: Mass balance verification (for validation)
+- Item #5: Correct boundary type handling
+
+**Phase 6 (Next)**: Items affecting accuracy
+- Item #1: Rarefaction-rarefaction intersections
+- Item #3: Full shock-rarefaction splitting
+- Item #2: Rarefaction creation from invalid shocks
+
+**Phase 7 (Polish)**: Completeness and edge cases
+- Item #6: Tail exit detection
+- Item #7: Sophisticated boundary modification
+- Item #8: Rarefaction-rarefaction collisions
+
+**Future Work**: Performance and advanced features
+- Item #9: Adaptive time stepping
+- Item #10: Parallel processing
+
+---
+
 ## Implementation Order
 
 1. **Week 1**: Phase 1 (Math foundation) + Phase 2 (Wave classes)
