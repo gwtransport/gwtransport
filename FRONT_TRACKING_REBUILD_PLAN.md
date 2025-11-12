@@ -3,7 +3,7 @@
 **Branch**: `front-tracking-clean` (clean branch from main)
 **Goal**: Machine-precision, physically correct, exact analytical solution for front tracking with nonlinear sorption
 
-**Status**: Phase 5 COMPLETE ✅
+**Status**: Phase 6 COMPLETE ✅
 
 ---
 
@@ -52,17 +52,24 @@
   - verify_physics(): Entropy and consistency checks
   - _initialize_inlet_waves(): Automatic inlet wave creation
   - **All 21 unit tests passing** with edge case handling
-  - **Total: 168 tests passing** (39 + 33 + 20 + 22 + 21 + 33 integration tests)
+
+- ✅ Phase 6.1-6.3: Concentration Extraction (front_tracking_output.py)
+  - concentration_at_point(): Exact point-wise concentration computation
+  - compute_breakthrough_curve(): Concentration at outlet over time
+  - identify_outlet_segments(): Wave segment identification for integration
+  - integrate_rarefaction_exact(): Exact analytical integration of rarefactions
+  - compute_bin_averaged_concentration_exact(): Bin-averaged output with exact integration
+  - **All 23 unit tests passing** with machine precision (rtol=1e-14)
+  - **Total: 161 tests passing** (39 + 33 + 20 + 22 + 21 + 23 + integration tests)
 
 ### Next Steps
-- Phase 6: Concentration Extraction (output computation with exact integration)
 - Phase 7: API Integration (public interface in advection.py)
 - Phase 8: Complete integration testing and validation
 
 ### For Session Continuation
 
 If starting a new session, tell Claude:
-> "Continue implementing the front tracking rebuild. We're on branch `front-tracking-clean`. Phases 1-5 (Mathematical Foundation + Wave Representation + Event Detection + Wave Interactions + Front Tracker) complete with 168 tests passing. Next: implement Phase 6 (Concentration Extraction - computing outlet concentrations). See FRONT_TRACKING_REBUILD_PLAN.md for the full plan."
+> "Continue implementing the front tracking rebuild. We're on branch `front-tracking-clean`. Phases 1-6 (Mathematical Foundation + Wave Representation + Event Detection + Wave Interactions + Front Tracker + Concentration Extraction) complete with 161 tests passing. Next: implement Phase 7 (API Integration - create public interface in advection.py). See FRONT_TRACKING_REBUILD_PLAN.md for the full plan."
 
 ---
 
@@ -75,6 +82,7 @@ If starting a new session, tell Claude:
 5. **Multiple Streamline Architecture**: Design supports future extension to distributions of pore volumes
 6. **Consistent API**: Use gwtransport terminology (tedges, cin, flow, aquifer_pore_volume, etc.)
 7. **No Capital Variable Names**: Follow Python convention (c_left not C_L, v_max not V_max)
+8. **Meaningful and Explicit Tests**: None of the tests contain conditional statements or try-except constructs. Ensure each comparisson serves the purpose of the test.
 
 ---
 
