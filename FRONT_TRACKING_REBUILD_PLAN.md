@@ -3,7 +3,7 @@
 **Branch**: `front-tracking-clean` (clean branch from main)
 **Goal**: Machine-precision, physically correct, exact analytical solution for front tracking with nonlinear sorption
 
-**Status**: Phase 3 COMPLETE ✅
+**Status**: Phase 4 COMPLETE ✅
 
 ---
 
@@ -22,7 +22,7 @@
   - CharacteristicWave class for smooth regions
   - ShockWave class with Rankine-Hugoniot condition
   - RarefactionWave class with self-similar solution
-  - **All 33 unit tests passing** (total: 72 tests passing)
+  - **All 33 unit tests passing**
 
 - ✅ Phase 3.1-3.2: Event Detection (front_tracking_events.py)
   - Event and EventType dataclasses
@@ -32,17 +32,27 @@
   - find_rarefaction_boundary_intersections (head/tail detection)
   - find_outlet_crossing (for all wave types)
   - **All 20 unit tests passing** with machine precision (rtol=1e-14)
-  - **Total: 125 tests passing** (72 + 20 + 33 integration tests)
+
+- ✅ Phase 4.1-4.2: Wave Interactions (front_tracking_handlers.py)
+  - handle_characteristic_collision: creates entropic shocks
+  - handle_shock_collision: merges shocks with proper entropy
+  - handle_shock_characteristic_collision: absorbs characteristics
+  - handle_shock_rarefaction_collision: complex interactions (simplified)
+  - handle_rarefaction_characteristic_collision: boundary interactions
+  - handle_outlet_crossing: records exit events
+  - create_inlet_waves_at_time: inlet boundary condition handler
+  - **All 22 unit tests passing** with entropy verification
+  - **Total: 147 tests passing** (39 + 33 + 20 + 22 + 33 integration tests)
 
 ### Next Steps
-- Phase 4: Wave Interactions (event handlers)
-- Phase 5: Front Tracker (main solver)
-- Phase 6: Concentration Extraction (output computation)
+- Phase 5: Front Tracker (main solver - event-driven simulation loop)
+- Phase 6: Concentration Extraction (output computation with exact integration)
+- Phase 7: API Integration (public interface in advection.py)
 
 ### For Session Continuation
 
 If starting a new session, tell Claude:
-> "Continue implementing the front tracking rebuild. We're on branch `front-tracking-clean`. Phases 1-3 (Mathematical Foundation + Wave Representation + Event Detection) complete with 125 tests passing. Next: implement Phase 4 (Wave Interactions - Event Handlers). See FRONT_TRACKING_REBUILD_PLAN.md for the full plan."
+> "Continue implementing the front tracking rebuild. We're on branch `front-tracking-clean`. Phases 1-4 (Mathematical Foundation + Wave Representation + Event Detection + Wave Interactions) complete with 147 tests passing. Next: implement Phase 5 (Front Tracker - main event-driven simulation loop). See FRONT_TRACKING_REBUILD_PLAN.md for the full plan."
 
 ---
 
