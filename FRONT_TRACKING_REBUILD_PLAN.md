@@ -3,7 +3,7 @@
 **Branch**: `front-tracking-clean` (clean branch from main)
 **Goal**: Machine-precision, physically correct, exact analytical solution for front tracking with nonlinear sorption
 
-**Status**: Phase 6 COMPLETE ✅
+**Status**: Phase 7 COMPLETE ✅
 
 ---
 
@@ -62,14 +62,27 @@
   - **All 23 unit tests passing** with machine precision (rtol=1e-14)
   - **Total: 161 tests passing** (39 + 33 + 20 + 22 + 21 + 23 + integration tests)
 
+- ✅ Phase 7.1-7.2: API Integration (advection.py)
+  - infiltration_to_extraction_front_tracking(): Public API function
+    - Integrates Phase 1-6 modules (FreundlichSorption, FrontTracker, compute_bin_averaged_concentration_exact)
+    - Supports both Freundlich sorption and constant retardation via retardation_factor parameter
+    - Returns bin-averaged concentrations with machine precision
+    - Comprehensive docstring with examples and notes on spin-up period
+  - infiltration_to_extraction_front_tracking_detailed(): Detailed output function
+    - Returns both concentrations and complete diagnostic structure
+    - Structure includes: waves, events, t_first_arrival, n_events, n_shocks, n_rarefactions, tracker_state
+    - Enables detailed analysis of wave dynamics and event history
+  - **All 5 API smoke tests passing** (test_advection_api_phase7.py)
+  - **Total: 166 tests passing** (161 from Phases 1-6 + 5 from Phase 7)
+  - Removed old implementation tests (test_advection_front_tracking.py, test_front_tracking.py)
+
 ### Next Steps
-- Phase 7: API Integration (public interface in advection.py)
 - Phase 8: Complete integration testing and validation
 
 ### For Session Continuation
 
 If starting a new session, tell Claude:
-> "Continue implementing the front tracking rebuild. We're on branch `front-tracking-clean`. Phases 1-6 (Mathematical Foundation + Wave Representation + Event Detection + Wave Interactions + Front Tracker + Concentration Extraction) complete with 161 tests passing. Next: implement Phase 7 (API Integration - create public interface in advection.py). See FRONT_TRACKING_REBUILD_PLAN.md for the full plan."
+> "Continue implementing the front tracking rebuild. We're on branch `front-tracking-clean`. Phases 1-7 (Mathematical Foundation + Wave Representation + Event Detection + Wave Interactions + Front Tracker + Concentration Extraction + API Integration) complete with 166 tests passing. Next: implement Phase 8 (Integration Testing & Validation). See FRONT_TRACKING_REBUILD_PLAN.md for the full plan."
 
 ---
 
@@ -82,7 +95,7 @@ If starting a new session, tell Claude:
 5. **Multiple Streamline Architecture**: Design supports future extension to distributions of pore volumes
 6. **Consistent API**: Use gwtransport terminology (tedges, cin, flow, aquifer_pore_volume, etc.)
 7. **No Capital Variable Names**: Follow Python convention (c_left not C_L, v_max not V_max)
-8. **Meaningful and Explicit Tests**: None of the tests contain conditional statements or try-except constructs. Ensure each comparisson serves the purpose of the test.
+8. **Meaningful and Explicit Tests**: None of the tests contain conditional statements or try-except constructs. Ensure each comparisson serves the purpose of the test. Masked array comparisons should only be used if the remaining unmasked values are sufficient to validate the test purpose.
 
 ---
 

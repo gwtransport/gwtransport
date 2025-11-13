@@ -40,6 +40,17 @@ Available functions:
   gamma_infiltration_to_extraction. Use case: Calibrating infiltration conditions from
   extraction measurements.
 
+- :func:`infiltration_to_extraction_front_tracking` - Exact front tracking with Freundlich sorption.
+  Event-driven algorithm that solves 1D advective transport with Freundlich isotherm using
+  analytical integration of shock and rarefaction waves. Machine-precision physics (no numerical
+  dispersion). Returns bin-averaged concentrations. Use case: Sharp concentration fronts with
+  exact mass balance required, single deterministic flow path.
+
+- :func:`infiltration_to_extraction_front_tracking_detailed` - Front tracking with piecewise structure.
+  Same as infiltration_to_extraction_front_tracking but also returns complete piecewise analytical
+  structure including all events, segments, and callable analytical forms C(t). Use case: Detailed
+  analysis of shock and rarefaction wave dynamics.
+
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
@@ -1183,3 +1194,347 @@ def extraction_to_infiltration(
     out[total_weights == 0] = np.nan
 
     return out
+
+
+def infiltration_to_extraction_front_tracking(
+    *,
+    cin: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    aquifer_pore_volume: float,
+    freundlich_k: float | None = None,
+    freundlich_n: float | None = None,
+    bulk_density: float | None = None,
+    porosity: float | None = None,
+    retardation_factor: float | None = None,
+    max_iterations: int = 10000,
+) -> npt.NDArray[np.floating]:
+    """
+    Compute extracted concentration using exact front tracking with nonlinear sorption.
+
+    Uses event-driven analytical algorithm that tracks shock waves, rarefaction waves,
+    and characteristics with machine precision. No numerical dispersion, exact mass
+    balance to floating-point precision.
+
+    Parameters
+    ----------
+    cin : array-like
+        Infiltration concentration [mg/L or any units].
+        Length = len(tedges) - 1.
+    flow : array-like
+        Flow rate [m³/day]. Must be positive.
+        Length = len(tedges) - 1.
+    tedges : pandas.DatetimeIndex
+        Time bin edges. Length = len(cin) + 1.
+    cout_tedges : pandas.DatetimeIndex
+        Output time bin edges. Can be different from tedges.
+        Length determines output array size.
+    aquifer_pore_volume : float
+        Total pore volume [m³]. Must be positive.
+    freundlich_k : float, optional
+        Freundlich coefficient [(m³/kg)^(1/n)]. Must be positive.
+        Used if retardation_factor is None.
+    freundlich_n : float, optional
+        Freundlich exponent [-]. Must be positive and != 1.
+        Used if retardation_factor is None.
+    bulk_density : float, optional
+        Bulk density [kg/m³]. Must be positive.
+        Used if retardation_factor is None.
+    porosity : float, optional
+        Porosity [-]. Must be in (0, 1).
+        Used if retardation_factor is None.
+    retardation_factor : float, optional
+        Constant retardation factor [-]. If provided, uses linear retardation
+        instead of Freundlich sorption. Must be >= 1.0.
+    max_iterations : int, optional
+        Maximum number of events. Default 10000.
+
+    Returns
+    -------
+    cout : numpy.ndarray
+        Bin-averaged extraction concentration.
+        Length = len(cout_tedges) - 1.
+
+    Notes
+    -----
+    **Spin-up Period**:
+    The function computes the first arrival time t_first. Concentrations
+    before t_first are affected by unknown initial conditions and should
+    not be used for analysis. Use `infiltration_to_extraction_front_tracking_detailed`
+    to access t_first.
+
+    **Machine Precision**:
+    All calculations use exact analytical formulas. Mass balance is conserved
+    to floating-point precision (~1e-14 relative error). No numerical tolerances
+    are used for time/position calculations.
+
+    **Physical Correctness**:
+    - All shocks satisfy Lax entropy condition
+    - Rarefaction waves use self-similar solutions
+    - Causality is strictly enforced
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import pandas as pd
+    >>>
+    >>> # Pulse injection
+    >>> tedges = pd.date_range("2020-01-01", periods=4, freq="10D")
+    >>> cin = np.array([0.0, 10.0, 0.0])
+    >>> flow = np.array([100.0, 100.0, 100.0])
+    >>> cout_tedges = pd.date_range("2020-01-01", periods=10, freq="5D")
+    >>>
+    >>> cout = infiltration_to_extraction_front_tracking(
+    ...     cin=cin,
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cout_tedges=cout_tedges,
+    ...     aquifer_pore_volume=500.0,
+    ...     freundlich_k=0.01,
+    ...     freundlich_n=2.0,
+    ...     bulk_density=1500.0,
+    ...     porosity=0.3,
+    ... )
+
+    See Also
+    --------
+    infiltration_to_extraction_front_tracking_detailed : Returns detailed structure
+    infiltration_to_extraction : Convolution-based approach for linear case
+    gamma_infiltration_to_extraction : For distributions of pore volumes
+    """
+    # Input validation
+    cin = np.asarray(cin, dtype=float)
+    flow = np.asarray(flow, dtype=float)
+    tedges = pd.DatetimeIndex(tedges)
+    cout_tedges = pd.DatetimeIndex(cout_tedges)
+
+    if len(tedges) != len(cin) + 1:
+        raise ValueError("tedges must have length len(cin) + 1")
+    if len(flow) != len(cin):
+        raise ValueError("flow must have same length as cin")
+    if np.any(cin < 0):
+        raise ValueError("cin must be non-negative")
+    if np.any(flow <= 0):
+        raise ValueError("flow must be positive")
+    if np.any(np.isnan(cin)) or np.any(np.isnan(flow)):
+        raise ValueError("cin and flow must not contain NaN")
+    if aquifer_pore_volume <= 0:
+        raise ValueError("aquifer_pore_volume must be positive")
+
+    # Convert time to days (relative to tedges[0])
+    t_ref = tedges[0]
+    tedges_days = ((tedges - t_ref) / pd.Timedelta(days=1)).values
+    cout_tedges_days = ((cout_tedges - t_ref) / pd.Timedelta(days=1)).values
+
+    # Create sorption object
+    if retardation_factor is not None:
+        if retardation_factor < 1.0:
+            raise ValueError("retardation_factor must be >= 1.0")
+        from gwtransport.front_tracking_math import ConstantRetardation
+
+        sorption = ConstantRetardation(retardation_factor=retardation_factor)
+    else:
+        if freundlich_k is None or freundlich_n is None or bulk_density is None or porosity is None:
+            raise ValueError(
+                "Must provide either retardation_factor or all Freundlich parameters "
+                "(freundlich_k, freundlich_n, bulk_density, porosity)"
+            )
+        if freundlich_k <= 0 or freundlich_n <= 0:
+            raise ValueError("Freundlich parameters must be positive")
+        if abs(freundlich_n - 1.0) < 1e-10:
+            raise ValueError("freundlich_n = 1 not supported (use retardation_factor for linear case)")
+        if bulk_density <= 0 or not 0 < porosity < 1:
+            raise ValueError("Invalid physical parameters")
+
+        from gwtransport.front_tracking_math import FreundlichSorption
+
+        sorption = FreundlichSorption(
+            k_f=freundlich_k,
+            n=freundlich_n,
+            bulk_density=bulk_density,
+            porosity=porosity,
+        )
+
+    # Create tracker and run simulation
+    from gwtransport.front_tracking_solver import FrontTracker
+
+    tracker = FrontTracker(
+        cin=cin,
+        flow=flow,
+        tedges=tedges_days,
+        aquifer_pore_volume=aquifer_pore_volume,
+        sorption=sorption,
+    )
+
+    tracker.run(max_iterations=max_iterations)
+
+    # Extract bin-averaged concentrations at outlet
+    from gwtransport.front_tracking_output import compute_bin_averaged_concentration_exact
+
+    cout = compute_bin_averaged_concentration_exact(
+        t_edges=cout_tedges_days,
+        v_outlet=aquifer_pore_volume,
+        waves=tracker.state.waves,
+        sorption=sorption,
+    )
+
+    return cout
+
+
+def infiltration_to_extraction_front_tracking_detailed(
+    *,
+    cin: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    aquifer_pore_volume: float,
+    freundlich_k: float | None = None,
+    freundlich_n: float | None = None,
+    bulk_density: float | None = None,
+    porosity: float | None = None,
+    retardation_factor: float | None = None,
+    max_iterations: int = 10000,
+) -> tuple[npt.NDArray[np.floating], dict]:
+    """
+    Compute extracted concentration with complete diagnostic information.
+
+    Returns both bin-averaged concentrations and detailed simulation structure.
+
+    Parameters
+    ----------
+    [Same as infiltration_to_extraction_front_tracking]
+
+    Returns
+    -------
+    cout : numpy.ndarray
+        Bin-averaged concentrations.
+
+    structure : dict
+        Detailed simulation structure with keys:
+
+        - 'waves': List[Wave] - All wave objects created during simulation
+        - 'events': List[dict] - All events with times, types, and details
+        - 't_first_arrival': float - First arrival time (end of spin-up period)
+        - 'n_events': int - Total number of events
+        - 'n_shocks': int - Number of shocks created
+        - 'n_rarefactions': int - Number of rarefactions created
+        - 'n_characteristics': int - Number of characteristics created
+        - 'final_time': float - Final simulation time
+        - 'sorption': FreundlichSorption | ConstantRetardation - Sorption object
+        - 'tracker_state': FrontTrackerState - Complete simulation state
+
+    Examples
+    --------
+    >>> cout, structure = infiltration_to_extraction_front_tracking_detailed(
+    ...     cin=cin,
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cout_tedges=cout_tedges,
+    ...     aquifer_pore_volume=500.0,
+    ...     freundlich_k=0.01,
+    ...     freundlich_n=2.0,
+    ...     bulk_density=1500.0,
+    ...     porosity=0.3,
+    ... )
+    >>>
+    >>> # Access spin-up period
+    >>> print(f"First arrival: {structure['t_first_arrival']:.2f} days")
+    >>>
+    >>> # Analyze events
+    >>> for event in structure["events"]:
+    ...     print(f"t={event['time']:.2f}: {event['type']}")
+    """
+    # Input validation (same as main function)
+    cin = np.asarray(cin, dtype=float)
+    flow = np.asarray(flow, dtype=float)
+    tedges = pd.DatetimeIndex(tedges)
+    cout_tedges = pd.DatetimeIndex(cout_tedges)
+
+    if len(tedges) != len(cin) + 1:
+        raise ValueError("tedges must have length len(cin) + 1")
+    if len(flow) != len(cin):
+        raise ValueError("flow must have same length as cin")
+    if np.any(cin < 0):
+        raise ValueError("cin must be non-negative")
+    if np.any(flow <= 0):
+        raise ValueError("flow must be positive")
+    if np.any(np.isnan(cin)) or np.any(np.isnan(flow)):
+        raise ValueError("cin and flow must not contain NaN")
+    if aquifer_pore_volume <= 0:
+        raise ValueError("aquifer_pore_volume must be positive")
+
+    # Convert time to days
+    t_ref = tedges[0]
+    tedges_days = ((tedges - t_ref) / pd.Timedelta(days=1)).values
+    cout_tedges_days = ((cout_tedges - t_ref) / pd.Timedelta(days=1)).values
+
+    # Create sorption object
+    if retardation_factor is not None:
+        if retardation_factor < 1.0:
+            raise ValueError("retardation_factor must be >= 1.0")
+        from gwtransport.front_tracking_math import ConstantRetardation
+
+        sorption = ConstantRetardation(retardation_factor=retardation_factor)
+    else:
+        if freundlich_k is None or freundlich_n is None or bulk_density is None or porosity is None:
+            raise ValueError(
+                "Must provide either retardation_factor or all Freundlich parameters "
+                "(freundlich_k, freundlich_n, bulk_density, porosity)"
+            )
+        if freundlich_k <= 0 or freundlich_n <= 0:
+            raise ValueError("Freundlich parameters must be positive")
+        if abs(freundlich_n - 1.0) < 1e-10:
+            raise ValueError("freundlich_n = 1 not supported (use retardation_factor for linear case)")
+        if bulk_density <= 0 or not 0 < porosity < 1:
+            raise ValueError("Invalid physical parameters")
+
+        from gwtransport.front_tracking_math import FreundlichSorption
+
+        sorption = FreundlichSorption(
+            k_f=freundlich_k,
+            n=freundlich_n,
+            bulk_density=bulk_density,
+            porosity=porosity,
+        )
+
+    # Create tracker and run simulation
+    from gwtransport.front_tracking_solver import FrontTracker
+    from gwtransport.front_tracking_waves import CharacteristicWave, RarefactionWave, ShockWave
+
+    tracker = FrontTracker(
+        cin=cin,
+        flow=flow,
+        tedges=tedges_days,
+        aquifer_pore_volume=aquifer_pore_volume,
+        sorption=sorption,
+    )
+
+    tracker.run(max_iterations=max_iterations)
+
+    # Extract bin-averaged concentrations
+    from gwtransport.front_tracking_output import compute_bin_averaged_concentration_exact
+
+    cout = compute_bin_averaged_concentration_exact(
+        t_edges=cout_tedges_days,
+        v_outlet=aquifer_pore_volume,
+        waves=tracker.state.waves,
+        sorption=sorption,
+    )
+
+    # Build detailed structure dict
+    structure = {
+        "waves": tracker.state.waves,
+        "events": tracker.state.events,
+        "t_first_arrival": tracker.t_first_arrival,
+        "n_events": len(tracker.state.events),
+        "n_shocks": sum(1 for w in tracker.state.waves if isinstance(w, ShockWave)),
+        "n_rarefactions": sum(1 for w in tracker.state.waves if isinstance(w, RarefactionWave)),
+        "n_characteristics": sum(1 for w in tracker.state.waves if isinstance(w, CharacteristicWave)),
+        "final_time": tracker.state.t_current,
+        "sorption": sorption,
+        "tracker_state": tracker.state,
+        "aquifer_pore_volume": aquifer_pore_volume,
+    }
+
+    return cout, structure
