@@ -197,16 +197,12 @@ class TestHandleEvent:
 
         initial_wave_count = len(tracker.state.waves)
 
-        # Run for a few iterations
-        for _ in range(5):
-            event = tracker.find_next_event()
-            if event is None:
-                break
-            tracker.state.t_current = event.time
-            tracker.handle_event(event)
+        # Run simulation to completion
+        tracker.run(max_iterations=100, verbose=False)
 
-        # Should have recorded events
-        # (Exact count depends on wave interactions)
+        # MUST have recorded events (characteristic collisions should occur)
+        assert len(tracker.state.events) > 0, "Expected at least one event to be recorded"
+        assert len(tracker.state.waves) >= initial_wave_count, "Expected waves to be created from collisions"
 
 
 class TestSimulationRun:

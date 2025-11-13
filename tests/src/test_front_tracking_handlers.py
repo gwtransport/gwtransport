@@ -269,11 +269,10 @@ class TestShockCharacteristicCollisionHandler:
 
         new_waves = handle_shock_characteristic_collision(shock, char, t_event=20.0, v_event=150.0)
 
-        # Should create new shock (if entropy satisfied)
-        if new_waves:
-            assert len(new_waves) == 1
-            assert isinstance(new_waves[0], ShockWave)
-            assert new_waves[0].satisfies_entropy()
+        # MUST create new shock
+        assert len(new_waves) == 1, "Expected exactly one new shock wave"
+        assert isinstance(new_waves[0], ShockWave), "Expected new wave to be shock"
+        assert new_waves[0].satisfies_entropy(), "New shock must satisfy entropy"
 
     def test_characteristic_catches_shock(self, freundlich_sorption):
         """Test characteristic catching shock from behind."""
@@ -296,10 +295,10 @@ class TestShockCharacteristicCollisionHandler:
 
         new_waves = handle_shock_characteristic_collision(shock, char, t_event=20.0, v_event=150.0)
 
-        # Should create new shock or return empty
-        if new_waves:
-            assert isinstance(new_waves[0], ShockWave)
-            assert new_waves[0].satisfies_entropy()
+        # MUST create new shock
+        assert len(new_waves) == 1, "Expected exactly one new shock wave"
+        assert isinstance(new_waves[0], ShockWave), "Expected new wave to be shock"
+        assert new_waves[0].satisfies_entropy(), "New shock must satisfy entropy"
 
     def test_waves_deactivated_on_interaction(self, freundlich_sorption):
         """Test that both waves are deactivated."""
@@ -352,9 +351,9 @@ class TestShockRarefactionCollisionHandler:
 
         new_waves = handle_shock_rarefaction_collision(shock, raref, t_event=20.0, v_event=150.0, boundary_type="tail")
 
-        # Should create new shock or return empty
-        if new_waves:
-            assert all(isinstance(w, ShockWave) for w in new_waves)
+        # MUST create new shocks
+        assert len(new_waves) > 0, "Expected at least one new wave"
+        assert all(isinstance(w, ShockWave) for w in new_waves), "All new waves must be shocks"
 
     def test_head_catches_shock(self, freundlich_sorption):
         """Test rarefaction head catching shock."""
@@ -438,22 +437,33 @@ class TestInletWaveCreation:
         # For n=2 (favorable), C: 0→10 is rarefaction
         assert len(waves) == 1
 
-    def test_step_decrease_correct_wave_type(self, freundlich_sorption):
-        """Test step decrease with favorable sorption."""
+    def test_step_increase_creates_rarefaction(self, freundlich_sorption):
+        """Test step decrease in concentration creates rarefaction for favorable sorption."""
         # For n>1: C: 10→2 (both non-zero to avoid C=0 special case)
-        # vel(10) = 100/R(10) = 8.91, vel(2) = 100/R(2) = 18.67
-        # vel_new > vel_prev → compression → shock
+        # vel(10) = 100/R(10), vel(2) = 100/R(2)
+        # Since R(10) > R(2), vel(10) < vel(2)
+        # vel_new > vel_prev → expansion → rarefaction
         waves = create_inlet_waves_at_time(
             c_prev=10.0, c_new=2.0, t=10.0, flow=100.0, sorption=freundlich_sorption, v_inlet=0.0
         )
 
-        assert len(waves) == 1
-        # This should create a shock with proper entropy
-        if isinstance(waves[0], ShockWave):
-            assert waves[0].satisfies_entropy()
-        elif isinstance(waves[0], RarefactionWave):
-            # If rarefaction, verify it's correct
-            pass
+        # MUST create exactly one rarefaction
+        assert len(waves) == 1, "Expected exactly one wave"
+        assert isinstance(waves[0], RarefactionWave), "Expected wave to be a rarefaction for expansion"
+
+    def test_step_increase_creates_shock(self, freundlich_sorption):
+        """Test step increase in concentration creates shock for favorable sorption."""
+        # For n>1: C: 2→10
+        # vel(2) > vel(10) → new water is slower
+        # vel_new < vel_prev → compression → shock
+        waves = create_inlet_waves_at_time(
+            c_prev=2.0, c_new=10.0, t=10.0, flow=100.0, sorption=freundlich_sorption, v_inlet=0.0
+        )
+
+        # MUST create exactly one shock with proper entropy
+        assert len(waves) == 1, "Expected exactly one wave"
+        assert isinstance(waves[0], ShockWave), "Expected wave to be a shock for compression"
+        assert waves[0].satisfies_entropy(), "Shock must satisfy entropy condition"
 
     def test_no_change_creates_nothing(self, freundlich_sorption):
         """Test that no concentration change creates no waves."""
@@ -463,19 +473,18 @@ class TestInletWaveCreation:
 
         assert len(waves) == 0
 
-    def test_shock_satisfies_entropy(self, freundlich_sorption):
+    def test_created_shock_satisfies_entropy(self, freundlich_sorption):
         """Test that created shocks satisfy entropy condition."""
         # Create a scenario that definitely produces a shock
-        # For n>1: need new velocity > old velocity
-        # vel = flow / R(C), so need R(new) < R(old), so need C_new < C_old
-        # But also need it to be physically valid (faster catching slower)
+        # For n>1: C: 2→10 means fast→slow, compression→shock
         waves = create_inlet_waves_at_time(
-            c_prev=10.0, c_new=2.0, t=10.0, flow=100.0, sorption=freundlich_sorption, v_inlet=0.0
+            c_prev=2.0, c_new=10.0, t=10.0, flow=100.0, sorption=freundlich_sorption, v_inlet=0.0
         )
 
-        # This should create shock (C: 10→2, slower→faster, compression)
-        if waves and isinstance(waves[0], ShockWave):
-            assert waves[0].satisfies_entropy()
+        # This MUST create shock (C: 2→10, fast→slow, compression)
+        assert len(waves) == 1, "Expected exactly one wave"
+        assert isinstance(waves[0], ShockWave), "Expected wave to be a shock"
+        assert waves[0].satisfies_entropy(), "Shock must satisfy entropy"
 
     def test_constant_retardation(self, constant_retardation):
         """Test wave creation with constant retardation."""
@@ -507,33 +516,56 @@ class TestInletWaveCreation:
 class TestPhysicsCorrectness:
     """Test that handlers maintain physical correctness."""
 
-    def test_entropy_always_satisfied(self, freundlich_sorption):
-        """Test that all created shocks satisfy entropy."""
-        # Test various collision scenarios
-        test_cases = [
-            # (char1_c, char2_c)
-            (10.0, 2.0),
-            (5.0, 1.0),
-            (8.0, 3.0),
-        ]
+    def test_entropy_always_satisfied_case1(self, freundlich_sorption):
+        """Test that created shock satisfies entropy (case 1: C=10.0 → C=2.0)."""
+        char1 = CharacteristicWave(
+            t_start=0.0, v_start=0.0, flow=100.0, concentration=10.0, sorption=freundlich_sorption
+        )
 
-        for c1, c2 in test_cases:
-            char1 = CharacteristicWave(
-                t_start=0.0, v_start=0.0, flow=100.0, concentration=c1, sorption=freundlich_sorption
-            )
+        char2 = CharacteristicWave(
+            t_start=5.0, v_start=0.0, flow=100.0, concentration=2.0, sorption=freundlich_sorption
+        )
 
-            char2 = CharacteristicWave(
-                t_start=5.0, v_start=0.0, flow=100.0, concentration=c2, sorption=freundlich_sorption
-            )
+        new_waves = handle_characteristic_collision(char1, char2, t_event=15.0, v_event=100.0)
 
-            # Handle collision
-            try:
-                new_waves = handle_characteristic_collision(char1, char2, t_event=15.0, v_event=100.0)
-                if new_waves and isinstance(new_waves[0], ShockWave):
-                    assert new_waves[0].satisfies_entropy()
-            except RuntimeError:
-                # If entropy violation raises error, that's also acceptable
-                pass
+        # MUST create entropy-satisfying shock
+        assert len(new_waves) == 1, "Expected exactly one wave"
+        assert isinstance(new_waves[0], ShockWave), "Expected wave to be shock"
+        assert new_waves[0].satisfies_entropy(), "Shock must satisfy entropy"
+
+    def test_entropy_always_satisfied_case2(self, freundlich_sorption):
+        """Test that created shock satisfies entropy (case 2: C=5.0 → C=1.0)."""
+        char1 = CharacteristicWave(
+            t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=freundlich_sorption
+        )
+
+        char2 = CharacteristicWave(
+            t_start=5.0, v_start=0.0, flow=100.0, concentration=1.0, sorption=freundlich_sorption
+        )
+
+        new_waves = handle_characteristic_collision(char1, char2, t_event=15.0, v_event=100.0)
+
+        # MUST create entropy-satisfying shock
+        assert len(new_waves) == 1, "Expected exactly one wave"
+        assert isinstance(new_waves[0], ShockWave), "Expected wave to be shock"
+        assert new_waves[0].satisfies_entropy(), "Shock must satisfy entropy"
+
+    def test_entropy_always_satisfied_case3(self, freundlich_sorption):
+        """Test that created shock satisfies entropy (case 3: C=8.0 → C=3.0)."""
+        char1 = CharacteristicWave(
+            t_start=0.0, v_start=0.0, flow=100.0, concentration=8.0, sorption=freundlich_sorption
+        )
+
+        char2 = CharacteristicWave(
+            t_start=5.0, v_start=0.0, flow=100.0, concentration=3.0, sorption=freundlich_sorption
+        )
+
+        new_waves = handle_characteristic_collision(char1, char2, t_event=15.0, v_event=100.0)
+
+        # MUST create entropy-satisfying shock
+        assert len(new_waves) == 1, "Expected exactly one wave"
+        assert isinstance(new_waves[0], ShockWave), "Expected wave to be shock"
+        assert new_waves[0].satisfies_entropy(), "Shock must satisfy entropy"
 
     def test_mass_conservation_in_shock_merger(self, freundlich_sorption):
         """Test that shock merger conserves mass (Rankine-Hugoniot)."""
@@ -555,14 +587,11 @@ class TestPhysicsCorrectness:
             sorption=freundlich_sorption,
         )
 
-        try:
-            new_waves = handle_shock_collision(shock1, shock2, t_event=25.0, v_event=200.0)
+        new_waves = handle_shock_collision(shock1, shock2, t_event=25.0, v_event=200.0)
 
-            if new_waves:
-                merged = new_waves[0]
-                # Merged shock should satisfy Rankine-Hugoniot
-                # (already verified by satisfies_entropy which checks RH)
-                assert merged.satisfies_entropy()
-        except RuntimeError:
-            # Some mergers may be physically invalid
-            pass
+        # MUST create merged shock
+        assert len(new_waves) == 1, "Expected exactly one merged shock"
+        merged = new_waves[0]
+        # Merged shock should satisfy Rankine-Hugoniot
+        # (already verified by satisfies_entropy which checks RH)
+        assert merged.satisfies_entropy(), "Merged shock must satisfy entropy and Rankine-Hugoniot"
