@@ -21,17 +21,13 @@ class TestPhase7APIIntegration:
         """Test basic call with Freundlich sorption parameters."""
         # Simple step input
         dates = pd.date_range(start="2020-01-01", periods=5, freq="D")
-        tedges = compute_time_edges(
-            tedges=None, tstart=None, tend=dates, number_of_bins=len(dates)
-        )
+        tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
         cin = np.array([0.0, 0.0, 10.0, 10.0, 10.0])
         flow = np.full(len(dates), 100.0)
 
         cout_dates = pd.date_range(start=dates[0], periods=10, freq="D")
-        cout_tedges = compute_time_edges(
-            tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates)
-        )
+        cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
         # Call with Freundlich parameters
         cout = infiltration_to_extraction_front_tracking(
@@ -55,17 +51,13 @@ class TestPhase7APIIntegration:
     def test_constant_retardation(self):
         """Test with constant retardation factor (linear sorption)."""
         dates = pd.date_range(start="2020-01-01", periods=5, freq="D")
-        tedges = compute_time_edges(
-            tedges=None, tstart=None, tend=dates, number_of_bins=len(dates)
-        )
+        tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
         cin = np.array([0.0, 0.0, 10.0, 10.0, 10.0])
         flow = np.full(len(dates), 100.0)
 
         cout_dates = pd.date_range(start=dates[0], periods=10, freq="D")
-        cout_tedges = compute_time_edges(
-            tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates)
-        )
+        cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
         # Call with retardation_factor
         cout = infiltration_to_extraction_front_tracking(
@@ -85,17 +77,13 @@ class TestPhase7APIIntegration:
     def test_detailed_returns_structure(self):
         """Test detailed function returns both concentration and structure."""
         dates = pd.date_range(start="2020-01-01", periods=5, freq="D")
-        tedges = compute_time_edges(
-            tedges=None, tstart=None, tend=dates, number_of_bins=len(dates)
-        )
+        tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
         cin = np.array([0.0, 0.0, 10.0, 10.0, 10.0])
         flow = np.full(len(dates), 100.0)
 
         cout_dates = pd.date_range(start=dates[0], periods=10, freq="D")
-        cout_tedges = compute_time_edges(
-            tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates)
-        )
+        cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
         # Call detailed function
         cout, structure = infiltration_to_extraction_front_tracking_detailed(
@@ -129,17 +117,13 @@ class TestPhase7APIIntegration:
     def test_zero_concentration_input(self):
         """Test with all-zero concentration input."""
         dates = pd.date_range(start="2020-01-01", periods=5, freq="D")
-        tedges = compute_time_edges(
-            tedges=None, tstart=None, tend=dates, number_of_bins=len(dates)
-        )
+        tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
         cin = np.zeros(len(dates))
         flow = np.full(len(dates), 100.0)
 
         cout_dates = pd.date_range(start=dates[0], periods=10, freq="D")
-        cout_tedges = compute_time_edges(
-            tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates)
-        )
+        cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
         cout = infiltration_to_extraction_front_tracking(
             cin=cin,
@@ -157,17 +141,13 @@ class TestPhase7APIIntegration:
     def test_parameter_validation(self):
         """Test that parameter validation works."""
         dates = pd.date_range(start="2020-01-01", periods=5, freq="D")
-        tedges = compute_time_edges(
-            tedges=None, tstart=None, tend=dates, number_of_bins=len(dates)
-        )
+        tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
         cin = np.array([0.0, 0.0, 10.0, 10.0, 10.0])
         flow = np.full(len(dates), 100.0)
 
         cout_dates = pd.date_range(start=dates[0], periods=10, freq="D")
-        cout_tedges = compute_time_edges(
-            tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates)
-        )
+        cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
         # Should raise error if neither retardation_factor nor Freundlich params provided
         try:
