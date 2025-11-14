@@ -64,7 +64,7 @@ class FreundlichSorption:
     retardation(c)
         Compute retardation factor R(C)
     total_concentration(c)
-        Compute total concentration C_total(C) = C + (ρ_b/n_por)*s(C)
+        Compute total concentration C_total(C) = C + (rho_b/n_por)*s(C)
     concentration_from_retardation(r)
         Invert R → C analytically
     shock_velocity(c_left, c_right, flow)
@@ -85,8 +85,8 @@ class FreundlichSorption:
     Notes
     -----
     The retardation factor is defined as:
-        R(C) = 1 + (ρ_b/n_por) * ds/dC
-             = 1 + (ρ_b*k_f)/(n_por*n) * C^((1/n)-1)
+        R(C) = 1 + (rho_b/n_por) * ds/dC
+             = 1 + (rho_b*k_f)/(n_por*n) * C^((1/n)-1)
 
     For Freundlich sorption, R depends on C, which creates nonlinear wave behavior.
     """
@@ -122,7 +122,7 @@ class FreundlichSorption:
             v_C = flow / R(C)
 
         For Freundlich sorption:
-            R(C) = 1 + (ρ_b*k_f)/(n_por*n) * C^((1/n)-1)
+            R(C) = 1 + (rho_b*k_f)/(n_por*n) * C^((1/n)-1)
 
         Parameters
         ----------
@@ -157,7 +157,7 @@ class FreundlichSorption:
         # Exponent: (1/n) - 1
         exponent = (1.0 / self.n) - 1.0
 
-        # R = 1 + (ρ_b*k_f)/(n_por*n) * C^exponent
+        # R = 1 + (rho_b*k_f)/(n_por*n) * C^exponent
         coefficient = (self.bulk_density * self.k_f) / (self.porosity * self.n)
         return 1.0 + coefficient * (c**exponent)
 
@@ -166,8 +166,8 @@ class FreundlichSorption:
         Compute total concentration (dissolved + sorbed per unit pore volume).
 
         Total concentration includes both dissolved and sorbed mass:
-            C_total = C + (ρ_b/n_por) * s(C)
-                    = C + (ρ_b/n_por) * k_f * C^(1/n)
+            C_total = C + (rho_b/n_por) * s(C)
+                    = C + (rho_b/n_por) * k_f * C^(1/n)
 
         Parameters
         ----------
@@ -201,7 +201,7 @@ class FreundlichSorption:
         if c <= 0:
             return 0.0
 
-        # C_total = C + (ρ_b/n_por) * k_f * C^(1/n)
+        # C_total = C + (rho_b/n_por) * k_f * C^(1/n)
         sorbed_mass_per_pore_volume = (self.bulk_density / self.porosity) * self.k_f * (c ** (1.0 / self.n))
         return c + sorbed_mass_per_pore_volume
 
@@ -225,10 +225,10 @@ class FreundlichSorption:
         Notes
         -----
         This inverts the relation:
-            R = 1 + (ρ_b*k_f)/(n_por*n) * C^((1/n)-1)
+            R = 1 + (rho_b*k_f)/(n_por*n) * C^((1/n)-1)
 
         The analytical solution is:
-            C = [(R-1) * n_por*n / (ρ_b*k_f)]^(n/(1-n))
+            C = [(R-1) * n_por*n / (rho_b*k_f)]^(n/(1-n))
 
         For n = 1 (linear sorption), the exponent n/(1-n) is undefined, which is
         why linear sorption must use ConstantRetardation class instead.
@@ -254,7 +254,7 @@ class FreundlichSorption:
             msg = "Cannot invert linear retardation (n=1)"
             raise ValueError(msg)
 
-        # Coefficient: (ρ_b*k_f)/(n_por*n)
+        # Coefficient: (rho_b*k_f)/(n_por*n)
         coefficient = (self.bulk_density * self.k_f) / (self.porosity * self.n)
 
         # From R = 1 + coefficient * C^exponent
@@ -400,7 +400,7 @@ class ConstantRetardation:
     Constant (linear) retardation model.
 
     For linear sorption: s(C) = K_d * C
-    This gives constant retardation: R(C) = 1 + (ρ_b/n_por) * K_d = constant
+    This gives constant retardation: R(C) = 1 + (rho_b/n_por) * K_d = constant
 
     This is a special case where concentration-dependent behavior disappears.
     Used for conservative tracers or as approximation for weak sorption.

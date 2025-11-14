@@ -68,6 +68,10 @@ from gwtransport.advection_utils import (
     _infiltration_to_extraction_nonlinear_weights_exact,
     _infiltration_to_extraction_weights,
 )
+from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
+from gwtransport.fronttracking.output import compute_bin_averaged_concentration_exact
+from gwtransport.fronttracking.solver import FrontTracker
+from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.residence_time import residence_time
 
 
@@ -1310,17 +1314,23 @@ def infiltration_to_extraction_front_tracking(
     cout_tedges = pd.DatetimeIndex(cout_tedges)
 
     if len(tedges) != len(cin) + 1:
-        raise ValueError("tedges must have length len(cin) + 1")
+        msg = "tedges must have length len(cin) + 1"
+        raise ValueError(msg)
     if len(flow) != len(cin):
-        raise ValueError("flow must have same length as cin")
+        msg = "flow must have same length as cin"
+        raise ValueError(msg)
     if np.any(cin < 0):
-        raise ValueError("cin must be non-negative")
+        msg = "cin must be non-negative"
+        raise ValueError(msg)
     if np.any(flow <= 0):
-        raise ValueError("flow must be positive")
+        msg = "flow must be positive"
+        raise ValueError(msg)
     if np.any(np.isnan(cin)) or np.any(np.isnan(flow)):
-        raise ValueError("cin and flow must not contain NaN")
+        msg = "cin and flow must not contain NaN"
+        raise ValueError(msg)
     if aquifer_pore_volume <= 0:
-        raise ValueError("aquifer_pore_volume must be positive")
+        msg = "aquifer_pore_volume must be positive"
+        raise ValueError(msg)
 
     # Convert time to days (relative to tedges[0])
     t_ref = tedges[0]
@@ -1330,24 +1340,27 @@ def infiltration_to_extraction_front_tracking(
     # Create sorption object
     if retardation_factor is not None:
         if retardation_factor < 1.0:
-            raise ValueError("retardation_factor must be >= 1.0")
-        from gwtransport.front_tracking_math import ConstantRetardation
+            msg = "retardation_factor must be >= 1.0"
+            raise ValueError(msg)
 
         sorption = ConstantRetardation(retardation_factor=retardation_factor)
     else:
         if freundlich_k is None or freundlich_n is None or bulk_density is None or porosity is None:
-            raise ValueError(
+            msg = (
                 "Must provide either retardation_factor or all Freundlich parameters "
                 "(freundlich_k, freundlich_n, bulk_density, porosity)"
             )
+            raise ValueError(msg)
         if freundlich_k <= 0 or freundlich_n <= 0:
-            raise ValueError("Freundlich parameters must be positive")
+            msg = "Freundlich parameters must be positive"
+            raise ValueError(msg)
         if abs(freundlich_n - 1.0) < 1e-10:
-            raise ValueError("freundlich_n = 1 not supported (use retardation_factor for linear case)")
+            msg = "freundlich_n = 1 not supported (use retardation_factor for linear case)"
+            raise ValueError(msg)
         if bulk_density <= 0 or not 0 < porosity < 1:
-            raise ValueError("Invalid physical parameters")
+            msg = "Invalid physical parameters"
+            raise ValueError(msg)
 
-        from gwtransport.front_tracking_math import FreundlichSorption
 
         sorption = FreundlichSorption(
             k_f=freundlich_k,
@@ -1357,7 +1370,6 @@ def infiltration_to_extraction_front_tracking(
         )
 
     # Create tracker and run simulation
-    from gwtransport.front_tracking_solver import FrontTracker
 
     tracker = FrontTracker(
         cin=cin,
@@ -1370,7 +1382,6 @@ def infiltration_to_extraction_front_tracking(
     tracker.run(max_iterations=max_iterations)
 
     # Extract bin-averaged concentrations at outlet
-    from gwtransport.front_tracking_output import compute_bin_averaged_concentration_exact
 
     cout = compute_bin_averaged_concentration_exact(
         t_edges=cout_tedges_days,
@@ -1452,17 +1463,23 @@ def infiltration_to_extraction_front_tracking_detailed(
     cout_tedges = pd.DatetimeIndex(cout_tedges)
 
     if len(tedges) != len(cin) + 1:
-        raise ValueError("tedges must have length len(cin) + 1")
+        msg = "tedges must have length len(cin) + 1"
+        raise ValueError(msg)
     if len(flow) != len(cin):
-        raise ValueError("flow must have same length as cin")
+        msg = "flow must have same length as cin"
+        raise ValueError(msg)
     if np.any(cin < 0):
-        raise ValueError("cin must be non-negative")
+        msg = "cin must be non-negative"
+        raise ValueError(msg)
     if np.any(flow <= 0):
-        raise ValueError("flow must be positive")
+        msg = "flow must be positive"
+        raise ValueError(msg)
     if np.any(np.isnan(cin)) or np.any(np.isnan(flow)):
-        raise ValueError("cin and flow must not contain NaN")
+        msg = "cin and flow must not contain NaN"
+        raise ValueError(msg)
     if aquifer_pore_volume <= 0:
-        raise ValueError("aquifer_pore_volume must be positive")
+        msg = "aquifer_pore_volume must be positive"
+        raise ValueError(msg)
 
     # Convert time to days
     t_ref = tedges[0]
@@ -1472,24 +1489,27 @@ def infiltration_to_extraction_front_tracking_detailed(
     # Create sorption object
     if retardation_factor is not None:
         if retardation_factor < 1.0:
-            raise ValueError("retardation_factor must be >= 1.0")
-        from gwtransport.front_tracking_math import ConstantRetardation
+            msg = "retardation_factor must be >= 1.0"
+            raise ValueError(msg)
 
         sorption = ConstantRetardation(retardation_factor=retardation_factor)
     else:
         if freundlich_k is None or freundlich_n is None or bulk_density is None or porosity is None:
-            raise ValueError(
+            msg = (
                 "Must provide either retardation_factor or all Freundlich parameters "
                 "(freundlich_k, freundlich_n, bulk_density, porosity)"
             )
+            raise ValueError(msg)
         if freundlich_k <= 0 or freundlich_n <= 0:
-            raise ValueError("Freundlich parameters must be positive")
+            msg = "Freundlich parameters must be positive"
+            raise ValueError(msg)
         if abs(freundlich_n - 1.0) < 1e-10:
-            raise ValueError("freundlich_n = 1 not supported (use retardation_factor for linear case)")
+            msg = "freundlich_n = 1 not supported (use retardation_factor for linear case)"
+            raise ValueError(msg)
         if bulk_density <= 0 or not 0 < porosity < 1:
-            raise ValueError("Invalid physical parameters")
+            msg = "Invalid physical parameters"
+            raise ValueError(msg)
 
-        from gwtransport.front_tracking_math import FreundlichSorption
 
         sorption = FreundlichSorption(
             k_f=freundlich_k,
@@ -1499,8 +1519,6 @@ def infiltration_to_extraction_front_tracking_detailed(
         )
 
     # Create tracker and run simulation
-    from gwtransport.front_tracking_solver import FrontTracker
-    from gwtransport.front_tracking_waves import CharacteristicWave, RarefactionWave, ShockWave
 
     tracker = FrontTracker(
         cin=cin,
@@ -1513,7 +1531,6 @@ def infiltration_to_extraction_front_tracking_detailed(
     tracker.run(max_iterations=max_iterations)
 
     # Extract bin-averaged concentrations
-    from gwtransport.front_tracking_output import compute_bin_averaged_concentration_exact
 
     cout = compute_bin_averaged_concentration_exact(
         t_edges=cout_tedges_days,

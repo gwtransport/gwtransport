@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport.front_tracking import SorptionParams
 from gwtransport.utils import compute_time_edges
 
 # ============================================================================
@@ -19,7 +18,7 @@ from gwtransport.utils import compute_time_edges
 
 @pytest.fixture
 def standard_dates():
-    """Standard date range for testing (1 year)."""
+    """Return standard date range for testing (1 year)."""
     return pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
 
 
@@ -65,7 +64,7 @@ def constant_flow_short(short_dates):
 
 @pytest.fixture
 def constant_concentration():
-    """Factory for constant concentration inputs."""
+    """Create factory for constant concentration inputs."""
 
     def _make_concentration(n_days, value=10.0):
         return np.full(n_days, value)
@@ -75,7 +74,7 @@ def constant_concentration():
 
 @pytest.fixture
 def gaussian_pulse():
-    """Factory for Gaussian pulse concentration inputs."""
+    """Create factory for Gaussian pulse concentration inputs."""
 
     def _make_pulse(n_days, peak=50.0, center=None, sigma=10.0):
         if center is None:
@@ -88,7 +87,7 @@ def gaussian_pulse():
 
 @pytest.fixture
 def step_function():
-    """Factory for step function concentration inputs."""
+    """Create factory for step function concentration inputs."""
 
     def _make_step(n_days, level_1=0.0, level_2=50.0, step_day=None):
         if step_day is None:
@@ -102,7 +101,7 @@ def step_function():
 
 @pytest.fixture
 def sine_wave():
-    """Factory for sinusoidal concentration inputs."""
+    """Create factory for sinusoidal concentration inputs."""
 
     def _make_sine(n_days, mean=30.0, amplitude=20.0, period=40.0):
         t = np.arange(n_days)
@@ -118,7 +117,7 @@ def sine_wave():
 
 @pytest.fixture
 def standard_freundlich_params():
-    """Standard Freundlich parameters for testing.
+    """Return standard Freundlich parameters for testing.
 
     These parameters give moderate nonlinearity suitable for most tests.
     """
@@ -150,18 +149,6 @@ def no_sorption_params():
         "bulk_density": 1600.0,
         "porosity": 0.35,
     }
-
-
-@pytest.fixture
-def favorable_sorption():
-    """Favorable sorption (n > 1) SorptionParams for front tracking tests."""
-    return SorptionParams(rho_b=1500, n_por=0.3, Kf=0.01, n=2.0)
-
-
-@pytest.fixture
-def unfavorable_sorption():
-    """Unfavorable sorption (n < 1) SorptionParams for front tracking tests."""
-    return SorptionParams(rho_b=1500, n_por=0.3, Kf=0.01, n=0.5)
 
 
 # ============================================================================

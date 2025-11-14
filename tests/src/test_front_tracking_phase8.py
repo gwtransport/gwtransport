@@ -12,8 +12,8 @@ from gwtransport.advection import (
     infiltration_to_extraction_front_tracking,
     infiltration_to_extraction_front_tracking_detailed,
 )
-from gwtransport.front_tracking_math import FreundlichSorption
-from gwtransport.front_tracking_waves import RarefactionWave, ShockWave
+from gwtransport.fronttracking.math import FreundlichSorption
+from gwtransport.fronttracking.waves import RarefactionWave, ShockWave
 from gwtransport.utils import compute_time_edges
 
 

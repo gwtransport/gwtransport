@@ -1,5 +1,6 @@
 """
 Event Detection for Front Tracking.
+
 ====================================
 
 This module provides exact analytical event detection for the front tracking
@@ -19,6 +20,9 @@ All calculations return exact floating-point results with machine precision.
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
+
+from gwtransport.fronttracking.math import characteristic_position, characteristic_velocity
+from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 
 
 class EventType(Enum):
@@ -141,7 +145,6 @@ def find_characteristic_intersection(char1, char2, t_current: float) -> Optional
     ...     print(f"Intersection at t={t_int:.6f}, V={v_int:.6f}")
     """
     # Import here to avoid circular dependency
-    from gwtransport.front_tracking_math import characteristic_velocity
 
     # Get velocities
     vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
@@ -155,7 +158,6 @@ def find_characteristic_intersection(char1, char2, t_current: float) -> Optional
     t_both_active = max(char1.t_start, char2.t_start, t_current)
 
     # Compute positions when both are active
-    from gwtransport.front_tracking_math import characteristic_position
 
     v1 = characteristic_position(
         char1.concentration, char1.flow, char1.sorption, char1.t_start, char1.v_start, t_both_active
@@ -266,8 +268,6 @@ def find_shock_characteristic_intersection(shock, char, t_current: float) -> Opt
     ...     t_int, v_int = result
     ...     print(f"Shock catches characteristic at t={t_int:.6f}, V={v_int:.6f}")
     """
-    from gwtransport.front_tracking_math import characteristic_velocity
-
     vel_shock = shock.velocity
     vel_char = characteristic_velocity(char.concentration, char.flow, char.sorption)
 
@@ -280,7 +280,6 @@ def find_shock_characteristic_intersection(shock, char, t_current: float) -> Opt
     # Positions when both are active
     v_shock = shock.v_start + shock.velocity * (t_both_active - shock.t_start)
 
-    from gwtransport.front_tracking_math import characteristic_position
 
     v_char = characteristic_position(
         char.concentration, char.flow, char.sorption, char.t_start, char.v_start, t_both_active
@@ -339,7 +338,6 @@ def find_rarefaction_boundary_intersections(raref, other_wave, t_current: float)
     ...     print(f"{boundary} intersects at t={t:.3f}, V={v:.3f}")
     """
     # Import wave classes to avoid circular dependency
-    from gwtransport.front_tracking_waves import CharacteristicWave, ShockWave
 
     intersections = []
 
@@ -428,15 +426,11 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> Optional[fl
     >>> if t_cross:
     ...     print(f"Shock exits at t={t_cross:.3f} days")
     """
-    from gwtransport.front_tracking_math import characteristic_velocity
-    from gwtransport.front_tracking_waves import CharacteristicWave, RarefactionWave, ShockWave
-
     if not wave.is_active:
         return None
 
     if isinstance(wave, CharacteristicWave):
         # Get current position (use wave start time if not yet active)
-        from gwtransport.front_tracking_math import characteristic_position
 
         t_eval = max(t_current, wave.t_start)
         v_current = characteristic_position(
@@ -476,7 +470,6 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> Optional[fl
         t_eval = max(t_current, wave.t_start)
         vel_head = characteristic_velocity(wave.c_head, wave.flow, wave.sorption)
 
-        from gwtransport.front_tracking_math import characteristic_position
 
         v_head = characteristic_position(wave.c_head, wave.flow, wave.sorption, wave.t_start, wave.v_start, t_eval)
 

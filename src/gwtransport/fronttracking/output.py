@@ -21,9 +21,9 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import numpy.typing as npt
 
-from gwtransport.front_tracking_events import find_outlet_crossing
-from gwtransport.front_tracking_math import ConstantRetardation, FreundlichSorption
-from gwtransport.front_tracking_waves import CharacteristicWave, RarefactionWave, ShockWave, Wave
+from gwtransport.fronttracking.events import find_outlet_crossing
+from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
+from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave, Wave
 
 
 def concentration_at_point(
@@ -408,25 +408,25 @@ def integrate_rarefaction_exact(
     -----
     **Derivation**:
 
-    For Freundlich: R(C) = 1 + α*C^β where:
-        α = ρ_b*k_f/(n_por*n)
-        β = 1/n - 1
+    For Freundlich: R(C) = 1 + alpha*C^beta where:
+        alpha = rho_b*k_f/(n_por*n)
+        beta = 1/n - 1
 
-    At outlet: R = κ*t + μ where:
-        κ = flow/(v_outlet - v_origin)
-        μ = -flow*t_origin/(v_outlet - v_origin)
+    At outlet: R = kappa*t + mu where:
+        kappa = flow/(v_outlet - v_origin)
+        mu = -flow*t_origin/(v_outlet - v_origin)
 
-    Inverting: C = [(R-1)/α]^(1/β) = [(κ*t + μ - 1)/α]^(1/β)
+    Inverting: C = [(R-1)/alpha]^(1/beta) = [(kappa*t + mu - 1)/alpha]^(1/beta)
 
     Integral:
-        ∫ C dt = (1/α^(1/β)) * ∫ (κ*t + μ - 1)^(1/β) dt
-               = (1/α^(1/β)) * (1/κ) * [(κ*t + μ - 1)^(1/β + 1) / (1/β + 1)]
+        ∫ C dt = (1/alpha^(1/beta)) * ∫ (kappa*t + mu - 1)^(1/beta) dt
+               = (1/alpha^(1/beta)) * (1/kappa) * [(kappa*t + mu - 1)^(1/beta + 1) / (1/beta + 1)]
 
     evaluated from t_start to t_end.
 
     **Special Cases**:
-    - If (κ*t + μ - 1) <= 0, concentration is 0 (unphysical region)
-    - For β = 0 (n = 1), use ConstantRetardation instead
+    - If (kappa*t + mu - 1) <= 0, concentration is 0 (unphysical region)
+    - For beta = 0 (n = 1), use ConstantRetardation instead
 
     Examples
     --------
@@ -456,7 +456,7 @@ def integrate_rarefaction_exact(
     kappa = flow / (v_outlet - v_origin)
     mu = -flow * t_origin / (v_outlet - v_origin)
 
-    # Freundlich parameters: R = 1 + α*C^β
+    # Freundlich parameters: R = 1 + alpha*C^beta
     alpha = sorption.bulk_density * sorption.k_f / (sorption.porosity * sorption.n)
     beta = 1.0 / sorption.n - 1.0
 
@@ -470,7 +470,7 @@ def integrate_rarefaction_exact(
     exponent = 1.0 / beta + 1.0
 
     # Coefficient for antiderivative
-    # F(t) = (1/(α^(1/β)*κ*exponent)) * (κ*t + μ - 1)^exponent
+    # F(t) = (1/(alpha^(1/beta)*kappa*exponent)) * (kappa*t + mu - 1)^exponent
     coeff = 1.0 / (alpha ** (1.0 / beta) * kappa * exponent)
 
     def antiderivative(t: float) -> float:
@@ -541,12 +541,12 @@ def compute_bin_averaged_concentration_exact(
     **Rarefaction Integration**:
 
     For Freundlich sorption, rarefaction concentration at outlet varies as:
-        C(t) = [(κ*t + μ - 1)/α]^(1/β)
+        C(t) = [(kappa*t + mu - 1)/alpha]^(1/beta)
 
     The exact integral is:
-        ∫ C dt = (1/(α^(1/β)*κ*exponent)) * (κ*t + μ - 1)^exponent
+        ∫ C dt = (1/(alpha^(1/beta)*kappa*exponent)) * (kappa*t + mu - 1)^exponent
 
-    where exponent = 1/β + 1.
+    where exponent = 1/beta + 1.
 
     Examples
     --------

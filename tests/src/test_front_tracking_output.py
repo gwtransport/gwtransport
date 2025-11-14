@@ -10,15 +10,15 @@ All tests verify machine precision accuracy (rtol=1e-14) and exact mass balance.
 import numpy as np
 import pytest
 
-from gwtransport.front_tracking_math import ConstantRetardation, FreundlichSorption
-from gwtransport.front_tracking_output import (
+from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
+from gwtransport.fronttracking.output import (
     compute_bin_averaged_concentration_exact,
     compute_breakthrough_curve,
     concentration_at_point,
     identify_outlet_segments,
     integrate_rarefaction_exact,
 )
-from gwtransport.front_tracking_waves import CharacteristicWave, RarefactionWave, ShockWave
+from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 
 
 class TestConcentrationAtPoint:

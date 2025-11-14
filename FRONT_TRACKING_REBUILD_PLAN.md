@@ -1831,7 +1831,7 @@ def infiltration_to_extraction_front_tracking(
         )
 
     # Create tracker and run simulation
-    from gwtransport.front_tracking_solver import FrontTracker
+    from gwtransport.fronttracking.solver import FrontTracker
 
     tracker = FrontTracker(
         cin=cin,
@@ -1844,7 +1844,7 @@ def infiltration_to_extraction_front_tracking(
     tracker.run(max_iterations=max_iterations)
 
     # Extract bin-averaged concentrations at outlet
-    from gwtransport.front_tracking_output import compute_bin_averaged_concentration_exact
+    from gwtransport.fronttracking.output import compute_bin_averaged_concentration_exact
 
     cout = compute_bin_averaged_concentration_exact(
         t_edges=cout_tedges_days,
@@ -1919,7 +1919,7 @@ def infiltration_to_extraction_front_tracking_detailed(
     ...     print(f"t={event['time']:.2f}: {event['type']}")
     >>>
     >>> # Plot V-t diagram (custom visualization)
-    >>> from gwtransport.front_tracking_plot import plot_vt_diagram
+    >>> from gwtransport.fronttracking.plot import plot_vt_diagram
     >>> fig = plot_vt_diagram(structure['tracker_state'])
     """
     # [Same input processing as main function]

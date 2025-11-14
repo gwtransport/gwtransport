@@ -1,5 +1,6 @@
 """
 Event Handlers for Front Tracking.
+
 ====================================
 
 This module provides handlers for all wave interaction events in the front
@@ -15,8 +16,8 @@ Handlers modify wave states in-place by deactivating parent waves and
 creating new child waves.
 """
 
-from gwtransport.front_tracking_math import ConstantRetardation, FreundlichSorption
-from gwtransport.front_tracking_waves import CharacteristicWave, RarefactionWave, ShockWave
+from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption, characteristic_velocity
+from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 
 
 def handle_characteristic_collision(
@@ -64,7 +65,6 @@ def handle_characteristic_collision(
     >>> assert not char1.is_active  # Parent deactivated
     """
     # Determine which characteristic is faster (upstream)
-    from gwtransport.front_tracking_math import characteristic_velocity
 
     vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
     vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
@@ -89,10 +89,11 @@ def handle_characteristic_collision(
     # Verify entropy condition
     if not shock.satisfies_entropy():
         # This shouldn't happen if characteristics collided correctly
-        raise RuntimeError(
+        msg = (
             f"Characteristic collision created non-entropic shock at t={t_event:.3f}, V={v_event:.3f}. "
             f"c_left={c_left:.3f}, c_right={c_right:.3f}, shock_vel={shock.velocity:.3f}"
         )
+        raise RuntimeError(msg)
 
     # Deactivate parent characteristics
     char1.is_active = False
@@ -168,10 +169,11 @@ def handle_shock_collision(
     if not merged.satisfies_entropy():
         # This can happen if the intermediate state causes issues
         # In some cases, the shocks might pass through each other instead
-        raise RuntimeError(
+        msg = (
             f"Shock merger created non-entropic shock at t={t_event:.3f}. "
             f"This may indicate complex wave interaction requiring special handling."
         )
+        raise RuntimeError(msg)
 
     # Deactivate parent shocks
     shock1.is_active = False
@@ -224,8 +226,6 @@ def handle_shock_characteristic_collision(
     >>> if new_shock:
     ...     assert new_shock[0].satisfies_entropy()
     """
-    from gwtransport.front_tracking_math import characteristic_velocity
-
     shock_vel = shock.velocity
     char_vel = characteristic_velocity(char.concentration, char.flow, char.sorption)
 
@@ -505,7 +505,6 @@ def create_inlet_waves_at_time(
         return []
 
     # Compute characteristic velocities
-    from gwtransport.front_tracking_math import characteristic_velocity
 
     vel_prev = characteristic_velocity(c_prev, flow, sorption) if c_prev > 1e-15 else flow
     vel_new = characteristic_velocity(c_new, flow, sorption)

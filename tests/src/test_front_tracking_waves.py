@@ -10,8 +10,8 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import pytest
 
-from gwtransport.front_tracking_math import ConstantRetardation, FreundlichSorption
-from gwtransport.front_tracking_waves import CharacteristicWave, RarefactionWave, ShockWave
+from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
+from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 
 
 class TestCharacteristicWave:

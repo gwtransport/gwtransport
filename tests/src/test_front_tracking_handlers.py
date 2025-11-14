@@ -9,7 +9,7 @@ and proper wave state transitions.
 
 import pytest
 
-from gwtransport.front_tracking_handlers import (
+from gwtransport.fronttracking.handlers import (
     create_inlet_waves_at_time,
     handle_characteristic_collision,
     handle_outlet_crossing,
@@ -17,8 +17,8 @@ from gwtransport.front_tracking_handlers import (
     handle_shock_collision,
     handle_shock_rarefaction_collision,
 )
-from gwtransport.front_tracking_math import ConstantRetardation, FreundlichSorption
-from gwtransport.front_tracking_waves import (
+from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption, characteristic_velocity
+from gwtransport.fronttracking.waves import (
     CharacteristicWave,
     RarefactionWave,
     ShockWave,
@@ -146,7 +146,6 @@ class TestCharacteristicCollisionHandler:
 
         # Faster (char2 with C=2) should be upstream (left)
         # Slower (char1 with C=5) should be downstream (right)
-        from gwtransport.front_tracking_math import characteristic_velocity
 
         vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
         vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)

@@ -1,5 +1,6 @@
 """
 Front Tracking Solver - Event-Driven Simulation Engine.
+
 ========================================================
 
 This module implements the main event-driven front tracking solver for
@@ -18,11 +19,12 @@ All calculations are exact analytical with machine precision.
 
 from dataclasses import dataclass
 from heapq import heappop, heappush
+import logging
 from typing import Optional
 
 import numpy as np
 
-from gwtransport.front_tracking_events import (
+from gwtransport.fronttracking.events import (
     Event,
     EventType,
     find_characteristic_intersection,
@@ -31,7 +33,7 @@ from gwtransport.front_tracking_events import (
     find_shock_characteristic_intersection,
     find_shock_shock_intersection,
 )
-from gwtransport.front_tracking_handlers import (
+from gwtransport.fronttracking.handlers import (
     create_inlet_waves_at_time,
     handle_characteristic_collision,
     handle_outlet_crossing,
@@ -40,12 +42,12 @@ from gwtransport.front_tracking_handlers import (
     handle_shock_collision,
     handle_shock_rarefaction_collision,
 )
-from gwtransport.front_tracking_math import (
+from gwtransport.fronttracking.math import (
     ConstantRetardation,
     FreundlichSorption,
     compute_first_arrival_time,
 )
-from gwtransport.front_tracking_waves import (
+from gwtransport.fronttracking.waves import (
     CharacteristicWave,
     RarefactionWave,
     ShockWave,
@@ -188,15 +190,20 @@ class FrontTracker:
         """
         # Validation
         if len(tedges) != len(cin) + 1:
-            raise ValueError(f"tedges must have length len(cin) + 1, got {len(tedges)} vs {len(cin) + 1}")
+            msg = f"tedges must have length len(cin) + 1, got {len(tedges)} vs {len(cin) + 1}"
+            raise ValueError(msg)
         if len(flow) != len(cin):
-            raise ValueError(f"flow must have same length as cin, got {len(flow)} vs {len(cin)}")
+            msg = f"flow must have same length as cin, got {len(flow)} vs {len(cin)}"
+            raise ValueError(msg)
         if np.any(cin < 0):
-            raise ValueError("cin must be non-negative")
+            msg = "cin must be non-negative"
+            raise ValueError(msg)
         if np.any(flow <= 0):
-            raise ValueError("flow must be positive")
+            msg = "flow must be positive"
+            raise ValueError(msg)
         if aquifer_pore_volume <= 0:
-            raise ValueError("aquifer_pore_volume must be positive")
+            msg = "aquifer_pore_volume must be positive"
+            raise ValueError(msg)
 
         # Initialize state
         self.state = FrontTrackerState(
@@ -446,9 +453,9 @@ class FrontTracker:
         iteration = 0
 
         if verbose:
-            print(f"Starting simulation at t={self.state.t_current:.3f}")
-            print(f"Initial waves: {len(self.state.waves)}")
-            print(f"First arrival time: {self.t_first_arrival:.3f} days")
+            logging.info("Starting simulation at t=%.3f", self.state.t_current)
+            logging.info("Initial waves: %d", len(self.state.waves))
+            logging.info("First arrival time: %.3f days", self.t_first_arrival)
 
         while iteration < max_iterations:
             # Find next event
@@ -456,7 +463,7 @@ class FrontTracker:
 
             if event is None:
                 if verbose:
-                    print(f"\nSimulation complete after {iteration} events at t={self.state.t_current:.6f}")
+                    logging.info("Simulation complete after %d events at t=%.6f", iteration, self.state.t_current)
                 break
 
             # Advance time
@@ -465,8 +472,8 @@ class FrontTracker:
             # Handle event
             try:
                 self.handle_event(event)
-            except Exception as e:
-                print(f"Error handling event at t={event.time:.3f}: {e}")
+            except Exception:
+                logging.exception("Error handling event at t=%.3f", event.time)
                 raise
 
             # Optional: verify physics periodically
@@ -475,19 +482,19 @@ class FrontTracker:
 
             if verbose and iteration % 10 == 0:
                 active = sum(1 for w in self.state.waves if w.is_active)
-                print(f"Iteration {iteration}: t={event.time:.3f}, active_waves={active}")
+                logging.debug("Iteration %d: t=%.3f, active_waves=%d", iteration, event.time, active)
 
             iteration += 1
 
         if iteration >= max_iterations:
-            print(f"Warning: Reached max_iterations={max_iterations}")
+            logging.warning("Reached max_iterations=%d", max_iterations)
 
         if verbose:
-            print("\nFinal statistics:")
-            print(f"  Total events: {len(self.state.events)}")
-            print(f"  Total waves created: {len(self.state.waves)}")
-            print(f"  Active waves: {sum(1 for w in self.state.waves if w.is_active)}")
-            print(f"  First arrival time: {self.t_first_arrival:.6f} days")
+            logging.info("Final statistics:")
+            logging.info("  Total events: %d", len(self.state.events))
+            logging.info("  Total waves created: %d", len(self.state.waves))
+            logging.info("  Active waves: %d", sum(1 for w in self.state.waves if w.is_active))
+            logging.info("  First arrival time: %.6f days", self.t_first_arrival)
 
     def verify_physics(self):
         """
@@ -507,11 +514,12 @@ class FrontTracker:
         for wave in self.state.waves:
             if isinstance(wave, ShockWave) and wave.is_active:
                 if not wave.satisfies_entropy():
-                    raise RuntimeError(
+                    msg = (
                         f"Shock at t_start={wave.t_start:.3f} violates entropy! "
                         f"c_left={wave.c_left:.3f}, c_right={wave.c_right:.3f}, "
                         f"velocity={wave.velocity:.3f}"
                     )
+                    raise RuntimeError(msg)
 
         # Check rarefaction ordering
         for wave in self.state.waves:
@@ -519,10 +527,11 @@ class FrontTracker:
                 v_head = wave.head_velocity()
                 v_tail = wave.tail_velocity()
                 if v_head <= v_tail:
-                    raise RuntimeError(
+                    msg = (
                         f"Rarefaction at t_start={wave.t_start:.3f} has invalid ordering! "
                         f"head_velocity={v_head:.3f} <= tail_velocity={v_tail:.3f}"
                     )
+                    raise RuntimeError(msg)
 
         # TODO: Implement exact mass balance check
         # This requires analytical integration over domain

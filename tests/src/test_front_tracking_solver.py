@@ -9,8 +9,8 @@ Verifies initialization, event detection, event handling, and full simulation ru
 import numpy as np
 import pytest
 
-from gwtransport.front_tracking_math import ConstantRetardation, FreundlichSorption
-from gwtransport.front_tracking_solver import FrontTracker
+from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
+from gwtransport.fronttracking.solver import FrontTracker
 
 
 @pytest.fixture

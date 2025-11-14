@@ -10,7 +10,7 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import pytest
 
-from gwtransport.front_tracking_math import (
+from gwtransport.fronttracking.math import (
     ConstantRetardation,
     FreundlichSorption,
     characteristic_position,

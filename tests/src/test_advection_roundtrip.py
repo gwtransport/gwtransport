@@ -118,7 +118,7 @@ class TestRoundtripNonlinear:
     - Input types: gaussian (smooth), step (discontinuous), sine (periodic)
     - Freundlich n values: 0.6 (strong), 0.75 (moderate), 0.9 (weak nonlinearity)
 
-    Total: 2 × 3 × 3 = 18 test cases (consolidated from ~25 scattered tests)
+    Total: 2 x 3 x 3 = 18 test cases (consolidated from ~25 scattered tests)
     """
 
     def test_roundtrip_reconstruction(self, nonlinear_method, input_type, n_freundlich):
