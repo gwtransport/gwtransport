@@ -10,7 +10,7 @@ calculations.
 import numpy as np
 import pytest
 
-from gwtransport.front_tracking_events import (
+from gwtransport.fronttracking.events import (
     Event,
     EventType,
     find_characteristic_intersection,
@@ -19,14 +19,13 @@ from gwtransport.front_tracking_events import (
     find_shock_characteristic_intersection,
     find_shock_shock_intersection,
 )
-from gwtransport.front_tracking_math import ConstantRetardation, FreundlichSorption
-from gwtransport.front_tracking_waves import CharacteristicWave, RarefactionWave, ShockWave
+from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption, characteristic_position
+from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 
-
-@pytest.fixture
-def freundlich_sorption():
-    """Standard Freundlich sorption for testing."""
-    return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+freundlich_sorptions = [
+    FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3),
+    FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3),
+]
 
 
 @pytest.fixture
@@ -60,6 +59,7 @@ class TestEventDataStructures:
         assert EventType.OUTLET_CROSSING.value == "outlet_crossing"
 
 
+@pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
 class TestCharacteristicIntersection:
     """Test find_characteristic_intersection function."""
 
@@ -76,18 +76,18 @@ class TestCharacteristicIntersection:
         )
 
         # Since they start at same point but have different velocities,
-        # they should never intersect again (they diverge)
+        # they should never intersect again (they diverge) for both n>1 and n<1
         result = find_characteristic_intersection(char1, char2, t_current=0.0)
         assert result is None
 
     def test_intersection_catching_from_behind(self, freundlich_sorption):
         """Test faster characteristic catching slower one from behind."""
-        # char1 starts early with LOWER concentration (this specific sorption makes it slower)
+        # char1 starts early with LOWER concentration
         char1 = CharacteristicWave(
             t_start=0.0, v_start=0.0, flow=10000.0, concentration=1.0, sorption=freundlich_sorption
         )
 
-        # char2 starts later at same position, with HIGHER concentration (faster for this sorption)
+        # char2 starts later at same position, with HIGHER concentration
         # Higher flow makes waves travel faster, increasing chance of intersection
         char2 = CharacteristicWave(
             t_start=100.0, v_start=0.0, flow=10000.0, concentration=10.0, sorption=freundlich_sorption
@@ -96,21 +96,24 @@ class TestCharacteristicIntersection:
         # char2 is faster and will catch char1
         result = find_characteristic_intersection(char1, char2, t_current=100.0)
 
-        # MUST return an intersection
-        assert result is not None, "Expected intersection when faster characteristic starts behind"
+        if freundlich_sorption.n < 1.0:
+            # For n<1, higher concentration = faster velocity, so no intersection occurs
+            assert result is None, "Expected intersection for n<1 when faster characteristic starts behind"
+        else:
+            # For n>1, higher concentration = slower velocity, so intersection
+            assert result is not None, "Expected no intersection for n>1 when faster characteristic starts behind"
 
-        t_int, v_int = result
-        # Verify both characteristics are at same position at intersection time
-        from gwtransport.front_tracking_math import characteristic_position
+            t_int, v_int = result
 
-        v1 = characteristic_position(
-            char1.concentration, char1.flow, char1.sorption, char1.t_start, char1.v_start, t_int
-        )
-        v2 = characteristic_position(
-            char2.concentration, char2.flow, char2.sorption, char2.t_start, char2.v_start, t_int
-        )
-        assert np.isclose(v1, v2, rtol=1e-14)
-        assert np.isclose(v1, v_int, rtol=1e-14)
+            # Verify both characteristics are at same position at intersection time
+            v1 = characteristic_position(
+                char1.concentration, char1.flow, char1.sorption, char1.t_start, char1.v_start, t_int
+            )
+            v2 = characteristic_position(
+                char2.concentration, char2.flow, char2.sorption, char2.t_start, char2.v_start, t_int
+            )
+            assert np.isclose(v1, v2, rtol=1e-14)
+            assert np.isclose(v1, v_int, rtol=1e-14)
 
     def test_parallel_characteristics(self, freundlich_sorption):
         """Test parallel characteristics don't intersect."""
@@ -142,10 +145,10 @@ class TestCharacteristicIntersection:
 
         # If they would have intersected at t=50, asking at t=100 should return None
         result = find_characteristic_intersection(char1, char2, t_current=1000.0)
-        # Depending on velocities, might be None or in past
-        # This test just ensures no error is raised
+        assert result is None, "Expected no intersection in the past. Initial conditions shouldn't matter."
 
 
+@pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
 class TestShockShockIntersection:
     """Test find_shock_shock_intersection function."""
 
@@ -153,12 +156,26 @@ class TestShockShockIntersection:
         """Test two shocks colliding."""
         # Create two shocks with different velocities
         # shock1 starts at t=0, V=0
-        shock1 = ShockWave(t_start=0.0, v_start=0.0, flow=100.0, c_left=10.0, c_right=0.0, sorption=freundlich_sorption)
 
-        # shock2 starts at t=0, V=200 (ahead of shock1)
-        shock2 = ShockWave(
-            t_start=0.0, v_start=200.0, flow=100.0, c_left=5.0, c_right=0.0, sorption=freundlich_sorption
-        )
+        if freundlich_sorption.n < 1.0:
+            shock1 = ShockWave(
+                t_start=0.0, v_start=0.0, flow=100.0, c_left=10.0, c_right=0.0, sorption=freundlich_sorption
+            )
+
+            # shock2 starts at t=10, V=0 (after of shock1)
+            shock2 = ShockWave(
+                t_start=10.0, v_start=0.0, flow=100.0, c_left=5.0, c_right=0.0, sorption=freundlich_sorption
+            )
+
+        elif freundlich_sorption.n > 1.0:
+            shock1 = ShockWave(
+                t_start=0.0, v_start=0.0, flow=100.0, c_left=10.0, c_right=0.0, sorption=freundlich_sorption
+            )
+
+            # shock2 starts at t=0, V=200 (ahead of shock1)
+            shock2 = ShockWave(
+                t_start=0.0, v_start=200.0, flow=100.0, c_left=5.0, c_right=0.0, sorption=freundlich_sorption
+            )
 
         result = find_shock_shock_intersection(shock1, shock2, t_current=0.0)
 
@@ -185,16 +202,33 @@ class TestShockShockIntersection:
         assert result is None
 
 
+@pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
 class TestShockCharacteristicIntersection:
     """Test find_shock_characteristic_intersection function."""
 
     def test_shock_catches_characteristic(self, freundlich_sorption):
-        """Test shock catching a characteristic from behind."""
-        # Characteristic ahead
-        char = CharacteristicWave(t_start=0.0, v_start=0.0, flow=100.0, concentration=2.0, sorption=freundlich_sorption)
+        """Test shock catching a characteristic from behind. Char has lower concentration."""
+        if freundlich_sorption.n > 1.0:
+            # Characteristic ahead
+            char = CharacteristicWave(
+                t_start=0.0, v_start=0.0, flow=100.0, concentration=2.0, sorption=freundlich_sorption
+            )
 
-        # Shock behind but faster
-        shock = ShockWave(t_start=10.0, v_start=0.0, flow=100.0, c_left=10.0, c_right=0.0, sorption=freundlich_sorption)
+            # Shock behind but faster
+            shock = ShockWave(
+                t_start=10.0, v_start=0.0, flow=100.0, c_left=10.0, c_right=0.0, sorption=freundlich_sorption
+            )
+
+        elif freundlich_sorption.n < 1.0:
+            # Characteristic ahead
+            char = CharacteristicWave(
+                t_start=0.0, v_start=0.0, flow=100.0, concentration=2.0, sorption=freundlich_sorption
+            )
+
+            # Shock behind but faster
+            shock = ShockWave(
+                t_start=10.0, v_start=0.0, flow=100.0, c_left=1.0, c_right=0.0, sorption=freundlich_sorption
+            )
 
         result = find_shock_characteristic_intersection(shock, char, t_current=10.0)
 
@@ -206,61 +240,82 @@ class TestShockCharacteristicIntersection:
         assert v_int > 0, "Must be at positive position"
 
         # Verify both are at same position
-        from gwtransport.front_tracking_math import characteristic_position
-
         v_char = characteristic_position(
             char.concentration, char.flow, char.sorption, char.t_start, char.v_start, t_int
         )
         v_shock = shock.v_start + shock.velocity * (t_int - shock.t_start)
         assert np.isclose(v_char, v_shock, rtol=1e-14)
 
-    def test_characteristic_catches_shock(self, freundlich_sorption):
-        """Test characteristic catching a shock from behind."""
-        # Shock ahead
-        shock = ShockWave(t_start=0.0, v_start=0.0, flow=100.0, c_left=5.0, c_right=2.0, sorption=freundlich_sorption)
+    def test_shock_not_catches_characteristic(self, freundlich_sorption):
+        """Test shock not catching a characteristic from behind."""
+        if freundlich_sorption.n > 1.0:
+            # Characteristic ahead
+            char = CharacteristicWave(
+                t_start=0.0, v_start=0.0, flow=100.0, concentration=2.0, sorption=freundlich_sorption
+            )
 
-        # Characteristic behind but faster
-        char = CharacteristicWave(
-            t_start=10.0,
-            v_start=0.0,
-            flow=100.0,
-            concentration=1.0,  # Lower concentration = faster for n>1
-            sorption=freundlich_sorption,
-        )
+            # Shock behind but faster
+            shock = ShockWave(
+                t_start=10.0, v_start=0.0, flow=100.0, c_left=1.0, c_right=0.0, sorption=freundlich_sorption
+            )
+
+        elif freundlich_sorption.n < 1.0:
+            # Characteristic ahead
+            char = CharacteristicWave(
+                t_start=0.0, v_start=0.0, flow=100.0, concentration=2.0, sorption=freundlich_sorption
+            )
+
+            # Shock behind but faster
+            shock = ShockWave(
+                t_start=10.0, v_start=0.0, flow=100.0, c_left=10.0, c_right=0.0, sorption=freundlich_sorption
+            )
 
         result = find_shock_characteristic_intersection(shock, char, t_current=10.0)
-        # Result depends on relative velocities
+        # MUST return no intersection
+        assert result is None, "Expected no intersection between shock and characteristic"
 
 
+@pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
 class TestRarefactionIntersections:
     """Test find_rarefaction_boundary_intersections function."""
 
     def test_rarefaction_head_characteristic_intersection(self, freundlich_sorption):
         """Test rarefaction head intersecting with characteristic."""
-        # For n>1: lower concentration = faster velocity
-        # Head (faster) has c=2.0, tail (slower) has c=5.0
-        raref = RarefactionWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            c_head=5.0,  # Tail concentration (slower)
-            c_tail=2.0,  # Head concentration (faster)
-            sorption=freundlich_sorption,
-        )
+        if freundlich_sorption.n < 1.0:
+            with pytest.raises(ValueError, match="Not a rarefaction:"):
+                raref = RarefactionWave(
+                    t_start=0.0,
+                    v_start=0.0,
+                    flow=100.0,
+                    c_head=5.0,  # Tail concentration (slower)
+                    c_tail=2.0,  # Head concentration (faster)
+                    sorption=freundlich_sorption,
+                )
+        elif freundlich_sorption.n > 1.0:
+            # For n>1: lower concentration = faster velocity
+            # Head (faster) has c=2.0, tail (slower) has c=5.0
+            raref = RarefactionWave(
+                t_start=0.0,
+                v_start=0.0,
+                flow=100.0,
+                c_head=5.0,  # Tail concentration (slower)
+                c_tail=2.0,  # Head concentration (faster)
+                sorption=freundlich_sorption,
+            )
 
-        # Characteristic that might intersect with head or tail
-        char = CharacteristicWave(
-            t_start=10.0, v_start=0.0, flow=100.0, concentration=3.0, sorption=freundlich_sorption
-        )
+            # Characteristic that might intersect with head or tail
+            char = CharacteristicWave(
+                t_start=10.0, v_start=0.0, flow=100.0, concentration=3.0, sorption=freundlich_sorption
+            )
 
-        results = find_rarefaction_boundary_intersections(raref, char, t_current=10.0)
+            results = find_rarefaction_boundary_intersections(raref, char, t_current=10.0)
 
-        # Should return list of intersections
-        assert isinstance(results, list)
-        for t, v, boundary in results:
-            assert boundary in ["head", "tail"]
-            assert t >= 10.0  # Must be in future
-            assert v >= 0  # Must be at positive position
+            # Should return list of intersections
+            assert isinstance(results, list)
+            for t, v, boundary in results:
+                assert boundary in ["head", "tail"]
+                assert t >= 10.0  # Must be in future
+                assert v >= 0  # Must be at positive position
 
     def test_rarefaction_shock_intersection(self, freundlich_sorption):
         """Test rarefaction boundary intersecting with shock."""
@@ -283,6 +338,7 @@ class TestRarefactionIntersections:
         # May or may not have intersections depending on velocities
 
 
+@pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
 class TestOutletCrossing:
     """Test find_outlet_crossing function."""
 
@@ -299,8 +355,6 @@ class TestOutletCrossing:
         assert t_cross is not None, "Expected characteristic to cross outlet"
 
         # Verify characteristic is at outlet at crossing time
-        from gwtransport.front_tracking_math import characteristic_position
-
         v_at_cross = characteristic_position(
             char.concentration, char.flow, char.sorption, char.t_start, char.v_start, t_cross
         )
@@ -344,8 +398,6 @@ class TestOutletCrossing:
         assert t_cross is not None, "Expected rarefaction head to cross outlet"
 
         # Verify head is at outlet at crossing time
-        from gwtransport.front_tracking_math import characteristic_position
-
         v_head = characteristic_position(
             raref.c_head, raref.flow, raref.sorption, raref.t_start, raref.v_start, t_cross
         )
@@ -380,6 +432,7 @@ class TestOutletCrossing:
         assert t_cross is None
 
 
+@pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
 class TestMachinePrecision:
     """Test that all calculations achieve machine precision."""
 
@@ -404,8 +457,6 @@ class TestMachinePrecision:
         t_int, v_int = result
 
         # Compute positions independently
-        from gwtransport.front_tracking_math import characteristic_position
-
         v1 = characteristic_position(
             char1.concentration, char1.flow, char1.sorption, char1.t_start, char1.v_start, t_int
         )
