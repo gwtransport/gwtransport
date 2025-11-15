@@ -283,7 +283,7 @@ class TestRarefactionIntersections:
     """Test find_rarefaction_boundary_intersections function."""
 
     def test_rarefaction_head_characteristic_intersection_regime_aware(self, freundlich_sorption):
-        """Test rarefaction–characteristic head interactions for n<1 and n>1."""
+        """Test rarefaction-characteristic head interactions for n<1 and n>1."""
         flow = 100.0
 
         if freundlich_sorption.n < 1.0:
