@@ -1361,7 +1361,6 @@ def infiltration_to_extraction_front_tracking(
             msg = "Invalid physical parameters"
             raise ValueError(msg)
 
-
         sorption = FreundlichSorption(
             k_f=freundlich_k,
             n=freundlich_n,
@@ -1509,7 +1508,6 @@ def infiltration_to_extraction_front_tracking_detailed(
         if bulk_density <= 0 or not 0 < porosity < 1:
             msg = "Invalid physical parameters"
             raise ValueError(msg)
-
 
         sorption = FreundlichSorption(
             k_f=freundlich_k,

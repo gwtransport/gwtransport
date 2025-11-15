@@ -283,7 +283,6 @@ def find_shock_characteristic_intersection(shock, char, t_current: float) -> Opt
     # Positions when both are active
     v_shock = shock.v_start + shock.velocity * (t_both_active - shock.t_start)
 
-
     v_char = characteristic_position(
         char.concentration, char.flow, char.sorption, char.t_start, char.v_start, t_both_active
     )
@@ -509,7 +508,6 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> Optional[fl
         # Head crosses first (leading edge)
         t_eval = max(t_current, wave.t_start)
         vel_head = characteristic_velocity(wave.c_head, wave.flow, wave.sorption)
-
 
         v_head = characteristic_position(wave.c_head, wave.flow, wave.sorption, wave.t_start, wave.v_start, t_eval)
 

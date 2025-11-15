@@ -434,9 +434,7 @@ class TestRarefactionIntersections:
         else:
             pytest.skip("This check is only defined for n!=1.")
 
-    def test_valid_rarefaction_boundary_intersection_with_characteristic_regime_aware(
-        self, freundlich_sorption
-    ):
+    def test_valid_rarefaction_boundary_intersection_with_characteristic_regime_aware(self, freundlich_sorption):
         """Regime-aware test of rarefaction boundary intersection with a characteristic."""
         flow = 100.0
 
@@ -1024,6 +1022,7 @@ class TestMachinePrecision:
 
             assert np.isclose(v1, v2, rtol=1e-14, atol=1e-15)
             assert np.isclose(v1, v_int, rtol=1e-14, atol=1e-15)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
