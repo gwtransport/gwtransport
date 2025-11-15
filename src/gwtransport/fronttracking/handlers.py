@@ -187,9 +187,13 @@ def handle_shock_characteristic_collision(
     char: CharacteristicWave,
     t_event: float,
     v_event: float,
-) -> list[ShockWave]:
+) -> list:
     """
     Handle shock catching or being caught by characteristic.
+
+    When the attempted shock would violate entropy (indicating expansion rather
+    than compression), a rarefaction wave is created instead to preserve mass
+    balance. This addresses High Priority #1 from FRONT_TRACKING_REBUILD_PLAN.md.
 
     The outcome depends on which wave is faster:
     - If shock is faster: shock catches characteristic, absorbs it
@@ -208,8 +212,9 @@ def handle_shock_characteristic_collision(
 
     Returns
     -------
-    list[ShockWave]
-        List containing new shock(s), may be empty if no shock forms
+    list
+        List containing new wave(s): ShockWave if compression, RarefactionWave
+        if expansion, or empty list in edge cases
 
     Notes
     -----
@@ -217,8 +222,8 @@ def handle_shock_characteristic_collision(
     - If shock catches char: modifies c_right
     - If char catches shock: modifies c_left
 
-    The new shock must satisfy entropy condition, otherwise interaction
-    may result in rarefaction (not implemented yet).
+    If the new shock satisfies entropy → return shock (compression)
+    If entropy violated → create rarefaction instead (expansion)
 
     Examples
     --------
@@ -256,14 +261,55 @@ def handle_shock_characteristic_collision(
 
     # Check entropy condition
     if not new_shock.satisfies_entropy():
-        # If entropy violated, this interaction doesn't create a shock
-        # Instead, it might be a rarefaction scenario or waves pass through
-        # For now, deactivate both and return empty (waves disappear)
-        # TODO: Implement rarefaction creation in this case
-        shock.is_active = False
-        char.is_active = False
-        return []
+        # Entropy violated → this is an expansion, not compression
+        # Create rarefaction wave instead of shock to preserve mass balance
 
+        # Determine head and tail concentrations based on velocity ordering
+        # For a rarefaction: head (faster) follows tail (slower)
+        if shock_vel > char_vel:
+            # Shock was catching characteristic
+            # Expansion between shock.c_left (faster) and char.concentration (slower)
+            c_head = shock.c_left
+            c_tail = char.concentration
+        else:
+            # Characteristic was catching shock
+            # Expansion between char.concentration (faster) and shock.c_right (slower)
+            c_head = char.concentration
+            c_tail = shock.c_right
+
+        # Verify this creates a valid rarefaction (head faster than tail)
+        head_vel = characteristic_velocity(c_head, shock.flow, shock.sorption)
+        tail_vel = characteristic_velocity(c_tail, shock.flow, shock.sorption)
+
+        if head_vel > tail_vel:
+            # Valid rarefaction - create it
+            try:
+                raref = RarefactionWave(
+                    t_start=t_event,
+                    v_start=v_event,
+                    flow=shock.flow,
+                    c_head=c_head,
+                    c_tail=c_tail,
+                    sorption=shock.sorption,
+                )
+                # Deactivate parent waves
+                shock.is_active = False
+                char.is_active = False
+                return [raref]
+            except ValueError:
+                # Rarefaction validation failed - edge case
+                # Deactivate waves and return empty
+                shock.is_active = False
+                char.is_active = False
+                return []
+        else:
+            # Not a valid rarefaction - waves may pass through each other
+            # This is an edge case - deactivate and return empty
+            shock.is_active = False
+            char.is_active = False
+            return []
+
+    # Shock satisfies entropy - return it
     # Deactivate parent waves
     shock.is_active = False
     char.is_active = False
@@ -279,11 +325,15 @@ def handle_shock_rarefaction_collision(
     boundary_type: str,
 ) -> list:
     """
-    Handle shock interacting with rarefaction fan.
+    Handle shock interacting with rarefaction fan with wave splitting.
+
+    Implements proper wave splitting for shock-rarefaction interactions,
+    addressing High Priority #2 from FRONT_TRACKING_REBUILD_PLAN.md.
 
     This is the most complex interaction. A shock can:
-    - Catch the rarefaction tail: compresses rarefaction
-    - Be caught by rarefaction head: creates compression
+    - Catch the rarefaction tail: shock penetrates into rarefaction fan,
+      creating both a modified rarefaction and a continuing shock
+    - Be caught by rarefaction head: creates compression wave
 
     Parameters
     ----------
@@ -301,19 +351,16 @@ def handle_shock_rarefaction_collision(
     Returns
     -------
     list
-        List of new waves created (shocks, rarefactions, or characteristics)
+        List of new waves created: may include shock and modified rarefaction
+        for tail collision, or compression shock for head collision
 
     Notes
     -----
-    This is a simplified implementation. Full shock-rarefaction interaction
-    can create multiple waves and requires careful analysis of the wave
-    structure.
+    **Tail collision**: Shock penetrates rarefaction, creating:
+    - New shock continuing through rarefaction
+    - Modified rarefaction with compressed tail (if rarefaction not fully overtaken)
 
-    Current implementation:
-    - Tail collision: shock penetrates, compressing rarefaction
-    - Head collision: may create new shock or modify rarefaction
-
-    TODO: Implement full interaction logic with wave splitting
+    **Head collision**: Rarefaction head catches shock, may create compression shock
 
     Examples
     --------
@@ -322,42 +369,114 @@ def handle_shock_rarefaction_collision(
     ... )
     """
     if boundary_type == "tail":
-        # Shock catching rarefaction tail
-        # Shock penetrates into rarefaction, compressing it
-        # Create new shock that continues with c_right = rarefaction tail concentration
+        # Shock catching rarefaction tail - FULL WAVE SPLITTING
+        # Shock penetrates into rarefaction fan, need to split waves
+
+        # Query rarefaction concentration at collision point
+        # This tells us where in the rarefaction fan the shock is
+        raref_c_at_collision = raref.concentration_at_point(v_event, t_event)
+
+        if raref_c_at_collision is None:
+            # Shock not actually inside rarefaction - edge case
+            # Fall back to simple approach
+            new_shock = ShockWave(
+                t_start=t_event,
+                v_start=v_event,
+                flow=shock.flow,
+                c_left=shock.c_left,
+                c_right=raref.c_tail,
+                sorption=shock.sorption,
+            )
+            if new_shock.satisfies_entropy():
+                raref.is_active = False
+                shock.is_active = False
+                return [new_shock]
+            return []
+
+        # Create shock that continues through rarefaction
+        # Right state is the rarefaction concentration at collision
         new_shock = ShockWave(
             t_start=t_event,
             v_start=v_event,
             flow=shock.flow,
             c_left=shock.c_left,
-            c_right=raref.c_tail,
+            c_right=raref_c_at_collision,
             sorption=shock.sorption,
         )
 
-        if new_shock.satisfies_entropy():
-            # Deactivate rarefaction (simplified - should modify it instead)
+        if not new_shock.satisfies_entropy():
+            # Complex case - shock doesn't continue
             raref.is_active = False
             shock.is_active = False
+            return []
+
+        # Create modified rarefaction with compressed tail
+        # The portion of rarefaction ahead of shock remains
+        # New tail is at the collision concentration
+        c_new_tail = raref_c_at_collision
+
+        # Verify head is still faster than new tail
+        head_vel = characteristic_velocity(raref.c_head, raref.flow, raref.sorption)
+        tail_vel = characteristic_velocity(c_new_tail, raref.flow, raref.sorption)
+
+        if head_vel > tail_vel:
+            # Create modified rarefaction starting from collision point
+            try:
+                modified_raref = RarefactionWave(
+                    t_start=t_event,
+                    v_start=v_event,
+                    flow=raref.flow,
+                    c_head=raref.c_head,
+                    c_tail=c_new_tail,
+                    sorption=raref.sorption,
+                )
+
+                # Deactivate original waves
+                shock.is_active = False
+                raref.is_active = False
+
+                return [new_shock, modified_raref]
+            except ValueError:
+                # Rarefaction validation failed
+                shock.is_active = False
+                raref.is_active = False
+                return [new_shock]
+        else:
+            # Rarefaction completely overtaken - only shock continues
+            shock.is_active = False
+            raref.is_active = False
             return [new_shock]
-        # No shock forms - complex interaction
-        return []
 
     # boundary_type == 'head'
     # Rarefaction head catching shock
-    # This creates compression between rarefaction and shock
-    # May form new shock between rarefaction head and shock left state
-    new_shock = ShockWave(
-        t_start=t_event,
-        v_start=v_event,
-        flow=raref.flow,
-        c_left=raref.c_head,
-        c_right=shock.c_left,
-        sorption=raref.sorption,
-    )
+    # This creates compression between rarefaction head and shock
+    # May form new compression shock
 
-    if new_shock.satisfies_entropy():
-        return [new_shock]
-    # No shock forms - waves may pass through each other
+    # Check if compression forms between rarefaction head and shock
+    raref_head_vel = characteristic_velocity(raref.c_head, raref.flow, raref.sorption)
+    shock_vel = shock.velocity
+
+    if raref_head_vel > shock_vel:
+        # Rarefaction head is faster - creates compression
+        # Try to form shock between rarefaction head and shock left state
+        new_shock = ShockWave(
+            t_start=t_event,
+            v_start=v_event,
+            flow=raref.flow,
+            c_left=raref.c_head,
+            c_right=shock.c_left,
+            sorption=raref.sorption,
+        )
+
+        if new_shock.satisfies_entropy():
+            # Compression shock forms
+            # Deactivate original shock (rarefaction continues)
+            shock.is_active = False
+            return [new_shock]
+
+    # No compression shock forms - deactivate both for safety
+    shock.is_active = False
+    raref.is_active = False
     return []
 
 
@@ -370,6 +489,10 @@ def handle_rarefaction_characteristic_collision(
 ) -> list:
     """
     Handle rarefaction boundary intersecting with characteristic.
+
+    **SIMPLIFIED IMPLEMENTATION**: Just deactivates characteristic. See
+    FRONT_TRACKING_REBUILD_PLAN.md "Known Issues and Future Improvements"
+    Medium Priority #5.
 
     Parameters
     ----------
@@ -387,14 +510,19 @@ def handle_rarefaction_characteristic_collision(
     Returns
     -------
     list
-        List of new waves created
+        List of new waves created (currently always empty)
 
     Notes
     -----
-    This is a simplified implementation. Full interaction may require
-    modifying the rarefaction structure or creating new waves.
+    This is a simplified implementation that deactivates the characteristic
+    without modifying the rarefaction structure.
 
     Current implementation: deactivates characteristic, leaves rarefaction
+    unchanged.
+
+    **Future enhancement**: Should modify rarefaction head/tail concentration
+    to properly represent the wave structure instead of just absorbing the
+    characteristic.
     """
     # Simplified: characteristic gets absorbed into rarefaction
     # More sophisticated: modify rarefaction boundaries
@@ -442,7 +570,6 @@ def handle_rarefaction_rarefaction_collision(
     - This is consistent with the design goal of exact analytical
       computation while deferring complex topology changes.
     """
-
     # No topology changes yet; keep both rarefactions active.
     _ = (raref1, raref2, t_event, v_event, boundary_type)
     return []

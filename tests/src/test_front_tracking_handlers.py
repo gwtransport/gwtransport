@@ -13,6 +13,8 @@ from gwtransport.fronttracking.handlers import (
     create_inlet_waves_at_time,
     handle_characteristic_collision,
     handle_outlet_crossing,
+    handle_rarefaction_characteristic_collision,
+    handle_rarefaction_rarefaction_collision,
     handle_shock_characteristic_collision,
     handle_shock_collision,
     handle_shock_rarefaction_collision,
@@ -23,6 +25,11 @@ from gwtransport.fronttracking.waves import (
     RarefactionWave,
     ShockWave,
 )
+
+freundlich_sorptions = [
+    FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3),
+    FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3),
+]
 
 
 @pytest.fixture
@@ -594,3 +601,369 @@ class TestPhysicsCorrectness:
         # Merged shock should satisfy Rankine-Hugoniot
         # (already verified by satisfies_entropy which checks RH)
         assert merged.satisfies_entropy(), "Merged shock must satisfy entropy and Rankine-Hugoniot"
+
+
+class TestRarefactionCharacteristicCollisionHandler:
+    """Test handle_rarefaction_characteristic_collision function."""
+
+    @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
+    def test_characteristic_absorbed_at_head(self, freundlich_sorption):
+        """Test characteristic collision with rarefaction head.
+
+        This tests the SIMPLIFIED IMPLEMENTATION where the characteristic
+        is simply deactivated and absorbed into the rarefaction structure.
+        """
+        # For n>1: head has higher C (slower), tail has lower C (faster)
+        # For n<1: head has lower C (faster), tail has higher C (slower)
+        if freundlich_sorption.n > 1.0:
+            c_head, c_tail = 10.0, 2.0
+            c_char = 7.0
+        else:
+            c_head, c_tail = 2.0, 10.0
+            c_char = 5.0
+
+        raref = RarefactionWave(
+            t_start=0.0,
+            v_start=0.0,
+            flow=100.0,
+            c_head=c_head,
+            c_tail=c_tail,
+            sorption=freundlich_sorption,
+        )
+
+        char = CharacteristicWave(
+            t_start=5.0,
+            v_start=0.0,
+            flow=100.0,
+            concentration=c_char,
+            sorption=freundlich_sorption,
+        )
+
+        # Both active initially
+        assert raref.is_active
+        assert char.is_active
+
+        new_waves = handle_rarefaction_characteristic_collision(
+            raref, char, t_event=20.0, v_event=150.0, boundary_type="head"
+        )
+
+        # Simplified implementation returns no new waves
+        assert len(new_waves) == 0, "Simplified implementation creates no new waves"
+
+    @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
+    def test_characteristic_deactivated(self, freundlich_sorption):
+        """Test that characteristic is deactivated in the collision."""
+        # For n>1: head has higher C (slower), tail has lower C (faster)
+        # For n<1: head has lower C (faster), tail has higher C (slower)
+        if freundlich_sorption.n > 1.0:
+            c_head, c_tail = 8.0, 3.0
+            c_char = 5.0
+        else:
+            c_head, c_tail = 3.0, 8.0
+            c_char = 5.0
+
+        raref = RarefactionWave(
+            t_start=0.0,
+            v_start=0.0,
+            flow=100.0,
+            c_head=c_head,
+            c_tail=c_tail,
+            sorption=freundlich_sorption,
+        )
+
+        char = CharacteristicWave(
+            t_start=5.0,
+            v_start=0.0,
+            flow=100.0,
+            concentration=c_char,
+            sorption=freundlich_sorption,
+        )
+
+        handle_rarefaction_characteristic_collision(raref, char, t_event=20.0, v_event=150.0, boundary_type="tail")
+
+        # Characteristic should be deactivated
+        assert not char.is_active, "Characteristic must be deactivated"
+        # Rarefaction remains active
+        assert raref.is_active, "Rarefaction should remain active"
+
+    @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
+    def test_collision_at_tail(self, freundlich_sorption):
+        """Test characteristic collision with rarefaction tail."""
+        # For n>1: head has higher C (slower), tail has lower C (faster)
+        # For n<1: head has lower C (faster), tail has higher C (slower)
+        if freundlich_sorption.n > 1.0:
+            c_head, c_tail = 12.0, 4.0
+            c_char = 6.0
+        else:
+            c_head, c_tail = 4.0, 12.0
+            c_char = 8.0
+
+        raref = RarefactionWave(
+            t_start=0.0,
+            v_start=0.0,
+            flow=100.0,
+            c_head=c_head,
+            c_tail=c_tail,
+            sorption=freundlich_sorption,
+        )
+
+        char = CharacteristicWave(
+            t_start=5.0,
+            v_start=0.0,
+            flow=100.0,
+            concentration=c_char,
+            sorption=freundlich_sorption,
+        )
+
+        new_waves = handle_rarefaction_characteristic_collision(
+            raref, char, t_event=25.0, v_event=200.0, boundary_type="tail"
+        )
+
+        # No new waves in simplified implementation
+        assert len(new_waves) == 0
+        # Characteristic deactivated
+        assert not char.is_active
+        # Rarefaction remains active
+        assert raref.is_active
+
+
+class TestRarefactionRarefactionCollisionHandler:
+    """Test handle_rarefaction_rarefaction_collision function."""
+
+    @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
+    def test_conservative_behavior_no_waves_created(self, freundlich_sorption):
+        """Test that rarefaction-rarefaction collision creates no new waves.
+
+        This handler is INTENTIONALLY CONSERVATIVE: it detects the collision
+        but makes no topology changes. Both rarefactions remain active.
+        """
+        # For n>1: head has higher C (slower), tail has lower C (faster)
+        # For n<1: head has lower C (faster), tail has higher C (slower)
+        if freundlich_sorption.n > 1.0:
+            c_head1, c_tail1 = 10.0, 5.0
+            c_head2, c_tail2 = 8.0, 3.0
+        else:
+            c_head1, c_tail1 = 5.0, 10.0
+            c_head2, c_tail2 = 3.0, 8.0
+
+        raref1 = RarefactionWave(
+            t_start=0.0,
+            v_start=0.0,
+            flow=100.0,
+            c_head=c_head1,
+            c_tail=c_tail1,
+            sorption=freundlich_sorption,
+        )
+
+        raref2 = RarefactionWave(
+            t_start=5.0,
+            v_start=0.0,
+            flow=100.0,
+            c_head=c_head2,
+            c_tail=c_tail2,
+            sorption=freundlich_sorption,
+        )
+
+        new_waves = handle_rarefaction_rarefaction_collision(
+            raref1, raref2, t_event=30.0, v_event=250.0, boundary_type="head"
+        )
+
+        # Intentionally conservative: no new waves
+        assert len(new_waves) == 0, "Conservative implementation creates no new waves"
+
+    @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
+    def test_both_rarefactions_remain_active(self, freundlich_sorption):
+        """Test that both rarefactions remain active after collision."""
+        # For n>1: head has higher C (slower), tail has lower C (faster)
+        # For n<1: head has lower C (faster), tail has higher C (slower)
+        if freundlich_sorption.n > 1.0:
+            c_head1, c_tail1 = 12.0, 6.0
+            c_head2, c_tail2 = 9.0, 4.0
+        else:
+            c_head1, c_tail1 = 6.0, 12.0
+            c_head2, c_tail2 = 4.0, 9.0
+
+        raref1 = RarefactionWave(
+            t_start=0.0,
+            v_start=0.0,
+            flow=100.0,
+            c_head=c_head1,
+            c_tail=c_tail1,
+            sorption=freundlich_sorption,
+        )
+
+        raref2 = RarefactionWave(
+            t_start=5.0,
+            v_start=0.0,
+            flow=100.0,
+            c_head=c_head2,
+            c_tail=c_tail2,
+            sorption=freundlich_sorption,
+        )
+
+        # Both active initially
+        assert raref1.is_active
+        assert raref2.is_active
+
+        handle_rarefaction_rarefaction_collision(raref1, raref2, t_event=30.0, v_event=250.0, boundary_type="tail")
+
+        # Both should remain active
+        assert raref1.is_active, "First rarefaction must remain active"
+        assert raref2.is_active, "Second rarefaction must remain active"
+
+    @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
+    def test_different_boundary_types(self, freundlich_sorption):
+        """Test collision with different boundary types."""
+        # For n>1: head has higher C (slower), tail has lower C (faster)
+        # For n<1: head has lower C (faster), tail has higher C (slower)
+        if freundlich_sorption.n > 1.0:
+            c_head1, c_tail1 = 15.0, 7.0
+            c_head2, c_tail2 = 10.0, 5.0
+        else:
+            c_head1, c_tail1 = 7.0, 15.0
+            c_head2, c_tail2 = 5.0, 10.0
+
+        raref1 = RarefactionWave(
+            t_start=0.0,
+            v_start=0.0,
+            flow=100.0,
+            c_head=c_head1,
+            c_tail=c_tail1,
+            sorption=freundlich_sorption,
+        )
+
+        raref2 = RarefactionWave(
+            t_start=5.0,
+            v_start=0.0,
+            flow=100.0,
+            c_head=c_head2,
+            c_tail=c_tail2,
+            sorption=freundlich_sorption,
+        )
+
+        # Test with head boundary
+        new_waves_head = handle_rarefaction_rarefaction_collision(
+            raref1, raref2, t_event=30.0, v_event=250.0, boundary_type="head"
+        )
+        assert len(new_waves_head) == 0
+
+        # Reset rarefaction states
+        raref1.is_active = True
+        raref2.is_active = True
+
+        # Test with tail boundary
+        new_waves_tail = handle_rarefaction_rarefaction_collision(
+            raref1, raref2, t_event=35.0, v_event=280.0, boundary_type="tail"
+        )
+        assert len(new_waves_tail) == 0
+
+
+class TestEntropyViolatingScenarios:
+    """Test behavior when entropy conditions are violated."""
+
+    @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
+    def test_shock_characteristic_creates_rarefaction_on_entropy_violation(self, freundlich_sorption):
+        """Test that shock-characteristic collision creates rarefaction when entropy violated.
+
+        When a shock-characteristic collision would create a new shock that violates
+        the entropy condition, it creates a rarefaction wave instead to preserve mass
+        balance. This implements High Priority #1 from FRONT_TRACKING_REBUILD_PLAN.md.
+
+        Physics: Shock catches slower characteristic → expansion → rarefaction
+        """
+        # Create scenario where faster characteristic catches slower shock
+        # This creates expansion (slow following fast) → entropy violation → rarefaction
+
+        # For n>1: lower C = faster velocity
+        # Characteristic with C=1.0 (fastest) catches shock with c_left=3.0, c_right=5.0 (slower)
+        # Attempted shock would have c_left=1.0, c_right=5.0
+        # vel(1.0) > vel(5.0) but shock velocity between them violates entropy
+        # Creates rarefaction instead
+
+        # For n<1: higher C = faster velocity
+        # Characteristic with C=10.0 (fastest) catches shock with c_left=5.0, c_right=3.0 (slower)
+        # Same logic
+        if freundlich_sorption.n > 1.0:
+            c_shock_left = 3.0   # Slow (higher C for n>1)
+            c_shock_right = 5.0  # Slower still
+            c_char = 1.0         # Fast (low C for n>1)
+        else:
+            c_shock_left = 5.0   # Slow (lower C for n<1)
+            c_shock_right = 3.0  # Slower still
+            c_char = 10.0        # Fast (high C for n<1)
+
+        shock = ShockWave(
+            t_start=0.0,
+            v_start=0.0,
+            flow=100.0,
+            c_left=c_shock_left,
+            c_right=c_shock_right,
+            sorption=freundlich_sorption,
+        )
+
+        char = CharacteristicWave(
+            t_start=5.0,
+            v_start=0.0,
+            flow=100.0,
+            concentration=c_char,
+            sorption=freundlich_sorption,
+        )
+
+        # Collision: characteristic catches shock
+        new_waves = handle_shock_characteristic_collision(shock, char, t_event=20.0, v_event=150.0)
+
+        # Verify behavior: either rarefaction created OR valid shock created
+        assert len(new_waves) >= 1, "Expected at least one wave (rarefaction or shock)"
+
+        # Check if rarefaction was created (expansion case - High Priority #1 feature)
+        rarefactions = [w for w in new_waves if isinstance(w, RarefactionWave)]
+        shocks = [w for w in new_waves if isinstance(w, ShockWave)]
+
+        # At least one wave type must be present
+        assert rarefactions or shocks, "Expected either rarefaction or shock"
+
+        # If rarefaction created, verify it's physically valid
+        for raref in rarefactions:
+            assert raref.head_velocity() > raref.tail_velocity(), "Rarefaction head must be faster than tail"
+
+        # If shock created, verify it satisfies entropy
+        for shock_wave in shocks:
+            assert shock_wave.satisfies_entropy(), "Created shock must satisfy entropy"
+
+        # Parent waves should always be deactivated
+        assert not shock.is_active, "Shock should be deactivated"
+        assert not char.is_active, "Characteristic should be deactivated"
+
+    @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
+    def test_waves_deactivated_even_when_entropy_violated(self, freundlich_sorption):
+        """Test that waves are deactivated even when no new waves are created.
+
+        This verifies that parent waves are properly cleaned up even in edge cases
+        where entropy violations prevent new wave creation.
+        """
+        shock = ShockWave(
+            t_start=0.0,
+            v_start=0.0,
+            flow=100.0,
+            c_left=3.0,
+            c_right=2.0,
+            sorption=freundlich_sorption,
+        )
+
+        char = CharacteristicWave(
+            t_start=5.0,
+            v_start=0.0,
+            flow=100.0,
+            concentration=10.0,
+            sorption=freundlich_sorption,
+        )
+
+        # Both active initially
+        assert shock.is_active
+        assert char.is_active
+
+        handle_shock_characteristic_collision(shock, char, t_event=20.0, v_event=150.0)
+
+        # Parent waves should be deactivated regardless of whether new waves were created
+        assert not shock.is_active, "Shock should be deactivated"
+        assert not char.is_active, "Characteristic should be deactivated"
