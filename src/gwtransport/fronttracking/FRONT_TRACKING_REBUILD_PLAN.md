@@ -10,12 +10,14 @@
 ## Progress Summary
 
 ### Completed
+
 - ✅ Phase 1.1-1.4: Core Mathematical Foundation (front_tracking_math.py)
   - FreundlichSorption class with all methods
   - ConstantRetardation class
   - Characteristic velocity functions
   - First arrival time computation
   - **All 39 unit tests passing** with machine precision (rtol=1e-14)
+  - Complete coverage for both n>1 (favorable) and n<1 (unfavorable) sorption regimes
 
 - ✅ Phase 2.1-2.4: Wave Representation (front_tracking_waves.py)
   - Abstract Wave base class with position and concentration methods
@@ -29,9 +31,14 @@
   - find_characteristic_intersection (exact analytical)
   - find_shock_shock_intersection (exact analytical)
   - find_shock_characteristic_intersection (exact analytical)
-  - find_rarefaction_boundary_intersections (head/tail detection)
+  - find_rarefaction_boundary_intersections (head/tail detection, including rarefaction-rarefaction)
   - find_outlet_crossing (for all wave types)
-  - **All 20 unit tests passing** with machine precision (rtol=1e-14)
+  - **All 59 unit tests passing** with machine precision (rtol=1e-14)
+  - Complete coverage for both n>1 (favorable) and n<1 (unfavorable) sorption regimes
+  - Enhanced test suite includes:
+    - TestShockVelocityAndEntropy: 6 tests verifying shock velocity ordering and entropy conditions
+    - TestRarefactionRarefactionIntersections: Comprehensive rarefaction fan interaction tests
+    - All tests use exact comparisons (no physics tolerances)
 
 - ✅ Phase 4.1-4.2: Wave Interactions (front_tracking_handlers.py)
   - handle_characteristic_collision: creates entropic shocks
@@ -50,7 +57,7 @@
   - handle_event(): Dispatcher for all event types
   - run(): Main simulation loop with chronological event processing
   - verify_physics(): Entropy and consistency checks
-  - _initialize_inlet_waves(): Automatic inlet wave creation
+  - \_initialize_inlet_waves(): Automatic inlet wave creation
   - **All 21 unit tests passing** with edge case handling
 
 - ✅ Phase 6.1-6.3: Concentration Extraction (front_tracking_output.py)
@@ -113,6 +120,7 @@
   - **Total: 174 tests passing** (all previous phases)
 
 ### Implementation Complete
+
 All phases of the front tracking rebuild are complete with 174 tests passing.
 
 ### For Session Continuation
@@ -125,11 +133,13 @@ PYTHONPATH=src uv run pytest tests/src/test_front_tracking*.py tests/src/test_ad
 ```
 
 **Phase 9 deliverables:**
+
 - Fresh plotting module: `src/gwtransport/front_tracking_plot.py`
 - Example notebook: `examples/08_Front_Tracking_Exact_Solution.ipynb`
 - All code formatted with ruff and passing linting checks
 
 **Next steps for this feature:**
+
 - Merge `front-tracking-clean` branch into main after review
 - Consider adding Phase 9 visualization tests if desired
 - Update main documentation to reference new notebook
@@ -157,6 +167,7 @@ PYTHONPATH=src uv run pytest tests/src/test_front_tracking*.py tests/src/test_ad
 **File**: `src/gwtransport/front_tracking_math.py`
 
 **Class**: `FreundlichSorption`
+
 ```python
 @dataclass
 class FreundlichSorption:
@@ -183,6 +194,7 @@ class FreundlichSorption:
 ```
 
 **Special Case**: `ConstantRetardation`
+
 ```python
 @dataclass
 class ConstantRetardation:
@@ -193,6 +205,7 @@ class ConstantRetardation:
 ```
 
 **Unit Tests**:
+
 - Verify R(0) = 1.0 exactly
 - Test R→C→R roundtrip: `assert c == concentration_from_retardation(retardation(c))`
 - Compare shock_velocity against known Buckley-Leverett solutions
@@ -203,6 +216,7 @@ class ConstantRetardation:
 ### 1.2: Characteristic Mathematics
 
 **Functions**:
+
 ```python
 def characteristic_velocity(c: float, flow: float, sorption: FreundlichSorption) -> float:
     """Exact: v = flow / R(c)"""
@@ -216,6 +230,7 @@ def characteristic_position(c: float, flow: float, sorption: FreundlichSorption,
 ```
 
 **Unit Tests**:
+
 - Verify dV/dt = flow/R(c) by computing finite difference and comparing
 - Test that characteristics with c=0 travel at speed = flow (R(0)=1)
 
@@ -224,6 +239,7 @@ def characteristic_position(c: float, flow: float, sorption: FreundlichSorption,
 ### 1.3: Rarefaction Analytical Solutions
 
 **Functions**:
+
 ```python
 def rarefaction_concentration_at_point(v: float, t: float,
                                        v_origin: float, t_origin: float,
@@ -258,7 +274,8 @@ def rarefaction_mass_in_fan(c_head: float, c_tail: float,
 ```
 
 **Unit Tests**:
-- Verify self-similar solution satisfies PDE: ∂C_total/∂t + ∂(flow*C)/∂v = 0
+
+- Verify self-similar solution satisfies PDE: ∂C_total/∂t + ∂(flow\*C)/∂v = 0
 - Test mass conservation: integrate mass in fan analytically and verify
 - Compare head/tail positions against characteristic velocities
 
@@ -267,6 +284,7 @@ def rarefaction_mass_in_fan(c_head: float, c_tail: float,
 ### 1.4: First Arrival Time Computation
 
 **Function**:
+
 ```python
 def compute_first_arrival_time(cin: np.ndarray, flow: np.ndarray,
                                tedges: np.ndarray, aquifer_pore_volume: float,
@@ -321,7 +339,8 @@ def compute_first_arrival_time(cin: np.ndarray, flow: np.ndarray,
 ```
 
 **Unit Tests**:
-- Test simple case: constant C, constant flow → t_first = aquifer_pore_volume * R / flow
+
+- Test simple case: constant C, constant flow → t_first = aquifer_pore_volume \* R / flow
 - Test variable flow: verify analytical integration matches expected arrival time
 - Test edge case: cin all zeros → return infinity
 
@@ -2231,6 +2250,7 @@ def plot_breakthrough_curve(state: FrontTrackerState, t_max: float = None,
 **File**: `examples/08_Front_Tracking_Exact_Solution.ipynb`
 
 Contents:
+
 1. Introduction to front tracking
 2. Basic example: step input
 3. Complex example: pulse injection
@@ -2250,61 +2270,63 @@ All items are tracked for future enhancement phases.
 ### ✅ Resolved in Phase 6
 
 **Rarefaction Tail Exit Detection** - **COMPLETED** ✅
-   - Location: `front_tracking_output.py:247-275`
-   - Resolution: `identify_outlet_segments()` now detects both head and tail crossings
-   - Implementation: Tracks both rarefaction head and tail crossing events at outlet
-   - Impact: Rarefaction waves are properly handled when exiting domain
 
-**Output Mass Balance Verification** - **COMPLETED (for outlet)** ✅
-     - Location: `front_tracking_output.py`, `tests/src/test_front_tracking_output.py`
-     - What's done:
-         - Output mass conservation at the outlet verified to ~1e-13 relative error
-         - `compute_bin_averaged_concentration_exact()` conserves mass to machine precision
-         - Test suite includes `test_bin_averaging_conserves_mass()` and related checks
-     - Remaining gap: Runtime `verify_physics()` in `front_tracking_solver.py` does not yet
-         compute total mass over the entire domain; see High Priority item 4 below.
+- Location: `front_tracking_output.py:247-275`
+- Resolution: `identify_outlet_segments()` now detects both head and tail crossings
+- Implementation: Tracks both rarefaction head and tail crossing events at outlet
+- Impact: Rarefaction waves are properly handled when exiting domain
+
+**Output Mass Balance Verification** - **COMPLETED (for outlet)** ✅ - Location: `front_tracking_output.py`, `tests/src/test_front_tracking_output.py` - What's done: - Output mass conservation at the outlet verified to ~1e-13 relative error - `compute_bin_averaged_concentration_exact()` conserves mass to machine precision - Test suite includes `test_bin_averaging_conserves_mass()` and related checks - Remaining gap: Runtime `verify_physics()` in `front_tracking_solver.py` does not yet
+compute total mass over the entire domain; see High Priority item 3 below.
+
+**Rarefaction-Rarefaction Intersections** - **COMPLETED** ✅
+
+- Location: `front_tracking_events.py:388-427`
+- Resolution: `find_rarefaction_boundary_intersections()` handles rarefaction-rarefaction case
+- Implementation: Creates temporary characteristics for all 4 boundaries (both heads and tails)
+  and checks all combinations for intersections
+- Test coverage: Comprehensive `TestRarefactionRarefactionIntersections` class with tests for:
+  - Parallel boundaries (no intersection)
+  - Head/tail boundary intersections
+  - Both n>1 and n<1 regimes
+  - Multiple rarefaction interaction scenarios
+- Impact: All rarefaction fan interactions now supported with exact analytical detection
 
 ### High Priority
 
-1. **Rarefaction-Rarefaction Intersections** (`front_tracking_events.py:390`)
-   - Location: `find_rarefaction_boundary_intersections()`
-   - Issue: Not yet implemented
-   - Impact: Cannot handle rarefaction fan interactions
-   - Solution: Implement boundary-boundary intersection logic for raref-raref collisions
-
-2. **Rarefaction Creation from Invalid Shock** (`front_tracking_handlers.py:264`)
+1. **Rarefaction Creation from Invalid Shock** (`front_tracking_handlers.py:264`)
    - Location: `handle_shock_characteristic_collision()`
    - Issue: When entropy violated, waves just disappear instead of creating rarefaction
    - Impact: Mass balance may not be preserved in some edge cases
    - Solution: Detect compression-to-rarefaction transitions and create appropriate waves
 
-3. **Full Shock-Rarefaction Wave Splitting** (`front_tracking_handlers.py:318`)
+2. **Full Shock-Rarefaction Wave Splitting** (`front_tracking_handlers.py:318`)
    - Location: `handle_shock_rarefaction_collision()`
    - Issue: Simplified implementation without wave splitting
    - Impact: Complex shock-rarefaction interactions may not be fully accurate
    - Solution: Implement full wave splitting logic as described in LeVeque (2002)
 
-4. **Runtime Mass Balance Verification** (`front_tracking_solver.py:535`)
+3. **Runtime Mass Balance Verification** (`front_tracking_solver.py:535`)
    - Location: `verify_physics()`
      - Issue: Only checks entropy, not full domain mass balance during simulation
      - Impact: Cannot yet verify total mass conservation at runtime; diagnostics rely
-         on post-processing of outlet integrals.
+       on post-processing of outlet integrals.
      - Solution: Implement analytical integration of total mass over the spatial domain
-         using the existing wave representation (characteristics, shocks, rarefactions),
-         consistent with the closed-form formulas in `front_tracking_math.py` and
-         `front_tracking_output.py`.
+       using the existing wave representation (characteristics, shocks, rarefactions),
+       consistent with the closed-form formulas in `front_tracking_math.py` and
+       `front_tracking_output.py`.
      - Note: Outlet mass conservation is already verified in tests (Phase 6); this
-         item is strictly a runtime diagnostic enhancement.
+       item is strictly a runtime diagnostic enhancement.
 
 ### Medium Priority
 
-5. **Rarefaction Boundary Type in Events** (`front_tracking_solver.py:396, 405`)
+4. **Rarefaction Boundary Type in Events** (`front_tracking_solver.py:396, 405`)
    - Location: `handle_event()` dispatcher
    - Issue: Hardcoded "head" and "tail" instead of extracting from event
    - Impact: May handle wrong boundary in some cases
    - Solution: Add boundary_type field to Event dataclass
 
-6. **Sophisticated Rarefaction Boundary Modification** (`front_tracking_handlers.py:401`)
+5. **Sophisticated Rarefaction Boundary Modification** (`front_tracking_handlers.py:401`)
    - Location: `handle_rarefaction_characteristic_collision()`
    - Issue: Current implementation just absorbs characteristic
    - Impact: May not correctly represent wave structure
@@ -2312,40 +2334,36 @@ All items are tracked for future enhancement phases.
 
 ### Low Priority
 
-7. **Rarefaction-Rarefaction Collisions**
-   - Status: Not implemented
-   - Impact: Rare case, limited practical impact
-   - Solution: Extend event detection to handle rarefaction fan mergers
-
-8. **Adaptive Time Stepping**
+6. **Adaptive Time Stepping**
    - Status: Uses event-driven (exact) time stepping
    - Impact: Many events may slow down simulation
    - Solution: Consider adaptive refinement for dense event regions (post-Phase 8)
 
-9. **Parallel Event Processing**
-    - Status: Sequential event processing
-    - Impact: Cannot leverage parallelism
-    - Solution: Implement space-time domain decomposition (research topic)
+7. **Parallel Event Processing**
+   - Status: Sequential event processing
+   - Impact: Cannot leverage parallelism
+   - Solution: Implement space-time domain decomposition (research topic)
 
 ### Implementation Priority Order
 
 **Phase 7 (Next)**: API Integration
+
 - Create public interface in `advection.py`
 - Integrate with existing API patterns
 - Add documentation and examples
 
 **Phase 8 (Future)**: Items affecting accuracy and completeness
-- Item #1: Rarefaction-rarefaction intersections
-- Item #3: Full shock-rarefaction splitting
-- Item #2: Rarefaction creation from invalid shocks
-- Item #4: Runtime mass balance verification
-- Item #5: Correct boundary type handling
-- Item #6: Sophisticated boundary modification
-- Item #7: Rarefaction-rarefaction collisions
+
+- Item #2: Full shock-rarefaction splitting
+- Item #1: Rarefaction creation from invalid shocks
+- Item #3: Runtime mass balance verification
+- Item #4: Correct boundary type handling
+- Item #5: Sophisticated boundary modification
 
 **Future Work**: Performance and advanced features
-- Item #8: Adaptive time stepping
-- Item #9: Parallel processing
+
+- Item #6: Adaptive time stepping
+- Item #7: Parallel processing
 
 ---
 
