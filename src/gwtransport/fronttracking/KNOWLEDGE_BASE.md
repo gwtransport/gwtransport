@@ -57,9 +57,12 @@ All 9 phases in `FRONT_TRACKING_REBUILD_PLAN.md` are implemented and passing tes
     - Exact analytic $\int C(t)\,dt$ along outlet for a rarefaction (Freundlich case), using closed-form power-law integration.
 - Spin-up computation:
   - `compute_first_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)`
-    - Finds first non-zero concentration at inlet.
-    - Computes residence time via exact integration of piecewise-constant flow until cumulative volume reaches `aquifer_pore_volume * R(c_first)`.
-    - Returns `np.inf` if nothing arrives.
+    - Finds first index `i` where `cin[i] > 0` and defines `t_start = tedges[i]`.
+    - Computes retardation `R(c_first)` for this first non-zero concentration using the provided sorption model.
+    - Integrates the piecewise-constant flow history exactly from `t_start` forward until the cumulative advected volume reaches `aquifer_pore_volume * R(c_first)`.
+    - Uses an analytic partial-bin calculation: if the target is reached within bin `i`, solves `remaining_volume = flow[i] * dt_partial` exactly.
+    - Returns `t_first_arrival = t_start + (tedges[i] - t_start) + dt_partial`, which simplifies to the event time measured from the first non-zero inlet time.
+    - Returns `np.inf` if there is no non-zero concentration or if the flow history is insufficient to advect the required volume.
     - Defines "spin-up" period: $t < t_\text{first\_arrival}$.
 
 All math is closed-form; no root-finding and no numerical tolerances.
@@ -206,6 +209,17 @@ These handlers are the only place where wave topology changes; all operations ar
   - `verify_physics()`:
     - Currently enforces entropy condition for all active shocks.
     - Placeholder (TODO) for exact analytical mass-balance checks.
+
+  - Known limitation (Phase 5 implementation detail):
+    - For rarefaction-related collisions (`RAREF_CHAR_COLLISION`, `SHOCK_RAREF_COLLISION`,
+      `RAREF_RAREF_COLLISION`), the event detection layer computes which rarefaction boundary
+      (head vs tail) participates in the interaction.
+    - The current `handle_event` implementation in `front_tracking_solver.py` does not yet
+      propagate this boundary information through the `Event` object and instead passes a
+      hard-coded `boundary_type` (e.g. "head" or "tail") to the corresponding handler.
+    - Existing Phase 4 and 8 tests cover the physically relevant interaction patterns used
+      so far, but future refinements should propagate the exact boundary type through
+      `Event` and into the handlers for full generality.
 
 The solver is fully event-driven and analytical; there is no time-stepping.
 
