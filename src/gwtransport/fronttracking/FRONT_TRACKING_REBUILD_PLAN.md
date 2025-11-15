@@ -3,7 +3,7 @@
 **Branch**: `front-tracking-clean` (clean branch from main)
 **Goal**: Machine-precision, physically correct, exact analytical solution for front tracking with nonlinear sorption
 
-**Status**: Phase 9 COMPLETE ✅ - All phases complete including visualization and documentation
+**Status**: Phase 9 COMPLETE ✅ - All phases complete including visualization, documentation, and enhanced interaction handling
 
 ---
 
@@ -27,28 +27,29 @@
   - **All 33 unit tests passing**
 
 - ✅ Phase 3.1-3.2: Event Detection (front_tracking_events.py)
-  - Event and EventType dataclasses
-  - find_characteristic_intersection (exact analytical)
-  - find_shock_shock_intersection (exact analytical)
-  - find_shock_characteristic_intersection (exact analytical)
-  - find_rarefaction_boundary_intersections (head/tail detection, including rarefaction-rarefaction)
-  - find_outlet_crossing (for all wave types)
-  - **All 59 unit tests passing** with machine precision (rtol=1e-14)
-  - Complete coverage for both n>1 (favorable) and n<1 (unfavorable) sorption regimes
-  - Enhanced test suite includes:
-    - TestShockVelocityAndEntropy: 6 tests verifying shock velocity ordering and entropy conditions
-    - TestRarefactionRarefactionIntersections: Comprehensive rarefaction fan interaction tests
-    - All tests use exact comparisons (no physics tolerances)
+    - Event and EventType dataclasses
+    - find_characteristic_intersection (exact analytical)
+    - find_shock_shock_intersection (exact analytical)
+    - find_shock_characteristic_intersection (exact analytical)
+    - find_rarefaction_boundary_intersections (head/tail detection, including rarefaction–rarefaction)
+    - find_outlet_crossing (for all wave types)
+    - **All 59 unit tests passing** with machine precision (rtol=1e-14)
+    - Complete coverage for both n>1 (favorable) and n<1 (unfavorable) sorption regimes
+    - Enhanced test suite includes:
+        - TestShockVelocityAndEntropy: tests verifying shock velocity ordering and entropy conditions
+        - TestRarefactionRarefactionIntersections: comprehensive rarefaction fan interaction tests
+        - All tests use exact comparisons (no physics tolerances)
 
 - ✅ Phase 4.1-4.2: Wave Interactions (front_tracking_handlers.py)
-  - handle_characteristic_collision: creates entropic shocks
-  - handle_shock_collision: merges shocks with proper entropy
-  - handle_shock_characteristic_collision: absorbs characteristics
-  - handle_shock_rarefaction_collision: complex interactions (simplified)
-  - handle_rarefaction_characteristic_collision: boundary interactions
-  - handle_outlet_crossing: records exit events
-  - create_inlet_waves_at_time: inlet boundary condition handler
-  - **All 22 unit tests passing** with entropy verification
+    - handle_characteristic_collision: creates entropic shocks
+    - handle_shock_collision: merges shocks with proper entropy
+    - handle_shock_characteristic_collision: absorbs characteristics
+    - handle_shock_rarefaction_collision: complex interactions, including shock–rarefaction wave splitting
+    - handle_rarefaction_characteristic_collision: boundary interactions
+    - handle_rarefaction_rarefaction_collision: rarefaction–rarefaction interactions via boundary tracking
+    - handle_outlet_crossing: records exit events
+    - create_inlet_waves_at_time: inlet boundary condition handler
+    - **All 22 unit tests passing** with entropy verification and rarefaction interaction coverage
 
 - ✅ Phase 5.1-5.2: Front Tracker (front_tracking_solver.py)
   - FrontTrackerState: Complete simulation state management
@@ -66,8 +67,8 @@
   - identify_outlet_segments(): Wave segment identification for integration
   - integrate_rarefaction_exact(): Exact analytical integration of rarefactions
   - compute_bin_averaged_concentration_exact(): Bin-averaged output with exact integration
-  - **All 23 unit tests passing** with machine precision (rtol=1e-14)
-  - **Total: 161 tests passing** (39 + 33 + 20 + 22 + 21 + 23 + integration tests)
+    - **All 23 unit tests passing** with machine precision (rtol=1e-14)
+    - **Total: 161 tests passing** (39 + 33 + 20 + 22 + 21 + 23 + early integration tests)
 
 - ✅ Phase 7.1-7.2: API Integration (advection.py)
   - infiltration_to_extraction_front_tracking(): Public API function
@@ -164,7 +165,7 @@ PYTHONPATH=src uv run pytest tests/src/test_front_tracking*.py tests/src/test_ad
 
 ### 1.1: Freundlich Sorption Class
 
-**File**: `src/gwtransport/front_tracking_math.py`
+**File**: `src/gwtransport/fronttracking/math.py`
 
 **Class**: `FreundlichSorption`
 
@@ -350,7 +351,7 @@ def compute_first_arrival_time(cin: np.ndarray, flow: np.ndarray,
 
 ### 2.1: Abstract Wave Base Class
 
-**File**: `src/gwtransport/front_tracking_waves.py`
+**File**: `src/gwtransport/fronttracking/waves.py`
 
 ```python
 from abc import ABC, abstractmethod
@@ -564,7 +565,7 @@ class RarefactionWave(Wave):
 
 ### 3.1: Event Data Structure
 
-**File**: `src/gwtransport/front_tracking_events.py`
+**File**: `src/gwtransport/fronttracking/events.py`
 
 ```python
 from dataclasses import dataclass
@@ -1130,7 +1131,7 @@ def handle_outlet_crossing(wave: Wave, t_event: float, v_outlet: float) -> dict:
 
 ### 5.1: Front Tracker Class
 
-**File**: `src/gwtransport/front_tracking_solver.py`
+**File**: `src/gwtransport/fronttracking/solver.py`
 
 ```python
 @dataclass
@@ -1414,7 +1415,7 @@ class FrontTracker:
 
 ### 6.1: Point-wise Concentration
 
-**File**: `src/gwtransport/front_tracking_output.py`
+**File**: `src/gwtransport/fronttracking/output.py`
 
 ```python
 def concentration_at_point(v: float, t: float, waves: list[Wave],
@@ -2159,7 +2160,7 @@ def test_compare_against_analytical_buckley_leverett():
 
 ### 9.1: V-t Diagram Plotting
 
-**File**: `src/gwtransport/front_tracking_plot.py`
+**File**: `src/gwtransport/fronttracking/plot.py`
 
 ```python
 def plot_vt_diagram(state: FrontTrackerState, t_max: float = None,
