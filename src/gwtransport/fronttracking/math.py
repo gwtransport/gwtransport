@@ -718,7 +718,7 @@ def compute_first_arrival_time(
 
     idx_first = nonzero_indices[0]
     c_first = cin[idx_first]
-    tedges[idx_first]
+    t_start = tedges[idx_first]
 
     # Compute retardation for this concentration
     r_first = sorption.retardation(c_first)
@@ -737,7 +737,9 @@ def compute_first_arrival_time(
             # First arrival occurs during this bin
             remaining_volume = target_volume - cumulative_volume
             dt_partial = remaining_volume / flow[i]
-            return tedges[i] + dt_partial
+            # Total time = t_start + elapsed since t_start within this bin
+            # Elapsed = (tedges[i] - t_start) + dt_partial
+            return t_start + (tedges[i] - t_start) + dt_partial
 
         cumulative_volume += volume_in_bin
 
