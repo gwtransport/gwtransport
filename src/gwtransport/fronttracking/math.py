@@ -310,11 +310,6 @@ class FreundlichSorption:
         >>> v_shock > 0
         True
         """
-        # Handle case where concentrations are equal (not really a shock)
-        if abs(c_left - c_right) < 1e-15:
-            # Return characteristic velocity for this concentration
-            return flow / self.retardation(c_left)
-
         # Flux = flow * C (only dissolved species flow)
         flux_left = flow * c_left
         flux_right = flow * c_right
@@ -325,7 +320,17 @@ class FreundlichSorption:
 
         # Rankine-Hugoniot condition
         # s_shock = Δflux / ΔC_total
-        return (flux_right - flux_left) / (c_total_right - c_total_left)
+        denom = c_total_right - c_total_left
+
+        # Guard against degenerate "shock" states where the total
+        # concentration jump tends to zero. In the analytic limit
+        # ΔC_total → 0, the Rankine-Hugoniot speed approaches the
+        # characteristic velocity, so we fall back to that value
+        # instead of dividing by an extremely small number.
+        if abs(denom) < 1e-18:
+            return flow / self.retardation(c_left)
+
+        return (flux_right - flux_left) / denom
 
     def check_entropy_condition(self, c_left: float, c_right: float, shock_vel: float, flow: float) -> bool:
         """
@@ -386,6 +391,12 @@ class FreundlichSorption:
         # Characteristic velocities
         lambda_left = flow / self.retardation(c_left)
         lambda_right = flow / self.retardation(c_right)
+
+        # If any of the velocities are non-finite (can occur for
+        # test-generated edge states), treat the entropy condition as
+        # violated rather than propagating RuntimeWarnings.
+        if not np.isfinite(lambda_left) or not np.isfinite(lambda_right) or not np.isfinite(shock_vel):
+            return False
 
         # Lax condition: λ(C_L) > s_shock > λ(C_R)
         # Use small tolerance for floating-point comparison
