@@ -946,6 +946,136 @@ class TestRarefactionRarefactionIntersections:
 
 
 @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
+class TestShockVelocityAndEntropy:
+    """Test shock velocity calculations and entropy conditions."""
+
+    def test_shock_velocity_ordering_for_different_jumps(self, freundlich_sorption):
+        """Verify shock velocities follow correct ordering for n>1 and n<1.
+
+        Note: For C>0, the ordering depends on n.
+        """
+        flow = 100.0
+
+        if freundlich_sorption.n < 1.0:
+            # For n<1 and C>0: higher concentration → slower velocity
+            # Shock with lower c_left (faster) should have higher velocity
+            shock_low = ShockWave(
+                t_start=0.0, v_start=0.0, flow=flow, c_left=2.0, c_right=10.0, sorption=freundlich_sorption
+            )
+            shock_high = ShockWave(
+                t_start=0.0, v_start=0.0, flow=flow, c_left=5.0, c_right=10.0, sorption=freundlich_sorption
+            )
+
+            # shock_low (c_left=2) should be faster than shock_high (c_left=5)
+            # because lower concentrations are faster for n<1
+            assert shock_low.velocity > shock_high.velocity, "For n<1, shock with lower c_left should be faster"
+
+        elif freundlich_sorption.n > 1.0:
+            # For n>1 and C>0: higher concentration → faster velocity
+            # Shock with higher c_left (faster) should have higher velocity
+            shock_high = ShockWave(
+                t_start=0.0, v_start=0.0, flow=flow, c_left=10.0, c_right=2.0, sorption=freundlich_sorption
+            )
+            shock_low = ShockWave(
+                t_start=0.0, v_start=0.0, flow=flow, c_left=5.0, c_right=2.0, sorption=freundlich_sorption
+            )
+
+            # shock_high (c_left=10) should be faster than shock_low (c_left=5)
+            # because higher concentrations are faster for n>1 (for C>0)
+            assert shock_high.velocity > shock_low.velocity, "For n>1, shock with higher c_left should be faster"
+
+    def test_shock_satisfies_entropy_condition(self, freundlich_sorption):
+        """Verify physically valid compression shocks satisfy the Lax entropy condition.
+
+        Note: C=0 is excluded because v(C=0)=flow is faster than any C>0,
+        making shocks to/from zero invalid (they would be rarefactions).
+        """
+        flow = 100.0
+
+        if freundlich_sorption.n < 1.0:
+            # For n<1 and C>0: higher c → slower v
+            # Valid compression: faster water (low c) catches slower water (high c)
+            # So c_left < c_right (low c behind, high c ahead, creates shock)
+            test_shocks = [
+                (1.0, 10.0),  # Low c catching high c
+                (2.0, 5.0),   # Low c catching high c
+                (1.0, 5.0),   # Low c catching high c
+            ]
+
+            for c_left, c_right in test_shocks:
+                shock = ShockWave(
+                    t_start=0.0, v_start=0.0, flow=flow, c_left=c_left, c_right=c_right, sorption=freundlich_sorption
+                )
+                assert shock.satisfies_entropy(), f"Shock {c_left}→{c_right} must satisfy entropy for n<1"
+
+        elif freundlich_sorption.n > 1.0:
+            # For n>1 and C>0: higher c → faster v
+            # Valid compression: faster water (high c) catches slower water (low c)
+            # So c_left > c_right (high c behind, low c ahead, creates shock)
+            test_shocks = [
+                (10.0, 2.0),  # High c catching low c
+                (5.0, 1.0),   # High c catching low c
+                (10.0, 5.0),  # High c catching low c
+            ]
+
+            for c_left, c_right in test_shocks:
+                shock = ShockWave(
+                    t_start=0.0, v_start=0.0, flow=flow, c_left=c_left, c_right=c_right, sorption=freundlich_sorption
+                )
+                assert shock.satisfies_entropy(), f"Shock {c_left}→{c_right} must satisfy entropy for n>1"
+
+    def test_characteristic_velocity_vs_shock_velocity(self, freundlich_sorption):
+        """Verify characteristic velocities bracket shock velocity (entropy condition)."""
+        flow = 100.0
+
+        if freundlich_sorption.n < 1.0:
+            # For n<1: create shock and verify char velocities bracket it
+            c_left = 10.0
+            c_right = 2.0
+
+            shock = ShockWave(
+                t_start=0.0, v_start=0.0, flow=flow, c_left=c_left, c_right=c_right, sorption=freundlich_sorption
+            )
+
+            char_left = CharacteristicWave(
+                t_start=0.0, v_start=0.0, flow=flow, concentration=c_left, sorption=freundlich_sorption
+            )
+
+            char_right = CharacteristicWave(
+                t_start=0.0, v_start=0.0, flow=flow, concentration=c_right, sorption=freundlich_sorption
+            )
+
+            # For n<1: higher c → slower v, so c_left (higher) → slower, c_right (lower) → faster
+            # Entropy requires: v(c_left) < shock_v < v(c_right)
+            assert char_left.velocity() < shock.velocity < char_right.velocity(), (
+                "Entropy condition violated: characteristic velocities must bracket shock velocity for n<1"
+            )
+
+        elif freundlich_sorption.n > 1.0:
+            # For n>1: create shock and verify char velocities bracket it
+            c_left = 10.0
+            c_right = 2.0
+
+            shock = ShockWave(
+                t_start=0.0, v_start=0.0, flow=flow, c_left=c_left, c_right=c_right, sorption=freundlich_sorption
+            )
+
+            char_left = CharacteristicWave(
+                t_start=0.0, v_start=0.0, flow=flow, concentration=c_left, sorption=freundlich_sorption
+            )
+
+            char_right = CharacteristicWave(
+                t_start=0.0, v_start=0.0, flow=flow, concentration=c_right, sorption=freundlich_sorption
+            )
+
+            # For n>1: higher c → faster v, so c_left (higher) → faster, c_right (lower) → slower
+            # Entropy requires: v(c_left) > shock_v > v(c_right)
+            assert char_left.velocity() > shock.velocity > char_right.velocity(), (
+                "Entropy condition violated: characteristic velocities must bracket shock velocity for n>1"
+            )
+
+
+@pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
 class TestMachinePrecision:
     """Test that all calculations achieve machine precision."""
 
