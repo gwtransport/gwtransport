@@ -41,6 +41,8 @@ class EventType(Enum):
         Rarefaction boundary intersects with characteristic
     SHOCK_RAREF_COLLISION : str
         Shock intersects with rarefaction boundary
+    RAREF_RAREF_COLLISION : str
+        Rarefaction boundary intersects with another rarefaction boundary
     OUTLET_CROSSING : str
         Wave crosses outlet boundary
     INLET_CHANGE : str
@@ -52,6 +54,7 @@ class EventType(Enum):
     SHOCK_CHAR_COLLISION = "shock_characteristic_collision"
     RAREF_CHAR_COLLISION = "rarefaction_characteristic_collision"
     SHOCK_RAREF_COLLISION = "shock_rarefaction_collision"
+    RAREF_RAREF_COLLISION = "rarefaction_rarefaction_collision"
     OUTLET_CROSSING = "outlet_crossing"
     INLET_CHANGE = "inlet_concentration_change"
 
@@ -383,8 +386,45 @@ def find_rarefaction_boundary_intersections(raref, other_wave, t_current: float)
         if result:
             intersections.append((result[0], result[1], "tail"))
 
-    # TODO: Handle rarefaction-rarefaction intersections
-    # This is more complex and will be added in Phase 4
+    elif isinstance(other_wave, RarefactionWave):
+        # Rarefaction-rarefaction intersections: treat all boundaries as
+        # characteristics and reuse the analytical intersection helpers.
+
+        other_head_char = CharacteristicWave(
+            t_start=other_wave.t_start,
+            v_start=other_wave.v_start,
+            flow=other_wave.flow,
+            concentration=other_wave.c_head,
+            sorption=other_wave.sorption,
+            is_active=other_wave.is_active,
+        )
+
+        other_tail_char = CharacteristicWave(
+            t_start=other_wave.t_start,
+            v_start=other_wave.v_start,
+            flow=other_wave.flow,
+            concentration=other_wave.c_tail,
+            sorption=other_wave.sorption,
+            is_active=other_wave.is_active,
+        )
+
+        # head(head) and head(tail)
+        result = find_characteristic_intersection(head_char, other_head_char, t_current)
+        if result:
+            intersections.append((result[0], result[1], "head"))
+
+        result = find_characteristic_intersection(head_char, other_tail_char, t_current)
+        if result:
+            intersections.append((result[0], result[1], "head"))
+
+        # tail(head) and tail(tail)
+        result = find_characteristic_intersection(tail_char, other_head_char, t_current)
+        if result:
+            intersections.append((result[0], result[1], "tail"))
+
+        result = find_characteristic_intersection(tail_char, other_tail_char, t_current)
+        if result:
+            intersections.append((result[0], result[1], "tail"))
 
     return intersections
 

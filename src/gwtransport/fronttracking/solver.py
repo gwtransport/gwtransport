@@ -38,6 +38,7 @@ from gwtransport.fronttracking.handlers import (
     handle_characteristic_collision,
     handle_outlet_crossing,
     handle_rarefaction_characteristic_collision,
+    handle_rarefaction_rarefaction_collision,
     handle_shock_characteristic_collision,
     handle_shock_collision,
     handle_shock_rarefaction_collision,
@@ -332,7 +333,18 @@ class FrontTracker:
                             (t, EventType.SHOCK_RAREF_COLLISION, [shock, raref], v, boundary),
                         )
 
-        # 6. Outlet crossings
+        # 6. Rarefaction-Rarefaction collisions
+        for i, raref1 in enumerate(rarefs):
+            for raref2 in rarefs[i + 1 :]:
+                intersections = find_rarefaction_boundary_intersections(raref1, raref2, self.state.t_current)
+                for t, v, boundary in intersections:
+                    if 0 <= v <= self.state.v_outlet:
+                        heappush(
+                            candidates,
+                            (t, EventType.RAREF_RAREF_COLLISION, [raref1, raref2], v, boundary),
+                        )
+
+        # 7. Outlet crossings
         for wave in active_waves:
             t_cross = find_outlet_crossing(wave, self.state.v_outlet, self.state.t_current)
             if t_cross and t_cross > self.state.t_current:
@@ -404,6 +416,15 @@ class FrontTracker:
                 event.time,
                 event.location,
                 boundary_type="tail",  # TODO: Get from event
+            )
+
+        elif event.event_type == EventType.RAREF_RAREF_COLLISION:
+            new_waves = handle_rarefaction_rarefaction_collision(
+                event.waves_involved[0],
+                event.waves_involved[1],
+                event.time,
+                event.location,
+                boundary_type="head",  # TODO: Get from event
             )
 
         elif event.event_type == EventType.OUTLET_CROSSING:

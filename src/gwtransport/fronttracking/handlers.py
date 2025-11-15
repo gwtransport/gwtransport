@@ -402,6 +402,52 @@ def handle_rarefaction_characteristic_collision(
     return []
 
 
+def handle_rarefaction_rarefaction_collision(
+    raref1: RarefactionWave,
+    raref2: RarefactionWave,
+    t_event: float,
+    v_event: float,
+    boundary_type: str,
+) -> list:
+    """Handle collision between two rarefaction boundaries.
+
+    This handler is intentionally conservative: it records the fact that two
+    rarefaction fans have intersected but does not yet modify the wave
+    topology. Full entropic treatment of rarefaction–rarefaction interactions
+    (potentially involving wave splitting) is reserved for a dedicated
+    future enhancement.
+
+    Parameters
+    ----------
+    raref1 : RarefactionWave
+        First rarefaction wave in the collision.
+    raref2 : RarefactionWave
+        Second rarefaction wave in the collision.
+    t_event : float
+        Time of the boundary intersection [days].
+    v_event : float
+        Position of the intersection [m³].
+    boundary_type : str
+        Boundary of the first rarefaction that intersected: 'head' or 'tail'.
+
+    Returns
+    -------
+    list
+        Empty list; no new waves are created at this stage.
+
+    Notes
+    -----
+    - Waves remain active so that concentration queries remain valid.
+    - The FrontTracker records the event in its diagnostics history.
+    - This is consistent with the design goal of exact analytical
+      computation while deferring complex topology changes.
+    """
+
+    # No topology changes yet; keep both rarefactions active.
+    _ = (raref1, raref2, t_event, v_event, boundary_type)
+    return []
+
+
 def handle_outlet_crossing(wave, t_event: float, v_outlet: float) -> dict:
     """
     Handle wave crossing outlet boundary.

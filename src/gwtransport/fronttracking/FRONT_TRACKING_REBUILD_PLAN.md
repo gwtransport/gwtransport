@@ -249,8 +249,12 @@ def rarefaction_mass_in_fan(c_head: float, c_tail: float,
     Change variables: dv = [flow*(t-t0)/R^2] * dR/dC * dC
     Integrate C_total(C) with exact antiderivative
     """
-    # TODO: Derive exact closed-form integral for Freundlich case
-    # This is critical for exact mass balance verification
+    # NOTE: In the final implementation this functionality is provided
+    # by integrate_rarefaction_exact(raref, v_outlet, t_start, t_end, sorption)
+    # in front_tracking_output.py, which performs the closed-form
+    # analytical integration along the outlet needed for exact
+    # mass balance. This helper is kept here only as a sketch of
+    # the spatial integral derivation and is not used directly.
 ```
 
 **Unit Tests**:
@@ -1367,8 +1371,13 @@ class FrontTracker:
 
         Checks:
         - All shocks satisfy entropy condition
-        - Mass balance (TODO: implement exact analytical mass balance)
-        - No overlapping waves
+                - No overlapping waves
+
+                Notes:
+                - Exact analytical mass-balance verification during the event-driven
+                    simulation is a planned enhancement and is not performed here.
+                    Output mass conservation is instead verified analytically in the
+                    Phase 6 tests via compute_bin_averaged_concentration_exact().
         """
         # Check entropy for all active shocks
         for wave in self.state.waves:
@@ -1376,8 +1385,8 @@ class FrontTracker:
                 if not wave.satisfies_entropy():
                     raise RuntimeError(f"Shock at t={wave.t_start} violates entropy!")
 
-        # TODO: Implement exact mass balance check
-        # This requires analytical integration over domain
+    # Mass-balance checks are deferred to future work; see "Known Issues and
+    # Future Improvements" for the planned analytical domain integration.
 ```
 
 ---
@@ -1584,7 +1593,11 @@ def identify_outlet_segments(t_start: float, t_end: float, v_outlet: float,
                 outlet_events.append({
                     'time': t_cross,
                     'wave': wave,
-                    'c_before': 0.0,  # TODO: get concentration before
+                    # In the final implementation, concentration just before
+                    # and after the crossing is obtained via
+                    # concentration_at_point and the wave state; this field
+                    # is illustrative only.
+                    'c_before': 0.0,
                     'c_after': wave.concentration if isinstance(wave, CharacteristicWave) else wave.c_right
                 })
 
@@ -1593,7 +1606,10 @@ def identify_outlet_segments(t_start: float, t_end: float, v_outlet: float,
 
     # Create segments between events
     current_t = t_start
-    current_c = concentration_at_point(v_outlet, t_start, waves, None)  # Need sorption here
+    # In the final implementation, concentration_at_point is always
+    # called with the sorption model; "None" here is a placeholder in
+    # this sketch and not used in production code.
+    current_c = concentration_at_point(v_outlet, t_start, waves, sorption)
 
     for event in outlet_events:
         # Segment before event
@@ -2239,14 +2255,14 @@ All items are tracked for future enhancement phases.
    - Implementation: Tracks both rarefaction head and tail crossing events at outlet
    - Impact: Rarefaction waves are properly handled when exiting domain
 
-**Output Mass Balance Verification** - **PARTIALLY COMPLETED** 🟡
-   - Location: `front_tracking_output.py`, `test_front_tracking_output.py`
-   - What's done:
-     - Output mass conservation verified to ~1e-13 relative error
-     - `compute_bin_averaged_concentration_exact()` conserves mass to machine precision
-     - Test suite includes `test_bin_averaging_conserves_mass()`
-   - What remains: Runtime `verify_physics()` doesn't compute total mass during simulation
-   - Next step: Add analytical domain integration to `verify_physics()` for runtime checks
+**Output Mass Balance Verification** - **COMPLETED (for outlet)** ✅
+     - Location: `front_tracking_output.py`, `tests/src/test_front_tracking_output.py`
+     - What's done:
+         - Output mass conservation at the outlet verified to ~1e-13 relative error
+         - `compute_bin_averaged_concentration_exact()` conserves mass to machine precision
+         - Test suite includes `test_bin_averaging_conserves_mass()` and related checks
+     - Remaining gap: Runtime `verify_physics()` in `front_tracking_solver.py` does not yet
+         compute total mass over the entire domain; see High Priority item 4 below.
 
 ### High Priority
 
@@ -2270,10 +2286,15 @@ All items are tracked for future enhancement phases.
 
 4. **Runtime Mass Balance Verification** (`front_tracking_solver.py:535`)
    - Location: `verify_physics()`
-   - Issue: Only checks entropy, not mass balance during simulation
-   - Impact: Cannot verify mass conservation at runtime
-   - Solution: Implement analytical integration over domain to compute total mass
-   - Note: Output mass conservation is already verified in tests (Phase 6)
+     - Issue: Only checks entropy, not full domain mass balance during simulation
+     - Impact: Cannot yet verify total mass conservation at runtime; diagnostics rely
+         on post-processing of outlet integrals.
+     - Solution: Implement analytical integration of total mass over the spatial domain
+         using the existing wave representation (characteristics, shocks, rarefactions),
+         consistent with the closed-form formulas in `front_tracking_math.py` and
+         `front_tracking_output.py`.
+     - Note: Outlet mass conservation is already verified in tests (Phase 6); this
+         item is strictly a runtime diagnostic enhancement.
 
 ### Medium Priority
 
