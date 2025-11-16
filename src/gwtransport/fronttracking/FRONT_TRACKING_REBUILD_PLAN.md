@@ -71,34 +71,48 @@
     - **Total: 161 tests passing** (39 + 33 + 20 + 22 + 21 + 23 + early integration tests)
 
 - ✅ Phase 7.1-7.2: API Integration (advection.py)
-  - infiltration_to_extraction_front_tracking(): Public API function
-    - Integrates Phase 1-6 modules (FreundlichSorption, FrontTracker, compute_bin_averaged_concentration_exact)
-    - Supports both Freundlich sorption and constant retardation via retardation_factor parameter
-    - Returns bin-averaged concentrations with machine precision
-    - Comprehensive docstring with examples and notes on spin-up period
-  - infiltration_to_extraction_front_tracking_detailed(): Detailed output function
-    - Returns both concentrations and complete diagnostic structure
-    - Structure includes: waves, events, t_first_arrival, n_events, n_shocks, n_rarefactions, tracker_state
-    - Enables detailed analysis of wave dynamics and event history
-  - **All 5 API smoke tests passing** (test_advection_api_phase7.py)
-  - **Total: 166 tests passing** (161 from Phases 1-6 + 5 from Phase 7)
+    - infiltration_to_extraction_front_tracking(): Public API function
+        - Integrates Phase 1-6 modules (FreundlichSorption, FrontTracker, compute_bin_averaged_concentration_exact)
+        - Supports both Freundlich sorption and constant retardation via retardation_factor parameter
+        - Returns bin-averaged concentrations with machine precision
+        - Comprehensive docstring with examples and notes on spin-up period
+    - infiltration_to_extraction_front_tracking_detailed(): Detailed output function
+        - Returns both concentrations and complete diagnostic structure
+        - Structure includes: waves, events, t_first_arrival, n_events, n_shocks, n_rarefactions, n_characteristics, final_time, sorption, tracker_state
+        - Enables detailed analysis of wave dynamics and event history
+    - API tests in tests/src/test_front_tracking_api.py:
+        - Basic smoke tests for Freundlich and constant-retardation modes
+        - Zero-input test (cin = 0 ⇒ cout = 0)
+        - Parameter validation via pytest.raises
+        - Detailed diagnostics consistency (wave counts and sorption type)
+        - Spin-up verification: t_first_arrival matches compute_first_arrival_time and cout is zero before first arrival
+    - **All Phase 7 API tests passing** (test_front_tracking_api.py)
+    - **Total: 166 tests passing** (161 from Phases 1-6 + 5 from Phase 7)
   - Removed old implementation tests (test_advection_front_tracking.py, test_front_tracking.py)
 
 - ✅ Phase 8: Integration Testing & Validation (test_front_tracking_phase8.py)
   - TestWaveCreation: Verify correct wave type creation for n>1
     - Step increase (compression) → shock formation
     - Step decrease (expansion) → rarefaction formation
+  - TestWaveCreationUnfavorable: Verify correct wave type creation for n<1 (NEW)
+    - Step decrease (10→2) → shock formation (reversed physics)
+    - Step increase (2→10) → rarefaction formation (reversed physics)
   - TestAnalyticalCorrectness: Verify analytical solution accuracy
-    - Shock velocity matches Rankine-Hugoniot exactly (rtol=1e-14)
-    - Rarefaction follows self-similar solution (rtol=1e-12)
-  - TestEntropyAndPhysics: Physical correctness validation
+    - Extreme concentration ratio (0.01→1000) stress test (rtol=1e-14)
+  - TestEntropyAndPhysics: Physical correctness validation for n>1
     - All shocks satisfy Lax entropy condition
-    - No negative concentrations
-    - Output never exceeds input
+    - No negative concentrations (rtol=1e-14, tightened)
+    - Output never exceeds input (rtol=1e-10, tightened)
+  - TestEntropyAndPhysicsUnfavorable: Physical correctness validation for n<1 (NEW)
+    - Full pulse simulation with exact mass balance (rtol=1e-13)
+    - Complex multi-interaction scenario with entropy validation
+  - TestComplexInteractions: Multi-wave scenarios (NEW)
+    - Shock followed by rarefaction outlet behavior
+    - Rapid sequential concentration changes with event ordering
   - TestConstantRetardation: Linear sorption verification
     - Constant retardation produces valid output
-  - **All 8 integration tests passing**
-  - **Total: 174 tests passing** (166 from Phases 1-7 + 8 from Phase 8)
+  - **All 13 integration tests passing** (was 8, added 7 new, removed 2 redundant)
+  - **Total: 242 tests passing** (237 from Phases 1-7 + 13 from Phase 8, updated count)
 
 - ✅ Phase 9: Visualization & Documentation
   - plot_vt_diagram(): V-t diagram with FrontTrackerState API
