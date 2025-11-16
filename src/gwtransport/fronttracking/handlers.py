@@ -64,8 +64,23 @@ def handle_characteristic_collision(
     >>> assert shock.satisfies_entropy()
     >>> assert not char1.is_active  # Parent deactivated
     """
-    # Determine which characteristic is faster (upstream)
+    # Special case: if one characteristic has C=0, just keep the non-zero one
+    # Physical interpretation: C=0 is the background/initial condition
+    # When C>0 water catches up to C=0 region, the C>0 continues propagating
+    if char1.concentration <= 1e-15 and char2.concentration > 1e-15:
+        # char1 is C=0, char2 is C>0
+        # Just deactivate the C=0 characteristic and keep C>0 active
+        char1.is_active = False
+        # char2 stays active and continues propagating
+        return []  # No new waves created
+    if char2.concentration <= 1e-15 and char1.concentration > 1e-15:
+        # char2 is C=0, char1 is C>0
+        char2.is_active = False
+        # char1 stays active and continues propagating
+        return []  # No new waves created
 
+    # Normal case: both characteristics have nonzero concentration
+    # Determine which characteristic is faster (upstream)
     vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
     vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
 
@@ -668,18 +683,51 @@ def create_inlet_waves_at_time(
 
     Examples
     --------
-    >>> # Step increase creates shock for n>1
+    >>> # Step increase from zero creates characteristic
     >>> waves = create_inlet_waves_at_time(
     ...     c_prev=0.0, c_new=10.0, t=10.0, flow=100.0, sorption=sorption
+    ... )
+    >>> assert isinstance(waves[0], CharacteristicWave)
+    >>> # Step between nonzero values creates shock for n>1 (compression)
+    >>> waves = create_inlet_waves_at_time(
+    ...     c_prev=2.0, c_new=10.0, t=10.0, flow=100.0, sorption=sorption
     ... )
     >>> assert isinstance(waves[0], ShockWave)
     """
     if abs(c_new - c_prev) < 1e-15:  # No change
         return []
 
-    # Compute characteristic velocities
+    # Special case: c_prev = 0 (injecting into initially clean domain)
+    # Physical interpretation: new concentration propagates as a characteristic
+    # The C=0 "water" ahead has no well-defined velocity (it's the initial condition)
+    if c_prev <= 1e-15:  # c_prev ≈ 0
+        # Create characteristic wave with new concentration
+        # The front propagates at v(c_new), leaving c_new behind and 0 ahead
+        char = CharacteristicWave(
+            t_start=t,
+            v_start=v_inlet,
+            flow=flow,
+            concentration=c_new,
+            sorption=sorption,
+        )
+        return [char]
 
-    vel_prev = characteristic_velocity(c_prev, flow, sorption) if c_prev > 1e-15 else flow
+    # Special case: c_new = 0 (stopping injection)
+    if c_new <= 1e-15:  # c_new ≈ 0
+        # Create characteristic wave with zero concentration
+        # This represents clean water entering the domain
+        char = CharacteristicWave(
+            t_start=t,
+            v_start=v_inlet,
+            flow=flow,
+            concentration=c_new,
+            sorption=sorption,
+        )
+        return [char]
+
+    # Normal case: both c_prev and c_new are nonzero
+    # Compute characteristic velocities to determine wave type
+    vel_prev = characteristic_velocity(c_prev, flow, sorption)
     vel_new = characteristic_velocity(c_new, flow, sorption)
 
     if vel_new > vel_prev + 1e-15:  # Compression

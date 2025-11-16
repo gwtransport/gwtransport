@@ -346,9 +346,33 @@ class FrontTracker:
 
         # 7. Outlet crossings
         for wave in active_waves:
-            t_cross = find_outlet_crossing(wave, self.state.v_outlet, self.state.t_current)
-            if t_cross and t_cross > self.state.t_current:
-                heappush(candidates, (t_cross, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet))
+            # For rarefactions, detect BOTH head and tail crossings
+            if isinstance(wave, RarefactionWave):
+                # Head crossing
+                t_eval = max(self.state.t_current, wave.t_start)
+                v_head = wave.head_position_at_time(t_eval)
+                if v_head is not None and v_head < self.state.v_outlet:
+                    vel_head = wave.head_velocity()
+                    if vel_head > 0:
+                        dt_head = (self.state.v_outlet - v_head) / vel_head
+                        t_cross_head = t_eval + dt_head
+                        if t_cross_head > self.state.t_current:
+                            heappush(candidates, (t_cross_head, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet))
+
+                # Tail crossing
+                v_tail = wave.tail_position_at_time(t_eval)
+                if v_tail is not None and v_tail < self.state.v_outlet:
+                    vel_tail = wave.tail_velocity()
+                    if vel_tail > 0:
+                        dt_tail = (self.state.v_outlet - v_tail) / vel_tail
+                        t_cross_tail = t_eval + dt_tail
+                        if t_cross_tail > self.state.t_current:
+                            heappush(candidates, (t_cross_tail, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet))
+            else:
+                # For characteristics and shocks, use existing logic
+                t_cross = find_outlet_crossing(wave, self.state.v_outlet, self.state.t_current)
+                if t_cross and t_cross > self.state.t_current:
+                    heappush(candidates, (t_cross, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet))
 
         # Return earliest event
         if candidates:

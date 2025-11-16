@@ -1,0 +1,430 @@
+"""
+Visualization functions for front tracking.
+
+This module provides plotting utilities for visualizing front-tracking simulations:
+- V-t diagrams showing wave propagation in space-time
+- Breakthrough curves showing concentration at outlet over time
+
+This file is part of gwtransport which is released under AGPL-3.0 license.
+See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
+"""
+
+import numpy as np
+
+from gwtransport.fronttracking.solver import FrontTrackerState
+from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
+
+
+def plot_vt_diagram(
+    state: FrontTrackerState,
+    t_max: float | None = None,
+    figsize: tuple[float, float] = (14, 10),
+    show_inactive: bool = False,
+):
+    """
+    Create V-t diagram showing all waves in space-time.
+
+    Plots characteristics (blue lines), shocks (red lines), and rarefactions
+    (green fans) in the (time, position) plane. This visualization shows how
+    waves propagate and interact throughout the simulation.
+
+    Parameters
+    ----------
+    state : FrontTrackerState
+        Complete simulation state containing all waves.
+    t_max : float, optional
+        Maximum time to plot [days]. If None, uses final simulation time * 1.2.
+    figsize : tuple of float, optional
+        Figure size in inches (width, height). Default (14, 10).
+    show_inactive : bool, optional
+        Whether to show inactive waves (deactivated by interactions).
+        Default False.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        Figure object containing the V-t diagram.
+
+    Notes
+    -----
+    - Characteristics appear as blue lines (constant velocity).
+    - Shocks appear as thick red lines (jump discontinuities).
+    - Rarefactions appear as green fans (smooth transition regions).
+    - Outlet position is shown as a horizontal dashed line.
+    - Only waves within domain [0, v_outlet] are plotted.
+
+    Examples
+    --------
+    >>> from gwtransport.fronttracking.solver import FrontTracker
+    >>> tracker = FrontTracker(cin, flow, tedges, aquifer_pore_volume, sorption)
+    >>> tracker.run()
+    >>> fig = plot_vt_diagram(tracker.state)
+    >>> fig.savefig("vt_diagram.png")
+    """
+    import matplotlib.pyplot as plt
+
+    if t_max is None:
+        t_max = state.t_current * 1.2
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Plot characteristics (blue lines)
+    for wave in state.waves:
+        if isinstance(wave, CharacteristicWave):
+            if not wave.is_active and not show_inactive:
+                continue
+
+            t_plot = np.linspace(wave.t_start, t_max, 100)
+            v_plot = []
+            for t in t_plot:
+                v = wave.position_at_time(t)
+                if v is not None and 0 <= v <= state.v_outlet:
+                    v_plot.append(v)
+                else:
+                    break
+
+            if len(v_plot) > 0:
+                alpha = 0.3 if not wave.is_active else 0.7
+                ax.plot(
+                    t_plot[: len(v_plot)],
+                    v_plot,
+                    "b-",
+                    linewidth=0.5,
+                    alpha=alpha,
+                    label="Characteristic" if not hasattr(ax, "_char_labeled") else "",
+                )
+                ax._char_labeled = True
+
+    # Plot shocks (red lines)
+    for wave in state.waves:
+        if isinstance(wave, ShockWave):
+            if not wave.is_active and not show_inactive:
+                continue
+
+            t_plot = np.linspace(wave.t_start, t_max, 100)
+            v_plot = []
+            for t in t_plot:
+                v = wave.position_at_time(t)
+                if v is not None and 0 <= v <= state.v_outlet:
+                    v_plot.append(v)
+                else:
+                    break
+
+            if len(v_plot) > 0:
+                alpha = 0.5 if not wave.is_active else 1.0
+                ax.plot(
+                    t_plot[: len(v_plot)],
+                    v_plot,
+                    "r-",
+                    linewidth=2,
+                    alpha=alpha,
+                    label="Shock" if not hasattr(ax, "_shock_labeled") else "",
+                )
+                ax._shock_labeled = True
+
+    # Plot rarefactions (green fans)
+    for wave in state.waves:
+        if isinstance(wave, RarefactionWave):
+            if not wave.is_active and not show_inactive:
+                continue
+
+            t_plot = np.linspace(wave.t_start, t_max, 100)
+            v_head_plot = []
+            v_tail_plot = []
+
+            for t in t_plot:
+                v_head = wave.head_position_at_time(t)
+                v_tail = wave.tail_position_at_time(t)
+
+                if v_head is not None and 0 <= v_head <= state.v_outlet:
+                    v_head_plot.append(v_head)
+                else:
+                    v_head_plot.append(None)
+
+                if v_tail is not None and 0 <= v_tail <= state.v_outlet:
+                    v_tail_plot.append(v_tail)
+                else:
+                    v_tail_plot.append(None)
+
+            # Plot head and tail boundaries
+            alpha = 0.5 if not wave.is_active else 0.8
+            label = "Rarefaction" if not hasattr(ax, "_raref_labeled") else ""
+
+            # Plot head (faster boundary)
+            valid_head = [(t, v) for t, v in zip(t_plot, v_head_plot, strict=False) if v is not None]
+            if valid_head:
+                t_h, v_h = zip(*valid_head, strict=False)
+                ax.plot(t_h, v_h, "g-", linewidth=1.5, alpha=alpha, label=label)
+                ax._raref_labeled = True
+
+            # Plot tail (slower boundary)
+            valid_tail = [(t, v) for t, v in zip(t_plot, v_tail_plot, strict=False) if v is not None]
+            if valid_tail:
+                t_t, v_t = zip(*valid_tail, strict=False)
+                ax.plot(t_t, v_t, "g--", linewidth=1.5, alpha=alpha)
+
+            # Fill between head and tail
+            if valid_head and valid_tail and len(valid_head) == len(valid_tail):
+                ax.fill_between(
+                    t_h,
+                    v_h,
+                    v_t,
+                    color="green",
+                    alpha=0.1 if not wave.is_active else 0.2,
+                )
+
+    # Plot outlet position
+    ax.axhline(
+        state.v_outlet,
+        color="k",
+        linestyle="--",
+        linewidth=1,
+        alpha=0.5,
+        label=f"Outlet (V={state.v_outlet:.1f} m³)",
+    )
+
+    # Plot inlet position
+    ax.axhline(
+        0.0,
+        color="k",
+        linestyle=":",
+        linewidth=1,
+        alpha=0.5,
+        label="Inlet (V=0)",
+    )
+
+    ax.set_xlabel("Time [days]", fontsize=12)
+    ax.set_ylabel("Position (Pore Volume) [m³]", fontsize=12)
+    ax.set_title("V-t Diagram: Front Tracking Simulation", fontsize=14, fontweight="bold")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best")
+    ax.set_xlim(0, t_max)
+    ax.set_ylim(-state.v_outlet * 0.05, state.v_outlet * 1.05)
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_breakthrough_curve(
+    state: FrontTrackerState,
+    t_max: float | None = None,
+    n_rarefaction_points: int = 50,
+    figsize: tuple[float, float] = (12, 6),
+    t_first_arrival: float | None = None,
+):
+    """
+    Plot exact analytical concentration breakthrough curve at outlet.
+
+    Uses wave segment information to plot the exact analytical solution
+    without discretization. Constant concentration regions are plotted
+    as horizontal lines, and rarefaction regions are plotted using their
+    exact self-similar solutions.
+
+    Parameters
+    ----------
+    state : FrontTrackerState
+        Complete simulation state containing all waves.
+    t_max : float, optional
+        Maximum time to plot [days]. If None, uses final simulation time * 1.1.
+    n_rarefaction_points : int, optional
+        Number of points to use for plotting rarefaction segments (analytical
+        curves). Default 50 per rarefaction segment.
+    figsize : tuple of float, optional
+        Figure size in inches (width, height). Default (12, 6).
+    t_first_arrival : float, optional
+        First arrival time for marking spin-up period [days]. If None, spin-up
+        period is not plotted.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        Figure object containing the breakthrough curve.
+
+    Notes
+    -----
+    - Uses identify_outlet_segments to get exact analytical segment boundaries
+    - Constant concentration segments plotted as horizontal lines (no discretization)
+    - Rarefaction segments plotted using exact self-similar solution
+    - Shocks appear as instantaneous jumps at exact crossing times
+    - No bin averaging or discretization artifacts
+
+    Examples
+    --------
+    >>> from gwtransport.fronttracking.solver import FrontTracker
+    >>> tracker = FrontTracker(cin, flow, tedges, aquifer_pore_volume, sorption)
+    >>> tracker.run()
+    >>> fig = plot_breakthrough_curve(tracker.state)
+    >>> fig.savefig("exact_breakthrough.png")
+    """
+    import matplotlib.pyplot as plt
+
+    from gwtransport.fronttracking.output import identify_outlet_segments
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    if t_max is None:
+        t_max = state.t_current * 1.1
+
+    # Use exact analytical segments
+    segments = identify_outlet_segments(0.0, t_max, state.v_outlet, state.waves, state.sorption)
+
+    for i, segment in enumerate(segments):
+        t_start = segment["t_start"]
+        t_end = segment["t_end"]
+
+        if segment["type"] == "constant":
+            # Constant concentration segment - plot as horizontal line
+            c_const = segment["concentration"]
+            ax.plot(
+                [t_start, t_end],
+                [c_const, c_const],
+                "b-",
+                linewidth=2,
+                label="Outlet concentration" if i == 0 else "",
+            )
+        elif segment["type"] == "rarefaction":
+            # Rarefaction segment - plot exact analytical curve
+            raref = segment["wave"]
+            t_raref = np.linspace(t_start, t_end, n_rarefaction_points)
+            c_raref = np.zeros_like(t_raref)
+
+            for j, t in enumerate(t_raref):
+                # Use the rarefaction wave's own concentration_at_point method
+                c_at_point = raref.concentration_at_point(state.v_outlet, t)
+                if c_at_point is not None:
+                    c_raref[j] = c_at_point
+                else:
+                    # Fallback to boundary values if not in fan
+                    c_raref[j] = segment.get("c_start", raref.c_tail)
+
+            ax.plot(t_raref, c_raref, "b-", linewidth=2, label="Outlet concentration" if i == 0 else "")
+
+    # Mark first arrival time if provided
+    if t_first_arrival is not None and np.isfinite(t_first_arrival):
+        ax.axvline(
+            t_first_arrival,
+            color="r",
+            linestyle="--",
+            linewidth=1.5,
+            alpha=0.7,
+            label=f"First arrival (t={t_first_arrival:.2f} days)",
+        )
+
+        # Shade spin-up region
+        ax.axvspan(
+            0,
+            t_first_arrival,
+            alpha=0.1,
+            color="gray",
+            label="Spin-up period",
+        )
+
+    ax.set_xlabel("Time [days]", fontsize=12)
+    ax.set_ylabel("Concentration [mass/volume]", fontsize=12)
+    ax.set_title("Breakthrough Curve at Outlet (Exact Analytical)", fontsize=14, fontweight="bold")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best")
+    ax.set_xlim(0, t_max)
+    ax.set_ylim(bottom=0)
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_wave_interactions(
+    state: FrontTrackerState,
+    figsize: tuple[float, float] = (14, 8),
+):
+    """
+    Plot event timeline showing wave interactions.
+
+    Creates a scatter plot showing when and where different types of wave
+    interactions occur during the simulation.
+
+    Parameters
+    ----------
+    state : FrontTrackerState
+        Complete simulation state containing all events.
+    figsize : tuple of float, optional
+        Figure size in inches (width, height). Default (14, 8).
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        Figure object containing the event timeline.
+
+    Notes
+    -----
+    - Each event type is shown with a different color and marker.
+    - Outlet crossings are shown separately from internal collisions.
+    - Event locations are plotted in the (time, position) plane.
+
+    Examples
+    --------
+    >>> from gwtransport.fronttracking.solver import FrontTracker
+    >>> tracker = FrontTracker(cin, flow, tedges, aquifer_pore_volume, sorption)
+    >>> tracker.run()
+    >>> fig = plot_wave_interactions(tracker.state)
+    >>> fig.savefig("wave_interactions.png")
+    """
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Group events by type
+    event_types = {}
+    for event_dict in state.events:
+        event_type = event_dict["type"]
+        if event_type not in event_types:
+            event_types[event_type] = {"times": [], "locations": []}
+        event_types[event_type]["times"].append(event_dict["time"])
+        event_types[event_type]["locations"].append(event_dict.get("location", 0.0))
+
+    # Define colors and markers for each event type
+    event_style = {
+        "CHAR_CHAR_COLLISION": {"color": "blue", "marker": "o", "label": "Char-Char"},
+        "SHOCK_SHOCK_COLLISION": {"color": "red", "marker": "s", "label": "Shock-Shock"},
+        "SHOCK_CHAR_COLLISION": {"color": "purple", "marker": "^", "label": "Shock-Char"},
+        "RAREF_CHAR_COLLISION": {"color": "green", "marker": "v", "label": "Raref-Char"},
+        "SHOCK_RAREF_COLLISION": {"color": "orange", "marker": "d", "label": "Shock-Raref"},
+        "RAREF_RAREF_COLLISION": {"color": "cyan", "marker": "p", "label": "Raref-Raref"},
+        "OUTLET_CROSSING": {"color": "black", "marker": "x", "label": "Outlet Crossing"},
+        "INLET_CHANGE": {"color": "gray", "marker": "+", "label": "Inlet Change"},
+    }
+
+    # Plot each event type
+    for event_type, data in event_types.items():
+        style = event_style.get(event_type, {"color": "gray", "marker": "o", "label": event_type})
+        ax.scatter(
+            data["times"],
+            data["locations"],
+            c=style["color"],
+            marker=style["marker"],
+            s=100,
+            alpha=0.7,
+            label=f"{style['label']} ({len(data['times'])})",
+        )
+
+    # Plot outlet line for reference
+    if state.events:
+        ax.axhline(
+            state.v_outlet,
+            color="k",
+            linestyle="--",
+            linewidth=1,
+            alpha=0.3,
+            label=f"Outlet (V={state.v_outlet:.1f} m³)",
+        )
+
+    ax.set_xlabel("Time [days]", fontsize=12)
+    ax.set_ylabel("Position (Pore Volume) [m³]", fontsize=12)
+    ax.set_title("Wave Interaction Events", fontsize=14, fontweight="bold")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best", ncol=2)
+
+    if state.events:
+        ax.set_xlim(left=0)
+        ax.set_ylim(-state.v_outlet * 0.05, state.v_outlet * 1.05)
+
+    fig.tight_layout()
+    return fig

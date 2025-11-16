@@ -147,7 +147,11 @@ All intersections are computed analytically (no iteration):
 
 - `create_inlet_waves_at_time(c_prev, c_new, t, flow, sorption, v_inlet=0.0)`:
   - If `c_new == c_prev`: no waves.
-  - Compute velocities via sorption model:
+  - **Special case for C=0 transitions** (added to fix Example 1 issues):
+    - If `c_prev ≈ 0` or `c_new ≈ 0`: create `CharacteristicWave` with the new concentration.
+    - Physical interpretation: C=0 represents the background/initial condition without a well-defined velocity in Freundlich sorption. When injecting C>0 into C=0 (or vice versa), the solute propagates as a characteristic, leaving its concentration behind and the background ahead.
+    - This avoids entropy violations that occur when trying to create shocks from/to C=0 with Freundlich n>1.
+  - For nonzero concentrations, compute velocities via sorption model:
     - Compression (`vel_new > vel_prev`): create `ShockWave` with `c_left=c_new`, `c_right=c_prev` and enforce entropy.
     - Expansion (`vel_new < vel_prev`): create `RarefactionWave` with `c_head=c_prev`, `c_tail=c_new`.
     - Same velocity: create `CharacteristicWave` with `c_new`.
@@ -158,8 +162,11 @@ All intersections are computed analytically (no iteration):
 **Wave interaction handlers**
 
 - `handle_characteristic_collision(char1, char2, t_event, v_event)`:
-  - Replaces two characteristics by an entropic `ShockWave` with appropriate left/right states.
-  - Deactivates parent characteristics.
+  - **Special case for C=0 collisions** (added to fix Example 1 issues):
+    - If one characteristic has C≈0 and the other has C>0: deactivate the C=0 characteristic and keep the C>0 characteristic active (no new waves created).
+    - Physical interpretation: C=0 represents background; when C>0 water catches up to C=0 region, the C>0 continues propagating.
+  - For nonzero characteristic collisions: replaces two characteristics by an entropic `ShockWave` with appropriate left/right states.
+  - Deactivates parent characteristics (or just the C=0 one in the special case).
 - `handle_shock_collision(shock1, shock2, t_event, v_event)`:
   - Merges shocks into a single `ShockWave` with left state from upstream shock and right state from downstream shock.
   - Deactivates parent shocks.
