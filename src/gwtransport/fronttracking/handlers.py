@@ -64,32 +64,81 @@ def handle_characteristic_collision(
     >>> assert shock.satisfies_entropy()
     >>> assert not char1.is_active  # Parent deactivated
     """
-    # Special case: if one characteristic has C=0, just keep the non-zero one
-    # Physical interpretation: C=0 is the background/initial condition
-    # When C>0 water catches up to C=0 region, the C>0 continues propagating
+    # Special case: if one characteristic has C=0
+    # Need to determine if this is:
+    # 1. C=0 from initial condition being overtaken by C>0 → keep C>0
+    # 2. C=0 from inlet (clean water) catching C>0 → create shock
     if char1.concentration <= 1e-15 and char2.concentration > 1e-15:
         # char1 is C=0, char2 is C>0
-        # Just deactivate the C=0 characteristic and keep C>0 active
-        char1.is_active = False
-        # char2 stays active and continues propagating
-        return []  # No new waves created
-    if char2.concentration <= 1e-15 and char1.concentration > 1e-15:
+        # Check velocities to determine who is catching whom
+        vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
+        vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
+
+        if vel1 > vel2:
+            # C=0 is faster → catching C>0 from behind
+            # For Freundlich n>1: concentration decrease (C>0 → C=0) forms rarefaction
+            # Physical: clean water (fast) catching contaminated water (slow)
+            try:
+                raref = RarefactionWave(
+                    t_start=t_event,
+                    v_start=v_event,
+                    flow=char1.flow,
+                    c_head=char1.concentration,  # C=0 is head (faster)
+                    c_tail=char2.concentration,  # C>0 is tail (slower)
+                    sorption=char1.sorption,
+                )
+                char1.is_active = False
+                char2.is_active = False
+                return [raref]
+            except ValueError:
+                # Rarefaction creation failed - just keep C=10, deactivate C=0
+                char1.is_active = False
+                return []
+        else:
+            # C>0 is faster → C>0 catching C=0 → C=0 is from initial condition
+            # Just deactivate the C=0 and keep C>0 active
+            char1.is_active = False
+            return []
+
+    elif char2.concentration <= 1e-15 and char1.concentration > 1e-15:
         # char2 is C=0, char1 is C>0
-        char2.is_active = False
-        # char1 stays active and continues propagating
-        return []  # No new waves created
+        vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
+        vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
 
-    # Normal case: both characteristics have nonzero concentration
-    # Determine which characteristic is faster (upstream)
-    vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
-    vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
-
-    if vel1 > vel2:
-        c_left = char1.concentration
-        c_right = char2.concentration
+        if vel2 > vel1:
+            # C=0 is faster → catching C>0 from behind
+            # For Freundlich n>1: concentration decrease forms rarefaction
+            try:
+                raref = RarefactionWave(
+                    t_start=t_event,
+                    v_start=v_event,
+                    flow=char1.flow,
+                    c_head=char2.concentration,  # C=0 is head (faster)
+                    c_tail=char1.concentration,  # C>0 is tail (slower)
+                    sorption=char1.sorption,
+                )
+                char1.is_active = False
+                char2.is_active = False
+                return [raref]
+            except ValueError:
+                # Rarefaction creation failed
+                char2.is_active = False
+                return []
+        else:
+            # C>0 is faster → C=0 is from initial condition
+            char2.is_active = False
+            return []
     else:
-        c_left = char2.concentration
-        c_right = char1.concentration
+        # Normal case: both nonzero - determine velocities
+        vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
+        vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
+
+        if vel1 > vel2:
+            c_left = char1.concentration
+            c_right = char2.concentration
+        else:
+            c_left = char2.concentration
+            c_right = char1.concentration
 
     # Create shock at collision point
     shock = ShockWave(
