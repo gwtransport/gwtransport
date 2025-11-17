@@ -20,6 +20,7 @@ def plot_vt_diagram(
     t_max: float | None = None,
     figsize: tuple[float, float] = (14, 10),
     show_inactive: bool = False,
+    show_events: bool = False,
 ):
     """
     Create V-t diagram showing all waves in space-time.
@@ -38,6 +39,9 @@ def plot_vt_diagram(
         Figure size in inches (width, height). Default (14, 10).
     show_inactive : bool, optional
         Whether to show inactive waves (deactivated by interactions).
+        Default False.
+    show_events : bool, optional
+        Whether to show wave interaction events as markers.
         Default False.
 
     Returns
@@ -263,6 +267,38 @@ def plot_vt_diagram(
         alpha=0.5,
         label="Inlet (V=0)",
     )
+
+    # Plot wave interaction events as markers
+    if show_events and hasattr(state, 'events') and state.events:
+        for event in state.events:
+            if 'time' in event and 'position' in event:
+                t_event = event['time']
+                v_event = event['position']
+                if 0 <= t_event <= t_max and 0 <= v_event <= state.v_outlet:
+                    # Determine marker style based on event type
+                    event_type = event.get('type', 'unknown')
+                    if 'shock' in event_type.lower() or 'collision' in event_type.lower():
+                        marker = 'X'
+                        color = 'red'
+                        size = 100
+                    elif 'rarefaction' in event_type.lower():
+                        marker = 'o'
+                        color = 'green'
+                        size = 80
+                    elif 'outlet' in event_type.lower():
+                        marker = 's'
+                        color = 'black'
+                        size = 80
+                    else:
+                        marker = 'D'
+                        color = 'gray'
+                        size = 60
+
+                    ax.scatter(t_event, v_event, marker=marker, s=size,
+                              color=color, edgecolors='black', linewidths=1.5,
+                              alpha=0.8, zorder=10,
+                              label='Event' if not hasattr(ax, '_event_labeled') else '')
+                    ax._event_labeled = True
 
     ax.set_xlabel("Time [days]", fontsize=12)
     ax.set_ylabel("Position (Pore Volume) [m³]", fontsize=12)
