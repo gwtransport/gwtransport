@@ -64,7 +64,8 @@ def plot_vt_diagram(
     import matplotlib.pyplot as plt
 
     if t_max is None:
-        t_max = state.t_current * 1.2
+        # Default to input data time range instead of simulation end time
+        t_max = float(state.tedges[-1])
 
     fig, ax = plt.subplots(figsize=figsize)
 
@@ -76,17 +77,35 @@ def plot_vt_diagram(
 
             t_plot = np.linspace(wave.t_start, t_max, 100)
             v_plot = []
+            t_plot_used = []
+
             for t in t_plot:
-                v = wave.position_at_time(t)
+                # Compute position manually for inactive waves when show_inactive=True
+                if wave.is_active:
+                    v = wave.position_at_time(t)
+                else:
+                    # Manually compute position for visualization
+                    v = wave.v_start + wave.velocity() * (t - wave.t_start)
+
                 if v is not None and 0 <= v <= state.v_outlet:
                     v_plot.append(v)
+                    t_plot_used.append(t)
+                elif v is not None and v > state.v_outlet:
+                    # Wave crossed outlet - add exact intersection point
+                    vel = wave.velocity()
+                    if vel > 0:
+                        t_outlet = wave.t_start + (state.v_outlet - wave.v_start) / vel
+                        if wave.t_start <= t_outlet <= t_max:
+                            v_plot.append(state.v_outlet)
+                            t_plot_used.append(t_outlet)
+                    break
                 else:
                     break
 
             if len(v_plot) > 0:
                 alpha = 0.3 if not wave.is_active else 0.7
                 ax.plot(
-                    t_plot[: len(v_plot)],
+                    t_plot_used,
                     v_plot,
                     "b-",
                     linewidth=0.5,
@@ -103,17 +122,35 @@ def plot_vt_diagram(
 
             t_plot = np.linspace(wave.t_start, t_max, 100)
             v_plot = []
+            t_plot_used = []
+
             for t in t_plot:
-                v = wave.position_at_time(t)
+                # Compute position manually for inactive waves when show_inactive=True
+                if wave.is_active:
+                    v = wave.position_at_time(t)
+                else:
+                    # Manually compute position for visualization
+                    v = wave.v_start + wave.velocity * (t - wave.t_start)
+
                 if v is not None and 0 <= v <= state.v_outlet:
                     v_plot.append(v)
+                    t_plot_used.append(t)
+                elif v is not None and v > state.v_outlet:
+                    # Wave crossed outlet - add exact intersection point
+                    vel = wave.velocity
+                    if vel > 0:
+                        t_outlet = wave.t_start + (state.v_outlet - wave.v_start) / vel
+                        if wave.t_start <= t_outlet <= t_max:
+                            v_plot.append(state.v_outlet)
+                            t_plot_used.append(t_outlet)
+                    break
                 else:
                     break
 
             if len(v_plot) > 0:
                 alpha = 0.5 if not wave.is_active else 1.0
                 ax.plot(
-                    t_plot[: len(v_plot)],
+                    t_plot_used,
                     v_plot,
                     "r-",
                     linewidth=2,
@@ -131,18 +168,52 @@ def plot_vt_diagram(
             t_plot = np.linspace(wave.t_start, t_max, 100)
             v_head_plot = []
             v_tail_plot = []
+            t_plot_used = []
+            head_crossed = False
+            tail_crossed = False
 
             for t in t_plot:
-                v_head = wave.head_position_at_time(t)
-                v_tail = wave.tail_position_at_time(t)
+                # Compute positions manually for inactive waves when show_inactive=True
+                if wave.is_active:
+                    v_head = wave.head_position_at_time(t)
+                    v_tail = wave.tail_position_at_time(t)
+                else:
+                    # Manually compute positions for visualization
+                    v_head = wave.v_start + wave.head_velocity() * (t - wave.t_start)
+                    v_tail = wave.v_start + wave.tail_velocity() * (t - wave.t_start)
 
+                # Track time points
+                t_plot_used.append(t)
+
+                # Handle head
                 if v_head is not None and 0 <= v_head <= state.v_outlet:
                     v_head_plot.append(v_head)
+                elif v_head is not None and v_head > state.v_outlet and not head_crossed:
+                    # Add exact outlet intersection for head
+                    head_vel = wave.head_velocity()
+                    if head_vel > 0:
+                        t_outlet_head = wave.t_start + (state.v_outlet - wave.v_start) / head_vel
+                        if wave.t_start <= t_outlet_head <= t_max:
+                            # Insert the exact crossing point
+                            v_head_plot.append(state.v_outlet)
+                            head_crossed = True
+                    v_head_plot.append(None)
                 else:
                     v_head_plot.append(None)
 
+                # Handle tail
                 if v_tail is not None and 0 <= v_tail <= state.v_outlet:
                     v_tail_plot.append(v_tail)
+                elif v_tail is not None and v_tail > state.v_outlet and not tail_crossed:
+                    # Add exact outlet intersection for tail
+                    tail_vel = wave.tail_velocity()
+                    if tail_vel > 0:
+                        t_outlet_tail = wave.t_start + (state.v_outlet - wave.v_start) / tail_vel
+                        if wave.t_start <= t_outlet_tail <= t_max:
+                            # Insert the exact crossing point
+                            v_tail_plot.append(state.v_outlet)
+                            tail_crossed = True
+                    v_tail_plot.append(None)
                 else:
                     v_tail_plot.append(None)
 
@@ -151,14 +222,14 @@ def plot_vt_diagram(
             label = "Rarefaction" if not hasattr(ax, "_raref_labeled") else ""
 
             # Plot head (faster boundary)
-            valid_head = [(t, v) for t, v in zip(t_plot, v_head_plot, strict=False) if v is not None]
+            valid_head = [(t, v) for t, v in zip(t_plot_used, v_head_plot, strict=False) if v is not None]
             if valid_head:
                 t_h, v_h = zip(*valid_head, strict=False)
                 ax.plot(t_h, v_h, "g-", linewidth=1.5, alpha=alpha, label=label)
                 ax._raref_labeled = True
 
             # Plot tail (slower boundary)
-            valid_tail = [(t, v) for t, v in zip(t_plot, v_tail_plot, strict=False) if v is not None]
+            valid_tail = [(t, v) for t, v in zip(t_plot_used, v_tail_plot, strict=False) if v is not None]
             if valid_tail:
                 t_t, v_t = zip(*valid_tail, strict=False)
                 ax.plot(t_t, v_t, "g--", linewidth=1.5, alpha=alpha)
@@ -263,7 +334,8 @@ def plot_breakthrough_curve(
     fig, ax = plt.subplots(figsize=figsize)
 
     if t_max is None:
-        t_max = state.t_current * 1.1
+        # Default to input data time range instead of simulation end time
+        t_max = float(state.tedges[-1])
 
     # Use exact analytical segments
     segments = identify_outlet_segments(0.0, t_max, state.v_outlet, state.waves, state.sorption)

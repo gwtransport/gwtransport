@@ -285,7 +285,8 @@ def identify_outlet_segments(
                 if isinstance(wave, CharacteristicWave):
                     c_after = wave.concentration
                 elif isinstance(wave, ShockWave):
-                    c_after = wave.c_right
+                    # After shock passes outlet, outlet sees left (upstream) state
+                    c_after = wave.c_left
                 else:
                     c_after = 0.0
 
