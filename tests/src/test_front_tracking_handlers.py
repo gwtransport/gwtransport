@@ -884,13 +884,13 @@ class TestEntropyViolatingScenarios:
         # Characteristic with C=10.0 (fastest) catches shock with c_left=5.0, c_right=3.0 (slower)
         # Same logic
         if freundlich_sorption.n > 1.0:
-            c_shock_left = 3.0   # Slow (higher C for n>1)
+            c_shock_left = 3.0  # Slow (higher C for n>1)
             c_shock_right = 5.0  # Slower still
-            c_char = 1.0         # Fast (low C for n>1)
+            c_char = 1.0  # Fast (low C for n>1)
         else:
-            c_shock_left = 5.0   # Slow (lower C for n<1)
+            c_shock_left = 5.0  # Slow (lower C for n<1)
             c_shock_right = 3.0  # Slower still
-            c_char = 10.0        # Fast (high C for n<1)
+            c_char = 10.0  # Fast (high C for n<1)
 
         shock = ShockWave(
             t_start=0.0,

@@ -998,8 +998,8 @@ class TestShockVelocityAndEntropy:
             # So c_left < c_right (low c behind, high c ahead, creates shock)
             test_shocks = [
                 (1.0, 10.0),  # Low c catching high c
-                (2.0, 5.0),   # Low c catching high c
-                (1.0, 5.0),   # Low c catching high c
+                (2.0, 5.0),  # Low c catching high c
+                (1.0, 5.0),  # Low c catching high c
             ]
 
             for c_left, c_right in test_shocks:
@@ -1014,7 +1014,7 @@ class TestShockVelocityAndEntropy:
             # So c_left > c_right (high c behind, low c ahead, creates shock)
             test_shocks = [
                 (10.0, 2.0),  # High c catching low c
-                (5.0, 1.0),   # High c catching low c
+                (5.0, 1.0),  # High c catching low c
                 (10.0, 5.0),  # High c catching low c
             ]
 
