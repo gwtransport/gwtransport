@@ -8,14 +8,14 @@ This file captures the current design and implementation of the exact analytical
 
 - Implementation lives in:
   - `src/gwtransport/advection.py`
-  - `src/gwtransport/front_tracking_math.py`
-  - `src/gwtransport/front_tracking_waves.py`
-  - `src/gwtransport/front_tracking_events.py`
-  - `src/gwtransport/front_tracking_inlet.py`
-  - `src/gwtransport/front_tracking_handlers.py`
-  - `src/gwtransport/front_tracking_solver.py`
-  - `src/gwtransport/front_tracking_output.py`
-  - `src/gwtransport/front_tracking_plot.py`
+  - `src/gwtransport/fronttracking/math.py`
+  - `src/gwtransport/fronttracking/waves.py`
+  - `src/gwtransport/fronttracking/events.py`
+  - `src/gwtransport/fronttracking/inlet.py`
+  - `src/gwtransport/fronttracking/handlers.py`
+  - `src/gwtransport/fronttracking/solver.py`
+  - `src/gwtransport/fronttracking/output.py`
+  - `src/gwtransport/fronttracking/plot.py`
 - Goal: exact analytical, event-driven front tracking for 1D advection with sorption:
   - Nonlinear Freundlich sorption and linear constant-retardation case
   - Machine-precision, no numerical tolerances, no iterative solvers
@@ -27,7 +27,7 @@ All 9 phases in `FRONT_TRACKING_REBUILD_PLAN.md` are implemented and passing tes
 
 ## 2. Modules and responsibilities
 
-### 2.1 `front_tracking_math.py` (Phase 1 – core math)
+### 2.1 `math.py` (Phase 1 – core math)
 
 **Classes and functions**
 
@@ -69,7 +69,7 @@ All math is closed-form; no root-finding and no numerical tolerances.
 
 ---
 
-### 2.2 `front_tracking_waves.py` (Phase 2 – wave representation)
+### 2.2 `waves.py` (Phase 2 – wave representation)
 
 Common base:
 
@@ -115,7 +115,7 @@ Wave kinematics are exact linear functions of time with analytically determined 
 
 ---
 
-### 2.3 `front_tracking_events.py` (Phase 3 – event detection)
+### 2.3 `events.py` (Phase 3 – event detection)
 
 **Core structures**
 
@@ -141,7 +141,7 @@ All intersections are computed analytically (no iteration):
 
 ---
 
-### 2.4 `front_tracking_inlet.py` and `front_tracking_handlers.py` (Phase 4 – wave creation & interactions)
+### 2.4 `handlers.py` (Phase 4 – wave creation & interactions)
 
 **Inlet wave creation**
 
@@ -183,7 +183,7 @@ These handlers are the only place where wave topology changes; all operations ar
 
 ---
 
-### 2.5 `front_tracking_solver.py` (Phase 5 – main solver)
+### 2.5 `solver.py` (Phase 5 – main solver)
 
 **Core structures**
 
@@ -221,7 +221,7 @@ These handlers are the only place where wave topology changes; all operations ar
     - For rarefaction-related collisions (`RAREF_CHAR_COLLISION`, `SHOCK_RAREF_COLLISION`,
       `RAREF_RAREF_COLLISION`), the event detection layer computes which rarefaction boundary
       (head vs tail) participates in the interaction.
-    - The current `handle_event` implementation in `front_tracking_solver.py` does not yet
+    - The current `handle_event` implementation in `solver.py` does not yet
       propagate this boundary information through the `Event` object and instead passes a
       hard-coded `boundary_type` (e.g. "head" or "tail") to the corresponding handler.
     - Existing Phase 4 and 8 tests cover the physically relevant interaction patterns used
@@ -232,7 +232,7 @@ The solver is fully event-driven and analytical; there is no time-stepping.
 
 ---
 
-### 2.6 `front_tracking_output.py` (Phase 6 – concentration extraction)
+### 2.6 `output.py` (Phase 6 – concentration extraction)
 
 - `concentration_at_point(v, t, waves, sorption)`:
   - Exact concentration $C(v, t)$ based on the wave set.
@@ -265,7 +265,7 @@ This ensures machine-precision mass balance and no numerical dispersion.
 
 ---
 
-### 2.7 `front_tracking_plot.py` and `examples/08_Front_Tracking_Exact_Solution.ipynb` (Phase 9)
+### 2.7 `plot.py` and `examples/08_Front_Tracking_Exact_Solution.ipynb` (Phase 9)
 
 - `plot_vt_diagram(tracker_state, ...)`:
   - Visualizes characteristics (blue), shocks (red), rarefactions (green) in the $(v, t)$ plane.
@@ -344,6 +344,8 @@ When editing or extending the front-tracking code, the following invariants and 
   - Flow: m³/day.
 - No capital variable names in the implementation:
   - Use `c_left`, `v_outlet`, `t_first_arrival` rather than `C_left`, `V_outlet`, `TFirstArrival`.
+- Plotting of binned values must be plotted as steps with:
+  - `x, y = np.repeat(tedges, 2)[1:-1], np.repeat(cout, 2)`
 
 ### 3.7 Testing discipline
 
