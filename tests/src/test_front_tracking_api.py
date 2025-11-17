@@ -17,7 +17,7 @@ from gwtransport.advection import (
     infiltration_to_extraction_front_tracking,
     infiltration_to_extraction_front_tracking_detailed,
 )
-from gwtransport.fronttracking.math import FreundlichSorption, compute_first_arrival_time
+from gwtransport.fronttracking.math import FreundlichSorption, compute_first_front_arrival_time
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.utils import compute_time_edges
 
@@ -233,13 +233,11 @@ class TestFrontTrackingAPI:
             porosity=porosity,
         )
 
-        # Compute t_first_arrival in solver time units (days since tedges[0])
-        tedges_days = (tedges.view(np.ndarray) - tedges[0].to_datetime64()) / np.timedelta64(1, "D")
-
-        t_first_expected = compute_first_arrival_time(
+        # Compute t_first_arrival (returns days from tedges[0])
+        t_first_expected = compute_first_front_arrival_time(
             cin=cin,
             flow=flow,
-            tedges=tedges_days,
+            tedges=tedges,
             aquifer_pore_volume=aquifer_pore_volume,
             sorption=sorption,
         )

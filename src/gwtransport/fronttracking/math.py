@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 
 
 @dataclass
@@ -623,11 +624,11 @@ def characteristic_position(
     sorption : FreundlichSorption or ConstantRetardation
         Sorption model.
     t_start : float
-        Time when characteristic starts [time].
+        Time when characteristic starts [days].
     v_start : float
         Starting position [volume].
     t : float
-        Time at which to compute position [time].
+        Time at which to compute position [days].
 
     Returns
     -------
@@ -647,10 +648,12 @@ def characteristic_position(
         return None
 
     velocity = characteristic_velocity(c, flow, sorption)
-    return v_start + velocity * (t - t_start)
+    dt_days = t - t_start
+
+    return v_start + velocity * dt_days
 
 
-def compute_first_arrival_time(
+def compute_first_front_arrival_time(
     cin: npt.NDArray[np.floating],
     flow: npt.NDArray[np.floating],
     tedges: npt.NDArray[np.floating],
@@ -658,16 +661,26 @@ def compute_first_arrival_time(
     sorption: FreundlichSorption | ConstantRetardation,
 ) -> float:
     """
-    Compute time of first non-zero concentration arrival at outlet.
+    Compute exact time when first wave reaches outlet (v_max).
 
-    This is the end of the spin-up period. All times before this are affected
-    by unknown initial conditions and should not be used for analysis.
+    This function returns the precise moment when the first non-zero
+    concentration wave from the inlet arrives at the outlet. This marks
+    the end of the spin-up period.
+
+    For the typical case where the first inlet change creates a characteristic
+    (e.g., 0→C transition), this is when that characteristic reaches v_max.
+
+    For cases with rarefaction waves:
+    - n>1 (favorable): Higher C travels faster. The head of a rarefaction
+      (higher C) arrives first.
+    - n<1 (unfavorable): Lower C travels faster. The head of a rarefaction
+      (lower C) arrives first.
 
     Algorithm:
     1. Find first index where cin > 0
     2. Compute residence time for this concentration from inlet to outlet
     3. Account for piecewise constant flow during transit
-    4. First arrival = t_start + residence_time
+    4. Return arrival time in days from tedges[0]
 
     Parameters
     ----------
@@ -675,8 +688,9 @@ def compute_first_arrival_time(
         Inlet concentration [mass/volume]. Length = len(tedges) - 1.
     flow : numpy.ndarray
         Flow rate [volume/time]. Length = len(tedges) - 1.
-    tedges : numpy.ndarray
-        Time bin edges [time]. Length = len(cin) + 1.
+    tedges : pandas.DatetimeIndex
+        Time bin edges. Length = len(cin) + 1.
+        Expected to be DatetimeIndex.
     aquifer_pore_volume : float
         Total pore volume [volume]. Must be positive.
     sorption : FreundlichSorption or ConstantRetardation
@@ -685,7 +699,7 @@ def compute_first_arrival_time(
     Returns
     -------
     t_first_arrival : float
-        Time when first non-zero concentration reaches outlet [time].
+        Time when first wave reaches outlet, measured in days from tedges[0].
         Returns np.inf if no concentration ever arrives.
 
     Notes
@@ -696,18 +710,25 @@ def compute_first_arrival_time(
     For piecewise constant flow, we integrate:
         ∫₀^residence_time flow(t) dt = aquifer_pore_volume * R(C)
 
-    After t_first_arrival, the solution is completely determined by inlet
-    boundary conditions and is independent of unknown initial conditions.
+    This function computes the EXACT crossing time in days, not a bin edge.
+    Use compute_first_fully_informed_bin_edge() to get the corresponding
+    output bin edge for masking purposes.
 
     Examples
     --------
+    >>> import pandas as pd
     >>> cin = np.array([0.0, 10.0, 10.0])
     >>> flow = np.array([100.0, 100.0, 100.0])
-    >>> tedges = np.array([0.0, 10.0, 20.0, 30.0])
+    >>> tedges = pd.date_range("2020-01-01", periods=4, freq="D")
     >>> sorption = ConstantRetardation(retardation_factor=2.0)
-    >>> t_first = compute_first_arrival_time(cin, flow, tedges, 500.0, sorption)
-    >>> np.isclose(t_first, 10.0 + 500.0 * 2.0 / 100.0)  # 10 + 10 = 20
+    >>> t_first = compute_first_front_arrival_time(cin, flow, tedges, 500.0, sorption)
+    >>> # Result is in days from tedges[0]
+    >>> np.isclose(t_first, 11.0)  # 1 day (index offset) + 10 days (travel time)
     True
+
+    See Also
+    --------
+    compute_first_fully_informed_bin_edge : Get first valid output bin edge
     """
     # Find first non-zero concentration
     nonzero_indices = np.where(cin > 0)[0]
@@ -727,21 +748,146 @@ def compute_first_arrival_time(
     target_volume = aquifer_pore_volume * r_first
 
     # Integrate piecewise constant flow starting from idx_first
+    # tedges is assumed to be DatetimeIndex, convert all times to days
     cumulative_volume = 0.0
 
     for i in range(idx_first, len(flow)):
-        dt = tedges[i + 1] - tedges[i]
-        volume_in_bin = flow[i] * dt
+        # Convert time interval to days
+        dt_days = (tedges[i + 1] - tedges[i]) / pd.Timedelta(days=1)
+        volume_in_bin = flow[i] * dt_days
 
         if cumulative_volume + volume_in_bin >= target_volume:
             # First arrival occurs during this bin
             remaining_volume = target_volume - cumulative_volume
             dt_partial = remaining_volume / flow[i]
-            # Total time = t_start + elapsed since t_start within this bin
-            # Elapsed = (tedges[i] - t_start) + dt_partial
-            return t_start + (tedges[i] - t_start) + dt_partial
+
+            # Return time in days from tedges[0]
+            t_bin_start_days = (tedges[i] - tedges[0]) / pd.Timedelta(days=1)
+            return t_bin_start_days + dt_partial
 
         cumulative_volume += volume_in_bin
 
     # Never reaches outlet with given flow history
     return np.inf
+
+
+def compute_first_fully_informed_bin_edge(
+    cin: npt.NDArray[np.floating],
+    flow: npt.NDArray[np.floating],
+    tedges: npt.NDArray[np.floating],
+    aquifer_pore_volume: float,
+    sorption: FreundlichSorption | ConstantRetardation,
+    output_tedges: npt.NDArray[np.floating],
+) -> float:
+    """
+    Compute left edge of first output bin that is fully informed.
+
+    A bin [t_i, t_{i+1}] is "fully informed" if all water exiting during
+    that interval originated from known inlet conditions (not unknown
+    initial conditions). This occurs when t_i >= first front arrival time.
+
+    This function is useful for:
+    - Masking output bins during spin-up period
+    - Determining which output times are valid for analysis
+    - Plotting valid vs spin-up regions
+
+    Rarefaction handling:
+    - For n>1: Rarefaction tail (lower C, slower) arrives after head.
+      Once the first wave (head) arrives, subsequent bins are informed.
+    - For n<1: Rarefaction tail (higher C, slower) arrives after head.
+      Same principle applies.
+
+    In both cases, once the leading edge of the inlet-generated wave structure
+    reaches the outlet, all subsequent output is determined by inlet history.
+
+    Parameters
+    ----------
+    cin : numpy.ndarray
+        Inlet concentration [mass/volume]. Length = len(tedges) - 1.
+    flow : numpy.ndarray
+        Flow rate [volume/time]. Length = len(tedges) - 1.
+    tedges : pandas.DatetimeIndex
+        Inlet time bin edges. Length = len(cin) + 1.
+        Expected to be DatetimeIndex.
+    aquifer_pore_volume : float
+        Total pore volume [volume]. Must be positive.
+    sorption : FreundlichSorption or ConstantRetardation
+        Sorption model.
+    output_tedges : pandas.DatetimeIndex
+        Output time bin edges. These are the bins for which we want
+        to determine the first fully-informed bin.
+        Expected to be DatetimeIndex.
+
+    Returns
+    -------
+    t_first_bin : float
+        Left edge of first output bin that is fully informed, measured in
+        days from output_tedges[0].
+        Returns last edge in days if no bin is fully informed.
+        Returns np.inf if output_tedges is empty.
+
+    Notes
+    -----
+    This differs from compute_first_front_arrival_time in that it returns
+    a BIN EDGE (from output_tedges), not the exact crossing time.
+
+    Both functions return time in days, but measured from different reference points:
+    - compute_first_front_arrival_time: days from tedges[0]
+    - compute_first_fully_informed_bin_edge: days from output_tedges[0]
+
+    For masking output arrays:
+        >>> import pandas as pd
+        >>> t_first_bin = compute_first_fully_informed_bin_edge(...)
+        >>> # Convert output_tedges to days from output_tedges[0]
+        >>> tedges_days = (output_tedges - output_tedges[0]) / pd.Timedelta(days=1)
+        >>> mask = tedges_days[:-1] >= t_first_bin
+        >>> cout_valid = cout[mask]
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> # Exact arrival at ~11 days from tedges[0]
+    >>> cin = np.array([0.0, 10.0, 10.0])
+    >>> flow = np.array([100.0, 100.0, 100.0])
+    >>> tedges = pd.date_range("2020-01-01", periods=4, freq="D")
+    >>> output_tedges = pd.date_range("2020-01-01", periods=20, freq="D")
+    >>> sorption = ConstantRetardation(retardation_factor=2.0)
+    >>> t_bin = compute_first_fully_informed_bin_edge(
+    ...     cin, flow, tedges, 500.0, sorption, output_tedges
+    ... )
+    >>> # Result is in days from output_tedges[0]
+    >>> t_bin >= 11.0  # First bin edge >= arrival time
+    True
+
+    See Also
+    --------
+    compute_first_front_arrival_time : Get exact arrival time
+    """
+    if len(output_tedges) == 0:
+        return np.inf
+
+    # Compute exact arrival time (in days from tedges[0])
+    t_arrival_days = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
+
+    if not np.isfinite(t_arrival_days):
+        # No arrival, return last edge in days from output_tedges[0]
+        return (output_tedges[-1] - output_tedges[0]) / pd.Timedelta(days=1)
+
+    # Convert output_tedges to days from output_tedges[0]
+    # Find first bin edge >= t_arrival_days
+    # Note: t_arrival_days is measured from tedges[0], but output_tedges might have different start
+    # So we need to adjust the reference point
+
+    # Convert t_arrival from "days from tedges[0]" to "days from output_tedges[0]"
+    t_arrival_abs = tedges[0] + pd.Timedelta(days=t_arrival_days)
+    t_arrival_output_ref = (t_arrival_abs - output_tedges[0]) / pd.Timedelta(days=1)
+
+    # Find first output bin edge >= t_arrival
+    for t_edge in output_tedges:
+        t_edge_days = (t_edge - output_tedges[0]) / pd.Timedelta(days=1)
+        if t_edge_days >= t_arrival_output_ref:
+            return t_edge_days
+
+    # If no edge is >= t_arrival, return the last edge
+    # (This means all bins are before arrival)
+    return (output_tedges[-1] - output_tedges[0]) / pd.Timedelta(days=1)

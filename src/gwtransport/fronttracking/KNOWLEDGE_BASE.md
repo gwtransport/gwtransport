@@ -56,7 +56,7 @@ All 9 phases in `FRONT_TRACKING_REBUILD_PLAN.md` are implemented and passing tes
   - `integrate_rarefaction_exact(raref, v_outlet, t_start, t_end, sorption)`
     - Exact analytic $\int C(t)\,dt$ along outlet for a rarefaction (Freundlich case), using closed-form power-law integration.
 - Spin-up computation:
-  - `compute_first_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)`
+  - `compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)`
     - Finds first index `i` where `cin[i] > 0` and defines `t_start = tedges[i]`.
     - Computes retardation `R(c_first)` for this first non-zero concentration using the provided sorption model.
     - Integrates the piecewise-constant flow history exactly from `t_start` forward until the cumulative advected volume reaches `aquifer_pore_volume * R(c_first)`.
@@ -199,7 +199,7 @@ These handlers are the only place where wave topology changes; all operations ar
   - `__init__(cin, flow, tedges, aquifer_pore_volume, sorption)`:
     - Validates shapes, positivity, and consistency of inputs.
     - Sets `v_outlet = aquifer_pore_volume`.
-    - Computes `t_first_arrival` via `compute_first_arrival_time` (spin-up boundary).
+    - Computes `t_first_arrival` via `compute_first_front_arrival_time` (spin-up boundary).
     - Initializes inlet waves via `initialize_all_inlet_waves`.
   - `find_next_event()`:
     - Uses analytical intersection functions to collect candidate events involving all active waves.
@@ -319,7 +319,7 @@ When editing or extending the front-tracking code, the following invariants and 
 
 ### 3.3 Spin-up period handling
 
-- `compute_first_arrival_time` is the canonical source of `t_first_arrival`.
+- `compute_first_front_arrival_time` is the canonical source of `t_first_arrival`.
 - Times `t < t_first_arrival` are "spin-up" and depend on unknown initial conditions.
 - For `t >= t_first_arrival`, the solution is fully determined by inlet history and the sorption model.
 
@@ -342,6 +342,12 @@ When editing or extending the front-tracking code, the following invariants and 
   - Time: days.
   - Volume: m³.
   - Flow: m³/day.
+- Time representation convention:
+  - **Input/Output**: `tedges` and `cout_tedges` are always `pd.DatetimeIndex` (pandas Timestamps).
+  - **Internal simulation**: All times (`t_current`, `t_start`, `t_first_arrival`, event times, wave times) are floats representing **days from `tedges[0]`**.
+  - **No flexibility**: Code should NOT use try-except blocks to accept both floats and Timestamps. Each function has a clear contract: internal functions use floats in days, public APIs accept DatetimeIndex.
+  - Conversion: When initializing from `tedges`, convert to days: `(tedges[i] - tedges[0]) / pd.Timedelta(days=1)`.
+- Input timeseries data is provided as bin-averaged numpy arrays; The time edges of the bin are `tedges` and are pandas `DatetimeIndex`, and are of length `len(cin) + 1`.
 - No capital variable names in the implementation:
   - Use `c_left`, `v_outlet`, `t_first_arrival` rather than `C_left`, `V_outlet`, `TFirstArrival`.
 - Plotting of binned values must be plotted as steps with:

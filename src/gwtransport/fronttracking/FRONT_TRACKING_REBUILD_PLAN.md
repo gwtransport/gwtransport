@@ -85,7 +85,7 @@
         - Zero-input test (cin = 0 ⇒ cout = 0)
         - Parameter validation via pytest.raises
         - Detailed diagnostics consistency (wave counts and sorption type)
-        - Spin-up verification: t_first_arrival matches compute_first_arrival_time and cout is zero before first arrival
+        - Spin-up verification: t_first_arrival matches compute_first_front_arrival_time and cout is zero before first arrival
     - **All Phase 7 API tests passing** (test_front_tracking_api.py)
     - **Total: 166 tests passing** (161 from Phases 1-6 + 5 from Phase 7)
   - Removed old implementation tests (test_advection_front_tracking.py, test_front_tracking.py)
@@ -301,7 +301,7 @@ def rarefaction_mass_in_fan(c_head: float, c_tail: float,
 **Function**:
 
 ```python
-def compute_first_arrival_time(cin: np.ndarray, flow: np.ndarray,
+def compute_first_front_arrival_time(cin: np.ndarray, flow: np.ndarray,
                                tedges: np.ndarray, aquifer_pore_volume: float,
                                sorption: FreundlichSorption | ConstantRetardation) -> float:
     """
@@ -1201,7 +1201,7 @@ class FrontTracker:
         )
 
         # Compute spin-up period
-        self.t_first_arrival = compute_first_arrival_time(
+        self.t_first_arrival = compute_first_front_arrival_time(
             cin, flow, tedges, aquifer_pore_volume, sorption
         )
 
@@ -2073,7 +2073,7 @@ def test_first_arrival_time_constant_flow():
 
     sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-    t_first = compute_first_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
+    t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
 
     # Expected: t_first = tedges[1] + aquifer_pore_volume * R(10) / flow
     r_10 = sorption.retardation(10.0)

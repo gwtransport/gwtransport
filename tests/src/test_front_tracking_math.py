@@ -15,7 +15,7 @@ from gwtransport.fronttracking.math import (
     FreundlichSorption,
     characteristic_position,
     characteristic_velocity,
-    compute_first_arrival_time,
+    compute_first_front_arrival_time,
 )
 
 
@@ -308,94 +308,110 @@ class TestFirstArrivalTime:
 
     def test_first_arrival_constant_flow_constant_retardation(self):
         """Test first arrival with constant flow and retardation."""
+        import pandas as pd
+
         cin = np.array([0.0, 10.0, 10.0])
         flow = np.array([100.0, 100.0, 100.0])
-        tedges = np.array([0.0, 10.0, 20.0, 30.0])
+        tedges = pd.date_range("2020-01-01", periods=4, freq="10D")  # [0, 10, 20, 30] days
         aquifer_pore_volume = 500.0
         sorption = ConstantRetardation(retardation_factor=2.0)
 
-        t_first = compute_first_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
+        t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
 
-        # Expected: tedges[1] + pore_volume * R / flow
-        # = 10.0 + 500.0 * 2.0 / 100.0 = 10.0 + 10.0 = 20.0
+        # Expected: time from tedges[0] when first concentration reaches outlet
+        # First non-zero at index 1 (day 10), travels for 500*2/100 = 10 days
+        # Arrives at day 10 + 10 = 20 days from tedges[0]
         t_expected = 20.0
 
         assert np.isclose(t_first, t_expected, rtol=1e-14)
 
     def test_first_arrival_starts_at_zero(self):
         """Test first arrival when concentration starts at t=0."""
+        import pandas as pd
+
         cin = np.array([10.0, 10.0])
         flow = np.array([100.0, 100.0])
-        tedges = np.array([0.0, 10.0, 20.0])
+        tedges = pd.date_range("2020-01-01", periods=3, freq="10D")  # [0, 10, 20] days
         aquifer_pore_volume = 500.0
         sorption = ConstantRetardation(retardation_factor=2.0)
 
-        t_first = compute_first_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
+        t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
 
-        # Expected: 0.0 + 500.0 * 2.0 / 100.0 = 10.0
+        # Expected: concentration starts at t=0 (tedges[0]), travels for 500*2/100 = 10 days
+        # Arrives at 0 + 10 = 10 days from tedges[0]
         t_expected = 10.0
 
         assert np.isclose(t_first, t_expected, rtol=1e-14)
 
     def test_first_arrival_no_concentration(self):
         """Test that all-zero concentration returns infinity."""
+        import pandas as pd
+
         cin = np.array([0.0, 0.0, 0.0])
         flow = np.array([100.0, 100.0, 100.0])
-        tedges = np.array([0.0, 10.0, 20.0, 30.0])
+        tedges = pd.date_range("2020-01-01", periods=4, freq="10D")  # [0, 10, 20, 30] days
         aquifer_pore_volume = 500.0
         sorption = ConstantRetardation(retardation_factor=2.0)
 
-        t_first = compute_first_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
+        t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
 
         assert t_first == np.inf
 
     def test_first_arrival_variable_flow(self):
         """Test first arrival with variable flow."""
+        import pandas as pd
+
         cin = np.array([0.0, 10.0, 10.0])
         flow = np.array([100.0, 50.0, 200.0])  # Variable flow
-        tedges = np.array([0.0, 10.0, 20.0, 30.0])
+        tedges = pd.date_range("2020-01-01", periods=4, freq="10D")  # [0, 10, 20, 30] days
         aquifer_pore_volume = 500.0
         sorption = ConstantRetardation(retardation_factor=2.0)
 
-        t_first = compute_first_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
+        t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
 
         # Target volume: 500 * 2 = 1000 m³
-        # From t=10 to t=20: flow=50, volume = 50*10 = 500 m³
-        # From t=20 onward: flow=200, remaining = 500 m³, time = 500/200 = 2.5 days
-        # Total: 20.0 + 2.5 = 22.5
+        # First non-zero at index 1 (day 10)
+        # From day 10 to day 20: flow=50, volume = 50*10 = 500 m³
+        # From day 20 onward: flow=200, remaining = 500 m³, time = 500/200 = 2.5 days
+        # Total: 20.0 + 2.5 = 22.5 days from tedges[0]
         t_expected = 22.5
 
         assert np.isclose(t_first, t_expected, rtol=1e-14)
 
     def test_first_arrival_freundlich_sorption(self):
         """Test first arrival with Freundlich sorption."""
+        import pandas as pd
+
         cin = np.array([0.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
         flow = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0])
-        tedges = np.array([0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0])
+        tedges = pd.date_range("2020-01-01", periods=8, freq="10D")  # [0, 10, 20, ...] days
         aquifer_pore_volume = 500.0
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-        t_first = compute_first_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
+        t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
 
         # Compute retardation for C=10
         r = sorption.retardation(10.0)
-        # Expected: 10.0 + 500.0 * r / 100.0
+        # First non-zero at index 1 (day 10), travels for 500*r/100 days
+        # Expected: 10.0 + 500.0 * r / 100.0 days from tedges[0]
         t_expected = 10.0 + 500.0 * r / 100.0
 
         assert np.isclose(t_first, t_expected, rtol=1e-14)
 
     def test_first_arrival_insufficient_flow_history(self):
         """Test that insufficient flow history returns infinity."""
+        import pandas as pd
+
         cin = np.array([0.0, 10.0])
         flow = np.array([10.0, 10.0])  # Very low flow
-        tedges = np.array([0.0, 10.0, 20.0])
+        tedges = pd.date_range("2020-01-01", periods=3, freq="10D")  # [0, 10, 20] days
         aquifer_pore_volume = 10000.0  # Very large volume
         sorption = ConstantRetardation(retardation_factor=2.0)
 
-        t_first = compute_first_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
+        t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
 
         # Target: 10000 * 2 = 20000 m³
-        # Available from t=10 to t=20: 10 * 10 = 100 m³
+        # Available from day 10 to day 20: 10 * 10 = 100 m³
         # Not enough flow history
         assert t_first == np.inf
 

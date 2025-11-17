@@ -154,7 +154,7 @@ front tracking with nonlinear sorption (Freundlich) or constant retardation.
 - Outlet concentration over time is computed via exact evaluation of
    `concentration_at_point` and exact analytic integration in
    `compute_bin_averaged_concentration_exact`.
-- Spin-up is handled internally via `compute_first_arrival_time`; values of
+- Spin-up is handled internally via `compute_first_front_arrival_time`; values of
    `cout` before `t_first_arrival` are influenced by unknown initial conditions
    and should be interpreted accordingly.
 
@@ -204,7 +204,7 @@ plot V–t diagrams, or perform custom diagnostics.
 
 ## 4. Spin-up and first arrival time
 
-The function `compute_first_arrival_time` analytically determines the first
+The function `compute_first_front_arrival_time` analytically determines the first
 time that non-zero concentration reaches the outlet, given `cin`, `flow`,
 `tedges`, and `aquifer_pore_volume`.
 

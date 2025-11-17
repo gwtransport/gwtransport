@@ -66,10 +66,12 @@ def plot_vt_diagram(
     >>> fig.savefig("vt_diagram.png")
     """
     import matplotlib.pyplot as plt
+    import pandas as pd
 
     if t_max is None:
         # Default to input data time range instead of simulation end time
-        t_max = float(state.tedges[-1])
+        # Convert tedges[-1] from Timestamp to days from tedges[0]
+        t_max = (state.tedges[-1] - state.tedges[0]) / pd.Timedelta(days=1)
 
     fig, ax = plt.subplots(figsize=figsize)
 
@@ -371,7 +373,10 @@ def plot_breakthrough_curve(
 
     if t_max is None:
         # Default to input data time range instead of simulation end time
-        t_max = float(state.tedges[-1])
+        # Convert tedges[-1] from Timestamp to days from tedges[0]
+        import pandas as pd
+
+        t_max = (state.tedges[-1] - state.tedges[0]) / pd.Timedelta(days=1)
 
     # Use exact analytical segments
     segments = identify_outlet_segments(0.0, t_max, state.v_outlet, state.waves, state.sorption)

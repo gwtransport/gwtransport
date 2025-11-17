@@ -7,6 +7,7 @@ Verifies initialization, event detection, event handling, and full simulation ru
 """
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
@@ -34,7 +35,10 @@ def constant_retardation():
 @pytest.fixture
 def simple_step_input():
     """Simple step input: C: 0→10."""
-    tedges = np.array([0.0, 10.0, 100.0])
+    import pandas as pd
+
+    # Create [0, 10, 100] days
+    tedges = pd.to_datetime(["2020-01-01", "2020-01-11", "2020-04-11"])
     cin = np.array([0.0, 10.0])
     flow = np.array([100.0, 100.0])
     return cin, flow, tedges
@@ -43,7 +47,10 @@ def simple_step_input():
 @pytest.fixture
 def pulse_input():
     """Pulse input: C: 0→10→0."""
-    tedges = np.array([0.0, 10.0, 20.0, 100.0])
+    import pandas as pd
+
+    # Use custom periods: 0, 10, 20, 100 days
+    tedges = pd.to_datetime(["2020-01-01", "2020-01-11", "2020-01-21", "2020-04-11"])
     cin = np.array([0.0, 10.0, 0.0])
     flow = np.array([100.0, 100.0, 100.0])
     return cin, flow, tedges
@@ -64,7 +71,8 @@ class TestFrontTrackerInitialization:
             sorption=freundlich_sorption,
         )
 
-        assert tracker.state.t_current == tedges[0]
+        # t_current is in days from tedges[0], so should be 0.0 at initialization
+        assert tracker.state.t_current == 0.0
         assert tracker.state.v_outlet == 500.0
         assert len(tracker.state.waves) >= 0  # Should have created inlet waves
         assert len(tracker.state.events) == 0  # No events yet
@@ -88,7 +96,7 @@ class TestFrontTrackerInitialization:
         """Test validation of tedges length."""
         cin = np.array([0.0, 10.0])
         flow = np.array([100.0, 100.0])
-        tedges = np.array([0.0, 10.0])  # Wrong length
+        tedges = pd.to_datetime(["2020-01-01", "2020-01-11"])  # Wrong length
 
         with pytest.raises(ValueError, match="tedges must have length"):
             FrontTracker(
@@ -103,7 +111,7 @@ class TestFrontTrackerInitialization:
         """Test validation of negative concentrations."""
         cin = np.array([0.0, -10.0])  # Negative concentration
         flow = np.array([100.0, 100.0])
-        tedges = np.array([0.0, 10.0, 100.0])
+        tedges = pd.to_datetime(["2020-01-01", "2020-01-11", "2020-04-11"])
 
         with pytest.raises(ValueError, match="cin must be non-negative"):
             FrontTracker(
@@ -118,7 +126,7 @@ class TestFrontTrackerInitialization:
         """Test validation of negative flow."""
         cin = np.array([0.0, 10.0])
         flow = np.array([100.0, -100.0])  # Negative flow
-        tedges = np.array([0.0, 10.0, 100.0])
+        tedges = pd.to_datetime(["2020-01-01", "2020-01-11", "2020-04-11"])
 
         with pytest.raises(ValueError, match="flow must be positive"):
             FrontTracker(
@@ -141,7 +149,8 @@ class TestFrontTrackerInitialization:
             sorption=freundlich_sorption,
         )
 
-        assert tracker.t_first_arrival > tedges[0]
+        # t_first_arrival is in days from tedges[0], should be positive
+        assert tracker.t_first_arrival > 0.0
         assert np.isfinite(tracker.t_first_arrival)
 
 
@@ -169,7 +178,7 @@ class TestFindNextEvent:
         # Create tracker with no concentration changes
         cin = np.array([0.0, 0.0])
         flow = np.array([100.0, 100.0])
-        tedges = np.array([0.0, 10.0, 100.0])
+        tedges = pd.to_datetime(["2020-01-01", "2020-01-11", "2020-04-11"])
 
         tracker = FrontTracker(
             cin=cin,
@@ -183,14 +192,13 @@ class TestFindNextEvent:
         assert len(tracker.state.waves) == 0
         assert tracker.find_next_event() is None
 
-
     def test_first_outlet_crossing_not_before_first_arrival(self, simple_step_input, freundlich_sorption):
         """Spin-up does not constrain outlet-crossing events created by the solver.
 
         This test is intentionally weak: it only checks that both t_first_arrival and
         at least one outlet crossing exist and are finite, without imposing a specific
         ordering between them. The exact relationship is handled analytically by
-        compute_first_arrival_time in the math module.
+        compute_first_front_arrival_time in the math module.
         """
         cin, flow, tedges = simple_step_input
 
@@ -223,7 +231,7 @@ class TestHandleEvent:
         """Test handling of characteristic collision."""
         cin = np.array([0.0, 5.0, 2.0])
         flow = np.array([100.0, 100.0, 100.0])
-        tedges = np.array([0.0, 10.0, 20.0, 100.0])
+        tedges = pd.to_datetime(["2020-01-01", "2020-01-11", "2020-01-21", "2020-04-11"])
 
         tracker = FrontTracker(
             cin=cin,
@@ -262,7 +270,8 @@ class TestSimulationRun:
         tracker.run(max_iterations=100, verbose=False)
 
         assert len(tracker.state.events) > 0
-        assert tracker.state.t_current >= tedges[0]
+        # t_current is in days from tedges[0], should be >= 0.0
+        assert tracker.state.t_current >= 0.0
 
     @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
     def test_pulse_input_completes(self, pulse_input, freundlich_sorption):
@@ -302,13 +311,14 @@ class TestSimulationRun:
         tracker.run(max_iterations=100, verbose=False)
 
         # Simulation should complete without errors
-        assert tracker.state.t_current >= tedges[0]
+        # t_current is in days from tedges[0], should be >= 0.0
+        assert tracker.state.t_current >= 0.0
 
     def test_multiple_steps_completes(self, freundlich_sorption):
         """Test simulation with multiple concentration steps."""
         cin = np.array([0.0, 2.0, 4.0, 6.0, 8.0])
         flow = np.array([100.0, 100.0, 100.0, 100.0, 100.0])
-        tedges = np.array([0.0, 10.0, 20.0, 30.0, 40.0, 100.0])
+        tedges = pd.to_datetime(["2020-01-01", "2020-01-11", "2020-01-21", "2020-01-31", "2020-02-10", "2020-04-11"])
 
         tracker = FrontTracker(
             cin=cin,
@@ -421,7 +431,7 @@ class TestEdgeCases:
         """Test with zero concentration throughout."""
         cin = np.array([0.0, 0.0, 0.0])
         flow = np.array([100.0, 100.0, 100.0])
-        tedges = np.array([0.0, 10.0, 20.0, 30.0])
+        tedges = pd.to_datetime(["2020-01-01", "2020-01-11", "2020-01-21", "2020-01-31"])
 
         tracker = FrontTracker(
             cin=cin,
@@ -438,7 +448,7 @@ class TestEdgeCases:
         """Test with single time bin."""
         cin = np.array([10.0])
         flow = np.array([100.0])
-        tedges = np.array([0.0, 100.0])
+        tedges = pd.to_datetime(["2020-01-01", "2020-04-11"])
 
         tracker = FrontTracker(
             cin=cin,

@@ -1332,9 +1332,8 @@ def infiltration_to_extraction_front_tracking(
         msg = "aquifer_pore_volume must be positive"
         raise ValueError(msg)
 
-    # Convert time to days (relative to tedges[0])
+    # Convert cout_tedges to days (relative to tedges[0]) for output computation
     t_ref = tedges[0]
-    tedges_days = ((tedges - t_ref) / pd.Timedelta(days=1)).values
     cout_tedges_days = ((cout_tedges - t_ref) / pd.Timedelta(days=1)).values
 
     # Create sorption object
@@ -1369,11 +1368,11 @@ def infiltration_to_extraction_front_tracking(
         )
 
     # Create tracker and run simulation
-
+    # Pass tedges as DatetimeIndex (not days)
     tracker = FrontTracker(
         cin=cin,
         flow=flow,
-        tedges=tedges_days,
+        tedges=tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         sorption=sorption,
     )
@@ -1480,9 +1479,8 @@ def infiltration_to_extraction_front_tracking_detailed(
         msg = "aquifer_pore_volume must be positive"
         raise ValueError(msg)
 
-    # Convert time to days
+    # Convert cout_tedges to days (relative to tedges[0]) for output computation
     t_ref = tedges[0]
-    tedges_days = ((tedges - t_ref) / pd.Timedelta(days=1)).values
     cout_tedges_days = ((cout_tedges - t_ref) / pd.Timedelta(days=1)).values
 
     # Create sorption object
@@ -1517,11 +1515,11 @@ def infiltration_to_extraction_front_tracking_detailed(
         )
 
     # Create tracker and run simulation
-
+    # Pass tedges as DatetimeIndex (not days)
     tracker = FrontTracker(
         cin=cin,
         flow=flow,
-        tedges=tedges_days,
+        tedges=tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         sorption=sorption,
     )

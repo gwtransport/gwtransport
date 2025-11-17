@@ -23,6 +23,7 @@ from heapq import heappop, heappush
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 
 from gwtransport.fronttracking.events import (
     Event,
@@ -46,7 +47,7 @@ from gwtransport.fronttracking.handlers import (
 from gwtransport.fronttracking.math import (
     ConstantRetardation,
     FreundlichSorption,
-    compute_first_arrival_time,
+    compute_first_front_arrival_time,
 )
 from gwtransport.fronttracking.waves import (
     CharacteristicWave,
@@ -72,7 +73,7 @@ class FrontTrackerState:
     events : list[dict]
         Event history with details about each event
     t_current : float
-        Current simulation time [days]
+        Current simulation time [days from tedges[0]]
     v_outlet : float
         Outlet position [m³]
     sorption : FreundlichSorption or ConstantRetardation
@@ -81,8 +82,8 @@ class FrontTrackerState:
         Inlet concentration time series [mass/volume]
     flow : np.ndarray
         Flow rate time series [m³/day]
-    tedges : np.ndarray
-        Time bin edges [days]
+    tedges : pd.DatetimeIndex
+        Time bin edges [pandas DatetimeIndex]
 
     Examples
     --------
@@ -105,7 +106,7 @@ class FrontTrackerState:
     sorption: FreundlichSorption | ConstantRetardation
     cin: np.ndarray
     flow: np.ndarray
-    tedges: np.ndarray
+    tedges: pd.DatetimeIndex
 
 
 class FrontTracker:
@@ -164,7 +165,7 @@ class FrontTracker:
         self,
         cin: np.ndarray,
         flow: np.ndarray,
-        tedges: np.ndarray,
+        tedges: pd.DatetimeIndex,
         aquifer_pore_volume: float,
         sorption: FreundlichSorption | ConstantRetardation,
     ):
@@ -177,8 +178,8 @@ class FrontTracker:
             Inlet concentration time series [mass/volume]
         flow : np.ndarray
             Flow rate time series [m³/day]
-        tedges : np.ndarray
-            Time bin edges [days]
+        tedges : pd.DatetimeIndex
+            Time bin edges [pandas DatetimeIndex]
         aquifer_pore_volume : float
             Total pore volume [m³]
         sorption : FreundlichSorption or ConstantRetardation
@@ -207,10 +208,11 @@ class FrontTracker:
             raise ValueError(msg)
 
         # Initialize state
+        # t_current is in days from tedges[0], so it starts at 0.0
         self.state = FrontTrackerState(
             waves=[],
             events=[],
-            t_current=tedges[0],
+            t_current=0.0,
             v_outlet=aquifer_pore_volume,
             sorption=sorption,
             cin=cin.copy(),
@@ -219,7 +221,7 @@ class FrontTracker:
         )
 
         # Compute spin-up period
-        self.t_first_arrival = compute_first_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
+        self.t_first_arrival = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
 
         # Initialize waves from inlet boundary conditions
         self._initialize_inlet_waves()
@@ -235,7 +237,8 @@ class FrontTracker:
 
         for i in range(len(self.state.cin)):
             c_new = self.state.cin[i]
-            t_change = self.state.tedges[i]
+            # Convert tedges[i] (Timestamp) to days from tedges[0]
+            t_change = (self.state.tedges[i] - self.state.tedges[0]) / pd.Timedelta(days=1)
             flow_current = self.state.flow[i]
 
             if abs(c_new - c_prev) > 1e-15:
