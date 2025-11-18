@@ -56,11 +56,17 @@ def concentration_at_point(
     -----
     **Wave Priority**:
     The algorithm checks waves in this order:
-    1. Rarefaction waves (have spatial extent)
+    1. Rarefaction waves (if point is inside rarefaction fan)
     2. Shocks (discontinuities)
-    3. Characteristics (smooth regions)
+    3. Rarefaction tails (if rarefaction tail has passed point)
+    4. Characteristics (smooth regions)
 
     If no active wave controls the point, returns 0.0 (initial condition).
+
+    **Rarefaction Tail Behavior**:
+    After a rarefaction tail passes a query point, that point maintains the
+    tail concentration as a plateau. This ensures proper concentration behavior
+    after rarefaction waves pass through.
 
     **Machine Precision**:
     All position and concentration calculations use exact analytical formulas.
@@ -83,11 +89,12 @@ def concentration_at_point(
             if c is not None:
                 return c
 
-    # Check shocks (discontinuities)
-    # Find the rightmost shock that has passed position v by time t
-    rightmost_shock_c = None
-    rightmost_shock_pos = -np.inf
+    # Track the most recent wave to affect position v
+    # We need to compare crossing times of shocks and rarefaction tails
+    latest_wave_time = -np.inf
+    latest_wave_c = None
 
+    # Check shocks - track which shocks control this position
     for wave in waves:
         if isinstance(wave, ShockWave) and wave.is_active:
             v_shock = wave.position_at_time(t)
@@ -95,22 +102,46 @@ def concentration_at_point(
                 # Tolerance for exact shock position
                 tol = 1e-15
 
-                if v < v_shock - tol:
-                    # Haven't reached shock yet - check if this is the rightmost shock behind us
-                    if v_shock > rightmost_shock_pos:
-                        rightmost_shock_pos = v_shock
-                        rightmost_shock_c = wave.c_left
-                elif v > v_shock + tol:
-                    # Past shock - check if this is the rightmost shock we've passed
-                    if v_shock > rightmost_shock_pos:
-                        rightmost_shock_pos = v_shock
-                        rightmost_shock_c = wave.c_right
-                else:
-                    # Exactly at shock
+                if abs(v - v_shock) < tol:
+                    # Exactly at shock position
                     return 0.5 * (wave.c_left + wave.c_right)
 
-    if rightmost_shock_c is not None:
-        return rightmost_shock_c
+                # Determine if shock has crossed position v and when
+                if wave.velocity is not None and abs(wave.velocity) > 1e-15:
+                    t_cross = wave.t_start + (v - wave.v_start) / wave.velocity
+
+                    if t_cross <= t:
+                        # Shock has crossed position v by time t
+                        # After crossing, point sees c_left (concentration behind shock)
+                        if t_cross > latest_wave_time:
+                            latest_wave_time = t_cross
+                            latest_wave_c = wave.c_left
+                    elif v > v_shock:
+                        # Point is ahead of shock (shock hasn't reached it yet)
+                        # Check if this is the closest shock ahead of us
+                        # In this case, we see c_right unless overridden by another wave
+                        # We track this with a negative time (shock formation time) to indicate
+                        # it's a "passive" state (not actively changed)
+                        if wave.t_start > latest_wave_time:
+                            latest_wave_time = wave.t_start
+                            latest_wave_c = wave.c_right
+
+    # Check rarefaction tails - they can override previous waves
+    for wave in waves:
+        if isinstance(wave, RarefactionWave) and wave.is_active:
+            v_tail = wave.tail_position_at_time(t)
+            if v_tail is not None and v_tail > v + 1e-15:
+                # Rarefaction tail has passed position v
+                # Find when it passed: v_start + tail_velocity * (t_pass - t_start) = v
+                tail_vel = wave.tail_velocity()
+                if tail_vel > 1e-15:
+                    t_pass = wave.t_start + (v - wave.v_start) / tail_vel
+                    if t_pass <= t and t_pass > latest_wave_time:
+                        latest_wave_time = t_pass
+                        latest_wave_c = wave.c_tail
+
+    if latest_wave_c is not None:
+        return latest_wave_c
 
     # Check characteristics
     # Find the most recent characteristic that has reached position v by time t

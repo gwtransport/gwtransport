@@ -237,10 +237,14 @@ The solver is fully event-driven and analytical; there is no time-stepping.
 - `concentration_at_point(v, t, waves, sorption)`:
   - Exact concentration $C(v, t)$ based on the wave set.
   - Priority:
-    1. Rarefactions (spatial extent; use rarefaction self-similar solution).
-    2. Shocks (left/right states and position).
+    1. Rarefactions (if point is inside rarefaction fan; use rarefaction self-similar solution).
+    2. Shocks and rarefaction tails (most recent wave to pass through point).
+       - Shocks: track crossing time and concentration (c_left after crossing, c_right ahead of shock).
+       - Rarefaction tails: track when tail passed point and return tail concentration.
+       - Return concentration from whichever passed most recently.
     3. Characteristics (latest characteristic that has passed through `(v, t)`).
   - If no wave controls `(v, t)`, returns `0.0` (initial condition).
+  - **Critical fix (2025-01-18)**: Rarefaction tails now properly establish final plateaus after passing a point. Previously, after a rarefaction tail passed, the code incorrectly reverted to an earlier characteristic's concentration.
 
 - `compute_breakthrough_curve(t_array, v_outlet, waves, sorption)`:
   - Evaluates `concentration_at_point(v_outlet, t, ...)` for each `t` in `t_array`.
