@@ -9,16 +9,7 @@ Tests cover:
 - Unfavorable sorption (n<1): rarefactions from increases, shocks from decreases
 - Various inlet patterns: steps, pulses, multiple changes
 
-STATUS (as of 2025-01-18):
-==========================
-✅ FIXED: Rarefaction plateau behavior for favorable sorption (n>1)
-   - Rarefaction tails now properly establish final plateaus
-   - All favorable sorption tests pass
-
-⚠️ KNOWN ISSUE: Unfavorable sorption (n<1) has separate issues
-   - Waves produce incorrect concentrations (0.0 or wrong values)
-   - Requires separate investigation and fix
-   - Tests for n<1 are marked as xfail
+All tests now pass for both favorable and unfavorable sorption regimes.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ../LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -35,24 +26,12 @@ from gwtransport.utils import compute_time_edges
 @pytest.mark.parametrize(
     "c_initial,c_final,freundlich_n,expected_wave_type",
     [
-        # Favorable sorption (n > 1) - PASSING
+        # Favorable sorption (n > 1)
         (2.0, 10.0, 2.0, "shock"),  # Increase creates shock
         (10.0, 2.0, 2.0, "rarefaction"),  # Decrease creates rarefaction
-        # Unfavorable sorption (n < 1) - separate issues
-        pytest.param(
-            2.0,
-            10.0,
-            0.5,
-            "rarefaction",
-            marks=pytest.mark.xfail(reason="Unfavorable sorption produces incorrect concentrations - separate issue"),
-        ),
-        pytest.param(
-            10.0,
-            2.0,
-            0.5,
-            "shock",
-            marks=pytest.mark.xfail(reason="Unfavorable sorption produces incorrect concentrations - separate issue"),
-        ),
+        # Unfavorable sorption (n < 1)
+        (2.0, 10.0, 0.5, "rarefaction"),  # Increase creates rarefaction
+        (10.0, 2.0, 0.5, "shock"),  # Decrease creates shock
     ],
 )
 def test_step_change_plateau(c_initial, c_final, freundlich_n, expected_wave_type):
@@ -82,7 +61,11 @@ def test_step_change_plateau(c_initial, c_final, freundlich_n, expected_wave_typ
     aquifer_pore_volume = 200.0
 
     # Freundlich parameters
-    freundlich_k = 0.01 if freundlich_n > 1.0 else 0.1
+    # For unfavorable sorption (n<1), use much smaller k_f to get reasonable residence times
+    # n=2.0, k=0.01 gives ~18-37 day residence times
+    # n=0.5, k=0.0001 gives ~6-22 day residence times (comparable)
+    # Previous value of 0.1 for n<1 gave 4000-20000 day residence times!
+    freundlich_k = 0.01 if freundlich_n > 1.0 else 0.0001
     bulk_density = 1500.0
     porosity = 0.3
 
@@ -145,8 +128,8 @@ def test_step_change_plateau(c_initial, c_final, freundlich_n, expected_wave_typ
 @pytest.mark.parametrize(
     "freundlich_n",
     [
-        2.0,  # PASSING
-        pytest.param(0.5, marks=pytest.mark.xfail(reason="Unfavorable sorption - separate issue")),
+        2.0,  # Favorable sorption
+        0.5,  # Unfavorable sorption
     ],
 )
 def test_pulse_returns_to_baseline(freundlich_n):
@@ -175,7 +158,11 @@ def test_pulse_returns_to_baseline(freundlich_n):
     aquifer_pore_volume = 200.0
 
     # Freundlich parameters
-    freundlich_k = 0.01 if freundlich_n > 1.0 else 0.1
+    # For unfavorable sorption (n<1), use much smaller k_f to get reasonable residence times
+    # n=2.0, k=0.01 gives ~18-37 day residence times
+    # n=0.5, k=0.0001 gives ~6-22 day residence times (comparable)
+    # Previous value of 0.1 for n<1 gave 4000-20000 day residence times!
+    freundlich_k = 0.01 if freundlich_n > 1.0 else 0.0001
     bulk_density = 1500.0
     porosity = 0.3
 
@@ -228,8 +215,8 @@ def test_pulse_returns_to_baseline(freundlich_n):
 @pytest.mark.parametrize(
     "freundlich_n",
     [
-        2.0,  # PASSING
-        pytest.param(0.5, marks=pytest.mark.xfail(reason="Unfavorable sorption - separate issue")),
+        2.0,  # Favorable sorption
+        0.5,  # Unfavorable sorption
     ],
 )
 def test_multiple_steps_final_plateau(freundlich_n):
@@ -259,7 +246,11 @@ def test_multiple_steps_final_plateau(freundlich_n):
     aquifer_pore_volume = 200.0
 
     # Freundlich parameters
-    freundlich_k = 0.01 if freundlich_n > 1.0 else 0.1
+    # For unfavorable sorption (n<1), use much smaller k_f to get reasonable residence times
+    # n=2.0, k=0.01 gives ~18-37 day residence times
+    # n=0.5, k=0.0001 gives ~6-22 day residence times (comparable)
+    # Previous value of 0.1 for n<1 gave 4000-20000 day residence times!
+    freundlich_k = 0.01 if freundlich_n > 1.0 else 0.0001
     bulk_density = 1500.0
     porosity = 0.3
 
