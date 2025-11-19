@@ -385,9 +385,7 @@ def test_step_down_to_zero_plateau(c_initial, freundlich_n):
 
         # Should reach near zero for unfavorable sorption
         atol = 0.1
-        assert abs(mean_final) < atol, (
-            f"Unfavorable sorption should reach zero: final={mean_final:.3e}"
-        )
+        assert abs(mean_final) < atol, f"Unfavorable sorption should reach zero: final={mean_final:.3e}"
     # For favorable sorption (n>1), the rarefaction structure is verified above
     # The wave may take thousands of days to complete, so we don't check final concentration
 
@@ -457,8 +455,7 @@ def test_pulse_from_zero_returns_to_zero(freundlich_n):
     if freundlich_n > 1.0:
         # Favorable: rising edge creates shock, falling edge creates rarefaction
         assert structure["n_shocks"] >= 1, (
-            f"Expected shock from pulse rising edge for favorable sorption, "
-            f"got {structure['n_shocks']} shocks"
+            f"Expected shock from pulse rising edge for favorable sorption, got {structure['n_shocks']} shocks"
         )
         assert structure["n_rarefactions"] >= 1, (
             f"Expected rarefaction from pulse falling edge for favorable sorption, "
@@ -471,12 +468,11 @@ def test_pulse_from_zero_returns_to_zero(freundlich_n):
             f"got {structure['n_rarefactions']} rarefactions"
         )
         assert structure["n_shocks"] >= 1, (
-            f"Expected shock from pulse falling edge for unfavorable sorption, "
-            f"got {structure['n_shocks']} shocks"
+            f"Expected shock from pulse falling edge for unfavorable sorption, got {structure['n_shocks']} shocks"
         )
 
     # Verify concentration is decreasing after pulse
-    mid_outlet = cout[len(cout)//3:len(cout)//2]  # Middle third
+    mid_outlet = cout[len(cout) // 3 : len(cout) // 2]  # Middle third
     final_outlet = cout[-60:]  # Last 60 days
     mid_outlet = mid_outlet[~np.isnan(mid_outlet)]
     final_outlet = final_outlet[~np.isnan(final_outlet)]
@@ -495,7 +491,5 @@ def test_pulse_from_zero_returns_to_zero(freundlich_n):
     # For unfavorable sorption (n<1), should actually return to near zero
     if freundlich_n < 1.0:
         atol = 0.1
-        assert abs(mean_final) < atol, (
-            f"Unfavorable sorption should return to zero: final={mean_final:.3e}"
-        )
+        assert abs(mean_final) < atol, f"Unfavorable sorption should return to zero: final={mean_final:.3e}"
     # For favorable sorption (n>1), just verify it's decreasing (may not reach c_min in finite time)

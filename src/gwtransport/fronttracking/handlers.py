@@ -65,8 +65,8 @@ def handle_characteristic_collision(
     >>> assert not char1.is_active  # Parent deactivated
     """
     # Get c_min from sorption to determine concentration threshold
-    c_min = getattr(char1.sorption, 'c_min', 0.0)
-    is_unfavorable = hasattr(char1.sorption, 'n') and char1.sorption.n < 1.0
+    c_min = getattr(char1.sorption, "c_min", 0.0)
+    is_unfavorable = hasattr(char1.sorption, "n") and char1.sorption.n < 1.0
 
     # Special case: if one characteristic has C near c_min
     # Need to determine if this is:
@@ -754,8 +754,8 @@ def create_inlet_waves_at_time(
         return []
 
     # Get c_min from sorption if available (determines when to use special treatment)
-    c_min = getattr(sorption, 'c_min', 0.0)
-    is_unfavorable = hasattr(sorption, 'n') and sorption.n < 1.0
+    c_min = getattr(sorption, "c_min", 0.0)
+    is_unfavorable = hasattr(sorption, "n") and sorption.n < 1.0
 
     # Special case: c_prev ≈ 0 AND this is unfavorable sorption with c_min=0
     # For unfavorable sorption (n<1), R(0)=1 is physically correct
