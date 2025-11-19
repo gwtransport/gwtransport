@@ -69,7 +69,7 @@ context and hard constraints before describing a concrete task.
 > work on now. Please scope it as narrowly and concretely as possible
 > (e.g. "add a specific test", "adjust a particular wave interaction", or
 > "update this doc section"):
-> Throughout gwtransport, tedges are always pandas timestamps and residence times or time of first arrival are always in days. However, some functions in solver.py and math.py may not consistently apply this convention. For example, don't include any try-except structures to also accept floats. Please review and update these functions to ensure they adhere to the established time representation standards.
+> I am currently working on `examples/08_Front_Tracking_Exact_Solution.ipynb` It looks okay but it does not include rarefactions. Please create an additional example notebook that demonstrates front-tracking with rarefaction waves. Make sure to include plots of the V-t diagram and breakthrough curves, similar to the existing notebook. 
 
 ---
 

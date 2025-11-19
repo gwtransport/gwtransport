@@ -570,3 +570,646 @@ def plot_wave_interactions(
 
     fig.tight_layout()
     return fig
+
+
+def plot_inlet_concentration(
+    dates,
+    cin,
+    ax=None,
+    *,
+    t_first_arrival=None,
+    event_markers=None,
+    color="blue",
+    t_max=None,
+    xlabel="Time [days]",
+    ylabel="Concentration",
+    title="Inlet Concentration",
+    figsize=(8, 5),
+    **step_kwargs,
+):
+    """
+    Plot inlet concentration as step function with optional markers.
+
+    Parameters
+    ----------
+    dates : pd.DatetimeIndex or array-like
+        Time points for concentration values.
+    cin : array-like
+        Inlet concentration values.
+    ax : matplotlib.axes.Axes, optional
+        Existing axes to plot into. If None, creates new figure.
+    t_first_arrival : float, optional
+        First arrival time to mark with vertical line [days].
+    event_markers : list of dict, optional
+        Event markers to add. Each dict should have keys: 'time', 'label', 'color'.
+    color : str, optional
+        Color for inlet concentration line. Default 'blue'.
+    t_max : float, optional
+        Maximum time for x-axis [days]. If None, uses full range.
+    xlabel : str, optional
+        Label for x-axis. Default 'Time [days]'.
+    ylabel : str, optional
+        Label for y-axis. Default 'Concentration'.
+    title : str, optional
+        Plot title. Default 'Inlet Concentration'.
+    figsize : tuple, optional
+        Figure size if creating new figure. Default (8, 5).
+    **step_kwargs
+        Additional arguments passed to ax.step().
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        Figure object.
+    ax : matplotlib.axes.Axes
+        Axes object.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    # Convert dates to days from start
+    if hasattr(dates, "to_numpy"):
+        dates_array = dates.to_numpy()
+    else:
+        dates_array = np.array(dates)
+
+    t_days = (dates_array - dates_array[0]) / pd.Timedelta(days=1)
+
+    # Plot inlet concentration
+    ax.step(t_days, cin, where="post", linewidth=2, color=color, label="Inlet", **step_kwargs)
+
+    # Add first arrival marker if provided
+    if t_first_arrival is not None and np.isfinite(t_first_arrival):
+        ax.axvline(
+            t_first_arrival,
+            color="green",
+            linestyle="--",
+            linewidth=1.5,
+            alpha=0.7,
+            label=f"First arrival ({t_first_arrival:.1f} days)",
+        )
+
+    # Add event markers if provided
+    if event_markers is not None:
+        for marker in event_markers:
+            t = marker.get("time")
+            label = marker.get("label", "")
+            marker_color = marker.get("color", "gray")
+            linestyle = marker.get("linestyle", "--")
+
+            if t is not None:
+                ax.axvline(
+                    t,
+                    color=marker_color,
+                    linestyle=linestyle,
+                    linewidth=1.5,
+                    alpha=0.7,
+                    label=label,
+                )
+
+    ax.set_xlabel(xlabel, fontsize=10)
+    ax.set_ylabel(ylabel, fontsize=10)
+    ax.set_title(title, fontsize=12, fontweight="bold")
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8)
+
+    if t_max is not None:
+        ax.set_xlim(0, t_max)
+    else:
+        ax.set_xlim(0, t_days[-1])
+
+    return fig, ax
+
+
+def plot_front_tracking_summary(
+    structure,
+    dates,
+    cin,
+    cout_tedges,
+    cout,
+    *,
+    figsize=(16, 10),
+    show_exact=True,
+    show_bin_averaged=True,
+    show_events=True,
+    show_inactive=False,
+    t_max=None,
+    title=None,
+    inlet_color="blue",
+    outlet_exact_color="blue",
+    outlet_binned_color="red",
+    first_arrival_color="green",
+):
+    """
+    Create comprehensive 3-panel summary figure for front tracking simulation.
+
+    Creates a multi-panel visualization with:
+    - Top-left: V-t diagram showing wave propagation
+    - Top-right: Inlet concentration time series
+    - Bottom: Outlet concentration (exact and/or bin-averaged)
+
+    Parameters
+    ----------
+    structure : dict
+        Structure returned from infiltration_to_extraction_front_tracking_detailed.
+        Must contain keys: 'tracker_state', 't_first_arrival'.
+    dates : pd.DatetimeIndex
+        Time points for inlet concentration.
+    cin : array-like
+        Inlet concentration values.
+    cout_tedges : pd.DatetimeIndex
+        Output time edges for bin-averaged concentration.
+    cout : array-like
+        Bin-averaged output concentration values.
+    figsize : tuple, optional
+        Figure size (width, height). Default (16, 10).
+    show_exact : bool, optional
+        Whether to show exact analytical breakthrough curve. Default True.
+    show_bin_averaged : bool, optional
+        Whether to show bin-averaged concentration. Default True.
+    show_events : bool, optional
+        Whether to show wave interaction events on V-t diagram. Default True.
+    show_inactive : bool, optional
+        Whether to show inactive waves on V-t diagram. Default False.
+    t_max : float, optional
+        Maximum time for plots [days]. If None, uses input data range.
+    title : str, optional
+        Overall figure title. If None, uses generic title.
+    inlet_color : str, optional
+        Color for inlet concentration. Default 'blue'.
+    outlet_exact_color : str, optional
+        Color for exact outlet curve. Default 'blue'.
+    outlet_binned_color : str, optional
+        Color for bin-averaged outlet. Default 'red'.
+    first_arrival_color : str, optional
+        Color for first arrival marker. Default 'green'.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        Figure object.
+    axes : dict
+        Dictionary with keys 'vt', 'inlet', 'outlet' containing axes objects.
+    """
+    from gwtransport.fronttracking.output import concentration_at_point
+
+    # Create figure with 3-panel layout
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.3)
+
+    axes = {}
+
+    # Top left: V-t diagram
+    ax_vt = fig.add_subplot(gs[0, 0])
+    plot_vt_diagram(
+        structure["tracker_state"],
+        ax=ax_vt,
+        show_inactive=show_inactive,
+        show_events=show_events,
+        t_max=t_max,
+    )
+    ax_vt.set_title("V-t Diagram", fontsize=12, fontweight="bold")
+    axes["vt"] = ax_vt
+
+    # Top right: Inlet concentration
+    ax_inlet = fig.add_subplot(gs[0, 1])
+    plot_inlet_concentration(
+        dates,
+        cin,
+        ax=ax_inlet,
+        t_first_arrival=structure["t_first_arrival"],
+        color=inlet_color,
+        t_max=t_max,
+    )
+    axes["inlet"] = ax_inlet
+
+    # Bottom: Outlet concentration (exact and bin-averaged)
+    ax_outlet = fig.add_subplot(gs[1, :])
+
+    # Compute time range
+    if t_max is None:
+        t_max = (dates.to_numpy()[-1] - dates.to_numpy()[0]) / pd.Timedelta(days=1)
+
+    # Exact breakthrough curve
+    if show_exact:
+        t_exact = np.linspace(0, t_max, 1000)
+        c_exact = [
+            concentration_at_point(
+                structure["tracker_state"].v_outlet,
+                t,
+                structure["tracker_state"].waves,
+                structure["tracker_state"].sorption,
+            )
+            for t in t_exact
+        ]
+        ax_outlet.plot(
+            t_exact,
+            c_exact,
+            color=outlet_exact_color,
+            linewidth=2.5,
+            label="Exact outlet concentration",
+            zorder=3,
+        )
+
+    # Bin-averaged outlet
+    if show_bin_averaged:
+        t_edges_days = ((cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)).values
+        xstep_cout, ystep_cout = np.repeat(t_edges_days, 2)[1:-1], np.repeat(cout, 2)
+        ax_outlet.plot(
+            xstep_cout,
+            ystep_cout,
+            color=outlet_binned_color,
+            linestyle="--",
+            linewidth=1.5,
+            alpha=0.7,
+            label="Bin-averaged outlet",
+            zorder=2,
+        )
+
+    # First arrival marker
+    t_first = structure["t_first_arrival"]
+    if np.isfinite(t_first):
+        ax_outlet.axvline(
+            t_first,
+            color=first_arrival_color,
+            linestyle="--",
+            linewidth=1.5,
+            alpha=0.7,
+            label=f"First arrival ({t_first:.1f} days)",
+            zorder=1,
+        )
+
+    ax_outlet.set_xlabel("Time [days]", fontsize=11)
+    ax_outlet.set_ylabel("Concentration", fontsize=11)
+    ax_outlet.set_title("Outlet Concentration: Exact vs Bin-Averaged", fontsize=12, fontweight="bold")
+    ax_outlet.grid(True, alpha=0.3)
+    ax_outlet.legend(fontsize=9)
+    ax_outlet.set_xlim(0, t_max)
+    axes["outlet"] = ax_outlet
+
+    # Overall title
+    if title is not None:
+        plt.suptitle(title, fontsize=14, fontweight="bold", y=0.995)
+
+    plt.tight_layout()
+    return fig, axes
+
+
+def plot_comparison_favorable_unfavorable(
+    structure_favorable,
+    dates_favorable,
+    cin_favorable,
+    structure_unfavorable,
+    dates_unfavorable,
+    cin_unfavorable,
+    *,
+    figsize=(16, 10),
+    annotate=True,
+    t_max_favorable=None,
+    t_max_unfavorable=None,
+):
+    """
+    Create side-by-side comparison of favorable vs unfavorable sorption.
+
+    DEPRECATED: Use plot_sorption_comparison instead for more flexibility.
+
+    Creates a 2x2 grid comparing:
+    - Top row: Inlet concentrations (favorable left, unfavorable right)
+    - Bottom row: Outlet breakthrough curves
+
+    Parameters
+    ----------
+    structure_favorable : dict
+        Structure from front tracking with n>1 (favorable sorption).
+    dates_favorable : pd.DatetimeIndex
+        Inlet time points for favorable case.
+    cin_favorable : array-like
+        Inlet concentration for favorable case.
+    structure_unfavorable : dict
+        Structure from front tracking with n<1 (unfavorable sorption).
+    dates_unfavorable : pd.DatetimeIndex
+        Inlet time points for unfavorable case.
+    cin_unfavorable : array-like
+        Inlet concentration for unfavorable case.
+    figsize : tuple, optional
+        Figure size (width, height). Default (16, 10).
+    annotate : bool, optional
+        Whether to add arrows/labels for shocks and rarefactions. Default True.
+    t_max_favorable : float, optional
+        Max time for favorable plots [days]. If None, auto-computed.
+    t_max_unfavorable : float, optional
+        Max time for unfavorable plots [days]. If None, auto-computed.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        Figure object.
+    axes : ndarray
+        2x2 array of axes objects.
+    """
+    from gwtransport.fronttracking.output import concentration_at_point
+
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    fig.suptitle(
+        "Comparison: Favorable vs Unfavorable Sorption",
+        fontsize=16,
+        fontweight="bold",
+        y=0.995,
+    )
+
+    # Compute time ranges
+    if t_max_favorable is None:
+        t_max_favorable = (dates_favorable.to_numpy()[-1] - dates_favorable.to_numpy()[0]) / pd.Timedelta(days=1)
+    if t_max_unfavorable is None:
+        t_max_unfavorable = (dates_unfavorable.to_numpy()[-1] - dates_unfavorable.to_numpy()[0]) / pd.Timedelta(days=1)
+
+    # Left column: Favorable sorption
+    ax_fav_inlet = axes[0, 0]
+    t_days_fav = (dates_favorable.to_numpy() - dates_favorable.to_numpy()[0]) / pd.Timedelta(days=1)
+    ax_fav_inlet.step(t_days_fav, cin_favorable, where="post", linewidth=2.5, color="blue")
+    ax_fav_inlet.set_xlabel("Time [days]", fontsize=11)
+    ax_fav_inlet.set_ylabel("Concentration", fontsize=11)
+    ax_fav_inlet.set_title("Favorable: Inlet", fontsize=12, fontweight="bold", color="darkblue")
+    ax_fav_inlet.grid(True, alpha=0.3)
+    ax_fav_inlet.set_xlim(0, t_max_favorable)
+    ax_fav_inlet.text(
+        0.05,
+        0.95,
+        "High C travels FAST\n(low retardation)",
+        transform=ax_fav_inlet.transAxes,
+        verticalalignment="top",
+        bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.5},
+        fontsize=9,
+    )
+
+    ax_fav_outlet = axes[1, 0]
+    t_exact_fav = np.linspace(0, t_max_favorable, 2000)
+    c_exact_fav = [
+        concentration_at_point(
+            structure_favorable["tracker_state"].v_outlet,
+            t,
+            structure_favorable["tracker_state"].waves,
+            structure_favorable["tracker_state"].sorption,
+        )
+        for t in t_exact_fav
+    ]
+    ax_fav_outlet.plot(t_exact_fav, c_exact_fav, "b-", linewidth=2.5)
+    ax_fav_outlet.set_xlabel("Time [days]", fontsize=11)
+    ax_fav_outlet.set_ylabel("Concentration", fontsize=11)
+    ax_fav_outlet.set_title("Favorable: Outlet", fontsize=12, fontweight="bold", color="darkblue")
+    ax_fav_outlet.grid(True, alpha=0.3)
+    ax_fav_outlet.set_xlim(0, t_max_favorable)
+
+    # Right column: Unfavorable sorption
+    ax_unfav_inlet = axes[0, 1]
+    t_days_unfav = (dates_unfavorable.to_numpy() - dates_unfavorable.to_numpy()[0]) / pd.Timedelta(days=1)
+    ax_unfav_inlet.step(t_days_unfav, cin_unfavorable, where="post", linewidth=2.5, color="darkred")
+    ax_unfav_inlet.set_xlabel("Time [days]", fontsize=11)
+    ax_unfav_inlet.set_ylabel("Concentration", fontsize=11)
+    ax_unfav_inlet.set_title("Unfavorable: Inlet", fontsize=12, fontweight="bold", color="darkred")
+    ax_unfav_inlet.grid(True, alpha=0.3)
+    ax_unfav_inlet.set_xlim(0, t_max_unfavorable)
+    ax_unfav_inlet.text(
+        0.05,
+        0.95,
+        "High C travels SLOW\n(high retardation)",
+        transform=ax_unfav_inlet.transAxes,
+        verticalalignment="top",
+        bbox={"boxstyle": "round", "facecolor": "lightcoral", "alpha": 0.5},
+        fontsize=9,
+    )
+
+    ax_unfav_outlet = axes[1, 1]
+    t_exact_unfav = np.linspace(0, t_max_unfavorable, 2000)
+    c_exact_unfav = [
+        concentration_at_point(
+            structure_unfavorable["tracker_state"].v_outlet,
+            t,
+            structure_unfavorable["tracker_state"].waves,
+            structure_unfavorable["tracker_state"].sorption,
+        )
+        for t in t_exact_unfav
+    ]
+    ax_unfav_outlet.plot(t_exact_unfav, c_exact_unfav, "r-", linewidth=2.5)
+    ax_unfav_outlet.set_xlabel("Time [days]", fontsize=11)
+    ax_unfav_outlet.set_ylabel("Concentration", fontsize=11)
+    ax_unfav_outlet.set_title("Unfavorable: Outlet", fontsize=12, fontweight="bold", color="darkred")
+    ax_unfav_outlet.grid(True, alpha=0.3)
+    ax_unfav_outlet.set_xlim(0, t_max_unfavorable)
+
+    plt.tight_layout()
+    return fig, axes
+
+
+def plot_sorption_comparison(
+    pulse_favorable_structure,
+    pulse_unfavorable_structure,
+    pulse_dates,
+    pulse_cin,
+    dip_favorable_structure,
+    dip_unfavorable_structure,
+    dip_dates,
+    dip_cin,
+    *,
+    figsize=(16, 12),
+    t_max_pulse=None,
+    t_max_dip=None,
+):
+    """
+    Compare how each inlet produces different outputs with favorable vs unfavorable sorption.
+
+    Creates a 2x3 grid:
+    - Row 1: Pulse inlet and its outputs with favorable and unfavorable sorption
+    - Row 2: Dip inlet and its outputs with favorable and unfavorable sorption
+
+    This demonstrates how the SAME inlet timeseries produces DIFFERENT breakthrough
+    curves depending on the sorption isotherm.
+
+    Parameters
+    ----------
+    pulse_favorable_structure : dict
+        Structure from pulse inlet with favorable sorption (n>1).
+    pulse_unfavorable_structure : dict
+        Structure from pulse inlet with unfavorable sorption (n<1).
+    pulse_dates : pd.DatetimeIndex
+        Time points for pulse inlet.
+    pulse_cin : array-like
+        Pulse inlet concentration (e.g., 0→10→0).
+    dip_favorable_structure : dict
+        Structure from dip inlet with favorable sorption (n>1).
+    dip_unfavorable_structure : dict
+        Structure from dip inlet with unfavorable sorption (n<1).
+    dip_dates : pd.DatetimeIndex
+        Time points for dip inlet.
+    dip_cin : array-like
+        Dip inlet concentration (e.g., 10→2→10).
+    figsize : tuple, optional
+        Figure size (width, height). Default (16, 12).
+    t_max_pulse : float, optional
+        Max time for pulse plots [days]. If None, auto-computed.
+    t_max_dip : float, optional
+        Max time for dip plots [days]. If None, auto-computed.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        Figure object.
+    axes : ndarray
+        2x3 array of axes objects.
+    """
+    from gwtransport.fronttracking.output import concentration_at_point
+
+    fig, axes = plt.subplots(2, 3, figsize=figsize)
+    fig.suptitle(
+        "Sorption Comparison: How Each Inlet Responds to Favorable vs Unfavorable Sorption",
+        fontsize=15,
+        fontweight="bold",
+        y=0.995,
+    )
+
+    # Compute time ranges
+    if t_max_pulse is None:
+        t_max_pulse = (pulse_dates.to_numpy()[-1] - pulse_dates.to_numpy()[0]) / pd.Timedelta(days=1)
+    if t_max_dip is None:
+        t_max_dip = (dip_dates.to_numpy()[-1] - dip_dates.to_numpy()[0]) / pd.Timedelta(days=1)
+
+    # === ROW 1: Pulse inlet (0→10→0) ===
+    t_days_pulse = (pulse_dates.to_numpy() - pulse_dates.to_numpy()[0]) / pd.Timedelta(days=1)
+
+    # Column 1: Pulse inlet
+    ax_pulse_inlet = axes[0, 0]
+    ax_pulse_inlet.step(t_days_pulse, pulse_cin, where="post", linewidth=2.5, color="black")
+    ax_pulse_inlet.set_xlabel("Time [days]", fontsize=10)
+    ax_pulse_inlet.set_ylabel("Concentration", fontsize=10)
+    ax_pulse_inlet.set_title("Pulse Inlet\n(0→10→0)", fontsize=11, fontweight="bold")
+    ax_pulse_inlet.grid(True, alpha=0.3)
+    ax_pulse_inlet.set_xlim(0, t_max_pulse)
+
+    # Column 2: Pulse → Favorable outlet
+    ax_pulse_fav = axes[0, 1]
+    t_exact_pulse_fav = np.linspace(0, t_max_pulse, 1500)
+    c_exact_pulse_fav = [
+        concentration_at_point(
+            pulse_favorable_structure["tracker_state"].v_outlet,
+            t,
+            pulse_favorable_structure["tracker_state"].waves,
+            pulse_favorable_structure["tracker_state"].sorption,
+        )
+        for t in t_exact_pulse_fav
+    ]
+    ax_pulse_fav.plot(t_exact_pulse_fav, c_exact_pulse_fav, "b-", linewidth=2.5)
+    ax_pulse_fav.set_xlabel("Time [days]", fontsize=10)
+    ax_pulse_fav.set_ylabel("Concentration", fontsize=10)
+    ax_pulse_fav.set_title("Favorable (n>1)\nShock→Rarefaction", fontsize=11, fontweight="bold", color="darkblue")
+    ax_pulse_fav.grid(True, alpha=0.3)
+    ax_pulse_fav.set_xlim(0, t_max_pulse)
+    ax_pulse_fav.text(
+        0.05,
+        0.95,
+        "High C: FAST\nRise: Sharp\nFall: Smooth",
+        transform=ax_pulse_fav.transAxes,
+        verticalalignment="top",
+        bbox={"boxstyle": "round", "facecolor": "lightblue", "alpha": 0.7},
+        fontsize=8,
+    )
+
+    # Column 3: Pulse → Unfavorable outlet
+    ax_pulse_unfav = axes[0, 2]
+    t_exact_pulse_unfav = np.linspace(0, t_max_pulse, 1500)
+    c_exact_pulse_unfav = [
+        concentration_at_point(
+            pulse_unfavorable_structure["tracker_state"].v_outlet,
+            t,
+            pulse_unfavorable_structure["tracker_state"].waves,
+            pulse_unfavorable_structure["tracker_state"].sorption,
+        )
+        for t in t_exact_pulse_unfav
+    ]
+    ax_pulse_unfav.plot(t_exact_pulse_unfav, c_exact_pulse_unfav, "r-", linewidth=2.5)
+    ax_pulse_unfav.set_xlabel("Time [days]", fontsize=10)
+    ax_pulse_unfav.set_ylabel("Concentration", fontsize=10)
+    ax_pulse_unfav.set_title("Unfavorable (n<1)\nRarefaction→Shock", fontsize=11, fontweight="bold", color="darkred")
+    ax_pulse_unfav.grid(True, alpha=0.3)
+    ax_pulse_unfav.set_xlim(0, t_max_pulse)
+    ax_pulse_unfav.text(
+        0.05,
+        0.95,
+        "High C: SLOW\nRise: Smooth\nFall: Sharp",
+        transform=ax_pulse_unfav.transAxes,
+        verticalalignment="top",
+        bbox={"boxstyle": "round", "facecolor": "lightcoral", "alpha": 0.7},
+        fontsize=8,
+    )
+
+    # === ROW 2: Dip inlet (10→2→10) ===
+    t_days_dip = (dip_dates.to_numpy() - dip_dates.to_numpy()[0]) / pd.Timedelta(days=1)
+
+    # Column 1: Dip inlet
+    ax_dip_inlet = axes[1, 0]
+    ax_dip_inlet.step(t_days_dip, dip_cin, where="post", linewidth=2.5, color="black")
+    ax_dip_inlet.set_xlabel("Time [days]", fontsize=10)
+    ax_dip_inlet.set_ylabel("Concentration", fontsize=10)
+    ax_dip_inlet.set_title("Dip Inlet\n(10→2→10)", fontsize=11, fontweight="bold")
+    ax_dip_inlet.grid(True, alpha=0.3)
+    ax_dip_inlet.set_xlim(0, t_max_dip)
+
+    # Column 2: Dip → Favorable outlet
+    ax_dip_fav = axes[1, 1]
+    t_exact_dip_fav = np.linspace(0, t_max_dip, 1500)
+    c_exact_dip_fav = [
+        concentration_at_point(
+            dip_favorable_structure["tracker_state"].v_outlet,
+            t,
+            dip_favorable_structure["tracker_state"].waves,
+            dip_favorable_structure["tracker_state"].sorption,
+        )
+        for t in t_exact_dip_fav
+    ]
+    ax_dip_fav.plot(t_exact_dip_fav, c_exact_dip_fav, "b-", linewidth=2.5)
+    ax_dip_fav.set_xlabel("Time [days]", fontsize=10)
+    ax_dip_fav.set_ylabel("Concentration", fontsize=10)
+    ax_dip_fav.set_title("Favorable (n>1)\nRarefaction→Shock", fontsize=11, fontweight="bold", color="darkblue")
+    ax_dip_fav.grid(True, alpha=0.3)
+    ax_dip_fav.set_xlim(0, t_max_dip)
+    ax_dip_fav.text(
+        0.05,
+        0.95,
+        "High C: FAST\nDrop: Smooth\nRise: Sharp",
+        transform=ax_dip_fav.transAxes,
+        verticalalignment="top",
+        bbox={"boxstyle": "round", "facecolor": "lightblue", "alpha": 0.7},
+        fontsize=8,
+    )
+
+    # Column 3: Dip → Unfavorable outlet
+    ax_dip_unfav = axes[1, 2]
+    t_exact_dip_unfav = np.linspace(0, t_max_dip, 1500)
+    c_exact_dip_unfav = [
+        concentration_at_point(
+            dip_unfavorable_structure["tracker_state"].v_outlet,
+            t,
+            dip_unfavorable_structure["tracker_state"].waves,
+            dip_unfavorable_structure["tracker_state"].sorption,
+        )
+        for t in t_exact_dip_unfav
+    ]
+    ax_dip_unfav.plot(t_exact_dip_unfav, c_exact_dip_unfav, "r-", linewidth=2.5)
+    ax_dip_unfav.set_xlabel("Time [days]", fontsize=10)
+    ax_dip_unfav.set_ylabel("Concentration", fontsize=10)
+    ax_dip_unfav.set_title("Unfavorable (n<1)\nShock→Rarefaction", fontsize=11, fontweight="bold", color="darkred")
+    ax_dip_unfav.grid(True, alpha=0.3)
+    ax_dip_unfav.set_xlim(0, t_max_dip)
+    ax_dip_unfav.text(
+        0.05,
+        0.95,
+        "High C: SLOW\nDrop: Sharp\nRise: Smooth",
+        transform=ax_dip_unfav.transAxes,
+        verticalalignment="top",
+        bbox={"boxstyle": "round", "facecolor": "lightcoral", "alpha": 0.7},
+        fontsize=8,
+    )
+
+    plt.tight_layout()
+    return fig, axes
