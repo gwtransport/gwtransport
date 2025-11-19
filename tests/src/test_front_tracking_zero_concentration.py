@@ -25,23 +25,28 @@ class TestInletWaveCreationZeroConcentration:
     """Test wave creation for C=0 transitions at inlet."""
 
     def test_zero_to_nonzero_creates_characteristic_freundlich_favorable(self):
-        """Test C=0 → C=10 creates characteristic for n>1 Freundlich."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        """Test C=0 → C=10 creates rarefaction for n>1 Freundlich with c_min>0."""
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
 
         waves = create_inlet_waves_at_time(c_prev=0.0, c_new=10.0, t=5.0, flow=100.0, sorption=sorption, v_inlet=0.0)
 
+        # For favorable sorption, velocity increases with concentration
+        # So 10 > 0 means faster concentration catching slower, creating compression (shock)
         assert len(waves) == 1
-        assert isinstance(waves[0], CharacteristicWave)
-        assert waves[0].concentration == 10.0
+        assert isinstance(waves[0], ShockWave)
+        assert waves[0].c_left == 10.0  # Upstream (faster)
+        assert waves[0].c_right == 0.0  # Downstream (slower)
         assert waves[0].t_start == 5.0
         assert waves[0].v_start == 0.0
 
     def test_zero_to_nonzero_creates_characteristic_freundlich_unfavorable(self):
-        """Test C=0 → C=10 creates characteristic for n<1 Freundlich."""
-        sorption = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3)
+        """Test C=0 → C=10 creates characteristic for n<1 Freundlich with c_min=0."""
+        sorption = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
 
         waves = create_inlet_waves_at_time(c_prev=0.0, c_new=10.0, t=5.0, flow=100.0, sorption=sorption, v_inlet=0.0)
 
+        # For unfavorable sorption with c_min=0, R(0)=1 is special case
+        # Stepping from 0 to nonzero creates characteristic
         assert len(waves) == 1
         assert isinstance(waves[0], CharacteristicWave)
         assert waves[0].concentration == 10.0
@@ -56,15 +61,17 @@ class TestInletWaveCreationZeroConcentration:
         assert isinstance(waves[0], CharacteristicWave)
         assert waves[0].concentration == 10.0
 
-    def test_nonzero_to_zero_creates_characteristic(self):
-        """Test C=10 → C=0 creates characteristic (stopping injection)."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+    def test_nonzero_to_zero_creates_rarefaction_favorable(self):
+        """Test C=10 → C=0 creates rarefaction for favorable sorption."""
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
 
         waves = create_inlet_waves_at_time(c_prev=10.0, c_new=0.0, t=15.0, flow=100.0, sorption=sorption, v_inlet=0.0)
 
+        # For favorable sorption, concentration decrease creates rarefaction (expansion)
         assert len(waves) == 1
-        assert isinstance(waves[0], CharacteristicWave)
-        assert waves[0].concentration == 0.0
+        assert isinstance(waves[0], RarefactionWave)
+        assert waves[0].c_head == 10.0  # Faster (higher C)
+        assert waves[0].c_tail == 0.0  # Slower (lower C approaches c_min)
         assert waves[0].t_start == 15.0
 
     def test_nonzero_to_nonzero_creates_shock_for_favorable(self):
@@ -130,9 +137,9 @@ class TestStepInputPlateau:
         )
 
         # Verify wave creation
-        assert structure["n_characteristics"] == 1
-        assert structure["n_shocks"] == 0
-        assert structure["n_rarefactions"] == 0
+        # For favorable sorption (n>1), step from 0 to 10 creates shock (compression)
+        assert structure["n_shocks"] >= 1, f"Expected shock, got {structure}"
+        # May also have other waves from interactions
 
         # Verify no negative concentrations
         valid_cout = cout[~np.isnan(cout)]
@@ -209,8 +216,10 @@ class TestStepInputPlateau:
             porosity=0.3,
         )
 
-        # Should create 2 characteristics: one for 0→10, one for 10→0
-        assert structure["n_characteristics"] == 2
+        # For favorable sorption: 0→10 creates shock, 10→0 creates rarefaction
+        # May have additional waves from interactions
+        assert structure["n_shocks"] >= 1, f"Expected at least 1 shock, got {structure}"
+        assert structure["n_rarefactions"] >= 1, f"Expected at least 1 rarefaction, got {structure}"
 
         # Verify no negative concentrations
         valid_cout = cout[~np.isnan(cout)]

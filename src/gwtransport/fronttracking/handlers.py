@@ -64,12 +64,17 @@ def handle_characteristic_collision(
     >>> assert shock.satisfies_entropy()
     >>> assert not char1.is_active  # Parent deactivated
     """
-    # Special case: if one characteristic has C=0
+    # Get c_min from sorption to determine concentration threshold
+    c_min = getattr(char1.sorption, 'c_min', 0.0)
+    is_unfavorable = hasattr(char1.sorption, 'n') and char1.sorption.n < 1.0
+
+    # Special case: if one characteristic has C near c_min
     # Need to determine if this is:
-    # 1. C=0 from initial condition being overtaken by C>0 → keep C>0
-    # 2. C=0 from inlet (clean water) catching C>0 → create shock
-    if char1.concentration <= 1e-15 and char2.concentration > 1e-15:
-        # char1 is C=0, char2 is C>0
+    # 1. C≈c_min from initial condition being overtaken by C>0 → keep C>0
+    # 2. C≈c_min from inlet (clean water) catching C>0 → analyze velocities
+    # Only use special handling for unfavorable sorption with c_min=0 where R(0)=1
+    if char1.concentration <= c_min and char2.concentration > c_min and is_unfavorable and c_min == 0:
+        # char1 is C≈0, char2 is C>0
         # Check velocities to determine who is catching whom
         vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
         vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
@@ -91,7 +96,7 @@ def handle_characteristic_collision(
                 char2.is_active = False
                 return [raref]
             except ValueError:
-                # Rarefaction creation failed - just keep C=10, deactivate C=0
+                # Rarefaction creation failed - just keep C>0, deactivate C=0
                 char1.is_active = False
                 return []
         else:
@@ -100,8 +105,8 @@ def handle_characteristic_collision(
             char1.is_active = False
             return []
 
-    elif char2.concentration <= 1e-15 and char1.concentration > 1e-15:
-        # char2 is C=0, char1 is C>0
+    elif char2.concentration <= c_min and char1.concentration > c_min and is_unfavorable and c_min == 0:
+        # char2 is C≈0, char1 is C>0
         vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
         vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
 
@@ -128,17 +133,19 @@ def handle_characteristic_collision(
             # C>0 is faster → C=0 is from initial condition
             char2.is_active = False
             return []
-    else:
-        # Normal case: both nonzero - determine velocities
-        vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
-        vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
 
-        if vel1 > vel2:
-            c_left = char1.concentration
-            c_right = char2.concentration
-        else:
-            c_left = char2.concentration
-            c_right = char1.concentration
+    # Normal case: analyze velocities to determine wave type
+    # This now handles all cases for favorable sorption (n>1) and
+    # concentrations above c_min for unfavorable sorption
+    vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
+    vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
+
+    if vel1 > vel2:
+        c_left = char1.concentration
+        c_right = char2.concentration
+    else:
+        c_left = char2.concentration
+        c_right = char1.concentration
 
     # Create shock at collision point
     shock = ShockWave(
@@ -746,10 +753,14 @@ def create_inlet_waves_at_time(
     if abs(c_new - c_prev) < 1e-15:  # No change
         return []
 
-    # Special case: c_prev = 0 (injecting into initially clean domain)
-    # Physical interpretation: new concentration propagates as a characteristic
-    # The C=0 "water" ahead has no well-defined velocity (it's the initial condition)
-    if c_prev <= 1e-15:  # c_prev ≈ 0
+    # Get c_min from sorption if available (determines when to use special treatment)
+    c_min = getattr(sorption, 'c_min', 0.0)
+    is_unfavorable = hasattr(sorption, 'n') and sorption.n < 1.0
+
+    # Special case: c_prev ≈ 0 AND this is unfavorable sorption with c_min=0
+    # For unfavorable sorption (n<1), R(0)=1 is physically correct
+    # The C=0 "water" ahead has a well-defined velocity and represents initial condition
+    if c_prev <= c_min and is_unfavorable and c_min == 0:
         # Create characteristic wave with new concentration
         # The front propagates at v(c_new), leaving c_new behind and 0 ahead
         char = CharacteristicWave(
@@ -761,8 +772,9 @@ def create_inlet_waves_at_time(
         )
         return [char]
 
-    # Special case: c_new = 0 (stopping injection)
-    if c_new <= 1e-15:  # c_new ≈ 0
+    # Special case: c_new ≈ 0 AND this is unfavorable sorption with c_min=0
+    # For unfavorable sorption, clean water (C=0) has well-defined velocity
+    if c_new <= c_min and is_unfavorable and c_min == 0:
         # Create characteristic wave with zero concentration
         # This represents clean water entering the domain
         char = CharacteristicWave(
@@ -774,8 +786,9 @@ def create_inlet_waves_at_time(
         )
         return [char]
 
-    # Normal case: both c_prev and c_new are nonzero
-    # Compute characteristic velocities to determine wave type
+    # Normal case: analyze velocities to determine wave type
+    # For favorable sorption (n>1), even stepping down to c_min creates proper waves
+    # The velocity analysis will determine if it's a shock, rarefaction, or characteristic
     vel_prev = characteristic_velocity(c_prev, flow, sorption)
     vel_new = characteristic_velocity(c_new, flow, sorption)
 

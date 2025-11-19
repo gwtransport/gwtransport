@@ -56,10 +56,17 @@ class TestFreundlichSorption:
             FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=1.5)
 
     def test_retardation_zero_concentration(self):
-        """Test R(0) = 1.0 exactly."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        r = sorption.retardation(0.0)
+        """Test R(0) behavior depends on n and c_min."""
+        # For unfavorable sorption (n<1) with c_min=0, R(0) = 1
+        sorption_unfav = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
+        r = sorption_unfav.retardation(0.0)
         assert r == 1.0
+
+        # For favorable sorption (n>1) with c_min>0, R(c_min) is used instead
+        sorption_fav = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
+        r = sorption_fav.retardation(0.0)
+        # Should return R(c_min), which is > 1 for favorable sorption
+        assert r > 1.0
 
     def test_retardation_positive_concentration_n_greater_1(self):
         """Test R(C) > 1 for C > 0 when n > 1."""
@@ -82,10 +89,17 @@ class TestFreundlichSorption:
         assert r1 < r2, "R should increase with increasing C for n < 1"
 
     def test_total_concentration_zero(self):
-        """Test C_total(0) = 0."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        c_total = sorption.total_concentration(0.0)
+        """Test C_total(0) behavior depends on n and c_min."""
+        # For unfavorable sorption with c_min=0, C_total(0) = 0
+        sorption_unfav = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
+        c_total = sorption_unfav.total_concentration(0.0)
         assert c_total == 0.0
+
+        # For favorable sorption with c_min>0, C_total(c_min) is used
+        sorption_fav = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
+        c_total = sorption_fav.total_concentration(0.0)
+        # Should be small but positive
+        assert c_total > 0.0
 
     def test_total_concentration_positive(self):
         """Test C_total > C for C > 0."""
@@ -106,15 +120,27 @@ class TestFreundlichSorption:
             assert np.isclose(c, c_back, rtol=1e-14), f"Roundtrip failed for C={c}: {c} → {r} → {c_back}"
 
     def test_concentration_from_retardation_r_equals_one(self):
-        """Test that R=1 gives C=0."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        """Test that R=1 gives C=c_min."""
+        # For favorable sorption with c_min>0
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
         c = sorption.concentration_from_retardation(1.0)
+        assert c == sorption.c_min
+
+        # For unfavorable sorption with c_min=0
+        sorption_unfav = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
+        c = sorption_unfav.concentration_from_retardation(1.0)
         assert c == 0.0
 
     def test_concentration_from_retardation_r_less_one(self):
-        """Test that R<1 gives C=0 (physical constraint)."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        """Test that R<1 gives C=c_min (physical constraint)."""
+        # For favorable sorption with c_min>0
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
         c = sorption.concentration_from_retardation(0.5)
+        assert c == sorption.c_min
+
+        # For unfavorable sorption with c_min=0
+        sorption_unfav = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
+        c = sorption_unfav.concentration_from_retardation(0.5)
         assert c == 0.0
 
     def test_shock_velocity_rankine_hugoniot(self):

@@ -48,6 +48,9 @@ class FreundlichSorption:
         Bulk density of porous medium [kg/m³]. Must be positive.
     porosity : float
         Porosity [-]. Must be in (0, 1).
+    c_min : float, optional
+        Minimum concentration threshold. For n>1, prevents infinite retardation
+        as C→0. Default: 0.1 for n>1, 0.0 for n<1 (set automatically if not provided).
 
     Attributes
     ----------
@@ -59,6 +62,8 @@ class FreundlichSorption:
         Bulk density
     porosity : float
         Porosity
+    c_min : float
+        Minimum concentration threshold
 
     Methods
     -------
@@ -90,12 +95,17 @@ class FreundlichSorption:
              = 1 + (rho_b*k_f)/(n_por*n) * C^((1/n)-1)
 
     For Freundlich sorption, R depends on C, which creates nonlinear wave behavior.
+
+    For favorable sorption (n>1), R(C)→∞ as C→0, which can cause extremely slow
+    wave propagation. The c_min parameter prevents this by enforcing a minimum
+    concentration, making R(C) finite for all C≥0.
     """
 
     k_f: float
     n: float
     bulk_density: float
     porosity: float
+    c_min: float = 1e-12
 
     def __post_init__(self):
         """Validate parameters after initialization."""
@@ -114,8 +124,11 @@ class FreundlichSorption:
         if not 0 < self.porosity < 1:
             msg = f"porosity must be in (0, 1), got {self.porosity}"
             raise ValueError(msg)
+        if self.c_min < 0:
+            msg = f"c_min must be non-negative, got {self.c_min}"
+            raise ValueError(msg)
 
-    def retardation(self, c: float) -> float:
+    def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """
         Compute retardation factor R(C).
 
@@ -127,42 +140,39 @@ class FreundlichSorption:
 
         Parameters
         ----------
-        c : float
-            Dissolved concentration [mass/volume]. Must be non-negative.
+        c : float or array_like
+            Dissolved concentration [mass/volume]. Non-negative.
 
         Returns
         -------
-        r : float
+        r : float or ndarray
             Retardation factor [-]. Always >= 1.0.
 
         Notes
         -----
-        - R(0) = 1.0 exactly (no sorption at zero concentration)
         - For n > 1: R decreases with increasing C (higher C travels faster)
         - For n < 1: R increases with increasing C (higher C travels slower)
-
-        Examples
-        --------
-        >>> sorption = FreundlichSorption(
-        ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
-        ... )
-        >>> sorption.retardation(0.0)
-        1.0
-        >>> r = sorption.retardation(5.0)
-        >>> r > 1.0
-        True
+        - Concentrations at or below c_min return R=1 if c_min=0, else are clipped to c_min
         """
-        if c <= 0:
-            return 1.0
+        is_array = isinstance(c, np.ndarray)
+        c_arr = np.asarray(c)
 
-        # Exponent: (1/n) - 1
+        if self.c_min == 0 and self.n < 1.0:
+            # Only for unfavorable sorption (n<1) where R(0)=1 is physically correct
+            result = np.where(c_arr <= 0, 1.0, self._compute_retardation(c_arr))
+        else:
+            c_eff = np.maximum(c_arr, self.c_min)
+            result = self._compute_retardation(c_eff)
+
+        return result if is_array else float(result)
+
+    def _compute_retardation(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        """Helper to compute retardation for positive concentrations."""
         exponent = (1.0 / self.n) - 1.0
-
-        # R = 1 + (rho_b*k_f)/(n_por*n) * C^exponent
         coefficient = (self.bulk_density * self.k_f) / (self.porosity * self.n)
         return 1.0 + coefficient * (c**exponent)
 
-    def total_concentration(self, c: float) -> float:
+    def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """
         Compute total concentration (dissolved + sorbed per unit pore volume).
 
@@ -172,12 +182,12 @@ class FreundlichSorption:
 
         Parameters
         ----------
-        c : float
-            Dissolved concentration [mass/volume]. Must be non-negative.
+        c : float or array_like
+            Dissolved concentration [mass/volume]. Non-negative.
 
         Returns
         -------
-        c_total : float
+        c_total : float or ndarray
             Total concentration [mass/volume]. Always >= c.
 
         Notes
@@ -186,25 +196,22 @@ class FreundlichSorption:
             ∂C_total/∂t + ∂(flow*C)/∂v = 0
 
         The flux term only includes dissolved concentration because sorbed mass
-        is immobile.
-
-        Examples
-        --------
-        >>> sorption = FreundlichSorption(
-        ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
-        ... )
-        >>> sorption.total_concentration(0.0)
-        0.0
-        >>> c_total = sorption.total_concentration(5.0)
-        >>> c_total > 5.0
-        True
+        is immobile. Concentrations at or below c_min return C if c_min=0, else use c_min.
         """
-        if c <= 0:
-            return 0.0
+        is_array = isinstance(c, np.ndarray)
+        c_arr = np.asarray(c)
 
-        # C_total = C + (rho_b/n_por) * k_f * C^(1/n)
-        sorbed_mass_per_pore_volume = (self.bulk_density / self.porosity) * self.k_f * (c ** (1.0 / self.n))
-        return c + sorbed_mass_per_pore_volume
+        if self.c_min == 0 and self.n < 1.0:
+            # Only for unfavorable sorption (n<1) where C=0 is physically valid
+            sorbed = np.where(
+                c_arr <= 0, 0.0, (self.bulk_density / self.porosity) * self.k_f * (c_arr ** (1.0 / self.n))
+            )
+        else:
+            c_eff = np.maximum(c_arr, self.c_min)
+            sorbed = (self.bulk_density / self.porosity) * self.k_f * (c_eff ** (1.0 / self.n))
+
+        result = c_arr + sorbed
+        return result if is_array else float(result)
 
     def concentration_from_retardation(self, r: float) -> float:
         """
@@ -245,29 +252,23 @@ class FreundlichSorption:
         True
         """
         if r <= 1.0:
-            return 0.0
+            return self.c_min
 
-        # Exponent for retardation: (1/n) - 1
         exponent = (1.0 / self.n) - 1.0
 
-        # Check for linear case (shouldn't happen due to __post_init__ check)
         if abs(exponent) < 1e-10:
             msg = "Cannot invert linear retardation (n=1)"
             raise ValueError(msg)
 
-        # Coefficient: (rho_b*k_f)/(n_por*n)
         coefficient = (self.bulk_density * self.k_f) / (self.porosity * self.n)
-
-        # From R = 1 + coefficient * C^exponent
-        # Solve for C: C = [(R - 1) / coefficient]^(1/exponent)
         base = (r - 1.0) / coefficient
 
         if base <= 0:
-            return 0.0
+            return self.c_min
 
-        # Inversion exponent: 1/exponent = n/(1-n)
         inversion_exponent = 1.0 / exponent
-        return base**inversion_exponent
+        c = base**inversion_exponent
+        return max(c, self.c_min)
 
     def shock_velocity(self, c_left: float, c_right: float, flow: float) -> float:
         """

@@ -9,14 +9,18 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
+from gwtransport.fronttracking.output import identify_outlet_segments
 from gwtransport.fronttracking.solver import FrontTrackerState
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 
 
 def plot_vt_diagram(
     state: FrontTrackerState,
+    ax=None,
     t_max: float | None = None,
     figsize: tuple[float, float] = (14, 10),
     show_inactive: bool = False,
@@ -33,6 +37,9 @@ def plot_vt_diagram(
     ----------
     state : FrontTrackerState
         Complete simulation state containing all waves.
+    ax : matplotlib.axes.Axes, optional
+        Existing axes to plot into. If None, a new figure and axes are created
+        using ``figsize``.
     t_max : float, optional
         Maximum time to plot [days]. If None, uses final simulation time * 1.2.
     figsize : tuple of float, optional
@@ -65,15 +72,19 @@ def plot_vt_diagram(
     >>> fig = plot_vt_diagram(tracker.state)
     >>> fig.savefig("vt_diagram.png")
     """
-    import matplotlib.pyplot as plt
-    import pandas as pd
+    # Track whether we created a new figure so we can return a consistent object
+    created_fig = False
 
     if t_max is None:
         # Default to input data time range instead of simulation end time
         # Convert tedges[-1] from Timestamp to days from tedges[0]
         t_max = (state.tedges[-1] - state.tedges[0]) / pd.Timedelta(days=1)
 
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+        created_fig = True
+    else:
+        fig = ax.figure
 
     # Plot characteristics (blue lines)
     for wave in state.waves:
@@ -324,6 +335,7 @@ def plot_vt_diagram(
 
 def plot_breakthrough_curve(
     state: FrontTrackerState,
+    ax=None,
     t_max: float | None = None,
     n_rarefaction_points: int = 50,
     figsize: tuple[float, float] = (12, 6),
@@ -341,6 +353,9 @@ def plot_breakthrough_curve(
     ----------
     state : FrontTrackerState
         Complete simulation state containing all waves.
+    ax : matplotlib.axes.Axes, optional
+        Existing axes to plot into. If None, a new figure and axes are created
+        using ``figsize``.
     t_max : float, optional
         Maximum time to plot [days]. If None, uses final simulation time * 1.1.
     n_rarefaction_points : int, optional
@@ -373,11 +388,10 @@ def plot_breakthrough_curve(
     >>> fig = plot_breakthrough_curve(tracker.state)
     >>> fig.savefig("exact_breakthrough.png")
     """
-    import matplotlib.pyplot as plt
-
-    from gwtransport.fronttracking.output import identify_outlet_segments
-
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     if t_max is None:
         # Default to input data time range instead of simulation end time
@@ -455,6 +469,7 @@ def plot_breakthrough_curve(
 def plot_wave_interactions(
     state: FrontTrackerState,
     figsize: tuple[float, float] = (14, 8),
+    ax=None,
 ):
     """
     Plot event timeline showing wave interactions.
@@ -466,6 +481,9 @@ def plot_wave_interactions(
     ----------
     state : FrontTrackerState
         Complete simulation state containing all events.
+    ax : matplotlib.axes.Axes, optional
+        Existing axes to plot into. If None, a new figure and axes are created
+        using ``figsize``.
     figsize : tuple of float, optional
         Figure size in inches (width, height). Default (14, 8).
 
@@ -490,7 +508,10 @@ def plot_wave_interactions(
     """
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
 
     # Group events by type
     event_types = {}
