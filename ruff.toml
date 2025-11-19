@@ -46,6 +46,7 @@ convention = "numpy"
 '**/*.py' = [
     "RUF001",
     "TC003",    # Type checking is fine.
+    "C901",     # Complex functions are okay for now.
 ]
 'modelscripts/**/*.py' = [
     'INP001',  # Missing return type annotation for public function
