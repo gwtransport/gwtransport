@@ -343,7 +343,7 @@ class TestIntegrateRarefactionExact:
         c_array = np.array([raref.concentration_at_point(v_outlet, t) for t in t_array])
 
         # Remove any None values (shouldn't be any if we're in the rarefaction)
-        mask = c_array != None
+        mask = c_array is not None
         c_array_clean = c_array[mask].astype(float)
         t_array_clean = t_array[mask]
 

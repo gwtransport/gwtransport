@@ -8,6 +8,7 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 """
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from gwtransport.fronttracking.math import (
@@ -334,7 +335,6 @@ class TestFirstArrivalTime:
 
     def test_first_arrival_constant_flow_constant_retardation(self):
         """Test first arrival with constant flow and retardation."""
-        import pandas as pd
 
         cin = np.array([0.0, 10.0, 10.0])
         flow = np.array([100.0, 100.0, 100.0])
@@ -353,7 +353,6 @@ class TestFirstArrivalTime:
 
     def test_first_arrival_starts_at_zero(self):
         """Test first arrival when concentration starts at t=0."""
-        import pandas as pd
 
         cin = np.array([10.0, 10.0])
         flow = np.array([100.0, 100.0])
@@ -371,7 +370,6 @@ class TestFirstArrivalTime:
 
     def test_first_arrival_no_concentration(self):
         """Test that all-zero concentration returns infinity."""
-        import pandas as pd
 
         cin = np.array([0.0, 0.0, 0.0])
         flow = np.array([100.0, 100.0, 100.0])
@@ -385,7 +383,6 @@ class TestFirstArrivalTime:
 
     def test_first_arrival_variable_flow(self):
         """Test first arrival with variable flow."""
-        import pandas as pd
 
         cin = np.array([0.0, 10.0, 10.0])
         flow = np.array([100.0, 50.0, 200.0])  # Variable flow
@@ -406,7 +403,6 @@ class TestFirstArrivalTime:
 
     def test_first_arrival_freundlich_sorption(self):
         """Test first arrival with Freundlich sorption."""
-        import pandas as pd
 
         cin = np.array([0.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
         flow = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0])
@@ -426,7 +422,6 @@ class TestFirstArrivalTime:
 
     def test_first_arrival_insufficient_flow_history(self):
         """Test that insufficient flow history returns infinity."""
-        import pandas as pd
 
         cin = np.array([0.0, 10.0])
         flow = np.array([10.0, 10.0])  # Very low flow

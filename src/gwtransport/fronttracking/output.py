@@ -25,9 +25,15 @@ from gwtransport.fronttracking.events import find_outlet_crossing
 from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave, Wave
 
+# Numerical tolerance constants
+EPSILON_VELOCITY = 1e-15  # Tolerance for checking if velocity is effectively zero
+
 
 def concentration_at_point(
-    v: float, t: float, waves: list[Wave], sorption: FreundlichSorption | ConstantRetardation
+    v: float,
+    t: float,
+    waves: list[Wave],
+    sorption: FreundlichSorption | ConstantRetardation,  # noqa: ARG001
 ) -> float:
     """
     Compute concentration at point (v, t) with exact analytical value.
@@ -107,7 +113,7 @@ def concentration_at_point(
                     return 0.5 * (wave.c_left + wave.c_right)
 
                 # Determine if shock has crossed position v and when
-                if wave.velocity is not None and abs(wave.velocity) > 1e-15:
+                if wave.velocity is not None and abs(wave.velocity) > EPSILON_VELOCITY:
                     t_cross = wave.t_start + (v - wave.v_start) / wave.velocity
 
                     if t_cross <= t:

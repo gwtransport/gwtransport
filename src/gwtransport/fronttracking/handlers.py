@@ -19,6 +19,9 @@ creating new child waves.
 from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption, characteristic_velocity
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 
+# Numerical tolerance constants
+EPSILON_CONCENTRATION = 1e-15  # Tolerance for checking if concentration change is negligible
+
 
 def handle_characteristic_collision(
     char1: CharacteristicWave,
@@ -92,13 +95,14 @@ def handle_characteristic_collision(
                     c_tail=char2.concentration,  # C>0 is tail (slower)
                     sorption=char1.sorption,
                 )
-                char1.is_active = False
-                char2.is_active = False
-                return [raref]
             except ValueError:
                 # Rarefaction creation failed - just keep C>0, deactivate C=0
                 char1.is_active = False
                 return []
+            else:
+                char1.is_active = False
+                char2.is_active = False
+                return [raref]
         else:
             # C>0 is faster → C>0 catching C=0 → C=0 is from initial condition
             # Just deactivate the C=0 and keep C>0 active
@@ -122,13 +126,14 @@ def handle_characteristic_collision(
                     c_tail=char1.concentration,  # C>0 is tail (slower)
                     sorption=char1.sorption,
                 )
-                char1.is_active = False
-                char2.is_active = False
-                return [raref]
             except ValueError:
                 # Rarefaction creation failed
                 char2.is_active = False
                 return []
+            else:
+                char1.is_active = False
+                char2.is_active = False
+                return [raref]
         else:
             # C>0 is faster → C=0 is from initial condition
             char2.is_active = False
@@ -363,16 +368,17 @@ def handle_shock_characteristic_collision(
                     c_tail=c_tail,
                     sorption=shock.sorption,
                 )
-                # Deactivate parent waves
-                shock.is_active = False
-                char.is_active = False
-                return [raref]
             except ValueError:
                 # Rarefaction validation failed - edge case
                 # Deactivate waves and return empty
                 shock.is_active = False
                 char.is_active = False
                 return []
+            else:
+                # Deactivate parent waves
+                shock.is_active = False
+                char.is_active = False
+                return [raref]
         else:
             # Not a valid rarefaction - waves may pass through each other
             # This is an edge case - deactivate and return empty
@@ -501,17 +507,17 @@ def handle_shock_rarefaction_collision(
                     c_tail=c_new_tail,
                     sorption=raref.sorption,
                 )
-
-                # Deactivate original waves
-                shock.is_active = False
-                raref.is_active = False
-
-                return [new_shock, modified_raref]
             except ValueError:
                 # Rarefaction validation failed
                 shock.is_active = False
                 raref.is_active = False
                 return [new_shock]
+            else:
+                # Deactivate original waves
+                shock.is_active = False
+                raref.is_active = False
+
+                return [new_shock, modified_raref]
         else:
             # Rarefaction completely overtaken - only shock continues
             shock.is_active = False
@@ -552,11 +558,11 @@ def handle_shock_rarefaction_collision(
 
 
 def handle_rarefaction_characteristic_collision(
-    raref: RarefactionWave,
+    raref: RarefactionWave,  # noqa: ARG001
     char: CharacteristicWave,
-    t_event: float,
-    v_event: float,
-    boundary_type: str,
+    t_event: float,  # noqa: ARG001
+    v_event: float,  # noqa: ARG001
+    boundary_type: str,  # noqa: ARG001
 ) -> list:
     """
     Handle rarefaction boundary intersecting with characteristic.
@@ -612,7 +618,7 @@ def handle_rarefaction_rarefaction_collision(
 
     This handler is intentionally conservative: it records the fact that two
     rarefaction fans have intersected but does not yet modify the wave
-    topology. Full entropic treatment of rarefaction–rarefaction interactions
+    topology. Full entropic treatment of rarefaction-rarefaction interactions
     (potentially involving wave splitting) is reserved for a dedicated
     future enhancement.
 
@@ -750,7 +756,7 @@ def create_inlet_waves_at_time(
     ... )
     >>> assert isinstance(waves[0], ShockWave)
     """
-    if abs(c_new - c_prev) < 1e-15:  # No change
+    if abs(c_new - c_prev) < EPSILON_CONCENTRATION:  # No change
         return []
 
     # Get c_min from sorption if available (determines when to use special treatment)
@@ -824,11 +830,12 @@ def create_inlet_waves_at_time(
                 c_tail=c_new,  # Tail (slower) is new water
                 sorption=sorption,
             )
-            return [raref]
         except ValueError:
             # Rarefaction validation failed (e.g., head not faster than tail)
             # This shouldn't happen if velocities were properly checked, but handle it
             return []
+        else:
+            return [raref]
 
     # Same velocity - contact discontinuity
     # This only happens if R(c_new) == R(c_prev), which is rare

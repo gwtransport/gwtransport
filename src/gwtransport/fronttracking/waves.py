@@ -14,6 +14,9 @@ from dataclasses import dataclass
 
 from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
 
+# Numerical tolerance constants
+EPSILON_POSITION = 1e-15  # Tolerance for checking if two positions are equal
+
 
 @dataclass
 class Wave(ABC):
@@ -649,7 +652,7 @@ class RarefactionWave(Wave):
         True
         """
         # Special case: at origin of rarefaction (before contains_point check)
-        if abs(v - self.v_start) < 1e-15 and t >= self.t_start:
+        if abs(v - self.v_start) < EPSILON_POSITION and t >= self.t_start:
             return self.c_tail
 
         if not self.contains_point(v, t):

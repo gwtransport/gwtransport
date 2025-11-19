@@ -24,6 +24,9 @@ from typing import Optional
 from gwtransport.fronttracking.math import characteristic_position, characteristic_velocity
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 
+# Numerical tolerance constants
+EPSILON_VELOCITY = 1e-15  # Tolerance for checking if two velocities are equal (machine precision)
+
 
 class EventType(Enum):
     """
@@ -98,6 +101,7 @@ class Event:
         return self.time < other.time
 
     def __repr__(self):
+        """Return string representation of Event."""
         return (
             f"Event(t={self.time:.3f}, type={self.event_type.value}, "
             f"location={self.location:.3f}, n_waves={len(self.waves_involved)})"
@@ -154,7 +158,7 @@ def find_characteristic_intersection(char1, char2, t_current: float) -> Optional
     vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
 
     # Check if parallel (within machine precision)
-    if abs(vel1 - vel2) < 1e-15:
+    if abs(vel1 - vel2) < EPSILON_VELOCITY:
         return None
 
     # Both characteristics must be active at some common time
@@ -222,7 +226,7 @@ def find_shock_shock_intersection(shock1, shock2, t_current: float) -> Optional[
     vel2 = shock2.velocity
 
     # Check if parallel
-    if abs(vel1 - vel2) < 1e-15:
+    if abs(vel1 - vel2) < EPSILON_VELOCITY:
         return None
 
     t_both_active = max(shock1.t_start, shock2.t_start, t_current)
@@ -275,7 +279,7 @@ def find_shock_characteristic_intersection(shock, char, t_current: float) -> Opt
     vel_char = characteristic_velocity(char.concentration, char.flow, char.sorption)
 
     # Check if parallel
-    if abs(vel_shock - vel_char) < 1e-15:
+    if abs(vel_shock - vel_char) < EPSILON_VELOCITY:
         return None
 
     t_both_active = max(shock.t_start, char.t_start, t_current)

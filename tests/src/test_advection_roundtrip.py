@@ -289,7 +289,6 @@ def test_roundtrip_coverage_requirements(nonlinear_method):
     cin_original = 50.0 * np.exp(-0.5 * ((t - 150) / 25) ** 2)
 
     flow_cin = np.full(n_days, 100.0)
-    flow_cout = np.full(n_days + 60, 100.0)
     pore_volume = np.array([45.0])
 
     retardation_cin = freundlich_retardation(

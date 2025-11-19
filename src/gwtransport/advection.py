@@ -74,6 +74,9 @@ from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.residence_time import residence_time
 
+# Numerical tolerance constants
+EPSILON_FREUNDLICH_N = 1e-10  # Tolerance for checking if freundlich_n ≈ 1.0
+
 
 def infiltration_to_extraction_series(
     *,
@@ -1353,7 +1356,7 @@ def infiltration_to_extraction_front_tracking(
         if freundlich_k <= 0 or freundlich_n <= 0:
             msg = "Freundlich parameters must be positive"
             raise ValueError(msg)
-        if abs(freundlich_n - 1.0) < 1e-10:
+        if abs(freundlich_n - 1.0) < EPSILON_FREUNDLICH_N:
             msg = "freundlich_n = 1 not supported (use retardation_factor for linear case)"
             raise ValueError(msg)
         if bulk_density <= 0 or not 0 < porosity < 1:
@@ -1381,14 +1384,12 @@ def infiltration_to_extraction_front_tracking(
 
     # Extract bin-averaged concentrations at outlet
 
-    cout = compute_bin_averaged_concentration_exact(
+    return compute_bin_averaged_concentration_exact(
         t_edges=cout_tedges_days,
         v_outlet=aquifer_pore_volume,
         waves=tracker.state.waves,
         sorption=sorption,
     )
-
-    return cout
 
 
 def infiltration_to_extraction_front_tracking_detailed(
@@ -1500,7 +1501,7 @@ def infiltration_to_extraction_front_tracking_detailed(
         if freundlich_k <= 0 or freundlich_n <= 0:
             msg = "Freundlich parameters must be positive"
             raise ValueError(msg)
-        if abs(freundlich_n - 1.0) < 1e-10:
+        if abs(freundlich_n - 1.0) < EPSILON_FREUNDLICH_N:
             msg = "freundlich_n = 1 not supported (use retardation_factor for linear case)"
             raise ValueError(msg)
         if bulk_density <= 0 or not 0 < porosity < 1:

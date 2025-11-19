@@ -204,7 +204,7 @@ def diff(*, a: npt.ArrayLike, alignment: str = "centered") -> npt.NDArray[np.flo
     raise ValueError(msg)
 
 
-def linear_average(  # noqa: C901
+def linear_average(
     *,
     x_data: npt.ArrayLike,
     y_data: npt.ArrayLike,

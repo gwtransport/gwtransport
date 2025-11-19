@@ -35,7 +35,6 @@ def constant_retardation():
 @pytest.fixture
 def simple_step_input():
     """Simple step input: C: 0→10."""
-    import pandas as pd
 
     # Create [0, 10, 100] days
     tedges = pd.to_datetime(["2020-01-01", "2020-01-11", "2020-04-11"])
@@ -47,7 +46,6 @@ def simple_step_input():
 @pytest.fixture
 def pulse_input():
     """Pulse input: C: 0→10→0."""
-    import pandas as pd
 
     # Use custom periods: 0, 10, 20, 100 days
     tedges = pd.to_datetime(["2020-01-01", "2020-01-11", "2020-01-21", "2020-04-11"])

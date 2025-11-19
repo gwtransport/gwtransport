@@ -25,7 +25,7 @@ from gwtransport.utils import compute_time_edges
 
 
 @pytest.mark.parametrize(
-    "c_initial,c_final,freundlich_n,expected_wave_type",
+    ("c_initial", "c_final", "freundlich_n", "expected_wave_type"),
     [
         # Favorable sorption (n > 1)
         (2.0, 10.0, 2.0, "shock"),  # Increase creates shock
@@ -298,7 +298,7 @@ def test_multiple_steps_final_plateau(freundlich_n):
 
 
 @pytest.mark.parametrize(
-    "c_initial,freundlich_n",
+    ("c_initial", "freundlich_n"),
     [
         (10.0, 2.0),  # Favorable sorption: decrease to zero
         (10.0, 0.5),  # Unfavorable sorption: decrease to zero
@@ -480,7 +480,6 @@ def test_pulse_from_zero_returns_to_zero(freundlich_n):
     assert len(mid_outlet) > 0, "No valid mid-period concentrations"
     assert len(final_outlet) > 0, "No valid final concentrations"
 
-    mean_mid = np.mean(mid_outlet)
     mean_final = np.mean(final_outlet)
 
     # Should be decreasing after pulse passes

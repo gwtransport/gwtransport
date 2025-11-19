@@ -560,14 +560,13 @@ class FrontTracker:
         """
         # Check entropy for all active shocks
         for wave in self.state.waves:
-            if isinstance(wave, ShockWave) and wave.is_active:
-                if not wave.satisfies_entropy():
-                    msg = (
-                        f"Shock at t_start={wave.t_start:.3f} violates entropy! "
-                        f"c_left={wave.c_left:.3f}, c_right={wave.c_right:.3f}, "
-                        f"velocity={wave.velocity:.3f}"
-                    )
-                    raise RuntimeError(msg)
+            if isinstance(wave, ShockWave) and wave.is_active and not wave.satisfies_entropy():
+                msg = (
+                    f"Shock at t_start={wave.t_start:.3f} violates entropy! "
+                    f"c_left={wave.c_left:.3f}, c_right={wave.c_right:.3f}, "
+                    f"velocity={wave.velocity:.3f}"
+                )
+                raise RuntimeError(msg)
 
         # Check rarefaction ordering
         for wave in self.state.waves:

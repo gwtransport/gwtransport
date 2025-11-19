@@ -20,6 +20,11 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+# Numerical tolerance constants
+EPSILON_FREUNDLICH_N = 1e-10  # Tolerance for checking if n ≈ 1.0
+EPSILON_EXPONENT = 1e-10  # Tolerance for checking if exponent ≈ 0
+EPSILON_DENOMINATOR = 1e-18  # Tolerance for near-zero denominators in shock velocity
+
 
 @dataclass
 class FreundlichSorption:
@@ -115,7 +120,7 @@ class FreundlichSorption:
         if self.n <= 0:
             msg = f"n must be positive, got {self.n}"
             raise ValueError(msg)
-        if abs(self.n - 1.0) < 1e-10:
+        if abs(self.n - 1.0) < EPSILON_FREUNDLICH_N:
             msg = "n = 1 (linear case) not supported, use ConstantRetardation instead"
             raise ValueError(msg)
         if self.bulk_density <= 0:
@@ -167,7 +172,7 @@ class FreundlichSorption:
         return result if is_array else float(result)
 
     def _compute_retardation(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        """Helper to compute retardation for positive concentrations."""
+        """Compute retardation for positive concentrations."""
         exponent = (1.0 / self.n) - 1.0
         coefficient = (self.bulk_density * self.k_f) / (self.porosity * self.n)
         return 1.0 + coefficient * (c**exponent)
@@ -256,7 +261,7 @@ class FreundlichSorption:
 
         exponent = (1.0 / self.n) - 1.0
 
-        if abs(exponent) < 1e-10:
+        if abs(exponent) < EPSILON_EXPONENT:
             msg = "Cannot invert linear retardation (n=1)"
             raise ValueError(msg)
 
@@ -329,7 +334,7 @@ class FreundlichSorption:
         # ΔC_total → 0, the Rankine-Hugoniot speed approaches the
         # characteristic velocity, so we fall back to that value
         # instead of dividing by an extremely small number.
-        if abs(denom) < 1e-18:
+        if abs(denom) < EPSILON_DENOMINATOR:
             return flow / self.retardation(c_left)
 
         return (flux_right - flux_left) / denom
@@ -470,7 +475,7 @@ class ConstantRetardation:
             msg = f"retardation_factor must be >= 1.0, got {self.retardation_factor}"
             raise ValueError(msg)
 
-    def retardation(self, c: float) -> float:
+    def retardation(self, c: float) -> float:  # noqa: ARG002
         """
         Return constant retardation factor (independent of concentration).
 
@@ -520,7 +525,7 @@ class ConstantRetardation:
         msg = "concentration_from_retardation not applicable for ConstantRetardation (R is independent of C)"
         raise NotImplementedError(msg)
 
-    def shock_velocity(self, c_left: float, c_right: float, flow: float) -> float:
+    def shock_velocity(self, c_left: float, c_right: float, flow: float) -> float:  # noqa: ARG002
         """
         Compute shock velocity for constant retardation.
 
@@ -545,7 +550,7 @@ class ConstantRetardation:
         """
         return flow / self.retardation_factor
 
-    def check_entropy_condition(self, c_left: float, c_right: float, shock_vel: float, flow: float) -> bool:
+    def check_entropy_condition(self, c_left: float, c_right: float, shock_vel: float, flow: float) -> bool:  # noqa: ARG002, PLR6301
         """
         Check entropy condition for constant retardation.
 
@@ -740,7 +745,6 @@ def compute_first_front_arrival_time(
 
     idx_first = nonzero_indices[0]
     c_first = cin[idx_first]
-    t_start = tedges[idx_first]
 
     # Compute retardation for this concentration
     r_first = sorption.retardation(c_first)

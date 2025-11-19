@@ -84,7 +84,7 @@ class TestAnalyticalCorrectness:
         dates = pd.date_range(start="2020-01-01", periods=15, freq="D")
         tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-        # Extreme ratio: 100,000× (5 orders of magnitude)
+        # Extreme ratio: 100,000x (5 orders of magnitude)
         cin = np.full(len(dates), 0.01)
         cin[5:] = 1000.0
         flow = np.full(len(dates), 100.0)

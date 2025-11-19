@@ -415,7 +415,7 @@ class DependencyTester:
                     error_message=str(e)[:500],
                 )
 
-    def find_minimum_version(self, package: str, start_version: str = "0.0.0") -> MinimumVersionResult:  # noqa: C901
+    def find_minimum_version(self, package: str, start_version: str = "0.0.0") -> MinimumVersionResult:
         """Find minimum compatible version for a package.
 
         Strategy: Cascading search from newest to oldest
@@ -762,7 +762,7 @@ def load_dependencies(
     return unique_names
 
 
-def main():  # noqa: C901
+def main():
     """Find minimum compatible versions for package dependencies."""
     parser = argparse.ArgumentParser(description="Find minimum compatible versions for package dependencies")
     parser.add_argument("--dependency", help="Test only this specific dependency")

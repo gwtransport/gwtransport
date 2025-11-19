@@ -9,10 +9,17 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+import logging
+
 import numpy as np
 import pandas as pd
 
 from gwtransport.fronttracking.waves import RarefactionWave, ShockWave
+
+# Numerical tolerance constants
+EPSILON_CONCENTRATION_TOLERANCE = -1e-14  # Minimum allowed concentration (machine precision)
+
+logger = logging.getLogger(__name__)
 
 
 def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-10):
@@ -82,7 +89,7 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     # Check 2: No negative concentrations (within tolerance)
     valid_cout = cout[~np.isnan(cout)]
     min_cout = np.min(valid_cout) if len(valid_cout) > 0 else 0.0
-    check2_pass = min_cout >= -1e-14
+    check2_pass = min_cout >= EPSILON_CONCENTRATION_TOLERANCE
     checks.append({
         "name": "Non-negative concentrations",
         "passed": check2_pass,
@@ -171,11 +178,7 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     # This is approximate since it depends on bin averaging
     try:
         # Estimate mass in (assumes constant flow, which may not be true)
-        if hasattr(structure.get("tracker_state"), "flow"):
-            flow = structure["tracker_state"].flow
-        else:
-            # Fall back to assuming flow information is not available
-            flow = None
+        flow = structure["tracker_state"].flow if hasattr(structure.get("tracker_state"), "flow") else None
 
         if flow is not None and len(flow) == len(cin):
             # Compute mass in from input data
@@ -207,7 +210,7 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
                 "passed": True,
                 "message": "Skipped (flow data not available)",
             })
-    except Exception as e:
+    except (KeyError, AttributeError, ValueError, TypeError) as e:
         # If mass balance computation fails, mark as passed but note the issue
         check8_pass = True
         checks.append({
@@ -235,19 +238,19 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
         "summary": summary,
     }
 
-    # Print detailed output if verbose
+    # Log detailed output if verbose
     if verbose:
-        print("\nPhysics Verification:")
+        logger.info("\nPhysics Verification:")
         for i, check in enumerate(checks, 1):
             status = "✓" if check["passed"] else "✗"
-            print(f"  {i}. {check['name']}: {status} {check['message']}")
+            logger.info("  %d. %s: %s %s", i, check["name"], status, check["message"])
 
         if all_passed:
-            print(f"\n{summary}")
+            logger.info("\n%s", summary)
         else:
-            print(f"\n{summary}")
-            print("\nFailures:")
+            logger.warning("\n%s", summary)
+            logger.warning("\nFailures:")
             for i, failure in enumerate(failures, 1):
-                print(f"  {i}. {failure}")
+                logger.warning("  %d. %s", i, failure)
 
     return results
