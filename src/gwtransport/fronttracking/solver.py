@@ -57,6 +57,10 @@ from gwtransport.fronttracking.waves import (
     Wave,
 )
 
+# Numerical tolerance constants
+EPSILON_CONCENTRATION = 1e-15  # Tolerance for concentration changes
+MIN_EVENT_DATA_LENGTH = 5  # Minimum length of event_data tuple before accessing extra field
+
 
 @dataclass
 class FrontTrackerState:
@@ -245,7 +249,7 @@ class FrontTracker:
             t_change = (self.state.tedges[i] - self.state.tedges[0]) / pd.Timedelta(days=1)
             flow_current = self.state.flow[i]
 
-            if abs(c_new - c_prev) > 1e-15:
+            if abs(c_new - c_prev) > EPSILON_CONCENTRATION:
                 # Create wave(s) for this concentration change
                 new_waves = create_inlet_waves_at_time(
                     c_prev=c_prev,
@@ -283,10 +287,10 @@ class FrontTracker:
         >>> # Returns: [(20.0, 200.0), (30.0, 50.0)]
         """
         flow_changes = []
-        EPSILON_FLOW = 1e-15
+        epsilon_flow = 1e-15
 
         for i in range(1, len(self.state.flow)):
-            if abs(self.state.flow[i] - self.state.flow[i - 1]) > EPSILON_FLOW:
+            if abs(self.state.flow[i] - self.state.flow[i - 1]) > epsilon_flow:
                 # Convert tedges[i] to days from tedges[0]
                 t_change = (self.state.tedges[i] - self.state.tedges[0]) / pd.Timedelta(days=1)
                 flow_new = self.state.flow[i]
@@ -454,7 +458,7 @@ class FrontTracker:
             event_type = event_data[2]
             waves = event_data[3]
             v = event_data[4]
-            extra = event_data[5] if len(event_data) > 5 else None
+            extra = event_data[5] if len(event_data) > MIN_EVENT_DATA_LENGTH else None
 
             # For FLOW_CHANGE events, extra contains flow_new
             flow_new = extra if event_type == EventType.FLOW_CHANGE else None
@@ -549,7 +553,7 @@ class FrontTracker:
             "waves_after": new_waves,
         })
 
-    def run(self, max_iterations: int = 10000, verbose: bool = False):
+    def run(self, max_iterations: int = 10000, *, verbose: bool = False):
         """
         Run simulation until no more events or max_iterations reached.
 

@@ -18,6 +18,8 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+from operator import itemgetter
+
 import numpy as np
 import numpy.typing as npt
 
@@ -27,6 +29,8 @@ from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave,
 
 # Numerical tolerance constants
 EPSILON_VELOCITY = 1e-15  # Tolerance for checking if velocity is effectively zero
+EPSILON_BETA = 1e-15  # Tolerance for checking if beta is effectively zero (linear case)
+EPSILON_TIME = 1e-15  # Tolerance for negligible time segments
 
 
 def concentration_at_point(
@@ -122,15 +126,14 @@ def concentration_at_point(
                         if t_cross > latest_wave_time:
                             latest_wave_time = t_cross
                             latest_wave_c = wave.c_left
-                    elif v > v_shock:
+                    elif v > v_shock and wave.t_start > latest_wave_time:
                         # Point is ahead of shock (shock hasn't reached it yet)
                         # Check if this is the closest shock ahead of us
                         # In this case, we see c_right unless overridden by another wave
                         # We track this with a negative time (shock formation time) to indicate
                         # it's a "passive" state (not actively changed)
-                        if wave.t_start > latest_wave_time:
-                            latest_wave_time = wave.t_start
-                            latest_wave_c = wave.c_right
+                        latest_wave_time = wave.t_start
+                        latest_wave_c = wave.c_right
 
     # Check rarefaction tails - they can override previous waves
     for wave in waves:
@@ -140,7 +143,7 @@ def concentration_at_point(
                 # Rarefaction tail has passed position v
                 # Find when it passed: v_start + tail_velocity * (t_pass - t_start) = v
                 tail_vel = wave.tail_velocity()
-                if tail_vel > 1e-15:
+                if tail_vel > EPSILON_VELOCITY:
                     t_pass = wave.t_start + (v - wave.v_start) / tail_vel
                     if t_pass <= t and t_pass > latest_wave_time:
                         latest_wave_time = t_pass
@@ -164,7 +167,7 @@ def concentration_at_point(
                 # Find when it passed: v_start + vel*(t_pass - t_start) = v
                 vel = wave.velocity()
 
-                if vel > 1e-15:
+                if vel > EPSILON_VELOCITY:
                     t_pass = wave.t_start + (v - wave.v_start) / vel
 
                     if t_pass <= t and t_pass > latest_time:
@@ -330,7 +333,7 @@ def identify_outlet_segments(
                 outlet_events.append({"time": t_cross, "wave": wave, "boundary": None, "c_after": c_after})
 
     # Sort events by time
-    outlet_events.sort(key=lambda e: e["time"])
+    outlet_events.sort(key=itemgetter("time"))
 
     # Create segments between events
     segments = []
@@ -499,7 +502,7 @@ def integrate_rarefaction_exact(
     beta = 1.0 / sorption.n - 1.0
 
     # For integration, we need exponent = 1/β + 1
-    if abs(beta) < 1e-15:
+    if abs(beta) < EPSILON_BETA:
         # Linear case - shouldn't happen with Freundlich
         # Fall back to numerical integration or raise error
         msg = "integrate_rarefaction_exact requires nonlinear sorption (n != 1)"
@@ -522,9 +525,7 @@ def integrate_rarefaction_exact(
         return coeff * base**exponent
 
     # Evaluate definite integral
-    integral = antiderivative(t_end) - antiderivative(t_start)
-
-    return integral
+    return antiderivative(t_end) - antiderivative(t_start)
 
 
 def compute_bin_averaged_concentration_exact(
@@ -631,7 +632,7 @@ def compute_bin_averaged_concentration_exact(
             seg_t_end = min(seg["t_end"], t_end)
             seg_dt = seg_t_end - seg_t_start
 
-            if seg_dt <= 1e-15:  # Skip negligible segments
+            if seg_dt <= EPSILON_TIME:  # Skip negligible segments
                 continue
 
             if seg["type"] == "constant":

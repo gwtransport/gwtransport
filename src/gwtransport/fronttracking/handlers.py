@@ -744,7 +744,8 @@ def recreate_characteristic_with_new_flow(
     v_at_change = char.position_at_time(t_change)
 
     if v_at_change is None:
-        raise ValueError(f"Characteristic not yet active at t={t_change}")
+        msg = f"Characteristic not yet active at t={t_change}"
+        raise ValueError(msg)
 
     return CharacteristicWave(
         t_start=t_change,
@@ -807,7 +808,8 @@ def recreate_shock_with_new_flow(
     v_at_change = shock.position_at_time(t_change)
 
     if v_at_change is None:
-        raise ValueError(f"Shock not yet active at t={t_change}")
+        msg = f"Shock not yet active at t={t_change}"
+        raise ValueError(msg)
 
     return ShockWave(
         t_start=t_change,
@@ -873,7 +875,8 @@ def recreate_rarefaction_with_new_flow(
     v_at_change = raref.position_at_time(t_change)
 
     if v_at_change is None:
-        raise ValueError(f"Rarefaction not yet active at t={t_change}")
+        msg = f"Rarefaction not yet active at t={t_change}"
+        raise ValueError(msg)
 
     return RarefactionWave(
         t_start=t_change,
@@ -944,7 +947,8 @@ def handle_flow_change(
         elif isinstance(wave, RarefactionWave):
             new_wave = recreate_rarefaction_with_new_flow(wave, t_change, flow_new)
         else:
-            raise ValueError(f"Unknown wave type: {type(wave)}")
+            msg = f"Unknown wave type: {type(wave)}"
+            raise TypeError(msg)
 
         new_waves.append(new_wave)
 
