@@ -69,7 +69,11 @@ context and hard constraints before describing a concrete task.
 > work on now. Please scope it as narrowly and concretely as possible
 > (e.g. "add a specific test", "adjust a particular wave interaction", or
 > "update this doc section"):
-> I am currently working on `examples/08_Front_Tracking_Exact_Solution.ipynb` It looks okay but it does not include rarefactions. Please create an additional example notebook that demonstrates front-tracking with rarefaction waves. Make sure to include plots of the V-t diagram and breakthrough curves, similar to the existing notebook. 
+> I want to know if a varying flow is tested sufficiently. As this is a key
+> aspect of the front-tracking implementation, please review the existing tests
+> and identify any gaps in coverage regarding varying flow conditions. If you
+> find any gaps, please suggest specific tests to add that would ensure robust
+> coverage of varying flow scenarios. Note that, all waves/characteristics have to change angle on the V-t diagram when flow varies.
 
 ---
 

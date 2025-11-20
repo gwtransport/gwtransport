@@ -700,6 +700,260 @@ def handle_outlet_crossing(wave, t_event: float, v_outlet: float) -> dict:
     }
 
 
+def recreate_characteristic_with_new_flow(
+    char: CharacteristicWave,
+    t_change: float,
+    flow_new: float,
+) -> CharacteristicWave:
+    """
+    Create new characteristic at current position with new flow.
+
+    When flow changes, existing characteristics must be recreated with updated
+    velocities. The concentration remains constant, but velocity becomes
+    flow_new / R(concentration).
+
+    Parameters
+    ----------
+    char : CharacteristicWave
+        Existing characteristic to recreate
+    t_change : float
+        Time of flow change [days]
+    flow_new : float
+        New flow rate [m³/day]
+
+    Returns
+    -------
+    CharacteristicWave
+        New characteristic at current position with new flow
+
+    Notes
+    -----
+    The parent characteristic should be deactivated by the caller.
+
+    Examples
+    --------
+    >>> char_old = CharacteristicWave(
+    ...     t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=sorption
+    ... )
+    >>> char_new = recreate_characteristic_with_new_flow(
+    ...     char_old, t_change=10.0, flow_new=200.0
+    ... )
+    >>> assert char_new.flow == 200.0
+    >>> assert char_new.concentration == 5.0  # Concentration unchanged
+    """
+    v_at_change = char.position_at_time(t_change)
+
+    if v_at_change is None:
+        raise ValueError(f"Characteristic not yet active at t={t_change}")
+
+    return CharacteristicWave(
+        t_start=t_change,
+        v_start=v_at_change,
+        flow=flow_new,
+        concentration=char.concentration,
+        sorption=char.sorption,
+        is_active=True,
+    )
+
+
+def recreate_shock_with_new_flow(
+    shock: ShockWave,
+    t_change: float,
+    flow_new: float,
+) -> ShockWave:
+    """
+    Create new shock at current position with new flow.
+
+    When flow changes, shock velocity must be recomputed using Rankine-Hugoniot
+    condition with the new flow: s = flow*(c_R - c_L) / (C_total(c_R) - C_total(c_L)).
+
+    Parameters
+    ----------
+    shock : ShockWave
+        Existing shock to recreate
+    t_change : float
+        Time of flow change [days]
+    flow_new : float
+        New flow rate [m³/day]
+
+    Returns
+    -------
+    ShockWave
+        New shock at current position with updated velocity
+
+    Notes
+    -----
+    The parent shock should be deactivated by the caller.
+    Shock velocity is automatically recomputed in ShockWave.__post_init__.
+
+    Examples
+    --------
+    >>> shock_old = ShockWave(
+    ...     t_start=0.0,
+    ...     v_start=0.0,
+    ...     flow=100.0,
+    ...     c_left=10.0,
+    ...     c_right=2.0,
+    ...     sorption=sorption,
+    ... )
+    >>> shock_new = recreate_shock_with_new_flow(
+    ...     shock_old, t_change=10.0, flow_new=200.0
+    ... )
+    >>> assert shock_new.flow == 200.0
+    >>> assert (
+    ...     shock_new.velocity == 2 * shock_old.velocity
+    ... )  # Velocity scales linearly with flow
+    """
+    v_at_change = shock.position_at_time(t_change)
+
+    if v_at_change is None:
+        raise ValueError(f"Shock not yet active at t={t_change}")
+
+    return ShockWave(
+        t_start=t_change,
+        v_start=v_at_change,
+        flow=flow_new,
+        c_left=shock.c_left,
+        c_right=shock.c_right,
+        sorption=shock.sorption,
+        is_active=True,
+    )
+
+
+def recreate_rarefaction_with_new_flow(
+    raref: RarefactionWave,
+    t_change: float,
+    flow_new: float,
+) -> RarefactionWave:
+    """
+    Create new rarefaction at current position with new flow.
+
+    When flow changes, rarefaction head and tail velocities are updated.
+    The fan structure (c_head, c_tail) is preserved, but the self-similar
+    solution pivots at the flow change point.
+
+    Parameters
+    ----------
+    raref : RarefactionWave
+        Existing rarefaction to recreate
+    t_change : float
+        Time of flow change [days]
+    flow_new : float
+        New flow rate [m³/day]
+
+    Returns
+    -------
+    RarefactionWave
+        New rarefaction at current position with updated velocities
+
+    Notes
+    -----
+    The parent rarefaction should be deactivated by the caller.
+    The rarefaction fan "pivots" at (v_at_change, t_change).
+
+    Before: R(C) = flow_old * (t - t_start_old) / (v - v_start_old)
+    After:  R(C) = flow_new * (t - t_change) / (v - v_at_change)
+
+    Examples
+    --------
+    >>> raref_old = RarefactionWave(
+    ...     t_start=0.0,
+    ...     v_start=0.0,
+    ...     flow=100.0,
+    ...     c_head=10.0,
+    ...     c_tail=2.0,
+    ...     sorption=sorption,
+    ... )
+    >>> raref_new = recreate_rarefaction_with_new_flow(
+    ...     raref_old, t_change=10.0, flow_new=200.0
+    ... )
+    >>> assert raref_new.flow == 200.0
+    >>> assert raref_new.c_head == 10.0  # Concentrations unchanged
+    """
+    v_at_change = raref.position_at_time(t_change)
+
+    if v_at_change is None:
+        raise ValueError(f"Rarefaction not yet active at t={t_change}")
+
+    return RarefactionWave(
+        t_start=t_change,
+        v_start=v_at_change,
+        flow=flow_new,
+        c_head=raref.c_head,
+        c_tail=raref.c_tail,
+        sorption=raref.sorption,
+        is_active=True,
+    )
+
+
+def handle_flow_change(
+    t_change: float,
+    flow_new: float,
+    active_waves: list,
+) -> list:
+    """
+    Handle flow change event by recreating all active waves with new flow.
+
+    When flow changes, all existing waves must be recreated at their current
+    positions with updated velocities. This maintains exact analytical computation
+    while correctly handling time-varying flow.
+
+    Parameters
+    ----------
+    t_change : float
+        Time of flow change [days]
+    flow_new : float
+        New flow rate [m³/day]
+    active_waves : list
+        All currently active waves
+
+    Returns
+    -------
+    list
+        New waves created at current positions with new flow
+
+    Notes
+    -----
+    Parent waves are deactivated by this handler.
+
+    Physical interpretation:
+    - Characteristics: velocity changes from flow_old/R(c) to flow_new/R(c)
+    - Shocks: Rankine-Hugoniot velocity recomputed with new flow
+    - Rarefactions: fan pivots at (v_change, t_change)
+
+    Examples
+    --------
+    >>> new_waves = handle_flow_change(
+    ...     t_change=10.0, flow_new=200.0, active_waves=[char1, shock1, raref1]
+    ... )
+    >>> assert len(new_waves) == 3
+    >>> assert all(w.flow == 200.0 for w in new_waves)
+    """
+    new_waves = []
+
+    for wave in active_waves:
+        if not wave.is_active:
+            continue
+
+        # Create replacement wave with new flow BEFORE deactivating parent
+        # (position_at_time requires wave to be active)
+        if isinstance(wave, CharacteristicWave):
+            new_wave = recreate_characteristic_with_new_flow(wave, t_change, flow_new)
+        elif isinstance(wave, ShockWave):
+            new_wave = recreate_shock_with_new_flow(wave, t_change, flow_new)
+        elif isinstance(wave, RarefactionWave):
+            new_wave = recreate_rarefaction_with_new_flow(wave, t_change, flow_new)
+        else:
+            raise ValueError(f"Unknown wave type: {type(wave)}")
+
+        new_waves.append(new_wave)
+
+        # Deactivate parent wave AFTER recreation
+        wave.is_active = False
+
+    return new_waves
+
+
 def create_inlet_waves_at_time(
     c_prev: float,
     c_new: float,

@@ -37,6 +37,7 @@ from gwtransport.fronttracking.events import (
 from gwtransport.fronttracking.handlers import (
     create_inlet_waves_at_time,
     handle_characteristic_collision,
+    handle_flow_change,
     handle_outlet_crossing,
     handle_rarefaction_characteristic_collision,
     handle_rarefaction_rarefaction_collision,
@@ -223,6 +224,9 @@ class FrontTracker:
         # Compute spin-up period
         self.t_first_arrival = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
 
+        # Detect flow changes for event scheduling
+        self._flow_change_schedule = self._detect_flow_changes()
+
         # Initialize waves from inlet boundary conditions
         self._initialize_inlet_waves()
 
@@ -255,6 +259,41 @@ class FrontTracker:
 
             c_prev = c_new
 
+    def _detect_flow_changes(self) -> list[tuple[float, float]]:
+        """
+        Detect all flow changes in the inlet time series.
+
+        Scans the flow array and identifies time points where flow changes.
+        These become scheduled events that will update all wave velocities.
+
+        Returns
+        -------
+        list[tuple[float, float]]
+            List of (t_change, flow_new) sorted by time
+            Times are in days from tedges[0]
+
+        Notes
+        -----
+        Flow changes are detected by comparing consecutive flow values.
+        Only significant changes (>1e-15) are included.
+
+        Examples
+        --------
+        >>> # flow = [100, 100, 200, 50] at tedges = [0, 10, 20, 30, 40] days
+        >>> # Returns: [(20.0, 200.0), (30.0, 50.0)]
+        """
+        flow_changes = []
+        EPSILON_FLOW = 1e-15
+
+        for i in range(1, len(self.state.flow)):
+            if abs(self.state.flow[i] - self.state.flow[i - 1]) > EPSILON_FLOW:
+                # Convert tedges[i] to days from tedges[0]
+                t_change = (self.state.tedges[i] - self.state.tedges[0]) / pd.Timedelta(days=1)
+                flow_new = self.state.flow[i]
+                flow_changes.append((t_change, flow_new))
+
+        return flow_changes
+
     def find_next_event(self) -> Optional[Event]:
         """
         Find the next event (earliest in time).
@@ -280,11 +319,23 @@ class FrontTracker:
         All collision times are computed using exact analytical formulas.
         """
         candidates = []  # Will use as min-heap by time
+        counter = 0  # Unique counter to break ties without comparing EventType
 
         # Get only active waves
         active_waves = [w for w in self.state.waves if w.is_active]
 
-        # 1. Characteristic-Characteristic collisions
+        # 1. Flow change events (checked FIRST to get priority in tie-breaking)
+        for t_change, flow_new in self._flow_change_schedule:
+            if t_change > self.state.t_current:
+                # All active waves are involved in flow change
+                heappush(
+                    candidates,
+                    (t_change, counter, EventType.FLOW_CHANGE, active_waves.copy(), None, flow_new),
+                )
+                counter += 1
+                break  # Only schedule the next flow change
+
+        # 2. Characteristic-Characteristic collisions
         chars = [w for w in active_waves if isinstance(w, CharacteristicWave)]
         for i, w1 in enumerate(chars):
             for w2 in chars[i + 1 :]:
@@ -292,7 +343,8 @@ class FrontTracker:
                 if result:
                     t, v = result
                     if 0 <= v <= self.state.v_outlet:  # In domain
-                        heappush(candidates, (t, EventType.CHAR_CHAR_COLLISION, [w1, w2], v))
+                        heappush(candidates, (t, counter, EventType.CHAR_CHAR_COLLISION, [w1, w2], v, None))
+                        counter += 1
 
         # 2. Shock-Shock collisions
         shocks = [w for w in active_waves if isinstance(w, ShockWave)]
@@ -302,7 +354,8 @@ class FrontTracker:
                 if result:
                     t, v = result
                     if 0 <= v <= self.state.v_outlet:
-                        heappush(candidates, (t, EventType.SHOCK_SHOCK_COLLISION, [w1, w2], v))
+                        heappush(candidates, (t, counter, EventType.SHOCK_SHOCK_COLLISION, [w1, w2], v, None))
+                        counter += 1
 
         # 3. Shock-Characteristic collisions
         for shock in shocks:
@@ -311,7 +364,8 @@ class FrontTracker:
                 if result:
                     t, v = result
                     if 0 <= v <= self.state.v_outlet:
-                        heappush(candidates, (t, EventType.SHOCK_CHAR_COLLISION, [shock, char], v))
+                        heappush(candidates, (t, counter, EventType.SHOCK_CHAR_COLLISION, [shock, char], v, None))
+                        counter += 1
 
         # 4. Rarefaction-Characteristic collisions
         rarefs = [w for w in active_waves if isinstance(w, RarefactionWave)]
@@ -322,8 +376,9 @@ class FrontTracker:
                     if 0 <= v <= self.state.v_outlet:
                         heappush(
                             candidates,
-                            (t, EventType.RAREF_CHAR_COLLISION, [raref, char], v, boundary),
+                            (t, counter, EventType.RAREF_CHAR_COLLISION, [raref, char], v, boundary),
                         )
+                        counter += 1
 
         # 5. Shock-Rarefaction collisions
         for shock in shocks:
@@ -333,8 +388,9 @@ class FrontTracker:
                     if 0 <= v <= self.state.v_outlet:
                         heappush(
                             candidates,
-                            (t, EventType.SHOCK_RAREF_COLLISION, [shock, raref], v, boundary),
+                            (t, counter, EventType.SHOCK_RAREF_COLLISION, [shock, raref], v, boundary),
                         )
+                        counter += 1
 
         # 6. Rarefaction-Rarefaction collisions
         for i, raref1 in enumerate(rarefs):
@@ -344,8 +400,9 @@ class FrontTracker:
                     if 0 <= v <= self.state.v_outlet:
                         heappush(
                             candidates,
-                            (t, EventType.RAREF_RAREF_COLLISION, [raref1, raref2], v, boundary),
+                            (t, counter, EventType.RAREF_RAREF_COLLISION, [raref1, raref2], v, boundary),
                         )
+                        counter += 1
 
         # 7. Outlet crossings
         for wave in active_waves:
@@ -360,7 +417,11 @@ class FrontTracker:
                         dt_head = (self.state.v_outlet - v_head) / vel_head
                         t_cross_head = t_eval + dt_head
                         if t_cross_head > self.state.t_current:
-                            heappush(candidates, (t_cross_head, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet))
+                            heappush(
+                                candidates,
+                                (t_cross_head, counter, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet, None),
+                            )
+                            counter += 1
 
                 # Tail crossing
                 v_tail = wave.tail_position_at_time(t_eval)
@@ -370,23 +431,35 @@ class FrontTracker:
                         dt_tail = (self.state.v_outlet - v_tail) / vel_tail
                         t_cross_tail = t_eval + dt_tail
                         if t_cross_tail > self.state.t_current:
-                            heappush(candidates, (t_cross_tail, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet))
+                            heappush(
+                                candidates,
+                                (t_cross_tail, counter, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet, None),
+                            )
+                            counter += 1
             else:
                 # For characteristics and shocks, use existing logic
                 t_cross = find_outlet_crossing(wave, self.state.v_outlet, self.state.t_current)
                 if t_cross and t_cross > self.state.t_current:
-                    heappush(candidates, (t_cross, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet))
+                    heappush(
+                        candidates, (t_cross, counter, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet, None)
+                    )
+                    counter += 1
 
         # Return earliest event
         if candidates:
-            # Handle both 4-tuple and 5-tuple (rarefaction events have boundary type)
+            # Handle 6-tuple format: (t, counter, event_type, waves, v, extra)
             event_data = heappop(candidates)
             t = event_data[0]
-            event_type = event_data[1]
-            waves = event_data[2]
-            v = event_data[3]
+            # Skip counter at index 1
+            event_type = event_data[2]
+            waves = event_data[3]
+            v = event_data[4]
+            extra = event_data[5] if len(event_data) > 5 else None
 
-            return Event(time=t, event_type=event_type, waves_involved=waves, location=v)
+            # For FLOW_CHANGE events, extra contains flow_new
+            flow_new = extra if event_type == EventType.FLOW_CHANGE else None
+
+            return Event(time=t, event_type=event_type, waves_involved=waves, location=v, flow_new=flow_new)
 
         return None
 
@@ -458,6 +531,11 @@ class FrontTracker:
             event_record = handle_outlet_crossing(event.waves_involved[0], event.time, event.location)
             self.state.events.append(event_record)
             return  # No new waves for outlet crossing
+
+        elif event.event_type == EventType.FLOW_CHANGE:
+            # Get all active waves at this time
+            active_waves = [w for w in self.state.waves if w.is_active]
+            new_waves = handle_flow_change(event.time, event.flow_new, active_waves)
 
         # Add new waves to state
         self.state.waves.extend(new_waves)

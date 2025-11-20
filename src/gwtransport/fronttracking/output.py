@@ -656,3 +656,152 @@ def compute_bin_averaged_concentration_exact(
         c_avg[i] = total_integral / dt
 
     return c_avg
+
+
+def compute_mass_balance_with_varying_flow(
+    cin: np.ndarray,
+    cout: np.ndarray,
+    flow: np.ndarray,
+    tedges_in: np.ndarray,
+    tedges_out: np.ndarray,
+    t_first_arrival: float,
+) -> dict:
+    """
+    Compute exact mass balance with varying flow and spin-up period.
+
+    Mass balance equation with varying flow:
+        Mass_in = ∫ cin(t) * flow(t) dt
+        Mass_out = ∫ cout(t) * flow(t) dt
+
+    The integration accounts for:
+    - Bin-averaged concentrations (piecewise constant)
+    - Varying flow rates (piecewise constant)
+    - Spin-up period (output before t_first_arrival is excluded)
+
+    Parameters
+    ----------
+    cin : np.ndarray
+        Inlet concentration time series [mass/volume]
+    cout : np.ndarray
+        Outlet concentration time series [mass/volume]
+    flow : np.ndarray
+        Flow rate time series [m³/day]
+    tedges_in : np.ndarray
+        Inlet time bin edges [days from reference time]
+    tedges_out : np.ndarray
+        Outlet time bin edges [days from reference time]
+    t_first_arrival : float
+        First arrival time [days from reference time]
+
+    Returns
+    -------
+    dict
+        Dictionary with keys:
+        - 'mass_in': Total mass entering [mass]
+        - 'mass_out': Total mass exiting (after spin-up) [mass]
+        - 'mass_balance_error': mass_out - mass_in [mass]
+        - 'relative_error': (mass_out - mass_in) / mass_in (dimensionless)
+        - 't_first_arrival': Spin-up boundary [days]
+        - 'n_bins_spinup': Number of output bins in spin-up period
+
+    Notes
+    -----
+    Mass is computed as: mass = Σ c[i] * flow[i] * dt[i]
+
+    For varying flow, flow[i] is the flow rate during bin i. The function
+    assumes flow is aligned with inlet bins and interpolates/matches to
+    outlet bins as needed.
+
+    Output bins entirely before t_first_arrival are excluded from mass_out
+    calculation as they depend on unknown initial conditions.
+
+    Examples
+    --------
+    >>> result = compute_mass_balance_with_varying_flow(
+    ...     cin=cin,
+    ...     cout=cout,
+    ...     flow=flow,
+    ...     tedges_in=tedges_in,
+    ...     tedges_out=tedges_out,
+    ...     t_first_arrival=t_first,
+    ... )
+    >>> print(f"Mass balance error: {result['mass_balance_error']:.2e}")
+    >>> print(f"Relative error: {result['relative_error']:.2e}")
+    """
+    # Compute time intervals
+    dt_in = np.diff(tedges_in)
+    dt_out = np.diff(tedges_out)
+
+    # Compute mass IN
+    mass_in = np.sum(cin * flow * dt_in)
+
+    # Compute mass OUT (only after spin-up)
+    # For each output bin, determine which input bin(s) it overlaps with
+    # and use the corresponding flow rate(s)
+
+    # Simple approach: assume flow is constant within each inlet bin
+    # For each outlet bin, find the flow at the bin center time
+    t_centers_out = 0.5 * (tedges_out[:-1] + tedges_out[1:])
+
+    # Interpolate flow to outlet bin centers (piecewise constant)
+    # flow[i] applies to tedges_in[i] to tedges_in[i+1]
+    t_centers_in = 0.5 * (tedges_in[:-1] + tedges_in[1:])
+    flow_at_out = np.interp(t_centers_out, t_centers_in, flow, left=flow[0], right=flow[-1])
+
+    # Exclude spin-up bins
+    mask_after_spinup = tedges_out[:-1] >= t_first_arrival
+    n_bins_spinup = np.sum(~mask_after_spinup)
+
+    mass_out = np.sum(cout[mask_after_spinup] * flow_at_out[mask_after_spinup] * dt_out[mask_after_spinup])
+
+    # Compute errors
+    mass_balance_error = mass_out - mass_in
+    relative_error = mass_balance_error / mass_in if mass_in > 0 else np.inf
+
+    return {
+        "mass_in": mass_in,
+        "mass_out": mass_out,
+        "mass_balance_error": mass_balance_error,
+        "relative_error": relative_error,
+        "t_first_arrival": t_first_arrival,
+        "n_bins_spinup": n_bins_spinup,
+    }
+
+
+def verify_mass_balance(
+    mass_balance: dict,
+    rtol: float = 1e-12,
+    atol: float = 1e-12,
+) -> bool:
+    """
+    Verify that mass balance is satisfied within tolerance.
+
+    Parameters
+    ----------
+    mass_balance : dict
+        Dictionary returned by compute_mass_balance_with_varying_flow
+    rtol : float, optional
+        Relative tolerance (default 1e-12)
+    atol : float, optional
+        Absolute tolerance (default 1e-12)
+
+    Returns
+    -------
+    bool
+        True if mass balance is satisfied, False otherwise
+
+    Notes
+    -----
+    Mass balance is considered satisfied if:
+        |mass_out - mass_in| <= atol + rtol * |mass_in|
+
+    This is consistent with np.isclose behavior.
+
+    Examples
+    --------
+    >>> result = compute_mass_balance_with_varying_flow(...)
+    >>> assert verify_mass_balance(result, rtol=1e-12)
+    """
+    error = abs(mass_balance["mass_balance_error"])
+    threshold = atol + rtol * abs(mass_balance["mass_in"])
+    return error <= threshold

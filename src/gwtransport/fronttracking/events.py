@@ -50,6 +50,8 @@ class EventType(Enum):
         Wave crosses outlet boundary
     INLET_CHANGE : str
         Inlet concentration changes (creates new wave)
+    FLOW_CHANGE : str
+        Flow rate changes (all waves get new velocities)
     """
 
     CHAR_CHAR_COLLISION = "characteristic_collision"
@@ -60,6 +62,7 @@ class EventType(Enum):
     RAREF_RAREF_COLLISION = "rarefaction_rarefaction_collision"
     OUTLET_CROSSING = "outlet_crossing"
     INLET_CHANGE = "inlet_concentration_change"
+    FLOW_CHANGE = "flow_change"
 
 
 @dataclass
@@ -79,6 +82,8 @@ class Event:
         List of wave objects involved in this event
     location : float
         Volumetric position where event occurs [m³]
+    flow_new : float, optional
+        New flow rate for FLOW_CHANGE events [m³/day]
 
     Examples
     --------
@@ -95,6 +100,7 @@ class Event:
     event_type: EventType
     waves_involved: list  # List[Wave] - can't type hint due to circular import
     location: float
+    flow_new: Optional[float] = None
 
     def __lt__(self, other):
         """Events ordered by time (for priority queue)."""
