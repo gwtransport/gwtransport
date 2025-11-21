@@ -972,7 +972,8 @@ class TestShockVelocityAndEntropy:
 
             # shock_low (c_left=2) should be faster than shock_high (c_left=5)
             # because lower concentrations are faster for n<1
-            assert shock_low.velocity is not None and shock_high.velocity is not None
+            assert shock_low.velocity is not None
+            assert shock_high.velocity is not None
             assert shock_low.velocity > shock_high.velocity, "For n<1, shock with lower c_left should be faster"
 
         elif freundlich_sorption.n > 1.0:
@@ -987,7 +988,8 @@ class TestShockVelocityAndEntropy:
 
             # shock_high (c_left=10) should be faster than shock_low (c_left=5)
             # because higher concentrations are faster for n>1 (for C>0)
-            assert shock_high.velocity is not None and shock_low.velocity is not None
+            assert shock_high.velocity is not None
+            assert shock_low.velocity is not None
             assert shock_high.velocity > shock_low.velocity, "For n>1, shock with higher c_left should be faster"
 
     def test_shock_satisfies_entropy_condition(self, freundlich_sorption):
@@ -1155,7 +1157,8 @@ class TestMachinePrecision:
 
             t_int, v_int = result
 
-            assert shock1.velocity is not None and shock2.velocity is not None
+            assert shock1.velocity is not None
+            assert shock2.velocity is not None
             v1 = shock1.v_start + shock1.velocity * (t_int - shock1.t_start)
             v2 = shock2.v_start + shock2.velocity * (t_int - shock2.t_start)
 

@@ -283,7 +283,8 @@ class TestRarefactionWave:
         v_tail = raref.tail_position_at_time(t)
 
         # Head should be ahead of tail
-        assert v_head is not None and v_tail is not None
+        assert v_head is not None
+        assert v_tail is not None
         assert v_head > v_tail
 
         # Verify exact values
@@ -310,7 +311,8 @@ class TestRarefactionWave:
         t = 20.0
         v_head = raref.head_position_at_time(t)
         v_tail = raref.tail_position_at_time(t)
-        assert v_head is not None and v_tail is not None
+        assert v_head is not None
+        assert v_tail is not None
         v_mid = 0.5 * (v_head + v_tail)
 
         assert raref.contains_point(v_mid, t)
@@ -323,7 +325,8 @@ class TestRarefactionWave:
         t = 20.0
         v_head = raref.head_position_at_time(t)
         v_tail = raref.tail_position_at_time(t)
-        assert v_head is not None and v_tail is not None
+        assert v_head is not None
+        assert v_tail is not None
 
         # Before tail
         assert not raref.contains_point(v_tail - 10.0, t)
