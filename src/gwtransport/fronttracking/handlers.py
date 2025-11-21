@@ -28,9 +28,9 @@ def handle_characteristic_collision(
     char2: CharacteristicWave,
     t_event: float,
     v_event: float,
-) -> list[ShockWave]:
+) -> list[ShockWave | RarefactionWave]:
     """
-    Handle collision of two characteristics → create shock.
+    Handle collision of two characteristics → create shock or rarefaction.
 
     When two characteristics with different concentrations intersect, they
     form a shock discontinuity. The faster characteristic (lower concentration
@@ -69,7 +69,7 @@ def handle_characteristic_collision(
     """
     # Get c_min from sorption to determine concentration threshold
     c_min = getattr(char1.sorption, "c_min", 0.0)
-    is_unfavorable = hasattr(char1.sorption, "n") and char1.sorption.n < 1.0
+    is_unfavorable = isinstance(char1.sorption, FreundlichSorption) and char1.sorption.n < 1.0
 
     # Special case: if one characteristic has C near c_min
     # Need to determine if this is:
@@ -224,6 +224,9 @@ def handle_shock_collision(
     """
     # Determine which shock is upstream (faster)
     # The shock catching up from behind is upstream
+    if shock1.velocity is None or shock2.velocity is None:
+        msg = "Shock velocities should be set in __post_init__"
+        raise RuntimeError(msg)
     if shock1.velocity > shock2.velocity:
         c_left = shock1.c_left
         c_right = shock2.c_right
@@ -307,6 +310,9 @@ def handle_shock_characteristic_collision(
     >>> if new_shock:
     ...     assert new_shock[0].satisfies_entropy()
     """
+    if shock.velocity is None:
+        msg = "Shock velocity should be set in __post_init__"
+        raise RuntimeError(msg)
     shock_vel = shock.velocity
     char_vel = characteristic_velocity(char.concentration, char.flow, char.sorption)
 
@@ -531,6 +537,9 @@ def handle_shock_rarefaction_collision(
 
     # Check if compression forms between rarefaction head and shock
     raref_head_vel = characteristic_velocity(raref.c_head, raref.flow, raref.sorption)
+    if shock.velocity is None:
+        msg = "Shock velocity should be set in __post_init__"
+        raise RuntimeError(msg)
     shock_vel = shock.velocity
 
     if raref_head_vel > shock_vel:
@@ -1019,7 +1028,7 @@ def create_inlet_waves_at_time(
 
     # Get c_min from sorption if available (determines when to use special treatment)
     c_min = getattr(sorption, "c_min", 0.0)
-    is_unfavorable = hasattr(sorption, "n") and sorption.n < 1.0
+    is_unfavorable = isinstance(sorption, FreundlichSorption) and sorption.n < 1.0
 
     # Special case: c_prev ≈ 0 AND this is unfavorable sorption with c_min=0
     # For unfavorable sorption (n<1), R(0)=1 is physically correct

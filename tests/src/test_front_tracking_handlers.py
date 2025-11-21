@@ -98,6 +98,7 @@ class TestCharacteristicCollisionHandler:
         new_waves = handle_characteristic_collision(char1, char2, t_event=20.0, v_event=150.0)
 
         shock = new_waves[0]
+        assert isinstance(shock, ShockWave)
         assert shock.satisfies_entropy()
 
     def test_parent_characteristics_deactivated(self, freundlich_sorption):
@@ -150,6 +151,7 @@ class TestCharacteristicCollisionHandler:
 
         new_waves = handle_characteristic_collision(char1, char2, t_event=15.0, v_event=100.0)
         shock = new_waves[0]
+        assert isinstance(shock, ShockWave)
 
         # Faster (char2 with C=2) should be upstream (left)
         # Slower (char1 with C=5) should be downstream (right)

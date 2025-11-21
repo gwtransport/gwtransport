@@ -61,6 +61,7 @@ class TestConcentrationAtPoint:
 
         # Get shock position at t=10
         v_shock = shock.position_at_time(10.0)
+        assert v_shock is not None
 
         # Before shock: c_left
         c = concentration_at_point(v=v_shock - 10.0, t=10.0, waves=waves, sorption=sorption)
@@ -177,6 +178,7 @@ class TestComputeBreakthroughCurve:
         v_outlet = 300.0
 
         # Shock crosses outlet at some time t_cross
+        assert shock.velocity is not None
         t_cross = v_outlet / shock.velocity
 
         t_array = np.linspace(0, t_cross * 2, 100)
@@ -507,6 +509,7 @@ class TestMachinePrecision:
 
         # Position at t=10: v = 0 + (100/2)*10 = 500
         v_at_10 = char.position_at_time(10.0)
+        assert v_at_10 is not None
 
         # Concentration at that position should be exact
         c = concentration_at_point(v=v_at_10, t=10.0, waves=[char], sorption=sorption)

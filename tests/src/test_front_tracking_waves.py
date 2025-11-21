@@ -161,8 +161,10 @@ class TestShockWave:
         shock = ShockWave(t_start=0.0, v_start=0.0, flow=100.0, c_left=10.0, c_right=2.0, sorption=sorption)
 
         v_shock = shock.velocity
+        assert v_shock is not None
         for t in [1.0, 5.0, 10.0]:
             v = shock.position_at_time(t)
+            assert v is not None
             expected = v_shock * t
             assert np.isclose(v, expected, rtol=1e-14)
 
@@ -189,6 +191,7 @@ class TestShockWave:
 
         # Shock at some position
         v_shock = shock.position_at_time(10.0)
+        assert v_shock is not None
         c = shock.concentration_at_point(v=v_shock - 10.0, t=10.0)
 
         assert c == 10.0  # Upstream concentration
@@ -200,6 +203,7 @@ class TestShockWave:
 
         # Shock at some position
         v_shock = shock.position_at_time(10.0)
+        assert v_shock is not None
         c = shock.concentration_at_point(v=v_shock + 10.0, t=10.0)
 
         assert c == 2.0  # Downstream concentration
@@ -210,6 +214,7 @@ class TestShockWave:
         shock = ShockWave(t_start=0.0, v_start=0.0, flow=100.0, c_left=10.0, c_right=2.0, sorption=sorption)
 
         v_shock = shock.position_at_time(10.0)
+        assert v_shock is not None
         c = shock.concentration_at_point(v=v_shock, t=10.0)
 
         # At exact shock position, returns average
@@ -278,6 +283,7 @@ class TestRarefactionWave:
         v_tail = raref.tail_position_at_time(t)
 
         # Head should be ahead of tail
+        assert v_head is not None and v_tail is not None
         assert v_head > v_tail
 
         # Verify exact values
@@ -304,6 +310,7 @@ class TestRarefactionWave:
         t = 20.0
         v_head = raref.head_position_at_time(t)
         v_tail = raref.tail_position_at_time(t)
+        assert v_head is not None and v_tail is not None
         v_mid = 0.5 * (v_head + v_tail)
 
         assert raref.contains_point(v_mid, t)
@@ -316,6 +323,7 @@ class TestRarefactionWave:
         t = 20.0
         v_head = raref.head_position_at_time(t)
         v_tail = raref.tail_position_at_time(t)
+        assert v_head is not None and v_tail is not None
 
         # Before tail
         assert not raref.contains_point(v_tail - 10.0, t)
@@ -349,6 +357,7 @@ class TestRarefactionWave:
 
         t = 20.0
         v_head = raref.head_position_at_time(t)
+        assert v_head is not None
 
         # After head
         c = raref.concentration_at_point(v_head + 100.0, t)

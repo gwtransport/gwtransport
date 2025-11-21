@@ -86,6 +86,7 @@ class TestWaveRecreation:
 
         # Get old velocity
         vel_old = shock_old.velocity
+        assert vel_old is not None
 
         # Compute position at t_change
         t_change = 5.0
@@ -107,6 +108,7 @@ class TestWaveRecreation:
 
         # Verify velocity doubled (Rankine-Hugoniot is linear in flow)
         vel_new = shock_new.velocity
+        assert vel_new is not None
         assert np.isclose(vel_new, 2 * vel_old, rtol=1e-14)
 
     def test_recreate_rarefaction_preserves_concentrations(self, freundlich_sorption):

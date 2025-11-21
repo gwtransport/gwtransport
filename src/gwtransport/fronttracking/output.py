@@ -660,11 +660,11 @@ def compute_bin_averaged_concentration_exact(
 
 
 def compute_mass_balance_with_varying_flow(
-    cin: np.ndarray,
-    cout: np.ndarray,
-    flow: np.ndarray,
-    tedges_in: np.ndarray,
-    tedges_out: np.ndarray,
+    cin: npt.NDArray[np.floating],
+    cout: npt.NDArray[np.floating],
+    flow: npt.NDArray[np.floating],
+    tedges_in: npt.NDArray[np.floating],
+    tedges_out: npt.NDArray[np.floating],
     t_first_arrival: float,
 ) -> dict:
     """
@@ -747,13 +747,13 @@ def compute_mass_balance_with_varying_flow(
     # Interpolate flow to outlet bin centers (piecewise constant)
     # flow[i] applies to tedges_in[i] to tedges_in[i+1]
     t_centers_in = 0.5 * (tedges_in[:-1] + tedges_in[1:])
-    flow_at_out = np.interp(t_centers_out, t_centers_in, flow, left=flow[0], right=flow[-1])
+    flow_at_out: npt.NDArray[np.floating] = np.interp(t_centers_out, t_centers_in, flow, left=flow[0], right=flow[-1])
 
     # Exclude spin-up bins
     mask_after_spinup = tedges_out[:-1] >= t_first_arrival
     n_bins_spinup = np.sum(~mask_after_spinup)
 
-    mass_out = np.sum(cout[mask_after_spinup] * flow_at_out[mask_after_spinup] * dt_out[mask_after_spinup])
+    mass_out = np.sum(cout[mask_after_spinup] * flow_at_out[mask_after_spinup] * dt_out[mask_after_spinup])  # type: ignore[call-overload]
 
     # Compute errors
     mass_balance_error = mass_out - mass_in

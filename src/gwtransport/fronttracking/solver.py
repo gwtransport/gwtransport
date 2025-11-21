@@ -244,10 +244,10 @@ class FrontTracker:
         c_prev = 0.0  # Assume domain initially at zero
 
         for i in range(len(self.state.cin)):
-            c_new = self.state.cin[i]
+            c_new = float(self.state.cin[i])
             # Convert tedges[i] (Timestamp) to days from tedges[0]
             t_change = (self.state.tedges[i] - self.state.tedges[0]) / pd.Timedelta(days=1)
-            flow_current = self.state.flow[i]
+            flow_current = float(self.state.flow[i])
 
             if abs(c_new - c_prev) > EPSILON_CONCENTRATION:
                 # Create wave(s) for this concentration change
@@ -539,6 +539,9 @@ class FrontTracker:
         elif event.event_type == EventType.FLOW_CHANGE:
             # Get all active waves at this time
             active_waves = [w for w in self.state.waves if w.is_active]
+            if event.flow_new is None:
+                msg = "FLOW_CHANGE event must have flow_new set"
+                raise RuntimeError(msg)
             new_waves = handle_flow_change(event.time, event.flow_new, active_waves)
 
         # Add new waves to state

@@ -122,7 +122,7 @@ def plot_vt_diagram(
                     alpha=alpha,
                     label="Characteristic" if not hasattr(ax, "gw_char_labeled") else "",
                 )
-                ax.gw_char_labeled = True
+                ax.gw_char_labeled = True  # type: ignore[attr-defined]
 
     # Plot shocks (red lines)
     for wave in state.waves:
@@ -144,7 +144,7 @@ def plot_vt_diagram(
                 elif v is not None and v > state.v_outlet:
                     # Wave crossed outlet - add exact intersection point
                     vel = wave.velocity
-                    if vel > 0:
+                    if vel is not None and vel > 0:
                         t_outlet = wave.t_start + (state.v_outlet - wave.v_start) / vel
                         if wave.t_start <= t_outlet <= t_max:
                             v_plot.append(state.v_outlet)
@@ -163,7 +163,7 @@ def plot_vt_diagram(
                     alpha=alpha,
                     label="Shock" if not hasattr(ax, "gw_shock_labeled") else "",
                 )
-                ax.gw_shock_labeled = True
+                ax.gw_shock_labeled = True  # type: ignore[attr-defined]
 
     # Plot rarefactions (green fans)
     for wave in state.waves:
@@ -232,7 +232,7 @@ def plot_vt_diagram(
             if valid_head:
                 t_h, v_h = zip(*valid_head, strict=False)
                 ax.plot(t_h, v_h, "g-", linewidth=1.5, alpha=alpha, label=label)
-                ax.gw_raref_labeled = True
+                ax.gw_raref_labeled = True  # type: ignore[attr-defined]
 
             # Plot tail (slower boundary)
             valid_tail = [(t, v) for t, v in zip(t_plot_used, v_tail_plot, strict=False) if v is not None]
@@ -308,7 +308,7 @@ def plot_vt_diagram(
                         zorder=10,
                         label="Event" if not hasattr(ax, "gw_event_labeled") else "",
                     )
-                    ax.gw_event_labeled = True
+                    ax.gw_event_labeled = True  # type: ignore[attr-defined]
 
     ax.set_xlabel("Time [days]", fontsize=12)
     ax.set_ylabel("Position (Pore Volume) [m³]", fontsize=12)

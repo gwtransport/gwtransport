@@ -100,7 +100,7 @@ class TestFrontTrackerInitialization:
             FrontTracker(
                 cin=cin,
                 flow=flow,
-                tedges=tedges,
+                tedges=tedges,  # type: ignore[arg-type]
                 aquifer_pore_volume=500.0,
                 sorption=freundlich_sorption,
             )
@@ -115,7 +115,7 @@ class TestFrontTrackerInitialization:
             FrontTracker(
                 cin=cin,
                 flow=flow,
-                tedges=tedges,
+                tedges=tedges,  # type: ignore[arg-type]
                 aquifer_pore_volume=500.0,
                 sorption=freundlich_sorption,
             )
@@ -130,7 +130,7 @@ class TestFrontTrackerInitialization:
             FrontTracker(
                 cin=cin,
                 flow=flow,
-                tedges=tedges,
+                tedges=tedges,  # type: ignore[arg-type]
                 aquifer_pore_volume=500.0,
                 sorption=freundlich_sorption,
             )
@@ -181,7 +181,7 @@ class TestFindNextEvent:
         tracker = FrontTracker(
             cin=cin,
             flow=flow,
-            tedges=tedges,
+            tedges=tedges,  # type: ignore[arg-type]
             aquifer_pore_volume=500.0,
             sorption=freundlich_sorption,
         )
@@ -234,7 +234,7 @@ class TestHandleEvent:
         tracker = FrontTracker(
             cin=cin,
             flow=flow,
-            tedges=tedges,
+            tedges=tedges,  # type: ignore[arg-type]
             aquifer_pore_volume=1000.0,
             sorption=freundlich_sorption,
         )
@@ -321,7 +321,7 @@ class TestSimulationRun:
         tracker = FrontTracker(
             cin=cin,
             flow=flow,
-            tedges=tedges,
+            tedges=tedges,  # type: ignore[arg-type]
             aquifer_pore_volume=500.0,
             sorption=freundlich_sorption,
         )
@@ -434,7 +434,7 @@ class TestEdgeCases:
         tracker = FrontTracker(
             cin=cin,
             flow=flow,
-            tedges=tedges,
+            tedges=tedges,  # type: ignore[arg-type]
             aquifer_pore_volume=500.0,
             sorption=freundlich_sorption,
         )
@@ -451,7 +451,7 @@ class TestEdgeCases:
         tracker = FrontTracker(
             cin=cin,
             flow=flow,
-            tedges=tedges,
+            tedges=tedges,  # type: ignore[arg-type]
             aquifer_pore_volume=500.0,
             sorption=freundlich_sorption,
         )

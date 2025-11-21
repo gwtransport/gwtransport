@@ -165,8 +165,8 @@ class CharacteristicWave(Wave):
     500.0
     """
 
-    concentration: float = None
-    sorption: FreundlichSorption | ConstantRetardation = None
+    concentration: float
+    sorption: FreundlichSorption | ConstantRetardation
 
     def velocity(self) -> float:
         """
@@ -310,12 +310,12 @@ class ShockWave(Wave):
     True
     """
 
-    c_left: float = None
-    c_right: float = None
-    sorption: FreundlichSorption | ConstantRetardation = None
-    velocity: float = None
+    c_left: float
+    c_right: float
+    sorption: FreundlichSorption | ConstantRetardation
+    velocity: float | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Compute shock velocity from Rankine-Hugoniot condition."""
         if self.velocity is None:
             self.velocity = self.sorption.shock_velocity(self.c_left, self.c_right, self.flow)
@@ -338,6 +338,9 @@ class ShockWave(Wave):
         """
         if t < self.t_start or not self.is_active:
             return None
+        if self.velocity is None:
+            msg = "Shock velocity should be set in __post_init__"
+            raise RuntimeError(msg)
         return self.v_start + self.velocity * (t - self.t_start)
 
     def concentration_left(self) -> float:
@@ -406,6 +409,9 @@ class ShockWave(Wave):
         Shocks that violate this condition are unphysical and should be
         replaced by rarefaction waves.
         """
+        if self.velocity is None:
+            msg = "Shock velocity should be set in __post_init__"
+            raise RuntimeError(msg)
         return self.sorption.check_entropy_condition(self.c_left, self.c_right, self.velocity, self.flow)
 
 
@@ -483,9 +489,9 @@ class RarefactionWave(Wave):
     True
     """
 
-    c_head: float = None
-    c_tail: float = None
-    sorption: FreundlichSorption | ConstantRetardation = None
+    c_head: float
+    c_tail: float
+    sorption: FreundlichSorption | ConstantRetardation
 
     def __post_init__(self):
         """Verify this is actually a rarefaction (head faster than tail)."""
