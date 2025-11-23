@@ -10,7 +10,7 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
 
@@ -54,7 +54,7 @@ class Wave(ABC):
     t_start: float
     v_start: float
     flow: float
-    is_active: bool = True
+    is_active: bool = field(default=True, kw_only=True)
 
     @abstractmethod
     def position_at_time(self, t: float) -> float | None:
