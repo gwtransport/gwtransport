@@ -956,7 +956,6 @@ def _integrate_rarefaction_spatial_exact(
         beta_diss *= beta_func(a_diss, b_diss)
     else:
         # Use mpmath for negative parameters (analytic continuation)
-        mp.dps = 20  # Sufficient for float64 precision
         beta_diss = float(mp.betainc(a_diss, b_diss, t_start, t_end, regularized=False))
 
     # Compute coefficient using regular float arithmetic
@@ -982,7 +981,6 @@ def _integrate_rarefaction_spatial_exact(
         beta_sorb = betainc(a_sorb, b_sorb, t_end) - betainc(a_sorb, b_sorb, t_start)
         beta_sorb *= beta_func(a_sorb, b_sorb)
     else:
-        mp.dps = 20
         beta_sorb = float(mp.betainc(a_sorb, b_sorb, t_start, t_end, regularized=False))
 
     # Compute coefficient using regular float arithmetic
