@@ -110,7 +110,7 @@ class FreundlichSorption:
     n: float
     bulk_density: float
     porosity: float
-    c_min: float = 1e-24
+    c_min: float = 1e-12
 
     def __post_init__(self):
         """Validate parameters after initialization."""
