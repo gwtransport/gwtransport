@@ -42,6 +42,7 @@ classifiers = [
 dependencies = [
   "ipykernel>=4.0.1",
   "matplotlib>=3.8.4",
+  "mpmath>=1.3.0",
   "numpy>=2.0.0",
   "pandas>=2.2.2",
   "requests>=2.19.0",
@@ -72,6 +73,8 @@ docs = [
 
 [project.urls]
 Homepage = "https://github.com/gwtransport/gwtransport"
+Documentation = "https://gwtransport.github.io/gwtransport"
+Sponsor = "https://savethechildren.net/what-we-do/emergencies/war-gaza"
 
 [tool.hatch.envs.hatch-static-analysis]
 config-path = "ruff.toml"

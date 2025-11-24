@@ -46,6 +46,7 @@ convention = "numpy"
 '**/*.py' = [
     "RUF001",
     "TC003",    # Type checking is fine.
+    "C901",     # Complex functions are okay for now.
 ]
 'modelscripts/**/*.py' = [
     'INP001',  # Missing return type annotation for public function
@@ -66,5 +67,6 @@ convention = "numpy"
     "D",
     "PT011",  # Valueerror should be allowed
     "PLR2004",
+    "PLR6301",  # Tests may be grouped in classes for clarity
     "INP001",  # __init__.py is not needed for the test folders
 ]

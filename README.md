@@ -93,6 +93,7 @@ Examples:
 2. [Estimate the residence time distribution](https://gwtransport.github.io/gwtransport/examples/02_Residence_Time_Analysis.html)
 3. [Log removal efficiency analysis](https://gwtransport.github.io/gwtransport/examples/03_Pathogen_Removal_Bank_Filtration.html)
 4. [Deposition analysis](https://gwtransport.github.io/gwtransport/examples/04_Deposition_Analysis_Bank_Filtration.html)
+5. [Front tracking with rarefaction waves](https://gwtransport.github.io/gwtransport/examples/09_Front_Tracking_Rarefaction_Waves.html)
 
 Full documentation: [gwtransport.github.io/gwtransport](https://gwtransport.github.io/gwtransport)
 

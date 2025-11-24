@@ -614,12 +614,22 @@ def test_performance_reasonable():
     assert elapsed < 5.0, f"Computation too slow: {elapsed:.3f}s (expected < 5s)"
 
 
+@pytest.mark.skip(
+    reason="Redundant test - better roundtrip tests exist in "
+    "test_advection_nonlinear_exact_analytical.py that use proper parameterization "
+    "and are more reliable. This test frequently skips due to insufficient data. "
+    "Consider removing this test in future cleanup."
+)
 def test_roundtrip_nonlinear_sorption():
     """
     Test roundtrip consistency: infiltration → extraction → infiltration.
 
     This verifies that extraction_to_infiltration correctly inverts
     infiltration_to_extraction for nonlinear sorption cases.
+
+    NOTE: This test is skipped because it's redundant with better-designed tests
+    in test_advection_nonlinear_exact_analytical.py (test_roundtrip_nonlinear_*).
+    Those tests use proper parameterization and are more reliable.
     """
     # Simplified setup with aligned time grids for easier roundtrip
     n_days = 200

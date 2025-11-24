@@ -23,11 +23,15 @@ jobs:
       - name: Install the project
         run: uv sync --extra test
       - name: Python format
-        run: uv run ruff format --diff .
+        run: |
+          uv run ruff --version
+          uv run ruff format --diff .
       - name: Run ruff
         run: uv run ruff check .
       - name: Type checking
-        run: uv run ty check .
+        run: |
+          uv run ty --version
+          uv run ty check .
       - name: "Validate project metadata"
         run: uv run validate-pyproject pyproject.toml
       - name: Prettier
