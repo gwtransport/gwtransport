@@ -73,6 +73,8 @@ docs = [
 
 [project.urls]
 Homepage = "https://github.com/gwtransport/gwtransport"
+Documentation = "https://gwtransport.github.io/gwtransport"
+Sponsor = "https://savethechildren.net/what-we-do/emergencies/war-gaza"
 
 [tool.hatch.envs.hatch-static-analysis]
 config-path = "ruff.toml"
