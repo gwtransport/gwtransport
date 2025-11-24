@@ -106,7 +106,6 @@ class TestRoundtripLinear:
 # ============================================================================
 
 
-@pytest.mark.parametrize("nonlinear_method", ["method_of_characteristics", "exact_front_tracking"])
 @pytest.mark.parametrize("input_type", ["gaussian", "step", "sine"])
 @pytest.mark.parametrize("n_freundlich", [0.6, 0.75, 0.9])
 class TestRoundtripNonlinear:
@@ -114,19 +113,18 @@ class TestRoundtripNonlinear:
     Comprehensive roundtrip tests for nonlinear sorption.
 
     Tests all combinations of:
-    - Nonlinear methods: method_of_characteristics, exact_front_tracking
+    - Nonlinear method: method_of_characteristics
     - Input types: gaussian (smooth), step (discontinuous), sine (periodic)
     - Freundlich n values: 0.6 (strong), 0.75 (moderate), 0.9 (weak nonlinearity)
 
-    Total: 2 x 3 x 3 = 18 test cases (consolidated from ~25 scattered tests)
+    Total: 3 x 3 = 9 test cases (consolidated from ~25 scattered tests)
     """
 
-    def test_roundtrip_reconstruction(self, nonlinear_method, input_type, n_freundlich):
+    def test_roundtrip_reconstruction(self, input_type, n_freundlich):
         """
         Test roundtrip reconstruction for nonlinear sorption.
 
         Parameters:
-            nonlinear_method: 'method_of_characteristics' or 'exact_front_tracking'
             input_type: 'gaussian', 'step', or 'sine'
             n_freundlich: Freundlich exponent (0.6, 0.75, 0.9)
 
@@ -192,7 +190,6 @@ class TestRoundtripNonlinear:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=pore_volume,
             retardation_factor=retardation_cin,
-            nonlinear_method=nonlinear_method,
         )
 
         # Trim to valid cout region
@@ -227,7 +224,6 @@ class TestRoundtripNonlinear:
             cin_tedges=cin_tedges,
             aquifer_pore_volumes=pore_volume,
             retardation_factor=retardation_cout,
-            nonlinear_method=nonlinear_method,
         )
 
         # Analysis: Compare in valid middle region
@@ -253,7 +249,7 @@ class TestRoundtripNonlinear:
             atol=atol,
             err_msg=(
                 f"Roundtrip reconstruction error exceeds tolerance\n"
-                f"Method: {nonlinear_method}\n"
+                f"Method: method_of_characteristics\n"
                 f"Input: {input_type}\n"
                 f"n: {n_freundlich}\n"
                 f"Tolerance: {tolerance:.1%}\n"
@@ -267,8 +263,7 @@ class TestRoundtripNonlinear:
 # ============================================================================
 
 
-@pytest.mark.parametrize("nonlinear_method", ["method_of_characteristics", "exact_front_tracking"])
-def test_roundtrip_coverage_requirements(nonlinear_method):
+def test_roundtrip_coverage_requirements():
     """
     Test that roundtrip tests have sufficient valid data coverage.
 
@@ -306,7 +301,6 @@ def test_roundtrip_coverage_requirements(nonlinear_method):
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=retardation_cin,
-        nonlinear_method=nonlinear_method,
     )
 
     # Check cout coverage
@@ -315,6 +309,6 @@ def test_roundtrip_coverage_requirements(nonlinear_method):
 
     # Require at least 50% valid cout data
     assert cout_coverage >= 0.50, (
-        f"Insufficient cout coverage ({cout_coverage:.1%}) for {nonlinear_method}. "
+        f"Insufficient cout coverage ({cout_coverage:.1%}) for method_of_characteristics. "
         f"Roundtrip tests require >= 50% valid data."
     )

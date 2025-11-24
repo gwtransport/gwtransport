@@ -89,8 +89,7 @@ from gwtransport.utils import compute_time_edges
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.parametrize("nonlinear_method", ["method_of_characteristics", "exact_front_tracking"])
-def test_shock_wave_step_input_exact(nonlinear_method):
+def test_shock_wave_step_input_exact():
     """
     Test 1: Shock wave propagation with step input (EXACT).
 
@@ -178,7 +177,6 @@ def test_shock_wave_step_input_exact(nonlinear_method):
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=retardation_factors,
-        nonlinear_method=nonlinear_method,
     )
 
     # Analysis 1: Breakthrough time
@@ -192,7 +190,7 @@ def test_shock_wave_step_input_exact(nonlinear_method):
     t_arrival_numerical = breakthrough_indices[0]  # days after start
     t_arrival_error = abs(t_arrival_numerical - t_arrival_analytical) / t_arrival_analytical
 
-    logger.info("\nShock Wave Test Results (%s):", nonlinear_method)
+    logger.info("\nShock Wave Test Results (method_of_characteristics):")
     logger.info("  Analytical arrival time: %.2f days", t_arrival_analytical)
     logger.info("  Numerical arrival time:  %.2f days", t_arrival_numerical)
     logger.info("  Relative error:          %.2f%%", t_arrival_error * 100)
@@ -231,8 +229,7 @@ def test_shock_wave_step_input_exact(nonlinear_method):
     )
 
 
-@pytest.mark.parametrize("nonlinear_method", ["method_of_characteristics", "exact_front_tracking"])
-def test_method_of_characteristics_concentration_tracking_exact(nonlinear_method):
+def test_method_of_characteristics_concentration_tracking_exact():
     """
     Test 2: Peak arrival time with method of characteristics (EXACT).
 
@@ -323,14 +320,13 @@ def test_method_of_characteristics_concentration_tracking_exact(nonlinear_method
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=retardation_factors,
-        nonlinear_method=nonlinear_method,
     )
 
     # Find numerical peak
     t_peak_numerical = np.nanargmax(cout)
     conc_peak_numerical = cout[t_peak_numerical]
 
-    logger.info("\nPeak Arrival Test Results (%s):", nonlinear_method)
+    logger.info("\nPeak Arrival Test Results (method_of_characteristics):")
     logger.info("  Input peak:            %.2f mg/L at day %d", conc_peak, t_center)
     logger.info("  R(C_peak):             %.3f", retardation_peak)
     logger.info("  Base residence time:   %.2f days", base_residence_time)
@@ -501,8 +497,7 @@ def test_power_law_decay_asymptotic_exact():
     )
 
 
-@pytest.mark.parametrize("nonlinear_method", ["method_of_characteristics", "exact_front_tracking"])
-def test_semi_analytical_gaussian_integration(nonlinear_method):
+def test_semi_analytical_gaussian_integration():
     """
     Test 4: Semi-analytical solution via concentration-level integration.
 
@@ -576,7 +571,6 @@ def test_semi_analytical_gaussian_integration(nonlinear_method):
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=retardation_factors,
-        nonlinear_method=nonlinear_method,
     )
 
     # Semi-analytical solution
@@ -674,7 +668,7 @@ def test_semi_analytical_gaussian_integration(nonlinear_method):
     mass_out_num = np.nansum(cout_numerical[: len(cout_numerical)] * flow[0])
     mass_recovery = mass_out_num / mass_in
 
-    logger.info("\nSemi-Analytical Integration Test Results (%s):", nonlinear_method)
+    logger.info("\nSemi-Analytical Integration Test Results (method_of_characteristics):")
     logger.info("  Input peak:            %.2f mg/L at day %d", conc_peak, t_center)
     logger.info("  R(C_peak):             %.3f", retardation_peak)
     logger.info("  Expected peak time:    %.2f days", t_peak_expected)
@@ -707,8 +701,7 @@ def test_semi_analytical_gaussian_integration(nonlinear_method):
     )
 
 
-@pytest.mark.parametrize("nonlinear_method", ["method_of_characteristics", "exact_front_tracking"])
-def test_multiple_n_values_consistency(nonlinear_method):
+def test_multiple_n_values_consistency():
     """
     Test 5: Consistency across different Freundlich exponents.
 
@@ -755,7 +748,7 @@ def test_multiple_n_values_consistency(nonlinear_method):
     n_values = [0.3, 0.5, 0.7, 0.9]
     results = []
 
-    logger.info("\nMultiple n Values Test Results (%s):", nonlinear_method)
+    logger.info("\nMultiple n Values Test Results (method_of_characteristics):")
     logger.info("  %6s %8s %12s %15s %10s", "n", "R_peak", "t_peak [d]", "C_peak [mg/L]", "Asymmetry")
     logger.info("  %s %s %s %s %s", "-" * 6, "-" * 8, "-" * 12, "-" * 15, "-" * 10)
 
@@ -777,7 +770,6 @@ def test_multiple_n_values_consistency(nonlinear_method):
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=pore_volume,
             retardation_factor=retardation_factors,
-            nonlinear_method=nonlinear_method,
         )
 
         # Extract metrics
@@ -829,8 +821,7 @@ def test_multiple_n_values_consistency(nonlinear_method):
     logger.info("\n  Note: n=1.0 (linear) case validated in other tests")
 
 
-@pytest.mark.parametrize("nonlinear_method", ["method_of_characteristics", "exact_front_tracking"])
-def test_roundtrip_nonlinear_gaussian_pulse(nonlinear_method):
+def test_roundtrip_nonlinear_gaussian_pulse():
     """
     Test 6: Roundtrip reconstruction with nonlinear sorption (Gaussian pulse).
 
@@ -906,7 +897,6 @@ def test_roundtrip_nonlinear_gaussian_pulse(nonlinear_method):
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=retardation_cin,
-        nonlinear_method=nonlinear_method,
     )
 
     # Handle NaN values in cout - trim to valid region for backward pass
@@ -940,7 +930,6 @@ def test_roundtrip_nonlinear_gaussian_pulse(nonlinear_method):
         cin_tedges=cin_tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=retardation_cout,
-        nonlinear_method=nonlinear_method,
     )
 
     # Analysis: Compare reconstruction to original
@@ -950,7 +939,7 @@ def test_roundtrip_nonlinear_gaussian_pulse(nonlinear_method):
     total_count = len(cin_reconstructed)
     coverage = valid_count / total_count
 
-    logger.info("\nRoundtrip Test (Gaussian, %s):", nonlinear_method)
+    logger.info("\nRoundtrip Test (Gaussian, method_of_characteristics):")
     logger.info("  Total bins:            %d", total_count)
     logger.info("  Valid bins:            %d", valid_count)
     logger.info("  Coverage:              %.1f%%", coverage * 100)
@@ -994,7 +983,7 @@ def test_roundtrip_nonlinear_gaussian_pulse(nonlinear_method):
     # Debug output showed 0.33% mean error, with max ~1.2% at boundaries
     # 1.5% for exact method (mean: ~0.33%, max: ~1.2%)
     # 1.5% for MoC (mean: ~0.33%, max: ~1.2%)
-    tolerance = 0.015 if nonlinear_method == "exact_front_tracking" else 0.015  # 1.5% for both methods
+    tolerance = 0.015  # 1.5% for method of characteristics
 
     # Test exact recovery in stable middle region
     np.testing.assert_allclose(
@@ -1003,7 +992,7 @@ def test_roundtrip_nonlinear_gaussian_pulse(nonlinear_method):
         rtol=tolerance,
         err_msg=(
             f"Roundtrip reconstruction error exceeds {tolerance:.0%}\n"
-            f"Method: {nonlinear_method}\n"
+            f"Method: method_of_characteristics\n"
             f"Mean relative error: {mean_rel_error:.2%}\n"
             f"Expected: mean C ≈ {np.mean(original_middle):.2f} mg/L\n"
             f"Got:      mean C ≈ {np.mean(reconstructed_middle):.2f} mg/L"
@@ -1011,8 +1000,7 @@ def test_roundtrip_nonlinear_gaussian_pulse(nonlinear_method):
     )
 
 
-@pytest.mark.parametrize("nonlinear_method", ["method_of_characteristics", "exact_front_tracking"])
-def test_roundtrip_nonlinear_step_function(nonlinear_method):
+def test_roundtrip_nonlinear_step_function():
     """
     Test 7: Roundtrip reconstruction with nonlinear sorption (step function).
 
@@ -1082,7 +1070,6 @@ def test_roundtrip_nonlinear_step_function(nonlinear_method):
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=retardation_cin,
-        nonlinear_method=nonlinear_method,
     )
 
     # Handle NaN values in cout - trim to valid region
@@ -1113,7 +1100,6 @@ def test_roundtrip_nonlinear_step_function(nonlinear_method):
         cin_tedges=cin_tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=retardation_cout,
-        nonlinear_method=nonlinear_method,
     )
 
     # Analysis
@@ -1121,7 +1107,7 @@ def test_roundtrip_nonlinear_step_function(nonlinear_method):
     valid_count = np.sum(valid_mask)
     coverage = valid_count / len(cin_reconstructed)
 
-    logger.info("\nRoundtrip Test (Step, %s):", nonlinear_method)
+    logger.info("\nRoundtrip Test (Step, method_of_characteristics):")
     logger.info("  Valid bins:            %d / %d", valid_count, len(cin_reconstructed))
     logger.info("  Coverage:              %.1f%%", coverage * 100)
 
@@ -1177,7 +1163,7 @@ def test_roundtrip_nonlinear_step_function(nonlinear_method):
         atol=atol,
         err_msg=(
             f"Roundtrip reconstruction error exceeds tolerance\n"
-            f"Method: {nonlinear_method}\n"
+            f"Method: method_of_characteristics\n"
             f"RMS error: {rms_error:.3f} mg/L\n"
             f"Expected: mean C ≈ {np.mean(original_middle):.2f} mg/L\n"
             f"Got:      mean C ≈ {np.mean(reconstructed_middle):.2f} mg/L"
@@ -1185,9 +1171,8 @@ def test_roundtrip_nonlinear_step_function(nonlinear_method):
     )
 
 
-@pytest.mark.parametrize("nonlinear_method", ["method_of_characteristics", "exact_front_tracking"])
 @pytest.mark.parametrize("n_freundlich", [0.6, 0.75, 0.9])
-def test_roundtrip_nonlinear_varying_n(nonlinear_method, n_freundlich):
+def test_roundtrip_nonlinear_varying_n(n_freundlich):
     """
     Test 8: Roundtrip reconstruction with varying nonlinearity.
 
@@ -1249,7 +1234,6 @@ def test_roundtrip_nonlinear_varying_n(nonlinear_method, n_freundlich):
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=retardation_cin,
-        nonlinear_method=nonlinear_method,
     )
 
     # Handle NaN values in cout - trim to valid region
@@ -1281,7 +1265,6 @@ def test_roundtrip_nonlinear_varying_n(nonlinear_method, n_freundlich):
         cin_tedges=cin_tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=retardation_cout,
-        nonlinear_method=nonlinear_method,
     )
 
     # Analysis
@@ -1303,7 +1286,7 @@ def test_roundtrip_nonlinear_varying_n(nonlinear_method, n_freundlich):
     rel_error = abs_error / (original_middle + 1e-10)
     mean_rel_error = np.mean(rel_error)
 
-    logger.info("\nRoundtrip Test (n=%.2f, %s):", n_freundlich, nonlinear_method)
+    logger.info("\nRoundtrip Test (n=%.2f, method_of_characteristics):", n_freundlich)
     logger.info("  Valid bins:            %d / %d", len(valid_indices), len(cin_reconstructed))
     logger.info("  Middle region bins:    %d", len(middle_indices))
     logger.info("  Mean rel error:        %.2f%%", mean_rel_error * 100)
@@ -1317,7 +1300,7 @@ def test_roundtrip_nonlinear_varying_n(nonlinear_method, n_freundlich):
         rtol=tolerance,
         err_msg=(
             f"Roundtrip reconstruction error exceeds {tolerance:.0%}\n"
-            f"n={n_freundlich}, method={nonlinear_method}\n"
+            f"n={n_freundlich}, method=method_of_characteristics\n"
             f"Mean relative error: {mean_rel_error:.2%}"
         ),
     )

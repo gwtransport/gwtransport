@@ -62,10 +62,8 @@ import pandas as pd
 from gwtransport import gamma
 from gwtransport.advection_utils import (
     _extraction_to_infiltration_nonlinear_weights,
-    _extraction_to_infiltration_nonlinear_weights_exact,
     _extraction_to_infiltration_weights,
     _infiltration_to_extraction_nonlinear_weights,
-    _infiltration_to_extraction_nonlinear_weights_exact,
     _infiltration_to_extraction_weights,
 )
 from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
@@ -321,7 +319,6 @@ def gamma_infiltration_to_extraction(
     std: float | None = None,
     n_bins: int = 100,
     retardation_factor: float = 1.0,
-    nonlinear_method: str = "method_of_characteristics",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.
@@ -360,9 +357,6 @@ def gamma_infiltration_to_extraction(
         Number of bins to discretize the gamma distribution.
     retardation_factor : float
         Retardation factor of the compound in the aquifer.
-    nonlinear_method : str, optional
-        Method used for solving nonlinear sorption transport (default "method_of_characteristics").
-        Passed through to :func:`infiltration_to_extraction`. See that function for details.
 
     Returns
     -------
@@ -446,7 +440,6 @@ def gamma_infiltration_to_extraction(
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=bins["expected_values"],
         retardation_factor=retardation_factor,
-        nonlinear_method=nonlinear_method,
     )
 
 
@@ -462,7 +455,6 @@ def gamma_extraction_to_infiltration(
     std: float | None = None,
     n_bins: int = 100,
     retardation_factor: float | npt.ArrayLike = 1.0,
-    nonlinear_method: str = "method_of_characteristics",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
@@ -504,9 +496,6 @@ def gamma_extraction_to_infiltration(
         Retardation factor of the compound in the aquifer (default 1.0).
         Can be scalar for linear sorption or array for concentration-dependent
         nonlinear sorption. See :func:`extraction_to_infiltration` for details.
-    nonlinear_method : str, optional
-        Method used for solving nonlinear sorption transport (default "method_of_characteristics").
-        Passed through to :func:`extraction_to_infiltration`. See that function for details.
 
     Returns
     -------
@@ -583,7 +572,6 @@ def gamma_extraction_to_infiltration(
         cin_tedges=cin_tedges,
         aquifer_pore_volumes=bins["expected_values"],
         retardation_factor=retardation_factor,
-        nonlinear_method=nonlinear_method,
     )
 
 
@@ -595,7 +583,6 @@ def infiltration_to_extraction(
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
     retardation_factor: float | npt.ArrayLike = 1.0,
-    nonlinear_method: str = "method_of_characteristics",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the extracted water using flow-weighted advection.
@@ -626,18 +613,10 @@ def infiltration_to_extraction(
 
        **Implementation:**
 
-       Two methods are available via the ``nonlinear_method`` parameter:
-
-       - **method_of_characteristics** (default): Forward parcel tracking where each infiltrating
-         parcel travels with its own retardation factor R(C). When faster-moving high-C parcels
-         overtake slower low-C parcels, they mix at extraction through flow-weighted averaging.
-         Fast and robust, but introduces slight numerical diffusion at shocks.
-
-       - **exact_front_tracking**: Event-based algorithm that explicitly tracks which parcels are
-         co-active at each moment in time. Maintains sharp concentration fronts without numerical
-         diffusion. More accurate for sharp gradients but slightly more computationally expensive.
-
-       See the nonlinear sorption example below for a comparison of both methods.
+       Uses method of characteristics for forward parcel tracking where each infiltrating
+       parcel travels with its own retardation factor R(C). When faster-moving high-C parcels
+       overtake slower low-C parcels, they mix at extraction through flow-weighted averaging.
+       Fast and robust, but introduces slight numerical diffusion at shocks.
 
     Parameters
     ----------
@@ -665,19 +644,7 @@ def infiltration_to_extraction(
         - **Array**: Nonlinear sorption with concentration-dependent retardation.
           Must have length matching cin. Typically computed from Freundlich or
           Langmuir isotherms using :func:`gwtransport.residence_time.freundlich_retardation`.
-    nonlinear_method : str, optional
-        Method used for solving nonlinear sorption transport (default "method_of_characteristics").
-        Only applies when retardation_factor is an array (concentration-dependent).
-
-        - **"method_of_characteristics"**: Forward parcel tracking with flow-weighted mixing.
-          Each infiltrating parcel travels with its own retardation factor R(C).
-          Allows parcels to overlap and mixes them via flow-weighting. Fast and robust
-          but introduces some numerical diffusion at shocks.
-
-        - **"exact_front_tracking"**: Event-based front tracking algorithm. Explicitly
-          tracks which parcels are co-active at each moment, maintaining sharp fronts
-          without numerical diffusion. More accurate for sharp concentration gradients
-          and shocks, but slightly more computationally expensive.
+          Uses method of characteristics for forward parcel tracking with flow-weighted mixing.
 
     Returns
     -------
@@ -778,28 +745,16 @@ def infiltration_to_extraction(
     ...     bulk_density=1600.0,
     ...     porosity=0.35,
     ... )
-    >>> # Method of characteristics (default): faster, slight numerical diffusion at shocks
-    >>> cout_moc = infiltration_to_extraction(
+    >>> # Uses method of characteristics for nonlinear transport
+    >>> cout_nonlinear = infiltration_to_extraction(
     ...     cin=cin_nonlinear,
     ...     flow=flow,
     ...     tedges=tedges,
     ...     cout_tedges=cout_tedges,
     ...     aquifer_pore_volumes=aquifer_pore_volumes,
     ...     retardation_factor=R_freundlich,
-    ...     nonlinear_method="method_of_characteristics",  # Default
-    ... )
-    >>> # Exact front tracking: maintains sharp shocks, no diffusion
-    >>> cout_exact = infiltration_to_extraction(
-    ...     cin=cin_nonlinear,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volumes=aquifer_pore_volumes,
-    ...     retardation_factor=R_freundlich,
-    ...     nonlinear_method="exact_front_tracking",  # Sharp shocks
     ... )
     >>> # Result: asymmetric breakthrough (sharp front, long tail)
-    >>> # cout_exact has sharper concentration gradients than cout_moc
 
     Using single pore volume:
 
@@ -851,41 +806,22 @@ def infiltration_to_extraction(
         )
     else:
         # Nonlinear sorption: concentration-dependent retardation
+        # Uses method of characteristics
         retardation_factor = np.asarray(retardation_factor)
 
         if len(retardation_factor) != len(cin):
             msg = f"retardation_factor array must match cin length ({len(cin)}), got {len(retardation_factor)}"
             raise ValueError(msg)
 
-        # Validate nonlinear method
-        supported_methods = ["method_of_characteristics", "exact_front_tracking"]
-        if nonlinear_method not in supported_methods:
-            msg = f"nonlinear_method '{nonlinear_method}' not supported. Choose from: {supported_methods}"
-            raise ValueError(msg)
-
-        # Use nonlinear weights computation
-        if nonlinear_method == "method_of_characteristics":
-            normalized_weights = _infiltration_to_extraction_nonlinear_weights(
-                tedges=tedges,
-                cout_tedges=cout_tedges,
-                aquifer_pore_volumes=aquifer_pore_volumes,
-                cin=cin,
-                flow=flow,
-                retardation_factors=retardation_factor,
-            )
-        elif nonlinear_method == "exact_front_tracking":
-            normalized_weights = _infiltration_to_extraction_nonlinear_weights_exact(
-                tedges=tedges,
-                cout_tedges=cout_tedges,
-                aquifer_pore_volumes=aquifer_pore_volumes,
-                cin=cin,
-                flow=flow,
-                retardation_factors=retardation_factor,
-            )
-        else:
-            # Should never reach here due to validation above
-            msg = f"Method '{nonlinear_method}' is recognized but not yet implemented"
-            raise NotImplementedError(msg)
+        # Use method of characteristics for nonlinear weights computation
+        normalized_weights = _infiltration_to_extraction_nonlinear_weights(
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            cin=cin,
+            flow=flow,
+            retardation_factors=retardation_factor,
+        )
 
     # Apply to concentrations and handle NaN for periods with no contributions
     out = normalized_weights.dot(cin)
@@ -904,7 +840,6 @@ def extraction_to_infiltration(
     cin_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
     retardation_factor: float | npt.ArrayLike = 1.0,
-    nonlinear_method: str = "method_of_characteristics",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
@@ -974,19 +909,7 @@ def extraction_to_infiltration(
         - **Array**: Nonlinear sorption with concentration-dependent retardation.
           Must have length matching cout. For deconvolution, compute from cout using
           :func:`gwtransport.residence_time.freundlich_retardation` with cout as input.
-    nonlinear_method : str, optional
-        Method used for solving nonlinear sorption transport (default "method_of_characteristics").
-        Only applies when retardation_factor is an array (concentration-dependent).
-
-        - **"method_of_characteristics"**: Backward parcel tracking with flow-weighted mixing.
-          Each extraction parcel is tracked backward with retardation factor R(cout).
-          Recovers infiltration history from mixed extraction observations. Fast and robust
-          but introduces some numerical diffusion at shocks.
-
-        - **"exact_front_tracking"**: Event-based front tracking algorithm for backward direction.
-          Explicitly tracks which extraction parcels are co-active during backward propagation,
-          maintaining sharp fronts without numerical diffusion. More accurate for sharp
-          concentration gradients and shocks, but slightly more computationally expensive.
+          Uses backward method of characteristics for parcel tracking with flow-weighted mixing.
 
     Returns
     -------
@@ -1158,41 +1081,22 @@ def extraction_to_infiltration(
         )
     else:
         # Nonlinear sorption: concentration-dependent retardation
+        # Uses backward method of characteristics
         retardation_factor = np.asarray(retardation_factor)
 
         if len(retardation_factor) != len(cout):
             msg = f"retardation_factor array must match cout length ({len(cout)}), got {len(retardation_factor)}"
             raise ValueError(msg)
 
-        # Validate nonlinear method
-        supported_methods = ["method_of_characteristics", "exact_front_tracking"]
-        if nonlinear_method not in supported_methods:
-            msg = f"nonlinear_method '{nonlinear_method}' not supported. Choose from: {supported_methods}"
-            raise ValueError(msg)
-
-        # Use nonlinear weights computation
-        if nonlinear_method == "method_of_characteristics":
-            normalized_weights = _extraction_to_infiltration_nonlinear_weights(
-                tedges=tedges,
-                cin_tedges=cin_tedges,
-                aquifer_pore_volumes=aquifer_pore_volumes,
-                cout=cout,
-                flow=flow,
-                retardation_factors=retardation_factor,
-            )
-        elif nonlinear_method == "exact_front_tracking":
-            normalized_weights = _extraction_to_infiltration_nonlinear_weights_exact(
-                tedges=tedges,
-                cin_tedges=cin_tedges,
-                aquifer_pore_volumes=aquifer_pore_volumes,
-                cout=cout,
-                flow=flow,
-                retardation_factors=retardation_factor,
-            )
-        else:
-            # Should never reach here due to validation above
-            msg = f"Method '{nonlinear_method}' is recognized but not yet implemented"
-            raise NotImplementedError(msg)
+        # Use backward method of characteristics for nonlinear weights computation
+        normalized_weights = _extraction_to_infiltration_nonlinear_weights(
+            tedges=tedges,
+            cin_tedges=cin_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            cout=cout,
+            flow=flow,
+            retardation_factors=retardation_factor,
+        )
 
     # Apply to concentrations and handle NaN for periods with no contributions
     out = normalized_weights.dot(cout)
