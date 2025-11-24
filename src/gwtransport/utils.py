@@ -794,14 +794,13 @@ def get_soil_temperature(*, station_number: int = 260, interpolate_missing_value
     with requests.get(url, params={"download": "zip"}, timeout=10) as response:
         response.raise_for_status()
 
-    df = pd.read_csv(
+    df = pd.read_csv(  # type: ignore[call-overload]
         io.BytesIO(response.content),
         compression="zip",
         dtype=dtypes,
-        usecols=dtypes.keys(),
+        usecols=list(dtypes.keys()),
         skiprows=16,
         sep=",",
-        index_col=None,
         na_values=["     "],
         engine="c",
         parse_dates=False,
