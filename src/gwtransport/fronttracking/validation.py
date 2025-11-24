@@ -181,71 +181,62 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
 
     # Check 8: Exact mass balance using analytical integration
     # Uses: mass_in_domain(t) + mass_out_cumulative(t) = mass_in_cumulative(t)
-    try:
-        tracker_state = structure.get("tracker_state")
-        if tracker_state is not None and hasattr(tracker_state, "flow"):
-            # Use the end of the output time range for mass balance check
-            # This is the time at which we want to verify mass conservation
-            t_final_timestamp = cout_tedges[-1]
+    tracker_state = structure.get("tracker_state")
+    if tracker_state is not None and hasattr(tracker_state, "flow"):
+        # Use the end of the output time range for mass balance check
+        # This is the time at which we want to verify mass conservation
+        t_final_timestamp = cout_tedges[-1]
 
-            # Convert tedges from DatetimeIndex to float days for mass functions
-            tedges_in = tracker_state.tedges
-            tedges_days = (tedges_in - tedges_in[0]) / pd.Timedelta(days=1)
+        # Convert tedges from DatetimeIndex to float days for mass functions
+        tedges_in = tracker_state.tedges
+        tedges_days = (tedges_in - tedges_in[0]) / pd.Timedelta(days=1)
 
-            # Convert t_final from Timestamp to days from tedges[0]
-            t_final = (t_final_timestamp - tedges_in[0]) / pd.Timedelta(days=1)
+        # Convert t_final from Timestamp to days from tedges[0]
+        t_final = (t_final_timestamp - tedges_in[0]) / pd.Timedelta(days=1)
 
-            # Get simulation parameters
-            waves = structure["waves"]
-            v_outlet = tracker_state.v_outlet
-            sorption = tracker_state.sorption
-            flow = tracker_state.flow
+        # Get simulation parameters
+        waves = structure["waves"]
+        v_outlet = tracker_state.v_outlet
+        sorption = tracker_state.sorption
+        flow = tracker_state.flow
 
-            # Compute exact mass balance components
-            mass_in_domain = compute_domain_mass(t=t_final, v_outlet=v_outlet, waves=waves, sorption=sorption)
+        # Compute exact mass balance components
+        mass_in_domain = compute_domain_mass(t=t_final, v_outlet=v_outlet, waves=waves, sorption=sorption)
 
-            mass_in_cumulative = compute_cumulative_inlet_mass(t=t_final, cin=cin, flow=flow, tedges=tedges_days.values)
+        mass_in_cumulative = compute_cumulative_inlet_mass(t=t_final, cin=cin, flow=flow, tedges=tedges_days.values)
 
-            mass_out_cumulative = compute_cumulative_outlet_mass(
-                t=t_final, v_outlet=v_outlet, waves=waves, sorption=sorption, flow=flow, tedges=tedges_days.values
-            )
+        mass_out_cumulative = compute_cumulative_outlet_mass(
+            t=t_final, v_outlet=v_outlet, waves=waves, sorption=sorption, flow=flow, tedges=tedges_days.values
+        )
 
-            # Mass balance: mass_in_domain + mass_out = mass_in
-            mass_balance_error = (mass_in_domain + mass_out_cumulative) - mass_in_cumulative
+        # Mass balance: mass_in_domain + mass_out = mass_in
+        mass_balance_error = (mass_in_domain + mass_out_cumulative) - mass_in_cumulative
 
-            # Check relative error
-            if mass_in_cumulative > 0:
-                relative_error = abs(mass_balance_error) / mass_in_cumulative
-            else:
-                relative_error = abs(mass_balance_error)
-
-            check8_pass = relative_error <= rtol
-            checks.append({
-                "name": "Exact mass balance",
-                "passed": check8_pass,
-                "message": f"Relative error: {relative_error:.2e} (tolerance: {rtol:.2e})",
-            })
-            if not check8_pass:
-                failures.append(
-                    f"Mass balance violation: relative_error={relative_error:.2e} > {rtol:.2e} "
-                    f"(mass_in_domain={mass_in_domain:.6e}, mass_out={mass_out_cumulative:.6e}, "
-                    f"mass_in={mass_in_cumulative:.6e})"
-                )
+        # Check relative error
+        if mass_in_cumulative > 0:
+            relative_error = abs(mass_balance_error) / mass_in_cumulative
         else:
-            # Skip mass balance if tracker state not available
-            check8_pass = True
-            checks.append({
-                "name": "Exact mass balance",
-                "passed": True,
-                "message": "Skipped (tracker state not available)",
-            })
-    except (KeyError, AttributeError, ValueError, TypeError) as e:
-        # If mass balance computation fails, mark as passed but note the issue
+            relative_error = abs(mass_balance_error)
+
+        check8_pass = relative_error <= rtol
+        checks.append({
+            "name": "Exact mass balance",
+            "passed": check8_pass,
+            "message": f"Relative error: {relative_error:.2e} (tolerance: {rtol:.2e})",
+        })
+        if not check8_pass:
+            failures.append(
+                f"Mass balance violation: relative_error={relative_error:.2e} > {rtol:.2e} "
+                f"(mass_in_domain={mass_in_domain:.6e}, mass_out={mass_out_cumulative:.6e}, "
+                f"mass_in={mass_in_cumulative:.6e})"
+            )
+    else:
+        # Skip mass balance if tracker state not available
         check8_pass = True
         checks.append({
             "name": "Exact mass balance",
             "passed": True,
-            "message": f"Skipped (error: {e!s})",
+            "message": "Skipped (tracker state not available)",
         })
 
     # Compile results
