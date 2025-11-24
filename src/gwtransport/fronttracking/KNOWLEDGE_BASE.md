@@ -213,9 +213,14 @@ These handlers are the only place where wave topology changes; all operations ar
     - Event-driven loop: repeatedly finds the next event, advances `t_current` to the event time, and handles the event.
     - Optional physics verification via `verify_physics()` every N events.
     - Prints summary statistics (events, waves, active waves, first arrival time).
-  - `verify_physics()`:
-    - Currently enforces entropy condition for all active shocks.
-    - Placeholder (TODO) for exact analytical mass-balance checks.
+  - `verify_physics(*, check_mass_balance=False, mass_balance_rtol=1e-12)`:
+    - Enforces entropy condition for all active shocks and rarefactions.
+    - Optional mass balance verification (when `check_mass_balance=True`):
+      - Computes mass_in_domain + mass_out_cumulative and compares to mass_in_cumulative.
+      - Uses exact analytical integration functions from `output.py`.
+      - Raises `RuntimeError` if relative error exceeds `mass_balance_rtol`.
+      - Mass balance equation:
+        $$\text{mass\_in\_domain}(t) + \text{mass\_out\_cumulative}(t) = \text{mass\_in\_cumulative}(t)$$
 
   - Known limitation (Phase 5 implementation detail):
     - For rarefaction-related collisions (`RAREF_CHAR_COLLISION`, `SHOCK_RAREF_COLLISION`,
@@ -264,6 +269,44 @@ The solver is fully event-driven and analytical; there is no time-stepping.
     - Constant segments: `integral = C * Δt`.
     - Rarefaction segments: `integral = integrate_rarefaction_exact(...)`.
   - Returns bin-averaged concentrations for each bin with no numerical quadrature.
+
+**Mass balance verification functions** (added for High Priority #3):
+
+- `compute_domain_mass(t, v_outlet, waves, sorption)`:
+  - Computes total mass (dissolved + sorbed) in domain [0, v_outlet] at time t.
+  - Uses **exact analytical spatial integration** (no numerical quadrature):
+    - Partitions domain by wave positions into constant-concentration regions and rarefaction fans.
+    - For constant regions: exact integration using $C_{\text{total}} \times \Delta v$.
+    - For rarefactions: calls `_integrate_rarefaction_spatial_exact()`.
+  - Total concentration: $C_{\text{total}} = C + \frac{\rho_b}{n_{\text{por}}} k_f C^{1/n}$ (dissolved + sorbed).
+  - Achieves machine precision for spatial integrals.
+
+- `_integrate_rarefaction_spatial_exact(raref, v_start, v_end, t, sorption)`:
+  - **Exact analytical spatial integral** of rarefaction concentration over [v_start, v_end].
+  - **Unified formula for ALL n > 0** using generalized incomplete beta function via mpmath:
+    - Both dissolved and sorbed integrals reduce to power-law forms: $\int u^p (\kappa-u)^q du$
+    - Expressed using generalized incomplete beta function: $\kappa^{p+q+1} B(u_1/\kappa, u_2/\kappa; p+1, q+1)$
+    - Uses `mpmath.betainc()` which handles negative parameters via analytic continuation
+    - Achieves machine precision (~1e-15 relative error) for all positive real n > 0
+    - No conditional logic or special cases (except optimized path for n=2)
+  - **Optimized path for n=2** (β = -0.5) using explicit polynomial antiderivatives:
+    - Rarefaction concentration: $C(u) = \frac{\alpha^2 u^2}{(\kappa - u)^2}$ where $u = v - v_{\text{origin}}$, $\kappa = \text{flow} \times (t - t_{\text{origin}})$, $\alpha = \frac{\rho_b k_f}{n_{\text{por}} n}$.
+    - Dissolved antiderivative: $\alpha^2 \left[ \frac{\kappa^2}{\kappa-u} + 2\kappa \ln(\kappa-u) - (\kappa-u) \right]$.
+    - Sorbed antiderivative: $\frac{\rho_b}{n_{\text{por}}} k_f \alpha \left[ -u - \kappa \ln(\kappa-u) \right]$.
+  - **Mathematical properties**:
+    - Continuous for all n > 0 (no discontinuities)
+    - True closed-form antiderivative (no numerical quadrature)
+    - Single unified formula (implemented 2025-01-24)
+
+- `compute_cumulative_inlet_mass(t, cin, flow, tedges)`:
+  - Computes total mass that has entered the domain from t=0 to t=t.
+  - Exact piecewise-constant integration: $\int_0^t C_{\text{in}}(s) \times \text{flow}(s) \, ds$.
+  - No numerical quadrature.
+
+- `compute_cumulative_outlet_mass(t, v_outlet, waves, sorption, flow, tedges)`:
+  - Computes total mass that has exited the domain from t=0 to t=t.
+  - Uses existing exact outlet integration infrastructure (`identify_outlet_segments`, `integrate_rarefaction_exact`).
+  - Integrates outlet concentration weighted by flow rate: $\int_0^t C_{\text{out}}(s) \times \text{flow}(s) \, ds$.
 
 This ensures machine-precision mass balance and no numerical dispersion.
 

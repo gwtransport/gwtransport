@@ -42,6 +42,7 @@ classifiers = [
 dependencies = [
   "ipykernel>=4.0.1",
   "matplotlib>=3.8.4",
+  "mpmath>=1.3.0",
   "numpy>=2.0.0",
   "pandas>=2.2.2",
   "requests>=2.19.0",

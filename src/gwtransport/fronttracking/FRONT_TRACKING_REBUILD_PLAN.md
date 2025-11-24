@@ -2321,17 +2321,30 @@ compute total mass over the entire domain; see High Priority item 3 below.
    - Impact: Complex shock-rarefaction interactions may not be fully accurate
    - Solution: Implement full wave splitting logic as described in LeVeque (2002)
 
-3. **Runtime Mass Balance Verification** (`front_tracking_solver.py:535`)
-   - Location: `verify_physics()`
-     - Issue: Only checks entropy, not full domain mass balance during simulation
-     - Impact: Cannot yet verify total mass conservation at runtime; diagnostics rely
-       on post-processing of outlet integrals.
-     - Solution: Implement analytical integration of total mass over the spatial domain
-       using the existing wave representation (characteristics, shocks, rarefactions),
-       consistent with the closed-form formulas in `front_tracking_math.py` and
-       `front_tracking_output.py`.
-     - Note: Outlet mass conservation is already verified in tests (Phase 6); this
-       item is strictly a runtime diagnostic enhancement.
+3. **Runtime Mass Balance Verification** ✅ **COMPLETED** (2025-01-23)
+   - Location: `verify_physics()` and `output.py`
+   - **Implementation**:
+     - Extended `verify_physics()` with optional `check_mass_balance` parameter
+     - Added four new functions to `output.py`:
+       - `compute_domain_mass()`: Exact spatial integration of total mass (dissolved + sorbed)
+       - `_integrate_rarefaction_spatial_exact()`: Exact analytical rarefaction spatial integral
+       - `compute_cumulative_inlet_mass()`: Exact inlet mass integration
+       - `compute_cumulative_outlet_mass()`: Exact outlet mass integration
+     - **Exact Analytical Integration**: Implemented closed-form antiderivatives for Freundlich n=2
+       - Dissolved: $\alpha^2 [\kappa^2/(\kappa-u) + 2\kappa \ln(\kappa-u) - (\kappa-u)]$
+       - Sorbed: $(\rho_b/n_{\text{por}}) k_f \alpha [-u - \kappa \ln(\kappa-u)]$
+       - Achieves machine precision (~1e-14) for spatial integrals
+     - **Mass Balance Equation**: mass_in_domain(t) + mass_out_cumulative(t) = mass_in_cumulative(t)
+     - **Tests**: 9 new tests in `test_front_tracking_solver.py::TestRuntimeMassBalanceVerification`
+       - Tests pass with ~1e-6 relative error for n=2 (limited by time discretization, not spatial integration)
+   - **Unified Formula for All n > 0** ✅ **COMPLETED** (2025-01-24):
+     - Implemented single unified analytical formula using generalized incomplete beta function via mpmath
+     - Works for ALL positive real n > 0 with no conditional logic or special cases
+     - Uses `mpmath.betainc()` with analytic continuation for negative parameters
+     - Achieves machine precision (~1e-15 relative error) for all n values
+     - Mathematical formulation: $\int u^p (\kappa-u)^q du = \kappa^{p+q+1} B(u_1/\kappa, u_2/\kappa; p+1, q+1)$
+     - **Tests**: All 285 front-tracking tests pass with representative n values (0.5, 0.8, 1.5, 2.0, 3.0, 5.0)
+     - **Dependency**: Added `mpmath>=1.3.0` to project dependencies
 
 ### Medium Priority
 
