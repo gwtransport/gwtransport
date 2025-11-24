@@ -79,9 +79,7 @@ def plot_vt_diagram(
         t_max = (state.tedges[-1] - state.tedges[0]) / pd.Timedelta(days=1)
 
     if ax is None:
-        fig, ax = plt.subplots(figsize=figsize)
-    else:
-        fig = ax.figure
+        _, ax = plt.subplots(figsize=figsize)
 
     # Plot characteristics (blue lines)
     for wave in state.waves:
@@ -318,8 +316,7 @@ def plot_vt_diagram(
     ax.set_xlim(0, t_max)
     ax.set_ylim(-state.v_outlet * 0.05, state.v_outlet * 1.05)
 
-    fig.tight_layout()
-    return fig
+    return ax
 
 
 def plot_breakthrough_curve(
@@ -378,9 +375,7 @@ def plot_breakthrough_curve(
     >>> fig.savefig("exact_breakthrough.png")
     """
     if ax is None:
-        fig, ax = plt.subplots(figsize=figsize)
-    else:
-        fig = ax.figure
+        _, ax = plt.subplots(figsize=figsize)
 
     if t_max is None:
         # Default to input data time range instead of simulation end time
@@ -449,8 +444,7 @@ def plot_breakthrough_curve(
     ax.set_xlim(0, t_max)
     ax.set_ylim(bottom=0)
 
-    fig.tight_layout()
-    return fig
+    return ax
 
 
 def plot_wave_interactions(
@@ -494,9 +488,7 @@ def plot_wave_interactions(
     >>> fig.savefig("wave_interactions.png")
     """
     if ax is None:
-        fig, ax = plt.subplots(figsize=figsize)
-    else:
-        fig = ax.figure
+        _, ax = plt.subplots(figsize=figsize)
 
     # Group events by type
     event_types = {}
@@ -553,8 +545,7 @@ def plot_wave_interactions(
         ax.set_xlim(left=0)
         ax.set_ylim(-state.v_outlet * 0.05, state.v_outlet * 1.05)
 
-    fig.tight_layout()
-    return fig
+    return ax
 
 
 def plot_inlet_concentration(
@@ -610,9 +601,7 @@ def plot_inlet_concentration(
         Axes object.
     """
     if ax is None:
-        fig, ax = plt.subplots(figsize=figsize)
-    else:
-        fig = ax.figure
+        _, ax = plt.subplots(figsize=figsize)
 
     # Convert dates to days from start
     dates_array = dates.to_numpy() if hasattr(dates, "to_numpy") else np.array(dates)
@@ -662,7 +651,7 @@ def plot_inlet_concentration(
     else:
         ax.set_xlim(0, t_days[-1])
 
-    return fig, ax
+    return ax
 
 
 def plot_front_tracking_summary(
@@ -833,8 +822,7 @@ def plot_front_tracking_summary(
     if title is not None:
         plt.suptitle(title, fontsize=14, fontweight="bold", y=0.995)
 
-    plt.tight_layout()
-    return fig, axes
+    return fig
 
 
 def plot_comparison_favorable_unfavorable(
@@ -976,7 +964,6 @@ def plot_comparison_favorable_unfavorable(
     ax_unfav_outlet.grid(True, alpha=0.3)
     ax_unfav_outlet.set_xlim(0, t_max_unfavorable)
 
-    plt.tight_layout()
     return fig, axes
 
 
@@ -1186,5 +1173,4 @@ def plot_sorption_comparison(
         fontsize=8,
     )
 
-    plt.tight_layout()
     return fig, axes
