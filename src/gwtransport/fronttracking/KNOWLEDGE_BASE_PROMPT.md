@@ -20,6 +20,7 @@ context and hard constraints before describing a concrete task.
 > implementation, modules, algorithms, and invariants.
 >
 > Please:
+>
 > 1. Load and interpret the information in
 >    `src/gwtransport/fronttracking/KNOWLEDGE_BASE.md` as the high-level
 >    specification of how front tracking is implemented in:
@@ -70,6 +71,7 @@ context and hard constraints before describing a concrete task.
 > **High Priority #3 from `FRONT_TRACKING_REBUILD_PLAN.md` - FULLY COMPLETED**:
 >
 > ### Phase 1: Runtime Mass Balance Verification (Completed 2025-01-23)
+>
 > - Added `compute_domain_mass()`, `compute_cumulative_inlet_mass()`, and
 >   `compute_cumulative_outlet_mass()` to `output.py`
 > - Extended `verify_physics()` with optional mass balance checking
@@ -80,6 +82,7 @@ context and hard constraints before describing a concrete task.
 >   not spatial integration which achieves machine precision)
 >
 > ### Phase 2: Unified Formula for All n > 0 (Completed 2025-01-24) ✅
+>
 > - **Derived and implemented ONE unified analytical formula** using generalized
 >   incomplete beta function via mpmath
 > - Works for **ALL positive real n > 0** with no conditional logic or special cases
@@ -100,14 +103,15 @@ context and hard constraints before describing a concrete task.
 >
 > **NOTE**: The above task has been completed. This template is preserved for
 > reference and can be adapted for future tasks.
+
 ---
 
 ## How to use this prompt
 
 1. Open a new AI assistant session in your editor.
 2. Paste the contents of this file (and optionally `KNOWLEDGE_BASE.md`) into
-	the chat.
+   the chat.
 3. Replace the placeholder task description at the end with your concrete,
-	narrowly scoped task.
+   narrowly scoped task.
 4. Let the assistant read `KNOWLEDGE_BASE.md` (and other referenced source
-	files) from the repo and proceed under the constraints described above.
+   files) from the repo and proceed under the constraints described above.

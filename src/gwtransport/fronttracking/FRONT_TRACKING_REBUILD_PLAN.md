@@ -12,6 +12,7 @@
 ### Completed
 
 - ✅ Phase 1.1-1.4: Core Mathematical Foundation (front_tracking_math.py)
+
   - FreundlichSorption class with all methods
   - ConstantRetardation class
   - Characteristic velocity functions
@@ -20,6 +21,7 @@
   - Complete coverage for both n>1 (favorable) and n<1 (unfavorable) sorption regimes
 
 - ✅ Phase 2.1-2.4: Wave Representation (front_tracking_waves.py)
+
   - Abstract Wave base class with position and concentration methods
   - CharacteristicWave class for smooth regions
   - ShockWave class with Rankine-Hugoniot condition
@@ -27,31 +29,34 @@
   - **All 33 unit tests passing**
 
 - ✅ Phase 3.1-3.2: Event Detection (front_tracking_events.py)
-    - Event and EventType dataclasses
-    - find_characteristic_intersection (exact analytical)
-    - find_shock_shock_intersection (exact analytical)
-    - find_shock_characteristic_intersection (exact analytical)
-    - find_rarefaction_boundary_intersections (head/tail detection, including rarefaction–rarefaction)
-    - find_outlet_crossing (for all wave types)
-    - **All 59 unit tests passing** with machine precision (rtol=1e-14)
-    - Complete coverage for both n>1 (favorable) and n<1 (unfavorable) sorption regimes
-    - Enhanced test suite includes:
-        - TestShockVelocityAndEntropy: tests verifying shock velocity ordering and entropy conditions
-        - TestRarefactionRarefactionIntersections: comprehensive rarefaction fan interaction tests
-        - All tests use exact comparisons (no physics tolerances)
+
+  - Event and EventType dataclasses
+  - find_characteristic_intersection (exact analytical)
+  - find_shock_shock_intersection (exact analytical)
+  - find_shock_characteristic_intersection (exact analytical)
+  - find_rarefaction_boundary_intersections (head/tail detection, including rarefaction–rarefaction)
+  - find_outlet_crossing (for all wave types)
+  - **All 59 unit tests passing** with machine precision (rtol=1e-14)
+  - Complete coverage for both n>1 (favorable) and n<1 (unfavorable) sorption regimes
+  - Enhanced test suite includes:
+    - TestShockVelocityAndEntropy: tests verifying shock velocity ordering and entropy conditions
+    - TestRarefactionRarefactionIntersections: comprehensive rarefaction fan interaction tests
+    - All tests use exact comparisons (no physics tolerances)
 
 - ✅ Phase 4.1-4.2: Wave Interactions (front_tracking_handlers.py)
-    - handle_characteristic_collision: creates entropic shocks
-    - handle_shock_collision: merges shocks with proper entropy
-    - handle_shock_characteristic_collision: absorbs characteristics
-    - handle_shock_rarefaction_collision: complex interactions, including shock–rarefaction wave splitting
-    - handle_rarefaction_characteristic_collision: boundary interactions
-    - handle_rarefaction_rarefaction_collision: rarefaction–rarefaction interactions via boundary tracking
-    - handle_outlet_crossing: records exit events
-    - create_inlet_waves_at_time: inlet boundary condition handler
-    - **All 22 unit tests passing** with entropy verification and rarefaction interaction coverage
+
+  - handle_characteristic_collision: creates entropic shocks
+  - handle_shock_collision: merges shocks with proper entropy
+  - handle_shock_characteristic_collision: absorbs characteristics
+  - handle_shock_rarefaction_collision: complex interactions, including shock–rarefaction wave splitting
+  - handle_rarefaction_characteristic_collision: boundary interactions
+  - handle_rarefaction_rarefaction_collision: rarefaction–rarefaction interactions via boundary tracking
+  - handle_outlet_crossing: records exit events
+  - create_inlet_waves_at_time: inlet boundary condition handler
+  - **All 22 unit tests passing** with entropy verification and rarefaction interaction coverage
 
 - ✅ Phase 5.1-5.2: Front Tracker (front_tracking_solver.py)
+
   - FrontTrackerState: Complete simulation state management
   - FrontTracker class: Main event-driven solver
   - find_next_event(): Searches all wave interactions with exact analytical detection
@@ -62,6 +67,7 @@
   - **All 21 unit tests passing** with edge case handling
 
 - ✅ Phase 6.1-6.3: Concentration Extraction (front_tracking_output.py)
+
   - concentration_at_point(): Exact point-wise concentration computation
   - compute_breakthrough_curve(): Concentration at outlet over time
   - identify_outlet_segments(): Wave segment identification for integration
@@ -71,26 +77,28 @@
     - **Total: 161 tests passing** (39 + 33 + 20 + 22 + 21 + 23 + early integration tests)
 
 - ✅ Phase 7.1-7.2: API Integration (advection.py)
-    - infiltration_to_extraction_front_tracking(): Public API function
-        - Integrates Phase 1-6 modules (FreundlichSorption, FrontTracker, compute_bin_averaged_concentration_exact)
-        - Supports both Freundlich sorption and constant retardation via retardation_factor parameter
-        - Returns bin-averaged concentrations with machine precision
-        - Comprehensive docstring with examples and notes on spin-up period
-    - infiltration_to_extraction_front_tracking_detailed(): Detailed output function
-        - Returns both concentrations and complete diagnostic structure
-        - Structure includes: waves, events, t_first_arrival, n_events, n_shocks, n_rarefactions, n_characteristics, final_time, sorption, tracker_state
-        - Enables detailed analysis of wave dynamics and event history
-    - API tests in tests/src/test_front_tracking_api.py:
-        - Basic smoke tests for Freundlich and constant-retardation modes
-        - Zero-input test (cin = 0 ⇒ cout = 0)
-        - Parameter validation via pytest.raises
-        - Detailed diagnostics consistency (wave counts and sorption type)
-        - Spin-up verification: t_first_arrival matches compute_first_front_arrival_time and cout is zero before first arrival
-    - **All Phase 7 API tests passing** (test_front_tracking_api.py)
-    - **Total: 166 tests passing** (161 from Phases 1-6 + 5 from Phase 7)
+
+  - infiltration_to_extraction_front_tracking(): Public API function
+    - Integrates Phase 1-6 modules (FreundlichSorption, FrontTracker, compute_bin_averaged_concentration_exact)
+    - Supports both Freundlich sorption and constant retardation via retardation_factor parameter
+    - Returns bin-averaged concentrations with machine precision
+    - Comprehensive docstring with examples and notes on spin-up period
+  - infiltration_to_extraction_front_tracking_detailed(): Detailed output function
+    - Returns both concentrations and complete diagnostic structure
+    - Structure includes: waves, events, t_first_arrival, n_events, n_shocks, n_rarefactions, n_characteristics, final_time, sorption, tracker_state
+    - Enables detailed analysis of wave dynamics and event history
+  - API tests in tests/src/test_front_tracking_api.py:
+    - Basic smoke tests for Freundlich and constant-retardation modes
+    - Zero-input test (cin = 0 ⇒ cout = 0)
+    - Parameter validation via pytest.raises
+    - Detailed diagnostics consistency (wave counts and sorption type)
+    - Spin-up verification: t_first_arrival matches compute_first_front_arrival_time and cout is zero before first arrival
+  - **All Phase 7 API tests passing** (test_front_tracking_api.py)
+  - **Total: 166 tests passing** (161 from Phases 1-6 + 5 from Phase 7)
   - Removed old implementation tests (test_advection_front_tracking.py, test_front_tracking.py)
 
 - ✅ Phase 8: Integration Testing & Validation (test_front_tracking_phase8.py)
+
   - TestWaveCreation: Verify correct wave type creation for n>1
     - Step increase (compression) → shock formation
     - Step decrease (expansion) → rarefaction formation
@@ -2310,12 +2318,14 @@ compute total mass over the entire domain; see High Priority item 3 below.
 ### High Priority
 
 1. **Rarefaction Creation from Invalid Shock** (`front_tracking_handlers.py:264`)
+
    - Location: `handle_shock_characteristic_collision()`
    - Issue: When entropy violated, waves just disappear instead of creating rarefaction
    - Impact: Mass balance may not be preserved in some edge cases
    - Solution: Detect compression-to-rarefaction transitions and create appropriate waves
 
 2. **Full Shock-Rarefaction Wave Splitting** (`front_tracking_handlers.py:318`)
+
    - Location: `handle_shock_rarefaction_collision()`
    - Issue: Simplified implementation without wave splitting
    - Impact: Complex shock-rarefaction interactions may not be fully accurate
@@ -2349,6 +2359,7 @@ compute total mass over the entire domain; see High Priority item 3 below.
 ### Medium Priority
 
 4. **Rarefaction Boundary Type in Events** (`front_tracking_solver.py:396, 405`)
+
    - Location: `handle_event()` dispatcher
    - Issue: Hardcoded "head" and "tail" instead of extracting from event
    - Impact: May handle wrong boundary in some cases
@@ -2363,6 +2374,7 @@ compute total mass over the entire domain; see High Priority item 3 below.
 ### Low Priority
 
 6. **Adaptive Time Stepping**
+
    - Status: Uses event-driven (exact) time stepping
    - Impact: Many events may slow down simulation
    - Solution: Consider adaptive refinement for dense event regions (post-Phase 8)

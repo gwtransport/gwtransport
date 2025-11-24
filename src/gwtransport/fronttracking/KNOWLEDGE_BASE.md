@@ -34,9 +34,9 @@ All 9 phases in `FRONT_TRACKING_REBUILD_PLAN.md` are implemented and passing tes
 - `FreundlichSorption`
   - Parameters: `k_f`, `n`, `bulk_density`, `porosity`
   - Methods:
-    - `retardation(c)`: 
+    - `retardation(c)`:
       $R(C) = 1 + \frac{\rho_b k_f}{n_{\text{por}} n} C^{(1/n) - 1}$
-    - `total_concentration(c)`: 
+    - `total_concentration(c)`:
       $C_\text{total} = C + \frac{\rho_b}{n_{\text{por}}} k_f C^{1/n}$
     - `concentration_from_retardation(r)`: exact analytic inverse of `retardation`.
     - `shock_velocity(c_left, c_right, flow)`: Rankine–Hugoniot,
@@ -50,7 +50,7 @@ All 9 phases in `FRONT_TRACKING_REBUILD_PLAN.md` are implemented and passing tes
   - `characteristic_position(c, flow, sorption, t_start, v_start, t)`.
 - Rarefaction math:
   - `rarefaction_concentration_at_point(v, t, v_origin, t_origin, flow, sorption)`
-    - Uses self-similar relation: 
+    - Uses self-similar relation:
       $$R(C) = \frac{\text{flow} (t - t_0)}{v - v_0}$$
       then analytic inverse via sorption model.
   - `integrate_rarefaction_exact(raref, v_outlet, t_start, t_end, sorption)`
@@ -84,6 +84,7 @@ Common base:
 Specific wave types:
 
 - `CharacteristicWave(Wave)`
+
   - Fields: `concentration`, `sorption`.
   - `velocity() = flow / R(concentration)`.
   - `position_at_time(t)`: linear motion if `t >= t_start` and `is_active`.
@@ -91,6 +92,7 @@ Specific wave types:
   - `concentration_at_point(v, t)`: returns `concentration` when this characteristic controls `(v, t)`.
 
 - `ShockWave(Wave)`
+
   - Fields: `c_left`, `c_right`, `sorption`, `velocity` (computed in `__post_init__`).
   - `velocity`: computed via `sorption.shock_velocity` (Rankine–Hugoniot).
   - `position_at_time(t)`: linear motion if active.
@@ -105,7 +107,7 @@ Specific wave types:
   - `head_position_at_time(t)`, `tail_position_at_time(t)`.
   - `contains_point(v, t)`: tests if `(v, t)` lies between head and tail.
   - `concentration_at_point(v, t)`:
-    - Uses self-similar solution 
+    - Uses self-similar solution
       $$R(C) = \frac{\text{flow}(t - t_0)}{v - v_0}$$
       and analytic inversion via sorption.
     - Enforces `c` within `[min(c_tail, c_head), max(c_tail, c_head)]`.
@@ -188,6 +190,7 @@ These handlers are the only place where wave topology changes; all operations ar
 **Core structures**
 
 - `FrontTrackerState`
+
   - `waves`: all waves (active and inactive).
   - `events`: list of event dicts (time, type, waves_before/after, etc.).
   - `t_current`: current simulation time.
@@ -196,6 +199,7 @@ These handlers are the only place where wave topology changes; all operations ar
   - Inlet data: `cin`, `flow`, `tedges`.
 
 - `FrontTracker`
+
   - `__init__(cin, flow, tedges, aquifer_pore_volume, sorption)`:
     - Validates shapes, positivity, and consistency of inputs.
     - Sets `v_outlet = aquifer_pore_volume`.
@@ -214,6 +218,7 @@ These handlers are the only place where wave topology changes; all operations ar
     - Optional physics verification via `verify_physics()` every N events.
     - Prints summary statistics (events, waves, active waves, first arrival time).
   - `verify_physics(*, check_mass_balance=False, mass_balance_rtol=1e-12)`:
+
     - Enforces entropy condition for all active shocks and rarefactions.
     - Optional mass balance verification (when `check_mass_balance=True`):
       - Computes mass_in_domain + mass_out_cumulative and compares to mass_in_cumulative.
@@ -240,6 +245,7 @@ The solver is fully event-driven and analytical; there is no time-stepping.
 ### 2.6 `output.py` (Phase 6 – concentration extraction)
 
 - `concentration_at_point(v, t, waves, sorption)`:
+
   - Exact concentration $C(v, t)$ based on the wave set.
   - Priority:
     1. Rarefactions (if point is inside rarefaction fan; use rarefaction self-similar solution).
@@ -252,9 +258,11 @@ The solver is fully event-driven and analytical; there is no time-stepping.
   - **Critical fix (2025-01-18)**: Rarefaction tails now properly establish final plateaus after passing a point. Previously, after a rarefaction tail passed, the code incorrectly reverted to an earlier characteristic's concentration.
 
 - `compute_breakthrough_curve(t_array, v_outlet, waves, sorption)`:
+
   - Evaluates `concentration_at_point(v_outlet, t, ...)` for each `t` in `t_array`.
 
 - `identify_outlet_segments(t_start, t_end, v_outlet, waves)`:
+
   - Decomposes `[t_start, t_end]` into segments where the outlet concentration is controlled by a single wave or wave type.
   - Returns a list of segments with:
     - `t_start`, `t_end`.
@@ -262,6 +270,7 @@ The solver is fully event-driven and analytical; there is no time-stepping.
     - `concentration` (for constant segments) or `wave` reference.
 
 - `integrate_rarefaction_exact(raref, v_outlet, t_start, t_end, sorption)`:
+
   - Computes exact integral of rarefaction-controlled concentration at the outlet.
 
 - `compute_bin_averaged_concentration_exact(t_edges, v_outlet, waves, sorption)`:
@@ -273,6 +282,7 @@ The solver is fully event-driven and analytical; there is no time-stepping.
 **Mass balance verification functions** (added for High Priority #3):
 
 - `compute_domain_mass(t, v_outlet, waves, sorption)`:
+
   - Computes total mass (dissolved + sorbed) in domain [0, v_outlet] at time t.
   - Uses **exact analytical spatial integration** (no numerical quadrature):
     - Partitions domain by wave positions into constant-concentration regions and rarefaction fans.
@@ -282,6 +292,7 @@ The solver is fully event-driven and analytical; there is no time-stepping.
   - Achieves machine precision for spatial integrals.
 
 - `_integrate_rarefaction_spatial_exact(raref, v_start, v_end, t, sorption)`:
+
   - **Exact analytical spatial integral** of rarefaction concentration over [v_start, v_end].
   - **Unified formula for ALL n > 0** using generalized incomplete beta function via mpmath:
     - Both dissolved and sorbed integrals reduce to power-law forms: $\int u^p (\kappa-u)^q du$
@@ -299,6 +310,7 @@ The solver is fully event-driven and analytical; there is no time-stepping.
     - Single unified formula (implemented 2025-01-24)
 
 - `compute_cumulative_inlet_mass(t, cin, flow, tedges)`:
+
   - Computes total mass that has entered the domain from t=0 to t=t.
   - Exact piecewise-constant integration: $\int_0^t C_{\text{in}}(s) \times \text{flow}(s) \, ds$.
   - No numerical quadrature.
@@ -326,6 +338,7 @@ This ensures machine-precision mass balance and no numerical dispersion.
 ### 2.8 Public API in `advection.py` (Phase 7)
 
 - `infiltration_to_extraction_front_tracking(...)`
+
   - Keyword-only parameters:
     - `cin`, `flow`, `tedges`, `cout_tedges`, `aquifer_pore_volume`.
     - Freundlich parameters: `freundlich_k`, `freundlich_n`, `bulk_density`, `porosity`.
