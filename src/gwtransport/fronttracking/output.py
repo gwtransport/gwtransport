@@ -291,12 +291,36 @@ def identify_outlet_segments(
     # Find all waves that cross outlet in this time range
     outlet_events = []
 
+    # Track rarefactions that already contain the outlet at t_start
+    # These need to be handled separately since they don't generate crossing events
+    active_rarefactions_at_start = []
+
     for wave in waves:
         if not wave.is_active:
             continue
 
         # For rarefactions, detect both head and tail crossings
         if isinstance(wave, RarefactionWave):
+            # Check if outlet is already inside this rarefaction at t_start
+            if wave.contains_point(v_outlet, t_start):
+                active_rarefactions_at_start.append(wave)
+                # Don't add crossing events for this wave since we're already inside it
+                # But we still need to detect when the tail crosses during [t_start, t_end]
+                v_tail = wave.tail_position_at_time(t_start)
+                if v_tail is not None and v_tail < v_outlet:
+                    vel_tail = wave.tail_velocity()
+                    if vel_tail > 0:
+                        dt = (v_outlet - v_tail) / vel_tail
+                        t_cross = t_start + dt
+                        if t_start < t_cross <= t_end:
+                            outlet_events.append({
+                                "time": t_cross,
+                                "wave": wave,
+                                "boundary": "tail",
+                                "c_after": wave.c_tail,
+                            })
+                continue
+
             # Head crossing
             v_head = wave.head_position_at_time(t_start)
             if v_head is not None and v_head < v_outlet:
@@ -348,6 +372,40 @@ def identify_outlet_segments(
     segments = []
     current_t = t_start
     current_c = concentration_at_point(v_outlet, t_start, waves, sorption)
+
+    # Handle case where we start inside a rarefaction
+    if active_rarefactions_at_start:
+        # Should only be one rarefaction containing the outlet at t_start
+        raref = active_rarefactions_at_start[0]
+
+        # Find when tail crosses (if it does)
+        tail_cross_time = None
+        for event in outlet_events:
+            if event["wave"] is raref and event["boundary"] == "tail" and event["time"] > t_start:
+                tail_cross_time = event["time"]
+                break
+
+        # Create rarefaction segment from t_start
+        raref_end = min(tail_cross_time or t_end, t_end)
+
+        c_start = concentration_at_point(v_outlet, t_start, waves, sorption)
+        c_end = None
+        if tail_cross_time and tail_cross_time <= t_end:
+            c_end = raref.c_tail
+
+        segments.append({
+            "t_start": t_start,
+            "t_end": raref_end,
+            "type": "rarefaction",
+            "wave": raref,
+            "c_start": c_start,
+            "c_end": c_end,
+        })
+
+        current_t = raref_end
+        current_c = (
+            concentration_at_point(v_outlet, raref_end + 1e-10, waves, sorption) if raref_end < t_end else current_c
+        )
 
     for event in outlet_events:
         # Check if we're entering a rarefaction fan
