@@ -376,7 +376,7 @@ def _infiltration_to_extraction_weights(
     aquifer_pore_volumes: npt.NDArray[np.floating],
     cin: npt.NDArray[np.floating],
     flow: npt.NDArray[np.floating],
-    retardation_factor: float | npt.ArrayLike,
+    retardation_factor: float,
 ) -> npt.NDArray[np.floating]:
     """
     Compute normalized weights for linear infiltration to extraction transformation.

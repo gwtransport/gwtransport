@@ -336,11 +336,12 @@ class DependencyTester:
                 logger.info("Creating virtual environment with Python %s using uv at %s", self.python_version, uv_path)
                 subprocess.run(
                     [uv_path, "venv", str(venv_path), "--python", self.python_version],
-                    cwd=self.project_root,
+                    cwd=str(self.project_root),
                     check=True,
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
-                )
+                )  # type: ignore[no-matching-overload]
 
                 # Install package with specific dependency version
                 logger.info("Installing package with %s==%s", package, version)

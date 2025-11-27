@@ -141,6 +141,11 @@ def linear_interpolate(
     --------
     interp_series : Interpolate pandas Series with datetime index
     """
+    # Convert inputs to arrays
+    x_ref = np.asarray(x_ref)
+    y_ref = np.asarray(y_ref)
+    x_query = np.asarray(x_query)
+
     # Sort reference data to ensure monotonic ordering
     sort_idx = np.argsort(x_ref)
     x_ref_sorted = x_ref[sort_idx]
@@ -192,6 +197,9 @@ def diff(*, a: npt.ArrayLike, alignment: str = "centered") -> npt.NDArray[np.flo
     numpy.ndarray
         Array with differences between elements.
     """
+    # Convert input to array
+    a = np.asarray(a)
+
     if alignment == "centered":
         mid = a[:-1] + (a[1:] - a[:-1]) / 2
         return np.concatenate((a[[1]] - a[[0]], mid[1:] - mid[:-1], a[[-1]] - a[[-2]]))

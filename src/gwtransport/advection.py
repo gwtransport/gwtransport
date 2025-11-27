@@ -796,13 +796,14 @@ def infiltration_to_extraction(
     if is_linear:
         # Linear sorption: constant retardation
         # Compute normalized weights (includes all pre-computation)
+        retardation_factor_float: float = float(retardation_factor)
         normalized_weights = _infiltration_to_extraction_weights(
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             cin=cin,
             flow=flow,
-            retardation_factor=retardation_factor,
+            retardation_factor=retardation_factor_float,
         )
     else:
         # Nonlinear sorption: concentration-dependent retardation
@@ -1071,13 +1072,14 @@ def extraction_to_infiltration(
     if is_linear:
         # Linear sorption: constant retardation
         # Compute normalized weights (includes all pre-computation)
+        retardation_factor_float: float = float(retardation_factor)
         normalized_weights = _extraction_to_infiltration_weights(
             tedges=tedges,
             cin_tedges=cin_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             cout=cout,
             flow=flow,
-            retardation_factor=retardation_factor,
+            retardation_factor=retardation_factor_float,
         )
     else:
         # Nonlinear sorption: concentration-dependent retardation
