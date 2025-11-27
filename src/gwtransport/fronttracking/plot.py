@@ -549,7 +549,7 @@ def plot_wave_interactions(
 
 
 def plot_inlet_concentration(
-    dates,
+    tedges,
     cin,
     ax=None,
     *,
@@ -568,10 +568,12 @@ def plot_inlet_concentration(
 
     Parameters
     ----------
-    dates : pd.DatetimeIndex or array-like
-        Time points for concentration values.
+    tedges : pd.DatetimeIndex
+        Time bin edges for inlet concentration.
+        Length = len(cin) + 1.
     cin : array-like
         Inlet concentration values.
+        Length = len(tedges) - 1.
     ax : matplotlib.axes.Axes, optional
         Existing axes to plot into. If None, creates new figure.
     t_first_arrival : float, optional
@@ -591,7 +593,7 @@ def plot_inlet_concentration(
     figsize : tuple, optional
         Figure size if creating new figure. Default (8, 5).
     **step_kwargs
-        Additional arguments passed to ax.step().
+        Additional arguments passed to ax.plot().
 
     Returns
     -------
@@ -603,13 +605,14 @@ def plot_inlet_concentration(
     if ax is None:
         _, ax = plt.subplots(figsize=figsize)
 
-    # Convert dates to days from start
-    dates_array = dates.to_numpy() if hasattr(dates, "to_numpy") else np.array(dates)
+    # Convert tedges to days from start
+    tedges_array = tedges.to_numpy() if hasattr(tedges, "to_numpy") else np.array(tedges)
 
-    t_days = (dates_array - dates_array[0]) / pd.Timedelta(days=1)
+    t_days = (tedges_array - tedges_array[0]) / pd.Timedelta(days=1)
 
-    # Plot inlet concentration
-    ax.step(t_days, cin, where="post", linewidth=2, color=color, label="Inlet", **step_kwargs)
+    # Plot inlet concentration using repeat pattern for step function
+    x_plot, y_plot = np.repeat(t_days, 2)[1:-1], np.repeat(cin, 2)
+    ax.plot(x_plot, y_plot, linewidth=2, color=color, label="Inlet", **step_kwargs)
 
     # Add first arrival marker if provided
     if t_first_arrival is not None and np.isfinite(t_first_arrival):
@@ -656,7 +659,7 @@ def plot_inlet_concentration(
 
 def plot_front_tracking_summary(
     structure,
-    dates,
+    tedges,
     cin,
     cout_tedges,
     cout,
@@ -686,14 +689,18 @@ def plot_front_tracking_summary(
     structure : dict
         Structure returned from infiltration_to_extraction_front_tracking_detailed.
         Must contain keys: 'tracker_state', 't_first_arrival'.
-    dates : pd.DatetimeIndex
-        Time points for inlet concentration.
+    tedges : pd.DatetimeIndex
+        Time bin edges for inlet concentration.
+        Length = len(cin) + 1.
     cin : array-like
         Inlet concentration values.
+        Length = len(tedges) - 1.
     cout_tedges : pd.DatetimeIndex
-        Output time edges for bin-averaged concentration.
+        Output time bin edges for bin-averaged concentration.
+        Length = len(cout) + 1.
     cout : array-like
         Bin-averaged output concentration values.
+        Length = len(cout_tedges) - 1.
     figsize : tuple, optional
         Figure size (width, height). Default (16, 10).
     show_exact : bool, optional
@@ -745,7 +752,7 @@ def plot_front_tracking_summary(
     # Top right: Inlet concentration
     ax_inlet = fig.add_subplot(gs[0, 1])
     plot_inlet_concentration(
-        dates,
+        tedges,
         cin,
         ax=ax_inlet,
         t_first_arrival=structure["t_first_arrival"],
@@ -759,7 +766,7 @@ def plot_front_tracking_summary(
 
     # Compute time range
     if t_max is None:
-        t_max = (dates.to_numpy()[-1] - dates.to_numpy()[0]) / pd.Timedelta(days=1)
+        t_max = (tedges.to_numpy()[-1] - tedges.to_numpy()[0]) / pd.Timedelta(days=1)
 
     # Exact breakthrough curve
     if show_exact:
@@ -827,10 +834,10 @@ def plot_front_tracking_summary(
 
 def plot_comparison_favorable_unfavorable(
     structure_favorable,
-    dates_favorable,
+    tedges_favorable,
     cin_favorable,
     structure_unfavorable,
-    dates_unfavorable,
+    tedges_unfavorable,
     cin_unfavorable,
     *,
     figsize=(16, 10),
@@ -850,20 +857,22 @@ def plot_comparison_favorable_unfavorable(
     ----------
     structure_favorable : dict
         Structure from front tracking with n>1 (favorable sorption).
-    dates_favorable : pd.DatetimeIndex
-        Inlet time points for favorable case.
+    tedges_favorable : pd.DatetimeIndex
+        Inlet time bin edges for favorable case.
+        Length = len(cin_favorable) + 1.
     cin_favorable : array-like
         Inlet concentration for favorable case.
+        Length = len(tedges_favorable) - 1.
     structure_unfavorable : dict
         Structure from front tracking with n<1 (unfavorable sorption).
-    dates_unfavorable : pd.DatetimeIndex
-        Inlet time points for unfavorable case.
+    tedges_unfavorable : pd.DatetimeIndex
+        Inlet time bin edges for unfavorable case.
+        Length = len(cin_unfavorable) + 1.
     cin_unfavorable : array-like
         Inlet concentration for unfavorable case.
+        Length = len(tedges_unfavorable) - 1.
     figsize : tuple, optional
         Figure size (width, height). Default (16, 10).
-    annotate : bool, optional
-        Whether to add arrows/labels for shocks and rarefactions. Default True.
     t_max_favorable : float, optional
         Max time for favorable plots [days]. If None, auto-computed.
     t_max_unfavorable : float, optional
@@ -886,14 +895,17 @@ def plot_comparison_favorable_unfavorable(
 
     # Compute time ranges
     if t_max_favorable is None:
-        t_max_favorable = (dates_favorable.to_numpy()[-1] - dates_favorable.to_numpy()[0]) / pd.Timedelta(days=1)
+        t_max_favorable = (tedges_favorable.to_numpy()[-1] - tedges_favorable.to_numpy()[0]) / pd.Timedelta(days=1)
     if t_max_unfavorable is None:
-        t_max_unfavorable = (dates_unfavorable.to_numpy()[-1] - dates_unfavorable.to_numpy()[0]) / pd.Timedelta(days=1)
+        t_max_unfavorable = (tedges_unfavorable.to_numpy()[-1] - tedges_unfavorable.to_numpy()[0]) / pd.Timedelta(
+            days=1
+        )
 
     # Left column: Favorable sorption
     ax_fav_inlet = axes[0, 0]
-    t_days_fav = (dates_favorable.to_numpy() - dates_favorable.to_numpy()[0]) / pd.Timedelta(days=1)
-    ax_fav_inlet.step(t_days_fav, cin_favorable, where="post", linewidth=2.5, color="blue")
+    t_days_fav = (tedges_favorable.to_numpy() - tedges_favorable.to_numpy()[0]) / pd.Timedelta(days=1)
+    x_fav, y_fav = np.repeat(t_days_fav, 2)[1:-1], np.repeat(cin_favorable, 2)
+    ax_fav_inlet.plot(x_fav, y_fav, linewidth=2.5, color="blue")
     ax_fav_inlet.set_xlabel("Time [days]", fontsize=11)
     ax_fav_inlet.set_ylabel("Concentration", fontsize=11)
     ax_fav_inlet.set_title("Favorable: Inlet", fontsize=12, fontweight="bold", color="darkblue")
@@ -929,8 +941,9 @@ def plot_comparison_favorable_unfavorable(
 
     # Right column: Unfavorable sorption
     ax_unfav_inlet = axes[0, 1]
-    t_days_unfav = (dates_unfavorable.to_numpy() - dates_unfavorable.to_numpy()[0]) / pd.Timedelta(days=1)
-    ax_unfav_inlet.step(t_days_unfav, cin_unfavorable, where="post", linewidth=2.5, color="darkred")
+    t_days_unfav = (tedges_unfavorable.to_numpy() - tedges_unfavorable.to_numpy()[0]) / pd.Timedelta(days=1)
+    x_unfav, y_unfav = np.repeat(t_days_unfav, 2)[1:-1], np.repeat(cin_unfavorable, 2)
+    ax_unfav_inlet.plot(x_unfav, y_unfav, linewidth=2.5, color="darkred")
     ax_unfav_inlet.set_xlabel("Time [days]", fontsize=11)
     ax_unfav_inlet.set_ylabel("Concentration", fontsize=11)
     ax_unfav_inlet.set_title("Unfavorable: Inlet", fontsize=12, fontweight="bold", color="darkred")
@@ -970,11 +983,11 @@ def plot_comparison_favorable_unfavorable(
 def plot_sorption_comparison(
     pulse_favorable_structure,
     pulse_unfavorable_structure,
-    pulse_dates,
+    pulse_tedges,
     pulse_cin,
     dip_favorable_structure,
     dip_unfavorable_structure,
-    dip_dates,
+    dip_tedges,
     dip_cin,
     *,
     figsize=(16, 12),
@@ -997,18 +1010,22 @@ def plot_sorption_comparison(
         Structure from pulse inlet with favorable sorption (n>1).
     pulse_unfavorable_structure : dict
         Structure from pulse inlet with unfavorable sorption (n<1).
-    pulse_dates : pd.DatetimeIndex
-        Time points for pulse inlet.
+    pulse_tedges : pd.DatetimeIndex
+        Time bin edges for pulse inlet.
+        Length = len(pulse_cin) + 1.
     pulse_cin : array-like
         Pulse inlet concentration (e.g., 0→10→0).
+        Length = len(pulse_tedges) - 1.
     dip_favorable_structure : dict
         Structure from dip inlet with favorable sorption (n>1).
     dip_unfavorable_structure : dict
         Structure from dip inlet with unfavorable sorption (n<1).
-    dip_dates : pd.DatetimeIndex
-        Time points for dip inlet.
+    dip_tedges : pd.DatetimeIndex
+        Time bin edges for dip inlet.
+        Length = len(dip_cin) + 1.
     dip_cin : array-like
         Dip inlet concentration (e.g., 10→2→10).
+        Length = len(dip_tedges) - 1.
     figsize : tuple, optional
         Figure size (width, height). Default (16, 12).
     t_max_pulse : float, optional
@@ -1033,16 +1050,17 @@ def plot_sorption_comparison(
 
     # Compute time ranges
     if t_max_pulse is None:
-        t_max_pulse = (pulse_dates.to_numpy()[-1] - pulse_dates.to_numpy()[0]) / pd.Timedelta(days=1)
+        t_max_pulse = (pulse_tedges.to_numpy()[-1] - pulse_tedges.to_numpy()[0]) / pd.Timedelta(days=1)
     if t_max_dip is None:
-        t_max_dip = (dip_dates.to_numpy()[-1] - dip_dates.to_numpy()[0]) / pd.Timedelta(days=1)
+        t_max_dip = (dip_tedges.to_numpy()[-1] - dip_tedges.to_numpy()[0]) / pd.Timedelta(days=1)
 
     # === ROW 1: Pulse inlet (0→10→0) ===
-    t_days_pulse = (pulse_dates.to_numpy() - pulse_dates.to_numpy()[0]) / pd.Timedelta(days=1)
+    t_days_pulse = (pulse_tedges.to_numpy() - pulse_tedges.to_numpy()[0]) / pd.Timedelta(days=1)
 
     # Column 1: Pulse inlet
     ax_pulse_inlet = axes[0, 0]
-    ax_pulse_inlet.step(t_days_pulse, pulse_cin, where="post", linewidth=2.5, color="black")
+    x_pulse, y_pulse = np.repeat(t_days_pulse, 2)[1:-1], np.repeat(pulse_cin, 2)
+    ax_pulse_inlet.plot(x_pulse, y_pulse, linewidth=2.5, color="black")
     ax_pulse_inlet.set_xlabel("Time [days]", fontsize=10)
     ax_pulse_inlet.set_ylabel("Concentration", fontsize=10)
     ax_pulse_inlet.set_title("Pulse Inlet\n(0→10→0)", fontsize=11, fontweight="bold")
@@ -1106,11 +1124,12 @@ def plot_sorption_comparison(
     )
 
     # === ROW 2: Dip inlet (10→2→10) ===
-    t_days_dip = (dip_dates.to_numpy() - dip_dates.to_numpy()[0]) / pd.Timedelta(days=1)
+    t_days_dip = (dip_tedges.to_numpy() - dip_tedges.to_numpy()[0]) / pd.Timedelta(days=1)
 
     # Column 1: Dip inlet
     ax_dip_inlet = axes[1, 0]
-    ax_dip_inlet.step(t_days_dip, dip_cin, where="post", linewidth=2.5, color="black")
+    x_dip, y_dip = np.repeat(t_days_dip, 2)[1:-1], np.repeat(dip_cin, 2)
+    ax_dip_inlet.plot(x_dip, y_dip, linewidth=2.5, color="black")
     ax_dip_inlet.set_xlabel("Time [days]", fontsize=10)
     ax_dip_inlet.set_ylabel("Concentration", fontsize=10)
     ax_dip_inlet.set_title("Dip Inlet\n(10→2→10)", fontsize=11, fontweight="bold")
