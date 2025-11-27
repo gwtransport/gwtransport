@@ -338,8 +338,7 @@ class DependencyTester:
                     [uv_path, "venv", str(venv_path), "--python", self.python_version],
                     cwd=str(self.project_root),
                     check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    capture_output=True,
                     text=True,
                 )  # type: ignore[no-matching-overload]
 
