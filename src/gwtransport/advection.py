@@ -972,7 +972,7 @@ def infiltration_to_extraction_front_tracking(
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
     cout_tedges: pd.DatetimeIndex,
-    aquifer_pore_volume: float,
+    aquifer_pore_volumes: npt.ArrayLike,
     freundlich_k: float | None = None,
     freundlich_n: float | None = None,
     bulk_density: float | None = None,
@@ -1000,8 +1000,9 @@ def infiltration_to_extraction_front_tracking(
     cout_tedges : pandas.DatetimeIndex
         Output time bin edges. Can be different from tedges.
         Length determines output array size.
-    aquifer_pore_volume : float
-        Total pore volume [m³]. Must be positive.
+    aquifer_pore_volumes : array-like
+        Array of aquifer pore volumes [m³] representing the distribution
+        of residence times in the aquifer system. Each pore volume must be positive.
     freundlich_k : float, optional
         Freundlich coefficient [(m³/kg)^(1/n)]. Must be positive.
         Used if retardation_factor is None.
@@ -1023,7 +1024,7 @@ def infiltration_to_extraction_front_tracking(
     Returns
     -------
     cout : numpy.ndarray
-        Bin-averaged extraction concentration.
+        Bin-averaged extraction concentration averaged across all pore volumes.
         Length = len(cout_tedges) - 1.
 
     Notes
@@ -1049,7 +1050,7 @@ def infiltration_to_extraction_front_tracking(
     >>> import numpy as np
     >>> import pandas as pd
     >>>
-    >>> # Pulse injection
+    >>> # Pulse injection with single pore volume
     >>> tedges = pd.date_range("2020-01-01", periods=4, freq="10D")
     >>> cin = np.array([0.0, 10.0, 0.0])
     >>> flow = np.array([100.0, 100.0, 100.0])
@@ -1060,7 +1061,22 @@ def infiltration_to_extraction_front_tracking(
     ...     flow=flow,
     ...     tedges=tedges,
     ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volume=500.0,
+    ...     aquifer_pore_volumes=np.array([500.0]),
+    ...     freundlich_k=0.01,
+    ...     freundlich_n=2.0,
+    ...     bulk_density=1500.0,
+    ...     porosity=0.3,
+    ... )
+
+    With multiple pore volumes (distribution):
+
+    >>> aquifer_pore_volumes = np.array([400.0, 500.0, 600.0])
+    >>> cout = infiltration_to_extraction_front_tracking(
+    ...     cin=cin,
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cout_tedges=cout_tedges,
+    ...     aquifer_pore_volumes=aquifer_pore_volumes,
     ...     freundlich_k=0.01,
     ...     freundlich_n=2.0,
     ...     bulk_density=1500.0,
@@ -1078,6 +1094,7 @@ def infiltration_to_extraction_front_tracking(
     flow = np.asarray(flow, dtype=float)
     tedges = pd.DatetimeIndex(tedges)
     cout_tedges = pd.DatetimeIndex(cout_tedges)
+    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
 
     if len(tedges) != len(cin) + 1:
         msg = "tedges must have length len(cin) + 1"
@@ -1094,8 +1111,8 @@ def infiltration_to_extraction_front_tracking(
     if np.any(np.isnan(cin)) or np.any(np.isnan(flow)):
         msg = "cin and flow must not contain NaN"
         raise ValueError(msg)
-    if aquifer_pore_volume <= 0:
-        msg = "aquifer_pore_volume must be positive"
+    if np.any(aquifer_pore_volumes <= 0):
+        msg = "aquifer_pore_volumes must be positive"
         raise ValueError(msg)
 
     # Convert cout_tedges to days (relative to tedges[0]) for output computation
@@ -1133,26 +1150,31 @@ def infiltration_to_extraction_front_tracking(
             porosity=porosity,
         )
 
-    # Create tracker and run simulation
-    # Pass tedges as DatetimeIndex (not days)
-    tracker = FrontTracker(
-        cin=cin,
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=aquifer_pore_volume,
-        sorption=sorption,
-    )
+    # Loop over each pore volume and compute concentration
+    cout_all = np.zeros((len(aquifer_pore_volumes), len(cout_tedges) - 1))
 
-    tracker.run(max_iterations=max_iterations)
+    for i, aquifer_pore_volume in enumerate(aquifer_pore_volumes):
+        # Create tracker and run simulation for this pore volume
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=aquifer_pore_volume,
+            sorption=sorption,
+        )
 
-    # Extract bin-averaged concentrations at outlet
+        tracker.run(max_iterations=max_iterations)
 
-    return compute_bin_averaged_concentration_exact(
-        t_edges=cout_tedges_days,
-        v_outlet=aquifer_pore_volume,
-        waves=tracker.state.waves,
-        sorption=sorption,
-    )
+        # Extract bin-averaged concentrations at outlet for this pore volume
+        cout_all[i, :] = compute_bin_averaged_concentration_exact(
+            t_edges=cout_tedges_days,
+            v_outlet=aquifer_pore_volume,
+            waves=tracker.state.waves,
+            sorption=sorption,
+        )
+
+    # Return average across all pore volumes
+    return np.mean(cout_all, axis=0)
 
 
 def infiltration_to_extraction_front_tracking_detailed(
@@ -1161,18 +1183,18 @@ def infiltration_to_extraction_front_tracking_detailed(
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
     cout_tedges: pd.DatetimeIndex,
-    aquifer_pore_volume: float,
+    aquifer_pore_volumes: npt.ArrayLike,
     freundlich_k: float | None = None,
     freundlich_n: float | None = None,
     bulk_density: float | None = None,
     porosity: float | None = None,
     retardation_factor: float | None = None,
     max_iterations: int = 10000,
-) -> tuple[npt.NDArray[np.floating], dict]:
+) -> tuple[npt.NDArray[np.floating], list[dict]]:
     """
     Compute extracted concentration with complete diagnostic information.
 
-    Returns both bin-averaged concentrations and detailed simulation structure.
+    Returns both bin-averaged concentrations and detailed simulation structure for each pore volume.
 
     Parameters
     ----------
@@ -1181,10 +1203,10 @@ def infiltration_to_extraction_front_tracking_detailed(
     Returns
     -------
     cout : numpy.ndarray
-        Bin-averaged concentrations.
+        Bin-averaged concentrations averaged across all pore volumes.
 
-    structure : dict
-        Detailed simulation structure with keys:
+    structures : list[dict]
+        List of detailed simulation structures, one for each pore volume, with keys:
 
         - 'waves': List[Wave] - All wave objects created during simulation
         - 'events': List[dict] - All events with times, types, and details
@@ -1196,26 +1218,27 @@ def infiltration_to_extraction_front_tracking_detailed(
         - 'final_time': float - Final simulation time
         - 'sorption': FreundlichSorption | ConstantRetardation - Sorption object
         - 'tracker_state': FrontTrackerState - Complete simulation state
+        - 'aquifer_pore_volume': float - Pore volume for this simulation
 
     Examples
     --------
-    >>> cout, structure = infiltration_to_extraction_front_tracking_detailed(
+    >>> cout, structures = infiltration_to_extraction_front_tracking_detailed(
     ...     cin=cin,
     ...     flow=flow,
     ...     tedges=tedges,
     ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volume=500.0,
+    ...     aquifer_pore_volumes=np.array([500.0]),
     ...     freundlich_k=0.01,
     ...     freundlich_n=2.0,
     ...     bulk_density=1500.0,
     ...     porosity=0.3,
     ... )
     >>>
-    >>> # Access spin-up period
-    >>> print(f"First arrival: {structure['t_first_arrival']:.2f} days")
+    >>> # Access spin-up period for first pore volume
+    >>> print(f"First arrival: {structures[0]['t_first_arrival']:.2f} days")
     >>>
-    >>> # Analyze events
-    >>> for event in structure["events"]:
+    >>> # Analyze events for first pore volume
+    >>> for event in structures[0]["events"]:
     ...     print(f"t={event['time']:.2f}: {event['type']}")
     """
     # Input validation (same as main function)
@@ -1223,6 +1246,7 @@ def infiltration_to_extraction_front_tracking_detailed(
     flow = np.asarray(flow, dtype=float)
     tedges = pd.DatetimeIndex(tedges)
     cout_tedges = pd.DatetimeIndex(cout_tedges)
+    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
 
     if len(tedges) != len(cin) + 1:
         msg = "tedges must have length len(cin) + 1"
@@ -1239,8 +1263,8 @@ def infiltration_to_extraction_front_tracking_detailed(
     if np.any(np.isnan(cin)) or np.any(np.isnan(flow)):
         msg = "cin and flow must not contain NaN"
         raise ValueError(msg)
-    if aquifer_pore_volume <= 0:
-        msg = "aquifer_pore_volume must be positive"
+    if np.any(aquifer_pore_volumes <= 0):
+        msg = "aquifer_pore_volumes must be positive"
         raise ValueError(msg)
 
     # Convert cout_tedges to days (relative to tedges[0]) for output computation
@@ -1278,40 +1302,45 @@ def infiltration_to_extraction_front_tracking_detailed(
             porosity=porosity,
         )
 
-    # Create tracker and run simulation
-    # Pass tedges as DatetimeIndex (not days)
-    tracker = FrontTracker(
-        cin=cin,
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=aquifer_pore_volume,
-        sorption=sorption,
-    )
+    # Loop over each pore volume and compute concentration
+    cout_all = np.zeros((len(aquifer_pore_volumes), len(cout_tedges) - 1))
+    structures = []
 
-    tracker.run(max_iterations=max_iterations)
+    for i, aquifer_pore_volume in enumerate(aquifer_pore_volumes):
+        # Create tracker and run simulation for this pore volume
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=aquifer_pore_volume,
+            sorption=sorption,
+        )
 
-    # Extract bin-averaged concentrations
+        tracker.run(max_iterations=max_iterations)
 
-    cout = compute_bin_averaged_concentration_exact(
-        t_edges=cout_tedges_days,
-        v_outlet=aquifer_pore_volume,
-        waves=tracker.state.waves,
-        sorption=sorption,
-    )
+        # Extract bin-averaged concentrations for this pore volume
+        cout_all[i, :] = compute_bin_averaged_concentration_exact(
+            t_edges=cout_tedges_days,
+            v_outlet=aquifer_pore_volume,
+            waves=tracker.state.waves,
+            sorption=sorption,
+        )
 
-    # Build detailed structure dict
-    structure = {
-        "waves": tracker.state.waves,
-        "events": tracker.state.events,
-        "t_first_arrival": tracker.t_first_arrival,
-        "n_events": len(tracker.state.events),
-        "n_shocks": sum(1 for w in tracker.state.waves if isinstance(w, ShockWave)),
-        "n_rarefactions": sum(1 for w in tracker.state.waves if isinstance(w, RarefactionWave)),
-        "n_characteristics": sum(1 for w in tracker.state.waves if isinstance(w, CharacteristicWave)),
-        "final_time": tracker.state.t_current,
-        "sorption": sorption,
-        "tracker_state": tracker.state,
-        "aquifer_pore_volume": aquifer_pore_volume,
-    }
+        # Build detailed structure dict for this pore volume
+        structure = {
+            "waves": tracker.state.waves,
+            "events": tracker.state.events,
+            "t_first_arrival": tracker.t_first_arrival,
+            "n_events": len(tracker.state.events),
+            "n_shocks": sum(1 for w in tracker.state.waves if isinstance(w, ShockWave)),
+            "n_rarefactions": sum(1 for w in tracker.state.waves if isinstance(w, RarefactionWave)),
+            "n_characteristics": sum(1 for w in tracker.state.waves if isinstance(w, CharacteristicWave)),
+            "final_time": tracker.state.t_current,
+            "sorption": sorption,
+            "tracker_state": tracker.state,
+            "aquifer_pore_volume": aquifer_pore_volume,
+        }
+        structures.append(structure)
 
-    return cout, structure
+    # Return average concentrations and list of structures
+    return np.mean(cout_all, axis=0), structures

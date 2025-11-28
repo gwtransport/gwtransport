@@ -38,7 +38,7 @@ class TestWaveCreation:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=400.0,
+            aquifer_pore_volumes=np.array([400.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,
             bulk_density=1500.0,
@@ -65,7 +65,7 @@ class TestWaveCreation:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=400.0,
+            aquifer_pore_volumes=np.array([400.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,
             bulk_density=1500.0,
@@ -100,7 +100,7 @@ class TestAnalyticalCorrectness:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=400.0,
+            aquifer_pore_volumes=np.array([400.0]),
             freundlich_k=freundlich_k,
             freundlich_n=freundlich_n,
             bulk_density=bulk_density,
@@ -143,7 +143,7 @@ class TestEntropyAndPhysics:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=300.0,
+            aquifer_pore_volumes=np.array([300.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,
             bulk_density=1500.0,
@@ -172,7 +172,7 @@ class TestEntropyAndPhysics:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=200.0,
+            aquifer_pore_volumes=np.array([200.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,
             bulk_density=1500.0,
@@ -199,7 +199,7 @@ class TestEntropyAndPhysics:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=200.0,
+            aquifer_pore_volumes=np.array([200.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,
             bulk_density=1500.0,
@@ -237,7 +237,7 @@ class TestConstantRetardation:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=200.0,
+            aquifer_pore_volumes=np.array([200.0]),
             retardation_factor=2.0,
         )
 
@@ -266,7 +266,7 @@ class TestWaveCreationUnfavorable:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=400.0,
+            aquifer_pore_volumes=np.array([400.0]),
             freundlich_k=0.01,
             freundlich_n=0.5,  # n<1: unfavorable sorption
             bulk_density=1500.0,
@@ -307,7 +307,7 @@ class TestWaveCreationUnfavorable:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=400.0,
+            aquifer_pore_volumes=np.array([400.0]),
             freundlich_k=0.01,
             freundlich_n=0.5,  # n<1: unfavorable sorption
             bulk_density=1500.0,
@@ -347,7 +347,7 @@ class TestEntropyAndPhysicsUnfavorable:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=100.0,  # Small volume for reasonable transport
+            aquifer_pore_volumes=np.array([100.0,  # Small volume for reasonable transport
             freundlich_k=0.01,
             freundlich_n=0.5,  # n<1: unfavorable sorption
             bulk_density=1500.0,
@@ -394,7 +394,7 @@ class TestEntropyAndPhysicsUnfavorable:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=300.0,
+            aquifer_pore_volumes=np.array([300.0]),
             freundlich_k=0.01,
             freundlich_n=0.5,  # n<1: unfavorable sorption
             bulk_density=1500.0,
@@ -431,7 +431,7 @@ class TestComplexInteractions:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=300.0,
+            aquifer_pore_volumes=np.array([300.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,  # n>1: favorable sorption
             bulk_density=1500.0,
@@ -472,7 +472,7 @@ class TestComplexInteractions:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=300.0,
+            aquifer_pore_volumes=np.array([300.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,  # n>1: favorable sorption
             bulk_density=1500.0,

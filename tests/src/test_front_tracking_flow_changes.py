@@ -261,7 +261,7 @@ class TestFlowChangeIntegration:
             cin=cin,
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volume=500.0,
+            aquifer_pore_volumes=np.array([500.0]),
             sorption=constant_retardation,
         )
 
@@ -295,7 +295,7 @@ class TestFlowChangeIntegration:
             cin=cin,
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volume=1000.0,
+            aquifer_pore_volumes=np.array([1000.0]),
             sorption=freundlich_sorption,
         )
 
@@ -318,7 +318,7 @@ class TestFlowChangeIntegration:
             cin=cin,
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volume=1000.0,
+            aquifer_pore_volumes=np.array([1000.0]),
             sorption=constant_retardation,
         )
 
@@ -347,7 +347,7 @@ class TestExactMassBalanceVaryingFlow:
             cin=cin,
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volume=500.0,
+            aquifer_pore_volumes=np.array([500.0]),
             sorption=constant_retardation,
         )
 
@@ -367,7 +367,7 @@ class TestExactMassBalanceVaryingFlow:
             cin=cin,
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volume=500.0,
+            aquifer_pore_volumes=np.array([500.0]),
             sorption=constant_retardation,
         )
 
@@ -387,7 +387,7 @@ class TestExactMassBalanceVaryingFlow:
             cin=cin,
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volume=500.0,
+            aquifer_pore_volumes=np.array([500.0]),
             sorption=freundlich_sorption,
         )
 
@@ -406,7 +406,7 @@ class TestExactMassBalanceVaryingFlow:
             cin=cin,
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volume=500.0,
+            aquifer_pore_volumes=np.array([500.0]),
             sorption=constant_retardation,
         )
 
@@ -430,7 +430,7 @@ class TestExactMassBalanceVaryingFlow:
             cin=cin,
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volume=1000.0,
+            aquifer_pore_volumes=np.array([1000.0]),
             sorption=constant_retardation,
         )
 

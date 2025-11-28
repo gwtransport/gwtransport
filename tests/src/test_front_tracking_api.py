@@ -51,7 +51,7 @@ class TestFrontTrackingAPI:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=500.0,
+            aquifer_pore_volumes=np.array([500.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,
             bulk_density=1500.0,
@@ -89,7 +89,7 @@ class TestFrontTrackingAPI:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=500.0,
+            aquifer_pore_volumes=np.array([500.0]),
             retardation_factor=2.0,
         )
 
@@ -123,7 +123,7 @@ class TestFrontTrackingAPI:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=500.0,
+            aquifer_pore_volumes=np.array([500.0]),
             retardation_factor=2.0,
         )
 
@@ -157,7 +157,7 @@ class TestFrontTrackingAPI:
                 flow=flow,
                 tedges=tedges,
                 cout_tedges=cout_tedges,
-                aquifer_pore_volume=500.0,
+                aquifer_pore_volumes=np.array([500.0]),
             )
 
     def test_detailed_returns_consistent_structure(self):
@@ -181,12 +181,12 @@ class TestFrontTrackingAPI:
             number_of_bins=len(cout_dates),
         )
 
-        cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        cout, structures = infiltration_to_extraction_front_tracking_detailed(
             cin=cin,
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=500.0,
+            aquifer_pore_volumes=np.array([500.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,
             bulk_density=1500.0,
@@ -195,6 +195,10 @@ class TestFrontTrackingAPI:
 
         assert cout.shape == (len(cout_tedges) - 1,)
         assert not np.any(np.isnan(cout))
+
+        # Check that we get one structure per pore volume
+        assert len(structures) == 1
+        structure = structures[0]
 
         waves = structure["waves"]
         n_shocks = sum(isinstance(w, ShockWave) for w in waves)
@@ -250,18 +254,20 @@ class TestFrontTrackingAPI:
             number_of_bins=len(cout_dates),
         )
 
-        cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        cout, structures = infiltration_to_extraction_front_tracking_detailed(
             cin=cin,
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=aquifer_pore_volume,
+            aquifer_pore_volumes=np.array([aquifer_pore_volume]),
             freundlich_k=freundlich_k,
             freundlich_n=freundlich_n,
             bulk_density=bulk_density,
             porosity=porosity,
         )
 
+        assert len(structures) == 1
+        structure = structures[0]
         assert structure["t_first_arrival"] == pytest.approx(t_first_expected, rel=1e-14)
 
         # Verify spin-up: cout is zero for bins whose upper edge is before first arrival
@@ -296,7 +302,7 @@ class TestFrontTrackingAPI:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=500.0,
+            aquifer_pore_volumes=np.array([500.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,  # favorable (n>1)
             bulk_density=1500.0,
@@ -334,7 +340,7 @@ class TestFrontTrackingAPI:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=500.0,
+            aquifer_pore_volumes=np.array([500.0]),
             freundlich_k=0.01,
             freundlich_n=0.5,  # unfavorable (n<1)
             bulk_density=1500.0,
