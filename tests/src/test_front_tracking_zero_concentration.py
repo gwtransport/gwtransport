@@ -138,7 +138,7 @@ class TestStepInputPlateau:
 
         # Verify wave creation
         # For favorable sorption (n>1), step from 0 to 10 creates shock (compression)
-        assert structure["n_shocks"] >= 1, f"Expected shock, got {structure}"
+        assert structure[0]["n_shocks"] >= 1, f"Expected shock, got {structure[0]}"
         # May also have other waves from interactions
 
         # Verify no negative concentrations
@@ -182,7 +182,7 @@ class TestStepInputPlateau:
         )
 
         # Should create characteristic
-        assert structure["n_characteristics"] == 1
+        assert structure[0]["n_characteristics"] == 1
 
         # Verify plateau
         valid_cout = cout[~np.isnan(cout)]
@@ -218,8 +218,8 @@ class TestStepInputPlateau:
 
         # For favorable sorption: 0→10 creates shock, 10→0 creates rarefaction
         # May have additional waves from interactions
-        assert structure["n_shocks"] >= 1, f"Expected at least 1 shock, got {structure}"
-        assert structure["n_rarefactions"] >= 1, f"Expected at least 1 rarefaction, got {structure}"
+        assert structure[0]["n_shocks"] >= 1, f"Expected at least 1 shock, got {structure[0]}"
+        assert structure[0]["n_rarefactions"] >= 1, f"Expected at least 1 rarefaction, got {structure[0]}"
 
         # Verify no negative concentrations
         valid_cout = cout[~np.isnan(cout)]
@@ -260,13 +260,13 @@ class TestFirstArrivalTime:
         )
 
         # First arrival should be > day 5 (injection start)
-        assert structure["t_first_arrival"] > 5.0
+        assert structure[0]["t_first_arrival"] > 5.0
 
         # First arrival should be finite
-        assert np.isfinite(structure["t_first_arrival"])
+        assert np.isfinite(structure[0]["t_first_arrival"])
 
         # Output before first arrival should be zero
-        t_first = structure["t_first_arrival"]
+        t_first = structure[0]["t_first_arrival"]
         cout_tedges_days = (cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)
         mask_before = cout_tedges_days[1:-1] < t_first - 1e-10
         cout_before = cout[:-1][mask_before]

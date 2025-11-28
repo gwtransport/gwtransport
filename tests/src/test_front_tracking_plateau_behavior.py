@@ -89,9 +89,9 @@ def test_step_change_plateau(c_initial, c_final, freundlich_n, expected_wave_typ
 
     # Verify wave type
     if expected_wave_type == "shock":
-        assert structure["n_shocks"] >= 1, f"Expected at least one shock, got {structure['n_shocks']}"
+        assert structure[0]["n_shocks"] >= 1, f"Expected at least one shock, got {structure[0]['n_shocks']}"
     elif expected_wave_type == "rarefaction":
-        assert structure["n_rarefactions"] >= 1, f"Expected at least one rarefaction, got {structure['n_rarefactions']}"
+        assert structure[0]["n_rarefactions"] >= 1, f"Expected at least one rarefaction, got {structure[0]['n_rarefactions']}"
 
     # Check final plateau (last 20% of output)
     n_check = len(cout) // 5  # Last 20%
@@ -187,12 +187,12 @@ def test_pulse_returns_to_baseline(freundlich_n):
     # Verify both wave types were created
     if freundlich_n > 1.0:
         # Favorable: shock on rise, rarefaction on fall
-        assert structure["n_shocks"] >= 1, "Expected shock from pulse rising edge"
-        assert structure["n_rarefactions"] >= 1, "Expected rarefaction from pulse falling edge"
+        assert structure[0]["n_shocks"] >= 1, "Expected shock from pulse rising edge"
+        assert structure[0]["n_rarefactions"] >= 1, "Expected rarefaction from pulse falling edge"
     else:
         # Unfavorable: rarefaction on rise, shock on fall
-        assert structure["n_rarefactions"] >= 1, "Expected rarefaction from pulse rising edge"
-        assert structure["n_shocks"] >= 1, "Expected shock from pulse falling edge"
+        assert structure[0]["n_rarefactions"] >= 1, "Expected rarefaction from pulse rising edge"
+        assert structure[0]["n_shocks"] >= 1, "Expected shock from pulse falling edge"
 
     # Check final plateau returns to baseline (last 20% of output)
     n_check = len(cout) // 5
@@ -273,7 +273,7 @@ def test_multiple_steps_final_plateau(freundlich_n):
     )
 
     # Verify multiple waves were created
-    total_waves = structure["n_shocks"] + structure["n_rarefactions"]
+    total_waves = structure[0]["n_shocks"] + structure[0]["n_rarefactions"]
     assert total_waves >= 4, f"Expected at least 4 waves from multiple steps, got {total_waves}"
 
     # Check final plateau (last 15% of output)
@@ -358,15 +358,15 @@ def test_step_down_to_zero_plateau(c_initial, freundlich_n):
     # Verify correct wave structure
     if freundlich_n > 1.0:
         # Favorable: step down creates rarefaction
-        assert structure["n_rarefactions"] >= 1, (
+        assert structure[0]["n_rarefactions"] >= 1, (
             f"Expected rarefaction for favorable sorption step down, "
-            f"got {structure['n_rarefactions']} rarefactions, {structure['n_shocks']} shocks"
+            f"got {structure[0]['n_rarefactions']} rarefactions, {structure[0]['n_shocks']} shocks"
         )
     else:
         # Unfavorable: step down creates shock
-        assert structure["n_shocks"] >= 1, (
+        assert structure[0]["n_shocks"] >= 1, (
             f"Expected shock for unfavorable sorption step down, "
-            f"got {structure['n_shocks']} shocks, {structure['n_rarefactions']} rarefactions"
+            f"got {structure[0]['n_shocks']} shocks, {structure[0]['n_rarefactions']} rarefactions"
         )
 
     # Verify concentration behavior
@@ -454,21 +454,21 @@ def test_pulse_from_zero_returns_to_zero(freundlich_n):
     # Verify correct wave structure
     if freundlich_n > 1.0:
         # Favorable: rising edge creates shock, falling edge creates rarefaction
-        assert structure["n_shocks"] >= 1, (
-            f"Expected shock from pulse rising edge for favorable sorption, got {structure['n_shocks']} shocks"
+        assert structure[0]["n_shocks"] >= 1, (
+            f"Expected shock from pulse rising edge for favorable sorption, got {structure[0]['n_shocks']} shocks"
         )
-        assert structure["n_rarefactions"] >= 1, (
+        assert structure[0]["n_rarefactions"] >= 1, (
             f"Expected rarefaction from pulse falling edge for favorable sorption, "
-            f"got {structure['n_rarefactions']} rarefactions"
+            f"got {structure[0]['n_rarefactions']} rarefactions"
         )
     else:
         # Unfavorable: rising edge creates rarefaction, falling edge creates shock
-        assert structure["n_rarefactions"] >= 1, (
+        assert structure[0]["n_rarefactions"] >= 1, (
             f"Expected rarefaction from pulse rising edge for unfavorable sorption, "
-            f"got {structure['n_rarefactions']} rarefactions"
+            f"got {structure[0]['n_rarefactions']} rarefactions"
         )
-        assert structure["n_shocks"] >= 1, (
-            f"Expected shock from pulse falling edge for unfavorable sorption, got {structure['n_shocks']} shocks"
+        assert structure[0]["n_shocks"] >= 1, (
+            f"Expected shock from pulse falling edge for unfavorable sorption, got {structure[0]['n_shocks']} shocks"
         )
 
     # Verify concentration is decreasing after pulse
