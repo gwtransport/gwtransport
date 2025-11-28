@@ -91,7 +91,9 @@ def test_step_change_plateau(c_initial, c_final, freundlich_n, expected_wave_typ
     if expected_wave_type == "shock":
         assert structure[0]["n_shocks"] >= 1, f"Expected at least one shock, got {structure[0]['n_shocks']}"
     elif expected_wave_type == "rarefaction":
-        assert structure[0]["n_rarefactions"] >= 1, f"Expected at least one rarefaction, got {structure[0]['n_rarefactions']}"
+        assert structure[0]["n_rarefactions"] >= 1, (
+            f"Expected at least one rarefaction, got {structure[0]['n_rarefactions']}"
+        )
 
     # Check final plateau (last 20% of output)
     n_check = len(cout) // 5  # Last 20%
