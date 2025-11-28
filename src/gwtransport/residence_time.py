@@ -297,7 +297,7 @@ def fraction_explained(
     index : pandas.DatetimeIndex, optional
         Index at which to compute the fraction. If left to None, the index of `flow` is used.
         Default is None.
-    retardation_factor : float or array-like of float, optional
+    retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless].
     direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
         Direction of the flow calculation:

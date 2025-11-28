@@ -61,9 +61,7 @@ import pandas as pd
 
 from gwtransport import gamma
 from gwtransport.advection_utils import (
-    _extraction_to_infiltration_nonlinear_weights,
     _extraction_to_infiltration_weights,
-    _infiltration_to_extraction_nonlinear_weights,
     _infiltration_to_extraction_weights,
 )
 from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
@@ -454,7 +452,7 @@ def gamma_extraction_to_infiltration(
     mean: float | None = None,
     std: float | None = None,
     n_bins: int = 100,
-    retardation_factor: float | npt.ArrayLike = 1.0,
+    retardation_factor: float = 1.0,
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
@@ -492,10 +490,9 @@ def gamma_extraction_to_infiltration(
         Standard deviation of the gamma distribution.
     n_bins : int
         Number of bins to discretize the gamma distribution.
-    retardation_factor : float or array-like, optional
+    retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
-        Can be scalar for linear sorption or array for concentration-dependent
-        nonlinear sorption. See :func:`extraction_to_infiltration` for details.
+        Values > 1.0 indicate slower transport due to sorption/interaction.
 
     Returns
     -------
@@ -582,7 +579,7 @@ def infiltration_to_extraction(
     tedges: pd.DatetimeIndex,
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
-    retardation_factor: float | npt.ArrayLike = 1.0,
+    retardation_factor: float = 1.0,
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the extracted water using flow-weighted advection.
@@ -597,26 +594,6 @@ def infiltration_to_extraction(
     4. Creates flow-weighted overlap matrices normalized by total weights
     5. Computes weighted contributions and averages across pore volumes
 
-    .. note:: **Nonlinear Sorption and Concentration-Dependent Retardation**
-
-       When ``retardation_factor`` is provided as an array (one value per time bin), this function
-       models **nonlinear sorption** where retardation depends on concentration. This is critical
-       for contaminants that follow Freundlich or Langmuir isotherms.
-
-       **Physical Behavior:**
-
-       For Freundlich sorption with n < 1 (favorable sorption):
-
-       - High concentrations → Lower retardation → Faster travel
-       - Low concentrations → Higher retardation → Slower travel
-       - Creates asymmetric breakthrough: **sharp front, long tail**
-
-       **Implementation:**
-
-       Uses method of characteristics for forward parcel tracking where each infiltrating
-       parcel travels with its own retardation factor R(C). When faster-moving high-C parcels
-       overtake slower low-C parcels, they mix at extraction through flow-weighted averaging.
-       Fast and robust, but introduces slight numerical diffusion at shocks.
 
     Parameters
     ----------
@@ -635,16 +612,9 @@ def infiltration_to_extraction(
     aquifer_pore_volumes : array-like
         Array of aquifer pore volumes [m3] representing the distribution
         of residence times in the aquifer system.
-    retardation_factor : float or array-like, optional
+    retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
-
-        - **Scalar (float)**: Linear sorption with constant retardation.
-          Values > 1.0 indicate slower transport due to sorption/interaction.
-
-        - **Array**: Nonlinear sorption with concentration-dependent retardation.
-          Must have length matching cin. Typically computed from Freundlich or
-          Langmuir isotherms using :func:`gwtransport.residence_time.freundlich_retardation`.
-          Uses method of characteristics for forward parcel tracking with flow-weighted mixing.
+        Values > 1.0 indicate slower transport due to sorption/interaction.
 
     Returns
     -------
@@ -657,8 +627,7 @@ def infiltration_to_extraction(
     ------
     ValueError
         If tedges length doesn't match cin/flow arrays plus one, or if
-        infiltration time edges become non-monotonic (invalid input conditions),
-        or if retardation_factor array length doesn't match cin.
+        infiltration time edges become non-monotonic (invalid input conditions).
 
     See Also
     --------
@@ -790,39 +759,15 @@ def infiltration_to_extraction(
         msg = "flow contains NaN values, which are not allowed"
         raise ValueError(msg)
 
-    # Check if retardation_factor is array-like (nonlinear case)
-    is_linear = isinstance(retardation_factor, (float, int))
-
-    if is_linear:
-        # Linear sorption: constant retardation
-        # Compute normalized weights (includes all pre-computation)
-        retardation_factor_float: float = float(retardation_factor)
-        normalized_weights = _infiltration_to_extraction_weights(
-            tedges=tedges,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-            cin=cin,
-            flow=flow,
-            retardation_factor=retardation_factor_float,
-        )
-    else:
-        # Nonlinear sorption: concentration-dependent retardation
-        # Uses method of characteristics
-        retardation_factor = np.asarray(retardation_factor)
-
-        if len(retardation_factor) != len(cin):
-            msg = f"retardation_factor array must match cin length ({len(cin)}), got {len(retardation_factor)}"
-            raise ValueError(msg)
-
-        # Use method of characteristics for nonlinear weights computation
-        normalized_weights = _infiltration_to_extraction_nonlinear_weights(
-            tedges=tedges,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-            cin=cin,
-            flow=flow,
-            retardation_factors=retardation_factor,
-        )
+    # Compute normalized weights (includes all pre-computation)
+    normalized_weights = _infiltration_to_extraction_weights(
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        cin=cin,
+        flow=flow,
+        retardation_factor=retardation_factor,
+    )
 
     # Apply to concentrations and handle NaN for periods with no contributions
     out = normalized_weights.dot(cin)
@@ -840,7 +785,7 @@ def extraction_to_infiltration(
     tedges: pd.DatetimeIndex,
     cin_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
-    retardation_factor: float | npt.ArrayLike = 1.0,
+    retardation_factor: float = 1.0,
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
@@ -859,30 +804,6 @@ def extraction_to_infiltration(
     4. Creates flow-weighted overlap matrices normalized by total weights
     5. Computes weighted contributions and averages across pore volumes
 
-    .. note:: **Nonlinear Sorption and Concentration-Dependent Retardation (Deconvolution)**
-
-       When ``retardation_factor`` is provided as an array (one value per time bin), this function
-       models **nonlinear sorption deconvolution** where retardation depends on the observed
-       extraction concentrations. This is the inverse operation of forward nonlinear transport.
-
-       **Physical Behavior:**
-
-       For deconvolution with Freundlich sorption:
-
-       - Retardation is based on **observed extraction concentrations** (cout), not unknown infiltration
-       - Backward tracking: extraction parcels traced to infiltration times using R(cout)
-       - Recovers infiltration history from mixed extraction observations
-       - Handles shock waves in reverse direction
-
-       **Implementation:**
-
-       Uses backward method of characteristics where each extraction parcel is tracked backward
-       with retardation R(cout). The algorithm reconstructs infiltration concentrations by
-       inverting the flow-weighted mixing that occurred during forward transport.
-
-       **Important:** For deconvolution, retardation_factor array should be computed from cout,
-       not cin (which is unknown). Use :func:`gwtransport.residence_time.freundlich_retardation`
-       with cout as input.
 
     Parameters
     ----------
@@ -901,16 +822,9 @@ def extraction_to_infiltration(
     aquifer_pore_volumes : array-like
         Array of aquifer pore volumes [m3] representing the distribution
         of residence times in the aquifer system.
-    retardation_factor : float or array-like, optional
+    retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
-
-        - **Scalar (float)**: Linear sorption with constant retardation.
-          Values > 1.0 indicate slower transport due to sorption/interaction.
-
-        - **Array**: Nonlinear sorption with concentration-dependent retardation.
-          Must have length matching cout. For deconvolution, compute from cout using
-          :func:`gwtransport.residence_time.freundlich_retardation` with cout as input.
-          Uses backward method of characteristics for parcel tracking with flow-weighted mixing.
+        Values > 1.0 indicate slower transport due to sorption/interaction.
 
     Returns
     -------
@@ -923,8 +837,7 @@ def extraction_to_infiltration(
     ------
     ValueError
         If tedges length doesn't match cout/flow arrays plus one, or if
-        extraction time edges become non-monotonic (invalid input conditions),
-        or if retardation_factor array length doesn't match cout.
+        extraction time edges become non-monotonic (invalid input conditions).
 
     See Also
     --------
@@ -1009,38 +922,6 @@ def extraction_to_infiltration(
     ...     aquifer_pore_volumes=single_volume,
     ... )
 
-    With concentration-dependent retardation (nonlinear sorption deconvolution):
-
-    >>> from gwtransport.residence_time import freundlich_retardation
-    >>> # Observed extraction concentrations (asymmetric due to nonlinear transport)
-    >>> cout_observed = pd.Series(np.ones(len(dates)) * 50.0, index=dates)
-    >>> # Compute Freundlich retardation from OBSERVED concentrations (cout)
-    >>> R_freundlich = freundlich_retardation(
-    ...     concentration=np.maximum(cout_observed.values, 0.1),
-    ...     freundlich_k=0.02,
-    ...     freundlich_n=0.75,
-    ...     bulk_density=1600.0,
-    ...     porosity=0.35,
-    ... )
-    >>> # Extend cin_tedges backward to capture early infiltration
-    >>> cin_dates_extended = pd.date_range(
-    ...     start="2019-12-15", end="2020-01-15", freq="D"
-    ... )
-    >>> cin_tedges_extended = compute_time_edges(
-    ...     tedges=None,
-    ...     tstart=None,
-    ...     tend=cin_dates_extended,
-    ...     number_of_bins=len(cin_dates_extended),
-    ... )
-    >>> cin_reconstructed = extraction_to_infiltration(
-    ...     cout=cout_observed,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     cin_tedges=cin_tedges_extended,
-    ...     aquifer_pore_volumes=aquifer_pore_volumes,
-    ...     retardation_factor=R_freundlich,  # Array enables nonlinear deconvolution
-    ... )
-    >>> # Result: reconstructed infiltration history from extraction observations
     """
     tedges = pd.DatetimeIndex(tedges)
     cin_tedges = pd.DatetimeIndex(cin_tedges)
@@ -1066,39 +947,15 @@ def extraction_to_infiltration(
 
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
 
-    # Check if retardation_factor is array-like (nonlinear case)
-    is_linear = isinstance(retardation_factor, (float, int))
-
-    if is_linear:
-        # Linear sorption: constant retardation
-        # Compute normalized weights (includes all pre-computation)
-        retardation_factor_float: float = float(retardation_factor)
-        normalized_weights = _extraction_to_infiltration_weights(
-            tedges=tedges,
-            cin_tedges=cin_tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-            cout=cout,
-            flow=flow,
-            retardation_factor=retardation_factor_float,
-        )
-    else:
-        # Nonlinear sorption: concentration-dependent retardation
-        # Uses backward method of characteristics
-        retardation_factor = np.asarray(retardation_factor)
-
-        if len(retardation_factor) != len(cout):
-            msg = f"retardation_factor array must match cout length ({len(cout)}), got {len(retardation_factor)}"
-            raise ValueError(msg)
-
-        # Use backward method of characteristics for nonlinear weights computation
-        normalized_weights = _extraction_to_infiltration_nonlinear_weights(
-            tedges=tedges,
-            cin_tedges=cin_tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-            cout=cout,
-            flow=flow,
-            retardation_factors=retardation_factor,
-        )
+    # Compute normalized weights (includes all pre-computation)
+    normalized_weights = _extraction_to_infiltration_weights(
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        cout=cout,
+        flow=flow,
+        retardation_factor=retardation_factor,
+    )
 
     # Apply to concentrations and handle NaN for periods with no contributions
     out = normalized_weights.dot(cout)
