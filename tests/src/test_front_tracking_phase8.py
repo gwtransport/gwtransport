@@ -347,7 +347,7 @@ class TestEntropyAndPhysicsUnfavorable:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volumes=np.array([100.0,  # Small volume for reasonable transport
+            aquifer_pore_volumes=np.array([100.0]),  # Small volume for reasonable transport
             freundlich_k=0.01,
             freundlich_n=0.5,  # n<1: unfavorable sorption
             bulk_density=1500.0,

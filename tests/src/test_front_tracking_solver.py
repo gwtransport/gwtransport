@@ -468,7 +468,7 @@ class TestEdgeCases:
             cin=cin,
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volumes=np.array([10.0,  # Very small
+            aquifer_pore_volumes=np.array([10.0]),  # Very small
             sorption=freundlich_sorption,
         )
 
@@ -482,7 +482,7 @@ class TestEdgeCases:
             cin=cin,
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volumes=np.array([10000.0,  # Very large
+            aquifer_pore_volumes=np.array([10000.0]),  # Very large
             sorption=freundlich_sorption,
         )
 
@@ -657,7 +657,7 @@ class TestRuntimeMassBalanceVerification:
             cin=cin,
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volumes=np.array([10.0,  # Very small domain
+            aquifer_pore_volumes=np.array([10.0]),  # Very small domain
             sorption=freundlich_sorption,
         )
 

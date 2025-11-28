@@ -53,7 +53,7 @@ def test_example1_breakthrough_has_plateau() -> None:
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
-        aquifer_pore_volumes=np.array([aquifer_pore_volume,
+        aquifer_pore_volumes=np.array([aquifer_pore_volume]),
         freundlich_k=freundlich_k,
         freundlich_n=freundlich_n,
         bulk_density=bulk_density,
