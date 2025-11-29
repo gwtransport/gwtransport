@@ -252,7 +252,10 @@ def test_edge_cases_zero_flow():
     pore_volume = 100.0
 
     result = residence_time(
-        flow=zero_flow, flow_tedges=flow_tedges, aquifer_pore_volumes=pore_volume, direction="extraction_to_infiltration"
+        flow=zero_flow,
+        flow_tedges=flow_tedges,
+        aquifer_pore_volumes=pore_volume,
+        direction="extraction_to_infiltration",
     )
 
     # Zero flow should result in infinite/NaN residence times
@@ -378,7 +381,10 @@ def test_array_like_flow_input():
     # Test with list
     flow_list = [100.0, 110.0, 105.0, 95.0, 98.0]
     result_list = residence_time(
-        flow=flow_list, flow_tedges=flow_tedges, aquifer_pore_volumes=pore_volume, direction="extraction_to_infiltration"
+        flow=flow_list,
+        flow_tedges=flow_tedges,
+        aquifer_pore_volumes=pore_volume,
+        direction="extraction_to_infiltration",
     )
 
     # Test with numpy array
