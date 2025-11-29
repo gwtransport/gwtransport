@@ -31,7 +31,7 @@ def test_basic_extraction_with_flow_tedges():
     result = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -52,7 +52,7 @@ def test_basic_extraction_with_flow_tstart():
     result = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -73,7 +73,7 @@ def test_basic_extraction_with_flow_tend():
     result = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -91,7 +91,7 @@ def test_basic_infiltration():
     result = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="infiltration_to_extraction",
     )
 
@@ -109,7 +109,7 @@ def test_retardation_factor():
     result_no_retardation = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         retardation_factor=1.0,
         direction="extraction_to_infiltration",
     )
@@ -117,7 +117,7 @@ def test_retardation_factor():
     result_with_retardation = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         retardation_factor=2.0,
         direction="extraction_to_infiltration",
     )
@@ -139,7 +139,7 @@ def test_custom_index():
     result = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         index=custom_dates,
         direction="extraction_to_infiltration",
     )
@@ -156,7 +156,7 @@ def test_return_numpy_array():
     result = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -175,7 +175,7 @@ def test_multiple_pore_volumes():
     result = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volumes,
+        aquifer_pore_volumes=pore_volumes,
         direction="extraction_to_infiltration",
     )
 
@@ -198,7 +198,7 @@ def test_invalid_direction():
     with pytest.raises(
         ValueError, match="direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
     ):
-        residence_time(flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volume=pore_volume, direction="invalid")
+        residence_time(flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volumes=pore_volume, direction="invalid")
 
 
 def test_missing_flow_timing_parameters():
@@ -207,7 +207,7 @@ def test_missing_flow_timing_parameters():
     pore_volume = 200.0
 
     with pytest.raises(ValueError, match="flow_tedges must be provided"):
-        residence_time(flow=flow_values, aquifer_pore_volume=pore_volume, direction="extraction_to_infiltration")
+        residence_time(flow=flow_values, aquifer_pore_volumes=pore_volume, direction="extraction_to_infiltration")
 
 
 def test_flow_tedges_length_validation():
@@ -220,7 +220,7 @@ def test_flow_tedges_length_validation():
         residence_time(
             flow=flow_values,
             flow_tedges=flow_tedges,
-            aquifer_pore_volume=pore_volume,
+            aquifer_pore_volumes=pore_volume,
             direction="extraction_to_infiltration",
         )
 
@@ -252,7 +252,7 @@ def test_edge_cases_zero_flow():
     pore_volume = 100.0
 
     result = residence_time(
-        flow=zero_flow, flow_tedges=flow_tedges, aquifer_pore_volume=pore_volume, direction="extraction_to_infiltration"
+        flow=zero_flow, flow_tedges=flow_tedges, aquifer_pore_volumes=pore_volume, direction="extraction_to_infiltration"
     )
 
     # Zero flow should result in infinite/NaN residence times
@@ -268,7 +268,7 @@ def test_edge_cases_very_large_pore_volume():
     result = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=large_pore_volume,
+        aquifer_pore_volumes=large_pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -285,7 +285,7 @@ def test_negative_flow():
     result = residence_time(
         flow=negative_flow,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -302,14 +302,14 @@ def test_flow_variations(sample_flow_data):
     result1 = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
     result2 = residence_time(
         flow=flow_values * 2,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -331,7 +331,7 @@ def test_consistency_between_timing_methods():
 
     # Method 1: flow_tedges
     result_tedges = residence_time(
-        flow=flow_values, flow_tedges=dates, aquifer_pore_volume=pore_volume, direction="extraction_to_infiltration"
+        flow=flow_values, flow_tedges=dates, aquifer_pore_volumes=pore_volume, direction="extraction_to_infiltration"
     )
 
     # Method 2: flow_tstart (assuming flow is measured at start of intervals)
@@ -342,7 +342,7 @@ def test_consistency_between_timing_methods():
     result_tstart = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges_from_tstart,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -354,7 +354,7 @@ def test_consistency_between_timing_methods():
     result_tend = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges_from_tend,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -378,7 +378,7 @@ def test_array_like_flow_input():
     # Test with list
     flow_list = [100.0, 110.0, 105.0, 95.0, 98.0]
     result_list = residence_time(
-        flow=flow_list, flow_tedges=flow_tedges, aquifer_pore_volume=pore_volume, direction="extraction_to_infiltration"
+        flow=flow_list, flow_tedges=flow_tedges, aquifer_pore_volumes=pore_volume, direction="extraction_to_infiltration"
     )
 
     # Test with numpy array
@@ -386,7 +386,7 @@ def test_array_like_flow_input():
     result_array = residence_time(
         flow=flow_array,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -401,12 +401,12 @@ def test_single_pore_volume_vs_array():
 
     # Single float
     result_float = residence_time(
-        flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volume=200.0, direction="extraction_to_infiltration"
+        flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volumes=200.0, direction="extraction_to_infiltration"
     )
 
     # Array with single element
     result_array = residence_time(
-        flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volume=[200.0], direction="extraction_to_infiltration"
+        flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volumes=[200.0], direction="extraction_to_infiltration"
     )
 
     # Results should be identical
@@ -422,14 +422,14 @@ def test_infiltration_vs_extraction_symmetry():
     result_extraction = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
     result_infiltration = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="infiltration_to_extraction",
     )
 

@@ -61,7 +61,7 @@ def _infiltration_to_extraction_weights(
         flow=flow,
         flow_tedges=tedges,
         index=cout_tedges,
-        aquifer_pore_volume=aquifer_pore_volumes,
+        aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=retardation_factor,
         direction="extraction_to_infiltration",
     )
@@ -174,7 +174,7 @@ def _extraction_to_infiltration_weights(
         flow=flow,
         flow_tedges=tedges,
         index=cin_tedges,
-        aquifer_pore_volume=aquifer_pore_volumes,
+        aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=retardation_factor,
         direction="infiltration_to_extraction",  # Computing from infiltration perspective
     )

@@ -61,7 +61,7 @@ def test_exact_analytical_constant_deposition():
         flow=flow_values,
         flow_tedges=tedges,
         index=cout_tedges,
-        aquifer_pore_volume=params["aquifer_pore_volume"],
+        aquifer_pore_volumes=params["aquifer_pore_volume"],
         retardation_factor=params["retardation_factor"],
         direction="extraction_to_infiltration",
     )
@@ -116,7 +116,7 @@ def test_exact_analytical_varying_flow():
         flow=flow_values,
         flow_tedges=tedges,
         index=cout_tedges,
-        aquifer_pore_volume=params["aquifer_pore_volume"],
+        aquifer_pore_volumes=params["aquifer_pore_volume"],
         retardation_factor=params["retardation_factor"],
         direction="extraction_to_infiltration",
     )
@@ -172,7 +172,7 @@ def test_exact_analytical_retardation_factor():
             flow=flow_values,
             flow_tedges=tedges,
             index=cout_tedges,
-            aquifer_pore_volume=params["aquifer_pore_volume"],
+            aquifer_pore_volumes=params["aquifer_pore_volume"],
             retardation_factor=retardation_factor,
             direction="extraction_to_infiltration",
         )

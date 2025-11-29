@@ -97,7 +97,7 @@ def compute_deposition_weights(
         flow=flow_values,
         flow_tedges=tedges,
         index=cout_tedges,
-        aquifer_pore_volume=float(aquifer_pore_volume),
+        aquifer_pore_volumes=float(aquifer_pore_volume),
         retardation_factor=retardation_factor,
         direction="extraction_to_infiltration",
     )
@@ -433,7 +433,7 @@ def spinup_duration(
     rt = residence_time(
         flow=flow,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=aquifer_pore_volume,
+        aquifer_pore_volumes=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="infiltration_to_extraction",
     )

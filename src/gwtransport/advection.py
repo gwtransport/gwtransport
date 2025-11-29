@@ -181,7 +181,7 @@ def infiltration_to_extraction_series(
         flow=flow,
         flow_tedges=tedges,
         index=tedges,
-        aquifer_pore_volume=aquifer_pore_volume,
+        aquifer_pore_volumes=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="infiltration_to_extraction",
     )
@@ -298,7 +298,7 @@ def extraction_to_infiltration_series(
         flow=flow,
         flow_tedges=tedges,
         index=tedges,
-        aquifer_pore_volume=aquifer_pore_volume,
+        aquifer_pore_volumes=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="extraction_to_infiltration",
     )
@@ -710,7 +710,7 @@ def infiltration_to_extraction(
     >>> R_freundlich = freundlich_retardation(
     ...     concentration=np.maximum(cin_nonlinear, 0.1),
     ...     freundlich_k=0.02,
-    ...     freundlich_n=0.75,  # Favorable sorption
+    ...     freundlich_n=0.75,  # n<1 (lower C travels faster)
     ...     bulk_density=1600.0,
     ...     porosity=0.35,
     ... )
