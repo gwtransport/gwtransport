@@ -276,8 +276,8 @@ class TestFrontTrackingAPI:
             if t_upper < t_first_expected:
                 assert cout[i] == 0.0
 
-    def test_api_freundlich_favorable_n_greater_than_one(self):
-        """API works for favorable Freundlich sorption (n>1)."""
+    def test_api_freundlich_n_gt_1_n_greater_than_one(self):
+        """API works for Freundlich with n>1 sorption (n>1)."""
         dates = pd.date_range(start="2020-01-01", periods=5, freq="D")
         tedges = compute_time_edges(
             tedges=None,
@@ -304,7 +304,7 @@ class TestFrontTrackingAPI:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=np.array([500.0]),
             freundlich_k=0.01,
-            freundlich_n=2.0,  # favorable (n>1)
+            freundlich_n=2.0,  # n>1 (n>1)
             bulk_density=1500.0,
             porosity=0.3,
         )
@@ -314,8 +314,8 @@ class TestFrontTrackingAPI:
         assert np.all(cout >= 0.0)
         assert np.all(cout <= np.max(cin) * (1.0 + 1e-14))
 
-    def test_api_freundlich_unfavorable_n_less_than_one(self):
-        """API works for unfavorable Freundlich sorption (n<1)."""
+    def test_api_freundlich_n_lt_1_n_less_than_one(self):
+        """API works for Freundlich with n<1 sorption (n<1)."""
         dates = pd.date_range(start="2020-01-01", periods=5, freq="D")
         tedges = compute_time_edges(
             tedges=None,
@@ -342,7 +342,7 @@ class TestFrontTrackingAPI:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=np.array([500.0]),
             freundlich_k=0.01,
-            freundlich_n=0.5,  # unfavorable (n<1)
+            freundlich_n=0.5,  # n<1 (n<1)
             bulk_density=1500.0,
             porosity=0.3,
         )

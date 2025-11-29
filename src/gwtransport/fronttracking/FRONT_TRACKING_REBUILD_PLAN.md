@@ -17,7 +17,7 @@
   - Characteristic velocity functions
   - First arrival time computation
   - **All 39 unit tests passing** with machine precision (rtol=1e-14)
-  - Complete coverage for both n>1 (favorable) and n<1 (unfavorable) sorption regimes
+  - Complete coverage for both n>1 and n<1 sorption regimes
 
 - ✅ Phase 2.1-2.4: Wave Representation (front_tracking_waves.py)
   - Abstract Wave base class with position and concentration methods
@@ -34,7 +34,7 @@
   - find_rarefaction_boundary_intersections (head/tail detection, including rarefaction–rarefaction)
   - find_outlet_crossing (for all wave types)
   - **All 59 unit tests passing** with machine precision (rtol=1e-14)
-  - Complete coverage for both n>1 (favorable) and n<1 (unfavorable) sorption regimes
+  - Complete coverage for both n>1 and n<1 sorption regimes
   - Enhanced test suite includes:
     - TestShockVelocityAndEntropy: tests verifying shock velocity ordering and entropy conditions
     - TestRarefactionRarefactionIntersections: comprehensive rarefaction fan interaction tests
@@ -94,7 +94,7 @@
   - TestWaveCreation: Verify correct wave type creation for n>1
     - Step increase (compression) → shock formation
     - Step decrease (expansion) → rarefaction formation
-  - TestWaveCreationUnfavorable: Verify correct wave type creation for n<1 (NEW)
+  - TestWaveCreation_n_lt_1: Verify correct wave type creation for n<1 (NEW)
     - Step decrease (10→2) → shock formation (reversed physics)
     - Step increase (2→10) → rarefaction formation (reversed physics)
   - TestAnalyticalCorrectness: Verify analytical solution accuracy
@@ -103,7 +103,7 @@
     - All shocks satisfy Lax entropy condition
     - No negative concentrations (rtol=1e-14, tightened)
     - Output never exceeds input (rtol=1e-10, tightened)
-  - TestEntropyAndPhysicsUnfavorable: Physical correctness validation for n<1 (NEW)
+  - TestEntropyAndPhysics_n_lt_1: Physical correctness validation for n<1 (NEW)
     - Full pulse simulation with exact mass balance (rtol=1e-13)
     - Complex multi-interaction scenario with entropy validation
   - TestComplexInteractions: Multi-wave scenarios (NEW)

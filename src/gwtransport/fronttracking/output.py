@@ -542,7 +542,7 @@ def integrate_rarefaction_exact(
     **Special Cases**:
     - If (kappa*t + mu - 1) <= 0, concentration is 0 (unphysical region)
     - For beta = 0 (n = 1), use ConstantRetardation instead
-    - For t_end = +∞ with exponent < 0 (favorable sorption), integral converges to 0
+    - For t_end = +∞ with exponent < 0 (n>1), integral converges to 0
     - For t_start = -∞, antiderivative evaluates to 0
 
     Examples
@@ -603,10 +603,10 @@ def integrate_rarefaction_exact(
             if t > 0:
                 # t = +∞
                 if exponent < 0:
-                    # For favorable sorption (n > 1, beta < 0, exponent < 0):
+                    # For n > 1 (higher C travels faster, beta < 0, exponent < 0):
                     # As t → +∞, base → +∞, so base^exponent → 0
                     return 0.0
-                # For unfavorable sorption (n < 1, beta > 0, exponent > 0):
+                # For n < 1 (lower C travels faster, beta > 0, exponent > 0):
                 # As t → +∞, base → +∞, so base^exponent → +∞
                 # This should not happen for physical rarefactions to C=0
                 msg = f"Integral diverges at t=+∞ with exponent={exponent} > 0"

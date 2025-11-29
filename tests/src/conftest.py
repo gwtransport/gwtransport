@@ -123,7 +123,7 @@ def standard_freundlich_params():
     """
     return {
         "freundlich_k": 0.001,  # Reduced from typical to avoid extreme retardation
-        "freundlich_n": 0.75,  # Favorable sorption (n < 1)
+        "freundlich_n": 0.75,  # n<1 (lower C travels faster)
         "bulk_density": 1600.0,  # kg/m³
         "porosity": 0.35,
     }
@@ -228,7 +228,7 @@ def pytest_generate_tests(metafunc):
                 ),
                 pytest.param(
                     {"freundlich_k": 0.001, "freundlich_n": 0.75, "bulk_density": 1600.0, "porosity": 0.35},
-                    id="nonlinear_favorable",
+                    id="nonlinear_n_lt_1",
                 ),
             ],
         )

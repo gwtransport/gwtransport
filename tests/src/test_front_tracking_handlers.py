@@ -34,7 +34,7 @@ freundlich_sorptions = [
 
 @pytest.fixture
 def freundlich_sorption():
-    """Standard Freundlich sorption for testing (n>1, favorable)."""
+    """Standard Freundlich sorption for testing (n>1, n>1)."""
     return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
 
@@ -433,8 +433,8 @@ class TestOutletCrossingHandler:
 class TestInletWaveCreation:
     """Test create_inlet_waves_at_time function."""
 
-    def test_step_increase_creates_shock_favorable(self, freundlich_sorption):
-        """Test step increase creates shock for favorable sorption (n>1)."""
+    def test_step_increase_creates_shock_n_gt_1(self, freundlich_sorption):
+        """Test step increase creates shock for n>1 (higher C travels faster)."""
         # For n>1: higher C → higher R → slower velocity
         # So C: 0→10 means slow→slower velocity, but initial C=0 has R=1 (fastest)
         # Actually C: 0→10 means fast→slow, which is expansion (rarefaction)
@@ -442,11 +442,11 @@ class TestInletWaveCreation:
             c_prev=0.0, c_new=10.0, t=10.0, flow=100.0, sorption=freundlich_sorption, v_inlet=0.0
         )
 
-        # For n=2 (favorable), C: 0→10 is rarefaction
+        # For n=2 (n>1), C: 0→10 is rarefaction
         assert len(waves) == 1
 
     def test_step_increase_creates_rarefaction(self, freundlich_sorption):
-        """Test step decrease in concentration creates rarefaction for favorable sorption."""
+        """Test step decrease in concentration creates rarefaction for n>1."""
         # For n>1: C: 10→2 (both non-zero to avoid C=0 special case)
         # vel(10) = 100/R(10), vel(2) = 100/R(2)
         # Since R(10) > R(2), vel(10) < vel(2)
@@ -460,7 +460,7 @@ class TestInletWaveCreation:
         assert isinstance(waves[0], RarefactionWave), "Expected wave to be a rarefaction for expansion"
 
     def test_step_increase_creates_shock(self, freundlich_sorption):
-        """Test step increase in concentration creates shock for favorable sorption."""
+        """Test step increase in concentration creates shock for n>1."""
         # For n>1: C: 2→10
         # vel(2) > vel(10) → new water is slower
         # vel_new < vel_prev → compression → shock

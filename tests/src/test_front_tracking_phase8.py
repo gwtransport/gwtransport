@@ -246,8 +246,8 @@ class TestConstantRetardation:
         assert np.max(valid_cout) <= 10.5, "Output should not exceed input"
 
 
-class TestWaveCreationUnfavorable:
-    """Test wave creation for unfavorable sorption (n<1)."""
+class TestWaveCreation_n_lt_1:
+    """Test wave creation for n<1 (lower C travels faster)."""
 
     def test_shock_formation_for_n_less_1_high_to_low(self):
         """For n<1: step decrease (10→2) = compression = shock (reversed from n>1)."""
@@ -268,7 +268,7 @@ class TestWaveCreationUnfavorable:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=np.array([400.0]),
             freundlich_k=0.01,
-            freundlich_n=0.5,  # n<1: unfavorable sorption
+            freundlich_n=0.5,  # n<1: n<1
             bulk_density=1500.0,
             porosity=0.3,
         )
@@ -309,7 +309,7 @@ class TestWaveCreationUnfavorable:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=np.array([400.0]),
             freundlich_k=0.01,
-            freundlich_n=0.5,  # n<1: unfavorable sorption
+            freundlich_n=0.5,  # n<1: n<1
             bulk_density=1500.0,
             porosity=0.3,
         )
@@ -326,8 +326,8 @@ class TestWaveCreationUnfavorable:
             )
 
 
-class TestEntropyAndPhysicsUnfavorable:
-    """Test physical correctness for unfavorable sorption (n<1)."""
+class TestEntropyAndPhysics_n_lt_1:
+    """Test physical correctness for n<1 (lower C travels faster)."""
 
     def test_physical_correctness_n_less_1(self):
         """Physical correctness for n<1: non-negative output, entropy, bounded concentrations."""
@@ -349,7 +349,7 @@ class TestEntropyAndPhysicsUnfavorable:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=np.array([100.0]),  # Small volume for reasonable transport
             freundlich_k=0.01,
-            freundlich_n=0.5,  # n<1: unfavorable sorption
+            freundlich_n=0.5,  # n<1: n<1
             bulk_density=1500.0,
             porosity=0.3,
         )
@@ -396,7 +396,7 @@ class TestEntropyAndPhysicsUnfavorable:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=np.array([300.0]),
             freundlich_k=0.01,
-            freundlich_n=0.5,  # n<1: unfavorable sorption
+            freundlich_n=0.5,  # n<1: n<1
             bulk_density=1500.0,
             porosity=0.3,
         )
@@ -433,7 +433,7 @@ class TestComplexInteractions:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=np.array([300.0]),
             freundlich_k=0.01,
-            freundlich_n=2.0,  # n>1: favorable sorption
+            freundlich_n=2.0,  # n>1: n>1
             bulk_density=1500.0,
             porosity=0.3,
         )
@@ -474,7 +474,7 @@ class TestComplexInteractions:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=np.array([300.0]),
             freundlich_k=0.01,
-            freundlich_n=2.0,  # n>1: favorable sorption
+            freundlich_n=2.0,  # n>1: n>1
             bulk_density=1500.0,
             porosity=0.3,
         )

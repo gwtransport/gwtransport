@@ -25,7 +25,7 @@ from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave,
 
 @pytest.fixture
 def freundlich_sorption():
-    """Standard Freundlich sorption for testing (n>1, favorable)."""
+    """Standard Freundlich sorption for testing (n>1)."""
     return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
 

@@ -5,12 +5,12 @@ This module tests that outlet concentrations ultimately plateau at the final
 inlet concentration for various wave types and sorption conditions.
 
 Tests cover:
-- Favorable sorption (n>1): shocks from increases, rarefactions from decreases
-- Unfavorable sorption (n<1): rarefactions from increases, shocks from decreases
+- n>1 sorption (n>1): shocks from increases, rarefactions from decreases
+- n<1 sorption (n<1): rarefactions from increases, shocks from decreases
 - Various inlet patterns: steps, pulses, multiple changes
 - Plateau at C=0: Important limiting case for remediation and tracer tests
 
-All tests now pass for both favorable and unfavorable sorption regimes.
+All tests now pass for both n>1 and n<1 regimes.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ../LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -27,10 +27,10 @@ from gwtransport.utils import compute_time_edges
 @pytest.mark.parametrize(
     ("c_initial", "c_final", "freundlich_n", "expected_wave_type"),
     [
-        # Favorable sorption (n > 1)
+        # n>1 sorption (n > 1)
         (2.0, 10.0, 2.0, "shock"),  # Increase creates shock
         (10.0, 2.0, 2.0, "rarefaction"),  # Decrease creates rarefaction
-        # Unfavorable sorption (n < 1)
+        # n<1 sorption (n < 1)
         (2.0, 10.0, 0.5, "rarefaction"),  # Increase creates rarefaction
         (10.0, 2.0, 0.5, "shock"),  # Decrease creates shock
     ],
@@ -46,7 +46,7 @@ def test_step_change_plateau(c_initial, c_final, freundlich_n, expected_wave_typ
     c_final : float
         Final inlet concentration
     freundlich_n : float
-        Freundlich exponent (n>1: favorable, n<1: unfavorable)
+        Freundlich exponent (n>1: n>1, n<1: n<1)
     expected_wave_type : str
         Expected wave type created ("shock" or "rarefaction")
     """
@@ -62,7 +62,7 @@ def test_step_change_plateau(c_initial, c_final, freundlich_n, expected_wave_typ
     aquifer_pore_volume = 200.0
 
     # Freundlich parameters
-    # For unfavorable sorption (n<1), use much smaller k_f to get reasonable residence times
+    # For n<1 (lower C travels faster), use much smaller k_f to get reasonable residence times
     # n=2.0, k=0.01 gives ~18-37 day residence times
     # n=0.5, k=0.0001 gives ~6-22 day residence times (comparable)
     # Previous value of 0.1 for n<1 gave 4000-20000 day residence times!
@@ -131,8 +131,8 @@ def test_step_change_plateau(c_initial, c_final, freundlich_n, expected_wave_typ
 @pytest.mark.parametrize(
     "freundlich_n",
     [
-        2.0,  # Favorable sorption
-        0.5,  # Unfavorable sorption
+        2.0,  # n>1 sorption
+        0.5,  # n<1 sorption
     ],
 )
 def test_pulse_returns_to_baseline(freundlich_n):
@@ -145,7 +145,7 @@ def test_pulse_returns_to_baseline(freundlich_n):
     Parameters
     ----------
     freundlich_n : float
-        Freundlich exponent (n>1: favorable, n<1: unfavorable)
+        Freundlich exponent (n>1: n>1, n<1: n<1)
     """
     # Setup
     dates = pd.date_range(start="2020-01-01", periods=300, freq="D")
@@ -161,7 +161,7 @@ def test_pulse_returns_to_baseline(freundlich_n):
     aquifer_pore_volume = 200.0
 
     # Freundlich parameters
-    # For unfavorable sorption (n<1), use much smaller k_f to get reasonable residence times
+    # For n<1 (lower C travels faster), use much smaller k_f to get reasonable residence times
     # n=2.0, k=0.01 gives ~18-37 day residence times
     # n=0.5, k=0.0001 gives ~6-22 day residence times (comparable)
     # Previous value of 0.1 for n<1 gave 4000-20000 day residence times!
@@ -188,11 +188,11 @@ def test_pulse_returns_to_baseline(freundlich_n):
 
     # Verify both wave types were created
     if freundlich_n > 1.0:
-        # Favorable: shock on rise, rarefaction on fall
+        # n>1: shock on rise, rarefaction on fall
         assert structure[0]["n_shocks"] >= 1, "Expected shock from pulse rising edge"
         assert structure[0]["n_rarefactions"] >= 1, "Expected rarefaction from pulse falling edge"
     else:
-        # Unfavorable: rarefaction on rise, shock on fall
+        # n<1: rarefaction on rise, shock on fall
         assert structure[0]["n_rarefactions"] >= 1, "Expected rarefaction from pulse rising edge"
         assert structure[0]["n_shocks"] >= 1, "Expected shock from pulse falling edge"
 
@@ -218,8 +218,8 @@ def test_pulse_returns_to_baseline(freundlich_n):
 @pytest.mark.parametrize(
     "freundlich_n",
     [
-        2.0,  # Favorable sorption
-        0.5,  # Unfavorable sorption
+        2.0,  # n>1 sorption
+        0.5,  # n<1 sorption
     ],
 )
 def test_multiple_steps_final_plateau(freundlich_n):
@@ -232,7 +232,7 @@ def test_multiple_steps_final_plateau(freundlich_n):
     Parameters
     ----------
     freundlich_n : float
-        Freundlich exponent (n>1: favorable, n<1: unfavorable)
+        Freundlich exponent (n>1: n>1, n<1: n<1)
     """
     # Setup
     dates = pd.date_range(start="2020-01-01", periods=400, freq="D")
@@ -249,7 +249,7 @@ def test_multiple_steps_final_plateau(freundlich_n):
     aquifer_pore_volume = 200.0
 
     # Freundlich parameters
-    # For unfavorable sorption (n<1), use much smaller k_f to get reasonable residence times
+    # For n<1 (lower C travels faster), use much smaller k_f to get reasonable residence times
     # n=2.0, k=0.01 gives ~18-37 day residence times
     # n=0.5, k=0.0001 gives ~6-22 day residence times (comparable)
     # Previous value of 0.1 for n<1 gave 4000-20000 day residence times!
@@ -302,28 +302,28 @@ def test_multiple_steps_final_plateau(freundlich_n):
 @pytest.mark.parametrize(
     ("c_initial", "freundlich_n"),
     [
-        (10.0, 2.0),  # Favorable sorption: decrease to zero
-        (10.0, 0.5),  # Unfavorable sorption: decrease to zero
+        (10.0, 2.0),  # n>1 sorption: decrease to zero
+        (10.0, 0.5),  # n<1 sorption: decrease to zero
     ],
 )
 def test_step_down_to_zero_plateau(c_initial, freundlich_n):
     """
     Test wave structure for step decrease to C≈0.
 
-    For favorable sorption (n>1), stepping down to C≈0 creates a rarefaction wave
+    For n>1 (higher C travels faster), stepping down to C≈0 creates a rarefaction wave
     whose tail moves extremely slowly (R→∞ as C→c_min). The rarefaction may take
     thousands of years to fully propagate, but the wave structure should be correct.
 
-    For unfavorable sorption (n<1), the wave completes quickly and outlet reaches zero.
+    For n<1 (lower C travels faster), the wave completes quickly and outlet reaches zero.
 
     Parameters
     ----------
     c_initial : float
         Initial inlet concentration (> 0)
     freundlich_n : float
-        Freundlich exponent (n>1: favorable, n<1: unfavorable)
+        Freundlich exponent (n>1: n>1, n<1: n<1)
     """
-    # Setup - use longer simulation time for favorable sorption
+    # Setup - use longer simulation time for n>1
     n_days = 3000 if freundlich_n > 1.0 else 300
     dates = pd.date_range(start="2020-01-01", periods=n_days, freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -359,25 +359,25 @@ def test_step_down_to_zero_plateau(c_initial, freundlich_n):
 
     # Verify correct wave structure
     if freundlich_n > 1.0:
-        # Favorable: step down creates rarefaction
+        # n>1: step down creates rarefaction
         assert structure[0]["n_rarefactions"] >= 1, (
-            f"Expected rarefaction for favorable sorption step down, "
+            f"Expected rarefaction for n>1 step down, "
             f"got {structure[0]['n_rarefactions']} rarefactions, {structure[0]['n_shocks']} shocks"
         )
     else:
-        # Unfavorable: step down creates shock
+        # n<1: step down creates shock
         assert structure[0]["n_shocks"] >= 1, (
-            f"Expected shock for unfavorable sorption step down, "
+            f"Expected shock for n<1 step down, "
             f"got {structure[0]['n_shocks']} shocks, {structure[0]['n_rarefactions']} rarefactions"
         )
 
     # Verify concentration behavior
-    # For favorable sorption, the rarefaction wave is created but may take very long to complete
+    # For n>1, the rarefaction wave is created but may take very long to complete
     # We just need to verify the wave structure is correct (already checked above)
 
-    # For unfavorable sorption, verify it reaches near zero
+    # For n<1, verify it reaches near zero
     if freundlich_n < 1.0:
-        # For unfavorable sorption, waves complete quickly
+        # For n<1, waves complete quickly
         # Check that final concentration is near zero
         final_outlet = cout[-60:]  # Last 60 days
         final_outlet = final_outlet[~np.isnan(final_outlet)]
@@ -385,36 +385,36 @@ def test_step_down_to_zero_plateau(c_initial, freundlich_n):
         assert len(final_outlet) > 0, "No valid final concentrations"
         mean_final = np.mean(final_outlet)
 
-        # Should reach near zero for unfavorable sorption
+        # Should reach near zero for n<1
         atol = 0.1
-        assert abs(mean_final) < atol, f"Unfavorable sorption should reach zero: final={mean_final:.3e}"
-    # For favorable sorption (n>1), the rarefaction structure is verified above
+        assert abs(mean_final) < atol, f"n<1 sorption should reach zero: final={mean_final:.3e}"
+    # For n>1 (higher C travels faster), the rarefaction structure is verified above
     # The wave may take thousands of days to complete, so we don't check final concentration
 
 
 @pytest.mark.parametrize(
     "freundlich_n",
     [
-        2.0,  # Favorable sorption
-        0.5,  # Unfavorable sorption
+        2.0,  # n>1 sorption
+        0.5,  # n<1 sorption
     ],
 )
 def test_pulse_from_zero_returns_to_zero(freundlich_n):
     """
     Test wave structure for pulse from C≈0 that returns to C≈0.
 
-    For favorable sorption (n>1), the falling edge creates a rarefaction whose tail
+    For n>1 (higher C travels faster), the falling edge creates a rarefaction whose tail
     moves extremely slowly. The wave structure should be correct even if the rarefaction
     doesn't complete in finite time.
 
-    For unfavorable sorption (n<1), waves complete quickly and outlet returns to zero.
+    For n<1 (lower C travels faster), waves complete quickly and outlet returns to zero.
 
     Parameters
     ----------
     freundlich_n : float
-        Freundlich exponent (n>1: favorable, n<1: unfavorable)
+        Freundlich exponent (n>1: n>1, n<1: n<1)
     """
-    # Setup - use longer simulation time for favorable sorption
+    # Setup - use longer simulation time for n>1
     n_days = 3000 if freundlich_n > 1.0 else 300
     dates = pd.date_range(start="2020-01-01", periods=n_days, freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -455,22 +455,20 @@ def test_pulse_from_zero_returns_to_zero(freundlich_n):
 
     # Verify correct wave structure
     if freundlich_n > 1.0:
-        # Favorable: rising edge creates shock, falling edge creates rarefaction
+        # n>1: rising edge creates shock, falling edge creates rarefaction
         assert structure[0]["n_shocks"] >= 1, (
-            f"Expected shock from pulse rising edge for favorable sorption, got {structure[0]['n_shocks']} shocks"
+            f"Expected shock from pulse rising edge for n>1, got {structure[0]['n_shocks']} shocks"
         )
         assert structure[0]["n_rarefactions"] >= 1, (
-            f"Expected rarefaction from pulse falling edge for favorable sorption, "
-            f"got {structure[0]['n_rarefactions']} rarefactions"
+            f"Expected rarefaction from pulse falling edge for n>1, got {structure[0]['n_rarefactions']} rarefactions"
         )
     else:
-        # Unfavorable: rising edge creates rarefaction, falling edge creates shock
+        # n<1: rising edge creates rarefaction, falling edge creates shock
         assert structure[0]["n_rarefactions"] >= 1, (
-            f"Expected rarefaction from pulse rising edge for unfavorable sorption, "
-            f"got {structure[0]['n_rarefactions']} rarefactions"
+            f"Expected rarefaction from pulse rising edge for n<1, got {structure[0]['n_rarefactions']} rarefactions"
         )
         assert structure[0]["n_shocks"] >= 1, (
-            f"Expected shock from pulse falling edge for unfavorable sorption, got {structure[0]['n_shocks']} shocks"
+            f"Expected shock from pulse falling edge for n<1, got {structure[0]['n_shocks']} shocks"
         )
 
     # Verify concentration is decreasing after pulse
@@ -489,8 +487,8 @@ def test_pulse_from_zero_returns_to_zero(freundlich_n):
         f"Final concentration should decrease from pulse: final={mean_final:.3e}, pulse={c_pulse}"
     )
 
-    # For unfavorable sorption (n<1), should actually return to near zero
+    # For n<1 (lower C travels faster), should actually return to near zero
     if freundlich_n < 1.0:
         atol = 0.1
-        assert abs(mean_final) < atol, f"Unfavorable sorption should return to zero: final={mean_final:.3e}"
-    # For favorable sorption (n>1), just verify it's decreasing (may not reach c_min in finite time)
+        assert abs(mean_final) < atol, f"n<1 sorption should return to zero: final={mean_final:.3e}"
+    # For n>1 (higher C travels faster), just verify it's decreasing (may not reach c_min in finite time)

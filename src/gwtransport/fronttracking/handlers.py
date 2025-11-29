@@ -69,14 +69,14 @@ def handle_characteristic_collision(
     """
     # Get c_min from sorption to determine concentration threshold
     c_min = getattr(char1.sorption, "c_min", 0.0)
-    is_unfavorable = isinstance(char1.sorption, FreundlichSorption) and char1.sorption.n < 1.0
+    is_n_lt_1 = isinstance(char1.sorption, FreundlichSorption) and char1.sorption.n < 1.0
 
     # Special case: if one characteristic has C near c_min
     # Need to determine if this is:
     # 1. C≈c_min from initial condition being overtaken by C>0 → keep C>0
     # 2. C≈c_min from inlet (clean water) catching C>0 → analyze velocities
-    # Only use special handling for unfavorable sorption with c_min=0 where R(0)=1
-    if char1.concentration <= c_min and char2.concentration > c_min and is_unfavorable and c_min == 0:
+    # Only use special handling for n<1 with c_min=0 where R(0)=1
+    if char1.concentration <= c_min and char2.concentration > c_min and is_n_lt_1 and c_min == 0:
         # char1 is C≈0, char2 is C>0
         # Check velocities to determine who is catching whom
         vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
@@ -109,7 +109,7 @@ def handle_characteristic_collision(
             char1.is_active = False
             return []
 
-    elif char2.concentration <= c_min and char1.concentration > c_min and is_unfavorable and c_min == 0:
+    elif char2.concentration <= c_min and char1.concentration > c_min and is_n_lt_1 and c_min == 0:
         # char2 is C≈0, char1 is C>0
         vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
         vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
@@ -140,8 +140,8 @@ def handle_characteristic_collision(
             return []
 
     # Normal case: analyze velocities to determine wave type
-    # This now handles all cases for favorable sorption (n>1) and
-    # concentrations above c_min for unfavorable sorption
+    # This now handles all cases for n>1 (higher C travels faster) and
+    # concentrations above c_min for n<1 (lower C travels faster)
     vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
     vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
 
@@ -1028,12 +1028,12 @@ def create_inlet_waves_at_time(
 
     # Get c_min from sorption if available (determines when to use special treatment)
     c_min = getattr(sorption, "c_min", 0.0)
-    is_unfavorable = isinstance(sorption, FreundlichSorption) and sorption.n < 1.0
+    is_n_lt_1 = isinstance(sorption, FreundlichSorption) and sorption.n < 1.0
 
-    # Special case: c_prev ≈ 0 AND this is unfavorable sorption with c_min=0
-    # For unfavorable sorption (n<1), R(0)=1 is physically correct
+    # Special case: c_prev ≈ 0 AND this is n<1 with c_min=0
+    # For n<1 (lower C travels faster), R(0)=1 is physically correct
     # The C=0 "water" ahead has a well-defined velocity and represents initial condition
-    if c_prev <= c_min and is_unfavorable and c_min == 0:
+    if c_prev <= c_min and is_n_lt_1 and c_min == 0:
         # Create characteristic wave with new concentration
         # The front propagates at v(c_new), leaving c_new behind and 0 ahead
         char = CharacteristicWave(
@@ -1045,9 +1045,9 @@ def create_inlet_waves_at_time(
         )
         return [char]
 
-    # Special case: c_new ≈ 0 AND this is unfavorable sorption with c_min=0
-    # For unfavorable sorption, clean water (C=0) has well-defined velocity
-    if c_new <= c_min and is_unfavorable and c_min == 0:
+    # Special case: c_new ≈ 0 AND this is n<1 with c_min=0
+    # For n<1 (lower C travels faster), clean water (C=0) has well-defined velocity
+    if c_new <= c_min and is_n_lt_1 and c_min == 0:
         # Create characteristic wave with zero concentration
         # This represents clean water entering the domain
         char = CharacteristicWave(
@@ -1060,7 +1060,7 @@ def create_inlet_waves_at_time(
         return [char]
 
     # Normal case: analyze velocities to determine wave type
-    # For favorable sorption (n>1), even stepping down to c_min creates proper waves
+    # For n>1 (higher C travels faster), even stepping down to c_min creates proper waves
     # The velocity analysis will determine if it's a shock, rarefaction, or characteristic
     vel_prev = characteristic_velocity(c_prev, flow, sorption)
     vel_new = characteristic_velocity(c_new, flow, sorption)

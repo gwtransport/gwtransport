@@ -163,8 +163,8 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     rarefactions = [w for w in structure["waves"] if isinstance(w, RarefactionWave)]
     raref_ordering_violations = 0
     for raref in rarefactions:
-        # For n>1 (favorable), head should be higher concentration (faster)
-        # For n<1 (unfavorable), head should be lower concentration (faster)
+        # For n>1 (higher C travels faster), head should be higher concentration (faster)
+        # For n<1 (lower C travels faster), head should be lower concentration (faster)
         # We can check this via velocities: head_velocity should always be >= tail_velocity
         if raref.head_velocity() < raref.tail_velocity() - 1e-10:
             raref_ordering_violations += 1
