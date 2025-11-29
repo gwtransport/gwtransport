@@ -69,6 +69,10 @@ def compute_average_heights(
     >>> print(f"Shape: {avg_heights.shape}")
     Shape: (2, 2)
     """
+    # Convert inputs to arrays
+    x_edges = np.asarray(x_edges)
+    y_edges = np.asarray(y_edges)
+
     y_tl, y_tr = y_edges[:-1, :-1], y_edges[:-1, 1:]
     y_bl, y_br = y_edges[1:, :-1], y_edges[1:, 1:]
     widths = np.diff(x_edges)

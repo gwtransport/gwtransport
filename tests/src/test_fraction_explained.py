@@ -34,7 +34,7 @@ def test_single_pore_volume_constant_flow(constant_flow_setup):
     result = fraction_explained(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -63,7 +63,7 @@ def test_multiple_pore_volumes_gradual_increase(constant_flow_setup, multiple_po
     result = fraction_explained(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=multiple_pore_volumes,
+        aquifer_pore_volumes=multiple_pore_volumes,
         direction="extraction_to_infiltration",
     )
 
@@ -104,7 +104,7 @@ def test_zero_flow_all_invalid():
     result = fraction_explained(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volumes,
+        aquifer_pore_volumes=pore_volumes,
         direction="extraction_to_infiltration",
     )
 
@@ -127,7 +127,7 @@ def test_very_large_pore_volumes_all_invalid():
     result = fraction_explained(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=large_pore_volumes,
+        aquifer_pore_volumes=large_pore_volumes,
         direction="extraction_to_infiltration",
     )
 
@@ -149,7 +149,7 @@ def test_retardation_factor_effect(constant_flow_setup):
     result_no_retardation = fraction_explained(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         retardation_factor=1.0,
         direction="extraction_to_infiltration",
     )
@@ -157,7 +157,7 @@ def test_retardation_factor_effect(constant_flow_setup):
     result_with_retardation = fraction_explained(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         retardation_factor=3.0,
         direction="extraction_to_infiltration",
     )
@@ -181,14 +181,14 @@ def test_direction_consistency(constant_flow_setup, multiple_pore_volumes):
     result_extraction = fraction_explained(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=multiple_pore_volumes,
+        aquifer_pore_volumes=multiple_pore_volumes,
         direction="extraction_to_infiltration",
     )
 
     result_infiltration = fraction_explained(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=multiple_pore_volumes,
+        aquifer_pore_volumes=multiple_pore_volumes,
         direction="infiltration_to_extraction",
     )
 
@@ -236,7 +236,7 @@ def test_edge_case_single_time_point():
     result = fraction_explained(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -259,7 +259,7 @@ def test_mixed_valid_invalid_residence_times():
     result = fraction_explained(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volumes,
+        aquifer_pore_volumes=pore_volumes,
         direction="extraction_to_infiltration",
     )
 
@@ -285,7 +285,7 @@ def test_input_validation_missing_parameters():
     with pytest.raises(ValueError):
         fraction_explained(
             flow=np.array([100.0, 100.0]),
-            aquifer_pore_volume=200.0,
+            aquifer_pore_volumes=200.0,
         )
 
 
@@ -298,7 +298,7 @@ def test_invalid_direction():
         fraction_explained(
             flow=flow_values,
             flow_tedges=flow_tedges,
-            aquifer_pore_volume=200.0,
+            aquifer_pore_volumes=200.0,
             direction="invalid_direction",
         )
 
@@ -315,14 +315,14 @@ def test_array_consistency():
     result_list = fraction_explained(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volumes_list,
+        aquifer_pore_volumes=pore_volumes_list,
         direction="extraction_to_infiltration",
     )
 
     result_array = fraction_explained(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volumes_array,
+        aquifer_pore_volumes=pore_volumes_array,
         direction="extraction_to_infiltration",
     )
 
@@ -346,7 +346,7 @@ def test_numerical_precision():
     result = fraction_explained(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volumes,
+        aquifer_pore_volumes=pore_volumes,
         direction="extraction_to_infiltration",
     )
 
@@ -376,7 +376,7 @@ def test_monotonic_behavior_across_pore_volumes():
     result = fraction_explained(
         flow=flow_values,
         flow_tedges=flow_tedges,
-        aquifer_pore_volume=pore_volumes,
+        aquifer_pore_volumes=pore_volumes,
         direction="extraction_to_infiltration",
     )
 

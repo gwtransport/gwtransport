@@ -274,6 +274,9 @@ def gamma_pdf(
     pdf : numpy.ndarray
         PDF values corresponding to the input r values.
     """
+    # Convert input to array
+    r = np.asarray(r)
+
     # Compute the transformed PDF
     t_values = 10 ** (r / log_removal_rate)
 
@@ -308,6 +311,9 @@ def gamma_cdf(
     cdf : numpy.ndarray
         CDF values corresponding to the input r values.
     """
+    # Convert input to array
+    r = np.asarray(r)
+
     # Compute t values corresponding to r values
     t_values = 10 ** (r / log_removal_rate)
 

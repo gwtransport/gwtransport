@@ -39,8 +39,8 @@ class FreundlichSorption:
     - k_f is Freundlich coefficient [(volume/mass)^(1/n)]
     - n is Freundlich exponent (dimensionless)
 
-    For n > 1: favorable sorption (higher C travels faster)
-    For n < 1: unfavorable sorption (higher C travels slower)
+    For n > 1: Higher C travels faster
+    For n < 1: Higher C travels slower
     For n = 1: linear (not supported, use ConstantRetardation instead)
 
     Parameters
@@ -101,7 +101,7 @@ class FreundlichSorption:
 
     For Freundlich sorption, R depends on C, which creates nonlinear wave behavior.
 
-    For favorable sorption (n>1), R(C)→∞ as C→0, which can cause extremely slow
+    For n>1 (higher C travels faster), R(C)→∞ as C→0, which can cause extremely slow
     wave propagation. The c_min parameter prevents this by enforcing a minimum
     concentration, making R(C) finite for all C≥0.
     """
@@ -163,7 +163,7 @@ class FreundlichSorption:
         c_arr = np.asarray(c)
 
         if self.c_min == 0 and self.n < 1.0:
-            # Only for unfavorable sorption (n<1) where R(0)=1 is physically correct
+            # Only for n<1 (lower C travels faster) where R(0)=1 is physically correct
             result = np.where(c_arr <= 0, 1.0, self._compute_retardation(c_arr))
         else:
             c_eff = np.maximum(c_arr, self.c_min)
@@ -207,7 +207,7 @@ class FreundlichSorption:
         c_arr = np.asarray(c)
 
         if self.c_min == 0 and self.n < 1.0:
-            # Only for unfavorable sorption (n<1) where C=0 is physically valid
+            # Only for n<1 (lower C travels faster) where C=0 is physically valid
             sorbed = np.where(
                 c_arr <= 0, 0.0, (self.bulk_density / self.porosity) * self.k_f * (c_arr ** (1.0 / self.n))
             )
@@ -304,7 +304,7 @@ class FreundlichSorption:
         law across the shock discontinuity. It ensures that the total mass flux
         (advective transport) is conserved.
 
-        For physical shocks in favorable sorption (n > 1):
+        For physical shocks with n > 1 (higher C travels faster):
         - c_left > c_right (concentration decreases across shock)
         - The shock velocity is between the characteristic velocities
 
@@ -371,12 +371,12 @@ class FreundlichSorption:
         replaced by rarefaction waves. The entropy condition prevents non-physical
         expansion shocks.
 
-        For favorable sorption (n > 1):
+        For n > 1 (higher C travels faster):
         - Physical shocks have c_left > c_right
         - Characteristic from left is faster: λ(c_left) > λ(c_right)
         - Shock velocity is between them
 
-        For unfavorable sorption (n < 1):
+        For n < 1 (lower C travels faster):
         - Physical shocks have c_left < c_right
         - Characteristic from left is slower: λ(c_left) < λ(c_right)
         - Shock velocity is still between them
@@ -677,9 +677,9 @@ def compute_first_front_arrival_time(
     (e.g., 0→C transition), this is when that characteristic reaches v_max.
 
     For cases with rarefaction waves:
-    - n>1 (favorable): Higher C travels faster. The head of a rarefaction
+    - n>1 (higher C travels faster): The head of a rarefaction
       (higher C) arrives first.
-    - n<1 (unfavorable): Lower C travels faster. The head of a rarefaction
+    - n<1 (lower C travels faster): The head of a rarefaction
       (lower C) arrives first.
 
     Algorithm:

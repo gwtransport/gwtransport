@@ -248,10 +248,16 @@ def generate_example_deposition_timeseries(
     # Default event dates if not provided
     if event_dates is None:
         event_dates = ["2020-06-15", "2021-03-20", "2021-09-10", "2022-07-05"]
-    event_dates = pd.DatetimeIndex(pd.to_datetime(event_dates))
+    # Convert to DatetimeIndex - handles list, array, or DatetimeIndex input
+    if isinstance(event_dates, pd.DatetimeIndex):
+        event_dates_index = event_dates
+    else:
+        # Convert ArrayLike to list for pd.to_datetime
+        event_dates_list = event_dates if isinstance(event_dates, list) else list(np.asarray(event_dates))
+        event_dates_index = pd.DatetimeIndex(pd.to_datetime(event_dates_list))
 
     event = np.zeros(n_dates)
-    for event_date in event_dates:
+    for event_date in event_dates_index:
         event_idx = dates.get_indexer([event_date], method="nearest")[0]
         event_indices = np.arange(event_idx, min(event_idx + event_duration, n_dates))
         decay_pattern = event_magnitude * np.exp(-np.arange(len(event_indices)) / event_decay_scale)
@@ -269,7 +275,7 @@ def generate_example_deposition_timeseries(
         "base": base,
         "seasonal_amplitude": seasonal_amplitude,
         "noise_scale": noise_scale,
-        "event_dates": [str(d.date()) for d in event_dates],
+        "event_dates": [str(d.date()) for d in event_dates_index],
         "event_magnitude": event_magnitude,
         "event_duration": event_duration,
         "event_decay_scale": event_decay_scale,

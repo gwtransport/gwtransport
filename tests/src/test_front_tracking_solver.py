@@ -22,7 +22,7 @@ freundlich_sorptions = [
 
 @pytest.fixture
 def freundlich_sorption():
-    """Standard Freundlich sorption for testing (n>1, favorable)."""
+    """Standard Freundlich sorption for testing (n>1, n>1)."""
     return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
 
@@ -572,8 +572,8 @@ class TestRuntimeMassBalanceVerification:
         tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-6)
 
     @pytest.mark.skip(reason="Freundlich n!=2: exact spatial rarefaction integration not yet implemented")
-    def test_mass_balance_freundlich_unfavorable(self, simple_step_input):
-        """Test mass balance with Freundlich n<1 (unfavorable, different rarefactions)."""
+    def test_mass_balance_freundlich_n_lt_1(self, simple_step_input):
+        """Test mass balance with Freundlich n<1 (n<1, different rarefactions)."""
         cin, flow, tedges = simple_step_input
         sorption = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3)
 

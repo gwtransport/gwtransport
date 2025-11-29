@@ -189,7 +189,7 @@ def compute_sigma_array(
     rt_array = residence_time(
         flow=flow,
         flow_tedges=tedges,
-        aquifer_pore_volume=aquifer_pore_volume,
+        aquifer_pore_volumes=aquifer_pore_volume,
         retardation_factor=retardation_factor,
         direction="infiltration_to_extraction",
     )[0]  # Extract first pore volume

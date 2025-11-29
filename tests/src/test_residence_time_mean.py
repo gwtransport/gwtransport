@@ -31,7 +31,7 @@ def test_basic_extraction(constant_flow_data):
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=tedges_out,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -54,7 +54,7 @@ def test_basic_infiltration(constant_flow_data):
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="infiltration_to_extraction",
     )
 
@@ -80,7 +80,7 @@ def test_varying_extraction(constant_flow_data):
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=tedges_out_highres,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
     df_highres = pd.Series(result_highres[0], index=tedges_out_highres[:-1])
@@ -89,7 +89,7 @@ def test_varying_extraction(constant_flow_data):
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=tedges_out_lowres,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -106,7 +106,7 @@ def test_retardation_factor(constant_flow_data):
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         retardation_factor=1.0,
         direction="extraction_to_infiltration",
     )
@@ -115,7 +115,7 @@ def test_retardation_factor(constant_flow_data):
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=flow_tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         retardation_factor=2.0,
         direction="extraction_to_infiltration",
     )
@@ -140,7 +140,7 @@ def test_multiple_pore_volumes(constant_flow_data):
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=flow_tedges,
-        aquifer_pore_volume=pore_volumes,
+        aquifer_pore_volumes=pore_volumes,
         direction="extraction_to_infiltration",
     )
 
@@ -170,7 +170,7 @@ def test_invalid_direction(constant_flow_data):
             flow=flow_values,
             flow_tedges=flow_tedges,
             tedges_out=tedges_out,
-            aquifer_pore_volume=pore_volume,
+            aquifer_pore_volumes=pore_volume,
             direction="invalid",
         )
 
@@ -186,7 +186,7 @@ def test_edge_cases(sample_flow_data):
         flow=zero_flow,
         flow_tedges=flow_tedges,
         tedges_out=tedges_out,
-        aquifer_pore_volume=100.0,
+        aquifer_pore_volumes=100.0,
         direction="extraction_to_infiltration",
     )
     assert np.all(np.isnan(result_zero))
@@ -196,7 +196,7 @@ def test_edge_cases(sample_flow_data):
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=tedges_out,
-        aquifer_pore_volume=1e6,
+        aquifer_pore_volumes=1e6,
         direction="extraction_to_infiltration",
     )
     assert np.all(np.isnan(result_large))
@@ -213,7 +213,7 @@ def test_negative_flow(constant_flow_data):
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=tedges_out,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -232,7 +232,7 @@ def test_flow_variations(sample_flow_data):
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=tedges_out,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -240,7 +240,7 @@ def test_flow_variations(sample_flow_data):
         flow=double_flow,
         flow_tedges=flow_tedges,
         tedges_out=tedges_out,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -267,7 +267,7 @@ def test_output_tedges_alignment():
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=tedges_out1,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -275,7 +275,7 @@ def test_output_tedges_alignment():
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=tedges_out2,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
@@ -304,7 +304,7 @@ def test_example_from_docstring():
         flow=flow_values,
         flow_tedges=flow_dates,
         tedges_out=flow_dates,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
