@@ -246,7 +246,7 @@ class TestConstantRetardation:
         assert np.max(valid_cout) <= 10.5, "Output should not exceed input"
 
 
-class TestWaveCreation_n_lt_1:
+class TestWaveCreationNLessThanOne:
     """Test wave creation for n<1 (lower C travels faster)."""
 
     def test_shock_formation_for_n_less_1_high_to_low(self):
@@ -326,7 +326,7 @@ class TestWaveCreation_n_lt_1:
             )
 
 
-class TestEntropyAndPhysics_n_lt_1:
+class TestEntropyAndPhysicsNLessThanOne:
     """Test physical correctness for n<1 (lower C travels faster)."""
 
     def test_physical_correctness_n_less_1(self):
