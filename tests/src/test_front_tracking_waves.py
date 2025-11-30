@@ -36,7 +36,7 @@ class TestCharacteristicWave:
         velocity = char.velocity()
         expected = 100.0 / 2.0
 
-        assert np.isclose(velocity, expected, rtol=1e-14)
+        assert np.isclose(velocity, expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_velocity_freundlich(self):
         """Test velocity computation with Freundlich sorption."""
@@ -47,7 +47,7 @@ class TestCharacteristicWave:
         r = sorption.retardation(10.0)
         expected = 100.0 / r
 
-        assert np.isclose(velocity, expected, rtol=1e-14)
+        assert np.isclose(velocity, expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_position_at_time_linear_propagation(self):
         """Test that characteristic propagates linearly."""
@@ -57,7 +57,7 @@ class TestCharacteristicWave:
         for t in [1.0, 5.0, 10.0]:
             v = char.position_at_time(t)
             expected = (100.0 / 2.0) * t
-            assert np.isclose(v, expected, rtol=1e-14)
+            assert np.isclose(v, expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_position_at_time_before_start(self):
         """Test position is None for t < t_start."""
@@ -85,7 +85,7 @@ class TestCharacteristicWave:
         velocity = 100.0 / 2.0
         expected = 100.0 + velocity * (15.0 - 5.0)
 
-        assert np.isclose(v, expected, rtol=1e-14)
+        assert np.isclose(v, expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_concentration_left_right_equal(self):
         """Test that left and right concentrations are same for characteristic."""
@@ -153,7 +153,7 @@ class TestShockWave:
 
         v_expected = (flux_right - flux_left) / (c_total_right - c_total_left)
 
-        assert np.isclose(shock.velocity, v_expected, rtol=1e-14)
+        assert np.isclose(shock.velocity, v_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_position_at_time_linear_propagation(self):
         """Test shock propagates linearly."""
@@ -166,7 +166,7 @@ class TestShockWave:
             v = shock.position_at_time(t)
             assert v is not None
             expected = v_shock * t
-            assert np.isclose(v, expected, rtol=1e-14)
+            assert np.isclose(v, expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_position_at_time_before_start(self):
         """Test position is None for t < t_start."""
@@ -218,7 +218,7 @@ class TestShockWave:
         c = shock.concentration_at_point(v=v_shock, t=10.0)
 
         # At exact shock position, returns average
-        assert np.isclose(c, 0.5 * (10.0 + 2.0), rtol=1e-14)
+        assert np.isclose(c, 0.5 * (10.0 + 2.0), rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_satisfies_entropy_physical_shock(self):
         """Test that physical compression shock satisfies entropy."""
@@ -270,8 +270,8 @@ class TestRarefactionWave:
         # Verify exact values
         r_head = sorption.retardation(10.0)
         r_tail = sorption.retardation(2.0)
-        assert np.isclose(v_head, 100.0 / r_head, rtol=1e-14)
-        assert np.isclose(v_tail, 100.0 / r_tail, rtol=1e-14)
+        assert np.isclose(v_head, 100.0 / r_head, rtol=1e-14)  # type: ignore[no-matching-overload]
+        assert np.isclose(v_tail, 100.0 / r_tail, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_head_tail_positions(self):
         """Test head and tail position computations."""
@@ -290,8 +290,8 @@ class TestRarefactionWave:
         # Verify exact values
         expected_head = raref.head_velocity() * t
         expected_tail = raref.tail_velocity() * t
-        assert np.isclose(v_head, expected_head, rtol=1e-14)
-        assert np.isclose(v_tail, expected_tail, rtol=1e-14)
+        assert np.isclose(v_head, expected_head, rtol=1e-14)  # type: ignore[no-matching-overload]
+        assert np.isclose(v_tail, expected_tail, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_position_at_time_returns_head(self):
         """Test that position_at_time returns head position."""
@@ -351,7 +351,7 @@ class TestRarefactionWave:
         # Verify self-similar solution: R(C) = flow*t/v
         r_target = 100.0 * t / v
         c_from_r = sorption.concentration_from_retardation(r_target)
-        assert np.isclose(c, c_from_r, rtol=1e-14)
+        assert np.isclose(c, c_from_r, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_concentration_at_point_outside_fan(self):
         """Test concentration is None outside rarefaction fan."""
@@ -373,7 +373,7 @@ class TestRarefactionWave:
 
         # At v=0 (origin), concentration should be tail value
         c = raref.concentration_at_point(v=0.0, t=10.0)
-        assert np.isclose(c, 2.0, rtol=1e-14)
+        assert np.isclose(c, 2.0, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_concentration_left_right(self):
         """Test concentration_left and concentration_right."""

@@ -41,7 +41,7 @@ def residence_time(
     *,
     flow: npt.ArrayLike | None = None,
     flow_tedges: pd.DatetimeIndex | np.ndarray | None = None,
-    aquifer_pore_volume: npt.ArrayLike | None = None,
+    aquifer_pore_volumes: npt.ArrayLike | None = None,
     index: pd.DatetimeIndex | np.ndarray | None = None,
     retardation_factor: float = 1.0,
     direction: str = "extraction_to_infiltration",
@@ -56,8 +56,9 @@ def residence_time(
     flow_tedges : pandas.DatetimeIndex
         Time edges for the flow data. Used to compute the cumulative flow.
         Has a length of one more than `flow`.
-    aquifer_pore_volume : float or array-like of float
-        Pore volume of the aquifer [m3].
+    aquifer_pore_volumes : float or array-like of float
+        Pore volume(s) of the aquifer [m3]. Can be a single value or an array
+        of pore volumes representing different flow paths.
     index : pandas.DatetimeIndex, optional
         Index at which to compute the residence time. If left to None, flow_tedges is used.
         Default is None.
@@ -80,7 +81,11 @@ def residence_time(
     gwtransport.advection.gamma_infiltration_to_extraction : Use residence times for transport
     gwtransport.logremoval.residence_time_to_log_removal : Convert residence time to log removal
     """
-    aquifer_pore_volume = np.atleast_1d(aquifer_pore_volume)
+    if aquifer_pore_volumes is None:
+        msg = "aquifer_pore_volumes must be provided"
+        raise ValueError(msg)
+
+    aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
 
     if flow_tedges is None:
         msg = "flow_tedges must be provided"
@@ -94,7 +99,7 @@ def residence_time(
 
     # Convert to arrays for type safety
     flow = np.asarray(flow)
-    aquifer_pore_volume = np.asarray(aquifer_pore_volume)
+    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
 
     if len(flow_tedges) != len(flow) + 1:
         msg = "tedges must have one more element than flow"
@@ -104,7 +109,7 @@ def residence_time(
     if np.any(flow < 0):
         # Return NaN array with correct shape
         n_output = len(flow_tedges) - 1 if index is None else len(index)
-        n_pore_volumes = len(aquifer_pore_volume)
+        n_pore_volumes = len(aquifer_pore_volumes)
         return np.full((n_pore_volumes, n_output), np.nan)
 
     flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
@@ -126,12 +131,12 @@ def residence_time(
 
     if direction == "extraction_to_infiltration":
         # How many days ago was the extraced water infiltrated
-        a = flow_cum_at_index[None, :] - retardation_factor * aquifer_pore_volume[:, None]
+        a = flow_cum_at_index[None, :] - retardation_factor * aquifer_pore_volumes[:, None]
         days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
         data = index_dates_days_extraction - days
     elif direction == "infiltration_to_extraction":
         # In how many days the water that is infiltrated now be extracted
-        a = flow_cum_at_index[None, :] + retardation_factor * aquifer_pore_volume[:, None]
+        a = flow_cum_at_index[None, :] + retardation_factor * aquifer_pore_volumes[:, None]
         days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
         data = days - index_dates_days_extraction
     else:
@@ -146,7 +151,7 @@ def residence_time_mean(
     flow: npt.ArrayLike,
     flow_tedges: pd.DatetimeIndex | np.ndarray,
     tedges_out: pd.DatetimeIndex | np.ndarray,
-    aquifer_pore_volume: npt.ArrayLike,
+    aquifer_pore_volumes: npt.ArrayLike,
     direction: str = "extraction_to_infiltration",
     retardation_factor: float = 1.0,
 ) -> npt.NDArray[np.floating]:
@@ -172,8 +177,8 @@ def residence_time_mean(
     tedges_out : array-like
         Output time edges as datetime64 objects. These define the intervals for which
         the mean residence times will be calculated.
-    aquifer_pore_volume : float or array-like
-        Pore volume of the aquifer [m3]. Can be a single value or an array of values
+    aquifer_pore_volumes : float or array-like
+        Pore volume(s) of the aquifer [m3]. Can be a single value or an array of values
         for multiple pore volume scenarios.
     direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
         Direction of the flow calculation:
@@ -214,7 +219,7 @@ def residence_time_mean(
     ...     flow=flow_values,
     ...     flow_tedges=flow_dates,
     ...     tedges_out=flow_dates,
-    ...     aquifer_pore_volume=pore_volume,
+    ...     aquifer_pore_volumes=pore_volume,
     ...     direction="extraction_to_infiltration",
     ... )
     >>> # With constant flow of 100 m³/day and pore volume of 200 m³,
@@ -225,12 +230,12 @@ def residence_time_mean(
     flow = np.asarray(flow)
     flow_tedges = pd.DatetimeIndex(flow_tedges)
     tedges_out = pd.DatetimeIndex(tedges_out)
-    aquifer_pore_volume = np.atleast_1d(aquifer_pore_volume)
+    aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
 
     # Check for negative flow values - physically invalid
     if np.any(flow < 0):
         # Return NaN array with correct shape
-        n_pore_volumes = len(aquifer_pore_volume)
+        n_pore_volumes = len(aquifer_pore_volumes)
         n_output_bins = len(tedges_out) - 1
         return np.full((n_pore_volumes, n_output_bins), np.nan)
 
@@ -244,7 +249,7 @@ def residence_time_mean(
 
     if direction == "extraction_to_infiltration":
         # How many days ago was the extraced water infiltrated
-        a = flow_cum[None, :] - retardation_factor * aquifer_pore_volume[:, None]
+        a = flow_cum[None, :] - retardation_factor * aquifer_pore_volumes[:, None]
         days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
         data_edges = flow_tedges_days - days
         # Process each pore volume (row) separately. Although linear_average supports 2D x_edges,
@@ -255,7 +260,7 @@ def residence_time_mean(
         ])
     elif direction == "infiltration_to_extraction":
         # In how many days the water that is infiltrated now be extracted
-        a = flow_cum[None, :] + retardation_factor * aquifer_pore_volume[:, None]
+        a = flow_cum[None, :] + retardation_factor * aquifer_pore_volumes[:, None]
         days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
         data_edges = days - flow_tedges_days
         # Process each pore volume (row) separately. Although linear_average supports 2D x_edges,
@@ -275,7 +280,7 @@ def fraction_explained(
     rt: npt.NDArray[np.floating] | None = None,
     flow: npt.ArrayLike | None = None,
     flow_tedges: pd.DatetimeIndex | np.ndarray | None = None,
-    aquifer_pore_volume: npt.ArrayLike | None = None,
+    aquifer_pore_volumes: npt.ArrayLike | None = None,
     index: pd.DatetimeIndex | np.ndarray | None = None,
     retardation_factor: float = 1.0,
     direction: str = "extraction_to_infiltration",
@@ -292,12 +297,13 @@ def fraction_explained(
     flow_tedges : pandas.DatetimeIndex, optional
         Time edges for the flow data. Used to compute the cumulative flow.
         Has a length of one more than `flow`. Inbetween neighboring time edges, the flow is assumed constant.
-    aquifer_pore_volume : float or array-like of float, optional
-        Pore volume of the aquifer [m3].
+    aquifer_pore_volumes : float or array-like of float, optional
+        Pore volume(s) of the aquifer [m3]. Can be a single value or an array
+        of pore volumes representing different flow paths.
     index : pandas.DatetimeIndex, optional
         Index at which to compute the fraction. If left to None, the index of `flow` is used.
         Default is None.
-    retardation_factor : float or array-like of float, optional
+    retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless].
     direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
         Direction of the flow calculation:
@@ -314,7 +320,7 @@ def fraction_explained(
         rt = residence_time(
             flow=flow,
             flow_tedges=flow_tedges,
-            aquifer_pore_volume=aquifer_pore_volume,
+            aquifer_pore_volumes=aquifer_pore_volumes,
             index=index,
             retardation_factor=retardation_factor,
             direction=direction,

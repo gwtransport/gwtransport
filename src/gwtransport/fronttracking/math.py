@@ -39,8 +39,8 @@ class FreundlichSorption:
     - k_f is Freundlich coefficient [(volume/mass)^(1/n)]
     - n is Freundlich exponent (dimensionless)
 
-    For n > 1: favorable sorption (higher C travels faster)
-    For n < 1: unfavorable sorption (higher C travels slower)
+    For n > 1: Higher C travels faster
+    For n < 1: Higher C travels slower
     For n = 1: linear (not supported, use ConstantRetardation instead)
 
     Parameters
@@ -101,7 +101,7 @@ class FreundlichSorption:
 
     For Freundlich sorption, R depends on C, which creates nonlinear wave behavior.
 
-    For favorable sorption (n>1), R(C)→∞ as C→0, which can cause extremely slow
+    For n>1 (higher C travels faster), R(C)→∞ as C→0, which can cause extremely slow
     wave propagation. The c_min parameter prevents this by enforcing a minimum
     concentration, making R(C) finite for all C≥0.
     """
@@ -163,7 +163,7 @@ class FreundlichSorption:
         c_arr = np.asarray(c)
 
         if self.c_min == 0 and self.n < 1.0:
-            # Only for unfavorable sorption (n<1) where R(0)=1 is physically correct
+            # Only for n<1 (lower C travels faster) where R(0)=1 is physically correct
             result = np.where(c_arr <= 0, 1.0, self._compute_retardation(c_arr))
         else:
             c_eff = np.maximum(c_arr, self.c_min)
@@ -207,7 +207,7 @@ class FreundlichSorption:
         c_arr = np.asarray(c)
 
         if self.c_min == 0 and self.n < 1.0:
-            # Only for unfavorable sorption (n<1) where C=0 is physically valid
+            # Only for n<1 (lower C travels faster) where C=0 is physically valid
             sorbed = np.where(
                 c_arr <= 0, 0.0, (self.bulk_density / self.porosity) * self.k_f * (c_arr ** (1.0 / self.n))
             )
@@ -218,7 +218,7 @@ class FreundlichSorption:
         result = c_arr + sorbed
         return result if is_array else float(result)
 
-    def concentration_from_retardation(self, r: float) -> float:
+    def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """
         Invert retardation factor to obtain concentration analytically.
 
@@ -227,12 +227,12 @@ class FreundlichSorption:
 
         Parameters
         ----------
-        r : float
+        r : float or array_like
             Retardation factor [-]. Must be >= 1.0.
 
         Returns
         -------
-        c : float
+        c : float or ndarray
             Dissolved concentration [mass/volume]. Non-negative.
 
         Notes
@@ -256,8 +256,8 @@ class FreundlichSorption:
         >>> np.isclose(c, 5.0, rtol=1e-14)
         True
         """
-        if r <= 1.0:
-            return self.c_min
+        is_array = isinstance(r, np.ndarray)
+        r_arr = np.asarray(r)
 
         exponent = (1.0 / self.n) - 1.0
 
@@ -266,14 +266,15 @@ class FreundlichSorption:
             raise ValueError(msg)
 
         coefficient = (self.bulk_density * self.k_f) / (self.porosity * self.n)
-        base = (r - 1.0) / coefficient
-
-        if base <= 0:
-            return self.c_min
+        base = (r_arr - 1.0) / coefficient
 
         inversion_exponent = 1.0 / exponent
         c = base**inversion_exponent
-        return max(c, self.c_min)
+        result = np.maximum(c, self.c_min)
+        result = np.where(r_arr <= 1.0, self.c_min, result)
+        result = np.where(base <= 0, self.c_min, result)
+
+        return result if is_array else float(result)
 
     def shock_velocity(self, c_left: float, c_right: float, flow: float) -> float:
         """
@@ -304,7 +305,7 @@ class FreundlichSorption:
         law across the shock discontinuity. It ensures that the total mass flux
         (advective transport) is conserved.
 
-        For physical shocks in favorable sorption (n > 1):
+        For physical shocks with n > 1 (higher C travels faster):
         - c_left > c_right (concentration decreases across shock)
         - The shock velocity is between the characteristic velocities
 
@@ -335,9 +336,9 @@ class FreundlichSorption:
         # characteristic velocity, so we fall back to that value
         # instead of dividing by an extremely small number.
         if abs(denom) < EPSILON_DENOMINATOR:
-            return flow / self.retardation(c_left)
+            return float(flow / self.retardation(c_left))
 
-        return (flux_right - flux_left) / denom
+        return float((flux_right - flux_left) / denom)
 
     def check_entropy_condition(self, c_left: float, c_right: float, shock_vel: float, flow: float) -> bool:
         """
@@ -371,12 +372,12 @@ class FreundlichSorption:
         replaced by rarefaction waves. The entropy condition prevents non-physical
         expansion shocks.
 
-        For favorable sorption (n > 1):
+        For n > 1 (higher C travels faster):
         - Physical shocks have c_left > c_right
         - Characteristic from left is faster: λ(c_left) > λ(c_right)
         - Shock velocity is between them
 
-        For unfavorable sorption (n < 1):
+        For n < 1 (lower C travels faster):
         - Physical shocks have c_left < c_right
         - Characteristic from left is slower: λ(c_left) < λ(c_right)
         - Shock velocity is still between them
@@ -409,7 +410,7 @@ class FreundlichSorption:
         # Use small tolerance for floating-point comparison
         tolerance = 1e-14 * max(abs(lambda_left), abs(lambda_right), abs(shock_vel))
 
-        return (lambda_left > shock_vel + tolerance) and (shock_vel > lambda_right - tolerance)
+        return bool((lambda_left > shock_vel + tolerance) and (shock_vel > lambda_right - tolerance))
 
 
 @dataclass
@@ -607,7 +608,7 @@ def characteristic_velocity(c: float, flow: float, sorption: FreundlichSorption 
     >>> v > 0
     True
     """
-    return flow / sorption.retardation(c)
+    return float(flow / sorption.retardation(c))
 
 
 def characteristic_position(
@@ -662,7 +663,7 @@ def characteristic_position(
 def compute_first_front_arrival_time(
     cin: npt.NDArray[np.floating],
     flow: npt.NDArray[np.floating],
-    tedges: npt.NDArray[np.floating],
+    tedges: pd.DatetimeIndex,
     aquifer_pore_volume: float,
     sorption: FreundlichSorption | ConstantRetardation,
 ) -> float:
@@ -677,9 +678,9 @@ def compute_first_front_arrival_time(
     (e.g., 0→C transition), this is when that characteristic reaches v_max.
 
     For cases with rarefaction waves:
-    - n>1 (favorable): Higher C travels faster. The head of a rarefaction
+    - n>1 (higher C travels faster): The head of a rarefaction
       (higher C) arrives first.
-    - n<1 (unfavorable): Lower C travels faster. The head of a rarefaction
+    - n<1 (lower C travels faster): The head of a rarefaction
       (lower C) arrives first.
 
     Algorithm:
@@ -779,10 +780,10 @@ def compute_first_front_arrival_time(
 def compute_first_fully_informed_bin_edge(
     cin: npt.NDArray[np.floating],
     flow: npt.NDArray[np.floating],
-    tedges: npt.NDArray[np.floating],
+    tedges: pd.DatetimeIndex,
     aquifer_pore_volume: float,
     sorption: FreundlichSorption | ConstantRetardation,
-    output_tedges: npt.NDArray[np.floating],
+    output_tedges: pd.DatetimeIndex,
 ) -> float:
     """
     Compute left edge of first output bin that is fully informed.

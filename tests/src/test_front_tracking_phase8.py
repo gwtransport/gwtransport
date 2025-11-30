@@ -38,7 +38,7 @@ class TestWaveCreation:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=400.0,
+            aquifer_pore_volumes=np.array([400.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,
             bulk_density=1500.0,
@@ -46,7 +46,7 @@ class TestWaveCreation:
         )
 
         # For n>1: high C is faster, so step increase = compression = shock
-        assert structure["n_shocks"] >= 1, "Step increase should create shock for n>1"
+        assert structure[0]["n_shocks"] >= 1, "Step increase should create shock for n>1"
 
     def test_step_decrease_creates_rarefaction(self):
         """Step decrease (10→0) creates rarefaction for n>1 (slow follows fast)."""
@@ -65,7 +65,7 @@ class TestWaveCreation:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=400.0,
+            aquifer_pore_volumes=np.array([400.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,
             bulk_density=1500.0,
@@ -73,7 +73,7 @@ class TestWaveCreation:
         )
 
         # For n>1: low C is slower, so step decrease = expansion = rarefaction
-        assert structure["n_rarefactions"] >= 1, "Step decrease should create rarefaction for n>1"
+        assert structure[0]["n_rarefactions"] >= 1, "Step decrease should create rarefaction for n>1"
 
 
 class TestAnalyticalCorrectness:
@@ -100,7 +100,7 @@ class TestAnalyticalCorrectness:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=400.0,
+            aquifer_pore_volumes=np.array([400.0]),
             freundlich_k=freundlich_k,
             freundlich_n=freundlich_n,
             bulk_density=bulk_density,
@@ -110,7 +110,7 @@ class TestAnalyticalCorrectness:
         # Verify shock was created and has correct velocity to machine precision
         sorption = FreundlichSorption(k_f=freundlich_k, n=freundlich_n, bulk_density=bulk_density, porosity=porosity)
 
-        shocks = [w for w in structure["waves"] if isinstance(w, ShockWave)]
+        shocks = [w for w in structure[0]["waves"] if isinstance(w, ShockWave)]
         assert len(shocks) >= 1, "Should create at least one shock for extreme ratio"
 
         for shock in shocks:
@@ -143,7 +143,7 @@ class TestEntropyAndPhysics:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=300.0,
+            aquifer_pore_volumes=np.array([300.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,
             bulk_density=1500.0,
@@ -151,7 +151,7 @@ class TestEntropyAndPhysics:
         )
 
         # All shocks must satisfy entropy
-        shocks = [w for w in structure["waves"] if isinstance(w, ShockWave)]
+        shocks = [w for w in structure[0]["waves"] if isinstance(w, ShockWave)]
         for shock in shocks:
             assert shock.satisfies_entropy(), "Shock violates entropy condition"
 
@@ -172,7 +172,7 @@ class TestEntropyAndPhysics:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=200.0,
+            aquifer_pore_volumes=np.array([200.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,
             bulk_density=1500.0,
@@ -199,7 +199,7 @@ class TestEntropyAndPhysics:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=200.0,
+            aquifer_pore_volumes=np.array([200.0]),
             freundlich_k=0.01,
             freundlich_n=2.0,
             bulk_density=1500.0,
@@ -237,7 +237,7 @@ class TestConstantRetardation:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=200.0,
+            aquifer_pore_volumes=np.array([200.0]),
             retardation_factor=2.0,
         )
 
@@ -246,8 +246,8 @@ class TestConstantRetardation:
         assert np.max(valid_cout) <= 10.5, "Output should not exceed input"
 
 
-class TestWaveCreationUnfavorable:
-    """Test wave creation for unfavorable sorption (n<1)."""
+class TestWaveCreationNLessThanOne:
+    """Test wave creation for n<1 (lower C travels faster)."""
 
     def test_shock_formation_for_n_less_1_high_to_low(self):
         """For n<1: step decrease (10→2) = compression = shock (reversed from n>1)."""
@@ -266,19 +266,19 @@ class TestWaveCreationUnfavorable:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=400.0,
+            aquifer_pore_volumes=np.array([400.0]),
             freundlich_k=0.01,
-            freundlich_n=0.5,  # n<1: unfavorable sorption
+            freundlich_n=0.5,  # n<1: n<1
             bulk_density=1500.0,
             porosity=0.3,
         )
 
         # For n<1: high C is slower, so C↓ (10→2) is slow to fast (new is fast) = compression = shock
-        assert structure["n_shocks"] >= 1, "Step decrease should create shock for n<1"
+        assert structure[0]["n_shocks"] >= 1, "Step decrease should create shock for n<1"
 
         # Verify shock has correct ordering for n<1 inlet wave:
         # c_left (new, upstream) < c_right (old, downstream) when going from high to low
-        shocks = [w for w in structure["waves"] if isinstance(w, ShockWave)]
+        shocks = [w for w in structure[0]["waves"] if isinstance(w, ShockWave)]
         for shock in shocks:
             if shock.c_left != shock.c_right:  # Skip zero-strength shocks
                 # For n<1 with C: 10→2, inlet wave has c_left=2 (new/fast), c_right=10 (old/slow)
@@ -307,18 +307,18 @@ class TestWaveCreationUnfavorable:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=400.0,
+            aquifer_pore_volumes=np.array([400.0]),
             freundlich_k=0.01,
-            freundlich_n=0.5,  # n<1: unfavorable sorption
+            freundlich_n=0.5,  # n<1: n<1
             bulk_density=1500.0,
             porosity=0.3,
         )
 
         # For n<1: low C is faster, so C↑ (2→10) is fast→slower = expansion = rarefaction
-        assert structure["n_rarefactions"] >= 1, "Step increase should create rarefaction for n<1"
+        assert structure[0]["n_rarefactions"] >= 1, "Step increase should create rarefaction for n<1"
 
         # Verify rarefaction has correct ordering: c_head < c_tail for n<1
-        rarefactions = [w for w in structure["waves"] if isinstance(w, RarefactionWave)]
+        rarefactions = [w for w in structure[0]["waves"] if isinstance(w, RarefactionWave)]
         for raref in rarefactions:
             # For n<1, head (faster) has lower concentration than tail (slower)
             assert raref.c_head < raref.c_tail, (
@@ -326,8 +326,8 @@ class TestWaveCreationUnfavorable:
             )
 
 
-class TestEntropyAndPhysicsUnfavorable:
-    """Test physical correctness for unfavorable sorption (n<1)."""
+class TestEntropyAndPhysicsNLessThanOne:
+    """Test physical correctness for n<1 (lower C travels faster)."""
 
     def test_physical_correctness_n_less_1(self):
         """Physical correctness for n<1: non-negative output, entropy, bounded concentrations."""
@@ -347,9 +347,9 @@ class TestEntropyAndPhysicsUnfavorable:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=100.0,  # Small volume for reasonable transport
+            aquifer_pore_volumes=np.array([100.0]),  # Small volume for reasonable transport
             freundlich_k=0.01,
-            freundlich_n=0.5,  # n<1: unfavorable sorption
+            freundlich_n=0.5,  # n<1: n<1
             bulk_density=1500.0,
             porosity=0.3,
         )
@@ -369,12 +369,12 @@ class TestEntropyAndPhysicsUnfavorable:
         )
 
         # 3. All shocks satisfy entropy
-        shocks = [w for w in structure["waves"] if isinstance(w, ShockWave)]
+        shocks = [w for w in structure[0]["waves"] if isinstance(w, ShockWave)]
         for shock in shocks:
             assert shock.satisfies_entropy(), f"Shock violates entropy for n<1: {shock}"
 
         # 4. Simulation completed without errors
-        assert structure["n_events"] > 0, "No events generated for n<1 simulation"
+        assert structure[0]["n_events"] > 0, "No events generated for n<1 simulation"
 
     def test_entropy_satisfaction_multiple_interactions_n_less_1(self):
         """Complex scenario with multiple shocks - all must satisfy entropy for n<1."""
@@ -394,15 +394,15 @@ class TestEntropyAndPhysicsUnfavorable:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=300.0,
+            aquifer_pore_volumes=np.array([300.0]),
             freundlich_k=0.01,
-            freundlich_n=0.5,  # n<1: unfavorable sorption
+            freundlich_n=0.5,  # n<1: n<1
             bulk_density=1500.0,
             porosity=0.3,
         )
 
         # All shocks must satisfy entropy condition
-        shocks = [w for w in structure["waves"] if isinstance(w, ShockWave)]
+        shocks = [w for w in structure[0]["waves"] if isinstance(w, ShockWave)]
         assert len(shocks) > 0, "Should create at least one shock in complex scenario"
 
         for shock in shocks:
@@ -431,16 +431,16 @@ class TestComplexInteractions:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=300.0,
+            aquifer_pore_volumes=np.array([300.0]),
             freundlich_k=0.01,
-            freundlich_n=2.0,  # n>1: favorable sorption
+            freundlich_n=2.0,  # n>1: n>1
             bulk_density=1500.0,
             porosity=0.3,
         )
 
         # Should create waves for concentration changes
         # Note: Shock count can vary due to merging; rarefaction is more reliable indicator
-        assert structure["n_rarefactions"] >= 1, "Should create rarefaction for step decrease"
+        assert structure[0]["n_rarefactions"] >= 1, "Should create rarefaction for step decrease"
 
         # Outlet behavior: should show concentration change
         valid_cout = cout[~np.isnan(cout)]
@@ -472,23 +472,23 @@ class TestComplexInteractions:
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            aquifer_pore_volume=300.0,
+            aquifer_pore_volumes=np.array([300.0]),
             freundlich_k=0.01,
-            freundlich_n=2.0,  # n>1: favorable sorption
+            freundlich_n=2.0,  # n>1: n>1
             bulk_density=1500.0,
             porosity=0.3,
         )
 
         # Should create multiple waves
-        total_waves = structure["n_shocks"] + structure["n_rarefactions"] + structure["n_characteristics"]
+        total_waves = structure[0]["n_shocks"] + structure[0]["n_rarefactions"] + structure[0]["n_characteristics"]
         assert total_waves >= 5, f"Should create multiple waves from rapid changes, got {total_waves}"
 
         # All events should be ordered chronologically
-        event_times = [event["time"] for event in structure["events"]]
+        event_times = [event["time"] for event in structure[0]["events"]]
         assert event_times == sorted(event_times), "Events should be chronologically ordered"
 
         # Output should not have NaN values after first arrival
-        t_first = structure["t_first_arrival"]
+        t_first = structure[0]["t_first_arrival"]
         cout_tedges_days = ((cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)).values
         mask_after_spinup = cout_tedges_days[:-1] >= t_first
         cout_after_spinup = cout[mask_after_spinup]

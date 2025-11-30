@@ -179,7 +179,7 @@ class CharacteristicWave(Wave):
         velocity : float
             Characteristic velocity [m³/day].
         """
-        return self.flow / self.sorption.retardation(self.concentration)
+        return float(self.flow / self.sorption.retardation(self.concentration))
 
     def position_at_time(self, t: float) -> float | None:
         """
@@ -514,7 +514,7 @@ class RarefactionWave(Wave):
         velocity : float
             Head velocity [m³/day].
         """
-        return self.flow / self.sorption.retardation(self.c_head)
+        return float(self.flow / self.sorption.retardation(self.c_head))
 
     def tail_velocity(self) -> float:
         """
@@ -525,7 +525,7 @@ class RarefactionWave(Wave):
         velocity : float
             Tail velocity [m³/day].
         """
-        return self.flow / self.sorption.retardation(self.c_tail)
+        return float(self.flow / self.sorption.retardation(self.c_tail))
 
     def head_position_at_time(self, t: float) -> float | None:
         """
@@ -682,7 +682,8 @@ class RarefactionWave(Wave):
         c_min = min(self.c_tail, self.c_head)
         c_max = max(self.c_tail, self.c_head)
 
-        if c_min <= c <= c_max:
-            return c
+        c_float = float(c)
+        if c_min <= c_float <= c_max:
+            return c_float
 
         return None

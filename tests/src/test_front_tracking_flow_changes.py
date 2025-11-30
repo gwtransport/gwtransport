@@ -25,7 +25,7 @@ from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave,
 
 @pytest.fixture
 def freundlich_sorption():
-    """Standard Freundlich sorption for testing (n>1, favorable)."""
+    """Standard Freundlich sorption for testing (n>1)."""
     return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
 
@@ -67,7 +67,7 @@ class TestWaveRecreation:
         # Verify velocity doubled
         vel_old = char_old.velocity()
         vel_new = char_new.velocity()
-        assert np.isclose(vel_new, 2 * vel_old, rtol=1e-14)
+        assert np.isclose(vel_new, 2 * vel_old, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_recreate_shock_velocity_scales_with_flow(self, freundlich_sorption):
         """Shock velocity scales linearly with flow (Rankine-Hugoniot)."""
@@ -100,12 +100,12 @@ class TestWaveRecreation:
         assert shock_new.flow == 200.0
 
         # Verify position correct
-        assert np.isclose(shock_new.v_start, v_at_change, rtol=1e-14)
+        assert np.isclose(shock_new.v_start, v_at_change, rtol=1e-14)  # type: ignore[no-matching-overload]
 
         # Verify velocity doubled (Rankine-Hugoniot is linear in flow)
         vel_new = shock_new.velocity
         assert vel_new is not None
-        assert np.isclose(vel_new, 2 * vel_old, rtol=1e-14)
+        assert np.isclose(vel_new, 2 * vel_old, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_recreate_rarefaction_preserves_concentrations(self, freundlich_sorption):
         """Rarefaction head/tail concentrations unchanged, velocities scale with flow."""
@@ -138,13 +138,13 @@ class TestWaveRecreation:
         assert raref_new.flow == 50.0
 
         # Verify position
-        assert np.isclose(raref_new.v_start, v_at_change, rtol=1e-14)
+        assert np.isclose(raref_new.v_start, v_at_change, rtol=1e-14)  # type: ignore[no-matching-overload]
 
         # Verify velocities halved
         vel_head_new = raref_new.head_velocity()
         vel_tail_new = raref_new.tail_velocity()
-        assert np.isclose(vel_head_new, 0.5 * vel_head_old, rtol=1e-14)
-        assert np.isclose(vel_tail_new, 0.5 * vel_tail_old, rtol=1e-14)
+        assert np.isclose(vel_head_new, 0.5 * vel_head_old, rtol=1e-14)  # type: ignore[no-matching-overload]
+        assert np.isclose(vel_tail_new, 0.5 * vel_tail_old, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_recreate_before_wave_start_raises_error(self, constant_retardation):
         """Cannot recreate wave before it starts."""
@@ -270,7 +270,7 @@ class TestFlowChangeIntegration:
         # Verify flow change event occurred
         flow_change_events = [e for e in tracker.state.events if e["type"] == "flow_change"]
         assert len(flow_change_events) == 1
-        assert np.isclose(flow_change_events[0]["time"], 10.0, rtol=1e-14)
+        assert np.isclose(flow_change_events[0]["time"], 10.0, rtol=1e-14)  # type: ignore[no-matching-overload]
 
         # Verify waves were recreated
         # Should have: initial char, char after flow change

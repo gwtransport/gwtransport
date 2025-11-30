@@ -19,6 +19,12 @@ compute_cumulative_inlet_mass(t, cin, flow, tedges)
     Compute cumulative mass entering domain from t=0 to t
 compute_cumulative_outlet_mass(t, v_outlet, waves, sorption, flow, tedges)
     Compute cumulative mass exiting domain from t=0 to t
+find_last_rarefaction_start_time(v_outlet, waves)
+    Find time when last rarefaction head reaches outlet
+integrate_rarefaction_total_mass(raref, v_outlet, t_start, sorption, flow)
+    Compute total mass exiting through rarefaction to infinity
+compute_total_outlet_mass(v_outlet, waves, sorption, flow, tedges)
+    Compute total integrated outlet mass until all mass has exited
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -40,6 +46,8 @@ from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave,
 EPSILON_VELOCITY = 1e-15  # Tolerance for checking if velocity is effectively zero
 EPSILON_BETA = 1e-15  # Tolerance for checking if beta is effectively zero (linear case)
 EPSILON_TIME = 1e-15  # Tolerance for negligible time segments
+EPSILON_TIME_MATCH = 1e-6  # Tolerance for matching arrival times (for rarefaction identification)
+EPSILON_CONCENTRATION = 1e-10  # Tolerance for checking if concentration is effectively zero
 
 
 def concentration_at_point(
@@ -291,12 +299,36 @@ def identify_outlet_segments(
     # Find all waves that cross outlet in this time range
     outlet_events = []
 
+    # Track rarefactions that already contain the outlet at t_start
+    # These need to be handled separately since they don't generate crossing events
+    active_rarefactions_at_start = []
+
     for wave in waves:
         if not wave.is_active:
             continue
 
         # For rarefactions, detect both head and tail crossings
         if isinstance(wave, RarefactionWave):
+            # Check if outlet is already inside this rarefaction at t_start
+            if wave.contains_point(v_outlet, t_start):
+                active_rarefactions_at_start.append(wave)
+                # Don't add crossing events for this wave since we're already inside it
+                # But we still need to detect when the tail crosses during [t_start, t_end]
+                v_tail = wave.tail_position_at_time(t_start)
+                if v_tail is not None and v_tail < v_outlet:
+                    vel_tail = wave.tail_velocity()
+                    if vel_tail > 0:
+                        dt = (v_outlet - v_tail) / vel_tail
+                        t_cross = t_start + dt
+                        if t_start < t_cross <= t_end:
+                            outlet_events.append({
+                                "time": t_cross,
+                                "wave": wave,
+                                "boundary": "tail",
+                                "c_after": wave.c_tail,
+                            })
+                continue
+
             # Head crossing
             v_head = wave.head_position_at_time(t_start)
             if v_head is not None and v_head < v_outlet:
@@ -348,6 +380,40 @@ def identify_outlet_segments(
     segments = []
     current_t = t_start
     current_c = concentration_at_point(v_outlet, t_start, waves, sorption)
+
+    # Handle case where we start inside a rarefaction
+    if active_rarefactions_at_start:
+        # Should only be one rarefaction containing the outlet at t_start
+        raref = active_rarefactions_at_start[0]
+
+        # Find when tail crosses (if it does)
+        tail_cross_time = None
+        for event in outlet_events:
+            if event["wave"] is raref and event["boundary"] == "tail" and event["time"] > t_start:
+                tail_cross_time = event["time"]
+                break
+
+        # Create rarefaction segment from t_start
+        raref_end = min(tail_cross_time or t_end, t_end)
+
+        c_start = concentration_at_point(v_outlet, t_start, waves, sorption)
+        c_end = None
+        if tail_cross_time and tail_cross_time <= t_end:
+            c_end = raref.c_tail
+
+        segments.append({
+            "t_start": t_start,
+            "t_end": raref_end,
+            "type": "rarefaction",
+            "wave": raref,
+            "c_start": c_start,
+            "c_end": c_end,
+        })
+
+        current_t = raref_end
+        current_c = (
+            concentration_at_point(v_outlet, raref_end + 1e-10, waves, sorption) if raref_end < t_end else current_c
+        )
 
     for event in outlet_events:
         # Check if we're entering a rarefaction fan
@@ -443,9 +509,9 @@ def integrate_rarefaction_exact(
     v_outlet : float
         Outlet position [m³].
     t_start : float
-        Integration start time [days].
+        Integration start time [days]. Can be -np.inf.
     t_end : float
-        Integration end time [days].
+        Integration end time [days]. Can be np.inf.
     sorption : FreundlichSorption
         Freundlich sorption model.
 
@@ -477,6 +543,8 @@ def integrate_rarefaction_exact(
     **Special Cases**:
     - If (kappa*t + mu - 1) <= 0, concentration is 0 (unphysical region)
     - For beta = 0 (n = 1), use ConstantRetardation instead
+    - For t_end = +∞ with exponent < 0 (n>1), integral converges to 0
+    - For t_start = -∞, antiderivative evaluates to 0
 
     Examples
     --------
@@ -495,6 +563,12 @@ def integrate_rarefaction_exact(
     ...     raref, v_outlet=500.0, t_start=5.0, t_end=15.0, sorption=sorption
     ... )
     >>> integral > 0
+    True
+    >>> # Integration to infinity
+    >>> integral_inf = integrate_rarefaction_exact(
+    ...     raref, v_outlet=500.0, t_start=5.0, t_end=np.inf, sorption=sorption
+    ... )
+    >>> integral_inf > integral
     True
     """
     # Extract parameters
@@ -525,6 +599,22 @@ def integrate_rarefaction_exact(
 
     def antiderivative(t: float) -> float:
         """Evaluate antiderivative at time t."""
+        # Handle infinite bounds
+        if np.isinf(t):
+            if t > 0:
+                # t = +∞
+                if exponent < 0:
+                    # For n > 1 (higher C travels faster, beta < 0, exponent < 0):
+                    # As t → +∞, base → +∞, so base^exponent → 0
+                    return 0.0
+                # For n < 1 (lower C travels faster, beta > 0, exponent > 0):
+                # As t → +∞, base → +∞, so base^exponent → +∞
+                # This should not happen for physical rarefactions to C=0
+                msg = f"Integral diverges at t=+∞ with exponent={exponent} > 0"
+                raise ValueError(msg)
+            # t = -∞: always returns 0
+            return 0.0
+
         base = kappa * t + mu - 1.0
 
         # Check if we're in physical region (R > 1)
@@ -1073,6 +1163,65 @@ def compute_cumulative_inlet_mass(
     return float(mass_complete + mass_partial)
 
 
+def find_last_rarefaction_start_time(
+    v_outlet: float,
+    waves: list[Wave],
+) -> float:
+    """
+    Find the time when the last rarefaction head reaches the outlet.
+
+    For rarefactions, we integrate analytically so we only need to know
+    when the rarefaction starts at the outlet (head arrival).
+
+    Parameters
+    ----------
+    v_outlet : float
+        Outlet position [m³].
+    waves : list of Wave
+        All waves in the simulation.
+
+    Returns
+    -------
+    t_last : float
+        Time when last rarefaction head reaches outlet [days].
+        For non-rarefaction waves, uses their arrival time.
+        Returns 0.0 if no waves reach the outlet.
+
+    Notes
+    -----
+    This function finds when the last wave structure *starts* at the outlet.
+    For rarefactions, this is the head arrival time. The tail may arrive
+    much later (or at infinite time for rarefactions to C=0), but the
+    total mass in the rarefaction is computed analytically.
+
+    Examples
+    --------
+    >>> t_last = find_last_rarefaction_start_time(v_outlet=500.0, waves=all_waves)
+    >>> t_last >= 0.0
+    True
+    """
+    t_last = 0.0
+
+    for wave in waves:
+        if not wave.is_active:
+            continue
+
+        if isinstance(wave, RarefactionWave):
+            # For rarefaction, use head arrival (when rarefaction starts)
+            head_vel = wave.head_velocity()
+            if head_vel > EPSILON_VELOCITY:
+                t_arrival = wave.t_start + (v_outlet - wave.v_start) / head_vel
+                t_last = max(t_last, t_arrival)
+        elif isinstance(wave, (CharacteristicWave, ShockWave)):
+            # For characteristics and shocks, compute arrival time
+            vel = wave.velocity if isinstance(wave, ShockWave) else wave.velocity()
+            if vel is not None and vel > EPSILON_VELOCITY:
+                t_arrival = wave.t_start + (v_outlet - wave.v_start) / vel
+                t_last = max(t_last, t_arrival)
+
+    return t_last
+
+
 def compute_cumulative_outlet_mass(
     t: float,
     v_outlet: float,
@@ -1191,3 +1340,246 @@ def compute_cumulative_outlet_mass(
         total_mass += flow_i * integral_c_dt
 
     return float(total_mass)
+
+
+def integrate_rarefaction_total_mass(
+    raref: RarefactionWave,
+    v_outlet: float,
+    t_start: float,
+    sorption: FreundlichSorption | ConstantRetardation,
+    flow: float,
+) -> float:
+    """
+    Compute total mass exiting through a rarefaction.
+
+    For a rarefaction that starts at the outlet at time t_start, compute the
+    total mass that will exit through the rarefaction. Integration endpoint
+    depends on the rarefaction tail concentration:
+
+    - If c_tail ≈ 0: Integrate to infinity (tail extends infinitely)
+    - If c_tail > 0: Integrate to finite tail arrival time
+
+    Parameters
+    ----------
+    raref : RarefactionWave
+        Rarefaction wave.
+    v_outlet : float
+        Outlet position [m³].
+    t_start : float
+        Time when rarefaction head reaches outlet [days].
+    sorption : FreundlichSorption or ConstantRetardation
+        Sorption model.
+    flow : float
+        Flow rate [m³/day] (assumed constant).
+
+    Returns
+    -------
+    total_mass : float
+        Total mass that exits through rarefaction [mass].
+
+    Notes
+    -----
+    Uses the exact analytical integral:
+        M_total = ∫_{t_start}^{t_end} Q * C(t) dt
+
+    where C(t) is the concentration at the outlet from the rarefaction wave.
+
+    For n > 1 (favorable sorption), rarefactions typically decrease to C=0,
+    so t_end = ∞ and the integral converges.
+
+    For n < 1 (unfavorable sorption), rarefactions typically increase from
+    low C to high C, so c_tail > 0 and the tail arrives at finite time
+    t_end = t_start + (v_outlet - v_start) / tail_velocity.
+
+    Examples
+    --------
+    >>> mass = integrate_rarefaction_total_mass(
+    ...     raref=raref_wave,
+    ...     v_outlet=500.0,
+    ...     t_start=40.0,
+    ...     sorption=sorption,
+    ...     flow=100.0,
+    ... )
+    >>> mass >= 0.0
+    True
+    """
+    if isinstance(sorption, ConstantRetardation):
+        # No rarefactions with constant retardation
+        return 0.0
+
+    # Determine integration endpoint based on c_tail
+    # For rarefactions with c_tail ≈ 0, the tail extends to infinity
+    # For rarefactions with c_tail > 0, the tail arrives at finite time
+    if raref.c_tail < EPSILON_CONCENTRATION:
+        # Rarefaction tail goes to C≈0, extends to infinite time
+        # This is typical for n > 1 rarefactions (concentration decreases)
+        t_end = np.inf
+    else:
+        # Rarefaction tail has finite concentration, arrives at finite time
+        # This is typical for n < 1 rarefactions (concentration increases)
+        tail_velocity = raref.tail_velocity()
+        if tail_velocity < EPSILON_VELOCITY:
+            # Tail velocity is effectively zero, extends to infinity
+            t_end = np.inf
+        else:
+            # Compute finite tail arrival time
+            t_end = raref.t_start + (v_outlet - raref.v_start) / tail_velocity
+
+    # Integrate from t_start to t_end
+    integral_c_dt = integrate_rarefaction_exact(raref, v_outlet, t_start, t_end, sorption)
+
+    return flow * integral_c_dt
+
+
+def compute_total_outlet_mass(
+    v_outlet: float,
+    waves: list[Wave],
+    sorption: FreundlichSorption | ConstantRetardation,
+    flow: npt.NDArray[np.floating],
+    tedges: npt.NDArray[np.floating],
+) -> tuple[float, float]:
+    """
+    Compute total integrated outlet mass until all mass has exited.
+
+    Automatically determines when the last wave passes the outlet and
+    integrates the outlet mass flux until that time, regardless of the
+    provided tedges extent.
+
+    Parameters
+    ----------
+    v_outlet : float
+        Outlet position [m³].
+    waves : list of Wave
+        All waves in the simulation.
+    sorption : FreundlichSorption or ConstantRetardation
+        Sorption model.
+    flow : array_like
+        Flow rate time series [m³/day].
+        Piecewise constant within bins defined by tedges.
+    tedges : array_like
+        Time bin edges [days]. Length len(flow) + 1.
+
+    Returns
+    -------
+    total_mass_out : float
+        Total mass that exits through outlet [mass].
+    t_integration_end : float
+        Time until which integration was performed [days].
+        This is the time when the last wave passes the outlet.
+
+    Notes
+    -----
+    This function:
+    1. Finds when the last rarefaction *starts* at the outlet (head arrival)
+    2. Integrates outlet mass flux until that time
+    3. Adds analytical integral of rarefaction mass from start to infinity
+
+    For rarefactions to C=0, the tail has infinite arrival time but the
+    total mass is finite and computed analytically.
+
+    Examples
+    --------
+    >>> total_mass, t_end = compute_total_outlet_mass(
+    ...     v_outlet=500.0,
+    ...     waves=tracker.state.waves,
+    ...     sorption=sorption,
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ... )
+    >>> total_mass >= 0.0
+    True
+    >>> t_end >= tedges[0]
+    True
+
+    See Also
+    --------
+    compute_cumulative_outlet_mass : Cumulative outlet mass up to time t
+    find_last_rarefaction_start_time : Find when last rarefaction starts
+    integrate_rarefaction_total_mass : Total mass in rarefaction to infinity
+    """
+    # Find when the last rarefaction starts at the outlet
+    t_last_raref_start = find_last_rarefaction_start_time(v_outlet, waves)
+
+    tedges_arr = np.asarray(tedges, dtype=float)
+    flow_arr = np.asarray(flow, dtype=float)
+
+    # Integrate up to when last rarefaction starts
+    if t_last_raref_start <= tedges_arr[-1]:
+        # All waves start within provided time range
+        mass_up_to_raref_start = compute_cumulative_outlet_mass(
+            t_last_raref_start, v_outlet, waves, sorption, flow_arr, tedges_arr
+        )
+        flow_at_raref_start = flow_arr[-1]  # Use last flow value
+    else:
+        # Need to extend beyond tedges to reach rarefaction start
+        # First, compute mass up to tedges[-1]
+        mass_within_tedges = compute_cumulative_outlet_mass(
+            tedges_arr[-1], v_outlet, waves, sorption, flow_arr, tedges_arr
+        )
+
+        # Then, integrate from tedges[-1] to t_last_raref_start
+        flow_extended = flow_arr[-1]
+        t_start_extended = tedges_arr[-1]
+        t_end_extended = t_last_raref_start
+
+        # Get outlet segments for extended period
+        segments = identify_outlet_segments(t_start_extended, t_end_extended, v_outlet, waves, sorption)
+
+        integral_c_dt = 0.0
+
+        for seg in segments:
+            seg_t_start = max(seg["t_start"], t_start_extended)
+            seg_t_end = min(seg["t_end"], t_end_extended)
+            seg_dt = seg_t_end - seg_t_start
+
+            if seg_dt <= EPSILON_TIME:
+                continue
+
+            if seg["type"] == "constant":
+                integral_c_dt += seg["concentration"] * seg_dt
+            elif seg["type"] == "rarefaction":
+                if isinstance(sorption, FreundlichSorption):
+                    raref = seg["wave"]
+                    integral_c_dt += integrate_rarefaction_exact(raref, v_outlet, seg_t_start, seg_t_end, sorption)
+                else:
+                    # ConstantRetardation - use midpoint
+                    c_mid = concentration_at_point(v_outlet, 0.5 * (seg_t_start + seg_t_end), waves, sorption)
+                    integral_c_dt += c_mid * seg_dt
+
+        mass_up_to_raref_start = mass_within_tedges + flow_extended * integral_c_dt
+        flow_at_raref_start = flow_extended
+
+    # Find rarefactions that are active at the outlet after t_last_raref_start
+    # and add their total integrated mass
+    total_raref_mass = 0.0
+
+    for wave in waves:
+        if not wave.is_active:
+            continue
+
+        if isinstance(wave, RarefactionWave):
+            # Check if this rarefaction reaches the outlet
+            head_vel = wave.head_velocity()
+            if head_vel > EPSILON_VELOCITY and wave.v_start < v_outlet:
+                t_raref_start_at_outlet = wave.t_start + (v_outlet - wave.v_start) / head_vel
+
+                # If this rarefaction starts at or after t_last_raref_start, include its total mass
+                # (with small tolerance for numerical precision)
+                if abs(t_raref_start_at_outlet - t_last_raref_start) < EPSILON_TIME_MATCH:
+                    # This is the last rarefaction - integrate to infinity
+                    raref_mass = integrate_rarefaction_total_mass(
+                        raref=wave,
+                        v_outlet=v_outlet,
+                        t_start=t_raref_start_at_outlet,
+                        sorption=sorption,
+                        flow=flow_at_raref_start,
+                    )
+                    total_raref_mass += raref_mass
+
+    # For rarefactions with finite tails (c_tail > 0, typical for n < 1),
+    # all mass is already accounted for in the rarefaction integration
+    # from head to tail. No additional mass needs to be integrated after
+    # the tail - if there were more waves, they would be in the wave list.
+    total_mass = mass_up_to_raref_start + total_raref_mass
+
+    return float(total_mass), t_last_raref_start

@@ -58,15 +58,15 @@ class TestFreundlichSorption:
 
     def test_retardation_zero_concentration(self):
         """Test R(0) behavior depends on n and c_min."""
-        # For unfavorable sorption (n<1) with c_min=0, R(0) = 1
+        # For n<1 (lower C travels faster) with c_min=0, R(0) = 1
         sorption_unfav = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
         r = sorption_unfav.retardation(0.0)
         assert r == 1.0
 
-        # For favorable sorption (n>1) with c_min>0, R(c_min) is used instead
+        # For n>1 (higher C travels faster) with c_min>0, R(c_min) is used instead
         sorption_fav = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
         r = sorption_fav.retardation(0.0)
-        # Should return R(c_min), which is > 1 for favorable sorption
+        # Should return R(c_min), which is > 1 for n>1
         assert r > 1.0
 
     def test_retardation_positive_concentration_n_greater_1(self):
@@ -76,14 +76,14 @@ class TestFreundlichSorption:
         assert r > 1.0
 
     def test_retardation_decreases_with_concentration_n_greater_1(self):
-        """Test that R decreases with C for n > 1 (favorable sorption)."""
+        """Test that R decreases with C for n > 1 (n>1)."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         r1 = sorption.retardation(1.0)
         r2 = sorption.retardation(10.0)
         assert r1 > r2, "R should decrease with increasing C for n > 1"
 
     def test_retardation_increases_with_concentration_n_less_1(self):
-        """Test that R increases with C for n < 1 (unfavorable sorption)."""
+        """Test that R increases with C for n < 1 (n<1)."""
         sorption = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3)
         r1 = sorption.retardation(1.0)
         r2 = sorption.retardation(10.0)
@@ -91,12 +91,12 @@ class TestFreundlichSorption:
 
     def test_total_concentration_zero(self):
         """Test C_total(0) behavior depends on n and c_min."""
-        # For unfavorable sorption with c_min=0, C_total(0) = 0
+        # For n<1 with c_min=0, C_total(0) = 0
         sorption_unfav = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
         c_total = sorption_unfav.total_concentration(0.0)
         assert c_total == 0.0
 
-        # For favorable sorption with c_min>0, C_total(c_min) is used
+        # For n>1 with c_min>0, C_total(c_min) is used
         sorption_fav = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
         c_total = sorption_fav.total_concentration(0.0)
         # Should be small but positive
@@ -118,28 +118,28 @@ class TestFreundlichSorption:
         for c in test_concentrations:
             r = sorption.retardation(c)
             c_back = sorption.concentration_from_retardation(r)
-            assert np.isclose(c, c_back, rtol=1e-14), f"Roundtrip failed for C={c}: {c} → {r} → {c_back}"
+            assert np.isclose(c, c_back, rtol=1e-14), f"Roundtrip failed for C={c}: {c} → {r} → {c_back}"  # type: ignore[no-matching-overload]
 
     def test_concentration_from_retardation_r_equals_one(self):
         """Test that R=1 gives C=c_min."""
-        # For favorable sorption with c_min>0
+        # For n>1 with c_min>0
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
         c = sorption.concentration_from_retardation(1.0)
         assert c == sorption.c_min
 
-        # For unfavorable sorption with c_min=0
+        # For n<1 with c_min=0
         sorption_unfav = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
         c = sorption_unfav.concentration_from_retardation(1.0)
         assert c == 0.0
 
     def test_concentration_from_retardation_r_less_one(self):
         """Test that R<1 gives C=c_min (physical constraint)."""
-        # For favorable sorption with c_min>0
+        # For n>1 with c_min>0
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
         c = sorption.concentration_from_retardation(0.5)
         assert c == sorption.c_min
 
-        # For unfavorable sorption with c_min=0
+        # For n<1 with c_min=0
         sorption_unfav = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
         c = sorption_unfav.concentration_from_retardation(0.5)
         assert c == 0.0
@@ -161,7 +161,7 @@ class TestFreundlichSorption:
 
         v_shock_expected = (flux_right - flux_left) / (c_total_right - c_total_left)
 
-        assert np.isclose(v_shock, v_shock_expected, rtol=1e-14)
+        assert np.isclose(v_shock, v_shock_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_shock_velocity_equal_concentrations(self):
         """Test shock velocity when c_left = c_right (degenerate case)."""
@@ -173,7 +173,7 @@ class TestFreundlichSorption:
 
         # Should return characteristic velocity
         v_char = flow / sorption.retardation(c)
-        assert np.isclose(v_shock, v_char, rtol=1e-14)
+        assert np.isclose(v_shock, v_char, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_entropy_condition_physical_shock_n_greater_1(self):
         """Test entropy condition for physical compression shock (n > 1)."""
@@ -244,7 +244,7 @@ class TestConstantRetardation:
         sorption = ConstantRetardation(retardation_factor=2.0)
         c = 5.0
         c_total = sorption.total_concentration(c)
-        assert np.isclose(c_total, c * 2.0, rtol=1e-14)
+        assert np.isclose(c_total, c * 2.0, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_concentration_from_retardation_raises_error(self):
         """Test that inversion is not supported."""
@@ -258,7 +258,7 @@ class TestConstantRetardation:
         flow = 100.0
         v_shock = sorption.shock_velocity(c_left=10.0, c_right=2.0, flow=flow)
         v_expected = flow / 2.0
-        assert np.isclose(v_shock, v_expected, rtol=1e-14)
+        assert np.isclose(v_shock, v_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_entropy_condition_always_true(self):
         """Test that entropy condition is always satisfied."""
@@ -281,7 +281,7 @@ class TestCharacteristicFunctions:
         v = characteristic_velocity(c, flow, sorption)
         v_expected = flow / sorption.retardation(c)
 
-        assert np.isclose(v, v_expected, rtol=1e-14)
+        assert np.isclose(v, v_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_characteristic_velocity_constant(self):
         """Test characteristic velocity with constant retardation."""
@@ -292,7 +292,7 @@ class TestCharacteristicFunctions:
         v = characteristic_velocity(c, flow, sorption)
         v_expected = flow / 2.0
 
-        assert np.isclose(v, v_expected, rtol=1e-14)
+        assert np.isclose(v, v_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_characteristic_position_linear_propagation(self):
         """Test that characteristic propagates linearly."""
@@ -306,7 +306,7 @@ class TestCharacteristicFunctions:
         for t in [1.0, 5.0, 10.0]:
             v_pos = characteristic_position(c, flow, sorption, t_start, v_start, t)
             v_expected = (flow / 2.0) * t
-            assert np.isclose(v_pos, v_expected, rtol=1e-14)
+            assert np.isclose(v_pos, v_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_characteristic_position_before_start(self):
         """Test that position is None for t < t_start."""
@@ -327,7 +327,7 @@ class TestCharacteristicFunctions:
         velocity = flow / 2.0
         v_expected = v_start + velocity * (t - t_start)
 
-        assert np.isclose(v_pos, v_expected, rtol=1e-14)
+        assert np.isclose(v_pos, v_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
 
 class TestFirstArrivalTime:
@@ -349,7 +349,7 @@ class TestFirstArrivalTime:
         # Arrives at day 10 + 10 = 20 days from tedges[0]
         t_expected = 20.0
 
-        assert np.isclose(t_first, t_expected, rtol=1e-14)
+        assert np.isclose(t_first, t_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_first_arrival_starts_at_zero(self):
         """Test first arrival when concentration starts at t=0."""
@@ -366,7 +366,7 @@ class TestFirstArrivalTime:
         # Arrives at 0 + 10 = 10 days from tedges[0]
         t_expected = 10.0
 
-        assert np.isclose(t_first, t_expected, rtol=1e-14)
+        assert np.isclose(t_first, t_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_first_arrival_no_concentration(self):
         """Test that all-zero concentration returns infinity."""
@@ -399,7 +399,7 @@ class TestFirstArrivalTime:
         # Total: 20.0 + 2.5 = 22.5 days from tedges[0]
         t_expected = 22.5
 
-        assert np.isclose(t_first, t_expected, rtol=1e-14)
+        assert np.isclose(t_first, t_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_first_arrival_freundlich_sorption(self):
         """Test first arrival with Freundlich sorption."""
@@ -418,7 +418,7 @@ class TestFirstArrivalTime:
         # Expected: 10.0 + 500.0 * r / 100.0 days from tedges[0]
         t_expected = 10.0 + 500.0 * r / 100.0
 
-        assert np.isclose(t_first, t_expected, rtol=1e-14)
+        assert np.isclose(t_first, t_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_first_arrival_insufficient_flow_history(self):
         """Test that insufficient flow history returns infinity."""
