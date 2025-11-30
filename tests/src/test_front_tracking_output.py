@@ -91,7 +91,7 @@ class TestConcentrationAtPoint:
         r_expected = raref.flow * t / v
         r_actual = sorption.retardation(c)
 
-        assert np.isclose(r_actual, r_expected, rtol=1e-14)
+        assert np.isclose(r_actual, r_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_multiple_characteristics_most_recent_wins(self):
         """Test that most recent characteristic determines concentration."""
@@ -218,11 +218,11 @@ class TestIdentifyOutletSegments:
         assert len(segments) == 2
 
         assert segments[0]["t_start"] == 0.0
-        assert np.isclose(segments[0]["t_end"], 10.0, rtol=1e-10)
+        assert np.isclose(segments[0]["t_end"], 10.0, rtol=1e-10)  # type: ignore[no-matching-overload]
         assert segments[0]["type"] == "constant"
         assert segments[0]["concentration"] == 0.0
 
-        assert np.isclose(segments[1]["t_start"], 10.0, rtol=1e-10)
+        assert np.isclose(segments[1]["t_start"], 10.0, rtol=1e-10)  # type: ignore[no-matching-overload]
         assert segments[1]["t_end"] == 20.0
         assert segments[1]["type"] == "constant"
         assert segments[1]["concentration"] == 5.0
@@ -253,7 +253,7 @@ class TestIdentifyOutletSegments:
 
         raref_seg = raref_segments[0]
         assert raref_seg["wave"] is raref
-        assert np.isclose(raref_seg["t_start"], t_head, rtol=1e-10)
+        assert np.isclose(raref_seg["t_start"], t_head, rtol=1e-10)  # type: ignore[no-matching-overload]
 
     def test_multiple_crossings_create_multiple_segments(self):
         """Test multiple wave crossings create correct segments."""
@@ -316,7 +316,7 @@ class TestIntegrateRarefactionExact:
         integral_bc = integrate_rarefaction_exact(raref, v_outlet, t_b, t_c, sorption)
 
         # Should satisfy: ∫[a,c] = ∫[a,b] + ∫[b,c]
-        assert np.isclose(integral_ac, integral_ab + integral_bc, rtol=1e-14)
+        assert np.isclose(integral_ac, integral_ab + integral_bc, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_integration_matches_numerical_quadrature(self):
         """Test exact integral matches high-order numerical quadrature."""
@@ -352,7 +352,7 @@ class TestIntegrateRarefactionExact:
         integral_numerical = np.trapezoid(c_array_clean, t_array_clean)
 
         # Should match to high precision
-        assert np.isclose(integral_exact, integral_numerical, rtol=1e-6)
+        assert np.isclose(integral_exact, integral_numerical, rtol=1e-6)  # type: ignore[no-matching-overload]
 
     def test_zero_time_interval_returns_zero(self):
         """Test integration over zero time interval."""
@@ -427,7 +427,7 @@ class TestComputeBinAveragedConcentrationExact:
 
         expected_mass = 10.0 * 5.0 * 100.0  # c * dt * flow
 
-        assert np.isclose(mass_extracted, expected_mass, rtol=1e-13)
+        assert np.isclose(mass_extracted, expected_mass, rtol=1e-13)  # type: ignore[no-matching-overload]
 
     def test_rarefaction_bin_averaging_exact(self):
         """Test bin averaging with rarefaction uses exact integration."""
@@ -535,7 +535,7 @@ class TestMachinePrecision:
         v_shock_expected = flux_jump / total_conc_jump
         v_shock_actual = shock.velocity
 
-        assert np.isclose(v_shock_actual, v_shock_expected, rtol=1e-14)
+        assert np.isclose(v_shock_actual, v_shock_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_rarefaction_integral_machine_precision(self):
         """Test rarefaction integration maintains machine precision."""
@@ -555,7 +555,7 @@ class TestMachinePrecision:
         integral_bc = integrate_rarefaction_exact(raref, v_outlet, t_b, t_c, sorption)
 
         # Should be exact to floating-point precision
-        assert np.isclose(integral_ac, integral_ab + integral_bc, rtol=1e-14, atol=1e-14)
+        assert np.isclose(integral_ac, integral_ab + integral_bc, rtol=1e-14, atol=1e-14)  # type: ignore[no-matching-overload]
 
 
 if __name__ == "__main__":

@@ -119,8 +119,8 @@ class TestCharacteristicIntersection:
             v2 = characteristic_position(
                 char2.concentration, char2.flow, char2.sorption, char2.t_start, char2.v_start, t_int
             )
-            assert np.isclose(v1, v2, rtol=1e-14)
-            assert np.isclose(v1, v_int, rtol=1e-14)
+            assert np.isclose(v1, v2, rtol=1e-14)  # type: ignore[no-matching-overload]
+            assert np.isclose(v1, v_int, rtol=1e-14)  # type: ignore[no-matching-overload]
         # For n == 1.0 (if ever used), this test is not defined.
 
     def test_parallel_characteristics(self, freundlich_sorption):
@@ -190,8 +190,8 @@ class TestShockShockIntersection:
             assert shock2.velocity is not None
             v1 = shock1.v_start + shock1.velocity * (t_int - shock1.t_start)
             v2 = shock2.v_start + shock2.velocity * (t_int - shock2.t_start)
-            assert np.isclose(v1, v2, rtol=1e-14)
-            assert np.isclose(v1, v_int, rtol=1e-14)
+            assert np.isclose(v1, v2, rtol=1e-14)  # type: ignore[no-matching-overload]
+            assert np.isclose(v1, v_int, rtol=1e-14)  # type: ignore[no-matching-overload]
         # For n == 1.0, this configuration is not tested.
 
     def test_parallel_shocks(self, freundlich_sorption):
@@ -250,7 +250,7 @@ class TestShockCharacteristicIntersection:
             )
             assert shock.velocity is not None
             v_shock = shock.v_start + shock.velocity * (t_int - shock.t_start)
-            assert np.isclose(v_char, v_shock, rtol=1e-14)
+            assert np.isclose(v_char, v_shock, rtol=1e-14)  # type: ignore[no-matching-overload]
         # For n == 1.0, behaviour is not covered by this test.
 
     def test_shock_not_catches_characteristic(self, freundlich_sorption):
@@ -508,7 +508,7 @@ class TestRarefactionIntersections:
             char.concentration, char.flow, char.sorption, char.t_start, char.v_start, t_int
         )
 
-        assert np.isclose(v_raref, v_char, rtol=1e-14)
+        assert np.isclose(v_raref, v_char, rtol=1e-14)  # type: ignore[no-matching-overload]
 
 
 @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
@@ -531,7 +531,7 @@ class TestOutletCrossing:
         v_at_cross = characteristic_position(
             char.concentration, char.flow, char.sorption, char.t_start, char.v_start, t_cross
         )
-        assert np.isclose(v_at_cross, v_outlet, rtol=1e-14)
+        assert np.isclose(v_at_cross, v_outlet, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_shock_outlet_crossing(self, freundlich_sorption):
         """Test shock crossing outlet."""
@@ -548,7 +548,7 @@ class TestOutletCrossing:
         # Verify shock is at outlet at crossing time
         assert shock.velocity is not None
         v_at_cross = shock.v_start + shock.velocity * (t_cross - shock.t_start)
-        assert np.isclose(v_at_cross, v_outlet, rtol=1e-14)
+        assert np.isclose(v_at_cross, v_outlet, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_rarefaction_outlet_crossing(self, freundlich_sorption):
         """Test rarefaction head crossing outlet."""
@@ -587,7 +587,7 @@ class TestOutletCrossing:
             v_head = characteristic_position(
                 raref.c_head, raref.flow, raref.sorption, raref.t_start, raref.v_start, t_cross
             )
-            assert np.isclose(v_head, v_outlet, rtol=1e-14)
+            assert np.isclose(v_head, v_outlet, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_wave_already_past_outlet(self, freundlich_sorption):
         """Test wave that already passed outlet returns None."""
@@ -673,7 +673,7 @@ class TestRarefactionRarefactionIntersections:
                     raref1.c_tail, raref1.flow, raref1.sorption, raref1.t_start, raref1.v_start, t_int
                 )
 
-            assert np.isclose(v_raref1, v_int, rtol=1e-14)
+            assert np.isclose(v_raref1, v_int, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_parallel_rarefaction_boundaries_do_not_intersect(self, freundlich_sorption):
         """Test that parallel rarefaction boundaries do not intersect."""
@@ -804,7 +804,7 @@ class TestRarefactionRarefactionIntersections:
 
         # Position of intersecting boundary of raref1 must match v_int to
         # machine precision.
-        assert np.isclose(v_raref1, v_int, rtol=1e-14)
+        assert np.isclose(v_raref1, v_int, rtol=1e-14)  # type: ignore[no-matching-overload]
 
     def test_valid_rarefactions_without_intersection_regime_aware(self, freundlich_sorption):
         """Regime-aware test: separation for n<1, controlled tail intersection for n>1."""
@@ -886,7 +886,7 @@ class TestRarefactionRarefactionIntersections:
                 t_int,
             )
 
-            assert np.isclose(v_tail_front, v_int, rtol=1e-14)
+            assert np.isclose(v_tail_front, v_int, rtol=1e-14)  # type: ignore[no-matching-overload]
 
         else:
             pytest.skip("This test is only defined for n!=1.")
@@ -946,7 +946,7 @@ class TestRarefactionRarefactionIntersections:
                 raref1.c_tail, raref1.flow, raref1.sorption, raref1.t_start, raref1.v_start, t_tail
             )
 
-            assert np.isclose(v_raref1_tail, v_tail, rtol=1e-14)
+            assert np.isclose(v_raref1_tail, v_tail, rtol=1e-14)  # type: ignore[no-matching-overload]
 
 
 @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
@@ -1126,8 +1126,8 @@ class TestMachinePrecision:
                 char2.concentration, char2.flow, char2.sorption, char2.t_start, char2.v_start, t_int
             )
 
-            assert np.isclose(v1, v2, rtol=1e-14, atol=1e-15)
-            assert np.isclose(v1, v_int, rtol=1e-14, atol=1e-15)
+            assert np.isclose(v1, v2, rtol=1e-14, atol=1e-15)  # type: ignore[no-matching-overload]
+            assert np.isclose(v1, v_int, rtol=1e-14, atol=1e-15)  # type: ignore[no-matching-overload]
 
     def test_roundtrip_precision_shock(self, freundlich_sorption):
         """Test shock-shock intersection has machine precision."""
@@ -1162,8 +1162,8 @@ class TestMachinePrecision:
             v1 = shock1.v_start + shock1.velocity * (t_int - shock1.t_start)
             v2 = shock2.v_start + shock2.velocity * (t_int - shock2.t_start)
 
-            assert np.isclose(v1, v2, rtol=1e-14, atol=1e-15)
-            assert np.isclose(v1, v_int, rtol=1e-14, atol=1e-15)
+            assert np.isclose(v1, v2, rtol=1e-14, atol=1e-15)  # type: ignore[no-matching-overload]
+            assert np.isclose(v1, v_int, rtol=1e-14, atol=1e-15)  # type: ignore[no-matching-overload]
 
 
 if __name__ == "__main__":

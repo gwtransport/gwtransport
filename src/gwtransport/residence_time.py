@@ -81,6 +81,10 @@ def residence_time(
     gwtransport.advection.gamma_infiltration_to_extraction : Use residence times for transport
     gwtransport.logremoval.residence_time_to_log_removal : Convert residence time to log removal
     """
+    if aquifer_pore_volumes is None:
+        msg = "aquifer_pore_volumes must be provided"
+        raise ValueError(msg)
+
     aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
 
     if flow_tedges is None:

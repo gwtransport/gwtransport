@@ -296,7 +296,7 @@ def test_basic_case():
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
-        result = result.todense()
+        result = result.todense()  # type: ignore[call-non-callable]
     assert_array_almost_equal(result, expected)
 
 
@@ -309,7 +309,7 @@ def test_no_overlap():
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
-        result = result.todense()
+        result = result.todense()  # type: ignore[call-non-callable]
     assert_array_almost_equal(result, expected)
 
 
@@ -322,7 +322,7 @@ def test_complete_overlap():
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
-        result = result.todense()
+        result = result.todense()  # type: ignore[call-non-callable]
     assert_array_almost_equal(result, expected)
 
 
@@ -335,7 +335,7 @@ def test_exact_bin_match():
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
-        result = result.todense()
+        result = result.todense()  # type: ignore[call-non-callable]
     assert_array_almost_equal(result, expected)
 
 
@@ -348,7 +348,7 @@ def test_multiple_bins():
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
-        result = result.todense()
+        result = result.todense()  # type: ignore[call-non-callable]
     assert_array_almost_equal(result, expected)
 
 
@@ -361,7 +361,7 @@ def test_partial_overlaps():
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
-        result = result.todense()
+        result = result.todense()  # type: ignore[call-non-callable]
     assert_array_almost_equal(result, expected)
 
 
@@ -374,7 +374,7 @@ def test_list_inputs():
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
-        result = result.todense()
+        result = result.todense()  # type: ignore[call-non-callable]
     assert_array_almost_equal(result, expected)
 
 
@@ -387,7 +387,7 @@ def test_empty_inputs():
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
-        result = result.todense()
+        result = result.todense()  # type: ignore[call-non-callable]
     assert_array_almost_equal(result, expected)
 
 
@@ -400,7 +400,7 @@ def test_single_bin():
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
-        result = result.todense()
+        result = result.todense()  # type: ignore[call-non-callable]
     assert_array_almost_equal(result, expected)
 
 
@@ -413,7 +413,7 @@ def test_edge_alignment():
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
-        result = result.todense()
+        result = result.todense()  # type: ignore[call-non-callable]
     assert_array_almost_equal(result, expected)
 
 
@@ -426,7 +426,7 @@ def test_floating_point_precision():
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
-        result = result.todense()
+        result = result.todense()  # type: ignore[call-non-callable]
     assert_array_almost_equal(result, expected)
 
 
@@ -439,7 +439,7 @@ def test_negative_values():
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
     # Convert sparse matrix to dense for comparison
     if hasattr(result, "todense"):
-        result = result.todense()
+        result = result.todense()  # type: ignore[call-non-callable]
     assert_array_almost_equal(result, expected)
 
 
