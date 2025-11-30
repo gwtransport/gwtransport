@@ -1222,91 +1222,6 @@ def find_last_rarefaction_start_time(
     return t_last
 
 
-def find_last_wave_exit_time(
-    v_outlet: float,
-    waves: list[Wave],
-    tedges: npt.NDArray[np.floating],
-) -> float:
-    """
-    Find the time when the last wave completely passes the outlet.
-
-    For most waves, this is their arrival time. For rarefactions, this is
-    when the TAIL (not head) passes the outlet. This is critical for n < 1
-    where rarefactions have finite duration.
-
-    Parameters
-    ----------
-    v_outlet : float
-        Outlet position [m³].
-    waves : list of Wave
-        All waves in the simulation.
-    tedges : array_like
-        Time bin edges [days] from inlet data (used as upper bound).
-
-    Returns
-    -------
-    t_last_exit : float
-        Time when last wave completely exits [days].
-        Returns tedges[-1] if no waves reach the outlet or if the
-        last wave exit time exceeds the inlet data range.
-
-    Notes
-    -----
-    This function differs from find_last_rarefaction_start_time by considering
-    when waves FINISH passing the outlet, not when they START.
-
-    For rarefactions:
-    - If c_tail ≈ 0: tail extends to infinity, return tedges[-1]
-    - If c_tail > 0: tail arrives at finite time t_tail
-
-    Examples
-    --------
-    >>> t_exit = find_last_wave_exit_time(
-    ...     v_outlet=500.0, waves=all_waves, tedges=tedges
-    ... )
-    >>> t_exit >= 0.0
-    True
-    """
-    t_last_exit = 0.0
-    tedges_arr = np.asarray(tedges, dtype=float)
-
-    for wave in waves:
-        if not wave.is_active:
-            continue
-
-        if isinstance(wave, RarefactionWave):
-            # For rarefaction, find when TAIL passes outlet
-            head_vel = wave.head_velocity()
-            tail_vel = wave.tail_velocity()
-
-            if head_vel <= EPSILON_VELOCITY or wave.v_start >= v_outlet:
-                # Rarefaction doesn't reach outlet
-                continue
-
-            # Check if tail goes to C≈0 or has finite concentration
-            if wave.c_tail < EPSILON_CONCENTRATION:
-                # Tail extends to infinity - use inlet data extent
-                t_last_exit = tedges_arr[-1]
-            elif tail_vel > EPSILON_VELOCITY:
-                # Finite tail arrival time
-                t_tail_arrival = wave.t_start + (v_outlet - wave.v_start) / tail_vel
-                t_last_exit = max(t_last_exit, t_tail_arrival)
-            else:
-                # Tail velocity ~0 means tail extends to infinity
-                t_last_exit = tedges_arr[-1]
-
-        elif isinstance(wave, (CharacteristicWave, ShockWave)):
-            # For characteristics and shocks, compute arrival time
-            vel = wave.velocity if isinstance(wave, ShockWave) else wave.velocity()
-            if vel is not None and vel > EPSILON_VELOCITY and wave.v_start < v_outlet:
-                t_arrival = wave.t_start + (v_outlet - wave.v_start) / vel
-                t_last_exit = max(t_last_exit, t_arrival)
-
-    # Make sure we don't extend beyond inlet data range
-    # (after tedges[-1], we assume concentration is whatever the last inlet value was)
-    return min(t_last_exit, tedges_arr[-1])
-
-
 def compute_cumulative_outlet_mass(
     t: float,
     v_outlet: float,
@@ -1661,64 +1576,10 @@ def compute_total_outlet_mass(
                     )
                     total_raref_mass += raref_mass
 
-    # After rarefaction mass, check if there are waves that come AFTER the rarefaction tails
-    # This is critical for n < 1 where rarefactions have finite duration (c_tail > 0)
-    t_last_raref_tail = t_last_raref_start  # Default: rarefaction extends to infinity
-    has_finite_rarefaction = False
+    # For rarefactions with finite tails (c_tail > 0, typical for n < 1),
+    # all mass is already accounted for in the rarefaction integration
+    # from head to tail. No additional mass needs to be integrated after
+    # the tail - if there were more waves, they would be in the wave list.
+    total_mass = mass_up_to_raref_start + total_raref_mass
 
-    for wave in waves:
-        if not wave.is_active:
-            continue
-
-        if isinstance(wave, RarefactionWave):
-            head_vel = wave.head_velocity()
-            tail_vel = wave.tail_velocity()
-
-            if head_vel > EPSILON_VELOCITY and wave.v_start < v_outlet:
-                t_raref_start_at_outlet = wave.t_start + (v_outlet - wave.v_start) / head_vel
-
-                # Check if this is one of the rarefactions we integrated analytically
-                # and if it has finite tail
-                if (
-                    abs(t_raref_start_at_outlet - t_last_raref_start) < EPSILON_TIME_MATCH
-                    and wave.c_tail >= EPSILON_CONCENTRATION
-                    and tail_vel > EPSILON_VELOCITY
-                ):
-                    t_tail_arrival = wave.t_start + (v_outlet - wave.v_start) / tail_vel
-                    t_last_raref_tail = max(t_last_raref_tail, t_tail_arrival)
-                    has_finite_rarefaction = True
-
-    # If rarefactions have finite tails, integrate any remaining mass after them
-    mass_after_rarefaction = 0.0
-    if has_finite_rarefaction and t_last_raref_tail < tedges_arr[-1]:
-        # Find when all mass should have exited
-        t_final = find_last_wave_exit_time(v_outlet, waves, tedges_arr)
-
-        if t_final > t_last_raref_tail + EPSILON_TIME:
-            # There's more mass after the rarefaction tails - integrate it
-            segments = identify_outlet_segments(t_last_raref_tail, t_final, v_outlet, waves, sorption)
-
-            integral_c_dt = 0.0
-            for seg in segments:
-                seg_t_start = max(seg["t_start"], t_last_raref_tail)
-                seg_t_end = min(seg["t_end"], t_final)
-                seg_dt = seg_t_end - seg_t_start
-
-                if seg_dt <= EPSILON_TIME:
-                    continue
-
-                if seg["type"] == "constant":
-                    integral_c_dt += seg["concentration"] * seg_dt
-                elif seg["type"] == "rarefaction" and isinstance(sorption, FreundlichSorption):
-                    # This shouldn't happen (rarefactions after rarefaction tail), but handle it
-                    raref = seg["wave"]
-                    integral_c_dt += integrate_rarefaction_exact(raref, v_outlet, seg_t_start, seg_t_end, sorption)
-
-            mass_after_rarefaction = flow_at_raref_start * integral_c_dt
-
-    total_mass = mass_up_to_raref_start + total_raref_mass + mass_after_rarefaction
-
-    # Return integration endpoint
-    t_integration_end = t_last_raref_tail if has_finite_rarefaction else t_last_raref_start
-
-    return float(total_mass), t_integration_end
+    return float(total_mass), t_last_raref_start

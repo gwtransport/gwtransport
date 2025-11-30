@@ -200,6 +200,20 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
             v_outlet=v_outlet, waves=waves, sorption=sorption, flow=flow_arr, tedges=tedges_days.values
         )
 
+        # Check if inlet ends with explicit transition to C=0
+        # Without this, the front tracking solver assumes the inlet continues
+        # at the last concentration forever, leading to incorrect mass balance
+        epsilon_conc_zero = 1e-10  # Tolerance for checking if concentration is zero
+        if len(cin) > 0 and abs(cin[-1]) > epsilon_conc_zero and verbose:
+            msg = (
+                f"\n⚠️  WARNING: Inlet concentration ends at C={cin[-1]:.3f} (not zero).\n"
+                "   For accurate mass balance, the inlet should explicitly end with C=0.\n"
+                "   Consider appending cin[-1]=0.0 or adding a final time step with C=0.\n"
+                "   Without this, the solver assumes inlet continues indefinitely,\n"
+                "   causing mass balance errors in the validation check.\n"
+            )
+            print(msg)  # noqa: T201
+
         # Check if total outlet mass matches total inlet mass
         if total_mass_in > 0:
             relative_error_total = abs(total_mass_out - total_mass_in) / total_mass_in
