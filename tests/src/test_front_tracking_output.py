@@ -658,7 +658,7 @@ class TestMassBalanceFunctions:
         t_timestamp = pd.Timestamp("2020-02-01")  # 31 days
         t = (t_timestamp - tedges_datetime[0]).days
 
-        mass = compute_cumulative_inlet_mass(t, cin, flow, tedges)
+        mass = compute_cumulative_inlet_mass(t, cin.values, flow.values, tedges)
 
         # Mass should equal concentration * flow * time
         # 10.0 * 100.0 * 31 = 31000
@@ -678,7 +678,7 @@ class TestMassBalanceFunctions:
         t_timestamp = pd.Timestamp("2020-02-01")  # 31 days
         t = (t_timestamp - tedges_datetime[0]).days
 
-        mass = compute_cumulative_inlet_mass(t, cin, flow, tedges)
+        mass = compute_cumulative_inlet_mass(t, cin.values, flow.values, tedges)
 
         # Mass should be positive and reasonable
         assert mass > 0.0
@@ -699,7 +699,7 @@ class TestMassBalanceFunctions:
         t_timestamp = pd.Timestamp("2020-02-01")  # 31 days
         t = (t_timestamp - tedges_datetime[0]).days
 
-        mass = compute_cumulative_inlet_mass(t, cin, flow, tedges)
+        mass = compute_cumulative_inlet_mass(t, cin.values, flow.values, tedges)
 
         # Mass should be positive and reasonable
         assert mass > 0.0
@@ -725,7 +725,7 @@ class TestMassBalanceFunctions:
         t_timestamp = pd.Timestamp("2020-01-20")  # 19 days
         t = (t_timestamp - tedges_datetime[0]).days
 
-        mass = compute_cumulative_outlet_mass(t, v_outlet, waves, sorption, flow, tedges)
+        mass = compute_cumulative_outlet_mass(t, v_outlet, waves, sorption, flow.values, tedges)
 
         # Mass should be positive
         assert mass >= 0.0
@@ -754,8 +754,8 @@ class TestMassBalanceFunctions:
         t = (t_timestamp - tedges_datetime[0]).days
 
         # Compute all three masses
-        mass_inlet = compute_cumulative_inlet_mass(t, cin, flow_series, tedges)
-        mass_outlet = compute_cumulative_outlet_mass(t, v_outlet, waves, sorption, flow_series, tedges)
+        mass_inlet = compute_cumulative_inlet_mass(t, cin.values, flow_series.values, tedges)
+        mass_outlet = compute_cumulative_outlet_mass(t, v_outlet, waves, sorption, flow_series.values, tedges)
         mass_domain = compute_domain_mass(t, v_outlet, waves, sorption)
 
         # Mass balance: inlet - outlet ≈ domain
