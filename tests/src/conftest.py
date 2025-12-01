@@ -181,6 +181,179 @@ def multiple_pore_volumes():
 
 
 # ============================================================================
+# Aquifer Configuration Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def aquifer_scenarios():
+    """Various realistic aquifer configurations for parametrized testing.
+
+    Returns
+    -------
+    list of dict
+        Each dict contains pore_volume, length, porosity, and descriptive name.
+        Covers typical, small, and large aquifer systems.
+    """
+    return [
+        {"pore_volume": 30000.0, "length": 80.0, "porosity": 0.35, "name": "typical"},
+        {"pore_volume": 10000.0, "length": 50.0, "porosity": 0.25, "name": "small"},
+        {"pore_volume": 100000.0, "length": 150.0, "porosity": 0.40, "name": "large"},
+    ]
+
+
+# ============================================================================
+# Diffusivity Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def diffusivity_values():
+    """Different diffusivity values for various aquifer materials.
+
+    Returns
+    -------
+    dict
+        Maps material type to thermal diffusivity in m²/day.
+        Based on typical values for heat transport in saturated porous media.
+    """
+    return {
+        "fine_sand": 0.01,  # Lower end - finer material
+        "typical_sand": 0.03,  # Representative value
+        "coarse_gravel": 0.08,  # Upper end - coarser material
+    }
+
+
+# ============================================================================
+# Retardation Factor Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def retardation_scenarios():
+    """Different retardation factors for various transport scenarios.
+
+    Returns
+    -------
+    dict
+        Maps scenario name to retardation factor.
+        - Conservative solute: R = 1.0 (no retardation)
+        - Temperature: R ~ 2.0 (typical for heat transport)
+        - Reactive solute: R > 1.0 (sorbing compound)
+    """
+    return {
+        "conservative_solute": 1.0,
+        "temperature": 2.0,
+        "reactive_solute": 3.5,
+    }
+
+
+# ============================================================================
+# Enhanced Sorption Parameter Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def sorption_parameters():
+    """Freundlich sorption parameters for various scenarios.
+
+    Returns
+    -------
+    list of dict
+        Each dict contains n, kf, and descriptive name.
+        Covers unfavorable (n<1), linear (n=1), and favorable (n>1) isotherms.
+    """
+    return [
+        {"n": 0.5, "kf": 1.0, "name": "unfavorable"},
+        {"n": 1.0, "kf": 1.0, "name": "linear"},
+        {"n": 1.5, "kf": 1.0, "name": "favorable"},
+        {"n": 2.0, "kf": 1.0, "name": "strongly_favorable"},
+    ]
+
+
+# ============================================================================
+# Flow Pattern Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def flow_patterns():
+    """Create various flow patterns for testing.
+
+    Returns
+    -------
+    callable
+        Function that generates different flow patterns:
+        - constant: Uniform flow
+        - seasonal: Sinusoidal variation
+        - with_zeros: Includes zero-flow periods
+        - step_change: Abrupt flow changes
+    """
+
+    def _make_flow_pattern(pattern_type, n_days, base_flow=100.0):
+        """Generate flow patterns.
+
+        Parameters
+        ----------
+        pattern_type : str
+            One of: 'constant', 'seasonal', 'with_zeros', 'step_change'
+        n_days : int
+            Number of days
+        base_flow : float
+            Base flow rate in m³/day
+
+        Returns
+        -------
+        np.ndarray
+            Flow values for each day
+        """
+        if pattern_type == "constant":
+            return np.full(n_days, base_flow)
+
+        if pattern_type == "seasonal":
+            t = np.arange(n_days)
+            return base_flow * (1.0 + 0.5 * np.sin(2 * np.pi * t / 365))
+
+        if pattern_type == "with_zeros":
+            flow = np.full(n_days, base_flow)
+            # Add some zero-flow periods
+            flow[10:15] = 0.0
+            flow[25:28] = 0.0
+            return flow
+
+        if pattern_type == "step_change":
+            flow = np.full(n_days, base_flow)
+            flow[n_days // 3 :] = base_flow * 1.5
+            return flow
+
+        msg = f"Unknown pattern_type: {pattern_type}"
+        raise ValueError(msg)
+
+    return _make_flow_pattern
+
+
+# ============================================================================
+# Variable Flow Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def variable_flow_standard(standard_dates):
+    """Variable flow with seasonal pattern for standard period."""
+    n_days = len(standard_dates)
+    t = np.arange(n_days)
+    return 100.0 * (1.0 + 0.3 * np.sin(2 * np.pi * t / 365))
+
+
+@pytest.fixture
+def variable_flow_short(short_dates):
+    """Variable flow with weekly pattern for short period."""
+    n_days = len(short_dates)
+    t = np.arange(n_days)
+    return 100.0 * (1.0 + 0.2 * np.sin(2 * np.pi * t / 7))
+
+
+# ============================================================================
 # Composite Fixtures for Common Test Scenarios
 # ============================================================================
 

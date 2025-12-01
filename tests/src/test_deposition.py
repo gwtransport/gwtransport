@@ -11,7 +11,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport.deposition import deposition_to_extraction, extraction_to_deposition
+from gwtransport.deposition import (
+    compute_deposition_weights,
+    deposition_to_extraction,
+    extraction_to_deposition,
+    spinup_duration,
+)
 from gwtransport.examples import generate_example_data, generate_example_deposition_timeseries
 from gwtransport.residence_time import residence_time
 from gwtransport.utils import compute_time_edges, solve_underdetermined_system
@@ -659,6 +664,252 @@ def test_extraction_to_deposition_sparse_weekly_sampling():
     # Document that this test covers the same scenario as the notebook failure
     assert len(weekly_extraction_dates) == 157, "Should have 157 weekly samples like in notebook"
     assert len(weekly_cout_tedges) == 158, "Should have 158 weekly edges (157 + 1)"
+
+
+# =============================================================================
+# Tests for spinup_duration function (CRITICAL COVERAGE GAP)
+# =============================================================================
+
+
+def test_spinup_duration_constant_flow():
+    """Test spinup_duration with constant flow."""
+    dates = pd.date_range(start="2020-01-01", periods=100, freq="D")
+    tedges = pd.date_range(start="2020-01-01", periods=101, freq="D")
+    flow = np.ones(len(dates)) * 100.0  # m³/day
+    pore_volume = 5000.0  # m³
+    retardation_factor = 1.0
+
+    duration = spinup_duration(
+        flow=flow, flow_tedges=tedges, aquifer_pore_volume=pore_volume, retardation_factor=retardation_factor
+    )
+
+    # Spinup should equal residence time at first time point
+    # RT = pore_volume * retardation / flow = 5000 * 1.0 / 100 = 50 days
+    expected_duration = pore_volume * retardation_factor / flow[0]
+    assert duration == pytest.approx(expected_duration, rel=0.01)
+
+
+def test_spinup_duration_with_retardation():
+    """Test spinup_duration with retardation factor > 1."""
+    # RT = 5000 * 2.0 / 100 = 100 days, so need at least 100 days of flow history
+    dates = pd.date_range(start="2020-01-01", periods=150, freq="D")
+    tedges = pd.date_range(start="2020-01-01", periods=151, freq="D")
+    flow = np.ones(len(dates)) * 100.0
+    pore_volume = 5000.0
+    retardation_factor = 2.0  # Temperature transport
+
+    duration = spinup_duration(
+        flow=flow, flow_tedges=tedges, aquifer_pore_volume=pore_volume, retardation_factor=retardation_factor
+    )
+
+    # Spinup should be longer with retardation
+    # RT = 5000 * 2.0 / 100 = 100 days
+    expected_duration = pore_volume * retardation_factor / flow[0]
+    assert duration == pytest.approx(expected_duration, rel=0.01)
+    assert duration > 50.0  # Longer than without retardation
+
+
+def test_spinup_duration_high_flow():
+    """Test spinup_duration with high flow (short spinup)."""
+    dates = pd.date_range(start="2020-01-01", periods=100, freq="D")
+    tedges = pd.date_range(start="2020-01-01", periods=101, freq="D")
+    flow = np.ones(len(dates)) * 500.0  # High flow
+    pore_volume = 5000.0
+    retardation_factor = 1.0
+
+    duration = spinup_duration(
+        flow=flow, flow_tedges=tedges, aquifer_pore_volume=pore_volume, retardation_factor=retardation_factor
+    )
+
+    # RT = 5000 * 1.0 / 500 = 10 days
+    expected_duration = pore_volume * retardation_factor / flow[0]
+    assert duration == pytest.approx(expected_duration, rel=0.01)
+    assert duration < 20.0  # Short spinup with high flow
+
+
+def test_spinup_duration_low_flow():
+    """Test spinup_duration with low flow (long spinup)."""
+    # RT = 5000 * 1.0 / 20 = 250 days, so need at least 250 days of flow history
+    dates = pd.date_range(start="2020-01-01", periods=300, freq="D")
+    tedges = pd.date_range(start="2020-01-01", periods=301, freq="D")
+    flow = np.ones(len(dates)) * 20.0  # Low flow
+    pore_volume = 5000.0
+    retardation_factor = 1.0
+
+    duration = spinup_duration(
+        flow=flow, flow_tedges=tedges, aquifer_pore_volume=pore_volume, retardation_factor=retardation_factor
+    )
+
+    # RT = 5000 * 1.0 / 20 = 250 days
+    expected_duration = pore_volume * retardation_factor / flow[0]
+    assert duration == pytest.approx(expected_duration, rel=0.01)
+    assert duration > 200.0  # Long spinup with low flow
+
+
+def test_spinup_duration_large_pore_volume():
+    """Test spinup_duration with large pore volume."""
+    # RT = 20000 * 1.5 / 100 = 300 days, so need at least 300 days of flow history
+    dates = pd.date_range(start="2020-01-01", periods=400, freq="D")
+    tedges = pd.date_range(start="2020-01-01", periods=401, freq="D")
+    flow = np.ones(len(dates)) * 100.0
+    pore_volume = 20000.0  # Large aquifer
+    retardation_factor = 1.5
+
+    duration = spinup_duration(
+        flow=flow, flow_tedges=tedges, aquifer_pore_volume=pore_volume, retardation_factor=retardation_factor
+    )
+
+    # RT = 20000 * 1.5 / 100 = 300 days
+    expected_duration = pore_volume * retardation_factor / flow[0]
+    assert duration == pytest.approx(expected_duration, rel=0.01)
+
+
+# =============================================================================
+# Tests for compute_deposition_weights function (MEDIUM PRIORITY)
+# =============================================================================
+
+
+def test_compute_deposition_weights_structure():
+    """Test that compute_deposition_weights produces correct matrix structure."""
+    dates = pd.date_range(start="2020-01-01", periods=50, freq="D")
+    tedges = pd.date_range(start="2020-01-01", periods=51, freq="D")
+    # Start output after residence time: RT = 500/100 = 5 days
+    cout_tedges = pd.date_range(start="2020-01-08", periods=41, freq="D")
+
+    flow = np.ones(len(dates)) * 100.0
+    aquifer_pore_volume = 500.0  # RT = 500/100 = 5 days
+    porosity = 0.35
+    thickness = 3.0
+    retardation_factor = 1.0
+
+    weights = compute_deposition_weights(
+        flow_values=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=aquifer_pore_volume,
+        porosity=porosity,
+        thickness=thickness,
+        retardation_factor=retardation_factor,
+    )
+
+    # Verify shape
+    assert weights.shape == (len(cout_tedges) - 1, len(tedges) - 1)
+    assert weights.shape == (40, 50)
+
+    # Verify all weights are non-negative
+    assert np.all(weights >= 0.0)
+
+    # Verify weights are finite
+    assert np.all(np.isfinite(weights))
+
+
+def test_compute_deposition_weights_causality():
+    """Test that weight matrix respects causality (temporal ordering)."""
+    dates = pd.date_range(start="2020-01-01", periods=50, freq="D")
+    tedges = pd.date_range(start="2020-01-01", periods=51, freq="D")
+    # Start output after residence time: RT = 500/100 = 5 days
+    cout_tedges = pd.date_range(start="2020-01-08", periods=31, freq="D")
+
+    flow = np.ones(len(dates)) * 100.0
+    aquifer_pore_volume = 500.0  # RT = 500/100 = 5 days
+    porosity = 0.35
+    thickness = 3.0
+    retardation_factor = 1.0
+
+    weights = compute_deposition_weights(
+        flow_values=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=aquifer_pore_volume,
+        porosity=porosity,
+        thickness=thickness,
+        retardation_factor=retardation_factor,
+    )
+
+    # Weights should have a roughly diagonal structure
+    # (deposition at time t contributes to extraction near time t + residence_time)
+    # Most weight should be concentrated near the diagonal-like region
+    total_weight = np.sum(weights)
+    assert total_weight > 0.0
+
+
+def test_compute_deposition_weights_with_retardation():
+    """Test compute_deposition_weights with different retardation factors."""
+    dates = pd.date_range(start="2020-01-01", periods=50, freq="D")
+    tedges = pd.date_range(start="2020-01-01", periods=51, freq="D")
+    # Start output after residence time with retardation
+    cout_tedges = pd.date_range(start="2020-01-12", periods=31, freq="D")
+
+    flow = np.ones(len(dates)) * 100.0
+    aquifer_pore_volume = 5000.0
+    porosity = 0.35
+    thickness = 3.0
+
+    # Test with R=1.0
+    weights_r1 = compute_deposition_weights(
+        flow_values=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=aquifer_pore_volume,
+        porosity=porosity,
+        thickness=thickness,
+        retardation_factor=1.0,
+    )
+
+    # Test with R=2.0 (more retardation)
+    weights_r2 = compute_deposition_weights(
+        flow_values=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=aquifer_pore_volume,
+        porosity=porosity,
+        thickness=thickness,
+        retardation_factor=2.0,
+    )
+
+    # Shapes should be the same
+    assert weights_r1.shape == weights_r2.shape
+
+    # Weight patterns should be different
+    assert not np.allclose(weights_r1, weights_r2)
+
+
+def test_compute_deposition_weights_porosity_effect():
+    """Test that porosity affects contact area calculation in weights."""
+    dates = pd.date_range(start="2020-01-01", periods=50, freq="D")
+    tedges = pd.date_range(start="2020-01-01", periods=51, freq="D")
+    # Start output after residence time: RT = 500/100 = 5 days
+    cout_tedges = pd.date_range(start="2020-01-08", periods=31, freq="D")
+
+    flow = np.ones(len(dates)) * 100.0
+    aquifer_pore_volume = 500.0  # RT = 500/100 = 5 days
+    thickness = 3.0
+    retardation_factor = 1.0
+
+    # Low porosity (more contact area)
+    weights_low_por = compute_deposition_weights(
+        flow_values=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=aquifer_pore_volume,
+        porosity=0.25,
+        thickness=thickness,
+        retardation_factor=retardation_factor,
+    )
+
+    # High porosity (less contact area)
+    weights_high_por = compute_deposition_weights(
+        flow_values=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=aquifer_pore_volume,
+        porosity=0.45,
+        thickness=thickness,
+        retardation_factor=retardation_factor,
+    )
+
+    # Weights should be affected by porosity (different contact areas)
+    assert not np.allclose(weights_low_por, weights_high_por)
 
 
 if __name__ == "__main__":

@@ -1,9 +1,17 @@
 import numpy as np
+import pandas as pd
 import pytest
 from numpy.testing import assert_allclose
 from scipy import ndimage, special
 
-from gwtransport.diffusion import convolve_diffusion
+from gwtransport.diffusion import (
+    compute_sigma_array,
+    convolve_diffusion,
+    create_example_data,
+    deconvolve_diffusion,
+    extraction_to_infiltration,
+    infiltration_to_extraction,
+)
 
 
 class AnalyticalSolutions:
@@ -406,6 +414,393 @@ class TestGaussianComparison:
             result_small_variable = convolve_diffusion(input_signal=signal, sigma_array=sigma_array, truncate=4.0)
             result_small_scipy = ndimage.gaussian_filter1d(signal, sigma, mode="nearest", truncate=4.0)
             assert_allclose(result_small_variable, result_small_scipy, rtol=1e-6, err_msg=f"Failed for sigma={sigma}")
+
+
+# =============================================================================
+# Tests for infiltration_to_extraction function
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "diffusivity",
+    [
+        0.01,  # fine_sand
+        0.03,  # typical_sand
+        0.08,  # coarse_gravel
+    ],
+)
+def test_infiltration_to_extraction_with_various_diffusivity(diffusivity):
+    """Test infiltration_to_extraction with different diffusivity values."""
+    # Setup
+    n_days = 100
+    tedges = pd.date_range(start="2020-01-01", periods=n_days + 1, freq="D")
+    cin = np.ones(n_days) * 10.0
+    flow = np.ones(n_days) * 100.0
+
+    # Test
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=5000.0,
+        diffusivity=diffusivity,
+        retardation_factor=1.0,
+        aquifer_length=80.0,
+        porosity=0.35,
+    )
+
+    # Verify output
+    assert len(cout) == n_days
+    assert np.all(np.isfinite(cout))
+    # With constant input, output should converge to input value
+    assert np.mean(cout[-20:]) == pytest.approx(10.0, rel=0.1)
+
+
+@pytest.mark.parametrize(
+    "retardation_factor",
+    [
+        1.0,  # conservative_solute
+        2.0,  # temperature
+        3.5,  # reactive_solute
+    ],
+)
+def test_infiltration_to_extraction_with_retardation(retardation_factor):
+    """Test infiltration_to_extraction with different retardation factors."""
+    # Setup - use smaller pore volume to ensure valid residence time
+    # Max residence time: 1000 * 3.5 / 100 = 35 days (well within 150 days)
+    n_days = 150
+    tedges = pd.date_range(start="2020-01-01", periods=n_days + 1, freq="D")
+    # Step change in concentration
+    cin = np.zeros(n_days)
+    cin[50:] = 10.0
+    flow = np.ones(n_days) * 100.0
+
+    # Test
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=1000.0,  # Smaller pore volume for valid residence time
+        diffusivity=0.03,
+        retardation_factor=retardation_factor,
+        aquifer_length=80.0,
+        porosity=0.35,
+    )
+
+    # Verify output
+    assert len(cout) == n_days
+    assert np.all(np.isfinite(cout))
+    # Higher retardation should delay and spread the breakthrough
+    assert np.mean(cout[:50]) < 1.0  # Low before step
+    assert np.mean(cout[-20:]) > 8.0  # Converges to input after step
+
+
+def test_infiltration_to_extraction_with_variable_flow():
+    """Test infiltration_to_extraction with variable flow pattern."""
+    # Setup with variable flow
+    n_days = 100
+    tedges = pd.date_range(start="2020-01-01", periods=n_days + 1, freq="D")
+    cin = np.ones(n_days) * 10.0
+    # Seasonal flow variation
+    t = np.arange(n_days)
+    flow = 100.0 * (1.0 + 0.3 * np.sin(2 * np.pi * t / 30))
+
+    # Test
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=5000.0,
+        diffusivity=0.03,
+        retardation_factor=1.0,
+        aquifer_length=80.0,
+        porosity=0.35,
+    )
+
+    # Verify output
+    assert len(cout) == n_days
+    assert np.all(np.isfinite(cout))
+    assert np.mean(cout) > 0.0
+
+
+# =============================================================================
+# Tests for compute_sigma_array function
+# =============================================================================
+
+
+def test_compute_sigma_array_constant_flow():
+    """Test compute_sigma_array with constant flow."""
+    # Setup - use smaller pore volume to ensure we have enough flow data
+    # With 50 days at 100 m3/day, we have 5000 m3 total
+    # Use pore_volume = 1000 m3 for 10 day residence time, leaving plenty of margin
+    n_days = 50
+    tedges = pd.date_range(start="2020-01-01", periods=n_days + 1, freq="D")
+    flow = np.ones(n_days) * 100.0
+
+    # Test
+    sigma_array = compute_sigma_array(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=1000.0,  # Smaller pore volume for valid residence time calculation
+        diffusivity=0.03,
+        retardation_factor=1.0,
+        aquifer_length=80.0,
+        porosity=0.35,
+    )
+
+    # Verify
+    assert len(sigma_array) == n_days
+    assert np.all(np.isfinite(sigma_array))
+    assert np.all(sigma_array >= 0.0)
+    # With constant flow, sigma should be fairly uniform
+    assert np.std(sigma_array) < np.mean(sigma_array) * 0.1
+
+
+def test_compute_sigma_array_variable_flow():
+    """Test compute_sigma_array with variable flow."""
+    # Setup with variable flow
+    n_days = 50
+    tedges = pd.date_range(start="2020-01-01", periods=n_days + 1, freq="D")
+    t = np.arange(n_days)
+    flow = 100.0 * (1.0 + 0.5 * np.sin(2 * np.pi * t / 20))
+
+    # Test - with retardation_factor=2.0, residence time doubles
+    # So use pore_volume = 500 to get ~10 day residence time with safety margin
+    sigma_array = compute_sigma_array(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=500.0,  # Smaller pore volume accounting for retardation
+        diffusivity=0.03,
+        retardation_factor=2.0,
+        aquifer_length=80.0,
+        porosity=0.35,
+    )
+
+    # Verify
+    assert len(sigma_array) == n_days
+    assert np.all(np.isfinite(sigma_array))
+    assert np.all(sigma_array >= 0.0)
+    # Sigma should vary with flow
+    assert np.std(sigma_array) > 0.0
+
+
+def test_compute_sigma_array_with_nan_in_residence_time():
+    """Test compute_sigma_array handles NaN in residence time correctly."""
+    # Setup - flow pattern that might cause NaN
+    n_days = 50
+    tedges = pd.date_range(start="2020-01-01", periods=n_days + 1, freq="D")
+    flow = np.ones(n_days) * 100.0
+    # Create scenario with zero flow (could cause NaN)
+    flow[10:15] = 1e-10  # Very small flow
+
+    # Test - use smaller pore volume
+    sigma_array = compute_sigma_array(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=1000.0,  # Smaller pore volume
+        diffusivity=0.03,
+        retardation_factor=1.0,
+        aquifer_length=80.0,
+        porosity=0.35,
+    )
+
+    # Verify - should interpolate NaN values
+    assert len(sigma_array) == n_days
+    assert np.all(np.isfinite(sigma_array))
+    assert np.all(sigma_array >= 0.0)
+
+
+def test_compute_sigma_array_clipping():
+    """Test that compute_sigma_array clips extreme values."""
+    # Setup with extreme parameters to trigger clipping
+    # Use enough days and appropriate pore volume to avoid NaN
+    n_days = 100
+    tedges = pd.date_range(start="2020-01-01", periods=n_days + 1, freq="D")
+    flow = np.ones(n_days) * 10.0  # Higher flow to keep residence time manageable
+
+    # Test with high diffusivity to trigger clipping
+    sigma_array = compute_sigma_array(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=100.0,  # Smaller pore volume: residence time = 100 * 5 / 10 = 50 days
+        diffusivity=10.0,  # Very high diffusivity
+        retardation_factor=5.0,
+        aquifer_length=80.0,
+        porosity=0.35,
+    )
+
+    # Verify clipping at 100.0
+    assert len(sigma_array) == n_days
+    assert np.all(sigma_array <= 100.0)
+    assert np.all(sigma_array >= 0.0)
+
+
+@pytest.mark.parametrize(
+    ("diffusivity", "retardation"),
+    [
+        (0.01, 1.0),
+        (0.05, 2.0),
+        (0.10, 1.5),
+    ],
+)
+def test_compute_sigma_array_parametrized(diffusivity, retardation):
+    """Test compute_sigma_array with various parameter combinations."""
+    # Setup - use smaller pore volume to ensure valid residence time
+    # Max residence time: 1000 * 2.0 / 100 = 20 days (well within 50 days)
+    n_days = 50
+    tedges = pd.date_range(start="2020-01-01", periods=n_days + 1, freq="D")
+    flow = np.ones(n_days) * 100.0
+
+    # Test
+    sigma_array = compute_sigma_array(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=1000.0,  # Smaller pore volume
+        diffusivity=diffusivity,
+        retardation_factor=retardation,
+        aquifer_length=100.0,
+        porosity=0.30,
+    )
+
+    # Verify
+    assert len(sigma_array) == n_days
+    assert np.all(np.isfinite(sigma_array))
+    # Higher diffusivity and retardation should increase sigma
+    assert np.mean(sigma_array) > 0.0
+
+
+# =============================================================================
+# Tests for create_example_data function
+# =============================================================================
+
+
+def test_create_example_data_basic():
+    """Test basic functionality of create_example_data."""
+    # Test with default parameters
+    x, signal, sigma_array, dt = create_example_data()
+
+    # Verify outputs
+    assert len(x) == 1000  # Default nx
+    assert len(signal) == 1000
+    assert len(sigma_array) == 1000
+    assert len(dt) == 1000
+
+    # Verify all are finite
+    assert np.all(np.isfinite(x))
+    assert np.all(np.isfinite(signal))
+    assert np.all(np.isfinite(sigma_array))
+    assert np.all(np.isfinite(dt))
+
+    # Verify reasonable values
+    assert np.all(x >= 0.0)
+    assert np.all(sigma_array >= 0.0)
+    assert np.all(dt > 0.0)
+
+
+def test_create_example_data_custom_parameters():
+    """Test create_example_data with custom parameters."""
+    # Test with custom parameters
+    nx = 500
+    domain_length = 20.0
+    diffusivity = 0.5
+
+    x, signal, sigma_array, dt = create_example_data(nx=nx, domain_length=domain_length, diffusivity=diffusivity)
+
+    # Verify outputs
+    assert len(x) == nx
+    assert len(signal) == nx
+    assert len(sigma_array) == nx
+    assert len(dt) == nx
+
+    # Verify domain length
+    assert x[0] == pytest.approx(0.0)
+    assert x[-1] == pytest.approx(domain_length, rel=0.01)
+
+
+def test_create_example_data_different_sizes():
+    """Test create_example_data with different grid sizes."""
+    for nx in [100, 500, 2000]:
+        x, signal, sigma_array, dt = create_example_data(nx=nx)
+
+        assert len(x) == nx
+        assert len(signal) == nx
+        assert len(sigma_array) == nx
+        assert len(dt) == nx
+
+
+# =============================================================================
+# Tests for NotImplementedError paths
+# =============================================================================
+
+
+def test_extraction_to_infiltration_not_implemented():
+    """Test that extraction_to_infiltration raises NotImplementedError."""
+    with pytest.raises(NotImplementedError, match="not implemented yet"):
+        extraction_to_infiltration(
+            cout=np.array([1.0, 2.0, 3.0]),
+            flow=np.array([100.0, 100.0, 100.0]),
+            aquifer_pore_volume=5000.0,
+            diffusivity=0.03,
+            retardation_factor=1.0,
+            aquifer_length=80.0,
+            porosity=0.35,
+        )
+
+
+def test_deconvolve_diffusion_not_implemented():
+    """Test that deconvolve_diffusion raises NotImplementedError."""
+    with pytest.raises(NotImplementedError, match="not implemented yet"):
+        deconvolve_diffusion(
+            output_signal=np.array([1.0, 2.0, 3.0]),
+            sigma_array=np.array([0.1, 0.1, 0.1]),
+            truncate=4.0,
+        )
+
+
+# =============================================================================
+# Edge case tests
+# =============================================================================
+
+
+def test_infiltration_to_extraction_zero_diffusivity():
+    """Test infiltration_to_extraction with zero diffusivity (no diffusion)."""
+    # Setup - use smaller pore volume for valid residence time
+    n_days = 50
+    tedges = pd.date_range(start="2020-01-01", periods=n_days + 1, freq="D")
+    cin = np.ones(n_days) * 10.0
+    flow = np.ones(n_days) * 100.0
+
+    # Test with zero diffusivity
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=1000.0,  # Smaller pore volume for valid residence time
+        diffusivity=0.0,  # No diffusion
+        retardation_factor=1.0,
+        aquifer_length=80.0,
+        porosity=0.35,
+    )
+
+    # Verify - should return input unchanged (pure advection)
+    assert len(cout) == n_days
+    assert_allclose(cout, cin, rtol=0.01)
+
+
+def test_convolve_diffusion_mixed_zero_and_nonzero_sigma():
+    """Test convolve_diffusion with mixture of zero and non-zero sigma values."""
+    # Create signal with some points having zero sigma
+    signal = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.0])
+    sigma_array = np.array([0.0, 0.5, 0.5, 0.0, 0.5, 0.5, 0.0, 0.5, 0.5, 0.0])
+
+    result = convolve_diffusion(input_signal=signal, sigma_array=sigma_array)
+
+    # Verify
+    assert len(result) == len(signal)
+    assert np.all(np.isfinite(result))
+    # Points with zero sigma should be unchanged
+    assert result[0] == pytest.approx(signal[0], abs=0.1)
+    assert result[3] == pytest.approx(signal[3], abs=0.1)
 
 
 if __name__ == "__main__":
