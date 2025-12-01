@@ -18,6 +18,9 @@ from gwtransport.fronttracking.handlers import (
     handle_shock_characteristic_collision,
     handle_shock_collision,
     handle_shock_rarefaction_collision,
+    recreate_characteristic_with_new_flow,
+    recreate_rarefaction_with_new_flow,
+    recreate_shock_with_new_flow,
 )
 from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption, characteristic_velocity
 from gwtransport.fronttracking.waves import (
@@ -969,3 +972,217 @@ class TestEntropyViolatingScenarios:
         # Parent waves should be deactivated regardless of whether new waves were created
         assert not shock.is_active, "Shock should be deactivated"
         assert not char.is_active, "Characteristic should be deactivated"
+
+
+# =============================================================================
+# Tests for flow change handlers (CRITICAL COVERAGE GAP)
+# =============================================================================
+
+
+class TestFlowChangeHandlers:
+    """Test suite for flow change recreation handlers."""
+
+    def test_recreate_characteristic_with_new_flow(self, freundlich_sorption):
+        """Test recreate_characteristic_with_new_flow preserves concentration and updates velocity."""
+        # Create characteristic with initial flow
+        old_flow = 100.0
+        char = CharacteristicWave(
+            t_start=10.0, v_start=50.0, flow=old_flow, concentration=8.0, sorption=freundlich_sorption
+        )
+
+        original_concentration = char.concentration
+
+        # Recreate with new flow
+        new_flow = 150.0
+        t_flow_change = 15.0
+
+        # Calculate position where characteristic will be at t_flow_change
+        expected_position = char.position_at_time(t_flow_change)
+
+        new_char = recreate_characteristic_with_new_flow(char=char, t_change=t_flow_change, flow_new=new_flow)
+
+        # Verify concentration is preserved
+        assert new_char.concentration == pytest.approx(original_concentration)
+
+        # Verify new start point
+        assert new_char.t_start == t_flow_change
+        assert new_char.v_start == pytest.approx(expected_position, rel=1e-10)
+
+        # Verify velocity has changed (due to new flow)
+        old_velocity = char.velocity()
+        new_velocity = new_char.velocity()
+        assert new_velocity != old_velocity  # Flow change should affect velocity
+
+    def test_recreate_shock_with_new_flow(self, freundlich_sorption):
+        """Test recreate_shock_with_new_flow recomputes Rankine-Hugoniot velocity."""
+        # Create shock with initial flow
+        old_flow = 100.0
+        shock = ShockWave(
+            t_start=10.0, v_start=50.0, flow=old_flow, c_left=10.0, c_right=5.0, sorption=freundlich_sorption
+        )
+
+        original_c_left = shock.c_left
+        original_c_right = shock.c_right
+        old_velocity = shock.velocity
+
+        # Recreate with new flow
+        new_flow = 120.0
+        t_flow_change = 18.0
+
+        # Calculate position where shock will be at t_flow_change
+        expected_position = shock.position_at_time(t_flow_change)
+
+        new_shock = recreate_shock_with_new_flow(shock=shock, t_change=t_flow_change, flow_new=new_flow)
+
+        # Verify concentrations are preserved
+        assert new_shock.c_left == pytest.approx(original_c_left)
+        assert new_shock.c_right == pytest.approx(original_c_right)
+
+        # Verify new start point
+        assert new_shock.t_start == t_flow_change
+        assert new_shock.v_start == pytest.approx(expected_position, rel=1e-10)
+
+        # Verify velocity has been recomputed (Rankine-Hugoniot with new flow)
+        new_velocity = new_shock.velocity
+        assert new_velocity != old_velocity
+
+    def test_recreate_rarefaction_with_new_flow(self, freundlich_sorption):
+        """Test recreate_rarefaction_with_new_flow updates velocities correctly."""
+        # Create rarefaction with initial flow
+        old_flow = 100.0
+        raref = RarefactionWave(
+            t_start=10.0, v_start=50.0, flow=old_flow, c_head=12.0, c_tail=6.0, sorption=freundlich_sorption
+        )
+
+        original_c_head = raref.c_head
+        original_c_tail = raref.c_tail
+        old_head_velocity = raref.head_velocity()
+        old_tail_velocity = raref.tail_velocity()
+
+        # Recreate with new flow
+        new_flow = 140.0
+        t_flow_change = 20.0
+
+        # Calculate position where rarefaction head will be at t_flow_change
+        expected_position = raref.head_position_at_time(t_flow_change)
+
+        new_raref = recreate_rarefaction_with_new_flow(raref=raref, t_change=t_flow_change, flow_new=new_flow)
+
+        # Verify concentrations are preserved
+        assert new_raref.c_head == pytest.approx(original_c_head)
+        assert new_raref.c_tail == pytest.approx(original_c_tail)
+
+        # Verify new start point (rarefaction "pivots" at flow change point)
+        assert new_raref.t_start == t_flow_change
+        assert new_raref.v_start == pytest.approx(expected_position, rel=1e-10)
+
+        # Verify velocities have been recomputed
+        new_head_velocity = new_raref.head_velocity()
+        new_tail_velocity = new_raref.tail_velocity()
+        assert new_head_velocity != old_head_velocity
+        assert new_tail_velocity != old_tail_velocity
+
+    def test_characteristic_flow_increase(self, freundlich_sorption):
+        """Test characteristic recreation with flow increase."""
+        char = CharacteristicWave(
+            t_start=10.0, v_start=50.0, flow=100.0, concentration=10.0, sorption=freundlich_sorption
+        )
+
+        # Increase flow
+        new_char = recreate_characteristic_with_new_flow(
+            char=char,
+            t_change=15.0,
+            flow_new=200.0,  # Double the flow
+        )
+
+        # Higher flow should increase velocity (faster transport)
+        assert new_char.velocity() > char.velocity()
+
+    def test_characteristic_flow_decrease(self, freundlich_sorption):
+        """Test characteristic recreation with flow decrease."""
+        char = CharacteristicWave(
+            t_start=10.0, v_start=50.0, flow=200.0, concentration=10.0, sorption=freundlich_sorption
+        )
+
+        # Decrease flow
+        new_char = recreate_characteristic_with_new_flow(
+            char=char,
+            t_change=15.0,
+            flow_new=100.0,  # Half the flow
+        )
+
+        # Lower flow should decrease velocity (slower transport)
+        assert new_char.velocity() < char.velocity()
+
+    def test_shock_rankine_hugoniot_consistency(self, freundlich_sorption):
+        """Test that recreated shock satisfies Rankine-Hugoniot condition."""
+        shock = ShockWave(
+            t_start=10.0, v_start=50.0, flow=100.0, c_left=10.0, c_right=5.0, sorption=freundlich_sorption
+        )
+
+        new_flow = 150.0
+        new_shock = recreate_shock_with_new_flow(shock=shock, t_change=20.0, flow_new=new_flow)
+
+        # Verify Rankine-Hugoniot condition: velocity should match analytical calculation
+        expected_velocity = freundlich_sorption.shock_velocity(
+            c_left=new_shock.c_left, c_right=new_shock.c_right, flow=new_flow
+        )
+
+        assert new_shock.velocity == pytest.approx(expected_velocity, rel=1e-10)
+
+    def test_rarefaction_head_tail_ordering(self, freundlich_sorption):
+        """Test that rarefaction head and tail velocities maintain correct ordering after flow change."""
+        # For n > 1 (favorable sorption), head should be faster than tail
+        raref = RarefactionWave(
+            t_start=10.0, v_start=50.0, flow=100.0, c_head=12.0, c_tail=6.0, sorption=freundlich_sorption
+        )
+
+        new_raref = recreate_rarefaction_with_new_flow(raref=raref, t_change=20.0, flow_new=150.0)
+
+        # Verify head is faster than tail (for n > 1)
+        if freundlich_sorption.n > 1.0:
+            assert new_raref.head_velocity() > new_raref.tail_velocity()
+        elif freundlich_sorption.n < 1.0:
+            # For n < 1 (unfavorable), tail is faster
+            assert new_raref.tail_velocity() > new_raref.head_velocity()
+
+    @pytest.mark.parametrize(
+        ("old_flow", "new_flow"),
+        [
+            (100.0, 150.0),  # Increase
+            (200.0, 100.0),  # Decrease
+            (100.0, 120.0),  # Small increase
+            (150.0, 140.0),  # Small decrease
+        ],
+    )
+    def test_characteristic_with_various_flow_changes(self, old_flow, new_flow, freundlich_sorption):
+        """Test characteristic recreation with various flow change magnitudes."""
+        char = CharacteristicWave(
+            t_start=10.0, v_start=50.0, flow=old_flow, concentration=10.0, sorption=freundlich_sorption
+        )
+
+        new_char = recreate_characteristic_with_new_flow(char=char, t_change=15.0, flow_new=new_flow)
+
+        # Concentration should always be preserved
+        assert new_char.concentration == pytest.approx(char.concentration)
+
+        # Verify flow direction of velocity change
+        if new_flow > old_flow:
+            assert new_char.velocity() >= char.velocity()
+        elif new_flow < old_flow:
+            assert new_char.velocity() <= char.velocity()
+
+    def test_shock_mass_conservation_across_flow_change(self, freundlich_sorption):
+        """Test that shock preserves concentrations across flow change (mass conservation)."""
+        shock = ShockWave(
+            t_start=10.0, v_start=50.0, flow=100.0, c_left=15.0, c_right=8.0, sorption=freundlich_sorption
+        )
+
+        # Multiple flow changes
+        shock1 = recreate_shock_with_new_flow(shock=shock, t_change=20.0, flow_new=120.0)
+
+        shock2 = recreate_shock_with_new_flow(shock=shock1, t_change=30.0, flow_new=90.0)
+
+        # Concentrations should be preserved through all changes
+        assert shock2.c_left == pytest.approx(shock.c_left)
+        assert shock2.c_right == pytest.approx(shock.c_right)

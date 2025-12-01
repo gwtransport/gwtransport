@@ -7,6 +7,7 @@ from gwtransport.gamma import (
     alpha_beta_to_mean_std,
     bin_masses,
     mean_std_to_alpha_beta,
+    parse_parameters,
 )
 from gwtransport.gamma import (
     bins as gamma_bins,
@@ -313,3 +314,161 @@ def test_multiple_gamma_distributions_expected_values():
                     f"Empirical={empirical_expected[i]:.6f}, "
                     f"Relative error={relative_error:.6f} > {tolerance}"
                 )
+
+
+# =============================================================================
+# Tests for parse_parameters function
+# =============================================================================
+
+
+def test_parse_parameters_with_alpha_beta():
+    """Test parse_parameters with alpha and beta provided."""
+    alpha_in, beta_in = 5.0, 2.0
+    alpha_out, beta_out = parse_parameters(alpha=alpha_in, beta=beta_in)
+
+    assert alpha_out == alpha_in
+    assert beta_out == beta_in
+
+
+def test_parse_parameters_with_mean_std():
+    """Test parse_parameters with mean and std provided."""
+    mean, std = 10.0, 3.0
+    alpha, beta = parse_parameters(mean=mean, std=std)
+
+    # Verify alpha and beta are positive
+    assert alpha > 0
+    assert beta > 0
+
+    # Verify conversion back gives same mean/std
+    mean_back, std_back = alpha_beta_to_mean_std(alpha=alpha, beta=beta)
+    assert np.isclose(mean, mean_back)
+    assert np.isclose(std, std_back)
+
+
+def test_parse_parameters_missing_both():
+    """Test parse_parameters raises error when both parameter sets are missing."""
+    with pytest.raises(ValueError, match="Either alpha and beta or mean and std must be provided"):
+        parse_parameters()
+
+
+def test_parse_parameters_partial_alpha_beta():
+    """Test parse_parameters raises error with partial alpha/beta."""
+    with pytest.raises(ValueError, match="Either alpha and beta or mean and std must be provided"):
+        parse_parameters(alpha=5.0)
+
+    with pytest.raises(ValueError, match="Either alpha and beta or mean and std must be provided"):
+        parse_parameters(beta=2.0)
+
+
+def test_parse_parameters_partial_mean_std():
+    """Test parse_parameters raises error with partial mean/std."""
+    with pytest.raises(ValueError, match="Either alpha and beta or mean and std must be provided"):
+        parse_parameters(mean=10.0)
+
+    with pytest.raises(ValueError, match="Either alpha and beta or mean and std must be provided"):
+        parse_parameters(std=3.0)
+
+
+def test_parse_parameters_negative_alpha():
+    """Test parse_parameters raises error with negative alpha."""
+    with pytest.raises(ValueError, match="Alpha and beta must be positive"):
+        parse_parameters(alpha=-1.0, beta=2.0)
+
+
+def test_parse_parameters_negative_beta():
+    """Test parse_parameters raises error with negative beta."""
+    with pytest.raises(ValueError, match="Alpha and beta must be positive"):
+        parse_parameters(alpha=5.0, beta=-2.0)
+
+
+def test_parse_parameters_zero_alpha():
+    """Test parse_parameters raises error with zero alpha."""
+    with pytest.raises(ValueError, match="Alpha and beta must be positive"):
+        parse_parameters(alpha=0.0, beta=2.0)
+
+
+def test_parse_parameters_zero_beta():
+    """Test parse_parameters raises error with zero beta."""
+    with pytest.raises(ValueError, match="Alpha and beta must be positive"):
+        parse_parameters(alpha=5.0, beta=0.0)
+
+
+# =============================================================================
+# Tests for bins function with quantile_edges
+# =============================================================================
+
+
+def test_bins_with_quantile_edges_basic():
+    """Test bins with custom quantile edges."""
+    quantile_edges = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+    result = gamma_bins(alpha=10.0, beta=2.0, quantile_edges=quantile_edges)
+
+    # Verify correct number of bins
+    assert len(result["probability_mass"]) == 4
+    assert len(result["expected_values"]) == 4
+    assert len(result["edges"]) == 5
+
+    # Verify probability masses sum to 1
+    assert np.isclose(np.sum(result["probability_mass"]), 1.0)
+
+    # Verify probability masses match quantile differences
+    expected_masses = np.diff(quantile_edges)
+    np.testing.assert_allclose(result["probability_mass"], expected_masses, rtol=1e-15)
+
+
+def test_bins_with_quantile_edges_unequal():
+    """Test bins with unequal quantile edges."""
+    quantile_edges = np.array([0.0, 0.1, 0.3, 0.7, 1.0])
+    result = gamma_bins(alpha=5.0, beta=3.0, quantile_edges=quantile_edges)
+
+    # Verify correct number of bins
+    assert len(result["probability_mass"]) == 4
+
+    # Verify probability masses
+    expected_masses = np.diff(quantile_edges)
+    np.testing.assert_allclose(result["probability_mass"], expected_masses, rtol=1e-15)
+
+    # Verify expected values are within bins
+    for i in range(len(result["expected_values"])):
+        assert result["lower_bound"][i] <= result["expected_values"][i] <= result["upper_bound"][i]
+
+
+def test_bins_quantile_edges_vs_n_bins():
+    """Test that quantile_edges produces same result as n_bins for uniform quantiles."""
+    alpha, beta = 8.0, 1.5
+    n_bins = 5
+
+    # Using n_bins
+    result_n_bins = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
+
+    # Using quantile_edges (uniform)
+    quantile_edges = np.linspace(0, 1, n_bins + 1)
+    result_quantiles = gamma_bins(alpha=alpha, beta=beta, quantile_edges=quantile_edges)
+
+    # Results should be identical to machine precision
+    np.testing.assert_allclose(result_n_bins["edges"], result_quantiles["edges"], rtol=1e-15)
+    np.testing.assert_allclose(result_n_bins["probability_mass"], result_quantiles["probability_mass"], rtol=1e-15)
+    np.testing.assert_allclose(result_n_bins["expected_values"], result_quantiles["expected_values"], rtol=1e-15)
+
+
+def test_bins_neither_n_bins_nor_quantiles():
+    """Test bins raises error when neither n_bins nor quantile_edges provided."""
+    with pytest.raises(ValueError, match="Either n_bins or quantiles must be provided"):
+        gamma_bins(alpha=5.0, beta=2.0)
+
+
+def test_bins_both_n_bins_and_quantiles():
+    """Test bins raises error when both n_bins and quantile_edges provided."""
+    quantile_edges = np.array([0.0, 0.5, 1.0])
+
+    with pytest.raises(ValueError, match="Either n_bins or quantiles must be provided"):
+        gamma_bins(alpha=5.0, beta=2.0, n_bins=10, quantile_edges=quantile_edges)
+
+
+def test_bins_n_bins_too_small():
+    """Test bins raises error with n_bins <= 1."""
+    with pytest.raises(ValueError, match="Number of bins must be greater than 1"):
+        gamma_bins(alpha=5.0, beta=2.0, n_bins=1)
+
+    with pytest.raises(ValueError, match="Number of bins must be greater than 1"):
+        gamma_bins(alpha=5.0, beta=2.0, n_bins=0)

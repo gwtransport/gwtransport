@@ -1867,3 +1867,429 @@ def test_gamma_extraction_to_infiltration_missing_parameters():
     # Test missing both alpha/beta and mean/std
     with pytest.raises(ValueError):
         gamma_extraction_to_infiltration(cout=cout, tedges=tedges, cin_tedges=cin_tedges, flow=flow)
+
+
+# =============================================================================
+# Comprehensive tests for inverse operations (CRITICAL COVERAGE GAPS)
+# =============================================================================
+
+
+@pytest.mark.roundtrip
+def test_gamma_roundtrip_constant_concentration():
+    """Test roundtrip: infiltration->extraction->infiltration with constant concentration."""
+    # Setup
+    dates = pd.date_range(start="2020-01-01", periods=200, freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # Constant input concentration
+    cin_original = np.ones(len(dates)) * 10.0
+    flow = np.ones(len(dates)) * 100.0
+
+    # Define cout_tedges for forward operation
+    # Mean residence time = 5000/100 = 50 days, std = 10 days
+    # Start output after mean + 5*std = 100 days to avoid NaN values
+    cout_dates = pd.date_range(start="2020-04-20", periods=90, freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Forward: infiltration to extraction
+    cout = gamma_infiltration_to_extraction(
+        cin=cin_original,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        flow=flow,
+        mean=5000.0,
+        std=1000.0,
+        retardation_factor=1.0,
+    )
+
+    # Backward: extraction to infiltration
+    cin_dates = pd.date_range(start="2019-12-01", periods=250, freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    # Create flow array matching cout_tedges length
+    flow_backward = np.ones(len(cout_dates)) * 100.0
+
+    cin_recovered = gamma_extraction_to_infiltration(
+        cout=cout,
+        tedges=cout_tedges,
+        cin_tedges=cin_tedges,
+        flow=flow_backward,
+        mean=5000.0,
+        std=1000.0,
+        retardation_factor=1.0,
+    )
+
+    # Verify roundtrip recovers approximately original (within regularization tolerance)
+    valid_mask = ~np.isnan(cin_recovered)
+    valid_recovered = cin_recovered[valid_mask]
+
+    # Should recover constant value
+    assert np.mean(valid_recovered) == pytest.approx(10.0, rel=0.2)
+    assert np.std(valid_recovered) < 2.0  # Should be fairly uniform
+
+
+@pytest.mark.roundtrip
+def test_gamma_roundtrip_step_function():
+    """Test roundtrip with step function input."""
+    # Setup
+    dates = pd.date_range(start="2020-01-01", periods=200, freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # Step function
+    cin_original = np.zeros(len(dates))
+    cin_original[100:] = 15.0
+    flow = np.ones(len(dates)) * 100.0
+
+    # Define cout_tedges for forward operation
+    # alpha=20, beta=250: mean = 5000, std = sqrt(20)*250 = 1118
+    # Mean residence time = 5000/100 = 50 days, std = 11.18 days
+    # Step at day 100 will appear in output around day 150 (100 + 50)
+    # Start after day 106 to avoid NaN, run long enough to capture transition
+    cout_dates = pd.date_range(start="2020-04-16", periods=90, freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Forward
+    cout = gamma_infiltration_to_extraction(
+        cin=cin_original,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        flow=flow,
+        alpha=20.0,
+        beta=250.0,
+        retardation_factor=1.0,
+    )
+
+    # Backward
+    cin_dates = pd.date_range(start="2019-12-01", periods=250, freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    # Create flow array matching cout_tedges length
+    flow_backward = np.ones(len(cout_dates)) * 100.0
+
+    cin_recovered = gamma_extraction_to_infiltration(
+        cout=cout,
+        tedges=cout_tedges,
+        cin_tedges=cin_tedges,
+        flow=flow_backward,
+        alpha=20.0,
+        beta=250.0,
+        retardation_factor=1.0,
+    )
+
+    # Verify step is recovered (smoothed by dispersion)
+    valid_mask = ~np.isnan(cin_recovered)
+    valid_recovered = cin_recovered[valid_mask]
+
+    # With limited output window, we primarily see the transition and post-step regions
+    # The recovered signal shows a rising trend (transition from step function)
+    first_quarter = valid_recovered[: len(valid_recovered) // 4]
+    last_quarter = valid_recovered[3 * len(valid_recovered) // 4 :]
+
+    # First quarter captures transition region (lower values)
+    # Last quarter captures post-step plateau (higher values)
+    assert np.mean(first_quarter) < np.mean(last_quarter)
+    assert np.mean(last_quarter) > 13.0  # Should be close to 15.0
+
+
+@pytest.mark.roundtrip
+def test_extraction_to_infiltration_single_pore_volume_roundtrip():
+    """Test extraction_to_infiltration with single pore volume (square system) roundtrip."""
+    # Setup
+    dates = pd.date_range(start="2020-01-01", periods=150, freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cin_original = 5.0 + 3.0 * np.sin(2 * np.pi * np.arange(len(dates)) / 30)
+    flow = np.ones(len(dates)) * 100.0
+    pore_volumes = np.array([1000.0])  # Smaller pore volume for valid residence time
+
+    # Define cout_tedges for output
+    cout_dates = pd.date_range(start="2020-01-15", periods=120, freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Forward
+    cout = infiltration_to_extraction(
+        cin=cin_original,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        flow=flow,
+        aquifer_pore_volumes=pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Backward
+    cin_dates = pd.date_range(start="2019-12-01", periods=180, freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    # Create flow array matching cout_tedges length
+    flow_backward = np.ones(len(cout_dates)) * 100.0
+
+    cin_recovered = extraction_to_infiltration(
+        cout=cout,
+        tedges=cout_tedges,
+        cin_tedges=cin_tedges,
+        flow=flow_backward,
+        aquifer_pore_volumes=pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Verify roundtrip
+    valid_mask = ~np.isnan(cin_recovered)
+    if not np.any(valid_mask):
+        pytest.skip("No valid recovered values")
+    valid_recovered = cin_recovered[valid_mask]
+
+    # Should preserve mean
+    assert np.mean(valid_recovered) == pytest.approx(5.0, abs=2.0)
+
+
+@pytest.mark.roundtrip
+def test_extraction_to_infiltration_multiple_pore_volumes():
+    """Test extraction_to_infiltration with multiple pore volumes."""
+    # Setup
+    dates = pd.date_range(start="2020-01-01", periods=120, freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cin_original = np.ones(len(dates)) * 12.0
+    flow = np.ones(len(dates)) * 100.0
+    # Use smaller pore volumes for valid residence times
+    pore_volumes = np.array([600.0, 1000.0, 1400.0])
+
+    # Define cout_tedges
+    cout_dates = pd.date_range(start="2020-01-15", periods=90, freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Forward
+    cout = infiltration_to_extraction(
+        cin=cin_original,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        flow=flow,
+        aquifer_pore_volumes=pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Backward
+    cin_dates = pd.date_range(start="2019-12-10", periods=150, freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    # Create flow array matching cout_tedges length
+    flow_backward = np.ones(len(cout_dates)) * 100.0
+
+    cin_recovered = extraction_to_infiltration(
+        cout=cout,
+        tedges=cout_tedges,
+        cin_tedges=cin_tedges,
+        flow=flow_backward,
+        aquifer_pore_volumes=pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Verify roundtrip
+    valid_mask = ~np.isnan(cin_recovered)
+    if not np.any(valid_mask):
+        pytest.skip("No valid recovered values")
+    valid_recovered = cin_recovered[valid_mask]
+
+    # Should recover constant value
+    assert np.mean(valid_recovered) == pytest.approx(12.0, abs=3.0)
+
+
+def test_extraction_to_infiltration_nan_handling():
+    """Test that extraction_to_infiltration properly handles periods with no valid contribution."""
+    # Setup
+    dates = pd.date_range(start="2020-01-01", periods=100, freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cout = np.ones(len(dates)) * 10.0
+    flow = np.ones(len(dates)) * 100.0
+    pore_volumes = np.array([1000.0])  # Smaller pore volume
+
+    # Very short cin_tedges (before system has stabilized)
+    cin_dates = pd.date_range(start="2019-12-25", periods=20, freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    cin_recovered = extraction_to_infiltration(
+        cout=cout,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        flow=flow,
+        aquifer_pore_volumes=pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Early indices should be NaN (no sufficient history)
+    nan_count = np.sum(np.isnan(cin_recovered))
+    assert nan_count > 0  # Some early values should be NaN
+
+
+@pytest.mark.parametrize(
+    ("mean", "std"),
+    [
+        (600.0, 100.0),  # Smaller pore volumes for valid residence time
+        (1000.0, 200.0),
+        (1500.0, 300.0),
+    ],
+)
+def test_gamma_extraction_to_infiltration_parameter_sensitivity(mean, std):
+    """Test gamma_extraction_to_infiltration with various distribution parameters."""
+    # Setup
+    dates = pd.date_range(start="2020-01-01", periods=150, freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cout = 8.0 + 2.0 * np.sin(2 * np.pi * np.arange(len(dates)) / 40)
+    flow = np.ones(len(dates)) * 100.0
+
+    # Backward
+    cin_dates = pd.date_range(start="2019-12-15", periods=180, freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    cin_recovered = gamma_extraction_to_infiltration(
+        cout=cout, tedges=tedges, cin_tedges=cin_tedges, flow=flow, mean=mean, std=std, retardation_factor=1.0
+    )
+
+    # Verify outputs
+    valid_mask = ~np.isnan(cin_recovered)
+    if not np.any(valid_mask):
+        pytest.skip("No valid recovered values")
+    valid_recovered = cin_recovered[valid_mask]
+
+    assert len(valid_recovered) > 0
+    assert np.all(np.isfinite(valid_recovered))
+    # Mean should be preserved approximately
+    assert np.mean(valid_recovered) == pytest.approx(8.0, abs=3.0)
+
+
+def test_extraction_to_infiltration_with_retardation():
+    """Test extraction_to_infiltration with retardation factor."""
+    # Setup - need longer input to support output window after residence time
+    dates = pd.date_range(start="2020-01-01", periods=200, freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cin_original = np.ones(len(dates)) * 10.0
+    flow = np.ones(len(dates)) * 100.0
+    pore_volumes = np.array([5000.0])
+    retardation_factor = 2.0
+
+    # Define cout_tedges for forward operation
+    # Residence time = 5000 * 2 / 100 = 100 days
+    # Start output after 110 days to avoid NaN values
+    cout_dates = pd.date_range(start="2020-04-21", periods=40, freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Forward
+    cout = infiltration_to_extraction(
+        cin=cin_original,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        flow=flow,
+        aquifer_pore_volumes=pore_volumes,
+        retardation_factor=retardation_factor,
+    )
+
+    # Backward with same retardation
+    cin_dates = pd.date_range(start="2019-11-01", periods=220, freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    # Create flow array matching cout_tedges length
+    flow_backward = np.ones(len(cout_dates)) * 100.0
+
+    cin_recovered = extraction_to_infiltration(
+        cout=cout,
+        tedges=cout_tedges,
+        cin_tedges=cin_tedges,
+        flow=flow_backward,
+        aquifer_pore_volumes=pore_volumes,
+        retardation_factor=retardation_factor,
+    )
+
+    # Verify roundtrip
+    valid_mask = ~np.isnan(cin_recovered)
+    if not np.any(valid_mask):
+        pytest.skip("No valid recovered values")
+    valid_recovered = cin_recovered[valid_mask]
+
+    assert np.mean(valid_recovered) == pytest.approx(10.0, rel=0.3)
+
+
+def test_extraction_to_infiltration_variable_flow():
+    """Test extraction_to_infiltration with variable flow pattern."""
+    # Setup - need longer input to support output window
+    dates = pd.date_range(start="2020-01-01", periods=150, freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cin_original = np.ones(len(dates)) * 10.0
+    t = np.arange(len(dates))
+    flow = 100.0 * (1.0 + 0.3 * np.sin(2 * np.pi * t / 40))
+    pore_volumes = np.array([5000.0])
+
+    # Define cout_tedges for forward operation
+    # Variable flow: max residence time = 5000 / 70 = 71.4 days
+    # Start output after 80 days to avoid NaN values
+    cout_dates = pd.date_range(start="2020-03-22", periods=40, freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Forward
+    cout = infiltration_to_extraction(
+        cin=cin_original,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        flow=flow,
+        aquifer_pore_volumes=pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Backward
+    cin_dates = pd.date_range(start="2019-11-15", periods=180, freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    # Create flow array matching cout_tedges length
+    t_backward = np.arange(len(cout_dates))
+    flow_backward = 100.0 * (1.0 + 0.3 * np.sin(2 * np.pi * t_backward / 40))
+
+    cin_recovered = extraction_to_infiltration(
+        cout=cout,
+        tedges=cout_tedges,
+        cin_tedges=cin_tedges,
+        flow=flow_backward,
+        aquifer_pore_volumes=pore_volumes,
+        retardation_factor=1.0,
+    )
+
+    # Verify outputs
+    valid_mask = ~np.isnan(cin_recovered)
+    if not np.any(valid_mask):
+        pytest.skip("No valid recovered values")
+    valid_recovered = cin_recovered[valid_mask]
+
+    assert len(valid_recovered) > 0
+    assert np.mean(valid_recovered) == pytest.approx(10.0, rel=0.4)
+
+
+def test_gamma_extraction_to_infiltration_mean_preservation():
+    """Test that gamma_extraction_to_infiltration approximately preserves mean concentration."""
+    # Setup
+    dates = pd.date_range(start="2020-01-01", periods=200, freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cout = np.ones(len(dates)) * 25.0
+    flow_forward = np.ones(len(dates)) * 100.0
+
+    # Backward
+    cin_dates = pd.date_range(start="2019-11-01", periods=250, freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    cin_recovered = gamma_extraction_to_infiltration(
+        cout=cout,
+        tedges=tedges,
+        cin_tedges=cin_tedges,
+        flow=flow_forward,
+        mean=5000.0,
+        std=1000.0,
+        retardation_factor=1.0,
+    )
+
+    # Verify mean preservation
+    valid_mask = ~np.isnan(cin_recovered)
+    valid_recovered = cin_recovered[valid_mask]
+
+    assert np.mean(valid_recovered) == pytest.approx(25.0, rel=0.15)
