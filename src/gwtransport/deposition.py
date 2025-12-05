@@ -191,6 +191,17 @@ def deposition_to_extraction(
         _msg = "Input arrays cannot contain NaN values"
         raise ValueError(_msg)
 
+    # Validate physical parameters
+    if not 0 < porosity < 1:
+        _msg = f"Porosity must be in (0, 1), got {porosity}"
+        raise ValueError(_msg)
+    if thickness <= 0:
+        _msg = f"Thickness must be positive, got {thickness}"
+        raise ValueError(_msg)
+    if aquifer_pore_volume <= 0:
+        _msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
+        raise ValueError(_msg)
+
     # Compute deposition weights
     deposition_weights = compute_deposition_weights(
         flow_values=flow_values,
@@ -378,6 +389,17 @@ def extraction_to_deposition(
         raise ValueError(msg)
     if np.any(np.isnan(flow_values)):
         msg = "flow array cannot contain NaN values"
+        raise ValueError(msg)
+
+    # Validate physical parameters
+    if not 0 < porosity < 1:
+        msg = f"Porosity must be in (0, 1), got {porosity}"
+        raise ValueError(msg)
+    if thickness <= 0:
+        msg = f"Thickness must be positive, got {thickness}"
+        raise ValueError(msg)
+    if aquifer_pore_volume <= 0:
+        msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
         raise ValueError(msg)
 
     # Compute deposition weights

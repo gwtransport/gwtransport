@@ -95,6 +95,20 @@ def infiltration_to_extraction(
     cin = np.asarray(cin)
     flow = np.asarray(flow)
 
+    # Validate physical parameters
+    if not 0 < porosity < 1:
+        msg = f"Porosity must be in (0, 1), got {porosity}"
+        raise ValueError(msg)
+    if aquifer_pore_volume <= 0:
+        msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
+        raise ValueError(msg)
+    if aquifer_length <= 0:
+        msg = f"Aquifer length must be positive, got {aquifer_length}"
+        raise ValueError(msg)
+    if diffusivity < 0:
+        msg = f"Diffusivity must be non-negative, got {diffusivity}"
+        raise ValueError(msg)
+
     sigma_array = compute_sigma_array(
         flow=flow,
         tedges=tedges,

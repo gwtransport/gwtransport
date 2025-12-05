@@ -172,7 +172,7 @@ def bins(
     beta: float | None = None,
     mean: float | None = None,
     std: float | None = None,
-    n_bins: int | None = None,
+    n_bins: int = 100,
     quantile_edges: np.ndarray | None = None,
 ) -> dict[str, npt.NDArray[np.floating]]:
     """
@@ -194,7 +194,7 @@ def bins(
     std : float, optional
         Standard deviation of the gamma distribution.
     n_bins : int, optional
-        Number of bins to divide the gamma distribution (must be > 1)
+        Number of bins to divide the gamma distribution (must be > 1). Default is 100.
     quantile_edges : array-like, optional
         Quantile edges for binning. Must be in the range [0, 1] and of size n_bins + 1.
         The first and last quantile edges must be 0 and 1, respectively.
@@ -235,21 +235,13 @@ def bins(
     alpha, beta = parse_parameters(alpha=alpha, beta=beta, mean=mean, std=std)
 
     # Calculate boundaries for equal mass bins
-    if not ((n_bins is None) ^ (quantile_edges is None)):
-        msg = "Either n_bins or quantiles must be provided"
-        raise ValueError(msg)
-
+    # If quantile_edges is provided, use it (n_bins is ignored)
+    # Otherwise, use n_bins (which defaults to 100)
     if quantile_edges is not None:
         n_bins = len(quantile_edges) - 1
     else:
-        if n_bins is None:
-            msg = "n_bins should not be None here due to earlier validation"
-            raise ValueError(msg)
         quantile_edges = np.linspace(0, 1, n_bins + 1)  # includes 0 and 1
 
-    if n_bins is None:
-        msg = "n_bins should not be None here"
-        raise ValueError(msg)
     if n_bins <= 1:
         msg = "Number of bins must be greater than 1"
         raise ValueError(msg)

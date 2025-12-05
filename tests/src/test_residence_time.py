@@ -202,12 +202,14 @@ def test_invalid_direction():
 
 
 def test_missing_flow_timing_parameters():
-    """Test that missing flow timing parameters raises ValueError."""
+    """Test that missing flow timing parameters raises TypeError."""
     flow_values = np.full(5, 100.0)
     pore_volume = 200.0
 
-    with pytest.raises(ValueError, match="flow_tedges must be provided"):
-        residence_time(flow=flow_values, aquifer_pore_volumes=pore_volume, direction="extraction_to_infiltration")
+    # Since flow_tedges is now a required parameter (no longer has | None),
+    # Python raises TypeError when it's not provided
+    with pytest.raises(TypeError, match="missing 1 required keyword-only argument: 'flow_tedges'"):
+        residence_time(flow=flow_values, aquifer_pore_volumes=pore_volume, direction="extraction_to_infiltration")  # type: ignore[missing-argument]
 
 
 def test_flow_tedges_length_validation():

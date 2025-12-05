@@ -39,12 +39,12 @@ from gwtransport.utils import linear_average, linear_interpolate
 
 def residence_time(
     *,
-    flow: npt.ArrayLike | None = None,
-    flow_tedges: pd.DatetimeIndex | np.ndarray | None = None,
-    aquifer_pore_volumes: npt.ArrayLike | None = None,
+    flow: npt.ArrayLike,
+    flow_tedges: pd.DatetimeIndex | np.ndarray,
+    aquifer_pore_volumes: npt.ArrayLike,
     index: pd.DatetimeIndex | np.ndarray | None = None,
-    retardation_factor: float = 1.0,
     direction: str = "extraction_to_infiltration",
+    retardation_factor: float = 1.0,
 ) -> npt.NDArray[np.floating]:
     """
     Compute the residence time of retarded compound in the water in the aquifer.
@@ -62,13 +62,13 @@ def residence_time(
     index : pandas.DatetimeIndex, optional
         Index at which to compute the residence time. If left to None, flow_tedges is used.
         Default is None.
-    retardation_factor : float
-        Retardation factor of the compound in the aquifer [dimensionless].
     direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
         Direction of the flow calculation:
         * 'extraction_to_infiltration': Extraction to infiltration modeling - how many days ago was the extracted water infiltrated
         * 'infiltration_to_extraction': Infiltration to extraction modeling - how many days until the infiltrated water is extracted
         Default is 'extraction_to_infiltration'.
+    retardation_factor : float, optional
+        Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
 
     Returns
     -------
@@ -81,20 +81,7 @@ def residence_time(
     gwtransport.advection.gamma_infiltration_to_extraction : Use residence times for transport
     gwtransport.logremoval.residence_time_to_log_removal : Convert residence time to log removal
     """
-    if aquifer_pore_volumes is None:
-        msg = "aquifer_pore_volumes must be provided"
-        raise ValueError(msg)
-
     aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
-
-    if flow_tedges is None:
-        msg = "flow_tedges must be provided"
-        raise ValueError(msg)
-
-    if flow is None:
-        msg = "flow must be provided"
-        raise ValueError(msg)
-
     flow_tedges = pd.DatetimeIndex(flow_tedges)
 
     # Convert to arrays for type safety
@@ -282,8 +269,8 @@ def fraction_explained(
     flow_tedges: pd.DatetimeIndex | np.ndarray | None = None,
     aquifer_pore_volumes: npt.ArrayLike | None = None,
     index: pd.DatetimeIndex | np.ndarray | None = None,
-    retardation_factor: float = 1.0,
     direction: str = "extraction_to_infiltration",
+    retardation_factor: float = 1.0,
 ) -> npt.NDArray[np.floating]:
     """
     Compute the fraction of the aquifer that is informed with respect to the retarded flow.
@@ -303,13 +290,13 @@ def fraction_explained(
     index : pandas.DatetimeIndex, optional
         Index at which to compute the fraction. If left to None, the index of `flow` is used.
         Default is None.
-    retardation_factor : float, optional
-        Retardation factor of the compound in the aquifer [dimensionless].
     direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
         Direction of the flow calculation:
         * 'extraction_to_infiltration': Extraction to infiltration modeling - how many days ago was the extracted water infiltrated
         * 'infiltration_to_extraction': Infiltration to extraction modeling - how many days until the infiltrated water is extracted
         Default is 'extraction_to_infiltration'.
+    retardation_factor : float, optional
+        Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
 
     Returns
     -------
@@ -317,13 +304,24 @@ def fraction_explained(
         Fraction of the aquifer that is informed with respect to the retarded flow.
     """
     if rt is None:
+        # Validate that required parameters are provided for computing rt
+        if flow is None:
+            msg = "Either rt or flow must be provided"
+            raise ValueError(msg)
+        if flow_tedges is None:
+            msg = "Either rt or flow_tedges must be provided"
+            raise ValueError(msg)
+        if aquifer_pore_volumes is None:
+            msg = "Either rt or aquifer_pore_volumes must be provided"
+            raise ValueError(msg)
+
         rt = residence_time(
             flow=flow,
             flow_tedges=flow_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             index=index,
-            retardation_factor=retardation_factor,
             direction=direction,
+            retardation_factor=retardation_factor,
         )
 
     n_aquifer_pore_volume = rt.shape[0]
@@ -384,6 +382,18 @@ def freundlich_retardation(
     residence_time : Compute residence times with retardation
     """
     concentration = np.asarray(concentration)
+
+    # Validate physical parameters
+    if not 0 < porosity < 1:
+        msg = f"Porosity must be in (0, 1), got {porosity}"
+        raise ValueError(msg)
+    if bulk_density <= 0:
+        msg = f"Bulk density must be positive, got {bulk_density}"
+        raise ValueError(msg)
+    if freundlich_k < 0:
+        msg = f"Freundlich K must be non-negative, got {freundlich_k}"
+        raise ValueError(msg)
+
     concentration_safe = np.maximum(concentration, 1e-12)  # Avoid zero concentration issues
     return 1.0 + (bulk_density / porosity) * freundlich_k * freundlich_n * np.power(
         concentration_safe, freundlich_n - 1

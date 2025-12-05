@@ -452,17 +452,24 @@ def test_bins_quantile_edges_vs_n_bins():
 
 
 def test_bins_neither_n_bins_nor_quantiles():
-    """Test bins raises error when neither n_bins nor quantile_edges provided."""
-    with pytest.raises(ValueError, match="Either n_bins or quantiles must be provided"):
-        gamma_bins(alpha=5.0, beta=2.0)
+    """Test bins uses default n_bins=100 when neither n_bins nor quantile_edges provided."""
+    result = gamma_bins(alpha=5.0, beta=2.0)
+    # Should use default n_bins=100
+    assert len(result["probability_mass"]) == 100
+    assert len(result["expected_values"]) == 100
+    assert len(result["edges"]) == 101
 
 
 def test_bins_both_n_bins_and_quantiles():
-    """Test bins raises error when both n_bins and quantile_edges provided."""
+    """Test bins uses quantile_edges when both n_bins and quantile_edges provided (quantile_edges takes precedence)."""
     quantile_edges = np.array([0.0, 0.5, 1.0])
 
-    with pytest.raises(ValueError, match="Either n_bins or quantiles must be provided"):
-        gamma_bins(alpha=5.0, beta=2.0, n_bins=10, quantile_edges=quantile_edges)
+    # When both are provided, quantile_edges takes precedence
+    result = gamma_bins(alpha=5.0, beta=2.0, n_bins=10, quantile_edges=quantile_edges)
+    # Should use quantile_edges (2 bins), not n_bins (10)
+    assert len(result["probability_mass"]) == 2
+    assert len(result["expected_values"]) == 2
+    assert len(result["edges"]) == 3
 
 
 def test_bins_n_bins_too_small():
