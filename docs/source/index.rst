@@ -130,7 +130,7 @@ Documentation Contents
    examples/02_Residence_Time_Analysis.nblink
    examples/03_Pathogen_Removal_Bank_Filtration.nblink
    examples/04_Deposition_Analysis_Bank_Filtration.nblink
-   examples/09_Front_Tracking_Rarefaction_Waves.nblink
+   examples/10_Advection_with_non_linear_sorption.nblink
 
 .. toctree::
    :maxdepth: 2
