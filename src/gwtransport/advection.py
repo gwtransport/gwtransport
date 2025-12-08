@@ -1198,14 +1198,44 @@ def infiltration_to_extraction_front_tracking_detailed(
 
     Parameters
     ----------
-    [Same as infiltration_to_extraction_front_tracking]
+    cin : array-like
+        Infiltration concentration [mg/L or any units].
+        Length = len(tedges) - 1.
+    flow : array-like
+        Flow rate [m³/day]. Must be positive.
+        Length = len(tedges) - 1.
+    tedges : pandas.DatetimeIndex
+        Time bin edges. Length = len(cin) + 1.
+    cout_tedges : pandas.DatetimeIndex
+        Output time bin edges. Can be different from tedges.
+        Length determines output array size.
+    aquifer_pore_volumes : array-like
+        Array of aquifer pore volumes [m³] representing the distribution
+        of residence times in the aquifer system. Each pore volume must be positive.
+    freundlich_k : float, optional
+        Freundlich coefficient [(m³/kg)^(1/n)]. Must be positive.
+        Used if retardation_factor is None.
+    freundlich_n : float, optional
+        Freundlich exponent [-]. Must be positive and != 1.
+        Used if retardation_factor is None.
+    bulk_density : float, optional
+        Bulk density [kg/m³]. Must be positive.
+        Used if retardation_factor is None.
+    porosity : float, optional
+        Porosity [-]. Must be in (0, 1).
+        Used if retardation_factor is None.
+    retardation_factor : float, optional
+        Constant retardation factor [-]. If provided, uses linear retardation
+        instead of Freundlich sorption. Must be >= 1.0.
+    max_iterations : int, optional
+        Maximum number of events. Default 10000.
 
     Returns
     -------
     cout : numpy.ndarray
         Bin-averaged concentrations averaged across all pore volumes.
 
-    structures : list[dict]
+    structures : list of dict
         List of detailed simulation structures, one for each pore volume, with keys:
 
         - 'waves': List[Wave] - All wave objects created during simulation
