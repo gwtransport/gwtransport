@@ -1470,6 +1470,7 @@ class TestCharacteristicCollisionVelocityOrdering:
         new_waves = handle_characteristic_collision(char1, char2, t_event=20.0, v_event=150.0)
 
         shock = new_waves[0]
+        assert isinstance(shock, ShockWave)
         # char2 (faster, higher C) should be c_left
         assert shock.c_left == 10.0
         assert shock.c_right == 2.0
@@ -1650,6 +1651,7 @@ class TestShockRarefactionHeadCollisionPhysics:
         # Check velocities
         shock_vel = shock.velocity
         head_vel = raref.head_velocity()
+        assert shock_vel is not None
 
         new_waves = handle_shock_rarefaction_collision(shock, raref, t_event=25.0, v_event=180.0, boundary_type="head")
 
@@ -1717,6 +1719,7 @@ class TestHandleFlowChangePhysics:
         )
 
         active_waves = [char, shock, raref]
+        assert shock.velocity is not None
         old_velocities = [char.velocity(), shock.velocity, raref.head_velocity()]
 
         # Change flow
@@ -1948,6 +1951,7 @@ class TestEntropyViolationRarefactionCreation:
         # Fast characteristic catches slower shock
         char_vel = characteristic_velocity(2.0, 100.0, freundlich_n_gt_1)
         shock_vel = shock.velocity
+        assert shock_vel is not None
 
         if char_vel > shock_vel:
             # Characteristic is faster - catches shock from behind
@@ -2178,6 +2182,8 @@ class TestShockCollisionEdgeCases:
         )
 
         # Check velocity ordering
+        assert shock1.velocity is not None
+        assert shock2.velocity is not None
         if shock2.velocity > shock1.velocity:
             # Lines 233-235 will execute
             new_waves = handle_shock_collision(shock1, shock2, t_event=30.0, v_event=200.0)
@@ -2318,6 +2324,7 @@ class TestShockRarefactionEdgeCases:
         # Check that rarefaction head is slower than shock
         raref_head_vel = raref.head_velocity()
         shock_vel = shock.velocity
+        assert shock_vel is not None
 
         if raref_head_vel <= shock_vel:
             # Line 563-566: no compression forms
@@ -2606,6 +2613,7 @@ class TestShockRarefactionTailEdgeCases:
         # Let some time pass so rarefaction expands
         t_event = 30.0
         v_tail = raref.tail_position_at_time(t_event)  # Where tail is at t_event
+        assert v_tail is not None
 
         new_waves = handle_shock_rarefaction_collision(
             shock, raref, t_event=t_event, v_event=v_tail, boundary_type="tail"
@@ -2653,6 +2661,7 @@ class TestShockRarefactionTailEdgeCases:
         # Let rarefaction expand
         t_event = 30.0
         v_event = raref.tail_position_at_time(t_event)
+        assert v_event is not None
 
         new_waves = handle_shock_rarefaction_collision(
             shock, raref, t_event=t_event, v_event=v_event, boundary_type="tail"
