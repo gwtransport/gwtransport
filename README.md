@@ -76,7 +76,7 @@ cout_model = gamma_infiltration_to_extraction(
     retardation_factor=2.0,  # [-] Retardation factor for the temperature tracer
 )
 
-# Compare model output with measured data to calibrate mean and std parameters (see Example 1)
+# Compare model output with measured data to calibrate mean and std parameters (see example notebook 1)
 ```
 
 ## Installation
