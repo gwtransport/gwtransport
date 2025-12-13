@@ -87,6 +87,8 @@ pip install gwtransport
 
 ## Examples and Documentation
 
+See [Core Concepts](https://gwtransport.github.io/gwtransport/user_guide/concepts.html) for an in-depth discussion of the core modeling approach. To determine when ``gwtransport`` is appropriate for your application and understand the underlying assumptions, see [Assumptions](https://gwtransport.github.io/gwtransport/user_guide/assumptions.html).
+
 Examples:
 
 1. [Estimate aquifer pore volume from temperature response](https://gwtransport.github.io/gwtransport/examples/01_Aquifer_Characterization_Temperature.html)
@@ -101,25 +103,12 @@ Full documentation: [gwtransport.github.io/gwtransport](https://gwtransport.gith
 
 This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0), a strong copyleft license that requires making source code of any modifications available. This ensures improvements remain available to the community.
 
-**Permissions**
-
-- ✓ Commercial use
-- ✓ Distribution
-- ✓ Modification
-- ✓ Patent use
-- ✓ Private use
-
-**Conditions**
-
-- ℹ Disclose source
-- ℹ License and copyright notice
-- ℹ Network use is distribution
-- ℹ Same license
-- ℹ State changes
-
-**Limitations**
-
-- ✗ Liability
-- ✗ Warranty
+| Permissions          | Conditions                      | Limitations   |
+| -------------------- | ------------------------------- | ------------- |
+| ✓ Commercial use     | ℹ Disclose source               | ✗ Liability   |
+| ✓ Distribution       | ℹ License and copyright notice  | ✗ Warranty    |
+| ✓ Modification       | ℹ Network use is distribution   |               |
+| ✓ Patent use         | ℹ Same license                  |               |
+| ✓ Private use        | ℹ State changes                 |               |
 
 For more details about this license, see the [full AGPL-3.0 license text](https://choosealicense.com/licenses/agpl-3.0/).
