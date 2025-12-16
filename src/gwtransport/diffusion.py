@@ -174,9 +174,28 @@ def compute_sigma_array(
     diffusivity: float = 0.1,
     retardation_factor: float = 1.0,
     aquifer_length: float = 80.0,
-    porosity: float = 0.35,
 ) -> npt.NDArray[np.floating]:
     """Compute sigma values for diffusion based on flow and aquifer properties.
+
+    Sigma represents the dimensionless spreading parameter for Gaussian filtering,
+    expressed in units of array indices (time steps). It determines how many
+    neighboring time steps are blended together when applying diffusive smoothing.
+
+    The computation follows these steps:
+    1. Calculate residence time (rt) for water parcels traveling through the aquifer
+    2. Compute the diffusive spreading length: L_diff = sqrt(2 * D * rt) [m]
+       This is the physical distance over which concentrations spread due to diffusion
+    3. Compute the advective step size: dx = (Q * dt / V_pore) * L_aquifer [m]
+       This is the physical distance the water moves during one time step
+    4. Sigma = L_diff / dx converts the physical spreading into array index units
+
+    Why divide by dx?
+    The Gaussian filter operates on array indices, not physical distances. If the
+    diffusive spreading is 10 meters and each time step moves water 2 meters, then
+    sigma = 10/2 = 5 means the filter should blend across ~5 time steps. This
+    normalization accounts for variable flow rates: faster flow means larger dx,
+    so fewer time steps are blended (smaller sigma), even though the physical
+    spreading remains the same.
 
     Parameters
     ----------
@@ -187,18 +206,17 @@ def compute_sigma_array(
     aquifer_pore_volume : float
         Pore volume of the aquifer [m3].
     diffusivity : float, optional
-        diffusivity of the compound in the aquifer [m2/day]. Default is 0.1.
+        Diffusivity of the compound in the aquifer [m2/day]. Default is 0.1.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
     aquifer_length : float, optional
         Length of the aquifer [m]. Default is 80.0.
-    porosity : float, optional
-        Porosity of the aquifer [dimensionless]. Default is 0.35.
 
     Returns
     -------
     numpy.ndarray
-        Array of sigma values for diffusion.
+        Array of sigma values (in units of array indices), clipped to range [0, 100].
+        Each value corresponds to a time step in the input flow series.
     """
     rt_array = residence_time(
         flow=flow,
@@ -213,11 +231,16 @@ def compute_sigma_array(
     if np.any(valid_mask):
         rt_array = np.interp(np.arange(len(rt_array)), np.where(valid_mask)[0], rt_array[valid_mask])
 
+    # Diffusive spreading length [m]: how far concentrations spread physically
+    diffusive_spreading_length = np.sqrt(2 * diffusivity * rt_array)
+
+    # Advective step size [m]: how far water moves during one time step
     timedelta_at_departure = np.diff(tedges) / pd.to_timedelta(1, unit="D")
     volume_infiltrated_at_departure = flow * timedelta_at_departure
-    cross_sectional_area = aquifer_pore_volume / aquifer_length
-    dx = volume_infiltrated_at_departure / cross_sectional_area / porosity
-    sigma_array = np.sqrt(2 * diffusivity * rt_array) / dx
+    dx = volume_infiltrated_at_departure / aquifer_pore_volume * aquifer_length
+
+    # Sigma in array index units: number of time steps to blend
+    sigma_array = diffusive_spreading_length / dx
     return np.clip(sigma_array, 0.0, 100.0)
 
 
