@@ -679,7 +679,7 @@ class TestInfiltrationToExtractionDiffusion:
 
         # Single pore volume: 500 m3 = 5 days residence time at 100 m3/day
         aquifer_pore_volumes = np.array([500.0])
-        travel_distances = np.array([100.0])
+        streamline_length = np.array([100.0])
 
         return {
             "cin": cin,
@@ -687,7 +687,7 @@ class TestInfiltrationToExtractionDiffusion:
             "tedges": tedges,
             "cout_tedges": cout_tedges,
             "aquifer_pore_volumes": aquifer_pore_volumes,
-            "travel_distances": travel_distances,
+            "streamline_length": streamline_length,
         }
 
     def test_zero_diffusivity_matches_advection(self, simple_setup):
@@ -705,7 +705,7 @@ class TestInfiltrationToExtractionDiffusion:
             tedges=simple_setup["tedges"],
             cout_tedges=simple_setup["cout_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
-            travel_distances=simple_setup["travel_distances"],
+            streamline_length=simple_setup["streamline_length"],
             diffusivity=0.0,
         )
         np.testing.assert_allclose(cout_advection, cout_diffusion, equal_nan=True)
@@ -725,7 +725,7 @@ class TestInfiltrationToExtractionDiffusion:
             tedges=simple_setup["tedges"],
             cout_tedges=simple_setup["cout_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
-            travel_distances=simple_setup["travel_distances"],
+            streamline_length=simple_setup["streamline_length"],
             diffusivity=0.01,
         )
         # Should be close but not identical
@@ -740,8 +740,9 @@ class TestInfiltrationToExtractionDiffusion:
             tedges=simple_setup["tedges"],
             cout_tedges=simple_setup["cout_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
-            travel_distances=simple_setup["travel_distances"],
+            streamline_length=simple_setup["streamline_length"],
             diffusivity=0.1,
+            retardation_factor=2.0
         )
         cout_large_d = infiltration_to_extraction(
             cin=simple_setup["cin"],
@@ -749,7 +750,7 @@ class TestInfiltrationToExtractionDiffusion:
             tedges=simple_setup["tedges"],
             cout_tedges=simple_setup["cout_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
-            travel_distances=simple_setup["travel_distances"],
+            streamline_length=simple_setup["streamline_length"],
             diffusivity=10.0,
         )
         # With larger diffusivity, the breakthrough curve should be more spread out
@@ -767,7 +768,7 @@ class TestInfiltrationToExtractionDiffusion:
             tedges=simple_setup["tedges"],
             cout_tedges=simple_setup["cout_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
-            travel_distances=simple_setup["travel_distances"],
+            streamline_length=simple_setup["streamline_length"],
             diffusivity=1.0,
         )
         valid = ~np.isnan(cout)
@@ -784,7 +785,7 @@ class TestInfiltrationToExtractionDiffusion:
         flow = np.ones(len(tedges) - 1) * 100.0
 
         aquifer_pore_volumes = np.array([500.0])
-        travel_distances = np.array([100.0])
+        streamline_length = np.array([100.0])
 
         cout = infiltration_to_extraction(
             cin=cin,
@@ -792,7 +793,7 @@ class TestInfiltrationToExtractionDiffusion:
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
-            travel_distances=travel_distances,
+            streamline_length=streamline_length,
             diffusivity=1.0,
         )
 
@@ -811,7 +812,7 @@ class TestInfiltrationToExtractionDiffusion:
 
         # Multiple pore volumes with corresponding travel distances
         aquifer_pore_volumes = np.array([400.0, 500.0, 600.0])
-        travel_distances = np.array([80.0, 100.0, 120.0])
+        streamline_length = np.array([80.0, 100.0, 120.0])
 
         cout = infiltration_to_extraction(
             cin=cin,
@@ -819,7 +820,7 @@ class TestInfiltrationToExtractionDiffusion:
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
-            travel_distances=travel_distances,
+            streamline_length=streamline_length,
             diffusivity=1.0,
         )
 
@@ -842,7 +843,7 @@ class TestInfiltrationToExtractionDiffusion:
                 tedges=simple_setup["tedges"],
                 cout_tedges=simple_setup["cout_tedges"],
                 aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
-                travel_distances=simple_setup["travel_distances"],
+                streamline_length=simple_setup["streamline_length"],
                 diffusivity=-1.0,
             )
 
@@ -854,7 +855,7 @@ class TestInfiltrationToExtractionDiffusion:
                 tedges=simple_setup["tedges"],
                 cout_tedges=simple_setup["cout_tedges"],
                 aquifer_pore_volumes=np.array([500.0, 600.0]),
-                travel_distances=np.array([100.0]),
+                streamline_length=np.array([100.0]),
                 diffusivity=1.0,
             )
 
@@ -868,7 +869,7 @@ class TestInfiltrationToExtractionDiffusion:
                 tedges=simple_setup["tedges"],
                 cout_tedges=simple_setup["cout_tedges"],
                 aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
-                travel_distances=simple_setup["travel_distances"],
+                streamline_length=simple_setup["streamline_length"],
                 diffusivity=1.0,
             )
 
@@ -892,7 +893,7 @@ class TestInfiltrationToExtractionDiffusionPhysics:
         flow = np.ones(len(tedges) - 1) * 100.0
 
         aquifer_pore_volumes = np.array([500.0])  # 5 days residence time
-        travel_distances = np.array([100.0])
+        streamline_length = np.array([100.0])
 
         cout = infiltration_to_extraction(
             cin=cin,
@@ -900,7 +901,7 @@ class TestInfiltrationToExtractionDiffusionPhysics:
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
-            travel_distances=travel_distances,
+            streamline_length=streamline_length,
             diffusivity=5.0,
         )
 
@@ -925,7 +926,7 @@ class TestInfiltrationToExtractionDiffusionPhysics:
         flow = np.ones(len(tedges) - 1) * 100.0
 
         aquifer_pore_volumes = np.array([500.0])
-        travel_distances = np.array([100.0])
+        streamline_length = np.array([100.0])
 
         cout = infiltration_to_extraction(
             cin=cin,
@@ -933,7 +934,7 @@ class TestInfiltrationToExtractionDiffusionPhysics:
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
-            travel_distances=travel_distances,
+            streamline_length=streamline_length,
             diffusivity=1.0,
         )
 
@@ -957,7 +958,7 @@ class TestInfiltrationToExtractionDiffusionPhysics:
         flow = np.ones(len(tedges) - 1) * 100.0
 
         aquifer_pore_volumes = np.array([500.0])
-        travel_distances = np.array([100.0])
+        streamline_length = np.array([100.0])
 
         # Without retardation
         cout_r1 = infiltration_to_extraction(
@@ -966,7 +967,7 @@ class TestInfiltrationToExtractionDiffusionPhysics:
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
-            travel_distances=travel_distances,
+            streamline_length=streamline_length,
             diffusivity=1.0,
             retardation_factor=1.0,
         )
@@ -978,7 +979,7 @@ class TestInfiltrationToExtractionDiffusionPhysics:
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
-            travel_distances=travel_distances,
+            streamline_length=streamline_length,
             diffusivity=1.0,
             retardation_factor=2.0,
         )
