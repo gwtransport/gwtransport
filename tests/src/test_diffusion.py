@@ -5,7 +5,7 @@ from numpy.testing import assert_allclose
 from scipy import ndimage, special
 
 from gwtransport.diffusion import (
-    compute_sigma_array,
+    compute_scaled_sigma_array,
     convolve_diffusion,
     create_example_data,
     deconvolve_diffusion,
@@ -524,12 +524,12 @@ def test_infiltration_to_extraction_with_variable_flow():
 
 
 # =============================================================================
-# Tests for compute_sigma_array function
+# Tests for compute_scaled_sigma_array function
 # =============================================================================
 
 
-def test_compute_sigma_array_constant_flow():
-    """Test compute_sigma_array with constant flow."""
+def test_compute_scaled_sigma_array_constant_flow():
+    """Test compute_scaled_sigma_array with constant flow."""
     # Setup - use smaller pore volume to ensure we have enough flow data
     # With 50 days at 100 m3/day, we have 5000 m3 total
     # Use pore_volume = 1000 m3 for 10 day residence time, leaving plenty of margin
@@ -538,14 +538,13 @@ def test_compute_sigma_array_constant_flow():
     flow = np.ones(n_days) * 100.0
 
     # Test
-    sigma_array = compute_sigma_array(
+    sigma_array = compute_scaled_sigma_array(
         flow=flow,
         tedges=tedges,
         aquifer_pore_volume=1000.0,  # Smaller pore volume for valid residence time calculation
         diffusivity=0.03,
         retardation_factor=1.0,
         aquifer_length=80.0,
-        porosity=0.35,
     )
 
     # Verify
@@ -556,8 +555,8 @@ def test_compute_sigma_array_constant_flow():
     assert np.std(sigma_array) < np.mean(sigma_array) * 0.1
 
 
-def test_compute_sigma_array_variable_flow():
-    """Test compute_sigma_array with variable flow."""
+def test_compute_scaled_sigma_array_variable_flow():
+    """Test compute_scaled_sigma_array with variable flow."""
     # Setup with variable flow
     n_days = 50
     tedges = pd.date_range(start="2020-01-01", periods=n_days + 1, freq="D")
@@ -566,14 +565,13 @@ def test_compute_sigma_array_variable_flow():
 
     # Test - with retardation_factor=2.0, residence time doubles
     # So use pore_volume = 500 to get ~10 day residence time with safety margin
-    sigma_array = compute_sigma_array(
+    sigma_array = compute_scaled_sigma_array(
         flow=flow,
         tedges=tedges,
         aquifer_pore_volume=500.0,  # Smaller pore volume accounting for retardation
         diffusivity=0.03,
         retardation_factor=2.0,
         aquifer_length=80.0,
-        porosity=0.35,
     )
 
     # Verify
@@ -584,8 +582,8 @@ def test_compute_sigma_array_variable_flow():
     assert np.std(sigma_array) > 0.0
 
 
-def test_compute_sigma_array_with_nan_in_residence_time():
-    """Test compute_sigma_array handles NaN in residence time correctly."""
+def test_compute_scaled_sigma_array_with_nan_in_residence_time():
+    """Test compute_scaled_sigma_array handles NaN in residence time correctly."""
     # Setup - flow pattern that might cause NaN
     n_days = 50
     tedges = pd.date_range(start="2020-01-01", periods=n_days + 1, freq="D")
@@ -594,14 +592,13 @@ def test_compute_sigma_array_with_nan_in_residence_time():
     flow[10:15] = 1e-10  # Very small flow
 
     # Test - use smaller pore volume
-    sigma_array = compute_sigma_array(
+    sigma_array = compute_scaled_sigma_array(
         flow=flow,
         tedges=tedges,
         aquifer_pore_volume=1000.0,  # Smaller pore volume
         diffusivity=0.03,
         retardation_factor=1.0,
         aquifer_length=80.0,
-        porosity=0.35,
     )
 
     # Verify - should interpolate NaN values
@@ -610,8 +607,8 @@ def test_compute_sigma_array_with_nan_in_residence_time():
     assert np.all(sigma_array >= 0.0)
 
 
-def test_compute_sigma_array_clipping():
-    """Test that compute_sigma_array clips extreme values."""
+def test_compute_scaled_sigma_array_clipping():
+    """Test that compute_scaled_sigma_array clips extreme values."""
     # Setup with extreme parameters to trigger clipping
     # Use enough days and appropriate pore volume to avoid NaN
     n_days = 100
@@ -619,14 +616,13 @@ def test_compute_sigma_array_clipping():
     flow = np.ones(n_days) * 10.0  # Higher flow to keep residence time manageable
 
     # Test with high diffusivity to trigger clipping
-    sigma_array = compute_sigma_array(
+    sigma_array = compute_scaled_sigma_array(
         flow=flow,
         tedges=tedges,
         aquifer_pore_volume=100.0,  # Smaller pore volume: residence time = 100 * 5 / 10 = 50 days
         diffusivity=10.0,  # Very high diffusivity
         retardation_factor=5.0,
         aquifer_length=80.0,
-        porosity=0.35,
     )
 
     # Verify clipping at 100.0
@@ -643,8 +639,8 @@ def test_compute_sigma_array_clipping():
         (0.10, 1.5),
     ],
 )
-def test_compute_sigma_array_parametrized(diffusivity, retardation):
-    """Test compute_sigma_array with various parameter combinations."""
+def test_compute_scaled_sigma_array_parametrized(diffusivity, retardation):
+    """Test compute_scaled_sigma_array with various parameter combinations."""
     # Setup - use smaller pore volume to ensure valid residence time
     # Max residence time: 1000 * 2.0 / 100 = 20 days (well within 50 days)
     n_days = 50
@@ -652,14 +648,13 @@ def test_compute_sigma_array_parametrized(diffusivity, retardation):
     flow = np.ones(n_days) * 100.0
 
     # Test
-    sigma_array = compute_sigma_array(
+    sigma_array = compute_scaled_sigma_array(
         flow=flow,
         tedges=tedges,
         aquifer_pore_volume=1000.0,  # Smaller pore volume
         diffusivity=diffusivity,
         retardation_factor=retardation,
-        aquifer_length=100.0,
-        porosity=0.30,
+        aquifer_length=100.0
     )
 
     # Verify

@@ -57,7 +57,6 @@ def infiltration_to_extraction(
     diffusivity: float = 0.1,
     retardation_factor: float = 1.0,
     aquifer_length: float = 80.0,
-    porosity: float = 0.35,
 ) -> npt.NDArray[np.floating]:
     """Compute the diffusion of a compound during 1D transport in the aquifer.
 
@@ -99,9 +98,6 @@ def infiltration_to_extraction(
     flow = np.asarray(flow)
 
     # Validate physical parameters
-    if not 0 < porosity < 1:
-        msg = f"Porosity must be in (0, 1), got {porosity}"
-        raise ValueError(msg)
     if aquifer_pore_volume <= 0:
         msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
         raise ValueError(msg)
