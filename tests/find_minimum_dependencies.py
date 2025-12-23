@@ -216,7 +216,8 @@ class VersionStepper:
         """
         match = re.match(r"(\d+)\.(\d+)\.(\d+)", version)
         if match:
-            return tuple(map(int, match.groups()))
+            major, minor, patch = map(int, match.groups())
+            return (major, minor, patch)
         match = re.match(r"(\d+)\.(\d+)", version)
         if match:
             major, minor = map(int, match.groups())
