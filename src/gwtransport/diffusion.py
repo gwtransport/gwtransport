@@ -60,7 +60,10 @@ def infiltration_to_extraction(
 ) -> npt.NDArray[np.floating]:
     """Compute the diffusion of a compound during 1D transport in the aquifer.
 
-    This function represents infiltration to extraction modeling (equivalent to convolution).
+    This function represents infiltration to extraction modeling (equivalent to convolution). The function
+    is exact if flow and tedges are constant. Errors are made otherwise, but the mass balance is kept.
+    If diffusion behavior is important during times of varying flow and tedges, the diffusion2 module provides
+    an alternative approach that works better in those conditions but takes much longer to compute.
 
     Parameters
     ----------
