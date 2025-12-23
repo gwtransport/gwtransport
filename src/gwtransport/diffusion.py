@@ -173,7 +173,7 @@ def compute_sigma_array(
     tedges: pd.DatetimeIndex,
     aquifer_pore_volume: float,
     diffusivity: float = 0.1,
-    retardation_factor: float = 1.0
+    retardation_factor: float = 1.0,
 ) -> npt.NDArray[np.floating]:
     """Compute scaled sigma values for diffusion based on flow and aquifer properties.
 
@@ -231,6 +231,7 @@ def compute_sigma_array(
 
     # Diffusive spreading length [m]: how far concentrations spread physically
     return np.sqrt(2 * diffusivity * rt_array)
+
 
 def compute_scaled_sigma_array(
     *,
@@ -290,7 +291,7 @@ def compute_scaled_sigma_array(
         tedges=tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         diffusivity=diffusivity,
-        retardation_factor=retardation_factor
+        retardation_factor=retardation_factor,
     )
 
     # Advective step size [m]: how far water moves during one time step

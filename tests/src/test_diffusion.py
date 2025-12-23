@@ -651,7 +651,7 @@ def test_compute_scaled_sigma_array_parametrized(diffusivity, retardation):
         aquifer_pore_volume=1000.0,  # Smaller pore volume
         diffusivity=diffusivity,
         retardation_factor=retardation,
-        aquifer_length=100.0
+        aquifer_length=100.0,
     )
 
     # Verify
