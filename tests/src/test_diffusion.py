@@ -446,7 +446,6 @@ def test_infiltration_to_extraction_with_various_diffusivity(diffusivity):
         diffusivity=diffusivity,
         retardation_factor=1.0,
         aquifer_length=80.0,
-        porosity=0.35,
     )
 
     # Verify output
@@ -484,7 +483,6 @@ def test_infiltration_to_extraction_with_retardation(retardation_factor):
         diffusivity=0.03,
         retardation_factor=retardation_factor,
         aquifer_length=80.0,
-        porosity=0.35,
     )
 
     # Verify output
@@ -514,7 +512,6 @@ def test_infiltration_to_extraction_with_variable_flow():
         diffusivity=0.03,
         retardation_factor=1.0,
         aquifer_length=80.0,
-        porosity=0.35,
     )
 
     # Verify output
@@ -774,7 +771,6 @@ def test_infiltration_to_extraction_zero_diffusivity():
         diffusivity=0.0,  # No diffusion
         retardation_factor=1.0,
         aquifer_length=80.0,
-        porosity=0.35,
     )
 
     # Verify - should return input unchanged (pure advection)
