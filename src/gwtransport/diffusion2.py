@@ -860,8 +860,8 @@ def infiltration_to_extraction(
     ... )
     """
     # Convert to pandas DatetimeIndex if needed
-    tedges = pd.DatetimeIndex(tedges)
     cout_tedges = pd.DatetimeIndex(cout_tedges)
+    tedges = pd.DatetimeIndex(tedges)
 
     # Convert to arrays
     cin = np.asarray(cin, dtype=float)
@@ -894,6 +894,13 @@ def infiltration_to_extraction(
     if np.any(streamline_length <= 0):
         msg = "streamline_length must be positive"
         raise ValueError(msg)
+
+    # Extend tedges for spin up
+    tedges = pd.DatetimeIndex([
+        tedges[0] - pd.Timedelta("36500D"),
+        *list(tedges[1:-1]),
+        tedges[-1] + pd.Timedelta("36500D"),
+    ])
 
     # Compute the cumulative flow at tedges
     infiltration_volume = flow * (np.diff(tedges) / pd.Timedelta("1D"))  # m3
