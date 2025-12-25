@@ -701,29 +701,9 @@ def infiltration_to_extraction(
     ...     retardation_factor=2.0,  # Compound moves twice as slowly
     ... )
 
-    With concentration-dependent retardation (nonlinear sorption):
-
-    >>> from gwtransport.residence_time import freundlich_retardation
-    >>> # Gaussian concentration pulse
-    >>> cin_nonlinear = 100.0 * np.exp(-0.5 * ((np.arange(len(dates)) - 10) / 5) ** 2)
-    >>> # Compute Freundlich retardation (n < 1 causes shock formation)
-    >>> R_freundlich = freundlich_retardation(
-    ...     concentration=np.maximum(cin_nonlinear, 0.1),
-    ...     freundlich_k=0.02,
-    ...     freundlich_n=0.75,  # n<1 (lower C travels faster)
-    ...     bulk_density=1600.0,
-    ...     porosity=0.35,
-    ... )
-    >>> # Uses method of characteristics for nonlinear transport
-    >>> cout_nonlinear = infiltration_to_extraction(
-    ...     cin=cin_nonlinear,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volumes=aquifer_pore_volumes,
-    ...     retardation_factor=R_freundlich,
-    ... )
-    >>> # Result: asymmetric breakthrough (sharp front, long tail)
+    Note: For concentration-dependent retardation (nonlinear sorption),
+    use `infiltration_to_extraction_front_tracking_detailed` instead, as this
+    function only supports constant (float) retardation factors.
 
     Using single pore volume:
 
@@ -1252,24 +1232,26 @@ def infiltration_to_extraction_front_tracking_detailed(
 
     Examples
     --------
-    >>> cout, structures = infiltration_to_extraction_front_tracking_detailed(
-    ...     cin=cin,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volumes=np.array([500.0]),
-    ...     freundlich_k=0.01,
-    ...     freundlich_n=2.0,
-    ...     bulk_density=1500.0,
-    ...     porosity=0.3,
-    ... )
-    >>>
-    >>> # Access spin-up period for first pore volume
-    >>> print(f"First arrival: {structures[0]['t_first_arrival']:.2f} days")
-    >>>
-    >>> # Analyze events for first pore volume
-    >>> for event in structures[0]["events"]:
-    ...     print(f"t={event['time']:.2f}: {event['type']}")
+    ::
+
+        cout, structures = infiltration_to_extraction_front_tracking_detailed(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            freundlich_k=0.01,
+            freundlich_n=2.0,
+            bulk_density=1500.0,
+            porosity=0.3,
+        )
+
+        # Access spin-up period for first pore volume
+        print(f"First arrival: {structures[0]['t_first_arrival']:.2f} days")
+
+        # Analyze events for first pore volume
+        for event in structures[0]["events"]:
+            print(f"t={event['time']:.2f}: {event['type']}")
     """
     # Input validation (same as main function)
     cin = np.asarray(cin, dtype=float)

@@ -90,7 +90,7 @@ class FreundlichSorption:
     ... )
     >>> r = sorption.retardation(5.0)
     >>> c_back = sorption.concentration_from_retardation(r)
-    >>> np.isclose(c_back, 5.0)
+    >>> bool(np.isclose(c_back, 5.0))
     True
 
     Notes
@@ -253,7 +253,7 @@ class FreundlichSorption:
         ... )
         >>> r = sorption.retardation(5.0)
         >>> c = sorption.concentration_from_retardation(r)
-        >>> np.isclose(c, 5.0, rtol=1e-14)
+        >>> bool(np.isclose(c, 5.0, rtol=1e-14))
         True
         """
         is_array = isinstance(r, np.ndarray)
@@ -648,7 +648,7 @@ def characteristic_position(
     >>> v = characteristic_position(
     ...     c=5.0, flow=100.0, sorption=sorption, t_start=0.0, v_start=0.0, t=10.0
     ... )
-    >>> np.isclose(v, 500.0)  # v = 100/2 * 10 = 500
+    >>> bool(np.isclose(v, 500.0))  # v = 100/2 * 10 = 500
     True
     """
     if t < t_start:
@@ -724,13 +724,13 @@ def compute_first_front_arrival_time(
     Examples
     --------
     >>> import pandas as pd
-    >>> cin = np.array([0.0, 10.0, 10.0])
-    >>> flow = np.array([100.0, 100.0, 100.0])
-    >>> tedges = pd.date_range("2020-01-01", periods=4, freq="D")
+    >>> cin = np.array([0.0, 10.0] + [10.0] * 10)  # First bin zero, then nonzero
+    >>> flow = np.array([100.0] * 12)  # Constant flow
+    >>> tedges = pd.date_range("2020-01-01", periods=13, freq="D")
     >>> sorption = ConstantRetardation(retardation_factor=2.0)
     >>> t_first = compute_first_front_arrival_time(cin, flow, tedges, 500.0, sorption)
     >>> # Result is in days from tedges[0]
-    >>> np.isclose(t_first, 11.0)  # 1 day (index offset) + 10 days (travel time)
+    >>> bool(np.isclose(t_first, 11.0))  # 1 day (offset) + 10 days (travel time)
     True
 
     See Also
@@ -841,13 +841,15 @@ def compute_first_fully_informed_bin_edge(
     - compute_first_front_arrival_time: days from tedges[0]
     - compute_first_fully_informed_bin_edge: days from output_tedges[0]
 
-    For masking output arrays:
-        >>> import pandas as pd
-        >>> t_first_bin = compute_first_fully_informed_bin_edge(...)
-        >>> # Convert output_tedges to days from output_tedges[0]
-        >>> tedges_days = (output_tedges - output_tedges[0]) / pd.Timedelta(days=1)
-        >>> mask = tedges_days[:-1] >= t_first_bin
-        >>> cout_valid = cout[mask]
+    For masking output arrays::
+
+        import pandas as pd
+
+        t_first_bin = compute_first_fully_informed_bin_edge(...)
+        # Convert output_tedges to days from output_tedges[0]
+        tedges_days = (output_tedges - output_tedges[0]) / pd.Timedelta(days=1)
+        mask = tedges_days[:-1] >= t_first_bin
+        cout_valid = cout[mask]
 
     Examples
     --------

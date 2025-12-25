@@ -67,11 +67,14 @@ def plot_vt_diagram(
 
     Examples
     --------
-    >>> from gwtransport.fronttracking.solver import FrontTracker
-    >>> tracker = FrontTracker(cin, flow, tedges, aquifer_pore_volume, sorption)
-    >>> tracker.run()
-    >>> fig = plot_vt_diagram(tracker.state)
-    >>> fig.savefig("vt_diagram.png")
+    ::
+
+        from gwtransport.fronttracking.solver import FrontTracker
+
+        tracker = FrontTracker(cin, flow, tedges, aquifer_pore_volume, sorption)
+        tracker.run()
+        fig = plot_vt_diagram(tracker.state)
+        fig.savefig("vt_diagram.png")
     """
     if t_max is None:
         # Default to input data time range instead of simulation end time
@@ -368,11 +371,14 @@ def plot_breakthrough_curve(
 
     Examples
     --------
-    >>> from gwtransport.fronttracking.solver import FrontTracker
-    >>> tracker = FrontTracker(cin, flow, tedges, aquifer_pore_volume, sorption)
-    >>> tracker.run()
-    >>> fig = plot_breakthrough_curve(tracker.state)
-    >>> fig.savefig("exact_breakthrough.png")
+    ::
+
+        from gwtransport.fronttracking.solver import FrontTracker
+
+        tracker = FrontTracker(cin, flow, tedges, aquifer_pore_volume, sorption)
+        tracker.run()
+        fig = plot_breakthrough_curve(tracker.state)
+        fig.savefig("exact_breakthrough.png")
     """
     if ax is None:
         _, ax = plt.subplots(figsize=figsize)
@@ -481,11 +487,14 @@ def plot_wave_interactions(
 
     Examples
     --------
-    >>> from gwtransport.fronttracking.solver import FrontTracker
-    >>> tracker = FrontTracker(cin, flow, tedges, aquifer_pore_volume, sorption)
-    >>> tracker.run()
-    >>> fig = plot_wave_interactions(tracker.state)
-    >>> fig.savefig("wave_interactions.png")
+    ::
+
+        from gwtransport.fronttracking.solver import FrontTracker
+
+        tracker = FrontTracker(cin, flow, tedges, aquifer_pore_volume, sorption)
+        tracker.run()
+        fig = plot_wave_interactions(tracker.state)
+        fig.savefig("wave_interactions.png")
     """
     if ax is None:
         _, ax = plt.subplots(figsize=figsize)
