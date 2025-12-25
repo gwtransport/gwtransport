@@ -87,13 +87,15 @@ class Event:
 
     Examples
     --------
-    >>> event = Event(
-    ...     time=15.5,
-    ...     event_type=EventType.SHOCK_CHAR_COLLISION,
-    ...     waves_involved=[shock1, char1],
-    ...     location=250.0,
-    ... )
-    >>> print(f"Event at t={event.time}: {event.event_type.value}")
+    ::
+
+        event = Event(
+            time=15.5,
+            event_type=EventType.SHOCK_CHAR_COLLISION,
+            waves_involved=[shock1, char1],
+            location=250.0,
+        )
+        print(f"Event at t={event.time}: {event.event_type.value}")
     """
 
     time: float
@@ -152,10 +154,12 @@ def find_characteristic_intersection(char1, char2, t_current: float) -> Optional
 
     Examples
     --------
-    >>> result = find_characteristic_intersection(char1, char2, t_current=10.0)
-    >>> if result:
-    ...     t_int, v_int = result
-    ...     print(f"Intersection at t={t_int:.6f}, V={v_int:.6f}")
+    ::
+
+        result = find_characteristic_intersection(char1, char2, t_current=10.0)
+        if result:
+            t_int, v_int = result
+            print(f"Intersection at t={t_int:.6f}, V={v_int:.6f}")
     """
     # Import here to avoid circular dependency
 
@@ -223,10 +227,12 @@ def find_shock_shock_intersection(shock1, shock2, t_current: float) -> Optional[
 
     Examples
     --------
-    >>> result = find_shock_shock_intersection(shock1, shock2, t_current=10.0)
-    >>> if result:
-    ...     t_int, v_int = result
-    ...     print(f"Shocks collide at t={t_int:.6f}, V={v_int:.6f}")
+    ::
+
+        result = find_shock_shock_intersection(shock1, shock2, t_current=10.0)
+        if result:
+            t_int, v_int = result
+            print(f"Shocks collide at t={t_int:.6f}, V={v_int:.6f}")
     """
     vel1 = shock1.velocity
     vel2 = shock2.velocity
@@ -276,10 +282,12 @@ def find_shock_characteristic_intersection(shock, char, t_current: float) -> Opt
 
     Examples
     --------
-    >>> result = find_shock_characteristic_intersection(shock, char, t_current=10.0)
-    >>> if result:
-    ...     t_int, v_int = result
-    ...     print(f"Shock catches characteristic at t={t_int:.6f}, V={v_int:.6f}")
+    ::
+
+        result = find_shock_characteristic_intersection(shock, char, t_current=10.0)
+        if result:
+            t_int, v_int = result
+            print(f"Shock catches characteristic at t={t_int:.6f}, V={v_int:.6f}")
     """
     vel_shock = shock.velocity
     vel_char = characteristic_velocity(char.concentration, char.flow, char.sorption)
@@ -343,11 +351,13 @@ def find_rarefaction_boundary_intersections(raref, other_wave, t_current: float)
 
     Examples
     --------
-    >>> intersections = find_rarefaction_boundary_intersections(
-    ...     raref, char, t_current=10.0
-    ... )
-    >>> for t, v, boundary in intersections:
-    ...     print(f"{boundary} intersects at t={t:.3f}, V={v:.3f}")
+    ::
+
+        intersections = find_rarefaction_boundary_intersections(
+            raref, char, t_current=10.0
+        )
+        for t, v, boundary in intersections:
+            print(f"{boundary} intersects at t={t:.3f}, V={v:.3f}")
     """
     # Import wave classes to avoid circular dependency
 
@@ -471,9 +481,11 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> Optional[fl
 
     Examples
     --------
-    >>> t_cross = find_outlet_crossing(shock, v_outlet=500.0, t_current=10.0)
-    >>> if t_cross:
-    ...     print(f"Shock exits at t={t_cross:.3f} days")
+    ::
+
+        t_cross = find_outlet_crossing(shock, v_outlet=500.0, t_current=10.0)
+        if t_cross:
+            print(f"Shock exits at t={t_cross:.3f} days")
     """
     if not wave.is_active:
         return None

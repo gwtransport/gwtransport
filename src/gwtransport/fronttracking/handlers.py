@@ -63,9 +63,11 @@ def handle_characteristic_collision(
 
     Examples
     --------
-    >>> shock = handle_characteristic_collision(char1, char2, t=15.0, v=100.0)
-    >>> assert shock.satisfies_entropy()
-    >>> assert not char1.is_active  # Parent deactivated
+    ::
+
+        shock = handle_characteristic_collision(char1, char2, t=15.0, v=100.0)
+        assert shock.satisfies_entropy()
+        assert not char1.is_active  # Parent deactivated
     """
     # Get c_min from sorption to determine concentration threshold
     c_min = getattr(char1.sorption, "c_min", 0.0)
@@ -218,9 +220,11 @@ def handle_shock_collision(
 
     Examples
     --------
-    >>> merged = handle_shock_collision(shock1, shock2, t=20.0, v=200.0)
-    >>> assert merged.satisfies_entropy()
-    >>> assert not shock1.is_active  # Parents deactivated
+    ::
+
+        merged = handle_shock_collision(shock1, shock2, t=20.0, v=200.0)
+        assert merged.satisfies_entropy()
+        assert not shock1.is_active  # Parents deactivated
     """
     # Determine which shock is upstream (faster)
     # The shock catching up from behind is upstream
@@ -306,9 +310,11 @@ def handle_shock_characteristic_collision(
 
     Examples
     --------
-    >>> new_shock = handle_shock_characteristic_collision(shock, char, t=25.0, v=300.0)
-    >>> if new_shock:
-    ...     assert new_shock[0].satisfies_entropy()
+    ::
+
+        new_shock = handle_shock_characteristic_collision(shock, char, t=25.0, v=300.0)
+        if new_shock:
+            assert new_shock[0].satisfies_entropy()
     """
     if shock.velocity is None:
         msg = "Shock velocity should be set in __post_init__"
@@ -447,9 +453,11 @@ def handle_shock_rarefaction_collision(
 
     Examples
     --------
-    >>> waves = handle_shock_rarefaction_collision(
-    ...     shock, raref, t=30.0, v=400.0, boundary_type="tail"
-    ... )
+    ::
+
+        waves = handle_shock_rarefaction_collision(
+            shock, raref, t=30.0, v=400.0, boundary_type="tail"
+        )
     """
     if boundary_type == "tail":
         # Shock catching rarefaction tail - FULL WAVE SPLITTING
@@ -696,8 +704,10 @@ def handle_outlet_crossing(wave, t_event: float, v_outlet: float) -> dict:
 
     Examples
     --------
-    >>> event = handle_outlet_crossing(shock, t=50.0, v_outlet=500.0)
-    >>> print(f"Wave exited at t={event['time']:.2f}")
+    ::
+
+        event = handle_outlet_crossing(shock, t=50.0, v_outlet=500.0)
+        print(f"Wave exited at t={event['time']:.2f}")
     """
     return {
         "time": t_event,
@@ -741,14 +751,16 @@ def recreate_characteristic_with_new_flow(
 
     Examples
     --------
-    >>> char_old = CharacteristicWave(
-    ...     t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=sorption
-    ... )
-    >>> char_new = recreate_characteristic_with_new_flow(
-    ...     char_old, t_change=10.0, flow_new=200.0
-    ... )
-    >>> assert char_new.flow == 200.0
-    >>> assert char_new.concentration == 5.0  # Concentration unchanged
+    ::
+
+        char_old = CharacteristicWave(
+            t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=sorption
+        )
+        char_new = recreate_characteristic_with_new_flow(
+            char_old, t_change=10.0, flow_new=200.0
+        )
+        assert char_new.flow == 200.0
+        assert char_new.concentration == 5.0  # Concentration unchanged
     """
     v_at_change = char.position_at_time(t_change)
 
@@ -798,21 +810,23 @@ def recreate_shock_with_new_flow(
 
     Examples
     --------
-    >>> shock_old = ShockWave(
-    ...     t_start=0.0,
-    ...     v_start=0.0,
-    ...     flow=100.0,
-    ...     c_left=10.0,
-    ...     c_right=2.0,
-    ...     sorption=sorption,
-    ... )
-    >>> shock_new = recreate_shock_with_new_flow(
-    ...     shock_old, t_change=10.0, flow_new=200.0
-    ... )
-    >>> assert shock_new.flow == 200.0
-    >>> assert (
-    ...     shock_new.velocity == 2 * shock_old.velocity
-    ... )  # Velocity scales linearly with flow
+    ::
+
+        shock_old = ShockWave(
+            t_start=0.0,
+            v_start=0.0,
+            flow=100.0,
+            c_left=10.0,
+            c_right=2.0,
+            sorption=sorption,
+        )
+        shock_new = recreate_shock_with_new_flow(
+            shock_old, t_change=10.0, flow_new=200.0
+        )
+        assert shock_new.flow == 200.0
+        assert (
+            shock_new.velocity == 2 * shock_old.velocity
+        )  # Velocity scales linearly with flow
     """
     v_at_change = shock.position_at_time(t_change)
 
@@ -867,19 +881,21 @@ def recreate_rarefaction_with_new_flow(
 
     Examples
     --------
-    >>> raref_old = RarefactionWave(
-    ...     t_start=0.0,
-    ...     v_start=0.0,
-    ...     flow=100.0,
-    ...     c_head=10.0,
-    ...     c_tail=2.0,
-    ...     sorption=sorption,
-    ... )
-    >>> raref_new = recreate_rarefaction_with_new_flow(
-    ...     raref_old, t_change=10.0, flow_new=200.0
-    ... )
-    >>> assert raref_new.flow == 200.0
-    >>> assert raref_new.c_head == 10.0  # Concentrations unchanged
+    ::
+
+        raref_old = RarefactionWave(
+            t_start=0.0,
+            v_start=0.0,
+            flow=100.0,
+            c_head=10.0,
+            c_tail=2.0,
+            sorption=sorption,
+        )
+        raref_new = recreate_rarefaction_with_new_flow(
+            raref_old, t_change=10.0, flow_new=200.0
+        )
+        assert raref_new.flow == 200.0
+        assert raref_new.c_head == 10.0  # Concentrations unchanged
     """
     v_at_change = raref.position_at_time(t_change)
 
@@ -935,11 +951,13 @@ def handle_flow_change(
 
     Examples
     --------
-    >>> new_waves = handle_flow_change(
-    ...     t_change=10.0, flow_new=200.0, active_waves=[char1, shock1, raref1]
-    ... )
-    >>> assert len(new_waves) == 3
-    >>> assert all(w.flow == 200.0 for w in new_waves)
+    ::
+
+        new_waves = handle_flow_change(
+            t_change=10.0, flow_new=200.0, active_waves=[char1, shock1, raref1]
+        )
+        assert len(new_waves) == 3
+        assert all(w.flow == 200.0 for w in new_waves)
     """
     new_waves = []
 
@@ -1012,16 +1030,18 @@ def create_inlet_waves_at_time(
 
     Examples
     --------
-    >>> # Step increase from zero creates characteristic
-    >>> waves = create_inlet_waves_at_time(
-    ...     c_prev=0.0, c_new=10.0, t=10.0, flow=100.0, sorption=sorption
-    ... )
-    >>> assert isinstance(waves[0], CharacteristicWave)
-    >>> # Step between nonzero values creates shock for n>1 (compression)
-    >>> waves = create_inlet_waves_at_time(
-    ...     c_prev=2.0, c_new=10.0, t=10.0, flow=100.0, sorption=sorption
-    ... )
-    >>> assert isinstance(waves[0], ShockWave)
+    ::
+
+        # Step increase from zero creates characteristic
+        waves = create_inlet_waves_at_time(
+            c_prev=0.0, c_new=10.0, t=10.0, flow=100.0, sorption=sorption
+        )
+        assert isinstance(waves[0], CharacteristicWave)
+        # Step between nonzero values creates shock for n>1 (compression)
+        waves = create_inlet_waves_at_time(
+            c_prev=2.0, c_new=10.0, t=10.0, flow=100.0, sorption=sorption
+        )
+        assert isinstance(waves[0], ShockWave)
     """
     if abs(c_new - c_prev) < EPSILON_CONCENTRATION:  # No change
         return []

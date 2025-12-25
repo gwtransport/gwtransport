@@ -70,10 +70,12 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
 
     Examples
     --------
-    >>> results = verify_physics(structure, cout, cout_tedges, cin, verbose=False)
-    >>> print(results["summary"])
-    ✓ All 8 checks passed
-    >>> assert results["all_passed"]
+    ::
+
+        results = verify_physics(structure, cout, cout_tedges, cin, verbose=False)
+        print(results["summary"])
+        # ✓ All 8 checks passed
+        assert results["all_passed"]
     """
     failures = []
     checks = []

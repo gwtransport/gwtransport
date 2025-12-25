@@ -99,16 +99,18 @@ class FrontTrackerState:
 
     Examples
     --------
-    >>> state = FrontTrackerState(
-    ...     waves=[],
-    ...     events=[],
-    ...     t_current=0.0,
-    ...     v_outlet=500.0,
-    ...     sorption=sorption,
-    ...     cin=cin,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ... )
+    ::
+
+        state = FrontTrackerState(
+            waves=[],
+            events=[],
+            t_current=0.0,
+            v_outlet=500.0,
+            sorption=sorption,
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+        )
     """
 
     waves: list[Wave]
@@ -151,17 +153,19 @@ class FrontTracker:
 
     Examples
     --------
-    >>> tracker = FrontTracker(
-    ...     cin=cin,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     aquifer_pore_volume=500.0,
-    ...     sorption=sorption,
-    ... )
-    >>> tracker.run(max_iterations=1000)
-    >>> # Access results
-    >>> print(f"Total events: {len(tracker.state.events)}")
-    >>> print(f"Active waves: {sum(1 for w in tracker.state.waves if w.is_active)}")
+    ::
+
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=500.0,
+            sorption=sorption,
+        )
+        tracker.run(max_iterations=1000)
+        # Access results
+        print(f"Total events: {len(tracker.state.events)}")
+        print(f"Active waves: {sum(1 for w in tracker.state.waves if w.is_active)}")
 
     Notes
     -----

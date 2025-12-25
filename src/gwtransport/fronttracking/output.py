@@ -101,13 +101,14 @@ def concentration_at_point(
 
     Examples
     --------
-    >>> sorption = FreundlichSorption(
-    ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
-    ... )
-    >>> # After running simulation with waves...
-    >>> c = concentration_at_point(v=250.0, t=5.0, waves=all_waves, sorption=sorption)
-    >>> c >= 0.0
-    True
+    ::
+
+        sorption = FreundlichSorption(
+            k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+        )
+        # After running simulation with waves...
+        c = concentration_at_point(v=250.0, t=5.0, waves=all_waves, sorption=sorption)
+        c >= 0.0
     """
     # Check rarefactions first (they have spatial extent and override other waves)
     for wave in waves:
@@ -223,12 +224,13 @@ def compute_breakthrough_curve(
 
     Examples
     --------
-    >>> t_array = np.linspace(0, 100, 1000)
-    >>> c_out = compute_breakthrough_curve(
-    ...     t_array, v_outlet=500.0, waves=all_waves, sorption=sorption
-    ... )
-    >>> len(c_out) == len(t_array)
-    True
+    ::
+
+        t_array = np.linspace(0, 100, 1000)
+        c_out = compute_breakthrough_curve(
+            t_array, v_outlet=500.0, waves=all_waves, sorption=sorption
+        )
+        len(c_out) == len(t_array)
 
     See Also
     --------
@@ -548,28 +550,28 @@ def integrate_rarefaction_exact(
 
     Examples
     --------
-    >>> sorption = FreundlichSorption(
-    ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
-    ... )
-    >>> raref = RarefactionWave(
-    ...     t_start=0.0,
-    ...     v_start=0.0,
-    ...     flow=100.0,
-    ...     c_head=10.0,
-    ...     c_tail=2.0,
-    ...     sorption=sorption,
-    ... )
-    >>> integral = integrate_rarefaction_exact(
-    ...     raref, v_outlet=500.0, t_start=5.0, t_end=15.0, sorption=sorption
-    ... )
-    >>> integral > 0
-    True
-    >>> # Integration to infinity
-    >>> integral_inf = integrate_rarefaction_exact(
-    ...     raref, v_outlet=500.0, t_start=5.0, t_end=np.inf, sorption=sorption
-    ... )
-    >>> integral_inf > integral
-    True
+    ::
+
+        sorption = FreundlichSorption(
+            k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+        )
+        raref = RarefactionWave(
+            t_start=0.0,
+            v_start=0.0,
+            flow=100.0,
+            c_head=10.0,
+            c_tail=2.0,
+            sorption=sorption,
+        )
+        integral = integrate_rarefaction_exact(
+            raref, v_outlet=500.0, t_start=5.0, t_end=15.0, sorption=sorption
+        )
+        integral > 0
+        # Integration to infinity
+        integral_inf = integrate_rarefaction_exact(
+            raref, v_outlet=500.0, t_start=5.0, t_end=np.inf, sorption=sorption
+        )
+        integral_inf > integral
     """
     # Extract parameters
     t_origin = raref.t_start
@@ -688,18 +690,18 @@ def compute_bin_averaged_concentration_exact(
 
     Examples
     --------
-    >>> # After running front tracking simulation
-    >>> t_edges = np.array([0.0, 10.0, 20.0, 30.0])
-    >>> c_avg = compute_bin_averaged_concentration_exact(
-    ...     t_edges=t_edges,
-    ...     v_outlet=500.0,
-    ...     waves=tracker.state.waves,
-    ...     sorption=sorption,
-    ... )
-    >>> len(c_avg) == len(t_edges) - 1
-    True
-    >>> np.all(c_avg >= 0)
-    True
+    ::
+
+        # After running front tracking simulation
+        t_edges = np.array([0.0, 10.0, 20.0, 30.0])
+        c_avg = compute_bin_averaged_concentration_exact(
+            t_edges=t_edges,
+            v_outlet=500.0,
+            waves=tracker.state.waves,
+            sorption=sorption,
+        )
+        len(c_avg) == len(t_edges) - 1
+        np.all(c_avg >= 0)
 
     See Also
     --------
@@ -826,12 +828,13 @@ def compute_domain_mass(
 
     Examples
     --------
-    >>> # After running simulation to time t=10.0
-    >>> mass = compute_domain_mass(
-    ...     t=10.0, v_outlet=500.0, waves=tracker.state.waves, sorption=sorption
-    ... )
-    >>> mass >= 0.0
-    True
+    ::
+
+        # After running simulation to time t=10.0
+        mass = compute_domain_mass(
+            t=10.0, v_outlet=500.0, waves=tracker.state.waves, sorption=sorption
+        )
+        mass >= 0.0
 
     See Also
     --------
@@ -1122,11 +1125,12 @@ def compute_cumulative_inlet_mass(
 
     Examples
     --------
-    >>> mass_in = compute_cumulative_inlet_mass(
-    ...     t=50.0, cin=cin, flow=flow, tedges=tedges
-    ... )
-    >>> mass_in >= 0.0
-    True
+    ::
+
+        mass_in = compute_cumulative_inlet_mass(
+            t=50.0, cin=cin, flow=flow, tedges=tedges
+        )
+        mass_in >= 0.0
     """
     tedges_arr = np.asarray(tedges, dtype=float)
     cin_arr = np.asarray(cin, dtype=float)
@@ -1196,9 +1200,10 @@ def find_last_rarefaction_start_time(
 
     Examples
     --------
-    >>> t_last = find_last_rarefaction_start_time(v_outlet=500.0, waves=all_waves)
-    >>> t_last >= 0.0
-    True
+    ::
+
+        t_last = find_last_rarefaction_start_time(v_outlet=500.0, waves=all_waves)
+        t_last >= 0.0
     """
     t_last = 0.0
 
@@ -1271,16 +1276,17 @@ def compute_cumulative_outlet_mass(
 
     Examples
     --------
-    >>> mass_out = compute_cumulative_outlet_mass(
-    ...     t=50.0,
-    ...     v_outlet=500.0,
-    ...     waves=tracker.state.waves,
-    ...     sorption=sorption,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ... )
-    >>> mass_out >= 0.0
-    True
+    ::
+
+        mass_out = compute_cumulative_outlet_mass(
+            t=50.0,
+            v_outlet=500.0,
+            waves=tracker.state.waves,
+            sorption=sorption,
+            flow=flow,
+            tedges=tedges,
+        )
+        mass_out >= 0.0
     """
     tedges_arr = np.asarray(tedges, dtype=float)
     flow_arr = np.asarray(flow, dtype=float)
@@ -1393,15 +1399,16 @@ def integrate_rarefaction_total_mass(
 
     Examples
     --------
-    >>> mass = integrate_rarefaction_total_mass(
-    ...     raref=raref_wave,
-    ...     v_outlet=500.0,
-    ...     t_start=40.0,
-    ...     sorption=sorption,
-    ...     flow=100.0,
-    ... )
-    >>> mass >= 0.0
-    True
+    ::
+
+        mass = integrate_rarefaction_total_mass(
+            raref=raref_wave,
+            v_outlet=500.0,
+            t_start=40.0,
+            sorption=sorption,
+            flow=100.0,
+        )
+        mass >= 0.0
     """
     if isinstance(sorption, ConstantRetardation):
         # No rarefactions with constant retardation
@@ -1479,17 +1486,17 @@ def compute_total_outlet_mass(
 
     Examples
     --------
-    >>> total_mass, t_end = compute_total_outlet_mass(
-    ...     v_outlet=500.0,
-    ...     waves=tracker.state.waves,
-    ...     sorption=sorption,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ... )
-    >>> total_mass >= 0.0
-    True
-    >>> t_end >= tedges[0]
-    True
+    ::
+
+        total_mass, t_end = compute_total_outlet_mass(
+            v_outlet=500.0,
+            waves=tracker.state.waves,
+            sorption=sorption,
+            flow=flow,
+            tedges=tedges,
+        )
+        total_mass >= 0.0
+        t_end >= tedges[0]
 
     See Also
     --------
