@@ -117,6 +117,7 @@ For an in-depth discussion of the core modeling approach, see :doc:`user_guide/c
    examples/02_Residence_Time_Analysis.nblink
    examples/03_Pathogen_Removal_Bank_Filtration.nblink
    examples/04_Deposition_Analysis_Bank_Filtration.nblink
+   examples/05_Diffusion_Dispersion.nblink
    examples/10_Advection_with_non_linear_sorption.nblink
 
 .. toctree::

@@ -30,6 +30,14 @@ diffusion
    :undoc-members:
    :show-inheritance:
 
+diffusion2
+==========
+
+.. automodule:: gwtransport.diffusion2
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 gamma
 =====
 
