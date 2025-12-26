@@ -69,4 +69,5 @@ convention = "numpy"
     "PLR2004",
     "PLR6301",  # Tests may be grouped in classes for clarity
     "INP001",  # __init__.py is not needed for the test folders
+    "PLC2701",  # Private functions may also be tested
 ]
