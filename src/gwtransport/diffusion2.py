@@ -16,7 +16,7 @@ which the user should compute as:
 where:
 - D_m is the molecular diffusion coefficient [m^2/day]
 - alpha_L is the longitudinal dispersivity [m]
-- v is the pore velocity [m/day]
+- v is the pore velocity [m/day] (v = q/n, where q is specific discharge and n is porosity)
 """
 
 import numpy as np
@@ -740,7 +740,8 @@ def infiltration_to_extraction(
         D_L = D_m + alpha_L * v
 
     where D_m is molecular diffusion [m^2/day], alpha_L is dispersivity [m],
-    and v is pore velocity [m/day].
+    and v is pore velocity [m/day] (v = q/n, where q is specific discharge
+    and n is porosity).
 
     Parameters
     ----------
@@ -769,7 +770,8 @@ def infiltration_to_extraction(
         Compute as D_L = D_m + alpha_L * v where:
         - D_m: molecular diffusion coefficient [m2/day]
         - alpha_L: longitudinal dispersivity [m]
-        - v: pore velocity [m/day]
+        - v: pore velocity [m/day] (v = q/n, where q is specific discharge
+          and n is porosity)
         Set to 0 for pure advection (no dispersion).
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
