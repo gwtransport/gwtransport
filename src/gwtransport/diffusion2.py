@@ -31,411 +31,6 @@ from gwtransport.residence_time import residence_time
 EPSILON_COEFF_SUM = 1e-10
 
 
-def _erf_integral_space(
-    x: NDArray[np.float64],
-    diffusivity: float,
-    t: float | NDArray[np.float64],
-    clip_to_inf: float = 6.0,
-) -> NDArray[np.float64]:
-    """Compute the integral of the error function.
-
-    This function computes the integral of the error function from 0 to x.
-
-    Parameters
-    ----------
-    x : ndarray, shape (n,)
-        Input values.
-    diffusivity : float
-        Diffusivity [m²/day]. Must be non-negative.
-    t : float or ndarray, shape (m,)
-        Time values [day]. Must be non-negative.
-        If array, output will have shape (m, n).
-    clip_to_inf : float, optional
-        Clip the input values to -clip_to_inf and clip_to_inf to avoid numerical issues.
-        Default is 6.
-
-    Returns
-    -------
-    ndarray
-        Integral of the error function from 0 to x.
-        Shape is (n,) if t is scalar, (m, n) if t is array of shape (m,).
-    """
-    x = np.asarray(x)
-    t = np.asarray(t)
-
-    # Compute a = 1/(2*sqrt(diffusivity*t)) from diffusivity and t
-    # Handle edge cases: diffusivity=0 or t=0 means a=inf (step function)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        a = np.where((diffusivity == 0.0) | (t == 0.0), np.inf, 1.0 / (2.0 * np.sqrt(diffusivity * t)))
-
-    a = np.asarray(a)
-    a_is_scalar = a.ndim == 0
-
-    if a_is_scalar:
-        a_val = float(a)
-        ax = a_val * x
-        out = np.zeros_like(x, dtype=float)
-
-        if np.isinf(a_val):
-            # a=inf means step function: erf(inf*x) = sign(x)
-            # Integral of sign(x) from 0 to x is |x|
-            return np.abs(x)
-
-        if a_val == 0.0:
-            return out
-
-        # Fill in the limits of the error function
-        maskl, masku = ax <= -clip_to_inf, ax >= clip_to_inf
-        out[maskl] = -x[maskl] - 1 / (a_val * np.sqrt(np.pi))
-        out[masku] = x[masku] - 1 / (a_val * np.sqrt(np.pi))
-
-        # Fill in the rest of the values
-        mask = ~maskl & ~masku
-        out[mask] = x[mask] * special.erf(ax[mask]) + (np.exp(-(ax[mask] ** 2)) - 1) / (a_val * np.sqrt(np.pi))
-        return out
-
-    # Vectorized case: a is array of shape (m,), x is shape (n,)
-    # Output shape: (m, n)
-    a_2d = a[:, np.newaxis]  # Shape: (m, 1)
-    x_2d = x[np.newaxis, :]  # Shape: (1, n)
-    ax = a_2d * x_2d  # Shape: (m, n)
-
-    out = np.zeros_like(ax, dtype=float)
-
-    # Handle a == inf rows (step function case)
-    mask_a_inf = np.isinf(a)
-    if np.any(mask_a_inf):
-        out[mask_a_inf, :] = np.abs(x)[np.newaxis, :]
-
-    # Handle a == 0 rows
-    mask_a_zero = a == 0.0
-    # Rows where a == 0 remain zero
-
-    # For finite non-zero a values
-    mask_a_valid = ~mask_a_zero & ~mask_a_inf
-    if np.any(mask_a_valid):
-        ax_valid = ax[mask_a_valid, :]  # Shape: (m_valid, n)
-        a_valid = a[mask_a_valid, np.newaxis]  # Shape: (m_valid, 1)
-        x_broadcast = x_2d  # Shape: (1, n), broadcasts to (m_valid, n)
-
-        maskl = ax_valid <= -clip_to_inf
-        masku = ax_valid >= clip_to_inf
-        mask_mid = ~maskl & ~masku
-
-        out_valid = np.zeros_like(ax_valid)
-        out_valid[maskl] = -np.broadcast_to(x_broadcast, ax_valid.shape)[maskl] - 1 / (
-            np.broadcast_to(a_valid, ax_valid.shape)[maskl] * np.sqrt(np.pi)
-        )
-        out_valid[masku] = np.broadcast_to(x_broadcast, ax_valid.shape)[masku] - 1 / (
-            np.broadcast_to(a_valid, ax_valid.shape)[masku] * np.sqrt(np.pi)
-        )
-        x_mid = np.broadcast_to(x_broadcast, ax_valid.shape)[mask_mid]
-        a_mid = np.broadcast_to(a_valid, ax_valid.shape)[mask_mid]
-        out_valid[mask_mid] = x_mid * special.erf(ax_valid[mask_mid]) + (np.exp(-(ax_valid[mask_mid] ** 2)) - 1) / (
-            a_mid * np.sqrt(np.pi)
-        )
-        out[mask_a_valid, :] = out_valid
-
-    return out
-
-
-def _erf_mean_space(
-    edges: NDArray[np.float64],
-    diffusivity: float,
-    t: float | NDArray[np.float64],
-) -> NDArray[np.float64]:
-    """Compute the mean of the error function between edges.
-
-    This function computes the mean of the error function between two bounds. Provides an
-    alternative to computing directly the error function at the cell node. This alternative
-    conserves the mass of the signal.
-
-    Parameters
-    ----------
-    edges : ndarray, shape (n,)
-        Cell edges of size n.
-    diffusivity : float
-        Diffusivity [m²/day]. Must be non-negative.
-    t : float or ndarray, shape (m,)
-        Time values [day]. Must be non-negative.
-        If array, output will have shape (m, n-1).
-
-    Returns
-    -------
-    ndarray
-        Mean of the error function between the bounds.
-        Shape is (n-1,) if t is scalar, (m, n-1) if t is array of shape (m,).
-    """
-    edges = np.asarray(edges)
-    t = np.asarray(t)
-
-    # Compute a = 1/(2*sqrt(diffusivity*t)) from diffusivity and t
-    # Handle edge cases: diffusivity=0 or t=0 means a=inf (step function)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        a = np.where((diffusivity == 0.0) | (t == 0.0), np.inf, 1.0 / (2.0 * np.sqrt(diffusivity * t)))
-
-    a = np.asarray(a)
-    a_is_scalar = a.ndim == 0
-
-    _edges = np.clip(edges, -1e6, 1e6)
-    _erfint = _erf_integral_space(_edges, diffusivity=diffusivity, t=t)
-    dx = _edges[1:] - _edges[:-1]
-
-    if a_is_scalar:
-        a_val = float(a)
-        # Original scalar logic
-        out = np.where(dx != 0.0, (_erfint[1:] - _erfint[:-1]) / dx, np.nan)
-
-        if np.isinf(a_val):
-            # Step function case: erf(inf*x) = sign(x)
-            out[dx == 0.0] = np.sign(edges[:-1][dx == 0.0])
-        else:
-            out[dx == 0.0] = special.erf(a_val * edges[:-1][dx == 0.0])
-
-        # Handle the case where the edges are far from the origin and have a known outcome
-        ue, le = edges[1:], edges[:-1]  # upper and lower cell edges
-        out[np.isinf(le) & ~np.isinf(ue)] = -1.0
-        out[np.isneginf(le) & np.isneginf(ue)] = -1.0
-        out[~np.isinf(le) & np.isinf(ue)] = 1.0
-        out[np.isposinf(le) & np.isposinf(ue)] = 1.0
-        out[np.isneginf(le) & np.isposinf(ue)] = 0.0
-        out[np.isposinf(le) & np.isneginf(ue)] = 0.0
-        return out
-
-    # Vectorized case: a is array of shape (m,), edges is shape (n,)
-    # _erfint has shape (m, n), output shape: (m, n-1)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        out = (_erfint[:, 1:] - _erfint[:, :-1]) / dx[np.newaxis, :]
-
-    # Handle dx == 0 (point evaluation): erf(a * x) at that point
-    mask_dx_zero = dx == 0.0
-    if np.any(mask_dx_zero):
-        # Handle infinite a values (step function case)
-        mask_a_inf = np.isinf(a)
-        x_at_zero = edges[:-1][mask_dx_zero]
-
-        if np.any(mask_a_inf):
-            # For infinite a, erf(inf*x) = sign(x)
-            out[np.ix_(mask_a_inf, mask_dx_zero)] = np.sign(x_at_zero)[np.newaxis, :]
-
-        mask_a_finite = ~mask_a_inf
-        if np.any(mask_a_finite):
-            ax_at_zero = a[mask_a_finite, np.newaxis] * x_at_zero[np.newaxis, :]
-            out[np.ix_(mask_a_finite, mask_dx_zero)] = special.erf(ax_at_zero)
-
-    # Handle the case where the edges are at infinity (known asymptotic values)
-    ue, le = edges[1:], edges[:-1]  # upper and lower cell edges
-    out[:, np.isinf(le) & ~np.isinf(ue)] = -1.0
-    out[:, np.isneginf(le) & np.isneginf(ue)] = -1.0
-    out[:, ~np.isinf(le) & np.isinf(ue)] = 1.0
-    out[:, np.isposinf(le) & np.isposinf(ue)] = 1.0
-    out[:, np.isneginf(le) & np.isposinf(ue)] = 0.0
-    out[:, np.isposinf(le) & np.isneginf(ue)] = 0.0
-    return out
-
-
-def _erf_integral_time(
-    t: NDArray[np.float64],
-    x: float | NDArray[np.float64],
-    diffusivity: float,
-) -> NDArray[np.float64]:
-    r"""Compute the integral of the error function over time.
-
-    This function computes the integral of erf(x/(2*sqrt(D*t))) from 0 to t.
-
-    The analytical solution is derived using substitution u = x/(2*sqrt(D*t)):
-
-    .. math::
-        \int_0^t \text{erf}\left(\frac{x}{2\sqrt{D \tau}}\right) d\tau
-        = t \cdot \text{erf}\left(\frac{x}{2\sqrt{D t}}\right)
-        + \frac{x \sqrt{t}}{\sqrt{\pi D}} \exp\left(-\frac{x^2}{4 D t}\right)
-        - \frac{x^2}{2D} \text{erfc}\left(\frac{x}{2\sqrt{D t}}\right)
-
-    Parameters
-    ----------
-    t : ndarray, shape (n,)
-        Input time values. Must be non-negative.
-    x : float or ndarray, shape (m,)
-        Position value (distance from concentration front).
-        If array, output will have shape (n, m).
-    diffusivity : float
-        Diffusivity [m²/day]. Must be positive.
-
-    Returns
-    -------
-    ndarray
-        Integral of the error function from 0 to t.
-        Shape is (n,) if x is scalar, (n, m) if x is array of shape (m,).
-    """
-    t = np.asarray(t, dtype=float)
-    x = np.asarray(x, dtype=float)
-    x_is_scalar = x.ndim == 0
-    diffusivity = float(diffusivity)
-
-    if diffusivity <= 0.0:
-        if x_is_scalar:
-            return np.zeros_like(t, dtype=float)
-        return np.zeros((len(t), len(x)), dtype=float)
-
-    if x_is_scalar:
-        # Original scalar logic
-        x_val = float(x)
-        out = np.zeros_like(t, dtype=float)
-
-        if x_val == 0.0:
-            return out
-
-        mask_positive = t > 0.0
-        if not np.any(mask_positive):
-            return out
-
-        t_pos = t[mask_positive]
-        sqrt_t = np.sqrt(t_pos)
-        sqrt_d = np.sqrt(diffusivity)
-        sqrt_pi = np.sqrt(np.pi)
-
-        arg = x_val / (2 * sqrt_d * sqrt_t)
-        exp_term = np.exp(-(x_val**2) / (4 * diffusivity * t_pos))
-        erf_term = special.erf(arg)
-        erfc_term = special.erfc(arg)
-
-        term1 = t_pos * erf_term
-        term2 = (x_val * sqrt_t / (sqrt_pi * sqrt_d)) * exp_term
-        term3 = -(x_val**2 / (2 * diffusivity)) * erfc_term
-
-        out[mask_positive] = term1 + term2 + term3
-        out[np.isinf(t)] = np.inf * np.sign(x_val)
-        return out
-
-    # Vectorized case: t is shape (n,), x is shape (m,)
-    # Output shape: (n, m)
-    t_2d = t[:, np.newaxis]  # Shape: (n, 1)
-    x_2d = x[np.newaxis, :]  # Shape: (1, m)
-
-    out = np.zeros((len(t), len(x)), dtype=float)
-
-    # Mask for valid computation: t > 0 and x != 0
-    mask_t_pos = t > 0.0
-    mask_x_nonzero = x != 0.0
-
-    # Compute for all valid (t, x) pairs
-    if np.any(mask_t_pos) and np.any(mask_x_nonzero):
-        t_valid = t_2d[mask_t_pos]  # Shape: (n_valid, 1)
-        x_valid = x_2d[:, mask_x_nonzero]  # Shape: (1, m_valid)
-
-        # Broadcast to full grid
-        t_grid = np.broadcast_to(t_valid, (np.sum(mask_t_pos), np.sum(mask_x_nonzero)))
-        x_grid = np.broadcast_to(x_valid, (np.sum(mask_t_pos), np.sum(mask_x_nonzero)))
-
-        sqrt_t = np.sqrt(t_grid)
-        sqrt_d = np.sqrt(diffusivity)
-        sqrt_pi = np.sqrt(np.pi)
-
-        arg = x_grid / (2 * sqrt_d * sqrt_t)
-        exp_term = np.exp(-(x_grid**2) / (4 * diffusivity * t_grid))
-        erf_term = special.erf(arg)
-        erfc_term = special.erfc(arg)
-
-        term1 = t_grid * erf_term
-        term2 = (x_grid * sqrt_t / (sqrt_pi * sqrt_d)) * exp_term
-        term3 = -(x_grid**2 / (2 * diffusivity)) * erfc_term
-
-        out[np.ix_(mask_t_pos, mask_x_nonzero)] = term1 + term2 + term3
-
-    # Handle infinity: as t -> inf, integral -> inf * sign(x)
-    mask_t_inf = np.isinf(t)
-    if np.any(mask_t_inf):
-        out[mask_t_inf, :] = np.inf * np.sign(x)[np.newaxis, :]
-
-    return out
-
-
-def _erf_mean_time(
-    tedges: NDArray[np.float64],
-    x: float | NDArray[np.float64],
-    diffusivity: float,
-) -> NDArray[np.float64]:
-    """Compute the mean of the error function over time intervals.
-
-    This function computes the mean of erf(x/(2*sqrt(D*t))) between time edges.
-
-    Parameters
-    ----------
-    tedges : ndarray, shape (n,)
-        Time edges of size n.
-    x : float or ndarray, shape (m,)
-        Position value (distance from concentration front).
-        If array, output will have shape (n-1, m).
-    diffusivity : float
-        Diffusivity [m²/day]. Must be positive.
-
-    Returns
-    -------
-    ndarray
-        Mean of the error function between the time bounds.
-        Shape is (n-1,) if x is scalar, (n-1, m) if x is array of shape (m,).
-    """
-    tedges = np.asarray(tedges, dtype=float)
-    x = np.asarray(x, dtype=float)
-    x_is_scalar = x.ndim == 0
-    diffusivity = float(diffusivity)
-
-    # Compute integral at all edges
-    erfint = _erf_integral_time(tedges, x, diffusivity)
-
-    # Compute mean as difference of integrals divided by time interval
-    dt = tedges[1:] - tedges[:-1]
-
-    if x_is_scalar:
-        # Original scalar logic
-        x_val = float(x)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            out = np.where(dt != 0.0, (erfint[1:] - erfint[:-1]) / dt, np.nan)
-
-        # For dt == 0, evaluate erf at that point
-        mask_zero_dt = dt == 0.0
-        if np.any(mask_zero_dt):
-            t_at_zero = tedges[:-1][mask_zero_dt]
-            with np.errstate(divide="ignore", invalid="ignore"):
-                arg = np.where(
-                    t_at_zero > 0,
-                    x_val / (2 * np.sqrt(diffusivity * t_at_zero)),
-                    np.inf * np.sign(x_val) if x_val != 0 else 0.0,
-                )
-            out[mask_zero_dt] = special.erf(arg)
-
-        # Handle infinite time edges
-        ut, lt = tedges[1:], tedges[:-1]
-        out[~np.isinf(lt) & np.isposinf(ut)] = 0.0
-        out[np.isposinf(lt) & np.isposinf(ut)] = 0.0
-        return out
-
-    # Vectorized case: tedges is shape (n,), x is shape (m,)
-    # erfint has shape (n, m), output shape: (n-1, m)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        out = (erfint[1:, :] - erfint[:-1, :]) / dt[:, np.newaxis]
-
-    # Handle dt == 0 (point evaluation): erf(x / (2*sqrt(D*t))) at that point
-    mask_zero_dt = dt == 0.0
-    if np.any(mask_zero_dt):
-        t_at_zero = tedges[:-1][mask_zero_dt, np.newaxis]  # Shape: (n_zero, 1)
-        x_2d = x[np.newaxis, :]  # Shape: (1, m)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            arg = np.where(
-                t_at_zero > 0,
-                x_2d / (2 * np.sqrt(diffusivity * t_at_zero)),
-                np.where(x_2d != 0, np.inf * np.sign(x_2d), 0.0),
-            )
-        out[mask_zero_dt, :] = special.erf(arg)
-
-    # Handle infinite time edges
-    ut, lt = tedges[1:], tedges[:-1]
-    out[~np.isinf(lt) & np.isposinf(ut), :] = 0.0
-    out[np.isposinf(lt) & np.isposinf(ut), :] = 0.0
-
-    return out
-
-
 def _erf_integral_time_paired(
     t: NDArray[np.float64],
     x: NDArray[np.float64],
@@ -634,80 +229,6 @@ def _erf_integral_space_time_pointwise(x, t, diffusivity):
     return np.where(np.isinf(x) | np.isinf(t), np.inf, out)
 
 
-def _erf_integral_space_time(x, t, diffusivity):
-    """
-    Compute the integral of the error function in space and time.
-
-    This function computes the double integral:
-    F(x,t) = ∫₀ᵗ ∫₀ˣ erf(ξ/(2√(Dτ))) dξ dτ
-
-    The double integral is symmetric in x: F(-x, t) = F(x, t).
-
-    Parameters
-    ----------
-    x : ndarray
-        Input values in space.
-    t : ndarray
-        Input values in time.
-    diffusivity : float
-        Diffusivity [m²/day]. Must be positive.
-
-    Returns
-    -------
-    ndarray
-        Integral of the error function in space and time.
-    """
-    # The double integral is symmetric in x: F(-x, t) = F(x, t)
-    x = np.abs(np.asarray(x))
-    xarray, tarray = np.meshgrid(x, t, sparse=True)
-    isnan = np.isnan(xarray) | np.isnan(tarray)
-
-    sqrt_diffusivity = np.sqrt(diffusivity)
-    sqrt_t = np.sqrt(tarray)
-    sqrt_pi = np.sqrt(np.pi)
-    exp_term = np.exp(-(xarray**2) / (4 * diffusivity * tarray))
-    erf_term = special.erf(xarray / (2 * sqrt_diffusivity * sqrt_t))
-
-    term1 = -4 * sqrt_diffusivity * tarray ** (3 / 2) / (3 * sqrt_pi)
-    term2 = (2 * sqrt_diffusivity / sqrt_pi) * (
-        (2 * tarray ** (3 / 2) * exp_term / 3)
-        - (sqrt_t * xarray**2 * exp_term / (3 * diffusivity))
-        - (sqrt_pi * xarray**3 * erf_term / (6 * diffusivity ** (3 / 2)))
-    )
-    term3 = xarray * (
-        tarray * erf_term
-        + (xarray**2 * erf_term / (2 * diffusivity))
-        + (sqrt_t * xarray * exp_term / (sqrt_pi * sqrt_diffusivity))
-    )
-    term4 = -(xarray**3) / (6 * diffusivity)
-    out = term1 + term2 + term3 + term4
-
-    out = np.where(isnan, np.nan, out)
-    # out = np.where(tarray <= 0.0 and x > 0.0, x, out)
-    # out = np.where(tarray <= 0.0 and x < 0.0, -1.0, out)
-
-    # out[maskl] = -x[maskl] - 1 / (a * np.sqrt(np.pi))
-    # out[masku] = x[masku] - 1 / (a * np.sqrt(np.pi))
-
-    # if x == 0.0:
-    #     return 0.0
-    # if np.isposinf(x) or (x > 0.0 and t <= 0.0):
-    #     return 1.0
-    # if np.isneginf(x) or (x < 0.0 and t <= 0.0):
-    #     return -1.0
-
-    out = np.where(tarray <= 0.0, 0.0, out)
-    result = np.where(np.isinf(xarray) | np.isinf(tarray), np.inf, out)
-
-    if np.size(x) == 1 and np.size(t) == 1:
-        return result[0, 0]
-    if np.size(x) == 1 and np.size(t) != 1:
-        return result[:, 0]
-    if np.size(x) != 1 and np.size(t) == 1:
-        return result[0, :]
-    return result
-
-
 def _erf_integral_space_paired(
     x: NDArray[np.float64],
     diffusivity: float,
@@ -860,14 +381,14 @@ def _erf_mean_space_paired(
     return out
 
 
-def _erf_mean_space_time(xedges, tedges, diffusivity, *, paired=False):
+def _erf_mean_space_time(xedges, tedges, diffusivity):
     """
-    Compute the mean of the error function over space-time cells.
+    Compute the mean of the error function over paired space-time cells.
 
-    Computes the average value of erf(x/(2*sqrt(D*t))) over rectangular cells
-    defined by xedges and tedges using the analytical double integral solution.
+    Computes the average value of erf(x/(2*sqrt(D*t))) over cells where
+    cell i spans [xedges[i], xedges[i+1]] x [tedges[i], tedges[i+1]].
 
-    The mean is computed as:
+    The mean is computed using the inclusion-exclusion principle:
         (F(x₁,t₁) - F(x₀,t₁) - F(x₁,t₀) + F(x₀,t₀)) / ((x₁-x₀)(t₁-t₀))
 
     where F(x,t) = ∫₀ᵗ ∫₀ˣ erf(ξ/(2√(D·τ))) dξ dτ
@@ -875,197 +396,109 @@ def _erf_mean_space_time(xedges, tedges, diffusivity, *, paired=False):
     Parameters
     ----------
     xedges : ndarray
-        Cell edges in space of size (n_x + 1,).
+        Cell edges in space of size n.
     tedges : ndarray
-        Cell edges in time of size (n_t + 1,).
+        Cell edges in time of size n (same length as xedges).
     diffusivity : float
-        Diffusivity [m²/day]. Must be positive.
-    paired : bool, optional
-        If True and xedges/tedges have same length n, compute n-1 paired cells
-        where cell i spans [xedges[i], xedges[i+1]] x [tedges[i], tedges[i+1]].
-        Returns 1D array of length n-1. Default False.
+        Diffusivity [m²/day]. Must be non-negative.
 
     Returns
     -------
     ndarray
-        Mean of the error function over each cell. Shape is (n_t, n_x).
-        Returns scalar if both n_t=1 and n_x=1.
-        Returns 1D array if either n_t=1 or n_x=1.
-        If paired=True, returns 1D array of length n-1.
+        Mean of the error function over each cell.
+        Returns 1D array of length n-1, or scalar if n=2.
     """
-    # Ensure arrays
     xedges = np.asarray(xedges)
     tedges = np.asarray(tedges)
 
-    # Handle paired mode: compute diagonal cells where x and t edges move together
-    if paired:
-        if len(xedges) != len(tedges):
-            msg = "paired=True requires xedges and tedges to have same length"
-            raise ValueError(msg)
+    if len(xedges) != len(tedges):
+        msg = "xedges and tedges must have the same length"
+        raise ValueError(msg)
 
-        n_cells = len(xedges) - 1
-        out = np.full(n_cells, np.nan, dtype=float)
+    n_cells = len(xedges) - 1
+    out = np.full(n_cells, np.nan, dtype=float)
 
-        # Cell dimensions
-        dx = xedges[1:] - xedges[:-1]
-        dt = tedges[1:] - tedges[:-1]
+    dx = xedges[1:] - xedges[:-1]
+    dt = tedges[1:] - tedges[:-1]
 
-        # Track which cells still need computation
-        mask_dx_zero = dx == 0.0
-        mask_dt_zero = dt == 0.0
+    mask_dx_zero = dx == 0.0
+    mask_dt_zero = dt == 0.0
 
-        # 1. Handle cells where both dx=0 AND dt=0 (point evaluation of erf)
-        mask_both_zero = mask_dx_zero & mask_dt_zero
-        if np.any(mask_both_zero):
-            x_pts = xedges[:-1][mask_both_zero]
-            t_pts = tedges[:-1][mask_both_zero]
-            with np.errstate(divide="ignore", invalid="ignore"):
-                a_pts = np.where(
-                    (diffusivity == 0.0) | (t_pts == 0.0),
-                    np.inf,
-                    1.0 / (2.0 * np.sqrt(diffusivity * t_pts)),
-                )
-            mask_a_inf = np.isinf(a_pts)
-            result = np.zeros(np.sum(mask_both_zero))
-            if np.any(mask_a_inf):
-                result[mask_a_inf] = np.sign(x_pts[mask_a_inf])
-            if np.any(~mask_a_inf):
-                result[~mask_a_inf] = special.erf(a_pts[~mask_a_inf] * x_pts[~mask_a_inf])
-            out[mask_both_zero] = result
+    # Handle cells where both dx=0 AND dt=0 (point evaluation of erf)
+    mask_both_zero = mask_dx_zero & mask_dt_zero
+    if np.any(mask_both_zero):
+        x_pts = xedges[:-1][mask_both_zero]
+        t_pts = tedges[:-1][mask_both_zero]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            a_pts = np.where(
+                (diffusivity == 0.0) | (t_pts == 0.0),
+                np.inf,
+                1.0 / (2.0 * np.sqrt(diffusivity * t_pts)),
+            )
+        mask_a_inf = np.isinf(a_pts)
+        result = np.zeros(np.sum(mask_both_zero))
+        if np.any(mask_a_inf):
+            result[mask_a_inf] = np.sign(x_pts[mask_a_inf])
+        if np.any(~mask_a_inf):
+            result[~mask_a_inf] = special.erf(a_pts[~mask_a_inf] * x_pts[~mask_a_inf])
+        out[mask_both_zero] = result
 
-        # 2. Handle remaining dt=0 cells (mean over space at fixed time)
-        mask_dt_zero_only = mask_dt_zero & ~mask_dx_zero
-        if np.any(mask_dt_zero_only):
-            out[mask_dt_zero_only] = _erf_mean_space_paired(xedges, diffusivity=diffusivity, t=tedges)[
-                mask_dt_zero_only
-            ]
+    # Handle remaining dt=0 cells (mean over space at fixed time)
+    mask_dt_zero_only = mask_dt_zero & ~mask_dx_zero
+    if np.any(mask_dt_zero_only):
+        out[mask_dt_zero_only] = _erf_mean_space_paired(xedges, diffusivity=diffusivity, t=tedges)[mask_dt_zero_only]
 
-        # 3. Handle remaining dx=0 cells (mean over time at fixed x)
-        mask_dx_zero_only = mask_dx_zero & ~mask_dt_zero
-        if np.any(mask_dx_zero_only):
-            out[mask_dx_zero_only] = _erf_mean_time_paired(tedges, x=xedges, diffusivity=diffusivity)[mask_dx_zero_only]
+    # Handle remaining dx=0 cells (mean over time at fixed x)
+    mask_dx_zero_only = mask_dx_zero & ~mask_dt_zero
+    if np.any(mask_dx_zero_only):
+        out[mask_dx_zero_only] = _erf_mean_time_paired(tedges, x=xedges, diffusivity=diffusivity)[mask_dx_zero_only]
 
-        # 4. Handle remaining cells with full double integral
-        mask_remainder = ~mask_dx_zero & ~mask_dt_zero
-        if np.any(mask_remainder):
-            # Handle zero diffusivity case: erf(x/(2*sqrt(D*t))) -> sign(x) as D->0
-            if diffusivity == 0.0:
-                x_mid = (xedges[:-1] + xedges[1:]) / 2
-                out[mask_remainder] = np.sign(x_mid[mask_remainder])
-            else:
-                # Compute double integral only for remaining cells
-                # Get indices of remaining cells
-                idx_remainder = np.where(mask_remainder)[0]
+    # Handle remaining cells with full double integral
+    mask_remainder = ~mask_dx_zero & ~mask_dt_zero
+    if np.any(mask_remainder):
+        if diffusivity == 0.0:
+            x_mid = (xedges[:-1] + xedges[1:]) / 2
+            out[mask_remainder] = np.sign(x_mid[mask_remainder])
+        else:
+            idx_remainder = np.where(mask_remainder)[0]
+            x_corners = np.concatenate([
+                xedges[idx_remainder],
+                xedges[idx_remainder + 1],
+                xedges[idx_remainder],
+                xedges[idx_remainder + 1],
+            ])
+            t_corners = np.concatenate([
+                tedges[idx_remainder],
+                tedges[idx_remainder + 1],
+                tedges[idx_remainder + 1],
+                tedges[idx_remainder],
+            ])
+            f = _erf_integral_space_time_pointwise(x_corners, t_corners, diffusivity)
+            n_rem = len(idx_remainder)
+            f_00 = f[:n_rem]
+            f_11 = f[n_rem : 2 * n_rem]
+            f_01 = f[2 * n_rem : 3 * n_rem]
+            f_10 = f[3 * n_rem :]
 
-                # Build arrays for all 4 corners of remaining cells
-                x_corners = np.concatenate([
-                    xedges[idx_remainder],
-                    xedges[idx_remainder + 1],
-                    xedges[idx_remainder],
-                    xedges[idx_remainder + 1],
-                ])
-                t_corners = np.concatenate([
-                    tedges[idx_remainder],
-                    tedges[idx_remainder + 1],
-                    tedges[idx_remainder + 1],
-                    tedges[idx_remainder],
-                ])
-                f = _erf_integral_space_time_pointwise(x_corners, t_corners, diffusivity)
-                n_rem = len(idx_remainder)
-                f_00 = f[:n_rem]
-                f_11 = f[n_rem : 2 * n_rem]
-                f_01 = f[2 * n_rem : 3 * n_rem]
-                f_10 = f[3 * n_rem :]
+            double_integrals = f_11 - f_10 - f_01 + f_00
+            cell_areas = dx[mask_remainder] * dt[mask_remainder]
+            out[mask_remainder] = double_integrals / cell_areas
 
-                # Inclusion-exclusion: integral over each cell
-                double_integrals = f_11 - f_10 - f_01 + f_00
-                cell_areas = dx[mask_remainder] * dt[mask_remainder]
-                out[mask_remainder] = double_integrals / cell_areas
+    # Handle infinite x edges
+    le, ue = xedges[:-1], xedges[1:]
+    out[np.isinf(le) & ~np.isinf(ue)] = -1.0
+    out[np.isneginf(le) & np.isneginf(ue)] = -1.0
+    out[~np.isinf(le) & np.isinf(ue)] = 1.0
+    out[np.isposinf(le) & np.isposinf(ue)] = 1.0
+    out[np.isneginf(le) & np.isposinf(ue)] = 0.0
+    out[np.isposinf(le) & np.isneginf(ue)] = 0.0
 
-        # Handle infinite x edges (known asymptotic values)
-        le, ue = xedges[:-1], xedges[1:]
-        out[np.isinf(le) & ~np.isinf(ue)] = -1.0
-        out[np.isneginf(le) & np.isneginf(ue)] = -1.0
-        out[~np.isinf(le) & np.isinf(ue)] = 1.0
-        out[np.isposinf(le) & np.isposinf(ue)] = 1.0
-        out[np.isneginf(le) & np.isposinf(ue)] = 0.0
-        out[np.isposinf(le) & np.isneginf(ue)] = 0.0
+    # Handle NaN in edges
+    out[np.isnan(xedges[:-1]) | np.isnan(xedges[1:])] = np.nan
+    out[np.isnan(tedges[:-1]) | np.isnan(tedges[1:])] = np.nan
 
-        # Handle NaN in edges
-        out[np.isnan(xedges[:-1]) | np.isnan(xedges[1:])] = np.nan
-        out[np.isnan(tedges[:-1]) | np.isnan(tedges[1:])] = np.nan
-
-        # Return 1D array or scalar
-        if len(out) == 1:
-            return out[0]
-        return out
-
-    # Compute the double integral at all edge combinations
-    # _erf_integral_space_time returns shape (n_t, n_x) for inputs of size n_t and n_x
-    _erfint = _erf_integral_space_time(xedges, tedges, diffusivity)
-
-    # Use inclusion-exclusion to get integral over each cell
-    # I[i,j] = F(x_{j+1}, t_{i+1}) - F(x_j, t_{i+1}) - F(x_{j+1}, t_i) + F(x_j, t_i)
-    # _erfint has shape (n_tedges, n_xedges), we want (n_t_cells, n_x_cells)
-    double_integrals = _erfint[1:, 1:] - _erfint[:-1, 1:] - _erfint[1:, :-1] + _erfint[:-1, :-1]
-
-    # Calculate cell areas
-    dt = np.diff(tedges)[:, np.newaxis]
-    dx = np.diff(xedges)[np.newaxis, :]
-    cell_areas = dx * dt
-
-    # Compute averages
-    with np.errstate(divide="ignore", invalid="ignore"):
-        out = double_integrals / cell_areas
-
-    # Handle zero-area cells (dt=0 or dx=0) - these are instantaneous or point evaluations
-    # For dt=0: need to evaluate mean over space at fixed time using erf_mean_space
-    dt_flat = np.diff(tedges)
-    mask_dt_zero = dt_flat == 0.0
-    if np.any(mask_dt_zero):
-        idx_dt_zero = np.where(mask_dt_zero)[0]
-        t_fixed_values = tedges[idx_dt_zero]
-        mask_t_positive = t_fixed_values > 0
-
-        if np.any(mask_t_positive):
-            # Use vectorized _erf_mean_space: returns shape (len(t_pos), n_x_cells)
-            t_pos = t_fixed_values[mask_t_positive]
-            erf_means_space = _erf_mean_space(xedges, diffusivity=diffusivity, t=t_pos)
-            out[idx_dt_zero[mask_t_positive], :] = erf_means_space
-
-        if np.any(~mask_t_positive):
-            # At t=0, erf(x/(2*sqrt(D*0))) = erf(+-inf) = sign(x)
-            cell_centers = (xedges[:-1] + xedges[1:]) / 2
-            out[idx_dt_zero[~mask_t_positive], :] = np.sign(cell_centers)
-
-    # For dx=0: need to evaluate mean over time at fixed space using _erf_mean_time
-    dx_flat = np.diff(xedges)
-    mask_dx_zero = dx_flat == 0.0
-    if np.any(mask_dx_zero):
-        idx_dx_zero = np.where(mask_dx_zero)[0]
-        x_fixed_values = xedges[idx_dx_zero]
-        # Use vectorized _erf_mean_time: returns shape (n_t_cells, len(x_fixed_values))
-        erf_means_time = _erf_mean_time(tedges, x=x_fixed_values, diffusivity=diffusivity)
-        out[:, idx_dx_zero] = erf_means_time
-
-    # Handle the case where x edges are at infinity (known asymptotic values)
-    ue, le = xedges[1:], xedges[:-1]  # upper and lower cell edges in x
-    # Broadcasting: ue and le have shape (n_x_cells,), out has shape (n_t_cells, n_x_cells)
-    out[:, np.isinf(le) & ~np.isinf(ue)] = -1.0
-    out[:, np.isneginf(le) & np.isneginf(ue)] = -1.0
-    out[:, ~np.isinf(le) & np.isinf(ue)] = 1.0
-    out[:, np.isposinf(le) & np.isposinf(ue)] = 1.0
-    out[:, np.isneginf(le) & np.isposinf(ue)] = 0.0
-    out[:, np.isposinf(le) & np.isneginf(ue)] = 0.0
-
-    # Return appropriate shape
-    n_t_cells, n_x_cells = out.shape
-    if n_x_cells == 1 and n_t_cells == 1:
-        return out[0, 0]
-    if n_x_cells == 1 and n_t_cells != 1:
-        return out[:, 0]
-    if n_x_cells != 1 and n_t_cells == 1:
-        return out[0, :]
+    if len(out) == 1:
+        return out[0]
     return out
 
 
@@ -1332,8 +765,7 @@ def infiltration_to_extraction(
             xedges_j = step_widths_cin[:, j]  # shape (n_cout_edges,)
             tedges_j = time_active[:, j]  # shape (n_cout_edges,)
 
-            # With paired=True, returns (n_cout_bins,) - one value per output bin
-            response[:, j] = _erf_mean_space_time(xedges_j, tedges_j, diffusivity, paired=True)
+            response[:, j] = _erf_mean_space_time(xedges_j, tedges_j, diffusivity)
 
         # Convert erf response [-1, 1] to breakthrough fraction [0, 1]
         frac = 0.5 * (1 + response)  # shape (n_cout_bins, n_cin_edges)
