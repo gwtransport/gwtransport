@@ -360,17 +360,25 @@ class TestInfiltrationToExtractionDiffusionPhysics:
         assert last_r2 > last_r1
 
 
+def _a_to_t(a: float, diffusivity: float = 1.0) -> float:
+    """Convert a value to t for testing. a = 1/(2*sqrt(D*t)), so t = 1/(4*a^2*D)."""
+    if a == 0.0:
+        return np.inf
+    return 1.0 / (4.0 * a**2 * diffusivity)
+
+
 class TestErfIntegralSpaceAnalytical:
     """Tests for _erf_integral_space against known analytical solutions.
 
-    The function computes the integral of erf(a*x) from 0 to x:
-    ∫₀ˣ erf(a*ξ) dξ = x*erf(a*x) + (exp(-(a*x)²) - 1) / (a*√π)
+    The function computes the integral of erf(x/(2*sqrt(D*t))) from 0 to x.
+    For testing, we use diffusivity=1.0 and compute t from the desired a value.
     """
 
     def test_at_zero(self):
         """Integral from 0 to 0 should be 0."""
         x = np.array([0.0])
-        result = _erf_integral_space(x, a=1.0)
+        # a=1.0 corresponds to t=0.25 with D=1.0
+        result = _erf_integral_space(x, diffusivity=1.0, t=0.25)
         np.testing.assert_allclose(result, 0.0, atol=1e-14)
 
     def test_symmetry(self):
@@ -381,8 +389,9 @@ class TestErfIntegralSpaceAnalytical:
         So F(-x) = F(x), the function is symmetric (even) in x.
         """
         x = np.array([1.0, 2.0, 3.0])
-        result_pos = _erf_integral_space(x, a=1.0)
-        result_neg = _erf_integral_space(-x, a=1.0)
+        # a=1.0 corresponds to t=0.25 with D=1.0
+        result_pos = _erf_integral_space(x, diffusivity=1.0, t=0.25)
+        result_neg = _erf_integral_space(-x, diffusivity=1.0, t=0.25)
         # Actually F(-x) = -F(x) when we consider the integration direction
         # Let's verify against numerical integration
         for i, x_val in enumerate(x):
@@ -394,8 +403,9 @@ class TestErfIntegralSpaceAnalytical:
     def test_derivative_is_erf(self):
         """The derivative of the integral should be erf(a*x)."""
         a = 1.0
+        t = _a_to_t(a)
         x = np.linspace(0.1, 3.0, 50)
-        result = _erf_integral_space(x, a=a)
+        result = _erf_integral_space(x, diffusivity=1.0, t=t)
 
         # Numerical derivative
         dx = x[1] - x[0]
@@ -410,60 +420,67 @@ class TestErfIntegralSpaceAnalytical:
     def test_against_numerical_integration(self):
         """Compare against scipy.integrate.quad for various x values."""
         a = 1.5
+        t = _a_to_t(a)
         x_values = np.array([0.5, 1.0, 2.0, 3.0])
 
         for x_val in x_values:
             expected, _ = integrate.quad(lambda xi: special.erf(a * xi), 0, x_val)
-            result = _erf_integral_space(np.array([x_val]), a=a)
+            result = _erf_integral_space(np.array([x_val]), diffusivity=1.0, t=t)
             np.testing.assert_allclose(result[0], expected, rtol=1e-10)
 
-    def test_a_zero_returns_zero(self):
-        """When a=0, erf(0)=0, so integral should be 0."""
+    def test_large_t_approaches_zero(self):
+        """When t→∞ (a→0), erf(0)=0, so integral should approach 0."""
         x = np.array([1.0, 2.0, 5.0])
-        result = _erf_integral_space(x, a=0.0)
-        np.testing.assert_allclose(result, 0.0, atol=1e-14)
+        # Very large t means a→0
+        result = _erf_integral_space(x, diffusivity=1.0, t=1e10)
+        np.testing.assert_allclose(result, 0.0, atol=1e-4)
 
     def test_large_x_asymptotic(self):
         """For large x, erf(a*x) → 1, so integral ≈ x - 1/(a*√π)."""
         a = 1.0
+        t = _a_to_t(a)
         x = np.array([10.0, 20.0, 50.0])
-        result = _erf_integral_space(x, a=a)
+        result = _erf_integral_space(x, diffusivity=1.0, t=t)
         # Asymptotic: x - 1/(a*√π)
         expected = x - 1.0 / (a * np.sqrt(np.pi))
         np.testing.assert_allclose(result, expected, rtol=1e-6)
 
-    def test_vectorized_a(self):
-        """Test with array of a values."""
+    def test_vectorized_t(self):
+        """Test with array of t values."""
         x = np.array([0.5, 1.0, 1.5, 2.0])
-        a = np.array([0.5, 1.0, 2.0])
-        result = _erf_integral_space(x, a=a)
+        a_values = np.array([0.5, 1.0, 2.0])
+        t_values = np.array([_a_to_t(a) for a in a_values])
+        result = _erf_integral_space(x, diffusivity=1.0, t=t_values)
 
-        # Shape should be (len(a), len(x))
+        # Shape should be (len(t), len(x))
         assert result.shape == (3, 4)
 
         # Verify each row
-        for i, a_val in enumerate(a):
-            expected = _erf_integral_space(x, a=a_val)
+        for i, t_val in enumerate(t_values):
+            expected = _erf_integral_space(x, diffusivity=1.0, t=t_val)
             np.testing.assert_allclose(result[i, :], expected, rtol=1e-10)
 
 
 class TestErfMeanSpaceAnalytical:
     """Tests for _erf_mean_space against known analytical solutions.
 
-    The function computes the mean of erf(a*x) between edges.
+    The function computes the mean of erf(x/(2*sqrt(D*t))) between edges.
+    For testing, we use diffusivity=1.0 and compute t from the desired a value.
     """
 
     def test_symmetric_edges_around_zero(self):
         """Mean of erf over symmetric interval around 0 should be 0."""
         edges = np.array([-1.0, 1.0])
-        result = _erf_mean_space(edges, a=1.0)
+        # a=1.0 corresponds to t=0.25 with D=1.0
+        result = _erf_mean_space(edges, diffusivity=1.0, t=0.25)
         np.testing.assert_allclose(result, 0.0, atol=1e-10)
 
     def test_positive_edges(self):
         """Mean over [0, x] should equal integral/x."""
         edges = np.array([0.0, 2.0])
         a = 1.0
-        result = _erf_mean_space(edges, a=a)
+        t = _a_to_t(a)
+        result = _erf_mean_space(edges, diffusivity=1.0, t=t)
 
         # Mean = (∫₀² erf(a*x) dx) / 2
         integral, _ = integrate.quad(lambda x: special.erf(a * x), 0, 2)
@@ -473,6 +490,7 @@ class TestErfMeanSpaceAnalytical:
     def test_against_numerical_integration(self):
         """Compare against scipy.integrate.quad for various edge pairs."""
         a = 0.8
+        t = _a_to_t(a)
         edge_pairs = [
             np.array([0.0, 1.0]),
             np.array([1.0, 3.0]),
@@ -484,33 +502,36 @@ class TestErfMeanSpaceAnalytical:
             integral, _ = integrate.quad(lambda x: special.erf(a * x), edges[0], edges[1])
             dx = edges[1] - edges[0]
             expected = integral / dx
-            result = _erf_mean_space(edges, a=a)
+            result = _erf_mean_space(edges, diffusivity=1.0, t=t)
             np.testing.assert_allclose(result[0], expected, rtol=1e-10)
 
     def test_large_positive_edges(self):
         """For large positive edges, mean erf should approach 1."""
         edges = np.array([100.0, 200.0])
-        result = _erf_mean_space(edges, a=1.0)
+        # a=1.0 corresponds to t=0.25 with D=1.0
+        result = _erf_mean_space(edges, diffusivity=1.0, t=0.25)
         np.testing.assert_allclose(result, 1.0, rtol=1e-6)
 
     def test_large_negative_edges(self):
         """For large negative edges, mean erf should approach -1."""
         edges = np.array([-200.0, -100.0])
-        result = _erf_mean_space(edges, a=1.0)
+        # a=1.0 corresponds to t=0.25 with D=1.0
+        result = _erf_mean_space(edges, diffusivity=1.0, t=0.25)
         np.testing.assert_allclose(result, -1.0, rtol=1e-6)
 
-    def test_vectorized_a(self):
-        """Test with array of a values."""
+    def test_vectorized_t(self):
+        """Test with array of t values."""
         edges = np.array([0.0, 1.0, 2.0])
-        a = np.array([0.5, 1.0, 2.0])
-        result = _erf_mean_space(edges, a=a)
+        a_values = np.array([0.5, 1.0, 2.0])
+        t_values = np.array([_a_to_t(a) for a in a_values])
+        result = _erf_mean_space(edges, diffusivity=1.0, t=t_values)
 
-        # Shape should be (len(a), len(edges)-1)
+        # Shape should be (len(t), len(edges)-1)
         assert result.shape == (3, 2)
 
         # Verify each row
-        for i, a_val in enumerate(a):
-            expected = _erf_mean_space(edges, a=a_val)
+        for i, t_val in enumerate(t_values):
+            expected = _erf_mean_space(edges, diffusivity=1.0, t=t_val)
             np.testing.assert_allclose(result[i, :], expected, rtol=1e-10)
 
 
