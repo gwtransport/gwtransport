@@ -31,7 +31,7 @@ from gwtransport.residence_time import residence_time
 EPSILON_COEFF_SUM = 1e-10
 
 
-def _erf_integral_time_paired(
+def _erf_integral_time(
     t: NDArray[np.float64],
     x: NDArray[np.float64],
     diffusivity: float,
@@ -104,7 +104,7 @@ def _erf_integral_time_paired(
     return out
 
 
-def _erf_mean_time_paired(
+def _erf_mean_time(
     tedges: NDArray[np.float64],
     x: NDArray[np.float64],
     diffusivity: float,
@@ -136,7 +136,7 @@ def _erf_mean_time_paired(
     x_edges = np.broadcast_to(x, tedges.shape)
 
     # Compute integral at all edge points
-    erfint = _erf_integral_time_paired(tedges, x=x_edges, diffusivity=diffusivity)
+    erfint = _erf_integral_time(tedges, x=x_edges, diffusivity=diffusivity)
 
     # Compute mean using shifted views
     dt = tedges[1:] - tedges[:-1]
@@ -166,11 +166,11 @@ def _erf_mean_time_paired(
     return out
 
 
-def _erf_integral_space_time_pointwise(x, t, diffusivity):
+def _erf_integral_space_time(x, t, diffusivity):
     """
     Compute the integral of the error function in space and time at (x, t) points.
 
-    Unlike erf_integral_space_time which uses meshgrid, this function evaluates
+    This function evaluates
     F(x[i], t[i]) for each i, where x and t have the same shape. This is useful
     for batched computations where we need F at arbitrary (x, t) pairs.
 
@@ -229,7 +229,7 @@ def _erf_integral_space_time_pointwise(x, t, diffusivity):
     return np.where(np.isinf(x) | np.isinf(t), np.inf, out)
 
 
-def _erf_integral_space_paired(
+def _erf_integral_space(
     x: NDArray[np.float64],
     diffusivity: float,
     t: NDArray[np.float64],
@@ -303,7 +303,7 @@ def _erf_integral_space_paired(
     return out
 
 
-def _erf_mean_space_paired(
+def _erf_mean_space(
     edges: NDArray[np.float64],
     diffusivity: float,
     t: NDArray[np.float64],
@@ -338,7 +338,7 @@ def _erf_mean_space_paired(
     t_edges = np.broadcast_to(t, edges.shape)
 
     # Compute integral at all edge points
-    erfint = _erf_integral_space_paired(_edges, diffusivity=diffusivity, t=t_edges)
+    erfint = _erf_integral_space(_edges, diffusivity=diffusivity, t=t_edges)
 
     # Compute mean using shifted views
     dx = _edges[1:] - _edges[:-1]
@@ -446,12 +446,12 @@ def _erf_mean_space_time(xedges, tedges, diffusivity):
     # Handle remaining dt=0 cells (mean over space at fixed time)
     mask_dt_zero_only = mask_dt_zero & ~mask_dx_zero
     if np.any(mask_dt_zero_only):
-        out[mask_dt_zero_only] = _erf_mean_space_paired(xedges, diffusivity=diffusivity, t=tedges)[mask_dt_zero_only]
+        out[mask_dt_zero_only] = _erf_mean_space(xedges, diffusivity=diffusivity, t=tedges)[mask_dt_zero_only]
 
     # Handle remaining dx=0 cells (mean over time at fixed x)
     mask_dx_zero_only = mask_dx_zero & ~mask_dt_zero
     if np.any(mask_dx_zero_only):
-        out[mask_dx_zero_only] = _erf_mean_time_paired(tedges, x=xedges, diffusivity=diffusivity)[mask_dx_zero_only]
+        out[mask_dx_zero_only] = _erf_mean_time(tedges, x=xedges, diffusivity=diffusivity)[mask_dx_zero_only]
 
     # Handle remaining cells with full double integral
     mask_remainder = ~mask_dx_zero & ~mask_dt_zero
@@ -473,7 +473,7 @@ def _erf_mean_space_time(xedges, tedges, diffusivity):
                 tedges[idx_remainder + 1],
                 tedges[idx_remainder],
             ])
-            f = _erf_integral_space_time_pointwise(x_corners, t_corners, diffusivity)
+            f = _erf_integral_space_time(x_corners, t_corners, diffusivity)
             n_rem = len(idx_remainder)
             f_00 = f[:n_rem]
             f_11 = f[n_rem : 2 * n_rem]
