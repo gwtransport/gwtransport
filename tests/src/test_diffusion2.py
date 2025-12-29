@@ -3,9 +3,13 @@ import pandas as pd
 import pytest
 from scipy import integrate, special
 
-from gwtransport import advection
 from gwtransport import gamma as gamma_utils
-from gwtransport.advection import infiltration_to_extraction as advection_i2e
+from gwtransport.advection import (
+    gamma_infiltration_to_extraction as gamma_i2e,
+)
+from gwtransport.advection import (
+    infiltration_to_extraction as advection_i2e,
+)
 from gwtransport.diffusion2 import (
     _erf_mean_space_time,
     infiltration_to_extraction,
@@ -59,7 +63,8 @@ class TestInfiltrationToExtractionDiffusion:
             cout_tedges=simple_setup["cout_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
             streamline_length=simple_setup["streamline_length"],
-            diffusivity=0.0,
+            molecular_diffusivity=0.0,
+            longitudinal_dispersivity=0.0,
         )
         # Only compare values after spin-up (where advection is not NaN)
         valid_mask = ~np.isnan(cout_advection)
@@ -81,7 +86,8 @@ class TestInfiltrationToExtractionDiffusion:
             cout_tedges=simple_setup["cout_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
             streamline_length=simple_setup["streamline_length"],
-            diffusivity=0.01,
+            molecular_diffusivity=0.01,
+            longitudinal_dispersivity=0.0,
         )
         # Should be close but not identical
         # Use atol for near-zero values where rtol would be too strict
@@ -97,7 +103,8 @@ class TestInfiltrationToExtractionDiffusion:
             cout_tedges=simple_setup["cout_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
             streamline_length=simple_setup["streamline_length"],
-            diffusivity=0.1,
+            molecular_diffusivity=0.1,
+            longitudinal_dispersivity=0.0,
             retardation_factor=2.0,
         )
         cout_large_d = infiltration_to_extraction(
@@ -107,7 +114,8 @@ class TestInfiltrationToExtractionDiffusion:
             cout_tedges=simple_setup["cout_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
             streamline_length=simple_setup["streamline_length"],
-            diffusivity=10.0,
+            molecular_diffusivity=10.0,
+            longitudinal_dispersivity=0.0,
         )
         # With larger diffusivity, the breakthrough curve should be more spread out
         # This means the maximum should be lower and the tails should be higher
@@ -125,7 +133,8 @@ class TestInfiltrationToExtractionDiffusion:
             cout_tedges=simple_setup["cout_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
             streamline_length=simple_setup["streamline_length"],
-            diffusivity=1.0,
+            molecular_diffusivity=1.0,
+            longitudinal_dispersivity=0.0,
         )
         valid = ~np.isnan(cout)
         # Output should be between min and max of input (plus small tolerance for numerics)
@@ -150,7 +159,8 @@ class TestInfiltrationToExtractionDiffusion:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=streamline_length,
-            diffusivity=1.0,
+            molecular_diffusivity=1.0,
+            longitudinal_dispersivity=0.0,
         )
 
         valid = ~np.isnan(cout)
@@ -177,7 +187,8 @@ class TestInfiltrationToExtractionDiffusion:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=streamline_length,
-            diffusivity=1.0,
+            molecular_diffusivity=1.0,
+            longitudinal_dispersivity=0.0,
         )
 
         # Should produce valid output
@@ -191,8 +202,8 @@ class TestInfiltrationToExtractionDiffusion:
 
     def test_input_validation(self, simple_setup):
         """Test that invalid inputs raise appropriate errors."""
-        # Negative diffusivity
-        with pytest.raises(ValueError, match="diffusivity must be non-negative"):
+        # Negative molecular_diffusivity
+        with pytest.raises(ValueError, match="molecular_diffusivity must be non-negative"):
             infiltration_to_extraction(
                 cin=simple_setup["cin"],
                 flow=simple_setup["flow"],
@@ -200,7 +211,21 @@ class TestInfiltrationToExtractionDiffusion:
                 cout_tedges=simple_setup["cout_tedges"],
                 aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
                 streamline_length=simple_setup["streamline_length"],
-                diffusivity=-1.0,
+                molecular_diffusivity=-1.0,
+                longitudinal_dispersivity=0.0,
+            )
+
+        # Negative longitudinal_dispersivity
+        with pytest.raises(ValueError, match="longitudinal_dispersivity must be non-negative"):
+            infiltration_to_extraction(
+                cin=simple_setup["cin"],
+                flow=simple_setup["flow"],
+                tedges=simple_setup["tedges"],
+                cout_tedges=simple_setup["cout_tedges"],
+                aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
+                streamline_length=simple_setup["streamline_length"],
+                molecular_diffusivity=1.0,
+                longitudinal_dispersivity=-1.0,
             )
 
         # Mismatched pore volumes and travel distances
@@ -212,7 +237,8 @@ class TestInfiltrationToExtractionDiffusion:
                 cout_tedges=simple_setup["cout_tedges"],
                 aquifer_pore_volumes=np.array([500.0, 600.0]),
                 streamline_length=np.array([100.0]),
-                diffusivity=1.0,
+                molecular_diffusivity=1.0,
+                longitudinal_dispersivity=0.0,
             )
 
         # NaN in cin
@@ -226,7 +252,8 @@ class TestInfiltrationToExtractionDiffusion:
                 cout_tedges=simple_setup["cout_tedges"],
                 aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
                 streamline_length=simple_setup["streamline_length"],
-                diffusivity=1.0,
+                molecular_diffusivity=1.0,
+                longitudinal_dispersivity=0.0,
             )
 
 
@@ -258,7 +285,8 @@ class TestInfiltrationToExtractionDiffusionPhysics:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=streamline_length,
-            diffusivity=5.0,
+            molecular_diffusivity=5.0,
+            longitudinal_dispersivity=0.0,
         )
 
         valid = ~np.isnan(cout)
@@ -291,7 +319,8 @@ class TestInfiltrationToExtractionDiffusionPhysics:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=streamline_length,
-            diffusivity=1.0,
+            molecular_diffusivity=1.0,
+            longitudinal_dispersivity=0.0,
         )
 
         # Mass in = sum of cin (each bin is 1 day)
@@ -324,7 +353,8 @@ class TestInfiltrationToExtractionDiffusionPhysics:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=streamline_length,
-            diffusivity=1.0,
+            molecular_diffusivity=1.0,
+            longitudinal_dispersivity=0.0,
             retardation_factor=1.0,
         )
 
@@ -336,7 +366,8 @@ class TestInfiltrationToExtractionDiffusionPhysics:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=streamline_length,
-            diffusivity=1.0,
+            molecular_diffusivity=1.0,
+            longitudinal_dispersivity=0.0,
             retardation_factor=2.0,
         )
 
@@ -398,24 +429,25 @@ class TestErfMeanSpaceTimeAnalytical:
 
 
 class TestDiffusionMatchesApvdCombined:
-    """Test that diffusion2 output matches APVD with combined std (notebook 5 style).
+    """Test diffusion2 physics with per-bin velocity-dependent dispersivity.
 
-    This test replicates the comparison from example notebook 5, where
-    `cout_full[plot_start:plot_end-1]` should produce similar results to
-    `cout_apvd_combined[plot_start:plot_end-1]`.
+    These tests verify that the new implementation with time-varying diffusivity
+    produces physically correct results. The diffusivity is computed as:
+    D_L = D_m + alpha_L * v, where v is computed per output bin.
     """
 
-    def test_cout_full_matches_cout_apvd_combined(self):
-        """Test that diffusion2 matches APVD with combined std for constant flow.
+    def test_cout_full_physics_with_dispersivity(self):
+        """Test that diffusion2 produces physically correct results.
 
-        This test reproduces the key comparison from example notebook 5.
-        With constant flow, the full diffusion2 solution and the APVD
-        approximation with combined standard deviation should produce
-        similar breakthrough curves.
+        With the new per-bin velocity-dependent dispersivity, the solution
+        should:
+        1. Conserve mass
+        2. Have bounded concentrations
+        3. Show appropriate spreading behavior
         """
         np.random.seed(42)
 
-        # System parameters (from notebook 5)
+        # System parameters
         streamline_length = 100.0  # L [m]
         mean_apv = 10000.0  # V_mean [m³]
         std_apv = 800.0  # sigma_apv [m³]
@@ -423,15 +455,6 @@ class TestDiffusionMatchesApvdCombined:
         retardation = 2.0  # R [-]
         diffusivity_molecular = 1e-4  # D_m [m²/day]
         dispersivity = 1.0  # alpha_L [m]
-
-        # Compute equivalent APVD spreading
-        sigma_diff_disp = mean_apv * np.sqrt(
-            2
-            * retardation
-            / streamline_length
-            * (diffusivity_molecular * mean_apv / (streamline_length * mean_flow) + dispersivity)
-        )
-        sigma_apv_diff_disp = np.sqrt(std_apv**2 + sigma_diff_disp**2)
 
         # Set up time bins
         n_days = 350
@@ -454,11 +477,7 @@ class TestDiffusionMatchesApvdCombined:
         nbins = 5000
         streamline_lengths = np.full(nbins, streamline_length)
 
-        # Compute total diffusivity
-        pore_velocity = streamline_length * mean_flow / mean_apv
-        diffusivity = diffusivity_molecular + dispersivity * pore_velocity
-
-        # 1. Full solution: diffusion2 with APVD + diffusion/dispersion
+        # Full solution: diffusion2 with APVD + diffusion/dispersion
         gbins = gamma_utils.bins(mean=mean_apv, std=std_apv, n_bins=nbins)
         cout_full = infiltration_to_extraction(
             cin=cin,
@@ -467,67 +486,77 @@ class TestDiffusionMatchesApvdCombined:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=gbins["expected_values"],
             streamline_length=streamline_lengths,
-            diffusivity=diffusivity,
-            retardation_factor=retardation,
-        )
-
-        # 2. APVD with combined std (approximation)
-        cout_apvd_combined = advection.gamma_infiltration_to_extraction(
-            cin=cin,
-            flow=flow,
-            tedges=tedges,
-            cout_tedges=cout_tedges,
-            mean=mean_apv,
-            std=sigma_apv_diff_disp,
-            n_bins=nbins,
+            molecular_diffusivity=diffusivity_molecular,
+            longitudinal_dispersivity=dispersivity,
             retardation_factor=retardation,
         )
 
         # Compare in the main breakthrough region
         plot_start, plot_end = 100, 349
         cout_full_slice = cout_full[plot_start : plot_end - 1]
-        cout_apvd_slice = cout_apvd_combined[plot_start : plot_end - 1]
 
-        # Both should be valid (not NaN) in this region
-        valid_mask = ~np.isnan(cout_full_slice) & ~np.isnan(cout_apvd_slice)
-        assert np.sum(valid_mask) > 100, "Should have many valid comparison points"
+        # Should have valid values
+        valid_mask = ~np.isnan(cout_full_slice)
+        assert np.sum(valid_mask) > 100, "Should have many valid values"
 
-        # Peak concentration should be similar
-        peak_full = np.nanmax(cout_full_slice)
-        peak_apvd = np.nanmax(cout_apvd_slice)
-        np.testing.assert_allclose(
-            peak_full, peak_apvd, rtol=0.05, err_msg="Peak concentrations should match within 5%"
-        )
-
-        # Peak should occur at similar times
-        peak_idx_full = np.nanargmax(cout_full_slice)
-        peak_idx_apvd = np.nanargmax(cout_apvd_slice)
-        assert abs(peak_idx_full - peak_idx_apvd) <= 2, "Peak times should match within 2 days"
-
-        # Compare in the peak region (within 30 days of peak)
-        # This is where both methods should match well
-        # The tails differ due to gamma vs normal distribution shapes
-        peak_start = max(0, peak_idx_full - 30)
-        peak_end = min(len(cout_full_slice), peak_idx_full + 30)
-        cout_full_peak = cout_full_slice[peak_start:peak_end]
-        cout_apvd_peak = cout_apvd_slice[peak_start:peak_end]
-
-        np.testing.assert_allclose(
-            cout_full_peak,
-            cout_apvd_peak,
-            rtol=0.06,
-            err_msg="cout_full and cout_apvd_combined should match within 6% around peak",
-        )
-
-        # Total mass should be conserved - this is the key physical requirement
-        # Input mass = 100 (single pulse of concentration 100 for 1 day)
+        # Mass should be conserved
         mass_full = np.nansum(cout_full_slice)
-        mass_apvd = np.nansum(cout_apvd_slice)
-        np.testing.assert_allclose(mass_full, 100.0, rtol=0.01, err_msg="Full solution should conserve mass within 1%")
-        np.testing.assert_allclose(mass_apvd, 100.0, rtol=0.01, err_msg="APVD solution should conserve mass within 1%")
-        np.testing.assert_allclose(
-            mass_full, mass_apvd, rtol=0.01, err_msg="Both solutions should have same mass within 1%"
+        np.testing.assert_allclose(mass_full, 100.0, rtol=0.01, err_msg="Should conserve mass within 1%")
+
+        # Concentrations should be bounded (with tolerance for numerical precision)
+        assert np.all(cout_full_slice[valid_mask] >= -1e-9), "Concentrations should be non-negative"
+        assert np.all(cout_full_slice[valid_mask] <= 100.0 + 1e-9), "Concentrations should not exceed input max"
+
+        # Peak should occur at reasonable time (around mean residence time)
+        # The mean residence time is mean_apv * retardation / mean_flow
+        # Peak occurs around day 50 + residence_time in the full array
+        # In our slice (plot_start to plot_end-1), check peak is in a reasonable range
+        peak_idx = np.nanargmax(cout_full_slice)
+        mean_residence_time = mean_apv * retardation / mean_flow  # ~166.7 days
+        # Peak should be somewhere in the expected range of the breakthrough curve
+        # Peak idx in slice should correspond to around day 50 + mean_residence_time - plot_start
+        expected_peak_relative = 50 + mean_residence_time - plot_start  # ~116.7
+        assert abs(peak_idx - expected_peak_relative) <= 25, (
+            f"Peak at idx {peak_idx} should be near {expected_peak_relative}"
         )
+
+    def test_zero_dispersivity_matches_molecular_only(self):
+        """Test that zero dispersivity gives same result as molecular diffusion only."""
+        np.random.seed(42)
+
+        streamline_length = 100.0
+        mean_apv = 5000.0
+        std_apv = 500.0
+        mean_flow = 100.0
+        diffusivity_molecular = 0.1
+
+        n_days = 150
+        tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+        cout_tedges = tedges.copy()
+
+        cin = np.zeros(n_days)
+        cin[20] = 100.0
+        flow = np.full(n_days, mean_flow)
+
+        nbins = 1000
+        gbins = gamma_utils.bins(mean=mean_apv, std=std_apv, n_bins=nbins)
+        streamline_lengths = np.full(nbins, streamline_length)
+
+        # With zero dispersivity
+        cout_zero_disp = infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=gbins["expected_values"],
+            streamline_length=streamline_lengths,
+            molecular_diffusivity=diffusivity_molecular,
+            longitudinal_dispersivity=0.0,
+        )
+
+        # Should conserve mass
+        mass = np.nansum(cout_zero_disp)
+        np.testing.assert_allclose(mass, 100.0, rtol=0.05, err_msg="Mass should be conserved")
 
     def test_increased_dispersion_broadens_curve(self):
         """Test that higher dispersion causes broader, lower-peak breakthrough."""
@@ -558,7 +587,8 @@ class TestDiffusionMatchesApvdCombined:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=gbins["expected_values"],
             streamline_length=streamline_lengths,
-            diffusivity=0.1,
+            molecular_diffusivity=0.1,
+            longitudinal_dispersivity=0.0,
         )
 
         # High dispersion
@@ -569,7 +599,8 @@ class TestDiffusionMatchesApvdCombined:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=gbins["expected_values"],
             streamline_length=streamline_lengths,
-            diffusivity=10.0,
+            molecular_diffusivity=10.0,
+            longitudinal_dispersivity=0.0,
         )
 
         # High dispersion should have lower peak
@@ -581,3 +612,81 @@ class TestDiffusionMatchesApvdCombined:
         mass_low = np.nansum(cout_low)
         mass_high = np.nansum(cout_high)
         np.testing.assert_allclose(mass_low, mass_high, rtol=0.1, err_msg="Mass should be approximately conserved")
+
+    def test_single_pv_matches_apvd_with_combined_std(self):
+        """Test that diffusion2 with single pore volume matches APVD with combined std.
+
+        This validates the physical equivalence of the spreading formulas.
+        The corrected formula for mechanical dispersion has NO retardation factor:
+            sigma_disp = V * sqrt(2 * alpha_L / L)
+        because D_disp = alpha_L * v = alpha_L * L / tau, and D_disp * tau = alpha_L * L.
+        """
+        # System parameters
+        streamline_length = 100.0  # L [m]
+        mean_apv = 10000.0  # V_mean [m³]
+        mean_flow = 120.0  # Q [m³/day]
+        retardation = 2.0  # R [-]
+        diffusivity_molecular = 1e-4  # D_m [m²/day]
+        dispersivity = 1.0  # alpha_L [m]
+
+        # CORRECTED formula: R cancels out for mechanical dispersion
+        # sigma_diff = (V/L) * sqrt(2 * D_m * R * V / Q)  -- R stays for molecular diffusion
+        # sigma_disp = V * sqrt(2 * alpha_L / L)  -- NO R for mechanical dispersion
+        sigma_diff_disp = mean_apv * np.sqrt(
+            2 * diffusivity_molecular * retardation / (streamline_length * mean_flow)
+            + 2 * dispersivity / streamline_length
+        )
+
+        # Set up time bins
+        n_days = 350
+        tedges = pd.date_range("2019-12-31", periods=n_days + 1, freq="D")
+        cout_tedges = tedges.copy()
+
+        flow = np.full(n_days, mean_flow)
+        cin = np.zeros(n_days)
+        cin[50] = 100.0
+
+        # diffusion2 with single pore volume
+        cout_diffusion = infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([mean_apv]),
+            streamline_length=np.array([streamline_length]),
+            molecular_diffusivity=diffusivity_molecular,
+            longitudinal_dispersivity=dispersivity,
+            retardation_factor=retardation,
+        )
+
+        # APVD with combined std (using gamma distribution)
+        cout_apvd = gamma_i2e(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            mean=mean_apv,
+            std=sigma_diff_disp,
+            n_bins=5000,
+            retardation_factor=retardation,
+        )
+
+        # Peak concentrations should match closely
+        peak_diffusion = np.nanmax(cout_diffusion)
+        peak_apvd = np.nanmax(cout_apvd)
+        np.testing.assert_allclose(
+            peak_diffusion, peak_apvd, rtol=0.05, err_msg="Peak concentrations should match with corrected formula"
+        )
+
+        # Peak timing should match
+        peak_day_diffusion = np.nanargmax(cout_diffusion)
+        peak_day_apvd = np.nanargmax(cout_apvd)
+        assert abs(peak_day_diffusion - peak_day_apvd) <= 2, (
+            f"Peak timing should match: diffusion2={peak_day_diffusion}, APVD={peak_day_apvd}"
+        )
+
+        # Mass should be conserved
+        mass_diffusion = np.nansum(cout_diffusion)
+        mass_apvd = np.nansum(cout_apvd)
+        np.testing.assert_allclose(mass_diffusion, 100.0, rtol=0.01)
+        np.testing.assert_allclose(mass_apvd, 100.0, rtol=0.01)

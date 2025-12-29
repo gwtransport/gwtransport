@@ -9,14 +9,19 @@ Key function:
 - infiltration_to_extraction: Main transport function combining advection and dispersion
 
 The dispersion is characterized by the longitudinal dispersion coefficient D_L,
-which the user should compute as:
+which is computed internally from:
 
     D_L = D_m + alpha_L * v
 
 where:
 - D_m is the molecular diffusion coefficient [m^2/day]
 - alpha_L is the longitudinal dispersivity [m]
-- v is the pore velocity [m/day] (v = q/n, where q is specific discharge and n is porosity)
+- v is the pore velocity [m/day], computed as v = L / tau_mean
+
+The velocity v is computed per (pore_volume, output_bin) using the mean residence
+time, which correctly accounts for time-varying flow. This formulation ensures that:
+- Molecular diffusion spreading scales with residence time: sqrt(D_m * tau)
+- Mechanical dispersion spreading scales with travel distance: sqrt(alpha_L * L)
 """
 
 import numpy as np
@@ -25,7 +30,7 @@ import pandas as pd
 from numpy.typing import NDArray
 from scipy import special
 
-from gwtransport.residence_time import residence_time
+from gwtransport.residence_time import residence_time, residence_time_mean
 
 # Numerical tolerance for coefficient sum to determine valid output bins
 EPSILON_COEFF_SUM = 1e-10
@@ -34,12 +39,12 @@ EPSILON_COEFF_SUM = 1e-10
 def _erf_integral_time(
     t: NDArray[np.float64],
     x: NDArray[np.float64],
-    diffusivity: float,
+    diffusivity: npt.ArrayLike,
 ) -> NDArray[np.float64]:
     r"""Compute the integral of the error function over time at each (t[i], x[i]) point.
 
     This function computes the integral of erf(x/(2*sqrt(D*tau))) from 0 to t,
-    where t and x are broadcastable arrays.
+    where t, x, and diffusivity are broadcastable arrays.
 
     The analytical solution is:
 
@@ -52,47 +57,45 @@ def _erf_integral_time(
     Parameters
     ----------
     t : ndarray
-        Input time values. Broadcastable with x. Must be non-negative.
+        Input time values. Broadcastable with x and diffusivity. Must be non-negative.
     x : ndarray
-        Position values. Broadcastable with t.
-    diffusivity : float
-        Diffusivity [m²/day]. Must be positive.
+        Position values. Broadcastable with t and diffusivity.
+    diffusivity : float or ndarray
+        Diffusivity [m²/day]. Must be positive. Broadcastable with t and x.
 
     Returns
     -------
     ndarray
-        Integral values at each (t, x) point. Shape is broadcast shape of t and x.
+        Integral values at each (t, x, D) point. Shape is broadcast shape of inputs.
     """
     t = np.asarray(t, dtype=float)
     x = np.asarray(x, dtype=float)
-    diffusivity = float(diffusivity)
+    diffusivity = np.asarray(diffusivity, dtype=float)
 
-    # Broadcast t and x to common shape
-    t, x = np.broadcast_arrays(t, x)
+    # Broadcast all inputs to common shape
+    t, x, diffusivity = np.broadcast_arrays(t, x, diffusivity)
     out = np.zeros_like(t, dtype=float)
 
-    if diffusivity <= 0.0:
-        return out
-
-    # Mask for valid computation: t > 0 and x != 0
-    mask_valid = (t > 0.0) & (x != 0.0)
+    # Mask for valid computation: t > 0, x != 0, and diffusivity > 0
+    mask_valid = (t > 0.0) & (x != 0.0) & (diffusivity > 0.0)
 
     if np.any(mask_valid):
         t_v = t[mask_valid]
         x_v = x[mask_valid]
+        d_v = diffusivity[mask_valid]
 
         sqrt_t = np.sqrt(t_v)
-        sqrt_d = np.sqrt(diffusivity)
+        sqrt_d = np.sqrt(d_v)
         sqrt_pi = np.sqrt(np.pi)
 
         arg = x_v / (2 * sqrt_d * sqrt_t)
-        exp_term = np.exp(-(x_v**2) / (4 * diffusivity * t_v))
+        exp_term = np.exp(-(x_v**2) / (4 * d_v * t_v))
         erf_term = special.erf(arg)
         erfc_term = special.erfc(arg)
 
         term1 = t_v * erf_term
         term2 = (x_v * sqrt_t / (sqrt_pi * sqrt_d)) * exp_term
-        term3 = -(x_v**2 / (2 * diffusivity)) * erfc_term
+        term3 = -(x_v**2 / (2 * d_v)) * erfc_term
 
         out[mask_valid] = term1 + term2 + term3
 
@@ -107,12 +110,12 @@ def _erf_integral_time(
 def _erf_mean_time(
     tedges: NDArray[np.float64],
     x: NDArray[np.float64],
-    diffusivity: float,
+    diffusivity: npt.ArrayLike,
 ) -> NDArray[np.float64]:
     """Compute the mean of the error function over time intervals with paired x values.
 
     This function computes the mean of erf(x/(2*sqrt(D*t))) between consecutive
-    time edges, where each cell has its own x value.
+    time edges, where each cell has its own x value and diffusivity.
 
     Parameters
     ----------
@@ -120,8 +123,9 @@ def _erf_mean_time(
         Time edges of size n.
     x : ndarray
         Position values. Broadcastable to shape (n,) for edge evaluation.
-    diffusivity : float
-        Diffusivity [m²/day]. Must be positive.
+    diffusivity : float or ndarray
+        Diffusivity [m²/day]. Must be positive. Can be scalar or array of
+        size n-1 (one per cell).
 
     Returns
     -------
@@ -130,30 +134,45 @@ def _erf_mean_time(
     """
     tedges = np.asarray(tedges, dtype=float)
     x = np.asarray(x, dtype=float)
-    diffusivity = float(diffusivity)
+    diffusivity = np.atleast_1d(np.asarray(diffusivity, dtype=float))
+
+    n_cells = len(tedges) - 1
+
+    # Broadcast scalar diffusivity to all cells
+    if diffusivity.size == 1:
+        diffusivity = np.broadcast_to(diffusivity, (n_cells,))
 
     # Broadcast x to match tedges length
     x_edges = np.broadcast_to(x, tedges.shape)
 
+    # Replicate diffusivity for both edges of each cell
+    # Shape: (n_cells * 2,) for upper and lower edge
+    d_edges = np.concatenate([diffusivity, diffusivity])
+    t_edges_flat = np.concatenate([tedges[:-1], tedges[1:]])
+    x_edges_flat = np.concatenate([x_edges[:-1], x_edges[1:]])
+
     # Compute integral at all edge points
-    erfint = _erf_integral_time(tedges, x=x_edges, diffusivity=diffusivity)
+    erfint_flat = _erf_integral_time(t_edges_flat, x=x_edges_flat, diffusivity=d_edges)
+    erfint_lower = erfint_flat[:n_cells]
+    erfint_upper = erfint_flat[n_cells:]
 
     # Compute mean using shifted views
     dt = tedges[1:] - tedges[:-1]
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        out = np.where(dt != 0.0, (erfint[1:] - erfint[:-1]) / dt, np.nan)
+        out = np.where(dt != 0.0, (erfint_upper - erfint_lower) / dt, np.nan)
 
     # Handle dt == 0 (point evaluation): erf at that point
     mask_dt_zero = dt == 0.0
     if np.any(mask_dt_zero):
         t_at_zero = tedges[:-1][mask_dt_zero]
         x_at_zero = x_edges[:-1][mask_dt_zero]
+        d_at_zero = diffusivity[mask_dt_zero]
 
         with np.errstate(divide="ignore", invalid="ignore"):
             arg = np.where(
-                t_at_zero > 0,
-                x_at_zero / (2 * np.sqrt(diffusivity * t_at_zero)),
+                (t_at_zero > 0) & (d_at_zero > 0),
+                x_at_zero / (2 * np.sqrt(d_at_zero * t_at_zero)),
                 np.where(x_at_zero != 0, np.inf * np.sign(x_at_zero), 0.0),
             )
         out[mask_dt_zero] = special.erf(arg)
@@ -171,96 +190,104 @@ def _erf_integral_space_time(x, t, diffusivity):
     Compute the integral of the error function in space and time at (x, t) points.
 
     This function evaluates
-    F(x[i], t[i]) for each i, where x and t have the same shape. This is useful
-    for batched computations where we need F at arbitrary (x, t) pairs.
+    F(x[i], t[i], D[i]) for each i, where x, t, and diffusivity are broadcastable.
+    This is useful for batched computations where we need F at arbitrary
+    (x, t, D) triplets.
 
-    The double integral F(x,t) = ∫₀ᵗ ∫₀ˣ erf(ξ/(2√(Dτ))) dξ dτ is symmetric in x:
-    F(-x, t) = F(x, t). The analytical formula is only valid for x >= 0, so we
+    The double integral F(x,t,D) = ∫₀ᵗ ∫₀ˣ erf(ξ/(2√(Dτ))) dξ dτ is symmetric in x:
+    F(-x, t, D) = F(x, t, D). The analytical formula is only valid for x >= 0, so we
     compute using |x| and the symmetry property.
 
     Parameters
     ----------
     x : ndarray
-        Input values in space. Same shape as t.
+        Input values in space. Broadcastable with t and diffusivity.
     t : ndarray
-        Input values in time. Same shape as x.
-    diffusivity : float
-        Diffusivity [m²/day]. Must be positive.
+        Input values in time. Broadcastable with x and diffusivity.
+    diffusivity : float or ndarray
+        Diffusivity [m²/day]. Must be positive. Can be a scalar or array
+        broadcastable with x and t.
 
     Returns
     -------
     ndarray
-        Integral F(x[i], t[i]) for each i. Same shape as x and t.
+        Integral F(x[i], t[i], D[i]) for each i. Shape is broadcast shape of inputs.
     """
     x = np.asarray(x)
     t = np.asarray(t)
+    diffusivity = np.asarray(diffusivity)
 
-    # The double integral is symmetric in x: F(-x, t) = F(x, t)
+    # The double integral is symmetric in x: F(-x, t, D) = F(x, t, D)
     # Use |x| for the computation
     x = np.abs(x)
 
-    isnan = np.isnan(x) | np.isnan(t)
+    # Broadcast all inputs to common shape
+    x, t, diffusivity = np.broadcast_arrays(x, t, diffusivity)
+
+    isnan = np.isnan(x) | np.isnan(t) | np.isnan(diffusivity)
 
     sqrt_diffusivity = np.sqrt(diffusivity)
     sqrt_pi = np.sqrt(np.pi)
 
-    # Handle t <= 0 to avoid sqrt of negative
+    # Handle t <= 0 or diffusivity <= 0 to avoid sqrt of negative / division by zero
     with np.errstate(divide="ignore", invalid="ignore"):
-        sqrt_t = np.sqrt(np.maximum(t, 1e-30))
-        exp_term = np.exp(-(x**2) / (4 * diffusivity * np.maximum(t, 1e-30)))
-        erf_term = special.erf(x / (2 * sqrt_diffusivity * sqrt_t))
+        safe_t = np.maximum(t, 1e-30)
+        safe_d = np.maximum(diffusivity, 1e-30)
+        sqrt_t = np.sqrt(safe_t)
+        exp_term = np.exp(-(x**2) / (4 * safe_d * safe_t))
+        erf_term = special.erf(x / (2 * np.sqrt(safe_d) * sqrt_t))
 
         term1 = -4 * sqrt_diffusivity * t ** (3 / 2) / (3 * sqrt_pi)
         term2 = (2 * sqrt_diffusivity / sqrt_pi) * (
             (2 * t ** (3 / 2) * exp_term / 3)
-            - (sqrt_t * x**2 * exp_term / (3 * diffusivity))
-            - (sqrt_pi * x**3 * erf_term / (6 * diffusivity ** (3 / 2)))
+            - (sqrt_t * x**2 * exp_term / (3 * safe_d))
+            - (sqrt_pi * x**3 * erf_term / (6 * safe_d ** (3 / 2)))
         )
         term3 = x * (
-            t * erf_term
-            + (x**2 * erf_term / (2 * diffusivity))
-            + (sqrt_t * x * exp_term / (sqrt_pi * sqrt_diffusivity))
+            t * erf_term + (x**2 * erf_term / (2 * safe_d)) + (sqrt_t * x * exp_term / (sqrt_pi * np.sqrt(safe_d)))
         )
-        term4 = -(x**3) / (6 * diffusivity)
+        term4 = -(x**3) / (6 * safe_d)
         out = term1 + term2 + term3 + term4
 
     out = np.where(isnan, np.nan, out)
     out = np.where(t <= 0.0, 0.0, out)
+    out = np.where(diffusivity <= 0.0, 0.0, out)
     return np.where(np.isinf(x) | np.isinf(t), np.inf, out)
 
 
 def _erf_integral_space(
     x: NDArray[np.float64],
-    diffusivity: float,
+    diffusivity: npt.ArrayLike,
     t: NDArray[np.float64],
     clip_to_inf: float = 6.0,
 ) -> NDArray[np.float64]:
-    """Compute the integral of the error function at each (x[i], t[i]) point.
+    """Compute the integral of the error function at each (x[i], t[i], D[i]) point.
 
     This function computes the integral of erf from 0 to x[i] at time t[i],
-    where x and t are broadcastable arrays.
+    where x, t, and diffusivity are broadcastable arrays.
 
     Parameters
     ----------
     x : ndarray
-        Input x values. Broadcastable with t.
-    diffusivity : float
-        Diffusivity [m²/day]. Must be non-negative.
+        Input x values. Broadcastable with t and diffusivity.
+    diffusivity : float or ndarray
+        Diffusivity [m²/day]. Must be non-negative. Broadcastable with x and t.
     t : ndarray
-        Time values [day]. Broadcastable with x. Must be non-negative.
+        Time values [day]. Broadcastable with x and diffusivity. Must be non-negative.
     clip_to_inf : float, optional
         Clip ax values beyond this to avoid numerical issues. Default is 6.
 
     Returns
     -------
     ndarray
-        Integral values at each (x, t) point. Shape is broadcast shape of x and t.
+        Integral values at each (x, t, D) point. Shape is broadcast shape of inputs.
     """
     x = np.asarray(x)
     t = np.asarray(t)
+    diffusivity = np.asarray(diffusivity)
 
-    # Broadcast x and t to common shape
-    x, t = np.broadcast_arrays(x, t)
+    # Broadcast all inputs to common shape
+    x, t, diffusivity = np.broadcast_arrays(x, t, diffusivity)
     out = np.zeros_like(x, dtype=float)
 
     # Compute a = 1/(2*sqrt(diffusivity*t)) from diffusivity and t
@@ -305,20 +332,21 @@ def _erf_integral_space(
 
 def _erf_mean_space(
     edges: NDArray[np.float64],
-    diffusivity: float,
+    diffusivity: npt.ArrayLike,
     t: NDArray[np.float64],
 ) -> NDArray[np.float64]:
     """Compute the mean of the error function between edges with paired t values.
 
     This function computes the mean of erf(x/(2*sqrt(D*t))) between consecutive
-    edges, where each cell has its own t value.
+    edges, where each cell has its own t value and diffusivity.
 
     Parameters
     ----------
     edges : ndarray, shape (n,)
         Cell edges of size n.
-    diffusivity : float
-        Diffusivity [m²/day]. Must be non-negative.
+    diffusivity : float or ndarray
+        Diffusivity [m²/day]. Must be non-negative. Can be scalar or array of
+        size n-1 (one per cell).
     t : ndarray
         Time values [day]. Broadcastable to shape (n,) for edge evaluation,
         or shape (n-1,) for cell evaluation. Must be non-negative.
@@ -330,6 +358,13 @@ def _erf_mean_space(
     """
     edges = np.asarray(edges)
     t = np.asarray(t)
+    diffusivity = np.atleast_1d(np.asarray(diffusivity, dtype=float))
+
+    n_cells = len(edges) - 1
+
+    # Broadcast scalar diffusivity to all cells
+    if diffusivity.size == 1:
+        diffusivity = np.broadcast_to(diffusivity, (n_cells,))
 
     # Clip edges to avoid numerical issues with very large values
     _edges = np.clip(edges, -1e6, 1e6)
@@ -337,27 +372,35 @@ def _erf_mean_space(
     # Broadcast t to match edges length if needed
     t_edges = np.broadcast_to(t, edges.shape)
 
+    # Replicate diffusivity for both edges of each cell
+    d_edges = np.concatenate([diffusivity, diffusivity])
+    x_edges_flat = np.concatenate([_edges[:-1], _edges[1:]])
+    t_edges_flat = np.concatenate([t_edges[:-1], t_edges[1:]])
+
     # Compute integral at all edge points
-    erfint = _erf_integral_space(_edges, diffusivity=diffusivity, t=t_edges)
+    erfint_flat = _erf_integral_space(x_edges_flat, diffusivity=d_edges, t=t_edges_flat)
+    erfint_lower = erfint_flat[:n_cells]
+    erfint_upper = erfint_flat[n_cells:]
 
     # Compute mean using shifted views
     dx = _edges[1:] - _edges[:-1]
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        out = np.where(dx != 0.0, (erfint[1:] - erfint[:-1]) / dx, np.nan)
+        out = np.where(dx != 0.0, (erfint_upper - erfint_lower) / dx, np.nan)
 
     # Handle dx == 0 (point evaluation): erf at that point
     mask_dx_zero = dx == 0.0
     if np.any(mask_dx_zero):
         x_at_zero = edges[:-1][mask_dx_zero]
         t_at_zero = t_edges[:-1][mask_dx_zero]
+        d_at_zero = diffusivity[mask_dx_zero]
 
         # Compute a = 1/(2*sqrt(diffusivity*t))
         with np.errstate(divide="ignore", invalid="ignore"):
             a_at_zero = np.where(
-                (diffusivity == 0.0) | (t_at_zero == 0.0),
+                (d_at_zero == 0.0) | (t_at_zero == 0.0),
                 np.inf,
-                1.0 / (2.0 * np.sqrt(diffusivity * t_at_zero)),
+                1.0 / (2.0 * np.sqrt(d_at_zero * t_at_zero)),
             )
 
         # For infinite a, erf(inf*x) = sign(x)
@@ -389,9 +432,9 @@ def _erf_mean_space_time(xedges, tedges, diffusivity):
     cell i spans [xedges[i], xedges[i+1]] x [tedges[i], tedges[i+1]].
 
     The mean is computed using the inclusion-exclusion principle:
-        (F(x₁,t₁) - F(x₀,t₁) - F(x₁,t₀) + F(x₀,t₀)) / ((x₁-x₀)(t₁-t₀))
+        (F(x₁,t₁,D) - F(x₀,t₁,D) - F(x₁,t₀,D) + F(x₀,t₀,D)) / ((x₁-x₀)(t₁-t₀))
 
-    where F(x,t) = ∫₀ᵗ ∫₀ˣ erf(ξ/(2√(D·τ))) dξ dτ
+    where F(x,t,D) = ∫₀ᵗ ∫₀ˣ erf(ξ/(2√(D·τ))) dξ dτ
 
     Parameters
     ----------
@@ -399,8 +442,9 @@ def _erf_mean_space_time(xedges, tedges, diffusivity):
         Cell edges in space of size n.
     tedges : ndarray
         Cell edges in time of size n (same length as xedges).
-    diffusivity : float
-        Diffusivity [m²/day]. Must be non-negative.
+    diffusivity : float or ndarray
+        Diffusivity [m²/day]. Must be non-negative. Can be a scalar (same for
+        all cells) or an array of size n-1 (one value per cell).
 
     Returns
     -------
@@ -410,12 +454,22 @@ def _erf_mean_space_time(xedges, tedges, diffusivity):
     """
     xedges = np.asarray(xedges)
     tedges = np.asarray(tedges)
+    diffusivity = np.atleast_1d(np.asarray(diffusivity))
 
     if len(xedges) != len(tedges):
         msg = "xedges and tedges must have the same length"
         raise ValueError(msg)
 
     n_cells = len(xedges) - 1
+
+    # Broadcast scalar diffusivity to all cells
+    if diffusivity.size == 1:
+        diffusivity = np.broadcast_to(diffusivity, (n_cells,))
+
+    if len(diffusivity) != n_cells:
+        msg = "diffusivity must be a scalar or have length n_cells (len(xedges) - 1)"
+        raise ValueError(msg)
+
     out = np.full(n_cells, np.nan, dtype=float)
 
     dx = xedges[1:] - xedges[:-1]
@@ -429,11 +483,12 @@ def _erf_mean_space_time(xedges, tedges, diffusivity):
     if np.any(mask_both_zero):
         x_pts = xedges[:-1][mask_both_zero]
         t_pts = tedges[:-1][mask_both_zero]
+        d_pts = diffusivity[mask_both_zero]
         with np.errstate(divide="ignore", invalid="ignore"):
             a_pts = np.where(
-                (diffusivity == 0.0) | (t_pts == 0.0),
+                (d_pts == 0.0) | (t_pts == 0.0),
                 np.inf,
-                1.0 / (2.0 * np.sqrt(diffusivity * t_pts)),
+                1.0 / (2.0 * np.sqrt(d_pts * t_pts)),
             )
         mask_a_inf = np.isinf(a_pts)
         result = np.zeros(np.sum(mask_both_zero))
@@ -446,34 +501,83 @@ def _erf_mean_space_time(xedges, tedges, diffusivity):
     # Handle remaining dt=0 cells (mean over space at fixed time)
     mask_dt_zero_only = mask_dt_zero & ~mask_dx_zero
     if np.any(mask_dt_zero_only):
-        out[mask_dt_zero_only] = _erf_mean_space(xedges, diffusivity=diffusivity, t=tedges)[mask_dt_zero_only]
+        idx_dt_zero = np.where(mask_dt_zero_only)[0]
+        n_dt_zero = len(idx_dt_zero)
+
+        # Build edge arrays for all dt=0 cells
+        x_edges_flat = np.concatenate([xedges[idx_dt_zero], xedges[idx_dt_zero + 1]])
+        t_edges_flat = np.concatenate([tedges[idx_dt_zero], tedges[idx_dt_zero + 1]])
+        d_cells = diffusivity[idx_dt_zero]
+
+        # Replicate diffusivity for both edges of each cell
+        d_edges = np.concatenate([d_cells, d_cells])
+
+        # Compute integral at all edge points
+        erfint_flat = _erf_integral_space(x_edges_flat, diffusivity=d_edges, t=t_edges_flat)
+        erfint_lower = erfint_flat[:n_dt_zero]
+        erfint_upper = erfint_flat[n_dt_zero:]
+
+        dx_cells = xedges[idx_dt_zero + 1] - xedges[idx_dt_zero]
+        out[idx_dt_zero] = (erfint_upper - erfint_lower) / dx_cells
 
     # Handle remaining dx=0 cells (mean over time at fixed x)
     mask_dx_zero_only = mask_dx_zero & ~mask_dt_zero
     if np.any(mask_dx_zero_only):
-        out[mask_dx_zero_only] = _erf_mean_time(tedges, x=xedges, diffusivity=diffusivity)[mask_dx_zero_only]
+        idx_dx_zero = np.where(mask_dx_zero_only)[0]
+        n_dx_zero = len(idx_dx_zero)
+
+        # Build edge arrays for all dx=0 cells
+        t_edges_flat = np.concatenate([tedges[idx_dx_zero], tedges[idx_dx_zero + 1]])
+        x_edges_flat = np.concatenate([xedges[idx_dx_zero], xedges[idx_dx_zero + 1]])
+        d_cells = diffusivity[idx_dx_zero]
+
+        # Replicate diffusivity for both edges of each cell
+        d_edges = np.concatenate([d_cells, d_cells])
+
+        # Compute integral at all edge points
+        erfint_flat = _erf_integral_time(t_edges_flat, x=x_edges_flat, diffusivity=d_edges)
+        erfint_lower = erfint_flat[:n_dx_zero]
+        erfint_upper = erfint_flat[n_dx_zero:]
+
+        dt_cells = tedges[idx_dx_zero + 1] - tedges[idx_dx_zero]
+        out[idx_dx_zero] = (erfint_upper - erfint_lower) / dt_cells
 
     # Handle remaining cells with full double integral
     mask_remainder = ~mask_dx_zero & ~mask_dt_zero
     if np.any(mask_remainder):
-        if diffusivity == 0.0:
-            x_mid = (xedges[:-1] + xedges[1:]) / 2
-            out[mask_remainder] = np.sign(x_mid[mask_remainder])
-        else:
-            idx_remainder = np.where(mask_remainder)[0]
+        # Check for zero diffusivity cells
+        d_remainder = diffusivity[mask_remainder]
+        mask_d_zero = d_remainder == 0.0
+
+        if np.any(mask_d_zero):
+            # For zero diffusivity, erf becomes sign function
+            idx_d_zero = np.where(mask_remainder)[0][mask_d_zero]
+            x_mid = (xedges[idx_d_zero] + xedges[idx_d_zero + 1]) / 2
+            out[idx_d_zero] = np.sign(x_mid)
+
+        # Handle non-zero diffusivity cells
+        mask_d_nonzero = ~mask_d_zero
+        if np.any(mask_d_nonzero):
+            idx_remainder = np.where(mask_remainder)[0][mask_d_nonzero]
+            d_nonzero = d_remainder[mask_d_nonzero]
+
+            # Build corner arrays: each cell has 4 corners, all using same diffusivity
             x_corners = np.concatenate([
-                xedges[idx_remainder],
-                xedges[idx_remainder + 1],
-                xedges[idx_remainder],
-                xedges[idx_remainder + 1],
+                xedges[idx_remainder],  # x0
+                xedges[idx_remainder + 1],  # x1
+                xedges[idx_remainder],  # x0
+                xedges[idx_remainder + 1],  # x1
             ])
             t_corners = np.concatenate([
-                tedges[idx_remainder],
-                tedges[idx_remainder + 1],
-                tedges[idx_remainder + 1],
-                tedges[idx_remainder],
+                tedges[idx_remainder],  # t0
+                tedges[idx_remainder + 1],  # t1
+                tedges[idx_remainder + 1],  # t1
+                tedges[idx_remainder],  # t0
             ])
-            f = _erf_integral_space_time(x_corners, t_corners, diffusivity)
+            # Replicate diffusivity for all 4 corners of each cell
+            d_corners = np.concatenate([d_nonzero, d_nonzero, d_nonzero, d_nonzero])
+
+            f = _erf_integral_space_time(x_corners, t_corners, d_corners)
             n_rem = len(idx_remainder)
             f_00 = f[:n_rem]
             f_11 = f[n_rem : 2 * n_rem]
@@ -481,8 +585,8 @@ def _erf_mean_space_time(xedges, tedges, diffusivity):
             f_10 = f[3 * n_rem :]
 
             double_integrals = f_11 - f_10 - f_01 + f_00
-            cell_areas = dx[mask_remainder] * dt[mask_remainder]
-            out[mask_remainder] = double_integrals / cell_areas
+            cell_areas = dx[idx_remainder] * dt[idx_remainder]
+            out[idx_remainder] = double_integrals / cell_areas
 
     # Handle infinite x edges
     le, ue = xedges[:-1], xedges[1:]
@@ -510,7 +614,8 @@ def infiltration_to_extraction(
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
     streamline_length: npt.ArrayLike,
-    diffusivity: float,
+    molecular_diffusivity: npt.ArrayLike,
+    longitudinal_dispersivity: npt.ArrayLike,
     retardation_factor: float = 1.0,
 ) -> npt.NDArray[np.floating]:
     """
@@ -526,14 +631,15 @@ def infiltration_to_extraction(
     3. During transport, longitudinal dispersion causes spreading
     4. At extraction, the concentration is a diffused breakthrough curve
 
-    The dispersion is characterized by the longitudinal dispersion coefficient,
-    which should be computed by the user as:
+    The longitudinal dispersion coefficient D_L is computed internally as:
 
         D_L = D_m + alpha_L * v
 
-    where D_m is molecular diffusion [m^2/day], alpha_L is dispersivity [m],
-    and v is pore velocity [m/day] (v = q/n, where q is specific discharge
-    and n is porosity).
+    where v = L / tau_mean is the mean pore velocity computed from the mean
+    residence time for each (pore_volume, output_bin) combination. This
+    formulation correctly captures that:
+    - Molecular diffusion spreading scales with residence time: sqrt(D_m * tau)
+    - Mechanical dispersion spreading scales with travel distance: sqrt(alpha_L * L)
 
     Parameters
     ----------
@@ -555,16 +661,17 @@ def infiltration_to_extraction(
         that flow path: tau = V_pore / Q.
     streamline_length : array-like
         Array of travel distances [m] corresponding to each pore volume.
-        Must have the same length as aquifer_pore_volumes. The travel distance
-        determines the dispersion length scale: sqrt(D_L * tau).
-    diffusivity : float
-        Longitudinal dispersion coefficient [m2/day]. Must be non-negative.
-        Compute as D_L = D_m + alpha_L * v where:
-        - D_m: molecular diffusion coefficient [m2/day]
-        - alpha_L: longitudinal dispersivity [m]
-        - v: pore velocity [m/day] (v = q/n, where q is specific discharge
-          and n is porosity)
-        Set to 0 for pure advection (no dispersion).
+        Must have the same length as aquifer_pore_volumes.
+    molecular_diffusivity : float or array-like
+        Molecular diffusion coefficient [m2/day]. Can be a scalar (same for all
+        pore volumes) or an array with the same length as aquifer_pore_volumes.
+        Must be non-negative. Represents Brownian motion of solute molecules,
+        independent of velocity.
+    longitudinal_dispersivity : float or array-like
+        Longitudinal dispersivity [m]. Can be a scalar (same for all pore
+        volumes) or an array with the same length as aquifer_pore_volumes.
+        Must be non-negative. Represents mechanical dispersion due to pore-scale
+        velocity variations. Set to 0 for pure molecular diffusion.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
         Values > 1.0 indicate slower transport due to sorption.
@@ -626,7 +733,8 @@ def infiltration_to_extraction(
     >>> aquifer_pore_volumes = np.array([500.0])
     >>> streamline_length = np.array([100.0])
     >>>
-    >>> # Compute with dispersion
+    >>> # Compute with dispersion (molecular diffusion + dispersivity)
+    >>> # Scalar values broadcast to all pore volumes
     >>> cout = infiltration_to_extraction(
     ...     cin=cin,
     ...     flow=flow,
@@ -634,7 +742,8 @@ def infiltration_to_extraction(
     ...     cout_tedges=cout_tedges,
     ...     aquifer_pore_volumes=aquifer_pore_volumes,
     ...     streamline_length=streamline_length,
-    ...     diffusivity=1.0,  # m2/day
+    ...     molecular_diffusivity=1e-4,  # m2/day, same for all pore volumes
+    ...     longitudinal_dispersivity=1.0,  # m, same for all pore volumes
     ... )
 
     With multiple pore volumes (heterogeneous aquifer):
@@ -643,6 +752,7 @@ def infiltration_to_extraction(
     >>> aquifer_pore_volumes = np.array([400.0, 500.0, 600.0])
     >>> streamline_length = np.array([80.0, 100.0, 120.0])
     >>>
+    >>> # Scalar diffusion parameters broadcast to all pore volumes
     >>> cout = infiltration_to_extraction(
     ...     cin=cin,
     ...     flow=flow,
@@ -650,7 +760,8 @@ def infiltration_to_extraction(
     ...     cout_tedges=cout_tedges,
     ...     aquifer_pore_volumes=aquifer_pore_volumes,
     ...     streamline_length=streamline_length,
-    ...     diffusivity=1.0,
+    ...     molecular_diffusivity=1e-4,  # m2/day
+    ...     longitudinal_dispersivity=1.0,  # m
     ... )
     """
     # Convert to pandas DatetimeIndex if needed
@@ -663,6 +774,17 @@ def infiltration_to_extraction(
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
     streamline_length = np.asarray(streamline_length, dtype=float)
 
+    # Convert diffusion parameters to arrays and broadcast to pore volumes
+    n_pore_volumes = len(aquifer_pore_volumes)
+    molecular_diffusivity = np.atleast_1d(np.asarray(molecular_diffusivity, dtype=float))
+    longitudinal_dispersivity = np.atleast_1d(np.asarray(longitudinal_dispersivity, dtype=float))
+
+    # Broadcast scalar values to match pore volumes
+    if molecular_diffusivity.size == 1:
+        molecular_diffusivity = np.broadcast_to(molecular_diffusivity, (n_pore_volumes,)).copy()
+    if longitudinal_dispersivity.size == 1:
+        longitudinal_dispersivity = np.broadcast_to(longitudinal_dispersivity, (n_pore_volumes,)).copy()
+
     # Input validation
     if len(tedges) != len(cin) + 1:
         msg = "tedges must have one more element than cin"
@@ -673,8 +795,17 @@ def infiltration_to_extraction(
     if len(aquifer_pore_volumes) != len(streamline_length):
         msg = "aquifer_pore_volumes and streamline_length must have the same length"
         raise ValueError(msg)
-    if diffusivity < 0:
-        msg = "diffusivity must be non-negative"
+    if len(molecular_diffusivity) != n_pore_volumes:
+        msg = "molecular_diffusivity must be a scalar or have same length as aquifer_pore_volumes"
+        raise ValueError(msg)
+    if len(longitudinal_dispersivity) != n_pore_volumes:
+        msg = "longitudinal_dispersivity must be a scalar or have same length as aquifer_pore_volumes"
+        raise ValueError(msg)
+    if np.any(molecular_diffusivity < 0):
+        msg = "molecular_diffusivity must be non-negative"
+        raise ValueError(msg)
+    if np.any(longitudinal_dispersivity < 0):
+        msg = "longitudinal_dispersivity must be non-negative"
         raise ValueError(msg)
     if np.any(np.isnan(cin)):
         msg = "cin contains NaN values, which are not allowed"
@@ -726,6 +857,34 @@ def infiltration_to_extraction(
     # Check if any pore volume has NaN RT at the bin edges
     valid_cout_bins = ~np.any(np.isnan(rt_at_cout_tedges[:, :-1]) | np.isnan(rt_at_cout_tedges[:, 1:]), axis=0)
 
+    # Compute mean residence time per (pore_volume, cout_bin) for velocity calculation
+    # Shape: (n_pore_volumes, n_cout_bins)
+    rt_mean_2d = residence_time_mean(
+        flow=flow,
+        flow_tedges=tedges,
+        tedges_out=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        direction="extraction_to_infiltration",
+        retardation_factor=retardation_factor,
+    )
+
+    # Compute velocity: v = L / tau_mean
+    # Shape: (n_pore_volumes, n_cout_bins)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        velocity_2d = streamline_length[:, None] / rt_mean_2d
+
+    # Compute D_L = D_m + alpha_L * v
+    # Shape: (n_pore_volumes, n_cout_bins)
+    diffusivity_2d = molecular_diffusivity[:, None] + longitudinal_dispersivity[:, None] * velocity_2d
+
+    # Handle NaN/Inf velocity: fall back to molecular diffusivity only
+    mask_invalid_v = ~np.isfinite(velocity_2d)
+    diffusivity_2d = np.where(
+        mask_invalid_v,
+        molecular_diffusivity[:, None],
+        diffusivity_2d,
+    )
+
     # Initialize coefficient matrix accumulator
     n_cout_bins = len(cout_tedges) - 1
     n_cin_bins = len(cin)
@@ -760,12 +919,16 @@ def infiltration_to_extraction(
         # response[i_cout_bin, j_step] = mean erf for step j at output bin i
         response = np.zeros((n_cout_bins, n_cin_edges))
 
+        # Get diffusivity for this pore volume across all cout bins
+        diff_pv = diffusivity_2d[i_pv, :]  # shape (n_cout_bins,)
+
         for j in range(n_cin_edges):
             # Extract edges for this step across all cout edges
             xedges_j = step_widths_cin[:, j]  # shape (n_cout_edges,)
             tedges_j = time_active[:, j]  # shape (n_cout_edges,)
 
-            response[:, j] = _erf_mean_space_time(xedges_j, tedges_j, diffusivity)
+            # Use per-cell diffusivity for varying D_L across output bins
+            response[:, j] = _erf_mean_space_time(xedges_j, tedges_j, diff_pv)
 
         # Convert erf response [-1, 1] to breakthrough fraction [0, 1]
         frac = 0.5 * (1 + response)  # shape (n_cout_bins, n_cin_edges)
