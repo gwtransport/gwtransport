@@ -168,5 +168,4 @@ cython_debug/
 /.vscode
 uv.lock
 **/.DS_Store
-CLAUDE.md
 min_dependencies.json
