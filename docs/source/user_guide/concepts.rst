@@ -1,7 +1,11 @@
+.. _concepts:
+
 Core Concepts
 =============
 
 Groundwater transport involves the movement of solutes and heat through porous media. This guide introduces the fundamental concepts underlying ``gwtransport``.
+
+.. _concept-pore-volume-distribution:
 
 The Central Concept: Pore Volume Distribution
 ---------------------------------------------
@@ -29,6 +33,8 @@ The gamma distribution model is implemented in :py:func:`gwtransport.advection.g
 
 For assumptions about the gamma distribution, see :ref:`assumption-gamma-distribution`.
 
+.. _concept-residence-time:
+
 Residence Time
 ~~~~~~~~~~~~~~
 
@@ -45,6 +51,8 @@ where :math:`R` is the retardation factor. Residence time depends on:
 - **Retardation factor** of the compound (dimensionless)
 
 The distribution of residence times directly reflects the pore volume distribution. Use :py:func:`gwtransport.residence_time.residence_time` to compute residence times from flow rates and pore volumes. See the :doc:`/examples/02_Residence_Time_Analysis` example for practical applications.
+
+.. _concept-retardation-factor:
 
 Retardation Factor
 ~~~~~~~~~~~~~~~~~~
@@ -71,8 +79,12 @@ Temperature variations in infiltrated water serve as an effective natural tracer
 
 The key limitation is that temperature undergoes diffusive heat exchange with the aquifer matrix, requiring a retardation factor correction. Once pore volumes are calibrated using temperature data, conservative solutes can be predicted using :math:`R = 1.0`. See :doc:`/examples/01_Aquifer_Characterization_Temperature` for a complete calibration workflow.
 
+.. _concept-transport-physics:
+
 Transport Physics
 -----------------
+
+.. _concept-transport-equation:
 
 Core Transport Equation
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -98,6 +110,8 @@ This is mathematically equivalent to convolution, but implemented as discrete we
 where :math:`C_i(t)` is the concentration on streamline :math:`i` and :math:`Q_i` is the flow through that streamline. See :py:mod:`gwtransport.advection` for implementation details.
 
 For assumptions about the transport framework, see :ref:`assumption-advection-dominated`, :ref:`assumption-steady-streamlines`, and :ref:`assumption-no-transverse-mixing`.
+
+.. _concept-dispersion:
 
 Dispersion Without Numerical Dispersion
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -156,6 +170,8 @@ This approach captures the actual distribution of flow paths, including multi-mo
 Model Approaches
 ----------------
 
+.. _concept-gamma-distribution:
+
 Gamma Distribution Model
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -175,6 +191,8 @@ where:
 In practice, ``gwtransport`` parameterizes using mean and standard deviation directly (see :py:func:`gwtransport.gamma.bins`), which are more intuitive than shape and scale. The gamma model works well for moderately heterogeneous aquifers but may not capture multi-modal distributions or extreme heterogeneity.
 
 For assumptions about the gamma distribution, see :ref:`assumption-gamma-distribution`.
+
+.. _concept-nonlinear-sorption:
 
 Non-Linear Sorption: Exact Solutions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

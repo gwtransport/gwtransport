@@ -48,29 +48,29 @@ All checks must pass before merging. The pipeline tests on Python 3.11 (minimum 
 - **Type hints**: Required for all public functions
 - **Formatting**: `ruff format` with preview mode enabled
 
-Example docstring:
+Example docstring (use `npt.ArrayLike` for array inputs, `pd.DatetimeIndex` for time edges):
 
 ```python
-def function_name(param1: float, param2: np.ndarray) -> np.ndarray:
-    """Short description of function.
-
-    Longer description if needed.
+def function_name(*, flow: npt.ArrayLike, tedges: pd.DatetimeIndex) -> npt.NDArray[np.floating]:
+    """Short description.
 
     Parameters
     ----------
-    param1 : float
-        Description of param1.
-    param2 : ndarray
-        Description of param2.
+    flow : array_like
+        Flow rate (m³/day).
+    tedges : DatetimeIndex
+        Time bin edges (n+1 edges for n values).
 
     Returns
     -------
     ndarray
-        Description of return value.
+        Result description.
 
-    Examples
+    See Also
     --------
-    >>> result = function_name(1.0, np.array([1, 2, 3]))
+    related_function : Brief description.
+    :ref:`concept-residence-time` : Background on the concept.
+    :ref:`assumption-linear-retardation` : When this assumption applies.
     """
 ```
 
@@ -79,8 +79,8 @@ def function_name(param1: float, param2: np.ndarray) -> np.ndarray:
 ```
 src/gwtransport/
 ├── advection.py          # Main advection transport with pore volume distributions
-├── diffusion2.py         # 1D advection-dispersion analytical solutions
-├── diffusion.py          # Diffusive corrections via Gaussian smoothing
+├── diffusion2.py         # 1D advection-dispersion analytical solutions. Slow and physically correct
+├── diffusion.py          # Diffusive corrections via Gaussian smoothing. Fast and less physically correct.
 ├── residence_time.py     # Residence time calculations with retardation
 ├── deposition.py         # Deposition process analysis
 ├── logremoval.py         # Log removal efficiency calculations
@@ -124,10 +124,70 @@ uv run pytest tests/src --cov=src                # With coverage
 - Use fixtures from `tests/src/conftest.py` for common test data
 - Tests should be exact to machine precision. Use `np.testing.assert_allclose(actual, expected)` for numerical comparisons.
 - Validate physical correctness (conservation, bounds, limiting cases)
-- Tests should be meaningful and not trivial
+- Tests and comparisons should be meaningful and not trivial
 - Use analytical solutions for validation when possible
 
 ## Git
 
 - Do not include Claude-related signatures in commit messages
 - Run `ruff format .`, `ruff check --fix .`, `uv tool update ty` and `uv tool run ty check .` before committing
+
+## Conventions and Customs
+
+```python
+tedges = pd.DatetimeIndex([...])  # n+1 edges
+values = np.array([...])           # n values
+```
+
+- Values represent **average** over interval
+- Interval: `[tedges[i], tedges[i+1])`
+- Same holds for the spatial dimension: xedges
+
+Units must be consistent within calculation
+
+## Documentation Cross-References
+
+Enrich function docstrings with references to concepts and assumptions when they meaningfully aid understanding. Use Sphinx cross-references that render as clickable links.
+
+**Syntax in docstrings**:
+
+```python
+"""
+See :ref:`assumption-advection-dominated` for when this applies.
+For background on pore volumes, see :ref:`assumptions`.
+"""
+```
+
+**Available labels** (in `docs/source/user_guide/`):
+
+*Concepts* (`concepts.rst`):
+
+| Label                            | Topic                                    |
+| -------------------------------- | ---------------------------------------- |
+| `concept-pore-volume-distribution` | Central concept: aquifer heterogeneity |
+| `concept-residence-time`         | Time in aquifer (V·R/Q)                  |
+| `concept-retardation-factor`     | Slower movement due to sorption          |
+| `concept-transport-equation`     | Flow-weighted averaging                  |
+| `concept-dispersion`             | Macroscopic spreading from heterogeneity |
+| `concept-gamma-distribution`     | Two-parameter pore volume model          |
+| `concept-nonlinear-sorption`     | Freundlich isotherm, front-tracking      |
+
+*Assumptions* (`assumptions.rst`):
+
+| Label                            | Topic                            |
+| -------------------------------- | -------------------------------- |
+| `assumption-advection-dominated` | When diffusion is negligible     |
+| `assumption-steady-streamlines`  | Fixed flow path geometry         |
+| `assumption-gamma-distribution`  | Gamma distribution adequacy      |
+| `assumption-linear-retardation`  | Constant retardation factor      |
+| `assumption-no-reactions`        | Conservative transport           |
+| `assumption-no-transverse-mixing`| Independent streamtubes          |
+| `assumptions`                    | Full assumptions page            |
+
+**When to add references**:
+
+- Function assumes something non-obvious (e.g., linear retardation)
+- User needs context to choose between similar functions
+- Physical limitations affect interpretation of results
+
+**Keep it minimal** - only add references that genuinely help users understand when/how to use a function
