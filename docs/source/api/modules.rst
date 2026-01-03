@@ -22,10 +22,10 @@ deposition
    :undoc-members:
    :show-inheritance:
 
-diffusion
-=========
+diffusion_fast
+==============
 
-.. automodule:: gwtransport.diffusion
+.. automodule:: gwtransport.diffusion_fast
    :members:
    :undoc-members:
    :show-inheritance:

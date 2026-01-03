@@ -26,8 +26,8 @@ Module Reference
      - :py:func:`~gwtransport.deposition.deposition_to_extraction`, :py:func:`~gwtransport.deposition.extraction_to_deposition`
    * - ``logremoval``
      - :py:func:`~gwtransport.logremoval.residence_time_to_log_removal`, :py:func:`~gwtransport.logremoval.gamma_mean`, :py:func:`~gwtransport.logremoval.parallel_mean`
-   * - ``diffusion``
-     - :py:func:`~gwtransport.diffusion.infiltration_to_extraction`
+   * - ``diffusion_fast``
+     - :py:func:`~gwtransport.diffusion_fast.infiltration_to_extraction`
    * - ``gamma``
      - :py:func:`~gwtransport.gamma.bins`, :py:func:`~gwtransport.gamma.mean_std_to_alpha_beta`
 
@@ -43,7 +43,7 @@ Physical/Hydrogeological Assumptions
 
 **Applies to:** ``advection`` module (all functions), ``residence_time``, ``deposition``, ``logremoval``
 
-**Does NOT apply when using:** ``diffusion`` module (which explicitly adds diffusive spreading)
+**Does NOT apply when using:** ``diffusion_fast`` or ``diffusion2`` modules (which explicitly add diffusive spreading)
 
 **What this means:** The spreading of solute plumes is dominated by the variation in flow path lengths (different streamlines have different travel times), not by diffusive/dispersive processes within individual streamlines.
 
@@ -287,7 +287,7 @@ Model Parameterization Assumptions
 - :py:func:`~gwtransport.advection.gamma_extraction_to_infiltration`, :py:func:`~gwtransport.advection.extraction_to_infiltration`
 - :py:func:`~gwtransport.residence_time.residence_time`, :py:func:`~gwtransport.residence_time.residence_time_mean`
 - :py:func:`~gwtransport.deposition.deposition_to_extraction`, :py:func:`~gwtransport.deposition.extraction_to_deposition`
-- :py:func:`~gwtransport.diffusion.infiltration_to_extraction`
+- :py:func:`~gwtransport.diffusion_fast.infiltration_to_extraction`
 
 **Does NOT apply to:**
 
@@ -362,7 +362,7 @@ Data and Input Assumptions
 **Applies to:** All modules that take ``cin`` (infiltration concentration) as input:
 
 - ``advection`` module (all forward functions)
-- :py:func:`~gwtransport.diffusion.infiltration_to_extraction`
+- :py:func:`~gwtransport.diffusion_fast.infiltration_to_extraction`
 - :py:func:`~gwtransport.deposition.deposition_to_extraction` (for deposition rates)
 
 **What this means:** The monitoring point captures the true input signal without significant bias, lag, or spatial averaging issues.
@@ -392,7 +392,7 @@ Data and Input Assumptions
 **Applies to:** All modules that compute extraction concentrations:
 
 - ``advection`` module (all functions computing ``cout``)
-- :py:func:`~gwtransport.diffusion.infiltration_to_extraction`
+- :py:func:`~gwtransport.diffusion_fast.infiltration_to_extraction`
 - :py:func:`~gwtransport.deposition.deposition_to_extraction`
 - ``logremoval`` module (log-removal averaged across flow paths)
 
@@ -579,6 +579,9 @@ Quick Reference: Assumptions by Module
    * - ``logremoval``
      - :ref:`Steady streamlines <assumption-steady-streamlines>`
      - — (adds empirical decay)
-   * - ``diffusion``
+   * - ``diffusion_fast``
      - :ref:`Steady streamlines <assumption-steady-streamlines>`
-     - — (relaxes advection-only assumption)
+     - — (fast approximation, relaxes advection-only assumption)
+   * - ``diffusion2``
+     - :ref:`Steady streamlines <assumption-steady-streamlines>`
+     - — (analytical solution, relaxes advection-only assumption)

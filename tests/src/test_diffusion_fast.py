@@ -4,7 +4,7 @@ import pytest
 from numpy.testing import assert_allclose
 from scipy import ndimage, special
 
-from gwtransport.diffusion import (
+from gwtransport.diffusion_fast import (
     compute_scaled_sigma_array,
     convolve_diffusion,
     create_example_data,

@@ -79,8 +79,8 @@ def function_name(*, flow: npt.ArrayLike, tedges: pd.DatetimeIndex) -> npt.NDArr
 ```
 src/gwtransport/
 ├── advection.py          # Main advection transport with pore volume distributions
-├── diffusion2.py         # 1D advection-dispersion analytical solutions. Slow and physically correct
-├── diffusion.py          # Diffusive corrections via Gaussian smoothing. Fast and less physically correct.
+├── diffusion2.py         # 1D advection-dispersion analytical solutions (slow, physically rigorous)
+├── diffusion_fast.py     # Diffusive corrections via Gaussian smoothing (fast, approximate)
 ├── residence_time.py     # Residence time calculations with retardation
 ├── deposition.py         # Deposition process analysis
 ├── logremoval.py         # Log removal efficiency calculations

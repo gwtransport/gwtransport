@@ -1,5 +1,18 @@
 """
-Diffusive Transport Corrections for Aquifer Systems.
+Fast Diffusive Transport Corrections via Gaussian Smoothing.
+
+This module provides a computationally efficient approximation of diffusion/dispersion
+using Gaussian smoothing. It is much faster than :mod:`gwtransport.diffusion2` but
+less physically accurate, especially under variable flow conditions.
+
+**When to use diffusion_fast vs diffusion2:**
+
+- Use ``diffusion_fast`` when: Speed is critical, flow and time steps are relatively
+  constant, or you need real-time processing
+- Use ``diffusion2`` when: Physical accuracy is critical, flow varies significantly,
+  or you're analyzing periods with changing conditions
+
+See :ref:`concept-dispersion` for background on dispersion processes.
 
 This module implements diffusion/dispersion processes that modify advective transport
 in aquifer systems. Diffusion causes spreading and smoothing of concentration or
@@ -7,8 +20,11 @@ temperature fronts as they travel through the aquifer. While advection moves com
 with water flow, diffusion causes spreading due to molecular diffusion, mechanical
 dispersion, and thermal diffusion (for temperature).
 
-Limitation: It works well for when flow and tedges are relatively constant.
-dx in compute_scaled_sigma_array is assumed to be the same for neighboring cells.
+Limitation: This fast approximation works best when flow and tedges are relatively
+constant. The underlying assumption is that dx (spatial step between cells) remains
+approximately constant, which holds for steady flow but breaks down under highly
+variable conditions. For scenarios with significant flow variability, consider using
+:mod:`gwtransport.diffusion2` instead.
 
 Available functions:
 
@@ -60,10 +76,14 @@ def infiltration_to_extraction(
 ) -> npt.NDArray[np.floating]:
     """Compute the diffusion of a compound during 1D transport in the aquifer.
 
-    This function represents infiltration to extraction modeling (equivalent to convolution). The function
-    is exact if flow and tedges are constant. Errors are made otherwise, but the mass balance is kept.
-    If diffusion behavior is important during times of varying flow and tedges, the diffusion2 module provides
-    an alternative approach that works better in those conditions but takes much longer to compute.
+    This function represents infiltration to extraction modeling (equivalent to convolution).
+    It provides a fast approximation using Gaussian smoothing. The approximation is accurate
+    when flow and tedges are relatively constant. Under variable flow conditions, errors
+    increase but mass balance is preserved.
+
+    For physically rigorous solutions that handle variable flow correctly, use
+    :func:`gwtransport.diffusion2.infiltration_to_extraction` instead. That function is
+    slower but provides analytical solutions to the advection-dispersion equation.
 
     Parameters
     ----------
@@ -88,6 +108,10 @@ def infiltration_to_extraction(
     -------
     numpy.ndarray
         Concentration of the compound in the extracted water [ng/m3].
+
+    See Also
+    --------
+    gwtransport.diffusion2.infiltration_to_extraction : Physically rigorous analytical solution (slower)
 
     Notes
     -----
@@ -157,6 +181,10 @@ def extraction_to_infiltration(
     -------
     numpy.ndarray
         Concentration of the compound in the infiltrating water [ng/m3].
+
+    See Also
+    --------
+    gwtransport.diffusion2.extraction_to_infiltration : Analytically correct deconvolution
 
     Notes
     -----
@@ -284,6 +312,10 @@ def compute_scaled_sigma_array(
     numpy.ndarray
         Array of sigma values (in units of array indices), clipped to range [0, 100].
         Each value corresponds to a time step in the input flow series.
+
+    See Also
+    --------
+    gwtransport.diffusion2.infiltration_to_extraction : For analytical solutions without this approximation
     """
     # Diffusive spreading length [m]: how far concentrations spread physically
     diffusive_spreading_length = compute_sigma_array(
@@ -357,7 +389,7 @@ def convolve_diffusion(
     Examples
     --------
     >>> import numpy as np
-    >>> from gwtransport.diffusion import convolve_diffusion
+    >>> from gwtransport.diffusion_fast import convolve_diffusion
     >>> # Create a sample signal
     >>> x = np.linspace(0, 10, 1000)
     >>> signal = np.exp(-((x - 3) ** 2)) + 0.5 * np.exp(-((x - 7) ** 2) / 0.5)
