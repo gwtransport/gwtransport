@@ -319,21 +319,17 @@ def _erf_mean_space_time(xedges, tedges, diffusivity, *, asymptotic_cutoff_sigma
 
     # Early exit for asymptotic cells (performance optimization)
     # For cells far from the concentration front, erf ≈ ±1
+    # Assumes xedges and tedges are sorted (x0 <= x1, t0 <= t1)
     if asymptotic_cutoff_sigma is not None:
         x0, x1 = xedges[:-1], xedges[1:]
-        t_max = np.maximum(tedges[:-1], tedges[1:])
-
-        # Cell is asymptotic if: same sign in x AND weakest argument exceeds cutoff
-        # Weakest argument = min(|x|) / (2 * sqrt(D * t_max))
-        same_sign = (x0 >= 0) == (x1 >= 0)
-        min_abs_x = np.minimum(np.abs(x0), np.abs(x1))
-
-        with np.errstate(divide="ignore", invalid="ignore"):
-            weakest_arg = min_abs_x / (2.0 * np.sqrt(diffusivity * np.maximum(t_max, 0.0)))
-            weakest_arg = np.where((t_max <= 0) | (diffusivity <= 0), np.inf, weakest_arg)
-
-        mask_asymptotic = same_sign & (weakest_arg >= asymptotic_cutoff_sigma)
-        out[mask_asymptotic] = np.sign(x0[mask_asymptotic] + x1[mask_asymptotic])
+        t1, d = tedges[1:], diffusivity
+        # Cell doesn't straddle zero if x0 >= 0 (all positive) or x1 <= 0 (all negative)
+        # min(|x|) = x0 if x0 >= 0, else -x1 if x1 <= 0
+        min_abs_x = np.where(x0 >= 0, x0, -x1)
+        # Asymptotic if min(|x|) / (2 * sqrt(D * t1)) >= cutoff, with valid t1 > 0 and d > 0
+        mask = ((x0 >= 0) | (x1 <= 0)) & (t1 > 0) & (d > 0)
+        mask[mask] &= min_abs_x[mask] / (2.0 * np.sqrt(d[mask] * t1[mask])) >= asymptotic_cutoff_sigma
+        out[mask] = np.sign(x0[mask] + x1[mask])
 
     # Track which cells still need computation
     mask_computed = ~np.isnan(out)

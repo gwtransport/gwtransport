@@ -447,8 +447,8 @@ class TestErfMeanSpaceTimeAnalytical:
 
     def test_asymptotic_cutoff_handles_edge_cases(self):
         """Test asymptotic cutoff with dx=0, dt=0, and mixed cells."""
-        # Mix of edge cases
-        xedges = np.array([0.0, 0.0, 10.0, 20.0, -10.0, -5.0])  # dx=0 first cell
+        # Mix of edge cases - xedges and tedges must be sorted per cell
+        xedges = np.array([0.0, 0.0, 10.0, 20.0, 25.0, 30.0])  # dx=0 first cell
         tedges = np.array([1.0, 1.0, 2.0, 2.0, 3.0, 4.0])  # dt=0 third cell
         diffusivity = np.array([1.0, 1.0, 1.0, 1.0, 1.0])
 
