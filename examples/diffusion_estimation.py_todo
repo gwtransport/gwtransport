@@ -5,7 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from gwtransport.diffusion import compute_diffusion
+from gwtransport.diffusion_fast import compute_diffusion
 
 fp = Path(
     "/Users/bdestombe/Projects/bdestombe/python-pwn-productiecapaciteit-infiltratiegebieden/productiecapaciteit/data/Merged/IK93.feather"
