@@ -731,19 +731,17 @@ def infiltration_to_extraction(
 
     # Compute velocity: v = L / tau_mean
     # Shape: (n_pore_volumes, n_cout_bins)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        velocity_2d = streamline_length[:, None] / rt_mean_2d
+    # Use explicit validity handling instead of error suppression
+    valid_rt = np.isfinite(rt_mean_2d) & (rt_mean_2d > 0)
+    velocity_2d = np.where(valid_rt, streamline_length[:, None] / rt_mean_2d, 0.0)
 
     # Compute D_L = D_m + alpha_L * v
     # Shape: (n_pore_volumes, n_cout_bins)
-    diffusivity_2d = molecular_diffusivity[:, None] + longitudinal_dispersivity[:, None] * velocity_2d
-
-    # Handle NaN/Inf velocity: fall back to molecular diffusivity only
-    mask_invalid_v = ~np.isfinite(velocity_2d)
+    # Fall back to molecular diffusivity only where RT is invalid (spinup period)
     diffusivity_2d = np.where(
-        mask_invalid_v,
+        valid_rt,
+        molecular_diffusivity[:, None] + longitudinal_dispersivity[:, None] * velocity_2d,
         molecular_diffusivity[:, None],
-        diffusivity_2d,
     )
 
     # Initialize coefficient matrix accumulator
@@ -1049,6 +1047,10 @@ def extraction_to_infiltration(
         direction="infiltration_to_extraction",
     )
 
+    # Determine valid cin bins immediately (reuse rt_edges_2d, no duplicate computation)
+    # A cin bin is valid if both its edges have finite residence times across all pore volumes
+    valid_cin_bins = ~np.any(np.isnan(rt_edges_2d[:, :-1]) | np.isnan(rt_edges_2d[:, 1:]), axis=0)
+
     # Compute mean residence time per (pore_volume, cin_bin) for velocity calculation
     # Shape: (n_pore_volumes, n_cin_bins)
     rt_mean_2d = residence_time_mean(
@@ -1062,19 +1064,17 @@ def extraction_to_infiltration(
 
     # Compute velocity: v = L / tau_mean
     # Shape: (n_pore_volumes, n_cin_bins)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        velocity_2d = streamline_length[:, None] / rt_mean_2d
+    # Use explicit validity handling instead of error suppression
+    valid_rt = np.isfinite(rt_mean_2d) & (rt_mean_2d > 0)
+    velocity_2d = np.where(valid_rt, streamline_length[:, None] / rt_mean_2d, 0.0)
 
     # Compute D_L = D_m + alpha_L * v
     # Shape: (n_pore_volumes, n_cin_bins)
-    diffusivity_2d = molecular_diffusivity[:, None] + longitudinal_dispersivity[:, None] * velocity_2d
-
-    # Handle NaN/Inf velocity: fall back to molecular diffusivity only
-    mask_invalid_v = ~np.isfinite(velocity_2d)
+    # Fall back to molecular diffusivity only where RT is invalid (spinup period)
     diffusivity_2d = np.where(
-        mask_invalid_v,
+        valid_rt,
+        molecular_diffusivity[:, None] + longitudinal_dispersivity[:, None] * velocity_2d,
         molecular_diffusivity[:, None],
-        diffusivity_2d,
     )
 
     # Initialize coefficient matrix accumulator
@@ -1184,18 +1184,7 @@ def extraction_to_infiltration(
     # 2. The infiltration bin extends beyond the extraction data range
     total_coeff = np.sum(coeff_matrix_filled, axis=1)
 
-    # Determine valid cin bins: bins where extraction times fall within cout data range
-    # For each cin_bin, check if its extraction time overlaps with cout data
-    rt_at_cin_tedges = residence_time(
-        flow=flow,
-        flow_tedges=tedges,
-        index=cin_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=retardation_factor,
-        direction="infiltration_to_extraction",
-    )
-    valid_cin_bins = ~np.any(np.isnan(rt_at_cin_tedges[:, :-1]) | np.isnan(rt_at_cin_tedges[:, 1:]), axis=0)
-
+    # Use pre-computed valid_cin_bins (computed early from rt_edges_2d)
     no_valid_contribution = (total_coeff < EPSILON_COEFF_SUM) | ~valid_cin_bins
     cin[no_valid_contribution] = np.nan
 
