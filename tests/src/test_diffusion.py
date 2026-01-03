@@ -433,7 +433,7 @@ class TestErfMeanSpaceTimeAnalytical:
 
 
 class TestDiffusionMatchesApvdCombined:
-    """Test diffusion2 physics with per-bin velocity-dependent dispersivity.
+    """Test diffusion physics with per-bin velocity-dependent dispersivity.
 
     These tests verify that the new implementation with time-varying diffusivity
     produces physically correct results. The diffusivity is computed as:
@@ -441,7 +441,7 @@ class TestDiffusionMatchesApvdCombined:
     """
 
     def test_cout_full_physics_with_dispersivity(self):
-        """Test that diffusion2 produces physically correct results.
+        """Test that diffusion produces physically correct results.
 
         With the new per-bin velocity-dependent dispersivity, the solution
         should:
@@ -481,7 +481,7 @@ class TestDiffusionMatchesApvdCombined:
         nbins = 5000
         streamline_lengths = np.full(nbins, streamline_length)
 
-        # Full solution: diffusion2 with APVD + diffusion/dispersion
+        # Full solution: diffusion with APVD + diffusion/dispersion
         gbins = gamma_utils.bins(mean=mean_apv, std=std_apv, n_bins=nbins)
         cout_full = infiltration_to_extraction(
             cin=cin,
@@ -618,7 +618,7 @@ class TestDiffusionMatchesApvdCombined:
         np.testing.assert_allclose(mass_low, mass_high, rtol=0.1, err_msg="Mass should be approximately conserved")
 
     def test_single_pv_matches_apvd_with_combined_std(self):
-        """Test that diffusion2 with single pore volume matches APVD with combined std.
+        """Test that diffusion with single pore volume matches APVD with combined std.
 
         This validates the physical equivalence of the spreading formulas.
         The corrected formula for mechanical dispersion has NO retardation factor:
@@ -650,7 +650,7 @@ class TestDiffusionMatchesApvdCombined:
         cin = np.zeros(n_days)
         cin[50] = 100.0
 
-        # diffusion2 with single pore volume
+        # diffusion with single pore volume
         cout_diffusion = infiltration_to_extraction(
             cin=cin,
             flow=flow,
@@ -686,7 +686,7 @@ class TestDiffusionMatchesApvdCombined:
         peak_day_diffusion = np.nanargmax(cout_diffusion)
         peak_day_apvd = np.nanargmax(cout_apvd)
         assert abs(peak_day_diffusion - peak_day_apvd) <= 2, (
-            f"Peak timing should match: diffusion2={peak_day_diffusion}, APVD={peak_day_apvd}"
+            f"Peak timing should match: diffusion={peak_day_diffusion}, APVD={peak_day_apvd}"
         )
 
         # Mass should be conserved
@@ -996,7 +996,7 @@ class TestExtractionToInfiltrationDiffusionPhysics:
 
 
 class TestDiffusionRoundTrip:
-    """Round-trip tests for diffusion2: cin -> cout -> cin_reconstructed."""
+    """Round-trip tests for diffusion: cin -> cout -> cin_reconstructed."""
 
     @pytest.fixture
     def roundtrip_setup(self):
