@@ -530,27 +530,31 @@ def infiltration_to_extraction(
         This may lead to double-counting of spreading effects. Suppress with
         ``suppress_dispersion_warning=True`` if this is intentional.
 
-    See Also``````````````````````````````````
+    See Also
     --------
-    gwtransport.advection.infiltration_to_extraction : Pure advection (n``````````````````````````````````o dispersion)
-    examples/05_Diffusion_Dispersion.ipynb : Guidance on choosing modeling approaches
+    extraction_to_infiltration : Inverse operation (deconvolution)
+    gwtransport.advection.infiltration_to_extraction : Pure advection (no dispersion)
 
     Notes
     -----
-    The algorithm works as follows:
+    The algorithm constructs a coefficient matrix W where cout = W @ cin:
 
-    1. For each output time bin [t_out_start, t_out_end]:
-       - Compute the residence time for each pore volume
-       - Determine which infiltration times contribute to this output bin
+    1. For each pore volume, compute the breakthrough curve contribution:
+       - delta_volume: volume between infiltration event and extraction point
+       - step_widths: convert volume to spatial distance x (erf coordinate)
+       - time_active: diffusion time, limited by residence time
 
-    2. For each input concentration step (change in cin):
-       - The step diffuses as it travels through the aquifer
-       - The diffused contribution is computed using the error function
-       - Time-averaging over the output bin uses analytical space-time averaging
+    2. For each infiltration time edge, compute the erf response at all
+       extraction time edges using analytical space-time averaging.
 
-    3. The final output is a flow-weighted average across all pore volumes
+    3. Convert erf response to breakthrough fraction: frac = 0.5 * (1 + erf)
 
-    The error function solution assumes an initial step function that difwq`1       qw  q`fuses
+    4. Coefficient for bin: coeff[i,j] = frac_start - frac_end
+       This represents the fraction of cin[j] that arrives in cout[i].
+
+    5. Average coefficients across all pore volumes.
+
+    The error function solution assumes an initial step function that diffuses
     over time. The position coordinate x represents the distance from the
     concentration front to the observation point.
 
@@ -745,61 +749,58 @@ def infiltration_to_extraction(
     )
 
     # Initialize coefficient matrix accumulator
+    # Shape: (n_cout_bins, n_cin_bins) - each row represents contributions to one output bin
     n_cout_bins = len(cout_tedges) - 1
     n_cin_bins = len(cin)
     n_cin_edges = len(tedges)
     accumulated_coeff = np.zeros((n_cout_bins, n_cin_bins))
 
-    # At cout_tedges < tedges the concentration has not entered the aquifer yet.
+    # Determine when infiltration has occurred: cout_tedge must be >= tedge (infiltration time)
     isactive = cout_tedges.to_numpy()[:, None] >= tedges.to_numpy()[None, :]
 
     # Loop over each pore volume
     for i_pv in range(len(aquifer_pore_volumes)):
-        # The amount of apv between a change in concentration (tedges) and the point of extraction.
-        # Positive in the flow direction.
-        delta_volume_after_extraction = (
+        # Compute volume relationship for the erf x-coordinate:
+        # delta_volume = volume extracted at cout_tedge - volume at infiltration - R*APV
+        # This represents how far past the pore volume the concentration front has traveled
+        delta_volume = (
             cumulative_volume_at_cout_tedges[:, None]
             - cumulative_volume_at_cin_tedges[None, :]
             - (retardation_factor * aquifer_pore_volumes[i_pv])
         )
-        delta_volume_after_extraction[~isactive] = np.nan
+        delta_volume[~isactive] = np.nan
 
-        # Convert volume to distances (x-coordinate for erf)
-        step_widths_cin = (
-            delta_volume_after_extraction / (retardation_factor * aquifer_pore_volumes[i_pv]) * streamline_length[i_pv]
-        )
+        # Convert volume to spatial distance x (erf coordinate)
+        # x = delta_volume / (R * APV) * L
+        step_widths = delta_volume / (retardation_factor * aquifer_pore_volumes[i_pv]) * streamline_length[i_pv]
 
-        # Compute the time a concentration jump is active, limited by the residence time in days
+        # Compute diffusion time: time since infiltration, limited by residence time
         time_active = (cout_tedges.to_numpy()[:, None] - tedges.to_numpy()[None, :]) / pd.to_timedelta(1, unit="D")
         time_active[~isactive] = np.nan
         time_active = np.minimum(time_active, rt_edges_2d[[i_pv]])
 
-        # Compute erf response for each step at tedges[j]
-        # response[i_cout_bin, j_step] = mean erf for step j at output bin i
+        # Compute erf response: response[i_cout_bin, j_cin_edge] = mean erf for cin edge j at cout bin i
         response = np.zeros((n_cout_bins, n_cin_edges))
 
         # Get diffusivity for this pore volume across all cout bins
         diff_pv = diffusivity_2d[i_pv, :]  # shape (n_cout_bins,)
 
         for j in range(n_cin_edges):
-            # Extract edges for this step across all cout edges
-            xedges_j = step_widths_cin[:, j]  # shape (n_cout_edges,)
+            # For each infiltration edge, compute erf response at all extraction bins
+            xedges_j = step_widths[:, j]  # shape (n_cout_edges,)
             tedges_j = time_active[:, j]  # shape (n_cout_edges,)
-
-            # Use per-cell diffusivity for varying D_L across output bins
             response[:, j] = _erf_mean_space_time(xedges_j, tedges_j, diff_pv)
 
         # Convert erf response [-1, 1] to breakthrough fraction [0, 1]
         frac = 0.5 * (1 + response)  # shape (n_cout_bins, n_cin_edges)
 
-        # Coefficient matrix: coeff[i, j] = frac[i, j] - frac[i, j+1]
-        # This represents the fraction of cin[j] that arrives in output bin i
-        # frac[:, j] is the breakthrough of step at tedges[j]
-        # For cin[j] (between tedges[j] and tedges[j+1]), contribution is frac at start minus frac at end
-        # Handle NaN: if frac[j+1] is NaN but frac[j] is valid, use frac[j]
-        frac_start = frac[:, :-1]  # frac at tedges[j] for j=0..n-1
-        frac_end = frac[:, 1:]  # frac at tedges[j+1] for j=0..n-1
-        # Where frac_end is NaN but frac_start is valid, use frac_start
+        # Coefficient for bin j: coeff[i, j] = frac[i, j] - frac[i, j+1]
+        # This is the fraction of cin[j] that arrives in cout[i]
+        frac_start = frac[:, :-1]
+        frac_end = frac[:, 1:]
+
+        # Handle NaN: if frac_end is NaN but frac_start is valid, use 0.0 for frac_end
+        # (the concentration step hasn't fully passed through yet)
         frac_end_filled = np.where(np.isnan(frac_end) & ~np.isnan(frac_start), 0.0, frac_end)
         coeff = frac_start - frac_end_filled  # shape (n_cout_bins, n_cin_bins)
 
@@ -808,17 +809,16 @@ def infiltration_to_extraction(
     # Average across pore volumes
     coeff_matrix = accumulated_coeff / len(aquifer_pore_volumes)
 
-    # Handle NaN in coefficient matrix: replace with 0 for multiplication
-    # NaN means that cin bin hasn't entered the aquifer yet for that cout bin
+    # Replace NaN with 0 for matrix multiplication
+    # NaN indicates infiltration hasn't occurred yet for that (cout, cin) pair
     coeff_matrix_filled = np.nan_to_num(coeff_matrix, nan=0.0)
 
-    # Matrix multiply: cout = coeff_matrix @ cin
+    # Matrix multiply: cout = W @ cin
     cout = coeff_matrix_filled @ cin
 
-    # Handle invalid outputs where no valid contributions exist
-    # A cout bin is invalid when:
-    # 1. The sum of coefficients is near zero (no cin has broken through yet - early bins)
-    # 2. The output bin extends beyond the input data range (late bins - from valid_cout_bins)
+    # Mark output bins as invalid where no valid contributions exist:
+    # 1. Sum of coefficients near zero (no cin has broken through yet - spinup)
+    # 2. Output bin extends beyond input data range (from valid_cout_bins)
     total_coeff = np.sum(coeff_matrix_filled, axis=1)
     no_valid_contribution = (total_coeff < EPSILON_COEFF_SUM) | ~valid_cout_bins
     cout[no_valid_contribution] = np.nan
@@ -918,6 +918,32 @@ def extraction_to_infiltration(
     --------
     infiltration_to_extraction : Forward operation (convolution)
     gwtransport.advection.extraction_to_infiltration : Pure advection (no dispersion)
+
+    Notes
+    -----
+    The algorithm constructs a coefficient matrix W where cin = W @ cout:
+
+    1. For each pore volume, compute the deconvolution contribution:
+       - extraction_times: when water infiltrated at cin_tedges will be extracted
+       - delta_volume: volume between infiltration event and extraction point
+       - step_widths: convert volume to spatial distance x (erf coordinate)
+       - time_active: diffusion time, limited by residence time
+
+    2. For each extraction time edge, compute the erf response at all
+       infiltration time edges using analytical space-time averaging.
+
+    3. Convert erf response to breakthrough fraction: frac = 0.5 * (1 + erf)
+
+    4. Coefficient for bin: coeff[i,j] = frac_start - frac_end
+       This represents the fraction of cout[j] that originated from cin[i].
+
+    5. Average coefficients across all pore volumes, using nan_to_num to
+       prevent NaN propagation when different pore volumes have different
+       valid time ranges.
+
+    The error function solution assumes an initial step function that diffuses
+    over time. The position coordinate x represents the distance from the
+    concentration front to the observation point.
 
     Examples
     --------
@@ -1078,95 +1104,72 @@ def extraction_to_infiltration(
     )
 
     # Initialize coefficient matrix accumulator
+    # Shape: (n_cin_bins, n_cout_bins) - each row represents contributions to one output bin
     n_cin_bins = len(cin_tedges) - 1
     n_cout_bins = len(cout)
     n_cout_edges = len(tedges)
     accumulated_coeff = np.zeros((n_cin_bins, n_cout_bins))
 
-    # At cin_tedges, check if water has been extracted yet (looking forward in time)
-    # Water infiltrated at cin_tedges will be extracted at cin_tedges + rt
-    # It can be observed if that extraction time falls within tedges
-
     # Loop over each pore volume
     for i_pv in range(len(aquifer_pore_volumes)):
-        # Compute extraction times at cin_tedges for this pore volume
+        # Compute extraction times: when water infiltrated at cin_tedges will be extracted
         # t_extraction = t_infiltration + residence_time
-        extraction_times_at_cin_tedges = cin_tedges + pd.to_timedelta(rt_edges_2d[i_pv, :], unit="D")
+        extraction_times = cin_tedges + pd.to_timedelta(rt_edges_2d[i_pv, :], unit="D")
 
         # Convert to days relative to tedges[0] for computation
         cout_tedges_days = ((tedges - tedges[0]) / pd.Timedelta("1D")).values
-        extraction_times_days = ((extraction_times_at_cin_tedges - tedges[0]) / pd.Timedelta("1D")).values
+        extraction_times_days = ((extraction_times - tedges[0]) / pd.Timedelta("1D")).values
 
-        # The spatial coordinate x represents the distance from the concentration front
-        # to the observation point. For the inverse problem:
-        # We need to find what fraction of cout[j] originated from cin[i]
-        #
-        # For each (cin_edge, cout_edge) pair, compute the volume relationship:
-        # delta_volume = volume at cin_tedge + R*APV - volume at cout_tedge
-        # This represents how far the concentration front has traveled
-        delta_volume_for_extraction = (
+        # Compute volume relationship for the erf x-coordinate:
+        # delta_volume = volume at infiltration + R*APV - volume extracted at cout_tedge
+        # This represents how far past the pore volume the concentration front has traveled
+        delta_volume = (
             cumulative_volume_at_cin_tedges[:, None]
             + (retardation_factor * aquifer_pore_volumes[i_pv])
             - cumulative_volume_at_cout_tedges[None, :]
         )
 
-        # Mask positions where cin_tedge + RT < cout_tedge (extraction hasn't happened yet)
-        # The extraction time for water at cin_tedge[i] is extraction_times_at_cin_tedges[i]
-        # This should be >= cout_tedge[j] for cout[j] to contain this water
+        # Determine when extraction has occurred: extraction_time must be >= cout_tedge
         isactive = extraction_times_days[:, None] >= cout_tedges_days[None, :]
-        delta_volume_for_extraction[~isactive] = np.nan
+        delta_volume[~isactive] = np.nan
 
-        # Convert volume to distances (x-coordinate for erf)
-        step_widths_cout = (
-            delta_volume_for_extraction / (retardation_factor * aquifer_pore_volumes[i_pv]) * streamline_length[i_pv]
-        )
+        # Convert volume to spatial distance x (erf coordinate)
+        # x = delta_volume / (R * APV) * L
+        step_widths = delta_volume / (retardation_factor * aquifer_pore_volumes[i_pv]) * streamline_length[i_pv]
 
-        # Compute time_active: time from infiltration until the cout_edge is observed
-        # This is limited by the residence time (can't observe before extraction)
+        # Compute diffusion time: time from extraction until cout_tedge, limited by residence time
         time_active = extraction_times_days[:, None] - cout_tedges_days[None, :]
         time_active[~isactive] = np.nan
         time_active = np.maximum(time_active, 0)  # No negative times
         time_active = np.minimum(time_active, rt_edges_2d[[i_pv]].T)  # Limited by residence time
 
-        # Compute erf response for each cout_edge
-        # We need to compute response[i_cin_bin, j_cout_edge] for each cout edge
-        # This is similar to the forward function but with transposed structure
-        #
-        # For each cout_edge j, we compute the erf mean over cin bins
-        # xedges are at cin_tedges (n_cin_edges), giving n_cin_bins cells
-        # tedges are at cin_tedges (n_cin_edges), giving n_cin_bins cells
+        # Compute erf response: response[i_cin_bin, j_cout_edge] = mean erf for cin bin i at cout edge j
+        response = np.zeros((n_cin_bins, n_cout_edges))
 
         # Get diffusivity for this pore volume across all cin bins
         diff_pv = diffusivity_2d[i_pv, :]  # shape (n_cin_bins,)
 
-        # response[i_cin_bin, j_cout_edge] = mean erf for cin bin i at cout edge j
-        response = np.zeros((n_cin_bins, n_cout_edges))
-
         for j in range(n_cout_edges):
-            # For cout_edge j, extract the x and t values at each cin_edge
-            xedges_j = step_widths_cout[:, j]  # shape (n_cin_edges,)
+            # For each extraction edge, compute erf response at all infiltration bins
+            xedges_j = step_widths[:, j]  # shape (n_cin_edges,)
             tedges_j = time_active[:, j]  # shape (n_cin_edges,)
-
-            # _erf_mean_space_time takes edge arrays and returns cell averages
-            # Input: n edges, Output: n-1 cell averages
             response[:, j] = _erf_mean_space_time(xedges_j, tedges_j, diff_pv)
 
         # Convert erf response [-1, 1] to breakthrough fraction [0, 1]
         frac = 0.5 * (1 + response)  # shape (n_cin_bins, n_cout_edges)
 
-        # Coefficient matrix: coeff[i, j] = frac[i, j] - frac[i, j+1]
-        # This represents the fraction of cout[j] that originated from cin[i]
-        # frac[:, j] is the breakthrough at cout_tedge[j]
-        # For cout[j] (between tedges[j] and tedges[j+1]), contribution is frac at start minus frac at end
-        frac_start = frac[:, :-1]  # frac at tedges[j] for j=0..n-1
-        frac_end = frac[:, 1:]  # frac at tedges[j+1] for j=0..n-1
+        # Coefficient for bin j: coeff[i, j] = frac[i, j] - frac[i, j+1]
+        # This is the fraction of cout[j] that originated from cin[i]
+        frac_start = frac[:, :-1]
+        frac_end = frac[:, 1:]
 
         # Handle NaN: if frac_end is NaN but frac_start is valid, use 0.0 for frac_end
+        # (the concentration step hasn't fully passed through yet)
         frac_end_filled = np.where(np.isnan(frac_end) & ~np.isnan(frac_start), 0.0, frac_end)
         coeff = frac_start - frac_end_filled  # shape (n_cin_bins, n_cout_bins)
 
         # Replace NaN with 0 BEFORE accumulating to avoid NaN propagation
-        # (NaN + valid = NaN, which would lose valid contributions from other pore volumes)
+        # (NaN + valid = NaN would lose valid contributions from other pore volumes)
         accumulated_coeff += np.nan_to_num(coeff, nan=0.0)
 
     # Average across pore volumes
@@ -1175,16 +1178,13 @@ def extraction_to_infiltration(
     # coeff_matrix is already NaN-free due to nan_to_num in the loop
     coeff_matrix_filled = coeff_matrix
 
-    # Matrix multiply: cin = coeff_matrix @ cout
+    # Matrix multiply: cin = W @ cout
     cin = coeff_matrix_filled @ cout
 
-    # Handle invalid outputs where no valid contributions exist
-    # A cin bin is invalid when:
-    # 1. The sum of coefficients is near zero (no cout data covers this infiltration time)
-    # 2. The infiltration bin extends beyond the extraction data range
+    # Mark output bins as invalid where no valid contributions exist:
+    # 1. Sum of coefficients near zero (no cout data covers this time - spinup)
+    # 2. Output bin extends beyond input data range (from valid_cin_bins)
     total_coeff = np.sum(coeff_matrix_filled, axis=1)
-
-    # Use pre-computed valid_cin_bins (computed early from rt_edges_2d)
     no_valid_contribution = (total_coeff < EPSILON_COEFF_SUM) | ~valid_cin_bins
     cin[no_valid_contribution] = np.nan
 
