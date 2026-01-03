@@ -564,7 +564,7 @@ def infiltration_to_extraction(
 
     >>> import pandas as pd
     >>> import numpy as np
-    >>> from gwtransport.diffusion2 import infiltration_to_extraction
+    >>> from gwtransport.diffusion import infiltration_to_extraction
     >>>
     >>> # Create time edges
     >>> tedges = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
@@ -951,7 +951,7 @@ def extraction_to_infiltration(
 
     >>> import pandas as pd
     >>> import numpy as np
-    >>> from gwtransport.diffusion2 import extraction_to_infiltration
+    >>> from gwtransport.diffusion import extraction_to_infiltration
     >>>
     >>> # Create time edges for extraction data
     >>> tedges = pd.date_range(start="2020-01-05", end="2020-01-25", freq="D")

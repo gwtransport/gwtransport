@@ -30,10 +30,10 @@ diffusion_fast
    :undoc-members:
    :show-inheritance:
 
-diffusion2
-==========
+diffusion
+=========
 
-.. automodule:: gwtransport.diffusion2
+.. automodule:: gwtransport.diffusion
    :members:
    :undoc-members:
    :show-inheritance:

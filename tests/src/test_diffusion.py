@@ -13,7 +13,7 @@ from gwtransport.advection import (
 from gwtransport.advection import (
     infiltration_to_extraction as advection_i2e,
 )
-from gwtransport.diffusion2 import (
+from gwtransport.diffusion import (
     _erf_mean_space_time,
     extraction_to_infiltration,
     infiltration_to_extraction,

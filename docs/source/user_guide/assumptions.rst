@@ -43,7 +43,7 @@ Physical/Hydrogeological Assumptions
 
 **Applies to:** ``advection`` module (all functions), ``residence_time``, ``deposition``, ``logremoval``
 
-**Does NOT apply when using:** ``diffusion_fast`` or ``diffusion2`` modules (which explicitly add diffusive spreading)
+**Does NOT apply when using:** ``diffusion_fast`` or ``diffusion`` modules (which explicitly add diffusive spreading)
 
 **What this means:** The spreading of solute plumes is dominated by the variation in flow path lengths (different streamlines have different travel times), not by diffusive/dispersive processes within individual streamlines.
 
@@ -582,6 +582,6 @@ Quick Reference: Assumptions by Module
    * - ``diffusion_fast``
      - :ref:`Steady streamlines <assumption-steady-streamlines>`
      - — (fast approximation, relaxes advection-only assumption)
-   * - ``diffusion2``
+   * - ``diffusion``
      - :ref:`Steady streamlines <assumption-steady-streamlines>`
      - — (analytical solution, relaxes advection-only assumption)

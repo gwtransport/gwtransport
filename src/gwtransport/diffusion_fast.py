@@ -2,14 +2,14 @@
 Fast Diffusive Transport Corrections via Gaussian Smoothing.
 
 This module provides a computationally efficient approximation of diffusion/dispersion
-using Gaussian smoothing. It is much faster than :mod:`gwtransport.diffusion2` but
+using Gaussian smoothing. It is much faster than :mod:`gwtransport.diffusion` but
 less physically accurate, especially under variable flow conditions.
 
-**When to use diffusion_fast vs diffusion2:**
+**When to use diffusion_fast vs diffusion:**
 
 - Use ``diffusion_fast`` when: Speed is critical, flow and time steps are relatively
   constant, or you need real-time processing
-- Use ``diffusion2`` when: Physical accuracy is critical, flow varies significantly,
+- Use ``diffusion`` when: Physical accuracy is critical, flow varies significantly,
   or you're analyzing periods with changing conditions
 
 See :ref:`concept-dispersion` for background on dispersion processes.
@@ -24,7 +24,7 @@ Limitation: This fast approximation works best when flow and tedges are relative
 constant. The underlying assumption is that dx (spatial step between cells) remains
 approximately constant, which holds for steady flow but breaks down under highly
 variable conditions. For scenarios with significant flow variability, consider using
-:mod:`gwtransport.diffusion2` instead.
+:mod:`gwtransport.diffusion` instead.
 
 Available functions:
 
@@ -82,7 +82,7 @@ def infiltration_to_extraction(
     increase but mass balance is preserved.
 
     For physically rigorous solutions that handle variable flow correctly, use
-    :func:`gwtransport.diffusion2.infiltration_to_extraction` instead. That function is
+    :func:`gwtransport.diffusion.infiltration_to_extraction` instead. That function is
     slower but provides analytical solutions to the advection-dispersion equation.
 
     Parameters
@@ -111,7 +111,7 @@ def infiltration_to_extraction(
 
     See Also
     --------
-    gwtransport.diffusion2.infiltration_to_extraction : Physically rigorous analytical solution (slower)
+    gwtransport.diffusion.infiltration_to_extraction : Physically rigorous analytical solution (slower)
 
     Notes
     -----
@@ -184,7 +184,7 @@ def extraction_to_infiltration(
 
     See Also
     --------
-    gwtransport.diffusion2.extraction_to_infiltration : Analytically correct deconvolution
+    gwtransport.diffusion.extraction_to_infiltration : Analytically correct deconvolution
 
     Notes
     -----
@@ -315,7 +315,7 @@ def compute_scaled_sigma_array(
 
     See Also
     --------
-    gwtransport.diffusion2.infiltration_to_extraction : For analytical solutions without this approximation
+    gwtransport.diffusion.infiltration_to_extraction : For analytical solutions without this approximation
     """
     # Diffusive spreading length [m]: how far concentrations spread physically
     diffusive_spreading_length = compute_sigma_array(
