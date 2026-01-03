@@ -431,6 +431,45 @@ class TestErfMeanSpaceTimeAnalytical:
         result = _erf_mean_space_time(xedges, tedges, diffusivity=1.0)
         np.testing.assert_allclose(result, 1.0, rtol=1e-4)
 
+    def test_asymptotic_cutoff_matches_full_computation(self):
+        """Test that asymptotic cutoff produces same results as full computation."""
+        # Create a range of cells: some near the front, some far away
+        n_cells = 50
+        xedges = np.linspace(-20, 20, n_cells + 1)
+        tedges = np.linspace(1, 5, n_cells + 1)
+        diffusivity = 1.0
+
+        result_full = _erf_mean_space_time(xedges, tedges, diffusivity)
+        result_cutoff = _erf_mean_space_time(xedges, tedges, diffusivity, asymptotic_cutoff_sigma=4.0)
+
+        # Results should be very close (cutoff at 4 sigma gives error < 1e-8)
+        np.testing.assert_allclose(result_cutoff, result_full, rtol=1e-6, atol=1e-6)
+
+    def test_asymptotic_cutoff_handles_edge_cases(self):
+        """Test asymptotic cutoff with dx=0, dt=0, and mixed cells."""
+        # Mix of edge cases
+        xedges = np.array([0.0, 0.0, 10.0, 20.0, -10.0, -5.0])  # dx=0 first cell
+        tedges = np.array([1.0, 1.0, 2.0, 2.0, 3.0, 4.0])  # dt=0 third cell
+        diffusivity = np.array([1.0, 1.0, 1.0, 1.0, 1.0])
+
+        result_full = _erf_mean_space_time(xedges, tedges, diffusivity)
+        result_cutoff = _erf_mean_space_time(xedges, tedges, diffusivity, asymptotic_cutoff_sigma=3.0)
+
+        np.testing.assert_allclose(result_cutoff, result_full, rtol=1e-5, atol=1e-5)
+
+    def test_asymptotic_cutoff_cell_straddling_zero_not_optimized(self):
+        """Test that cells straddling x=0 are not assigned asymptotic values."""
+        # Cell that spans from negative to positive x should not be optimized
+        xedges = np.array([-5.0, 5.0])
+        tedges = np.array([1.0, 2.0])
+        diffusivity = 1.0
+
+        result_full = _erf_mean_space_time(xedges, tedges, diffusivity)
+        result_cutoff = _erf_mean_space_time(xedges, tedges, diffusivity, asymptotic_cutoff_sigma=0.1)
+
+        # Should get same result since cell straddles x=0
+        np.testing.assert_allclose(result_cutoff, result_full, rtol=1e-10)
+
 
 class TestDiffusionMatchesApvdCombined:
     """Test diffusion physics with per-bin velocity-dependent dispersivity.

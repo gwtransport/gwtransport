@@ -254,7 +254,7 @@ def _erf_integral_space(
     return out
 
 
-def _erf_mean_space_time(xedges, tedges, diffusivity):
+def _erf_mean_space_time(xedges, tedges, diffusivity, *, asymptotic_cutoff_sigma=None):
     """
     Compute the mean of the error function over paired space-time cells.
 
@@ -275,12 +275,27 @@ def _erf_mean_space_time(xedges, tedges, diffusivity):
     diffusivity : float or ndarray
         Diffusivity [m²/day]. Must be non-negative. Can be a scalar (same for
         all cells) or an array of size n-1 (one value per cell).
+    asymptotic_cutoff_sigma : float, optional
+        Performance optimization. When set, cells where the erf argument
+        magnitude exceeds this threshold are assigned asymptotic values (+1 or -1)
+        instead of computing the expensive double integral. Since erf(3) ≈ 0.99998
+        and erf(4) ≈ 0.9999999846, values of 3-5 provide good accuracy with
+        significant speedup for transport problems where most cells are far
+        from the concentration front. Default is None (no cutoff, compute all).
 
     Returns
     -------
     ndarray
         Mean of the error function over each cell.
         Returns 1D array of length n-1, or scalar if n=2.
+
+    Notes
+    -----
+    The asymptotic cutoff optimization works by checking the "weakest" erf
+    argument in each cell (minimum |x| with maximum t). If this argument
+    exceeds the cutoff threshold, the entire cell is in the asymptotic region
+    and no computation is needed. This is particularly effective for advection-
+    dispersion problems where most cells are far from the moving front.
     """
     xedges = np.asarray(xedges)
     tedges = np.asarray(tedges)
@@ -302,11 +317,32 @@ def _erf_mean_space_time(xedges, tedges, diffusivity):
 
     out = np.full(n_cells, np.nan, dtype=float)
 
+    # Early exit for asymptotic cells (performance optimization)
+    # For cells far from the concentration front, erf ≈ ±1
+    if asymptotic_cutoff_sigma is not None:
+        x0, x1 = xedges[:-1], xedges[1:]
+        t_max = np.maximum(tedges[:-1], tedges[1:])
+
+        # Cell is asymptotic if: same sign in x AND weakest argument exceeds cutoff
+        # Weakest argument = min(|x|) / (2 * sqrt(D * t_max))
+        same_sign = (x0 >= 0) == (x1 >= 0)
+        min_abs_x = np.minimum(np.abs(x0), np.abs(x1))
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            weakest_arg = min_abs_x / (2.0 * np.sqrt(diffusivity * np.maximum(t_max, 0.0)))
+            weakest_arg = np.where((t_max <= 0) | (diffusivity <= 0), np.inf, weakest_arg)
+
+        mask_asymptotic = same_sign & (weakest_arg >= asymptotic_cutoff_sigma)
+        out[mask_asymptotic] = np.sign(x0[mask_asymptotic] + x1[mask_asymptotic])
+
+    # Track which cells still need computation
+    mask_computed = ~np.isnan(out)
+
     dx = xedges[1:] - xedges[:-1]
     dt = tedges[1:] - tedges[:-1]
 
-    mask_dx_zero = dx == 0.0
-    mask_dt_zero = dt == 0.0
+    mask_dx_zero = (dx == 0.0) & ~mask_computed
+    mask_dt_zero = (dt == 0.0) & ~mask_computed
 
     # Handle cells where both dx=0 AND dt=0 (point evaluation of erf)
     mask_both_zero = mask_dx_zero & mask_dt_zero
@@ -373,7 +409,7 @@ def _erf_mean_space_time(xedges, tedges, diffusivity):
         out[idx_dx_zero] = (erfint_upper - erfint_lower) / dt_cells
 
     # Handle remaining cells with full double integral
-    mask_remainder = ~mask_dx_zero & ~mask_dt_zero
+    mask_remainder = ~mask_dx_zero & ~mask_dt_zero & ~mask_computed
     if np.any(mask_remainder):
         # Check for zero diffusivity cells
         d_remainder = diffusivity[mask_remainder]
@@ -448,6 +484,7 @@ def infiltration_to_extraction(
     longitudinal_dispersivity: npt.ArrayLike,
     retardation_factor: float = 1.0,
     suppress_dispersion_warning: bool = False,
+    asymptotic_cutoff_sigma: float | None = 3.0,
 ) -> npt.NDArray[np.floating]:
     """
     Compute extracted concentration with advection and longitudinal dispersion.
@@ -509,6 +546,12 @@ def infiltration_to_extraction(
     suppress_dispersion_warning : bool, optional
         If True, suppress the warning when using multiple pore volumes with
         non-zero longitudinal_dispersivity. Default is False.
+    asymptotic_cutoff_sigma : float or None, optional
+        Performance optimization. Cells where the erf argument magnitude exceeds
+        this threshold are assigned asymptotic values (±1) instead of computing
+        the expensive integral. Since erf(3) ≈ 0.99998, the default of 3.0
+        provides excellent accuracy with significant speedup. Set to None to
+        disable the optimization. Default is 3.0.
 
     Returns
     -------
@@ -789,7 +832,9 @@ def infiltration_to_extraction(
             # For each infiltration edge, compute erf response at all extraction bins
             xedges_j = step_widths[:, j]  # shape (n_cout_edges,)
             tedges_j = time_active[:, j]  # shape (n_cout_edges,)
-            response[:, j] = _erf_mean_space_time(xedges_j, tedges_j, diff_pv)
+            response[:, j] = _erf_mean_space_time(
+                xedges_j, tedges_j, diff_pv, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
+            )
 
         # Convert erf response [-1, 1] to breakthrough fraction [0, 1]
         frac = 0.5 * (1 + response)  # shape (n_cout_bins, n_cin_edges)
@@ -838,6 +883,7 @@ def extraction_to_infiltration(
     longitudinal_dispersivity: npt.ArrayLike,
     retardation_factor: float = 1.0,
     suppress_dispersion_warning: bool = False,
+    asymptotic_cutoff_sigma: float | None = 3.0,
 ) -> npt.NDArray[np.floating]:
     """
     Compute infiltration concentration from extracted water (deconvolution with dispersion).
@@ -895,6 +941,12 @@ def extraction_to_infiltration(
     suppress_dispersion_warning : bool, optional
         If True, suppress the warning when using multiple pore volumes with
         non-zero longitudinal_dispersivity. Default is False.
+    asymptotic_cutoff_sigma : float or None, optional
+        Performance optimization. Cells where the erf argument magnitude exceeds
+        this threshold are assigned asymptotic values (±1) instead of computing
+        the expensive integral. Since erf(3) ≈ 0.99998, the default of 3.0
+        provides excellent accuracy with significant speedup. Set to None to
+        disable the optimization. Default is 3.0.
 
     Returns
     -------
@@ -1153,7 +1205,9 @@ def extraction_to_infiltration(
             # For each extraction edge, compute erf response at all infiltration bins
             xedges_j = step_widths[:, j]  # shape (n_cin_edges,)
             tedges_j = time_active[:, j]  # shape (n_cin_edges,)
-            response[:, j] = _erf_mean_space_time(xedges_j, tedges_j, diff_pv)
+            response[:, j] = _erf_mean_space_time(
+                xedges_j, tedges_j, diff_pv, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
+            )
 
         # Convert erf response [-1, 1] to breakthrough fraction [0, 1]
         frac = 0.5 * (1 + response)  # shape (n_cin_bins, n_cout_edges)
