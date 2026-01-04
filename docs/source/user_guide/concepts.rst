@@ -132,6 +132,32 @@ A key advantage of ``gwtransport`` is how it handles dispersion:
 
 This is fundamentally different from traditional numerical transport models where dispersion must be parameterized separately and grid resolution affects results.
 
+.. _concept-dispersion-scales:
+
+Dispersion as Scale-Dependent Heterogeneity
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+All spreading in porous media transport arises from **velocity heterogeneity** at different scales:
+
+1. **Molecular scale**: Brownian motion causes spreading even in uniform flow (:math:`D_m`)
+2. **Pore scale** (~mm to cm): Velocity varies within and between pores (:math:`\alpha_L`, longitudinal dispersivity)
+3. **Local scale** (~m to 10m): Conductivity varies between soil layers and lenses
+4. **Aquifer scale** (~10m to km): Different streamlines have different path lengths (captured by APVD)
+
+The boundaries between these scales are **not sharp**. This is why measured dispersivity (:math:`\alpha_L`) famously increases with experiment scale—larger measurements "see" more heterogeneity.
+
+**gwtransport's approach:**
+
+- The **pore volume distribution (APVD)** captures macro-scale heterogeneity explicitly
+- The **diffusion module** adds molecular diffusion (:math:`D_m`) and mechanical dispersion (:math:`\alpha_L`)
+- For most bank filtration applications, APVD dominates and pore-scale dispersion is negligible
+
+**When calibrating APVD from breakthrough curves**, the fitted :math:`\sigma_{apv}` already includes all spreading sources at scales smaller than the APVD resolution. Adding :math:`\alpha_L` would double-count.
+
+**When computing APVD from streamline analysis**, only macro-scale path lengths are captured. Pore-scale dispersion (:math:`\alpha_L`) can be meaningfully added.
+
+See :doc:`/examples/05_Diffusion_Dispersion` for quantitative guidance on comparing these contributions and formulas to convert dispersion effects to equivalent APVD standard deviation.
+
 Calibration Approaches
 ----------------------
 

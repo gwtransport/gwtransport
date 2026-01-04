@@ -22,6 +22,11 @@ The velocity v is computed per (pore_volume, output_bin) using the mean residenc
 time, which correctly accounts for time-varying flow. This formulation ensures that:
 - Molecular diffusion spreading scales with residence time: sqrt(D_m * tau)
 - Mechanical dispersion spreading scales with travel distance: sqrt(alpha_L * L)
+
+Note: Both the pore volume distribution (APVD) and longitudinal dispersivity (alpha_L)
+represent velocity heterogeneity at different scales—they are the same physical phenomenon
+observed at different resolutions. See :ref:`concept-dispersion-scales` for guidance on
+when to use each approach and how to avoid double-counting spreading effects.
 """
 
 import warnings
@@ -706,20 +711,19 @@ def infiltration_to_extraction(
         raise ValueError(msg)
 
     # Check for conflicting approaches: multiple pore volumes with longitudinal dispersivity
-    # Both represent spreading mechanisms but at different scales:
-    # - Multiple pore volumes: macro-scale aquifer heterogeneity
-    # - Longitudinal dispersivity: pore-scale mechanical dispersion
-    # Using both simultaneously may lead to double-counting of spreading effects.
-    # See notebook 05_Diffusion_Dispersion.ipynb for guidance on choosing the right approach.
+    # Both represent the same physical phenomenon (velocity heterogeneity) at different scales.
+    # See concept-dispersion-scales in the documentation for details.
     if n_pore_volumes > 1 and np.any(longitudinal_dispersivity > 0) and not suppress_dispersion_warning:
         msg = (
             "Using multiple aquifer_pore_volumes with non-zero longitudinal_dispersivity. "
-            "Multiple pore volumes represent macro-scale aquifer heterogeneity, while "
-            "longitudinal_dispersivity represents pore-scale mechanical dispersion. "
-            "Using both may double-count spreading effects. Consider:\n"
-            "  1. Use multiple pore volumes with longitudinal_dispersivity=0 for macro-scale heterogeneity\n"
-            "  2. Use a single pore volume with longitudinal_dispersivity>0 for pore-scale dispersion\n"
-            "See examples/05_Diffusion_Dispersion.ipynb for guidance on selecting the appropriate method.\n"
+            "Both represent spreading from velocity heterogeneity at different scales.\n\n"
+            "This is appropriate when:\n"
+            "  - APVD comes from streamline analysis (explicit geometry)\n"
+            "  - You want to add unresolved pore-scale dispersion\n\n"
+            "This may double-count spreading when:\n"
+            "  - APVD was calibrated from breakthrough curves (dispersion already included)\n\n"
+            "Consider using the 'equivalent APVD std' approach from 05_Diffusion_Dispersion.ipynb "
+            "to combine both effects in the faster advection module.\n"
             "Suppress this warning with suppress_dispersion_warning=True."
         )
         warnings.warn(msg, UserWarning, stacklevel=2)
@@ -1083,15 +1087,19 @@ def extraction_to_infiltration(
         raise ValueError(msg)
 
     # Check for conflicting approaches: multiple pore volumes with longitudinal dispersivity
+    # Both represent the same physical phenomenon (velocity heterogeneity) at different scales.
+    # See concept-dispersion-scales in the documentation for details.
     if n_pore_volumes > 1 and np.any(longitudinal_dispersivity > 0) and not suppress_dispersion_warning:
         msg = (
             "Using multiple aquifer_pore_volumes with non-zero longitudinal_dispersivity. "
-            "Multiple pore volumes represent macro-scale aquifer heterogeneity, while "
-            "longitudinal_dispersivity represents pore-scale mechanical dispersion. "
-            "Using both may double-count spreading effects. Consider:\n"
-            "  1. Use multiple pore volumes with longitudinal_dispersivity=0 for macro-scale heterogeneity\n"
-            "  2. Use a single pore volume with longitudinal_dispersivity>0 for pore-scale dispersion\n"
-            "See examples/05_Diffusion_Dispersion.ipynb for guidance on selecting the appropriate method.\n"
+            "Both represent spreading from velocity heterogeneity at different scales.\n\n"
+            "This is appropriate when:\n"
+            "  - APVD comes from streamline analysis (explicit geometry)\n"
+            "  - You want to add unresolved pore-scale dispersion\n\n"
+            "This may double-count spreading when:\n"
+            "  - APVD was calibrated from breakthrough curves (dispersion already included)\n\n"
+            "Consider using the 'equivalent APVD std' approach from 05_Diffusion_Dispersion.ipynb "
+            "to combine both effects in the faster advection module.\n"
             "Suppress this warning with suppress_dispersion_warning=True."
         )
         warnings.warn(msg, UserWarning, stacklevel=2)
