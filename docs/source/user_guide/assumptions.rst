@@ -66,6 +66,19 @@ Physical/Hydrogeological Assumptions
 
    \frac{\sigma^2_{\text{diffusion}}}{\sigma^2_{\text{advection}}} < 0.1 \implies \text{Diffusion negligible}
 
+**Understanding the scale-dependence:**
+
+What appears as "dispersion" at one scale becomes "advection through heterogeneity" at a finer observation scale. The APVD captures velocity variations at the aquifer scale; :math:`\alpha_L` captures variations at the pore scale. These are the same physical phenomenon at different resolutions. See :ref:`concept-dispersion-scales` for details.
+
+**Relationship to the diffusion module:**
+
+When using the ``advection`` module, only macro-scale spreading from the pore volume distribution is modeled. To add pore-scale diffusive/dispersive spreading, use:
+
+- :mod:`gwtransport.diffusion_fast` for approximate but fast Gaussian smoothing
+- :mod:`gwtransport.diffusion` for analytical advection-dispersion solutions
+
+Alternatively, use the "equivalent APVD std" approach described in :doc:`/examples/05_Diffusion_Dispersion` to convert pore-scale dispersion to equivalent APVD spreading, allowing continued use of the fast advection module.
+
 .. _assumption-steady-streamlines:
 
 2. Steady Streamlines

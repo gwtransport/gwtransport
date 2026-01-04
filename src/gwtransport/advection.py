@@ -25,6 +25,13 @@ Available functions:
   (alpha, beta) or (mean, std). Discretizes gamma distribution into equal-probability bins.
   Use case: Heterogeneous aquifer with calibrated gamma parameters.
 
+Note on dispersion: The spreading from the pore volume distribution (APVD) represents
+macro-scale aquifer heterogeneity—this is the same physical phenomenon as "dispersion"
+but at a larger observation scale. If APVD was calibrated from breakthrough curves, this
+spreading already includes all dispersion effects at smaller scales. To add pore-scale
+dispersion separately (when APVD comes from streamline analysis), use
+:mod:`gwtransport.diffusion`. See :ref:`concept-dispersion-scales` for details.
+
 - :func:`extraction_to_infiltration_series` - Single pore volume, time-shift only
   (deconvolution). Shifts extraction time edges backward by residence time. Concentration
   values remain unchanged (cin = cout). Symmetric inverse of infiltration_to_extraction_series.
@@ -367,6 +374,14 @@ def gamma_infiltration_to_extraction(
     gamma_extraction_to_infiltration : Reverse operation (deconvolution)
     gwtransport.gamma.bins : Create gamma distribution bins
     gwtransport.residence_time.residence_time : Compute residence times
+    gwtransport.diffusion.infiltration_to_extraction : Add pore-scale dispersion
+
+    Notes
+    -----
+    The spreading from the gamma-distributed pore volumes represents macro-scale aquifer
+    heterogeneity. If parameters (mean, std) were calibrated from breakthrough curves,
+    pore-scale dispersion is already implicitly included. See :ref:`concept-dispersion-scales`
+    for guidance on when to add pore-scale dispersion using the diffusion module.
 
     Examples
     --------
@@ -498,6 +513,20 @@ def gamma_extraction_to_infiltration(
     -------
     numpy.ndarray
         Concentration of the compound in the infiltrating water [ng/m3] or temperature.
+
+    See Also
+    --------
+    extraction_to_infiltration : Deconvolution with explicit pore volume distribution
+    gamma_infiltration_to_extraction : Forward operation (convolution)
+    gwtransport.gamma.bins : Create gamma distribution bins
+    gwtransport.diffusion.extraction_to_infiltration : Deconvolution with pore-scale dispersion
+
+    Notes
+    -----
+    The spreading from the gamma-distributed pore volumes represents macro-scale aquifer
+    heterogeneity. If parameters (mean, std) were calibrated from breakthrough curves,
+    pore-scale dispersion is already implicitly included. See :ref:`concept-dispersion-scales`
+    for guidance on when to add pore-scale dispersion using the diffusion module.
 
     Examples
     --------

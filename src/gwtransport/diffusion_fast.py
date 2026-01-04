@@ -210,20 +210,20 @@ def compute_sigma_array(
     neighboring time steps are blended together when applying diffusive smoothing.
 
     The computation follows these steps:
-    1. Calculate residence time (rt) for water parcels traveling through the aquifer
-    2. Compute the diffusive spreading length: L_diff = sqrt(2 * D * rt) [m]
-       This is the physical distance over which concentrations spread due to diffusion
-    3. Compute the advective step size: dx = (Q * dt / V_pore) * L_aquifer [m]
-       This is the physical distance the water moves during one time step
-    4. Sigma = L_diff / dx converts the physical spreading into array index units
 
-    Why divide by dx?
-    The Gaussian filter operates on array indices, not physical distances. If the
-    diffusive spreading is 10 meters and each time step moves water 2 meters, then
-    sigma = 10/2 = 5 means the filter should blend across ~5 time steps. This
-    normalization accounts for variable flow rates: faster flow means larger dx,
-    so fewer time steps are blended (smaller sigma), even though the physical
-    spreading remains the same.
+    1. Calculate residence time (rt) for water parcels traveling through the aquifer
+    2. Compute the diffusive spreading length: L_diff = sqrt(2 * D * rt) [m].
+       This is the physical distance over which concentrations spread due to diffusion.
+    3. Compute the advective step size: dx = (Q * dt / V_pore) * L_aquifer [m].
+       This is the physical distance the water moves during one time step.
+    4. Sigma = L_diff / dx converts the physical spreading into array index units.
+
+    Why divide by dx? The Gaussian filter operates on array indices, not physical
+    distances. If the diffusive spreading is 10 meters and each time step moves
+    water 2 meters, then sigma = 10/2 = 5 means the filter should blend across
+    ~5 time steps. This normalization accounts for variable flow rates: faster
+    flow means larger dx, so fewer time steps are blended (smaller sigma), even
+    though the physical spreading remains the same.
 
     Parameters
     ----------
@@ -277,20 +277,20 @@ def compute_scaled_sigma_array(
     neighboring time steps are blended together when applying diffusive smoothing.
 
     The computation follows these steps:
-    1. Calculate residence time (rt) for water parcels traveling through the aquifer
-    2. Compute the diffusive spreading length: L_diff = sqrt(2 * D * rt) [m]
-       This is the physical distance over which concentrations spread due to diffusion
-    3. Compute the advective step size: dx = (Q * dt / V_pore) * L_aquifer [m]
-       This is the physical distance the water moves during one time step
-    4. Sigma = L_diff / dx converts the physical spreading into array index units
 
-    Why divide by dx?
-    The Gaussian filter operates on array indices, not physical distances. If the
-    diffusive spreading is 10 meters and each time step moves water 2 meters, then
-    sigma = 10/2 = 5 means the filter should blend across ~5 time steps. This
-    normalization accounts for variable flow rates: faster flow means larger dx,
-    so fewer time steps are blended (smaller sigma), even though the physical
-    spreading remains the same.
+    1. Calculate residence time (rt) for water parcels traveling through the aquifer
+    2. Compute the diffusive spreading length: L_diff = sqrt(2 * D * rt) [m].
+       This is the physical distance over which concentrations spread due to diffusion.
+    3. Compute the advective step size: dx = (Q * dt / V_pore) * L_aquifer [m].
+       This is the physical distance the water moves during one time step.
+    4. Sigma = L_diff / dx converts the physical spreading into array index units.
+
+    Why divide by dx? The Gaussian filter operates on array indices, not physical
+    distances. If the diffusive spreading is 10 meters and each time step moves
+    water 2 meters, then sigma = 10/2 = 5 means the filter should blend across
+    ~5 time steps. This normalization accounts for variable flow rates: faster
+    flow means larger dx, so fewer time steps are blended (smaller sigma), even
+    though the physical spreading remains the same.
 
     Parameters
     ----------
