@@ -16,6 +16,7 @@ uv run pytest tests/docs                   # Documentation code snippets
 # Linting (run before committing)
 uv run ruff format .                       # Format code
 uv run ruff check --fix .                  # Lint and auto-fix
+npx prettier --check "**/*.{yaml,yml,md}"  # Format markdown
 
 # Type checking
 uv tool update ty
@@ -151,12 +152,12 @@ Enrich function docstrings with references to concepts and assumptions when they
 
 **Syntax by context**:
 
-| Context                | Syntax                                                                                             |
-| ---------------------- | -------------------------------------------------------------------------------------------------- |
-| Python docstrings      | `:ref:`concept-dispersion-scales``                                                                 |
-| Jupyter notebooks / md | `[Dispersion scales](https://gwtransport.readthedocs.io/en/latest/user_guide/concepts.html#...)` |
+| Context                | Syntax                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| Python docstrings      | `:ref:`concept-dispersion-scales``                                                            |
+| Jupyter notebooks / md | `[Dispersion scales](https://gwtransport.github.io/gwtransport/user_guide/concepts.html#...)` |
 
-Base URL: `https://gwtransport.readthedocs.io/en/latest/user_guide/`
+Base URL: `https://gwtransport.github.io/gwtransport/`
 
 **Available labels** (in `docs/source/user_guide/`):
 
@@ -187,14 +188,14 @@ _Assumptions_ (`assumptions.rst` → `assumptions.html`):
 
 _Examples_ (`../examples/` → `examples.html`):
 
-| Path                                          | Topic                                  |
-| --------------------------------------------- | -------------------------------------- |
-| `examples/01_Aquifer_Characterization_Temperature` | Temperature tracer calibration         |
-| `examples/02_Residence_Time_Analysis`              | Residence time calculations            |
-| `examples/03_Pathogen_Removal_Bank_Filtration`     | Log removal efficiency                 |
-| `examples/04_Deposition_Analysis_Bank_Filtration`  | Deposition analysis                    |
-| `examples/05_Diffusion_Dispersion`                 | Dispersion vs APVD, equivalent std     |
-| `examples/10_Advection_with_non_linear_sorption`   | Freundlich sorption, front-tracking    |
+| Path                                               | Topic                               |
+| -------------------------------------------------- | ----------------------------------- |
+| `examples/01_Aquifer_Characterization_Temperature` | Temperature tracer calibration      |
+| `examples/02_Residence_Time_Analysis`              | Residence time calculations         |
+| `examples/03_Pathogen_Removal_Bank_Filtration`     | Log removal efficiency              |
+| `examples/04_Deposition_Analysis_Bank_Filtration`  | Deposition analysis                 |
+| `examples/05_Diffusion_Dispersion`                 | Dispersion vs APVD, equivalent std  |
+| `examples/10_Advection_with_non_linear_sorption`   | Freundlich sorption, front-tracking |
 
 **When to add references**: Function assumes something non-obvious, user needs context to choose between functions, or physical limitations affect interpretation.
 
