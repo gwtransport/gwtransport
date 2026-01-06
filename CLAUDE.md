@@ -16,6 +16,7 @@ uv run pytest tests/docs                   # Documentation code snippets
 # Linting (run before committing)
 uv run ruff format .                       # Format code
 uv run ruff check --fix .                  # Lint and auto-fix
+npx prettier --check "**/*.{yaml,yml,md}"  # Format markdown
 
 # Type checking
 uv tool update ty
@@ -149,18 +150,18 @@ Units must be consistent within calculation
 
 Enrich function docstrings with references to concepts and assumptions when they meaningfully aid understanding. Use Sphinx cross-references that render as clickable links.
 
-**Syntax in docstrings**:
+**Syntax by context**:
 
-```python
-"""
-See :ref:`assumption-advection-dominated` for when this applies.
-For background on pore volumes, see :ref:`assumptions`.
-"""
-```
+| Context                | Syntax                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| Python docstrings      | `:ref:`concept-dispersion-scales``                                                            |
+| Jupyter notebooks / md | `[Dispersion scales](https://gwtransport.github.io/gwtransport/user_guide/concepts.html#...)` |
+
+Base URL: `https://gwtransport.github.io/gwtransport/`
 
 **Available labels** (in `docs/source/user_guide/`):
 
-_Concepts_ (`concepts.rst`):
+_Concepts_ (`concepts.rst` → `concepts.html`):
 
 | Label                              | Topic                                    |
 | ---------------------------------- | ---------------------------------------- |
@@ -169,10 +170,11 @@ _Concepts_ (`concepts.rst`):
 | `concept-retardation-factor`       | Slower movement due to sorption          |
 | `concept-transport-equation`       | Flow-weighted averaging                  |
 | `concept-dispersion`               | Macroscopic spreading from heterogeneity |
+| `concept-dispersion-scales`        | Scale-dependent heterogeneity            |
 | `concept-gamma-distribution`       | Two-parameter pore volume model          |
 | `concept-nonlinear-sorption`       | Freundlich isotherm, front-tracking      |
 
-_Assumptions_ (`assumptions.rst`):
+_Assumptions_ (`assumptions.rst` → `assumptions.html`):
 
 | Label                             | Topic                        |
 | --------------------------------- | ---------------------------- |
@@ -184,10 +186,17 @@ _Assumptions_ (`assumptions.rst`):
 | `assumption-no-transverse-mixing` | Independent streamtubes      |
 | `assumptions`                     | Full assumptions page        |
 
-**When to add references**:
+_Examples_ (`../examples/` → `examples.html`):
 
-- Function assumes something non-obvious (e.g., linear retardation)
-- User needs context to choose between similar functions
-- Physical limitations affect interpretation of results
+| Path                                               | Topic                               |
+| -------------------------------------------------- | ----------------------------------- |
+| `examples/01_Aquifer_Characterization_Temperature` | Temperature tracer calibration      |
+| `examples/02_Residence_Time_Analysis`              | Residence time calculations         |
+| `examples/03_Pathogen_Removal_Bank_Filtration`     | Log removal efficiency              |
+| `examples/04_Deposition_Analysis_Bank_Filtration`  | Deposition analysis                 |
+| `examples/05_Diffusion_Dispersion`                 | Dispersion vs APVD, equivalent std  |
+| `examples/10_Advection_with_non_linear_sorption`   | Freundlich sorption, front-tracking |
+
+**When to add references**: Function assumes something non-obvious, user needs context to choose between functions, or physical limitations affect interpretation.
 
 **Keep it minimal** - only add references that genuinely help users understand when/how to use a function
