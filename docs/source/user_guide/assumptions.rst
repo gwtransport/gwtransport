@@ -68,7 +68,7 @@ Physical/Hydrogeological Assumptions
 
 **Understanding the scale-dependence:**
 
-What appears as "dispersion" at one scale becomes "advection through heterogeneity" at a finer observation scale. The APVD captures velocity variations at the aquifer scale; :math:`\alpha_L` captures variations at the pore scale. These are the same physical phenomenon at different resolutions. See :ref:`concept-dispersion-scales` for details.
+What appears as "dispersion" at one scale becomes "advection through heterogeneity" at a finer observation scale. The APVD captures velocity variations at the aquifer scale; :math:`\alpha_L` captures variations at the pore scale. These are the same physical phenomenon at different resolutions. See :ref:`concept-dispersion-scales` for details and :ref:`concept-dispersion` for background on dispersion processes.
 
 **Relationship to the diffusion module:**
 
@@ -88,7 +88,7 @@ Alternatively, use the "equivalent APVD std" approach described in :doc:`/exampl
 
 **Applies to:** All modules (``advection``, ``residence_time``, ``deposition``, ``logremoval``, ``diffusion``)
 
-**What this means:** When pumping rate doubles, water moves twice as fast along the same paths—the paths themselves don't change. The pore volume distribution is a time-invariant property of the aquifer geometry.
+**What this means:** When pumping rate doubles, water moves twice as fast along the same paths—the paths themselves don't change. The pore volume distribution (see :ref:`concept-pore-volume-distribution`) is a time-invariant property of the aquifer geometry.
 
 **When it holds:**
 
@@ -266,7 +266,7 @@ Model Parameterization Assumptions
 - :py:func:`~gwtransport.advection.infiltration_to_extraction` — accepts explicit pore volumes
 - :py:func:`~gwtransport.advection.infiltration_to_extraction_front_tracking` — accepts explicit pore volumes
 
-**What this means:** The shape of the pore volume distribution can be captured by specifying only mean and standard deviation. The gamma distribution is unimodal and right-skewed.
+**What this means:** The shape of the pore volume distribution can be captured by specifying only mean and standard deviation. The gamma distribution is unimodal and right-skewed. See :ref:`concept-gamma-distribution` for background on this parameterization.
 
 **When it holds:**
 
@@ -307,7 +307,7 @@ Model Parameterization Assumptions
 - :py:func:`~gwtransport.advection.infiltration_to_extraction_front_tracking` — supports Freundlich (non-linear) sorption
 - :py:func:`~gwtransport.residence_time.freundlich_retardation` — computes concentration-dependent R
 
-**What this means:** All concentrations travel at the same retarded velocity. The sorption isotherm is linear.
+**What this means:** All concentrations travel at the same retarded velocity. The sorption isotherm is linear. See :ref:`concept-retardation-factor` for background on retardation.
 
 **When it holds:**
 

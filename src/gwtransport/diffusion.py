@@ -578,6 +578,8 @@ def infiltration_to_extraction(
     --------
     extraction_to_infiltration : Inverse operation (deconvolution)
     gwtransport.advection.infiltration_to_extraction : Pure advection (no dispersion)
+    gwtransport.diffusion_fast.infiltration_to_extraction : Fast Gaussian approximation
+    :ref:`concept-dispersion-scales` : When to use dispersion vs APVD spreading
 
     Notes
     -----
@@ -970,6 +972,7 @@ def extraction_to_infiltration(
     --------
     infiltration_to_extraction : Forward operation (convolution)
     gwtransport.advection.extraction_to_infiltration : Pure advection (no dispersion)
+    :ref:`concept-dispersion-scales` : When to use dispersion vs APVD spreading
 
     Notes
     -----

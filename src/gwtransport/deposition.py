@@ -176,6 +176,12 @@ def deposition_to_extraction(
     ...     porosity=0.3,
     ...     thickness=10.0,
     ... )
+
+    See Also
+    --------
+    extraction_to_deposition : Inverse operation (deconvolution)
+    gwtransport.advection.infiltration_to_extraction : For concentration transport without deposition
+    :ref:`concept-transport-equation` : Flow-weighted averaging approach
     """
     tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
     dep_values, flow_values = np.asarray(dep), np.asarray(flow)
@@ -376,6 +382,12 @@ def extraction_to_deposition(
     ...     porosity=0.3,
     ...     thickness=10.0,
     ... )
+
+    See Also
+    --------
+    deposition_to_extraction : Forward operation (convolution)
+    gwtransport.advection.extraction_to_infiltration : For concentration transport without deposition
+    :ref:`concept-transport-equation` : Flow-weighted averaging approach
     """
     tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
     cout_values, flow_values = np.asarray(cout), np.asarray(flow)

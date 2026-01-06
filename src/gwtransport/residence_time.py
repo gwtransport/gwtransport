@@ -80,6 +80,8 @@ def residence_time(
     residence_time_mean : Compute mean residence time over time intervals
     gwtransport.advection.gamma_infiltration_to_extraction : Use residence times for transport
     gwtransport.logremoval.residence_time_to_log_removal : Convert residence time to log removal
+    :ref:`concept-residence-time` : Time in aquifer between infiltration and extraction
+    :ref:`concept-retardation-factor` : Slower movement due to sorption
     """
     aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
     flow_tedges = pd.DatetimeIndex(flow_tedges)
@@ -213,6 +215,11 @@ def residence_time_mean(
     >>> # mean residence time should be approximately 2 days
     >>> print(mean_times)  # doctest: +NORMALIZE_WHITESPACE
     [[nan nan  2.  2.  2.  2.  2.  2.  2.]]
+
+    See Also
+    --------
+    residence_time : Compute residence time at specific time indices
+    :ref:`concept-residence-time` : Time in aquifer between infiltration and extraction
     """
     flow = np.asarray(flow)
     flow_tedges = pd.DatetimeIndex(flow_tedges)
@@ -380,6 +387,8 @@ def freundlich_retardation(
     See Also
     --------
     residence_time : Compute residence times with retardation
+    gwtransport.advection.infiltration_to_extraction_front_tracking : Transport with nonlinear sorption
+    :ref:`concept-nonlinear-sorption` : Freundlich isotherm and concentration-dependent retardation
     """
     concentration = np.asarray(concentration)
 
