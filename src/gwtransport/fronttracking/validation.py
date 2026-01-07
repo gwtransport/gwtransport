@@ -195,7 +195,9 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
 
         # Total mass that entered domain
         t_inlet_end = tedges_days.values[-1]
-        total_mass_in = compute_cumulative_inlet_mass(t=t_inlet_end, cin=cin, flow=flow_arr, tedges_days=tedges_days.values)
+        total_mass_in = compute_cumulative_inlet_mass(
+            t=t_inlet_end, cin=cin, flow=flow_arr, tedges_days=tedges_days.values
+        )
 
         # Total mass that exits domain (integrating until all mass has exited)
         total_mass_out, t_integration_end = compute_total_outlet_mass(

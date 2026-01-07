@@ -755,7 +755,9 @@ class TestMassBalanceFunctions:
 
         # Compute all three masses
         mass_inlet = compute_cumulative_inlet_mass(t, cin.values, flow_series.values, tedges_days=tedges)
-        mass_outlet = compute_cumulative_outlet_mass(t, v_outlet, waves, sorption, flow_series.values, tedges_days=tedges)
+        mass_outlet = compute_cumulative_outlet_mass(
+            t, v_outlet, waves, sorption, flow_series.values, tedges_days=tedges
+        )
         mass_domain = compute_domain_mass(t, v_outlet, waves, sorption)
 
         # Mass balance: inlet - outlet ≈ domain
