@@ -375,6 +375,8 @@ def gamma_infiltration_to_extraction(
     gwtransport.gamma.bins : Create gamma distribution bins
     gwtransport.residence_time.residence_time : Compute residence times
     gwtransport.diffusion.infiltration_to_extraction : Add pore-scale dispersion
+    :ref:`concept-gamma-distribution` : Two-parameter pore volume model
+    :ref:`assumption-gamma-distribution` : When gamma distribution is adequate
 
     Notes
     -----
@@ -520,6 +522,8 @@ def gamma_extraction_to_infiltration(
     gamma_infiltration_to_extraction : Forward operation (convolution)
     gwtransport.gamma.bins : Create gamma distribution bins
     gwtransport.diffusion.extraction_to_infiltration : Deconvolution with pore-scale dispersion
+    :ref:`concept-gamma-distribution` : Two-parameter pore volume model
+    :ref:`assumption-gamma-distribution` : When gamma distribution is adequate
 
     Notes
     -----
@@ -665,6 +669,8 @@ def infiltration_to_extraction(
     infiltration_to_extraction_series : Simple time-shift for single pore volume
     gwtransport.residence_time.residence_time : Compute residence times from flow and pore volume
     gwtransport.residence_time.freundlich_retardation : Compute concentration-dependent retardation
+    :ref:`concept-pore-volume-distribution` : Background on aquifer heterogeneity modeling
+    :ref:`concept-transport-equation` : Flow-weighted averaging approach
 
     Examples
     --------
@@ -855,6 +861,8 @@ def extraction_to_infiltration(
     extraction_to_infiltration_series : Simple time-shift for single pore volume
     gwtransport.residence_time.residence_time : Compute residence times from flow and pore volume
     gwtransport.residence_time.freundlich_retardation : Compute concentration-dependent retardation
+    :ref:`concept-pore-volume-distribution` : Background on aquifer heterogeneity modeling
+    :ref:`concept-transport-equation` : Flow-weighted averaging approach
 
     Examples
     --------
@@ -1097,6 +1105,8 @@ def infiltration_to_extraction_front_tracking(
     infiltration_to_extraction_front_tracking_detailed : Returns detailed structure
     infiltration_to_extraction : Convolution-based approach for linear case
     gamma_infiltration_to_extraction : For distributions of pore volumes
+    :ref:`concept-nonlinear-sorption` : Freundlich isotherm and front-tracking theory
+    :ref:`assumption-advection-dominated` : When diffusion/dispersion is negligible
     """
     # Input validation
     cin = np.asarray(cin, dtype=float)
@@ -1281,6 +1291,12 @@ def infiltration_to_extraction_front_tracking_detailed(
         # Analyze events for first pore volume
         for event in structures[0]["events"]:
             print(f"t={event['time']:.2f}: {event['type']}")
+
+    See Also
+    --------
+    infiltration_to_extraction_front_tracking : Returns concentrations only (simpler interface)
+    :ref:`concept-nonlinear-sorption` : Freundlich isotherm and front-tracking theory
+    :ref:`assumption-advection-dominated` : When diffusion/dispersion is negligible
     """
     # Input validation (same as main function)
     cin = np.asarray(cin, dtype=float)

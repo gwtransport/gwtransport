@@ -112,6 +112,7 @@ def infiltration_to_extraction(
     See Also
     --------
     gwtransport.diffusion.infiltration_to_extraction : Physically rigorous analytical solution (slower)
+    :ref:`concept-dispersion-scales` : When to use dispersion vs APVD spreading
 
     Notes
     -----

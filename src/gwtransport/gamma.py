@@ -215,6 +215,9 @@ def bins(
     --------
     bin_masses : Calculate probability mass for bins
     mean_std_to_alpha_beta : Convert mean/std to alpha/beta parameters
+    gwtransport.advection.gamma_infiltration_to_extraction : Use bins for transport modeling
+    :ref:`concept-gamma-distribution` : Two-parameter pore volume model
+    :ref:`assumption-gamma-distribution` : When gamma distribution is adequate
 
     Examples
     --------

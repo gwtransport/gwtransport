@@ -88,6 +88,7 @@ def residence_time_to_log_removal(
     gamma_find_flow_for_target_mean : Find flow rate to achieve target log removal
     parallel_mean : Calculate weighted average for parallel flow systems
     gwtransport.residence_time.residence_time : Compute residence times from flow and pore volume
+    :ref:`concept-residence-time` : Time in aquifer determines pathogen contact time
 
     Notes
     -----

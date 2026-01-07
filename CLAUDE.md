@@ -23,7 +23,8 @@ uv tool update ty
 uv tool run ty check .
 
 # Build documentation
-uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b html docs/source docs/build/html
+uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck # Check links in documentation
+uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b html docs/source docs/build/html # Build HTML documentation
 ```
 
 ## CI/CD Pipeline
@@ -156,6 +157,7 @@ Enrich function docstrings with references to concepts and assumptions when they
 | ---------------------- | --------------------------------------------------------------------------------------------- |
 | Python docstrings      | `:ref:`concept-dispersion-scales``                                                            |
 | Jupyter notebooks / md | `[Dispersion scales](https://gwtransport.github.io/gwtransport/user_guide/concepts.html#...)` |
+| API links (notebooks)  | `[module](https://gwtransport.github.io/gwtransport/api/modules.html#module-gwtransport.xxx)` |
 
 Base URL: `https://gwtransport.github.io/gwtransport/`
 
