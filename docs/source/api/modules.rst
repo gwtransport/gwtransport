@@ -38,6 +38,14 @@ diffusion
    :undoc-members:
    :show-inheritance:
 
+fronttracking
+=============
+
+.. automodule:: gwtransport.fronttracking
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 gamma
 =====
 
