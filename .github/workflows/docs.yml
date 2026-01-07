@@ -29,9 +29,6 @@ jobs:
         run: uv run pytest tests/docs
       - name: Install Pandoc
         uses: pandoc/actions/setup@v1
-      - name: Check documentation links
-        run: |
-          uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck
       - name: Build documentation with sphinx and uv
         run: |
           uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b html docs/source docs/build/html
@@ -52,6 +49,23 @@ jobs:
         uses: actions/upload-pages-artifact@v4
         with:
           path: coverage
+
+  check-documentation-links:
+    runs-on: ubuntu-latest
+    needs: build-documentation
+    steps:
+      - name: Disable man-db to speed up pandoc install
+        run: |
+          echo 'set man-db/auto-update false' | sudo debconf-communicate >/dev/null
+          sudo dpkg-reconfigure man-db
+      - uses: actions/checkout@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Install Pandoc
+        uses: pandoc/actions/setup@v1
+      - name: Check documentation links
+        run: |
+          uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck
 
   deploy-documentation:
     if: ${{ github.ref == 'refs/heads/main' }}

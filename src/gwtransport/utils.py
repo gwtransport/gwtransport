@@ -304,9 +304,9 @@ def linear_average(
 
     # Handle extrapolation for all series at once (vectorized)
     if extrapolate_method == "outer":
-        edges_processed = np.clip(x_edges, x_data_clean.min(), x_data_clean.max())
+        edges_processed = np.clip(x_edges, x_data_clean[0], x_data_clean[-1])
     elif extrapolate_method == "raise":
-        if np.any(x_edges < x_data_clean.min()) or np.any(x_edges > x_data_clean.max()):
+        if np.any(x_edges < x_data_clean[0]) or np.any(x_edges > x_data_clean[-1]):
             msg = "x_edges must be within the range of x_data"
             raise ValueError(msg)
         edges_processed = x_edges.copy()
@@ -357,7 +357,7 @@ def linear_average(
     # Handle extrapolation when 'nan' method is used (vectorized)
     if extrapolate_method == "nan":
         # Set out-of-range bins to NaN
-        bins_within_range = (x_edges[:, :-1] >= x_data_clean.min()) & (x_edges[:, 1:] <= x_data_clean.max())
+        bins_within_range = (x_edges[:, :-1] >= x_data_clean[0]) & (x_edges[:, 1:] <= x_data_clean[-1])
         result[~bins_within_range] = np.nan
 
     return result
