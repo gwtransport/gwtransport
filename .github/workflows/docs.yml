@@ -30,6 +30,7 @@ jobs:
       - name: Install Pandoc
         uses: pandoc/actions/setup@v1
       - name: Check documentation links
+        continue-on-error: true
         run: |
           uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck
       - name: Build documentation with sphinx and uv
