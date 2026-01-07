@@ -46,6 +46,70 @@ fronttracking
    :undoc-members:
    :show-inheritance:
 
+fronttracking.events
+--------------------
+
+.. automodule:: gwtransport.fronttracking.events
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+fronttracking.handlers
+----------------------
+
+.. automodule:: gwtransport.fronttracking.handlers
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+fronttracking.math
+------------------
+
+.. automodule:: gwtransport.fronttracking.math
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+fronttracking.output
+--------------------
+
+.. automodule:: gwtransport.fronttracking.output
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+fronttracking.plot
+------------------
+
+.. automodule:: gwtransport.fronttracking.plot
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+fronttracking.solver
+--------------------
+
+.. automodule:: gwtransport.fronttracking.solver
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+fronttracking.validation
+------------------------
+
+.. automodule:: gwtransport.fronttracking.validation
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+fronttracking.waves
+-------------------
+
+.. automodule:: gwtransport.fronttracking.waves
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 gamma
 =====
 

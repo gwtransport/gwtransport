@@ -80,9 +80,9 @@ class FrontTrackerState:
 
     Parameters
     ----------
-    waves : list[Wave]
+    waves : list of Wave
         All waves created during simulation (includes inactive waves)
-    events : list[dict]
+    events : list of dict
         Event history with details about each event
     t_current : float
         Current simulation time [days from tedges[0]]
@@ -90,12 +90,12 @@ class FrontTrackerState:
         Outlet position [m³]
     sorption : FreundlichSorption or ConstantRetardation
         Sorption parameters
-    cin : np.ndarray
+    cin : numpy.ndarray
         Inlet concentration time series [mass/volume]
-    flow : np.ndarray
+    flow : numpy.ndarray
         Flow rate time series [m³/day]
-    tedges : pd.DatetimeIndex
-        Time bin edges [pandas DatetimeIndex]
+    tedges : pandas.DatetimeIndex
+        Time bin edges
 
     Examples
     --------
@@ -133,11 +133,11 @@ class FrontTracker:
 
     Parameters
     ----------
-    cin : np.ndarray
+    cin : numpy.ndarray
         Inlet concentration time series [mass/volume]
-    flow : np.ndarray
+    flow : numpy.ndarray
         Flow rate time series [m³/day]
-    tedges : np.ndarray
+    tedges : numpy.ndarray
         Time bin edges [days]
     aquifer_pore_volume : float
         Total pore volume [m³]
@@ -190,12 +190,12 @@ class FrontTracker:
 
         Parameters
         ----------
-        cin : np.ndarray
+        cin : numpy.ndarray
             Inlet concentration time series [mass/volume]
-        flow : np.ndarray
+        flow : numpy.ndarray
             Flow rate time series [m³/day]
-        tedges : pd.DatetimeIndex
-            Time bin edges [pandas DatetimeIndex]
+        tedges : numpy.ndarray
+            Time bin edges [days]
         aquifer_pore_volume : float
             Total pore volume [m³]
         sorption : FreundlichSorption or ConstantRetardation
@@ -283,9 +283,9 @@ class FrontTracker:
 
         Returns
         -------
-        list[tuple[float, float]]
-            List of (t_change, flow_new) sorted by time
-            Times are in days from tedges[0]
+        list of tuple
+            List of (t_change, flow_new) tuples sorted by time.
+            Times are in days from tedges[0].
 
         Notes
         -----
@@ -721,7 +721,7 @@ class FrontTracker:
                 t=t_current,
                 cin=self.state.cin,
                 flow=self.state.flow,
-                tedges=tedges_days,
+                tedges_days=tedges_days,
             )
 
             # Compute cumulative outlet mass
@@ -731,7 +731,7 @@ class FrontTracker:
                 waves=self.state.waves,
                 sorption=self.state.sorption,
                 flow=self.state.flow,
-                tedges=tedges_days,
+                tedges_days=tedges_days,
             )
 
             # Mass balance: mass_in_domain + mass_out = mass_in

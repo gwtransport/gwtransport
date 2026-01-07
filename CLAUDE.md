@@ -58,7 +58,7 @@ def function_name(*, flow: npt.ArrayLike, tedges: pd.DatetimeIndex) -> npt.NDArr
 
     Parameters
     ----------
-    flow : array_like
+    flow : array-like
         Flow rate (m³/day).
     tedges : DatetimeIndex
         Time bin edges (n+1 edges for n values).

@@ -48,6 +48,15 @@ napoleon_preprocess_types = True
 napoleon_type_aliases = {
     "array-like": ":py:data:`~numpy.typing.ArrayLike`",
     "callable": ":py:class:`~collections.abc.Callable`",
+    # Internal fronttracking types
+    "Wave": ":py:class:`~gwtransport.fronttracking.waves.Wave`",
+    "ShockWave": ":py:class:`~gwtransport.fronttracking.waves.ShockWave`",
+    "CharacteristicWave": ":py:class:`~gwtransport.fronttracking.waves.CharacteristicWave`",
+    "RarefactionWave": ":py:class:`~gwtransport.fronttracking.waves.RarefactionWave`",
+    "FreundlichSorption": ":py:class:`~gwtransport.fronttracking.math.FreundlichSorption`",
+    "ConstantRetardation": ":py:class:`~gwtransport.fronttracking.math.ConstantRetardation`",
+    "FrontTrackerState": ":py:class:`~gwtransport.fronttracking.solver.FrontTrackerState`",
+    "Event": ":py:class:`~gwtransport.fronttracking.events.Event`",
 }
 
 templates_path = ["_templates"]

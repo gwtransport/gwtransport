@@ -577,7 +577,7 @@ def plot_inlet_concentration(
 
     Parameters
     ----------
-    tedges : pd.DatetimeIndex
+    tedges : pandas.DatetimeIndex
         Time bin edges for inlet concentration.
         Length = len(cin) + 1.
     cin : array-like
@@ -698,13 +698,13 @@ def plot_front_tracking_summary(
     structure : dict
         Structure returned from infiltration_to_extraction_front_tracking_detailed.
         Must contain keys: 'tracker_state', 't_first_arrival'.
-    tedges : pd.DatetimeIndex
+    tedges : pandas.DatetimeIndex
         Time bin edges for inlet concentration.
         Length = len(cin) + 1.
     cin : array-like
         Inlet concentration values.
         Length = len(tedges) - 1.
-    cout_tedges : pd.DatetimeIndex
+    cout_tedges : pandas.DatetimeIndex
         Output time bin edges for bin-averaged concentration.
         Length = len(cout) + 1.
     cout : array-like
@@ -871,7 +871,7 @@ def plot_sorption_comparison(
         Structure from pulse inlet with n>1 (higher C travels faster).
     pulse_unfavorable_structure : dict
         Structure from pulse inlet with n<1 (lower C travels faster).
-    pulse_tedges : pd.DatetimeIndex
+    pulse_tedges : pandas.DatetimeIndex
         Time bin edges for pulse inlet.
         Length = len(pulse_cin) + 1.
     pulse_cin : array-like
@@ -881,7 +881,7 @@ def plot_sorption_comparison(
         Structure from dip inlet with n>1 (higher C travels faster).
     dip_unfavorable_structure : dict
         Structure from dip inlet with n<1 (lower C travels faster).
-    dip_tedges : pd.DatetimeIndex
+    dip_tedges : pandas.DatetimeIndex
         Time bin edges for dip inlet.
         Length = len(dip_cin) + 1.
     dip_cin : array-like
@@ -898,7 +898,7 @@ def plot_sorption_comparison(
     -------
     fig : matplotlib.figure.Figure
         Figure object.
-    axes : ndarray
+    axes : numpy.ndarray
         2x3 array of axes objects.
     """
     fig, axes = plt.subplots(2, 3, figsize=figsize)

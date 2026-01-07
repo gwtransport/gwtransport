@@ -139,7 +139,7 @@ def find_characteristic_intersection(char1, char2, t_current: float) -> Optional
 
     Returns
     -------
-    tuple[float, float] or None
+    tuple of float or None
         (t_intersect, v_intersect) if intersection exists in future, None otherwise
 
     Notes
@@ -217,7 +217,7 @@ def find_shock_shock_intersection(shock1, shock2, t_current: float) -> Optional[
 
     Returns
     -------
-    tuple[float, float] or None
+    tuple of float or None
         (t_intersect, v_intersect) if intersection exists in future, None otherwise
 
     Notes
@@ -277,7 +277,7 @@ def find_shock_characteristic_intersection(shock, char, t_current: float) -> Opt
 
     Returns
     -------
-    tuple[float, float] or None
+    tuple of float or None
         (t_intersect, v_intersect) if intersection exists in future, None otherwise
 
     Examples
@@ -339,7 +339,7 @@ def find_rarefaction_boundary_intersections(raref, other_wave, t_current: float)
 
     Returns
     -------
-    list[tuple[float, float, str]]
+    list of tuple
         List of (t_intersect, v_intersect, boundary_type) where boundary_type
         is either 'head' or 'tail'
 

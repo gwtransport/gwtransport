@@ -48,7 +48,7 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
         'n_rarefactions', etc.
     cout : array-like
         Bin-averaged output concentrations.
-    cout_tedges : pd.DatetimeIndex
+    cout_tedges : pandas.DatetimeIndex
         Output time edges for bins.
     cin : array-like
         Input concentrations.
@@ -195,11 +195,11 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
 
         # Total mass that entered domain
         t_inlet_end = tedges_days.values[-1]
-        total_mass_in = compute_cumulative_inlet_mass(t=t_inlet_end, cin=cin, flow=flow_arr, tedges=tedges_days.values)
+        total_mass_in = compute_cumulative_inlet_mass(t=t_inlet_end, cin=cin, flow=flow_arr, tedges_days=tedges_days.values)
 
         # Total mass that exits domain (integrating until all mass has exited)
         total_mass_out, t_integration_end = compute_total_outlet_mass(
-            v_outlet=v_outlet, waves=waves, sorption=sorption, flow=flow_arr, tedges=tedges_days.values
+            v_outlet=v_outlet, waves=waves, sorption=sorption, flow=flow_arr, tedges_days=tedges_days.values
         )
 
         # Check if inlet ends with explicit transition to C=0

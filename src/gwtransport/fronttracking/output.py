@@ -15,15 +15,15 @@ compute_bin_averaged_concentration_exact(t_edges, v_outlet, waves, sorption)
     Compute bin-averaged concentrations using exact analytical integration
 compute_domain_mass(t, v_outlet, waves, sorption)
     Compute total mass in domain [0, v_outlet] at time t using exact analytical integration
-compute_cumulative_inlet_mass(t, cin, flow, tedges)
+compute_cumulative_inlet_mass(t, cin, flow, tedges_days)
     Compute cumulative mass entering domain from t=0 to t
-compute_cumulative_outlet_mass(t, v_outlet, waves, sorption, flow, tedges)
+compute_cumulative_outlet_mass(t, v_outlet, waves, sorption, flow, tedges_days)
     Compute cumulative mass exiting domain from t=0 to t
 find_last_rarefaction_start_time(v_outlet, waves)
     Find time when last rarefaction head reaches outlet
 integrate_rarefaction_total_mass(raref, v_outlet, t_start, sorption, flow)
     Compute total mass exiting through rarefaction to infinity
-compute_total_outlet_mass(v_outlet, waves, sorption, flow, tedges)
+compute_total_outlet_mass(v_outlet, waves, sorption, flow, tedges_days)
     Compute total integrated outlet mass until all mass has exited
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
@@ -208,7 +208,7 @@ def compute_breakthrough_curve(
 
     Parameters
     ----------
-    t_array : array_like
+    t_array : array-like
         Time points [days]. Must be sorted in ascending order.
     v_outlet : float
         Outlet position [m³].
@@ -219,7 +219,7 @@ def compute_breakthrough_curve(
 
     Returns
     -------
-    c_out : ndarray
+    c_out : numpy.ndarray
         Array of concentrations matching t_array [mass/volume].
 
     Examples
@@ -646,7 +646,7 @@ def compute_bin_averaged_concentration_exact(
 
     Parameters
     ----------
-    t_edges : array_like
+    t_edges : array-like
         Time bin edges [days]. Length N+1 for N bins.
     v_outlet : float
         Outlet position [m³].
@@ -657,7 +657,7 @@ def compute_bin_averaged_concentration_exact(
 
     Returns
     -------
-    c_avg : ndarray
+    c_avg : numpy.ndarray
         Bin-averaged concentrations [mass/volume]. Length N.
 
     Notes
@@ -1087,7 +1087,7 @@ def compute_cumulative_inlet_mass(
     t: float,
     cin: npt.NDArray[np.floating],
     flow: npt.NDArray[np.floating],
-    tedges: npt.NDArray[np.floating],
+    tedges_days: npt.NDArray[np.floating],
 ) -> float:
     """
     Compute cumulative mass entering domain from t=0 to t.
@@ -1101,13 +1101,13 @@ def compute_cumulative_inlet_mass(
     ----------
     t : float
         Time up to which to integrate [days].
-    cin : array_like
+    cin : array-like
         Inlet concentration time series [mass/volume].
-        Piecewise constant within bins defined by tedges.
-    flow : array_like
+        Piecewise constant within bins defined by tedges_days.
+    flow : array-like
         Flow rate time series [m³/day].
-        Piecewise constant within bins defined by tedges.
-    tedges : array_like
+        Piecewise constant within bins defined by tedges_days.
+    tedges_days : numpy.ndarray
         Time bin edges [days]. Length len(cin) + 1.
 
     Returns
@@ -1120,7 +1120,7 @@ def compute_cumulative_inlet_mass(
     For piecewise-constant cin and flow:
         M_in = Σ cin[i] * flow[i] * dt[i]
 
-    where the sum is over all bins from tedges[0] to t.
+    where the sum is over all bins from tedges_days[0] to t.
     Partial bins are handled exactly.
 
     Examples
@@ -1128,11 +1128,11 @@ def compute_cumulative_inlet_mass(
     ::
 
         mass_in = compute_cumulative_inlet_mass(
-            t=50.0, cin=cin, flow=flow, tedges=tedges
+            t=50.0, cin=cin, flow=flow, tedges_days=tedges_days
         )
         mass_in >= 0.0
     """
-    tedges_arr = np.asarray(tedges, dtype=float)
+    tedges_arr = np.asarray(tedges_days, dtype=float)
     cin_arr = np.asarray(cin, dtype=float)
     flow_arr = np.asarray(flow, dtype=float)
 
@@ -1233,7 +1233,7 @@ def compute_cumulative_outlet_mass(
     waves: list[Wave],
     sorption: FreundlichSorption | ConstantRetardation,
     flow: npt.NDArray[np.floating],
-    tedges: npt.NDArray[np.floating],
+    tedges_days: npt.NDArray[np.floating],
 ) -> float:
     """
     Compute cumulative mass exiting domain from t=0 to t.
@@ -1254,10 +1254,10 @@ def compute_cumulative_outlet_mass(
         All waves in the simulation.
     sorption : FreundlichSorption or ConstantRetardation
         Sorption model.
-    flow : array_like
+    flow : array-like
         Flow rate time series [m³/day].
-        Piecewise constant within bins defined by tedges.
-    tedges : array_like
+        Piecewise constant within bins defined by tedges_days.
+    tedges_days : numpy.ndarray
         Time bin edges [days]. Length len(flow) + 1.
 
     Returns
@@ -1284,11 +1284,11 @@ def compute_cumulative_outlet_mass(
             waves=tracker.state.waves,
             sorption=sorption,
             flow=flow,
-            tedges=tedges,
+            tedges_days=tedges_days,
         )
         mass_out >= 0.0
     """
-    tedges_arr = np.asarray(tedges, dtype=float)
+    tedges_arr = np.asarray(tedges_days, dtype=float)
     flow_arr = np.asarray(flow, dtype=float)
 
     if t <= tedges_arr[0]:
@@ -1443,7 +1443,7 @@ def compute_total_outlet_mass(
     waves: list[Wave],
     sorption: FreundlichSorption | ConstantRetardation,
     flow: npt.NDArray[np.floating],
-    tedges: npt.NDArray[np.floating],
+    tedges_days: npt.NDArray[np.floating],
 ) -> tuple[float, float]:
     """
     Compute total integrated outlet mass until all mass has exited.
@@ -1460,10 +1460,10 @@ def compute_total_outlet_mass(
         All waves in the simulation.
     sorption : FreundlichSorption or ConstantRetardation
         Sorption model.
-    flow : array_like
+    flow : array-like
         Flow rate time series [m³/day].
-        Piecewise constant within bins defined by tedges.
-    tedges : array_like
+        Piecewise constant within bins defined by tedges_days.
+    tedges_days : numpy.ndarray
         Time bin edges [days]. Length len(flow) + 1.
 
     Returns
@@ -1493,10 +1493,10 @@ def compute_total_outlet_mass(
             waves=tracker.state.waves,
             sorption=sorption,
             flow=flow,
-            tedges=tedges,
+            tedges_days=tedges_days,
         )
         total_mass >= 0.0
-        t_end >= tedges[0]
+        t_end >= tedges_days[0]
 
     See Also
     --------
@@ -1507,7 +1507,7 @@ def compute_total_outlet_mass(
     # Find when the last rarefaction starts at the outlet
     t_last_raref_start = find_last_rarefaction_start_time(v_outlet, waves)
 
-    tedges_arr = np.asarray(tedges, dtype=float)
+    tedges_arr = np.asarray(tedges_days, dtype=float)
     flow_arr = np.asarray(flow, dtype=float)
 
     # Integrate up to when last rarefaction starts

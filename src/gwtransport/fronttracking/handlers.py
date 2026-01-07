@@ -49,8 +49,8 @@ def handle_characteristic_collision(
 
     Returns
     -------
-    list[ShockWave]
-        Single shock wave created at collision point
+    list of ShockWave or RarefactionWave
+        Single shock or rarefaction wave created at collision point
 
     Notes
     -----
@@ -206,7 +206,7 @@ def handle_shock_collision(
 
     Returns
     -------
-    list[ShockWave]
+    list of ShockWave
         Single merged shock wave
 
     Notes

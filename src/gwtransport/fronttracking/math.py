@@ -145,12 +145,12 @@ class FreundlichSorption:
 
         Parameters
         ----------
-        c : float or array_like
+        c : float or array-like
             Dissolved concentration [mass/volume]. Non-negative.
 
         Returns
         -------
-        r : float or ndarray
+        r : float or numpy.ndarray
             Retardation factor [-]. Always >= 1.0.
 
         Notes
@@ -187,12 +187,12 @@ class FreundlichSorption:
 
         Parameters
         ----------
-        c : float or array_like
+        c : float or array-like
             Dissolved concentration [mass/volume]. Non-negative.
 
         Returns
         -------
-        c_total : float or ndarray
+        c_total : float or numpy.ndarray
             Total concentration [mass/volume]. Always >= c.
 
         Notes
@@ -227,12 +227,12 @@ class FreundlichSorption:
 
         Parameters
         ----------
-        r : float or array_like
+        r : float or array-like
             Retardation factor [-]. Must be >= 1.0.
 
         Returns
         -------
-        c : float or ndarray
+        c : float or numpy.ndarray
             Dissolved concentration [mass/volume]. Non-negative.
 
         Notes
