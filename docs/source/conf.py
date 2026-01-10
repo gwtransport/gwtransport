@@ -77,7 +77,7 @@ html_theme_options = {
     "use_download_button": True,
     "use_fullscreen_button": True,
     "home_page_in_toc": True,
-    "show_toc_level": 3,
+    "show_toc_level": 2,
     "navigation_with_keys": True,
     "show_navbar_depth": 2,
     "path_to_docs": "docs/source",
