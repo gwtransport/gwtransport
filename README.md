@@ -81,7 +81,7 @@ cout_model = gamma_infiltration_to_extraction(
 # Compare model output with measured data to calibrate gamma mean and std parameters (see example notebook 1)
 ```
 
-Here, the continues gamma distribution for the aquifer pore volume distribution is discretized into bins. For every bin, 1D transport is computed and then averaged over all bins.
+Here, the continuous gamma distribution for the aquifer pore volume distribution is discretized into bins. For every bin, 1D transport is computed and then averaged over all bins.
 
 ## Installation
 
