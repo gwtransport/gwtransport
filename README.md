@@ -24,7 +24,7 @@ The aquifer pore volume distribution is constant over time and can be obtained u
 
 ### 1. Streamline Analysis
 
-You already have computed the groundwater flow with an analytical solution or a numerical groundwater flow model. Compute the area between streamlines from flow field data to directly estimate the pore volume distribution parameters.
+You already have computed the groundwater flow with an analytical solution or a numerical groundwater flow model. Compute the area between streamlines from flow field data to directly estimate the discrete aquifer pore volume distribution.
 
 ```python
 from gwtransport.advection import infiltration_to_extraction
@@ -52,6 +52,8 @@ cout = infiltration_to_extraction(
 # Note: Initial output values are NaN until the first cin value has fully passed the aquifer
 ```
 
+This efficiently computes `cout` with 1D transport for every aquifer pore volume and then averages over the aquifer pore volumes.
+
 ### 2. Temperature Tracer Test
 
 Approximate the aquifer pore volume distribution with a two-parameter gamma distribution. Estimate these parameters from measured temperatures of infiltrated and extracted water. Temperature acts as a natural tracer, revealing flow paths through heterogeneous aquifers via calibration. No groundwater model is required.
@@ -76,8 +78,10 @@ cout_model = gamma_infiltration_to_extraction(
     retardation_factor=2.0,  # [-] Retardation factor for the temperature tracer
 )
 
-# Compare model output with measured data to calibrate mean and std parameters (see example notebook 1)
+# Compare model output with measured data to calibrate gamma mean and std parameters (see example notebook 1)
 ```
+
+Here, the continues gamma distribution for the aquifer pore volume distribution is discretized into bins. For every bin, 1D transport is computed and then averaged over all bins.
 
 ## Installation
 

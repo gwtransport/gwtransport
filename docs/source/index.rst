@@ -61,6 +61,8 @@ You already have computed the groundwater flow with an analytical solution or a 
 
    # Note: Initial output values are NaN until the first cin value has fully passed the aquifer
 
+This efficiently computes `cout` with 1D transport for every aquifer pore volume and then averages over all aquifer pore volumes.
+
 2. Temperature Tracer Test
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -88,6 +90,8 @@ Approximate the aquifer pore volume distribution with a two-parameter gamma dist
    )
 
    # Compare model output with measured data to calibrate mean and std parameters (see example notebook 1)
+
+Here, the continues gamma distribution for the aquifer pore volume distribution is discretized into bins. For every bin, 1D transport is computed and then averaged over all bins.
 
 Installation
 ------------
