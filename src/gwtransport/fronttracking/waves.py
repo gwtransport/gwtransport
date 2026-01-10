@@ -38,23 +38,16 @@ class Wave(ABC):
         Flow rate at formation time [m³/day].
     is_active : bool, optional
         Whether wave is currently active. Default True.
-
-    Attributes
-    ----------
-    t_start : float
-        Formation time
-    v_start : float
-        Formation position
-    flow : float
-        Flow rate
-    is_active : bool
-        Activity status
     """
 
     t_start: float
+    """Time when wave forms [days]."""
     v_start: float
+    """Position where wave forms [m³]."""
     flow: float
+    """Flow rate at formation time [m³/day]."""
     is_active: bool = field(default=True, kw_only=True)
+    """Whether wave is currently active."""
 
     @abstractmethod
     def position_at_time(self, t: float) -> float | None:
@@ -137,22 +130,6 @@ class CharacteristicWave(Wave):
     is_active : bool, optional
         Activity status. Default True.
 
-    Attributes
-    ----------
-    concentration : float
-        Concentration value
-    sorption : FreundlichSorption or ConstantRetardation
-        Sorption model
-
-    Methods
-    -------
-    velocity()
-        Compute characteristic velocity
-    position_at_time(t)
-        Get position at time t
-    concentration_at_point(v, t)
-        Get concentration if point is on characteristic
-
     Examples
     --------
     >>> sorption = ConstantRetardation(retardation_factor=2.0)
@@ -166,7 +143,9 @@ class CharacteristicWave(Wave):
     """
 
     concentration: float
+    """Constant concentration carried [mass/volume]."""
     sorption: FreundlichSorption | ConstantRetardation
+    """Sorption model determining velocity."""
 
     def velocity(self) -> float:
         """
@@ -270,26 +249,9 @@ class ShockWave(Wave):
         Sorption model.
     is_active : bool, optional
         Activity status. Default True.
-
-    Attributes
-    ----------
-    c_left : float
-        Upstream concentration
-    c_right : float
-        Downstream concentration
-    sorption : FreundlichSorption or ConstantRetardation
-        Sorption model
-    velocity : float
-        Shock velocity computed from Rankine-Hugoniot
-
-    Methods
-    -------
-    position_at_time(t)
-        Get shock position at time t
-    satisfies_entropy()
-        Check if shock satisfies Lax entropy condition
-    concentration_at_point(v, t)
-        Get concentration based on which side of shock
+    velocity : float, optional
+        Shock velocity computed from Rankine-Hugoniot. Computed automatically
+        if not provided.
 
     Examples
     --------
@@ -311,9 +273,13 @@ class ShockWave(Wave):
     """
 
     c_left: float
+    """Concentration upstream (behind) shock [mass/volume]."""
     c_right: float
+    """Concentration downstream (ahead of) shock [mass/volume]."""
     sorption: FreundlichSorption | ConstantRetardation
+    """Sorption model."""
     velocity: float | None = None
+    """Shock velocity computed from Rankine-Hugoniot [m³/day]."""
 
     def __post_init__(self) -> None:
         """Compute shock velocity from Rankine-Hugoniot condition."""
@@ -441,30 +407,6 @@ class RarefactionWave(Wave):
     is_active : bool, optional
         Activity status. Default True.
 
-    Attributes
-    ----------
-    c_head : float
-        Head concentration (faster)
-    c_tail : float
-        Tail concentration (slower)
-    sorption : FreundlichSorption or ConstantRetardation
-        Sorption model
-
-    Methods
-    -------
-    head_velocity()
-        Velocity of leading edge
-    tail_velocity()
-        Velocity of trailing edge
-    head_position_at_time(t)
-        Position of head at time t
-    tail_position_at_time(t)
-        Position of tail at time t
-    contains_point(v, t)
-        Check if point is inside rarefaction fan
-    concentration_at_point(v, t)
-        Compute concentration via self-similar solution
-
     Raises
     ------
     ValueError
@@ -490,8 +432,11 @@ class RarefactionWave(Wave):
     """
 
     c_head: float
+    """Concentration at leading edge (faster) [mass/volume]."""
     c_tail: float
+    """Concentration at trailing edge (slower) [mass/volume]."""
     sorption: FreundlichSorption | ConstantRetardation
+    """Sorption model (must be concentration-dependent)."""
 
     def __post_init__(self):
         """Verify this is actually a rarefaction (head faster than tail)."""

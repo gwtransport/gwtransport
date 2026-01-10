@@ -420,6 +420,7 @@ def handle_shock_rarefaction_collision(
     addressing High Priority #2 from FRONT_TRACKING_REBUILD_PLAN.md.
 
     This is the most complex interaction. A shock can:
+
     - Catch the rarefaction tail: shock penetrates into rarefaction fan,
       creating both a modified rarefaction and a continuing shock
     - Be caught by rarefaction head: creates compression wave

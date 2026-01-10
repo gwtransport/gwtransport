@@ -665,10 +665,10 @@ def compute_bin_averaged_concentration_exact(
     **Algorithm**:
 
     1. For each bin [t_i, t_{i+1}]:
+
        a. Identify which wave segments control outlet during this period
-       b. For each segment:
-          - Constant C: integral = C * Δt
-          - Rarefaction C(t): use exact analytical integral formula
+       b. For each segment, compute: Constant C gives integral = C * Δt,
+          Rarefaction C(t) uses exact analytical integral formula
        c. Sum segment integrals and divide by bin width
 
     **Machine Precision**:
@@ -680,10 +680,12 @@ def compute_bin_averaged_concentration_exact(
 
     **Rarefaction Integration**:
 
-    For Freundlich sorption, rarefaction concentration at outlet varies as:
+    For Freundlich sorption, rarefaction concentration at outlet varies as::
+
         C(t) = [(kappa*t + mu - 1)/alpha]^(1/beta)
 
-    The exact integral is:
+    The exact integral is::
+
         ∫ C dt = (1/(alpha^(1/beta)*kappa*exponent)) * (kappa*t + mu - 1)^exponent
 
     where exponent = 1/beta + 1.

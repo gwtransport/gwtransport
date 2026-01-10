@@ -24,7 +24,7 @@ uv tool run ty check .
 
 # Build documentation
 uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck # Check links in documentation
-uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b html docs/source docs/build/html # Build HTML documentation
+rm -rf docs/build && uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j 1 -b html docs/source docs/build/html # Build HTML documentation
 ```
 
 ## CI/CD Pipeline

@@ -57,32 +57,6 @@ class FreundlichSorption:
         Minimum concentration threshold. For n>1, prevents infinite retardation
         as C→0. Default: 0.1 for n>1, 0.0 for n<1 (set automatically if not provided).
 
-    Attributes
-    ----------
-    k_f : float
-        Freundlich coefficient
-    n : float
-        Freundlich exponent
-    bulk_density : float
-        Bulk density
-    porosity : float
-        Porosity
-    c_min : float
-        Minimum concentration threshold
-
-    Methods
-    -------
-    retardation(c)
-        Compute retardation factor R(C)
-    total_concentration(c)
-        Compute total concentration C_total(C) = C + (rho_b/n_por)*s(C)
-    concentration_from_retardation(r)
-        Invert R → C analytically
-    shock_velocity(c_left, c_right, flow)
-        Compute shock velocity via Rankine-Hugoniot condition
-    check_entropy_condition(c_left, c_right, shock_vel, flow)
-        Verify Lax entropy condition
-
     Examples
     --------
     >>> sorption = FreundlichSorption(
@@ -107,10 +81,15 @@ class FreundlichSorption:
     """
 
     k_f: float
+    """Freundlich coefficient [(m³/kg)^(1/n)]."""
     n: float
+    """Freundlich exponent [-]."""
     bulk_density: float
+    """Bulk density of porous medium [kg/m³]."""
     porosity: float
+    """Porosity [-]."""
     c_min: float = 1e-12
+    """Minimum concentration threshold to prevent infinite retardation."""
 
     def __post_init__(self):
         """Validate parameters after initialization."""
@@ -345,7 +324,8 @@ class FreundlichSorption:
         Verify Lax entropy condition for physical admissibility of shock.
 
         The Lax entropy condition ensures that characteristics flow INTO the shock
-        from both sides, which is required for physical shocks:
+        from both sides, which is required for physical shocks::
+
             λ(C_L) > s_shock > λ(C_R)
 
         where λ(C) = flow / R(C) is the characteristic velocity.
@@ -430,24 +410,6 @@ class ConstantRetardation:
         Constant retardation factor [-]. Must be >= 1.0.
         R = 1.0 means no retardation (conservative tracer).
 
-    Attributes
-    ----------
-    retardation_factor : float
-        Constant retardation value
-
-    Methods
-    -------
-    retardation(c)
-        Return constant retardation (independent of c)
-    total_concentration(c)
-        Compute C_total = C * retardation_factor
-    concentration_from_retardation(r)
-        Not applicable for constant R (raises error)
-    shock_velocity(c_left, c_right, flow)
-        Compute shock velocity (simplified for constant R)
-    check_entropy_condition(c_left, c_right, shock_vel, flow)
-        Check entropy (always satisfied for compression shocks)
-
     Notes
     -----
     With constant retardation:
@@ -469,6 +431,7 @@ class ConstantRetardation:
     """
 
     retardation_factor: float
+    """Constant retardation factor [-]. Must be >= 1.0."""
 
     def __post_init__(self):
         """Validate parameters after initialization."""
@@ -678,6 +641,7 @@ def compute_first_front_arrival_time(
     (e.g., 0→C transition), this is when that characteristic reaches v_max.
 
     For cases with rarefaction waves:
+
     - n>1 (higher C travels faster): The head of a rarefaction
       (higher C) arrives first.
     - n<1 (lower C travels faster): The head of a rarefaction
@@ -798,6 +762,7 @@ def compute_first_fully_informed_bin_edge(
     - Plotting valid vs spin-up regions
 
     Rarefaction handling:
+
     - For n>1: Rarefaction tail (lower C, slower) arrives after head.
       Once the first wave (head) arrives, subsequent bins are informed.
     - For n<1: Rarefaction tail (higher C, slower) arrives after head.

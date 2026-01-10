@@ -29,40 +29,26 @@ EPSILON_VELOCITY = 1e-15  # Tolerance for checking if two velocities are equal (
 
 
 class EventType(Enum):
-    """
-    All possible event types in front tracking simulation.
-
-    Attributes
-    ----------
-    CHAR_CHAR_COLLISION : str
-        Two characteristics intersect (will form shock)
-    SHOCK_SHOCK_COLLISION : str
-        Two shocks collide (will merge)
-    SHOCK_CHAR_COLLISION : str
-        Shock catches or is caught by characteristic
-    RAREF_CHAR_COLLISION : str
-        Rarefaction boundary intersects with characteristic
-    SHOCK_RAREF_COLLISION : str
-        Shock intersects with rarefaction boundary
-    RAREF_RAREF_COLLISION : str
-        Rarefaction boundary intersects with another rarefaction boundary
-    OUTLET_CROSSING : str
-        Wave crosses outlet boundary
-    INLET_CHANGE : str
-        Inlet concentration changes (creates new wave)
-    FLOW_CHANGE : str
-        Flow rate changes (all waves get new velocities)
-    """
+    """All possible event types in front tracking simulation."""
 
     CHAR_CHAR_COLLISION = "characteristic_collision"
+    """Two characteristics intersect (will form shock)."""
     SHOCK_SHOCK_COLLISION = "shock_collision"
+    """Two shocks collide (will merge)."""
     SHOCK_CHAR_COLLISION = "shock_characteristic_collision"
+    """Shock catches or is caught by characteristic."""
     RAREF_CHAR_COLLISION = "rarefaction_characteristic_collision"
+    """Rarefaction boundary intersects with characteristic."""
     SHOCK_RAREF_COLLISION = "shock_rarefaction_collision"
+    """Shock intersects with rarefaction boundary."""
     RAREF_RAREF_COLLISION = "rarefaction_rarefaction_collision"
+    """Rarefaction boundary intersects with another rarefaction boundary."""
     OUTLET_CROSSING = "outlet_crossing"
+    """Wave crosses outlet boundary."""
     INLET_CHANGE = "inlet_concentration_change"
+    """Inlet concentration changes (creates new wave)."""
     FLOW_CHANGE = "flow_change"
+    """Flow rate changes (all waves get new velocities)."""
 
 
 @dataclass
@@ -150,7 +136,7 @@ def find_characteristic_intersection(char1, char2, t_current: float) -> Optional
     - Either characteristic is not yet active at intersection time
 
     The algorithm uses exact floating-point arithmetic with no tolerance checks
-    except for detecting parallel lines (|vel1 - vel2| < 1e-15).
+    except for detecting parallel lines (``abs(vel1 - vel2) < 1e-15``).
 
     Examples
     --------
