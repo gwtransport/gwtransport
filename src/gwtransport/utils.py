@@ -713,7 +713,9 @@ def compute_time_edges(
             msg = "tstart must have the same number of elements as flow"
             raise ValueError(msg)
 
-        return pd.DatetimeIndex(tstart.append(tstart[[-1]] + (tstart[-1] - tstart[-2])))
+        # Extrapolate final edge using uniform spacing
+        final_edge = tstart[-1] + (tstart[-1] - tstart[-2])
+        return pd.DatetimeIndex(list(tstart) + [final_edge])
 
     if tend is not None:
         # Assume the index refers to the time at the end of the measurement interval
@@ -722,7 +724,9 @@ def compute_time_edges(
             msg = "tend must have the same number of elements as flow"
             raise ValueError(msg)
 
-        return pd.DatetimeIndex((tend[[0]] - (tend[1] - tend[0])).append(tend))
+        # Extrapolate initial edge using uniform spacing
+        initial_edge = tend[0] - (tend[1] - tend[0])
+        return pd.DatetimeIndex([initial_edge] + list(tend))
 
     msg = "Either provide tedges, tstart, and tend"
     raise ValueError(msg)
