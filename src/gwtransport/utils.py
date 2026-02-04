@@ -715,7 +715,7 @@ def compute_time_edges(
 
         # Extrapolate final edge using uniform spacing
         final_edge = tstart[-1] + (tstart[-1] - tstart[-2])
-        return pd.DatetimeIndex([*list(tstart), final_edge])
+        return pd.DatetimeIndex([*list(tstart), final_edge], dtype=tstart.dtype)
 
     if tend is not None:
         # Assume the index refers to the time at the end of the measurement interval
@@ -726,7 +726,7 @@ def compute_time_edges(
 
         # Extrapolate initial edge using uniform spacing
         initial_edge = tend[0] - (tend[1] - tend[0])
-        return pd.DatetimeIndex([initial_edge, *list(tend)])
+        return pd.DatetimeIndex([initial_edge, *list(tend)], dtype=tend.dtype)
 
     msg = "Either provide tedges, tstart, and tend"
     raise ValueError(msg)
