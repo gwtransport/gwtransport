@@ -5,7 +5,7 @@ import tempfile
 
 import nbformat
 import pytest
-from nbconvert import PythonExporter  # type: ignore[attr-defined]
+from nbconvert import PythonExporter
 
 
 def test_pythonscript(pythonfile_path):

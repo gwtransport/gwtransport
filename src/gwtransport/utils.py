@@ -1012,7 +1012,7 @@ def _optimize_nullspace_coefficients(
             _squared_differences_objective,
             x0=coeffs_0,
             args=(x_ls, nullspace_basis),
-            method=optimization_method,  # type: ignore[arg-type]
+            method=optimization_method,
         )
         if not res_init.success:
             msg = f"Initial optimization failed: {res_init.message}"
@@ -1024,7 +1024,7 @@ def _optimize_nullspace_coefficients(
         objective_func,
         x0=coeffs_0,
         args=(x_ls, nullspace_basis),
-        method=optimization_method,  # type: ignore[arg-type]
+        method=optimization_method,
     )
 
     if not res.success:
