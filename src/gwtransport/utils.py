@@ -704,29 +704,31 @@ def compute_time_edges(
         if number_of_bins != len(tedges) - 1:
             msg = "tedges must have one more element than flow"
             raise ValueError(msg)
-        return pd.DatetimeIndex(tedges, dtype="datetime64[ns]")
+        tedges = pd.DatetimeIndex(tedges)
+        # Ensure nanosecond precision while preserving timezone
+        return tedges.as_unit("ns")
 
     if tstart is not None:
         # Assume the index refers to the time at the start of the measurement interval
-        tstart = pd.DatetimeIndex(tstart, dtype="datetime64[ns]")
+        tstart = pd.DatetimeIndex(tstart).as_unit("ns")
         if number_of_bins != len(tstart):
             msg = "tstart must have the same number of elements as flow"
             raise ValueError(msg)
 
         # Extrapolate final edge using uniform spacing
         final_edge = tstart[-1] + (tstart[-1] - tstart[-2])
-        return pd.DatetimeIndex([*list(tstart), final_edge], dtype="datetime64[ns]")
+        return pd.DatetimeIndex([*list(tstart), final_edge], dtype=tstart.dtype)
 
     if tend is not None:
         # Assume the index refers to the time at the end of the measurement interval
-        tend = pd.DatetimeIndex(tend, dtype="datetime64[ns]")
+        tend = pd.DatetimeIndex(tend).as_unit("ns")
         if number_of_bins != len(tend):
             msg = "tend must have the same number of elements as flow"
             raise ValueError(msg)
 
         # Extrapolate initial edge using uniform spacing
         initial_edge = tend[0] - (tend[1] - tend[0])
-        return pd.DatetimeIndex([initial_edge, *list(tend)], dtype="datetime64[ns]")
+        return pd.DatetimeIndex([initial_edge, *list(tend)], dtype=tend.dtype)
 
     msg = "Either provide tedges, tstart, and tend"
     raise ValueError(msg)
