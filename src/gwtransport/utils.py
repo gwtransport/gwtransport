@@ -782,7 +782,8 @@ def get_soil_temperature(*, station_number: int = 260, interpolate_missing_value
 
     # Check if cached file exists and is from today
     if cache_path.exists():
-        return pd.read_pickle(cache_path)  # noqa: S301
+        df: pd.DataFrame = pd.read_pickle(cache_path)  # noqa: S301
+        return df
 
     # Clean up old cache files to prevent disk bloat
     for old_file in cache_dir.glob(f"soil_temp_{station_number}_{interpolate_missing_values}_*.pkl"):
