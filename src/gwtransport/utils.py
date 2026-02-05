@@ -61,6 +61,7 @@ import io
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import numpy.typing as npt
@@ -782,8 +783,7 @@ def get_soil_temperature(*, station_number: int = 260, interpolate_missing_value
 
     # Check if cached file exists and is from today
     if cache_path.exists():
-        df: pd.DataFrame = pd.read_pickle(cache_path)  # noqa: S301
-        return df
+        return cast(pd.DataFrame, pd.read_pickle(cache_path))  # noqa: S301
 
     # Clean up old cache files to prevent disk bloat
     for old_file in cache_dir.glob(f"soil_temp_{station_number}_{interpolate_missing_values}_*.pkl"):
