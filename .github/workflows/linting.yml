@@ -31,7 +31,7 @@ jobs:
       - name: Type checking
         run: |
           uv run ty --version
-          uv run ty check .
+          uv run ty check . --output-format github --ignore unused-ignore-comment
       - name: "Validate project metadata"
         run: uv run validate-pyproject pyproject.toml
       - name: Prettier
