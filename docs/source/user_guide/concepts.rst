@@ -20,7 +20,7 @@ Why This Matters
 - The pore volume distribution describes how much of the aquifer is "fast" vs "slow"
 - A gamma distribution provides a flexible, physically meaningful approximation
 
-**Key insight:** The pore volume distribution is constant over time (it's a property of the aquifer geometry), while flow rates and concentrations vary. Once calibrated, the same distribution can predict transport of any solute.
+**Key insight:** The pore volume distribution is constant over time, while flow rates and concentrations vary. Once calibrated, the same distribution can predict transport of any solute. However, the APVD is only well-defined and time-invariant under the :ref:`steady-streamlines assumption <assumption-steady-streamlines>`: it is a property of the aquifer *for a given streamline configuration*, not an intrinsic aquifer property in general. When flow magnitude changes but streamline geometry is fixed, the APVD remains constant. When boundary conditions change in a way that redirects flow (e.g., a new pumping well activates), the streamlines rearrange and the APVD is no longer valid.
 
 Key Parameters
 ~~~~~~~~~~~~~~
@@ -150,11 +150,22 @@ The boundaries between these scales are **not sharp**. This is why measured disp
 
 - The **pore volume distribution (APVD)** captures macro-scale heterogeneity explicitly
 - The **diffusion module** adds molecular diffusion (:math:`D_m`) and mechanical dispersion (:math:`\alpha_L`)
-- For most bank filtration applications, APVD dominates and pore-scale dispersion is negligible
 
-**When calibrating APVD from breakthrough curves**, the fitted :math:`\sigma_{apv}` already includes all spreading sources at scales smaller than the APVD resolution. Adding :math:`\alpha_L` would double-count.
+**Dispersion coefficient vs. breakthrough spreading:**
 
-**When computing APVD from streamline analysis**, only macro-scale path lengths are captured. Pore-scale dispersion (:math:`\alpha_L`) can be meaningfully added.
+The longitudinal dispersion coefficient :math:`D_L = D_m + \alpha_L \cdot v` increases with flow velocity. However, the actual spreading of a breakthrough curve at a fixed travel distance does **not** increase with flow:
+
+- Mechanical dispersion (:math:`\alpha_L`): spatial spreading :math:`\sigma_x^2 = 2 \alpha_L L` is **independent of velocity** — the plume traverses the same pore-scale heterogeneity regardless of speed
+- Molecular diffusion (:math:`D_m`): spreading **decreases** with higher flow — less time for diffusion to act
+
+In pore volume units, :math:`\sigma_{V,disp}` is flow-independent, while :math:`\sigma_{V,diff}` decreases with higher flow (proportional to :math:`1/\sqrt{Q}`).
+
+**When calibrating APVD from breakthrough curves**, the fitted :math:`\sigma_{apv}` already includes all spreading sources present during calibration — including pore-scale dispersion and molecular diffusion. Adding :math:`\alpha_L` would double-count. Note: if calibrating with one compound (e.g., temperature, :math:`D_m \approx 0.1` m²/day) and predicting for another (e.g., a solute, :math:`D_m \approx 10^{-4}` m²/day), the baked-in diffusion contribution may need correction — see :doc:`/examples/05_Diffusion_Dispersion`.
+
+**When computing APVD from streamline analysis**, only macro-scale path lengths are captured. Pore-scale dispersion (:math:`\alpha_L`) can be meaningfully added:
+
+- **Gamma-parameterized APVD**: Combine variances by adjusting the standard deviation parameter: :math:`\sigma_{total} = \sqrt{\sigma_{apv}^2 + \sigma_{disp}^2 + \sigma_{diff}^2}`
+- **Discrete streamline volumes**: Variance addition is **not** meaningful for an array of specific geometric measurements. Use the :mod:`gwtransport.diffusion` module to apply pore-scale dispersion on top of the advective transport.
 
 See :doc:`/examples/05_Diffusion_Dispersion` for quantitative guidance on comparing these contributions and formulas to convert dispersion effects to equivalent APVD standard deviation.
 

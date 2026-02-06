@@ -724,8 +724,10 @@ def infiltration_to_extraction(
             "  - You want to add unresolved pore-scale dispersion\n\n"
             "This may double-count spreading when:\n"
             "  - APVD was calibrated from breakthrough curves (dispersion already included)\n\n"
-            "Consider using the 'equivalent APVD std' approach from 05_Diffusion_Dispersion.ipynb "
-            "to combine both effects in the faster advection module.\n"
+            "For gamma-parameterized APVD, consider using the 'equivalent APVD std' approach\n"
+            "from 05_Diffusion_Dispersion.ipynb to combine both effects in the faster advection\n"
+            "module. Note: this variance combination is only valid for continuous (gamma)\n"
+            "distributions, not for discrete streamline volumes.\n"
             "Suppress this warning with suppress_dispersion_warning=True."
         )
         warnings.warn(msg, UserWarning, stacklevel=2)
@@ -1101,8 +1103,10 @@ def extraction_to_infiltration(
             "  - You want to add unresolved pore-scale dispersion\n\n"
             "This may double-count spreading when:\n"
             "  - APVD was calibrated from breakthrough curves (dispersion already included)\n\n"
-            "Consider using the 'equivalent APVD std' approach from 05_Diffusion_Dispersion.ipynb "
-            "to combine both effects in the faster advection module.\n"
+            "For gamma-parameterized APVD, consider using the 'equivalent APVD std' approach\n"
+            "from 05_Diffusion_Dispersion.ipynb to combine both effects in the faster advection\n"
+            "module. Note: this variance combination is only valid for continuous (gamma)\n"
+            "distributions, not for discrete streamline volumes.\n"
             "Suppress this warning with suppress_dispersion_warning=True."
         )
         warnings.warn(msg, UserWarning, stacklevel=2)

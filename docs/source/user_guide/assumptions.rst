@@ -88,7 +88,7 @@ Alternatively, use the "equivalent APVD std" approach described in :doc:`/exampl
 
 **Applies to:** All modules (``advection``, ``residence_time``, ``deposition``, ``logremoval``, ``diffusion``)
 
-**What this means:** When pumping rate doubles, water moves twice as fast along the same paths—the paths themselves don't change. The pore volume distribution (see :ref:`concept-pore-volume-distribution`) is a time-invariant property of the aquifer geometry.
+**What this means:** When pumping rate doubles, water moves twice as fast along the same paths—the paths themselves don't change. The pore volume distribution (see :ref:`concept-pore-volume-distribution`) is only well-defined and time-invariant under this assumption: it is a property of the aquifer *for a given streamline configuration*. If boundary conditions change in a way that redirects flow, the streamlines rearrange and the APVD itself changes.
 
 **When it holds:**
 

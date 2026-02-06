@@ -32,6 +32,12 @@ spreading already includes all dispersion effects at smaller scales. To add pore
 dispersion separately (when APVD comes from streamline analysis), use
 :mod:`gwtransport.diffusion`. See :ref:`concept-dispersion-scales` for details.
 
+Note on cross-compound calibration: When APVD is calibrated from breakthrough data of one
+compound (e.g., temperature with D_m ~ 0.1 m²/day) and used to predict another (e.g., a
+solute with D_m ~ 1e-4 m²/day), the molecular diffusion contribution baked into the
+calibrated std may need correction. See :doc:`/examples/05_Diffusion_Dispersion` for
+the correction procedure.
+
 - :func:`extraction_to_infiltration_series` - Single pore volume, time-shift only
   (deconvolution). Shifts extraction time edges backward by residence time. Concentration
   values remain unchanged (cin = cout). Symmetric inverse of infiltration_to_extraction_series.
@@ -380,10 +386,16 @@ def gamma_infiltration_to_extraction(
 
     Notes
     -----
+    The APVD is only time-invariant under the steady-streamlines assumption
+    (see :ref:`assumption-steady-streamlines`).
+
     The spreading from the gamma-distributed pore volumes represents macro-scale aquifer
     heterogeneity. If parameters (mean, std) were calibrated from breakthrough curves,
-    pore-scale dispersion is already implicitly included. See :ref:`concept-dispersion-scales`
-    for guidance on when to add pore-scale dispersion using the diffusion module.
+    pore-scale dispersion is already implicitly included. If calibrating with one compound
+    (e.g., temperature) and predicting for another (e.g., a solute), the baked-in molecular
+    diffusion contribution may need correction — see :doc:`/examples/05_Diffusion_Dispersion`.
+    See :ref:`concept-dispersion-scales` for guidance on when to add pore-scale dispersion
+    using the diffusion module.
 
     Examples
     --------
@@ -527,10 +539,16 @@ def gamma_extraction_to_infiltration(
 
     Notes
     -----
+    The APVD is only time-invariant under the steady-streamlines assumption
+    (see :ref:`assumption-steady-streamlines`).
+
     The spreading from the gamma-distributed pore volumes represents macro-scale aquifer
     heterogeneity. If parameters (mean, std) were calibrated from breakthrough curves,
-    pore-scale dispersion is already implicitly included. See :ref:`concept-dispersion-scales`
-    for guidance on when to add pore-scale dispersion using the diffusion module.
+    pore-scale dispersion is already implicitly included. If calibrating with one compound
+    (e.g., temperature) and predicting for another (e.g., a solute), the baked-in molecular
+    diffusion contribution may need correction — see :doc:`/examples/05_Diffusion_Dispersion`.
+    See :ref:`concept-dispersion-scales` for guidance on when to add pore-scale dispersion
+    using the diffusion module.
 
     Examples
     --------
