@@ -21,7 +21,7 @@ Calibration refers to the estimation of the aquifer pore volume distribution. On
 
 -  **Predict residence time distributions** under varying flow conditions
 -  **Forecast contaminant arrival times** and extracted concentrations
--  **Design treatment systems** with quantified pathogen removal efficiency
+-  **Design treatment systems** with quantified pathogen removal efficiency, compatible with tracer dating decay rates
 -  **Assess groundwater vulnerability** to contamination with a retardation that may depend on its concentration (non-linear sorption)
 -  **Enable early warning systems** as digital twins for drinking water protection
 
