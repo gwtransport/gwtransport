@@ -9,12 +9,27 @@ reduction of pathogen concentration on a logarithmic scale (e.g., log removal of
 99.9% reduction). For systems in series, log removals are typically summed directly, while
 for parallel systems, a weighted average based on flow distribution is required.
 
+The log removal model uses standard first-order decay:
+
+    Log Removal = log10_removal_rate * residence_time
+
+where ``log10_removal_rate`` has units [log10/day] and ``residence_time`` has units [days].
+This is equivalent to exponential decay ``C_out/C_in = 10^(-mu * t)``, where mu is the
+log10 removal rate and t is residence time. The first-order decay rate constant lambda [1/day]
+is related to mu by ``lambda = mu * ln(10)``.
+
 Available functions:
 
 - :func:`residence_time_to_log_removal` - Calculate log removal from residence times and
-  removal rate coefficient. Uses formula: Log Removal = log_removal_rate * log10(residence_time).
+  removal rate coefficient. Uses formula: Log Removal = log10_removal_rate * residence_time.
   Handles single values, 1D arrays, or multi-dimensional arrays of residence times. Returns
   log removal values with same shape as input.
+
+- :func:`decay_rate_to_log10_removal_rate` - Convert a natural-log decay rate constant
+  lambda [1/day] to a log10 removal rate mu [log10/day].
+
+- :func:`log10_removal_rate_to_decay_rate` - Convert a log10 removal rate mu [log10/day]
+  to a natural-log decay rate constant lambda [1/day].
 
 - :func:`parallel_mean` - Calculate weighted average log removal for parallel flow systems.
   Computes overall efficiency when multiple treatment paths operate in parallel with different
@@ -24,24 +39,19 @@ Available functions:
   not provided.
 
 - :func:`gamma_pdf` - Compute probability density function (PDF) of log removal given
-  gamma-distributed residence time. Transforms gamma distribution gamma(rt_alpha, rt_beta) to
-  log removal distribution using log_removal_rate coefficient. Useful for uncertainty quantification
-  and probabilistic risk assessment.
+  gamma-distributed residence time. Since R = mu*T and T ~ Gamma(alpha, beta), R follows a
+  Gamma(alpha, mu*beta) distribution.
 
 - :func:`gamma_cdf` - Compute cumulative distribution function (CDF) of log removal given
   gamma-distributed residence time. Returns probability that log removal is less than or equal
-  to specified values. Uses scipy.stats.gamma.cdf internally with transformed residence time
-  values t = 10^(r/log_removal_rate).
+  to specified values.
 
 - :func:`gamma_mean` - Compute mean log removal for gamma-distributed residence time. Returns
-  expected value E[R] = (log_removal_rate/ln(10)) * (digamma(rt_alpha) + ln(rt_beta)). More
-  efficient than numerical integration of PDF. Useful for design calculations and performance
-  prediction.
+  expected value E[R] = mu * alpha * beta, where mu is the log10 removal rate.
 
 - :func:`gamma_find_flow_for_target_mean` - Find flow rate that produces specified target mean
-  log removal given gamma-distributed aquifer pore volume. Solves inverse problem analytically
-  using relationship: flow = apv_beta * exp(digamma(apv_alpha) - (ln(10)*target_mean)/log_removal_rate).
-  Useful for designing systems to meet regulatory requirements.
+  log removal given gamma-distributed aquifer pore volume. Solves inverse problem analytically:
+  flow = mu * alpha * apv_beta / target_mean.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -50,31 +60,30 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import numpy.typing as npt
 from scipy import stats
-from scipy.special import digamma, gamma
 
 
 def residence_time_to_log_removal(
-    *, residence_times: npt.ArrayLike, log_removal_rate: float
+    *, residence_times: npt.ArrayLike, log10_removal_rate: float
 ) -> npt.NDArray[np.floating]:
     """
-    Compute log removal given residence times and a log removal rate.
+    Compute log removal given residence times and a log10 removal rate.
 
     This function calculates the log removal efficiency based on the
-    residence times of water in a treatment system and the log removal
-    rate coefficient.
+    residence times of water in a treatment system and the log10 removal
+    rate coefficient using first-order decay:
 
-    The calculation uses the formula:
-    Log Removal = log_removal_rate * log10(residence_time)
+    Log Removal = log10_removal_rate * residence_time
+
+    This corresponds to exponential decay of pathogen concentration:
+    C_out/C_in = 10^(-log10_removal_rate * residence_time).
 
     Parameters
     ----------
     residence_times : array-like
-        Array of residence times (in consistent units, e.g., hours, days).
-        Must be positive values.
-    log_removal_rate : float
-        Log removal rate coefficient that relates residence time to
-        log removal efficiency. Units should be consistent with
-        residence_times.
+        Array of residence times in days. Must be positive values.
+    log10_removal_rate : float
+        Log10 removal rate coefficient (log10/day). Relates residence time
+        to log removal efficiency via first-order decay.
 
     Returns
     -------
@@ -84,6 +93,8 @@ def residence_time_to_log_removal(
 
     See Also
     --------
+    decay_rate_to_log10_removal_rate : Convert natural-log decay rate to log10 removal rate
+    log10_removal_rate_to_decay_rate : Convert log10 removal rate to natural-log decay rate
     gamma_mean : Compute mean log removal for gamma-distributed residence times
     gamma_find_flow_for_target_mean : Find flow rate to achieve target log removal
     parallel_mean : Calculate weighted average for parallel flow systems
@@ -97,37 +108,100 @@ def residence_time_to_log_removal(
     - Log 2 = 99% reduction
     - Log 3 = 99.9% reduction
 
-    The log removal rate coefficient determines how effectively the
-    treatment system removes pathogens per unit log time.
+    The first-order decay model is mathematically identical to radioactive
+    decay used in tracer dating. To convert a published natural-log decay
+    rate lambda [1/day] to log10_removal_rate mu [log10/day], use
+    :func:`decay_rate_to_log10_removal_rate`.
 
     Examples
     --------
     >>> import numpy as np
     >>> from gwtransport.logremoval import residence_time_to_log_removal
-    >>> residence_times = np.array([1.0, 10.0, 100.0])
-    >>> log_removal_rate = 2.0
+    >>> residence_times = np.array([10.0, 20.0, 50.0])
+    >>> log10_removal_rate = 0.2
     >>> residence_time_to_log_removal(
-    ...     residence_times=residence_times, log_removal_rate=log_removal_rate
+    ...     residence_times=residence_times, log10_removal_rate=log10_removal_rate
     ... )  # doctest: +NORMALIZE_WHITESPACE
-    array([0., 2., 4.])
+    array([ 2.,  4., 10.])
 
     >>> # Single residence time
-    >>> residence_time_to_log_removal(residence_times=5.0, log_removal_rate=1.5)
-    np.float64(1.0484550065040283)
+    >>> residence_time_to_log_removal(residence_times=5.0, log10_removal_rate=0.3)
+    np.float64(1.5)
 
     >>> # 2D array of residence times
-    >>> residence_times_2d = np.array([[1.0, 10.0], [100.0, 1000.0]])
+    >>> residence_times_2d = np.array([[10.0, 20.0], [30.0, 40.0]])
     >>> residence_time_to_log_removal(
-    ...     residence_times=residence_times_2d, log_removal_rate=1.0
+    ...     residence_times=residence_times_2d, log10_removal_rate=0.1
     ... )
-    array([[0., 1.],
-           [2., 3.]])
+    array([[1., 2.],
+           [3., 4.]])
     """
-    # Convert to numpy array for consistent handling
-    residence_times = np.asarray(residence_times, dtype=float)
+    return log10_removal_rate * np.asarray(residence_times, dtype=float)
 
-    # Calculate log removal using the formula
-    return log_removal_rate * np.log10(residence_times)
+
+def decay_rate_to_log10_removal_rate(decay_rate: float) -> float:
+    """
+    Convert a natural-log decay rate constant to a log10 removal rate.
+
+    Converts lambda [1/day] to mu [log10/day] using the relationship
+    mu = lambda / ln(10).
+
+    Parameters
+    ----------
+    decay_rate : float
+        Natural-log first-order decay rate constant lambda (1/day).
+        For example, from tracer dating: lambda = ln(2) / half_life.
+
+    Returns
+    -------
+    log10_removal_rate : float
+        Log10 removal rate mu (log10/day).
+
+    See Also
+    --------
+    log10_removal_rate_to_decay_rate : Inverse conversion
+    residence_time_to_log_removal : Apply the log10 removal rate
+
+    Examples
+    --------
+    >>> from gwtransport.logremoval import decay_rate_to_log10_removal_rate
+    >>> import numpy as np
+    >>> # Convert a decay rate of ln(2)/30 (half-life of 30 days)
+    >>> decay_rate = np.log(2) / 30
+    >>> decay_rate_to_log10_removal_rate(decay_rate)  # doctest: +SKIP
+    0.01003...
+    """
+    return decay_rate / np.log(10)
+
+
+def log10_removal_rate_to_decay_rate(log10_removal_rate: float) -> float:
+    """
+    Convert a log10 removal rate to a natural-log decay rate constant.
+
+    Converts mu [log10/day] to lambda [1/day] using the relationship
+    lambda = mu * ln(10).
+
+    Parameters
+    ----------
+    log10_removal_rate : float
+        Log10 removal rate mu (log10/day).
+
+    Returns
+    -------
+    decay_rate : float
+        Natural-log first-order decay rate constant lambda (1/day).
+
+    See Also
+    --------
+    decay_rate_to_log10_removal_rate : Inverse conversion
+
+    Examples
+    --------
+    >>> from gwtransport.logremoval import log10_removal_rate_to_decay_rate
+    >>> log10_removal_rate_to_decay_rate(0.2)  # doctest: +SKIP
+    0.4605...
+    """
+    return log10_removal_rate * np.log(10)
 
 
 def parallel_mean(
@@ -252,12 +326,13 @@ def parallel_mean(
 
 
 def gamma_pdf(
-    *, r: npt.ArrayLike, rt_alpha: float, rt_beta: float, log_removal_rate: float
+    *, r: npt.ArrayLike, rt_alpha: float, rt_beta: float, log10_removal_rate: float
 ) -> npt.NDArray[np.floating]:
     """
-    Compute the probability density function (PDF) of log removal given a gamma distribution for the residence time.
+    Compute the PDF of log removal given gamma-distributed residence time.
 
-    gamma(rt_alpha, rt_beta) = gamma(apv_alpha, apv_beta / flow)
+    Since log removal R = mu*T and T ~ Gamma(alpha, beta), the log removal R
+    follows a Gamma(alpha, mu*beta) distribution.
 
     Parameters
     ----------
@@ -266,122 +341,126 @@ def gamma_pdf(
     rt_alpha : float
         Shape parameter of the gamma distribution for residence time.
     rt_beta : float
-        Scale parameter of the gamma distribution for residence time.
-    log_removal_rate : float
-        Coefficient for log removal calculation (R = log_removal_rate * log10(T)).
+        Scale parameter of the gamma distribution for residence time (days).
+    log10_removal_rate : float
+        Log10 removal rate mu (log10/day). Relates residence time to
+        log removal via R = mu * T.
 
     Returns
     -------
     pdf : numpy.ndarray
         PDF values corresponding to the input r values.
+
+    See Also
+    --------
+    gamma_cdf : Cumulative distribution function of log removal
+    gamma_mean : Mean of the log removal distribution
     """
-    # Convert input to array
     r = np.asarray(r)
-
-    # Compute the transformed PDF
-    t_values = 10 ** (r / log_removal_rate)
-
-    return (
-        (np.log(10) / (log_removal_rate * gamma(rt_alpha) * (rt_beta**rt_alpha)))
-        * (t_values**rt_alpha)
-        * np.exp(-t_values / rt_beta)
-    )
+    return stats.gamma.pdf(r, a=rt_alpha, scale=log10_removal_rate * rt_beta)
 
 
 def gamma_cdf(
-    *, r: npt.ArrayLike, rt_alpha: float, rt_beta: float, log_removal_rate: float
+    *, r: npt.ArrayLike, rt_alpha: float, rt_beta: float, log10_removal_rate: float
 ) -> npt.NDArray[np.floating]:
     """
-    Compute the cumulative distribution function (CDF) of log removal given a gamma distribution for the residence time.
+    Compute the CDF of log removal given gamma-distributed residence time.
 
-    gamma(rt_alpha, rt_beta) = gamma(apv_alpha, apv_beta / flow)
+    Since log removal R = mu*T and T ~ Gamma(alpha, beta), the CDF is
+    P(R <= r) = P(T <= r/mu) = Gamma_CDF(r/mu; alpha, beta).
 
     Parameters
     ----------
     r : array-like
         Log removal values at which to compute the CDF.
-    alpha : float
+    rt_alpha : float
         Shape parameter of the gamma distribution for residence time.
-    beta : float
-        Scale parameter of the gamma distribution for residence time.
-    log_removal_rate : float
-        Coefficient for log removal calculation (R = log_removal_rate * log10(T)).
+    rt_beta : float
+        Scale parameter of the gamma distribution for residence time (days).
+    log10_removal_rate : float
+        Log10 removal rate mu (log10/day). Relates residence time to
+        log removal via R = mu * T.
 
     Returns
     -------
     cdf : numpy.ndarray
         CDF values corresponding to the input r values.
+
+    See Also
+    --------
+    gamma_pdf : Probability density function of log removal
+    gamma_mean : Mean of the log removal distribution
     """
-    # Convert input to array
     r = np.asarray(r)
-
-    # Compute t values corresponding to r values
-    t_values = 10 ** (r / log_removal_rate)
-
-    # Use the gamma CDF directly
-    return stats.gamma.cdf(t_values, a=rt_alpha, scale=rt_beta)
+    return stats.gamma.cdf(r, a=rt_alpha, scale=log10_removal_rate * rt_beta)
 
 
-def gamma_mean(*, rt_alpha: float, rt_beta: float, log_removal_rate: float) -> float:
+def gamma_mean(*, rt_alpha: float, rt_beta: float, log10_removal_rate: float) -> float:
     """
-    Compute the mean of the log removal distribution given a gamma distribution for the residence time.
+    Compute the mean log removal for gamma-distributed residence time.
 
-    gamma(rt_alpha, rt_beta) = gamma(apv_alpha, apv_beta / flow)
+    Since R = mu*T and T ~ Gamma(alpha, beta), the mean is
+    E[R] = mu * alpha * beta.
 
     Parameters
     ----------
     rt_alpha : float
         Shape parameter of the gamma distribution for residence time.
     rt_beta : float
-        Scale parameter of the gamma distribution for residence time.
-    log_removal_rate : float
-        Coefficient for log removal calculation (R = log_removal_rate * log10(T)).
+        Scale parameter of the gamma distribution for residence time (days).
+    log10_removal_rate : float
+        Log10 removal rate mu (log10/day).
 
     Returns
     -------
     mean : float
         Mean value of the log removal distribution.
-    """
-    # Calculate E[R] = log_removal_rate * E[log10(T)]
-    # For gamma distribution: E[ln(T)] = digamma(alpha) + ln(beta_adjusted)
-    # Convert to log10: E[log10(T)] = E[ln(T)] / ln(10)
 
-    return (log_removal_rate / np.log(10)) * (digamma(rt_alpha) + np.log(rt_beta))
+    See Also
+    --------
+    gamma_find_flow_for_target_mean : Find flow for target mean log removal
+    gamma_pdf : PDF of the log removal distribution
+    gamma_cdf : CDF of the log removal distribution
+    """
+    return log10_removal_rate * rt_alpha * rt_beta
 
 
 def gamma_find_flow_for_target_mean(
-    *, target_mean: float, apv_alpha: float, apv_beta: float, log_removal_rate: float
+    *, target_mean: float, apv_alpha: float, apv_beta: float, log10_removal_rate: float
 ) -> float:
     """
-    Find the flow rate flow that produces a specified target mean log removal given a gamma distribution for the residence time.
+    Find the flow rate that produces a target mean log removal.
 
-    gamma(rt_alpha, rt_beta) = gamma(apv_alpha, apv_beta / flow)
+    Given a gamma-distributed aquifer pore volume with parameters (apv_alpha, apv_beta),
+    the residence time distribution is Gamma(apv_alpha, apv_beta/flow). The mean log
+    removal is mu * apv_alpha * apv_beta / flow. Solving for flow:
+
+    flow = mu * apv_alpha * apv_beta / target_mean
+
+    Rearranging the mean formula to solve for Q:
+    target_mean = (log_removal_rate/ln(10)) * (digamma(alpha) + ln(beta) - ln(Q))
+    ln(Q) = digamma(alpha) + ln(beta) - (ln(10)*target_mean/log_removal_rate)
+    Q = beta * exp(-(ln(10)*target_mean/log_removal_rate - digamma(alpha)))
 
     Parameters
     ----------
     target_mean : float
         Target mean log removal value.
     apv_alpha : float
-        Shape parameter of the gamma distribution for residence time.
+        Shape parameter of the gamma distribution for aquifer pore volume.
     apv_beta : float
-        Scale parameter of the gamma distribution for pore volume.
-    log_removal_rate : float
-        Coefficient for log removal calculation (R = log_removal_rate * log10(T)).
+        Scale parameter of the gamma distribution for aquifer pore volume.
+    log10_removal_rate : float
+        Log10 removal rate mu (log10/day).
 
     Returns
     -------
     flow : float
-        Flow rate that produces the target mean log removal.
+        Flow rate (same units as apv_beta per day) that produces the
+        target mean log removal.
 
-    Notes
-    -----
-    This function uses the analytical solution derived from the mean formula.
-    From E[R] = (log_removal_rate/ln(10)) * (digamma(alpha) + ln(beta) - ln(Q)),
-    we can solve for Q to get:
-    flow = beta * exp(ln(10)*target_mean/log_removal_rate - digamma(alpha))
+    See Also
+    --------
+    gamma_mean : Compute mean log removal for given parameters
     """
-    # Rearranging the mean formula to solve for Q:
-    # target_mean = (log_removal_rate/ln(10)) * (digamma(alpha) + ln(beta) - ln(Q))
-    # ln(Q) = digamma(alpha) + ln(beta) - (ln(10)*target_mean/log_removal_rate)
-    # Q = beta * exp(-(ln(10)*target_mean/log_removal_rate - digamma(alpha)))
-    return apv_beta * np.exp(digamma(apv_alpha) - (np.log(10) * target_mean) / log_removal_rate)
+    return log10_removal_rate * apv_alpha * apv_beta / target_mean
