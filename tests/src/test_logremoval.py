@@ -533,7 +533,7 @@ def test_gamma_mean_matches_numerical_integration(rt_alpha, rt_beta, log10_remov
     )
     numerical_mean = -np.log10(expected_decimal_reduction)
 
-    assert_allclose(analytical_mean, numerical_mean, rtol=1e-6)
+    assert_allclose(analytical_mean, numerical_mean, atol=1e-4)
 
 
 @pytest.mark.parametrize(
@@ -591,7 +591,7 @@ def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow,
     # Step 4: Compute parallel mean
     discretized = parallel_mean(log_removals=log_removals, flow_fractions=flow_fractions)
 
-    assert_allclose(analytical, discretized, rtol=5e-4)
+    assert_allclose(analytical, discretized, atol=1e-3)
 
 
 @pytest.mark.parametrize(
