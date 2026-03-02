@@ -23,7 +23,7 @@ import pandas as pd
 # Numerical tolerance constants
 EPSILON_FREUNDLICH_N = 1e-10  # Tolerance for checking if n ≈ 1.0
 EPSILON_EXPONENT = 1e-10  # Tolerance for checking if exponent ≈ 0
-EPSILON_DENOMINATOR = 1e-18  # Tolerance for near-zero denominators in shock velocity
+EPSILON_DENOMINATOR = 1e-15  # Tolerance for near-zero denominators in shock velocity
 
 
 @dataclass
@@ -315,7 +315,8 @@ class FreundlichSorption:
         # characteristic velocity, so we fall back to that value
         # instead of dividing by an extremely small number.
         if abs(denom) < EPSILON_DENOMINATOR:
-            return float(flow / self.retardation(c_left))
+            avg_retardation = 0.5 * (self.retardation(c_left) + self.retardation(c_right))
+            return float(flow / avg_retardation)
 
         return float((flux_right - flux_left) / denom)
 
@@ -390,7 +391,7 @@ class FreundlichSorption:
         # Use small tolerance for floating-point comparison
         tolerance = 1e-14 * max(abs(lambda_left), abs(lambda_right), abs(shock_vel))
 
-        return bool((lambda_left > shock_vel + tolerance) and (shock_vel > lambda_right - tolerance))
+        return bool((lambda_left > shock_vel - tolerance) and (shock_vel > lambda_right - tolerance))
 
 
 @dataclass

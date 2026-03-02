@@ -411,7 +411,7 @@ def handle_shock_rarefaction_collision(
     raref: RarefactionWave,
     t_event: float,
     v_event: float,
-    boundary_type: str,
+    boundary_type: str | None,
 ) -> list:
     """
     Handle shock interacting with rarefaction fan with wave splitting.
@@ -553,13 +553,13 @@ def handle_shock_rarefaction_collision(
 
     if raref_head_vel > shock_vel:
         # Rarefaction head is faster - creates compression
-        # Try to form shock between rarefaction head and shock left state
+        # Try to form shock between rarefaction head and state downstream of original shock
         new_shock = ShockWave(
             t_start=t_event,
             v_start=v_event,
             flow=raref.flow,
             c_left=raref.c_head,
-            c_right=shock.c_left,
+            c_right=shock.c_right,
             sorption=raref.sorption,
         )
 
@@ -580,7 +580,7 @@ def handle_rarefaction_characteristic_collision(
     char: CharacteristicWave,
     t_event: float,  # noqa: ARG001
     v_event: float,  # noqa: ARG001
-    boundary_type: str,  # noqa: ARG001
+    boundary_type: str | None,  # noqa: ARG001
 ) -> list:
     """
     Handle rarefaction boundary intersecting with characteristic.
@@ -630,7 +630,7 @@ def handle_rarefaction_rarefaction_collision(
     raref2: RarefactionWave,
     t_event: float,
     v_event: float,
-    boundary_type: str,
+    boundary_type: str | None,
 ) -> list:
     """Handle collision between two rarefaction boundaries.
 

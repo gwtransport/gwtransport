@@ -74,9 +74,13 @@ def parse_parameters(
         If both alpha and beta are None or if both mean and std are None.
         If alpha or beta are not positive.
     """
+    if (alpha is None) != (beta is None):
+        msg = "alpha and beta must both be provided or both be None."
+        raise ValueError(msg)
+
     if alpha is None or beta is None:
         if mean is None or std is None:
-            msg = "Either alpha and beta or mean and std must be provided."
+            msg = "Either (alpha, beta) or (mean, std) must be provided."
             raise ValueError(msg)
 
         alpha, beta = mean_std_to_alpha_beta(mean=mean, std=std)
@@ -122,6 +126,13 @@ def mean_std_to_alpha_beta(*, mean: float, std: float) -> tuple[float, float]:
     >>> print(f"Scale parameter (beta): {beta:.2f}")
     Scale parameter (beta): 2187.00
     """
+    if std <= 0:
+        msg = "std must be positive"
+        raise ValueError(msg)
+    if mean <= 0:
+        msg = "mean must be positive"
+        raise ValueError(msg)
+
     alpha = mean**2 / std**2
     beta = std**2 / mean
     return alpha, beta

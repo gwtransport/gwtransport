@@ -139,7 +139,7 @@ def test_gamma_mean_std_to_alpha_beta_basic():
 def test_gamma_mean_std_to_alpha_beta_zero_std():
     """Test gamma_mean_std_to_alpha_beta when std is zero."""
     mean, std = 10.0, 0.0
-    with pytest.raises(ZeroDivisionError):
+    with pytest.raises(ValueError, match="std must be positive"):
         mean_std_to_alpha_beta(mean=mean, std=std)
 
 
@@ -347,25 +347,25 @@ def test_parse_parameters_with_mean_std():
 
 def test_parse_parameters_missing_both():
     """Test parse_parameters raises error when both parameter sets are missing."""
-    with pytest.raises(ValueError, match="Either alpha and beta or mean and std must be provided"):
+    with pytest.raises(ValueError, match=r"Either \(alpha, beta\) or \(mean, std\) must be provided"):
         parse_parameters()
 
 
 def test_parse_parameters_partial_alpha_beta():
     """Test parse_parameters raises error with partial alpha/beta."""
-    with pytest.raises(ValueError, match="Either alpha and beta or mean and std must be provided"):
+    with pytest.raises(ValueError, match="alpha and beta must both be provided"):
         parse_parameters(alpha=5.0)
 
-    with pytest.raises(ValueError, match="Either alpha and beta or mean and std must be provided"):
+    with pytest.raises(ValueError, match="alpha and beta must both be provided"):
         parse_parameters(beta=2.0)
 
 
 def test_parse_parameters_partial_mean_std():
     """Test parse_parameters raises error with partial mean/std."""
-    with pytest.raises(ValueError, match="Either alpha and beta or mean and std must be provided"):
+    with pytest.raises(ValueError, match=r"Either \(alpha, beta\) or \(mean, std\) must be provided"):
         parse_parameters(mean=10.0)
 
-    with pytest.raises(ValueError, match="Either alpha and beta or mean and std must be provided"):
+    with pytest.raises(ValueError, match=r"Either \(alpha, beta\) or \(mean, std\) must be provided"):
         parse_parameters(std=3.0)
 
 

@@ -70,6 +70,9 @@ class Event:
         Volumetric position where event occurs [m³]
     flow_new : float, optional
         New flow rate for FLOW_CHANGE events [m³/day]
+    boundary_type : str, optional
+        Which rarefaction boundary collided: ``'head'`` or ``'tail'``.
+        Set for rarefaction collision events.
 
     Examples
     --------
@@ -89,6 +92,7 @@ class Event:
     waves_involved: list  # List[Wave] - can't type hint due to circular import
     location: float
     flow_new: Optional[float] = None
+    boundary_type: Optional[str] = None
 
     def __lt__(self, other):
         """Events ordered by time (for priority queue)."""

@@ -77,14 +77,11 @@ from gwtransport.advection_utils import (
     _extraction_to_infiltration_weights,
     _infiltration_to_extraction_weights,
 )
-from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
+from gwtransport.fronttracking.math import EPSILON_FREUNDLICH_N, ConstantRetardation, FreundlichSorption
 from gwtransport.fronttracking.output import compute_bin_averaged_concentration_exact
 from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.residence_time import residence_time
-
-# Numerical tolerance constants
-EPSILON_FREUNDLICH_N = 1e-10  # Tolerance for checking if freundlich_n ≈ 1.0
 
 
 def infiltration_to_extraction_series(
@@ -791,6 +788,9 @@ def infiltration_to_extraction(
     if np.any(np.isnan(flow)):
         msg = "flow contains NaN values, which are not allowed"
         raise ValueError(msg)
+    if retardation_factor < 1.0:
+        msg = "retardation_factor must be >= 1.0"
+        raise ValueError(msg)
 
     # Compute normalized weights (includes all pre-computation)
     normalized_weights = _infiltration_to_extraction_weights(
@@ -978,6 +978,9 @@ def extraction_to_infiltration(
         raise ValueError(msg)
     if np.any(np.isnan(flow)):
         msg = "flow contains NaN values, which are not allowed"
+        raise ValueError(msg)
+    if retardation_factor < 1.0:
+        msg = "retardation_factor must be >= 1.0"
         raise ValueError(msg)
 
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)

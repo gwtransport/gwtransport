@@ -113,18 +113,14 @@ def test_weighted_flows():
 
 
 def test_weight_sum_behavior():
-    """Test behavior when weights don't sum to 1.0 (validation removed)."""
+    """Test behavior when weights don't sum to 1.0 raises ValueError."""
     log_removals = [3.0, 4.0]
 
-    # Weights that don't sum to 1.0 will now proceed with calculation
-    result1 = parallel_mean(log_removals=log_removals, flow_fractions=[0.7, 0.4])  # Sum > 1
-    result2 = parallel_mean(log_removals=log_removals, flow_fractions=[0.7, 0.2])  # Sum < 1
+    with pytest.raises(ValueError, match="flow_fractions must sum to 1.0"):
+        parallel_mean(log_removals=log_removals, flow_fractions=[0.7, 0.4])  # Sum > 1
 
-    # Results should be numeric (calculation proceeds)
-    assert isinstance(result1, (int, float))
-    assert not np.isnan(result1)
-    assert isinstance(result2, (int, float))
-    assert not np.isnan(result2)
+    with pytest.raises(ValueError, match="flow_fractions must sum to 1.0"):
+        parallel_mean(log_removals=log_removals, flow_fractions=[0.7, 0.2])  # Sum < 1
 
 
 def test_length_mismatch_behavior():

@@ -91,20 +91,27 @@ def _erf_integral_time(
         x_v = x[mask_valid]
         d_v = diffusivity[mask_valid]
 
+        # Use |x| for the formula and restore sign at the end.
+        # The antiderivative is an odd function of x, but the erfc term
+        # introduces a spurious -x²/D offset for negative x if computed
+        # directly.
+        sign_x = np.sign(x_v)
+        abs_x = np.abs(x_v)
+
         sqrt_t = np.sqrt(t_v)
         sqrt_d = np.sqrt(d_v)
         sqrt_pi = np.sqrt(np.pi)
 
-        arg = x_v / (2 * sqrt_d * sqrt_t)
-        exp_term = np.exp(-(x_v**2) / (4 * d_v * t_v))
+        arg = abs_x / (2 * sqrt_d * sqrt_t)
+        exp_term = np.exp(-(abs_x**2) / (4 * d_v * t_v))
         erf_term = special.erf(arg)
         erfc_term = special.erfc(arg)
 
         term1 = t_v * erf_term
-        term2 = (x_v * sqrt_t / (sqrt_pi * sqrt_d)) * exp_term
-        term3 = -(x_v**2 / (2 * d_v)) * erfc_term
+        term2 = (abs_x * sqrt_t / (sqrt_pi * sqrt_d)) * exp_term
+        term3 = -(abs_x**2 / (2 * d_v)) * erfc_term
 
-        out[mask_valid] = term1 + term2 + term3
+        out[mask_valid] = sign_x * (term1 + term2 + term3)
 
     # Handle infinity: as t -> inf, integral -> inf * sign(x)
     mask_t_inf = np.isinf(t)

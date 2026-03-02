@@ -22,6 +22,79 @@ import numpy as np
 import numpy.typing as npt
 
 
+def _positive_part_integral(
+    a: npt.NDArray[np.floating], b: npt.NDArray[np.floating], w: npt.NDArray[np.floating]
+) -> npt.NDArray[np.floating]:
+    """
+    Integrate max(f(x), 0) from x=0 to x=w where f is linear from a to b.
+
+    Parameters
+    ----------
+    a : ndarray
+        Function values at x=0.
+    b : ndarray
+        Function values at x=w.
+    w : ndarray
+        Integration width.
+
+    Returns
+    -------
+    ndarray
+        Integral values.
+    """
+    both_pos = (a > 0) & (b > 0)
+    only_a_pos = (a > 0) & ~both_pos
+    only_b_pos = (b > 0) & ~both_pos
+
+    abs_diff = np.abs(a - b)
+    safe_diff = np.where(abs_diff > 0, abs_diff, 1.0)
+
+    excess = np.where(only_a_pos, a, np.where(only_b_pos, b, 0.0))
+
+    return np.where(
+        both_pos,
+        w * (a + b) / 2,
+        w * excess**2 / (2 * safe_diff),
+    )
+
+
+def _clipped_linear_integral(
+    a: npt.NDArray[np.floating],
+    b: npt.NDArray[np.floating],
+    w: npt.NDArray[np.floating],
+    lo: float,
+    hi: float,
+) -> npt.NDArray[np.floating]:
+    """
+    Integrate clip(f(x), lo, hi) from x=0 to x=w where f is linear from a to b.
+
+    Uses the identity ``clip(f) = f - max(f - hi, 0) + max(lo - f, 0)`` to
+    compute the exact integral analytically.
+
+    Parameters
+    ----------
+    a : ndarray
+        Function values at x=0.
+    b : ndarray
+        Function values at x=w.
+    w : ndarray
+        Integration width.
+    lo : float
+        Lower clipping bound.
+    hi : float
+        Upper clipping bound.
+
+    Returns
+    -------
+    ndarray
+        Integral values.
+    """
+    raw = w * (a + b) / 2
+    excess_above = _positive_part_integral(a - hi, b - hi, w)
+    deficit_below = _positive_part_integral(lo - a, lo - b, w)
+    return raw - excess_above + deficit_below
+
+
 def compute_average_heights(
     *, x_edges: npt.ArrayLike, y_edges: npt.ArrayLike, y_lower: float, y_upper: float
 ) -> npt.NDArray[np.floating]:
@@ -33,6 +106,11 @@ def compute_average_heights(
     - top-right: (y_edges[i, j+1], x_edges[j+1])
     - bottom-left: (y_edges[i+1, j], x_edges[j])
     - bottom-right: (y_edges[i+1, j+1], x_edges[j+1])
+
+    The area is computed as the exact integral of
+    ``clip(top(x), y_lower, y_upper) - clip(bottom(x), y_lower, y_upper)``
+    where ``top(x)`` and ``bottom(x)`` are linear interpolants of the corner
+    values, and ``clip`` restricts values to ``[y_lower, y_upper]``.
 
     Parameters
     ----------
@@ -69,35 +147,17 @@ def compute_average_heights(
     >>> print(f"Shape: {avg_heights.shape}")
     Shape: (2, 2)
     """
-    # Convert inputs to arrays
-    x_edges = np.asarray(x_edges)
-    y_edges = np.asarray(y_edges)
+    x_edges = np.asarray(x_edges, dtype=float)
+    y_edges = np.asarray(y_edges, dtype=float)
 
     y_tl, y_tr = y_edges[:-1, :-1], y_edges[:-1, 1:]
     y_bl, y_br = y_edges[1:, :-1], y_edges[1:, 1:]
     widths = np.diff(x_edges)
 
-    # Handle complete outside cases
-    all_corners = np.stack([y_tl, y_tr, y_bl, y_br], axis=-1)
-    outside_mask = np.all(all_corners >= y_upper, axis=-1) | np.all(all_corners <= y_lower, axis=-1)
+    top_integral = _clipped_linear_integral(y_tl, y_tr, widths, y_lower, y_upper)
+    bottom_integral = _clipped_linear_integral(y_bl, y_br, widths, y_lower, y_upper)
 
-    # Vectorized area calculation using shoelace formula for clipped quadrilaterals
-    y_tl_c, y_tr_c = np.clip(y_tl, y_lower, y_upper), np.clip(y_tr, y_lower, y_upper)
-    y_bl_c, y_br_c = np.clip(y_bl, y_lower, y_upper), np.clip(y_br, y_lower, y_upper)
+    areas = np.maximum(top_integral - bottom_integral, 0.0)
 
-    # Use exact shoelace formula for quadrilateral with vertices:
-    # (0, y_bl_c), (width, y_br_c), (width, y_tr_c), (0, y_tl_c)
-    areas = 0.5 * widths * np.abs(y_bl_c + y_br_c - y_tl_c - y_tr_c)
-
-    # Enhanced correction for cases where edges cross clipping bounds
-    # This handles the specific geometry of sloped edge intersections
-    top_crosses = ((y_tl - y_upper) * (y_tr - y_upper)) < 0
-    correction = np.where(
-        top_crosses & (y_tl > y_upper) & (y_tr < y_upper),
-        widths * (y_tl - y_upper) ** 2 / (2 * np.maximum(y_tl - y_tr, 1e-15)),
-        0,
-    )
-    areas += correction
-    areas = np.where(outside_mask, 0, areas)
-
-    return areas / widths
+    with np.errstate(invalid="ignore"):
+        return areas / widths

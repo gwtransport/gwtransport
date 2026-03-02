@@ -331,6 +331,11 @@ def fraction_explained(
             retardation_factor=retardation_factor,
         )
 
+    _expected_ndim = 2
+    if rt.ndim != _expected_ndim:
+        msg = f"rt must be 2D with shape (n_pore_volumes, n_times), got {rt.ndim}D"
+        raise ValueError(msg)
+
     n_aquifer_pore_volume = rt.shape[0]
     return (n_aquifer_pore_volume - np.isnan(rt).sum(axis=0)) / n_aquifer_pore_volume
 

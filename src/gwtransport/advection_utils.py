@@ -136,17 +136,16 @@ def _extraction_to_infiltration_weights(
     """
     Compute extraction to infiltration transformation weights matrix.
 
-    Computes the weight matrix for the extraction to infiltration transformation,
-    ensuring mathematical symmetry with the infiltration to extraction operation. The extraction to infiltration
-    weights represent the transpose relationship needed for deconvolution.
+    Compute extraction to infiltration transformation weights matrix.
 
-    SYMMETRIC RELATIONSHIP:
-    - Infiltration to extraction weights: W_infiltration_to_extraction maps cin → cout
-    - Extraction to infiltration weights: W_extraction_to_infiltration maps cout → cin
-    - Mathematical constraint: W_extraction_to_infiltration should be the pseudo-inverse of W_infiltration_to_extraction
+    This is a reverse-direction flow-weighted estimate, NOT a true deconvolution
+    or pseudo-inverse of the infiltration-to-extraction weights. The weight matrix
+    is constructed independently using the same pore-volume-based overlap approach
+    in reverse, so ``W_reverse @ (W_forward @ cin) != cin`` in general.
 
-    The algorithm mirrors _infiltration_to_extraction_weights but with transposed
-    temporal overlap computations to ensure mathematical consistency.
+    The algorithm mirrors ``_infiltration_to_extraction_weights`` but reverses the
+    temporal mapping direction: for each infiltration time bin, it finds which
+    extraction time bins contribute, weighted by flow rate.
 
     The resulting cin values represent volume-weighted (flow-weighted) bin averages,
     where periods with higher extraction flow rates contribute more to the reconstructed infiltration concentration.

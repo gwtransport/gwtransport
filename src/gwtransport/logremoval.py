@@ -207,7 +207,7 @@ def log10_removal_rate_to_decay_rate(log10_removal_rate: float) -> float:
 
 def parallel_mean(
     *, log_removals: npt.ArrayLike, flow_fractions: npt.ArrayLike | None = None, axis: int | None = None
-) -> npt.NDArray[np.floating]:
+) -> np.floating | npt.NDArray[np.floating]:
     """
     Calculate the weighted average log removal for a system with parallel flows.
 
@@ -251,19 +251,15 @@ def parallel_mean(
 
     Notes
     -----
-    This function performs minimal input validation to reduce complexity.
-    NumPy will handle most error cases naturally through broadcasting
-    and array operations.
-
-    Notes
-    -----
     Log removal is a logarithmic measure of pathogen reduction:
+
     - Log 1 = 90% reduction
     - Log 2 = 99% reduction
     - Log 3 = 99.9% reduction
 
     For parallel flows, the combined removal is typically less effective
     than the best individual removal but better than the worst.
+    For systems in series, log removals would be summed directly.
 
     Examples
     --------
@@ -288,10 +284,6 @@ def parallel_mean(
     See Also
     --------
     residence_time_to_log_removal : Compute log removal from residence times
-
-    Notes
-    -----
-    For systems in series, log removals would be summed directly.
     """
     # Convert log_removals to numpy array if it isn't already
     log_removals = np.asarray(log_removals, dtype=float)
@@ -313,8 +305,10 @@ def parallel_mean(
         # Convert flow_fractions to numpy array
         flow_fractions = np.asarray(flow_fractions, dtype=float)
 
-        # Note: Shape compatibility and sum validation removed to reduce complexity
-        # NumPy will handle incompatible shapes through broadcasting or errors
+        fraction_sums = np.sum(flow_fractions, axis=axis)
+        if not np.all(np.isclose(fraction_sums, 1.0)):
+            msg = "flow_fractions must sum to 1.0 (along the specified axis)"
+            raise ValueError(msg)
 
     # Convert log removal to decimal reduction values
     decimal_reductions = 10 ** (-log_removals)

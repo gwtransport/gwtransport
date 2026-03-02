@@ -474,7 +474,22 @@ class FrontTracker:
             # For FLOW_CHANGE events, extra contains flow_new
             flow_new = extra if event_type == EventType.FLOW_CHANGE else None
 
-            return Event(time=t, event_type=event_type, waves_involved=waves, location=v, flow_new=flow_new)
+            # For rarefaction collision events, extra contains boundary_type
+            _raref_types = {
+                EventType.RAREF_CHAR_COLLISION,
+                EventType.SHOCK_RAREF_COLLISION,
+                EventType.RAREF_RAREF_COLLISION,
+            }
+            boundary_type = extra if event_type in _raref_types else None
+
+            return Event(
+                time=t,
+                event_type=event_type,
+                waves_involved=waves,
+                location=v,
+                flow_new=flow_new,
+                boundary_type=boundary_type,
+            )
 
         return None
 
@@ -521,7 +536,7 @@ class FrontTracker:
                 event.waves_involved[1],
                 event.time,
                 event.location,
-                boundary_type="head",  # TODO: Get from event
+                boundary_type=event.boundary_type,
             )
 
         elif event.event_type == EventType.SHOCK_RAREF_COLLISION:
@@ -530,7 +545,7 @@ class FrontTracker:
                 event.waves_involved[1],
                 event.time,
                 event.location,
-                boundary_type="tail",  # TODO: Get from event
+                boundary_type=event.boundary_type,
             )
 
         elif event.event_type == EventType.RAREF_RAREF_COLLISION:
@@ -539,7 +554,7 @@ class FrontTracker:
                 event.waves_involved[1],
                 event.time,
                 event.location,
-                boundary_type="head",  # TODO: Get from event
+                boundary_type=event.boundary_type,
             )
 
         elif event.event_type == EventType.OUTLET_CROSSING:
