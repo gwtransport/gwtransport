@@ -1,6 +1,7 @@
 import contextlib
 
 import numpy as np
+import pandas as pd
 import pytest
 from numpy.testing import assert_allclose
 from scipy import integrate, stats
@@ -16,6 +17,7 @@ from gwtransport.logremoval import (
     parallel_mean,
     residence_time_to_log_removal,
 )
+from gwtransport.residence_time import residence_time as compute_residence_time
 
 
 def test_single_flow():
@@ -535,34 +537,58 @@ def test_gamma_mean_matches_numerical_integration(rt_alpha, rt_beta, log10_remov
 
 
 @pytest.mark.parametrize(
-    ("rt_alpha", "rt_beta", "log10_removal_rate"),
+    ("apv_alpha", "apv_beta", "flow", "log10_removal_rate"),
     [
-        (1.5, 5.0, 0.1),  # low alpha
-        (3.0, 10.0, 0.2),  # moderate
-        (10.0, 5.0, 0.1),  # high alpha, narrow distribution
-        (2.0, 20.0, 0.5),  # high removal rate
-        (0.8, 100.0, 0.01),  # alpha < 1
+        (1.5, 50.0, 10.0, 0.1),  # low alpha
+        (3.0, 100.0, 10.0, 0.2),  # moderate
+        (10.0, 50.0, 10.0, 0.1),  # high alpha, narrow distribution
+        (2.0, 200.0, 10.0, 0.5),  # high removal rate
+        (0.8, 1000.0, 10.0, 0.01),  # alpha < 1
     ],
 )
-def test_gamma_mean_matches_discretized_parallel_mean(rt_alpha, rt_beta, log10_removal_rate):
-    """Test gamma_mean matches discretized residence times through parallel_mean.
+def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow, log10_removal_rate):
+    """Test gamma_mean matches the full pipeline: bins, residence_time, log_removal, parallel_mean.
 
-    Discretize the gamma distribution into bins, compute log removals via
-    residence_time_to_log_removal, and verify that parallel_mean of those
-    log removals converges to gamma_mean.
+    Uses the full pipeline:
+    1. gamma.bins() to discretize aquifer pore volumes
+    2. residence_time.residence_time() to compute residence times from pore volumes and flow
+    3. residence_time_to_log_removal() to compute log removals
+    4. parallel_mean() to compute effective log removal
+
+    The result should match gamma_mean() with rt_beta = apv_beta / flow.
     """
-    # Get the analytical effective mean
+    # Analytical effective mean
+    rt_alpha = apv_alpha
+    rt_beta = apv_beta / flow
     analytical = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate)
 
-    # Discretize the residence time distribution into many bins
-    b = gamma_bins(alpha=rt_alpha, beta=rt_beta, n_bins=10000)
-    residence_times = b["expected_values"]
+    # Step 1: Discretize aquifer pore volume distribution
+    b = gamma_bins(alpha=apv_alpha, beta=apv_beta, n_bins=10000)
+    pore_volumes = b["expected_values"]
     flow_fractions = b["probability_mass"]
 
-    # Compute log removal for each bin
+    # Step 2: Compute residence times using residence_time module
+    # Create a constant flow time series long enough for the largest pore volume
+    max_residence_days = pore_volumes.max() / flow * 2
+    n_days = int(np.ceil(max_residence_days)) + 10
+    flow_tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    constant_flow = np.full(n_days, flow)
+
+    # Compute residence time at a single point (midpoint, far enough from edges)
+    index = pd.DatetimeIndex([flow_tedges[0] + (flow_tedges[-1] - flow_tedges[0]) / 2])
+    rt_array = compute_residence_time(
+        flow=constant_flow,
+        flow_tedges=flow_tedges,
+        aquifer_pore_volumes=pore_volumes,
+        index=index,
+        direction="extraction_to_infiltration",
+    )
+    residence_times = rt_array[:, 0]  # shape (n_bins,)
+
+    # Step 3: Compute log removals
     log_removals = residence_time_to_log_removal(residence_times=residence_times, log10_removal_rate=log10_removal_rate)
 
-    # Compute the parallel mean (the physically correct weighted average)
+    # Step 4: Compute parallel mean
     discretized = parallel_mean(log_removals=log_removals, flow_fractions=flow_fractions)
 
     assert_allclose(analytical, discretized, rtol=5e-4)
