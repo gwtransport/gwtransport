@@ -46,12 +46,13 @@ Available functions:
   gamma-distributed residence time. Returns probability that log removal is less than or equal
   to specified values.
 
-- :func:`gamma_mean` - Compute mean log removal for gamma-distributed residence time. Returns
-  expected value E[R] = mu * alpha * beta, where mu is the log10 removal rate.
+- :func:`gamma_mean` - Compute effective (parallel) mean log removal for gamma-distributed
+  residence time. Uses the moment generating function of the gamma distribution to compute the
+  log-weighted average: LR_eff = alpha * log10(1 + beta * mu * ln(10)).
 
-- :func:`gamma_find_flow_for_target_mean` - Find flow rate that produces specified target mean
-  log removal given gamma-distributed aquifer pore volume. Solves inverse problem analytically:
-  flow = mu * alpha * apv_beta / target_mean.
+- :func:`gamma_find_flow_for_target_mean` - Find flow rate that produces specified target
+  effective mean log removal given gamma-distributed aquifer pore volume. Solves inverse problem:
+  flow = apv_beta * mu * ln(10) / (10^(target_mean / apv_alpha) - 1).
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -397,10 +398,19 @@ def gamma_cdf(
 
 def gamma_mean(*, rt_alpha: float, rt_beta: float, log10_removal_rate: float) -> float:
     """
-    Compute the mean log removal for gamma-distributed residence time.
+    Compute the effective (parallel) mean log removal for gamma-distributed residence time.
 
-    Since R = mu*T and T ~ Gamma(alpha, beta), the mean is
-    E[R] = mu * alpha * beta.
+    When water travels through multiple flow paths with gamma-distributed
+    residence times, the effective log removal is determined by mixing the
+    output concentrations (not by averaging individual log removals). This
+    uses the moment generating function of the gamma distribution:
+
+    LR_eff = -log10(E[10^(-mu*T)])
+           = alpha * log10(1 + beta * mu * ln(10))
+
+    This is always less than the arithmetic mean (mu * alpha * beta)
+    because short residence time paths contribute disproportionately
+    to the output concentration.
 
     Parameters
     ----------
@@ -414,38 +424,39 @@ def gamma_mean(*, rt_alpha: float, rt_beta: float, log10_removal_rate: float) ->
     Returns
     -------
     mean : float
-        Mean value of the log removal distribution.
+        Effective (parallel) mean log removal value.
 
     See Also
     --------
     gamma_find_flow_for_target_mean : Find flow for target mean log removal
+    parallel_mean : Discrete version of this calculation
     gamma_pdf : PDF of the log removal distribution
     gamma_cdf : CDF of the log removal distribution
+    :ref:`concept-pore-volume-distribution` : Why residence times are distributed
     """
-    return log10_removal_rate * rt_alpha * rt_beta
+    return rt_alpha * np.log10(1 + rt_beta * log10_removal_rate * np.log(10))
 
 
 def gamma_find_flow_for_target_mean(
     *, target_mean: float, apv_alpha: float, apv_beta: float, log10_removal_rate: float
 ) -> float:
     """
-    Find the flow rate that produces a target mean log removal.
+    Find the flow rate that produces a target effective mean log removal.
 
     Given a gamma-distributed aquifer pore volume with parameters (apv_alpha, apv_beta),
-    the residence time distribution is Gamma(apv_alpha, apv_beta/flow). The mean log
-    removal is mu * apv_alpha * apv_beta / flow. Solving for flow:
+    the residence time distribution is Gamma(apv_alpha, apv_beta/flow). The effective
+    mean log removal (from :func:`gamma_mean`) is:
 
-    flow = mu * apv_alpha * apv_beta / target_mean
+    LR_eff = apv_alpha * log10(1 + (apv_beta/flow) * mu * ln(10))
 
-    Rearranging the mean formula to solve for Q:
-    target_mean = (log_removal_rate/ln(10)) * (digamma(alpha) + ln(beta) - ln(Q))
-    ln(Q) = digamma(alpha) + ln(beta) - (ln(10)*target_mean/log_removal_rate)
-    Q = beta * exp(-(ln(10)*target_mean/log_removal_rate - digamma(alpha)))
+    Solving for flow:
+
+    flow = apv_beta * mu * ln(10) / (10^(target_mean / apv_alpha) - 1)
 
     Parameters
     ----------
     target_mean : float
-        Target mean log removal value.
+        Target effective mean log removal value.
     apv_alpha : float
         Shape parameter of the gamma distribution for aquifer pore volume.
     apv_beta : float
@@ -461,6 +472,6 @@ def gamma_find_flow_for_target_mean(
 
     See Also
     --------
-    gamma_mean : Compute mean log removal for given parameters
+    gamma_mean : Compute effective mean log removal for given parameters
     """
-    return log10_removal_rate * apv_alpha * apv_beta / target_mean
+    return apv_beta * log10_removal_rate * np.log(10) / (10 ** (target_mean / apv_alpha) - 1)

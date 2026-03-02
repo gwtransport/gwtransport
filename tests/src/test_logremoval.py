@@ -1,9 +1,11 @@
 import contextlib
 
 import numpy as np
+import pytest
 from numpy.testing import assert_allclose
 from scipy import integrate, stats
 
+from gwtransport.gamma import bins as gamma_bins
 from gwtransport.logremoval import (
     decay_rate_to_log10_removal_rate,
     gamma_cdf,
@@ -169,37 +171,27 @@ def test_extreme_weights():
     assert result == 4.0
 
 
-def test_gamma_find_flow_for_target_mean():
+@pytest.mark.parametrize(
+    ("apv_alpha", "apv_beta", "log10_removal_rate", "target_mean"),
+    [
+        (1.5, 5.0, 0.1, 0.5),  # low alpha, small system
+        (3.0, 10.0, 0.2, 1.5),  # moderate parameters
+        (10.0, 5.0, 0.1, 3.0),  # high alpha, narrow distribution
+        (2.0, 20.0, 0.5, 2.0),  # high removal rate
+        (0.8, 100.0, 0.01, 0.3),  # alpha < 1, very heterogeneous
+    ],
+)
+def test_gamma_find_flow_for_target_mean(apv_alpha, apv_beta, log10_removal_rate, target_mean):
     """Test that gamma_find_flow_for_target_mean inverts gamma_mean correctly."""
-    apv_alpha = 2.0
-    apv_beta = 10.0
-    log10_removal_rate = 0.2
-
-    target_mean = 3.0
     required_flow = gamma_find_flow_for_target_mean(
         target_mean=target_mean, apv_alpha=apv_alpha, apv_beta=apv_beta, log10_removal_rate=log10_removal_rate
     )
 
-    # Verify the result
+    # Verify the round-trip: flow -> residence time params -> gamma_mean == target
     rt_alpha = apv_alpha
     rt_beta = apv_beta / required_flow
     verification_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate)
     assert_allclose(verification_mean, target_mean, rtol=1e-10)
-
-
-def test_gamma_find_flow_for_target_mean_explicit():
-    """Test gamma_find_flow_for_target_mean with explicit expected value."""
-    # flow = mu * alpha * beta / target
-    # flow = 0.2 * 2.0 * 10.0 / 3.0 = 4.0/3.0
-    result = gamma_find_flow_for_target_mean(target_mean=3.0, apv_alpha=2.0, apv_beta=10.0, log10_removal_rate=0.2)
-    assert_allclose(result, 4.0 / 3.0)
-
-
-def test_gamma_mean_explicit():
-    """Test gamma_mean with explicit expected value."""
-    # E[R] = mu * alpha * beta = 0.2 * 5.0 * 10.0 = 10.0
-    result = gamma_mean(rt_alpha=5.0, rt_beta=10.0, log10_removal_rate=0.2)
-    assert_allclose(result, 10.0)
 
 
 def test_axis_parameter_2d_arrays():
@@ -516,21 +508,87 @@ def test_gamma_cdf_approaches_one():
     assert_allclose(result, 0.0, atol=1e-10)
 
 
-def test_gamma_mean_matches_numerical_integration():
-    """Test that gamma_mean matches numerical integration of r * pdf(r)."""
-    rt_alpha = 3.0
-    rt_beta = 10.0
-    log10_removal_rate = 0.2
-
+@pytest.mark.parametrize(
+    ("rt_alpha", "rt_beta", "log10_removal_rate"),
+    [
+        (1.5, 5.0, 0.1),  # low alpha
+        (3.0, 10.0, 0.2),  # moderate
+        (10.0, 5.0, 0.1),  # high alpha, narrow distribution
+        (2.0, 20.0, 0.5),  # high removal rate
+        (0.8, 100.0, 0.01),  # alpha < 1
+    ],
+)
+def test_gamma_mean_matches_numerical_integration(rt_alpha, rt_beta, log10_removal_rate):
+    """Test that gamma_mean matches -log10(E[10^(-R)]) via numerical integration."""
     analytical_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate)
 
-    numerical_mean, _ = integrate.quad(
-        lambda r: r * gamma_pdf(r=r, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate),
+    # Integrate E[10^(-R)] = integral of 10^(-r) * pdf(r) dr
+    expected_decimal_reduction, _ = integrate.quad(
+        lambda r: 10 ** (-r)
+        * gamma_pdf(r=r, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate),
         0,
         np.inf,
     )
+    numerical_mean = -np.log10(expected_decimal_reduction)
 
-    assert_allclose(analytical_mean, numerical_mean, rtol=1e-8)
+    assert_allclose(analytical_mean, numerical_mean, rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("rt_alpha", "rt_beta", "log10_removal_rate"),
+    [
+        (1.5, 5.0, 0.1),  # low alpha
+        (3.0, 10.0, 0.2),  # moderate
+        (10.0, 5.0, 0.1),  # high alpha, narrow distribution
+        (2.0, 20.0, 0.5),  # high removal rate
+        (0.8, 100.0, 0.01),  # alpha < 1
+    ],
+)
+def test_gamma_mean_matches_discretized_parallel_mean(rt_alpha, rt_beta, log10_removal_rate):
+    """Test gamma_mean matches discretized residence times through parallel_mean.
+
+    Discretize the gamma distribution into bins, compute log removals via
+    residence_time_to_log_removal, and verify that parallel_mean of those
+    log removals converges to gamma_mean.
+    """
+    # Get the analytical effective mean
+    analytical = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate)
+
+    # Discretize the residence time distribution into many bins
+    b = gamma_bins(alpha=rt_alpha, beta=rt_beta, n_bins=10000)
+    residence_times = b["expected_values"]
+    flow_fractions = b["probability_mass"]
+
+    # Compute log removal for each bin
+    log_removals = residence_time_to_log_removal(residence_times=residence_times, log10_removal_rate=log10_removal_rate)
+
+    # Compute the parallel mean (the physically correct weighted average)
+    discretized = parallel_mean(log_removals=log_removals, flow_fractions=flow_fractions)
+
+    assert_allclose(analytical, discretized, rtol=5e-4)
+
+
+@pytest.mark.parametrize(
+    ("rt_alpha", "rt_beta", "log10_removal_rate"),
+    [
+        (1.5, 5.0, 0.1),
+        (3.0, 10.0, 0.2),
+        (10.0, 5.0, 0.1),
+        (2.0, 20.0, 0.5),
+        (0.8, 100.0, 0.01),
+    ],
+)
+def test_gamma_mean_less_than_arithmetic_mean(rt_alpha, rt_beta, log10_removal_rate):
+    """Test that effective parallel mean is less than arithmetic mean.
+
+    The parallel mean is always less than the arithmetic mean because
+    short residence time paths contribute disproportionately to output
+    concentration.
+    """
+    effective_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate)
+    arithmetic_mean = log10_removal_rate * rt_alpha * rt_beta
+
+    assert effective_mean < arithmetic_mean
 
 
 def test_gamma_pdf_is_scaled_gamma():
