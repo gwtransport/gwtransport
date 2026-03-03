@@ -479,3 +479,28 @@ def test_bins_n_bins_too_small():
 
     with pytest.raises(ValueError, match="Number of bins must be greater than 1"):
         gamma_bins(alpha=5.0, beta=2.0, n_bins=0)
+
+
+def test_bins_alpha_less_than_one_large_nbins():
+    """Test numerical stability of gamma.bins() with alpha < 1 and large n_bins.
+
+    Alpha < 1 produces a distribution with a singularity at 0, which can
+    cause numerical issues with quantile computation.
+    """
+    result = gamma_bins(alpha=0.5, beta=10.0, n_bins=100)
+
+    # No NaN values in expected values
+    assert not np.any(np.isnan(result["expected_values"]))
+
+    # All expected values should be positive
+    assert np.all(result["expected_values"] > 0)
+
+    # Probability masses should sum to 1
+    np.testing.assert_allclose(np.sum(result["probability_mass"]), 1.0, rtol=1e-10)
+
+    # Edges should be monotonically increasing
+    assert np.all(np.diff(result["edges"]) > 0)
+
+    # Expected values should be within their bin bounds
+    for i in range(len(result["expected_values"])):
+        assert result["lower_bound"][i] <= result["expected_values"][i] <= result["upper_bound"][i]

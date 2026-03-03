@@ -386,3 +386,11 @@ def test_monotonic_behavior_across_pore_volumes():
     # Should start at 0.0 and increase
     assert result[0] == 0.0
     assert result[-1] > result[0]
+
+
+def test_fraction_explained_rejects_1d_input():
+    """Test that fraction_explained raises ValueError for 1D rt input."""
+    rt_1d = np.array([1.0, 2.0, 3.0, np.nan, np.nan])
+
+    with pytest.raises(ValueError, match="rt must be 2D"):
+        fraction_explained(rt=rt_1d)

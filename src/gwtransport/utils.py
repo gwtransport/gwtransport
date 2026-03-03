@@ -326,7 +326,12 @@ def linear_average(
     dx = np.diff(all_unique_x)
     y_avg = (all_unique_y[:-1] + all_unique_y[1:]) / 2
     segment_integrals = dx * y_avg
-    # Replace NaN values with 0 to avoid breaking cumulative sum
+    # Replace NaN values with 0 to avoid breaking cumulative sum.
+    # NaN occurs for segments outside the data range (extrapolation='nan').
+    # Setting NaN to 0 means boundary bins with partial data coverage have their
+    # average biased low: the integral covers only the valid portion but the
+    # width denominator below uses the full bin width. A proper fix would track
+    # the covered fraction per bin.
     segment_integrals = np.nan_to_num(segment_integrals, nan=0.0)
     cumulative_integral = np.concatenate([[0], np.cumsum(segment_integrals)])
 

@@ -625,3 +625,46 @@ def test_gamma_pdf_is_scaled_gamma():
     # R = mu*T, so R ~ Gamma(alpha, mu*beta)
     expected = stats.gamma.pdf(r_values, a=rt_alpha, scale=log10_removal_rate * rt_beta)
     assert_allclose(pdf_values, expected, rtol=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("alpha", "beta", "mu"),
+    [
+        (2.0, 5.0, 0.2),
+        (10.0, 2.0, 0.1),
+        (0.5, 10.0, 0.3),
+        (50.0, 1.0, 0.05),
+    ],
+)
+def test_gamma_mean_leq_arithmetic_mean(alpha, beta, mu):
+    """Test that gamma_mean (parallel mean) <= arithmetic mean (Jensen's inequality).
+
+    The arithmetic mean of log removals is mu * alpha * beta (= mu * E[T]).
+    The parallel (mixed-effluent) mean is always less due to Jensen's inequality
+    applied to the convex function 10^(-x).
+    """
+    parallel = gamma_mean(rt_alpha=alpha, rt_beta=beta, log10_removal_rate=mu)
+    arithmetic = mu * alpha * beta
+
+    assert parallel <= arithmetic + 1e-12  # Allow tiny numerical tolerance
+
+
+def test_gamma_mean_matches_parallel_mean_discretized():
+    """Test that gamma_mean matches parallel_mean computed from discretized bins."""
+    alpha = 5.0
+    beta = 3.0
+    mu = 0.15
+    n_bins = 500  # Large number for good approximation
+
+    # Compute gamma_mean (analytical via MGF)
+    result_analytical = gamma_mean(rt_alpha=alpha, rt_beta=beta, log10_removal_rate=mu)
+
+    # Compute via discretized bins
+    bins = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
+    log_removals = residence_time_to_log_removal(
+        residence_times=bins["expected_values"],
+        log10_removal_rate=mu,
+    )
+    result_discretized = parallel_mean(log_removals=log_removals)
+
+    assert_allclose(result_analytical, result_discretized, rtol=0.01)

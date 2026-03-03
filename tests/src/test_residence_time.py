@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport.residence_time import residence_time
+from gwtransport.residence_time import freundlich_retardation, residence_time
 from gwtransport.utils import compute_time_edges
 
 
@@ -455,3 +455,84 @@ def test_infiltration_vs_extraction_symmetry():
         # All valid infiltration residence times should be approximately equal
         infiltration_values = result_infiltration[0, infiltration_valid]
         assert np.allclose(infiltration_values, infiltration_values[0], rtol=0.1)
+
+
+def test_freundlich_retardation_analytical():
+    """Test freundlich_retardation against hand-computed analytical values.
+
+    R = 1 + (rho_b / theta) * k_f * n * C^(n-1)
+    """
+    concentration = np.array([1.0])
+    k_f = 0.5
+    n = 0.8
+    rho_b = 1500.0
+    theta = 0.3
+
+    result = freundlich_retardation(
+        concentration=concentration,
+        freundlich_k=k_f,
+        freundlich_n=n,
+        bulk_density=rho_b,
+        porosity=theta,
+    )
+
+    # R = 1 + (1500/0.3) * 0.5 * 0.8 * 1.0^(-0.2) = 1 + 2000
+    expected = 1.0 + (rho_b / theta) * k_f * n * np.power(1.0, n - 1)
+    np.testing.assert_allclose(result, expected, rtol=1e-12)
+
+
+def test_freundlich_retardation_concentration_dependence():
+    """Test that freundlich_retardation varies correctly with concentration."""
+    concentrations = np.array([0.1, 1.0, 10.0])
+    k_f = 0.01
+    n = 0.7
+    rho_b = 1600.0
+    theta = 0.35
+
+    result = freundlich_retardation(
+        concentration=concentrations,
+        freundlich_k=k_f,
+        freundlich_n=n,
+        bulk_density=rho_b,
+        porosity=theta,
+    )
+
+    # For n < 1, retardation decreases with increasing concentration
+    assert result[0] > result[1] > result[2]
+
+    # Check exact values
+    expected = 1.0 + (rho_b / theta) * k_f * n * np.power(np.maximum(concentrations, 1e-12), n - 1)
+    np.testing.assert_allclose(result, expected, rtol=1e-10)
+
+
+def test_variable_flow_residence_time_analytical():
+    """Test residence_time with linearly increasing flow against analytical solution.
+
+    For Q(t) = q0 + a*t, cumulative volume V(t) = q0*t + a*t²/2.
+    Residence time tau satisfies V(t) - V(t-tau) = V_p.
+    """
+    q0 = 100.0  # m³/day
+    a = 2.0  # m³/day²  (flow increase rate)
+    n_days = 200
+    pore_volume = 500.0  # m³
+
+    flow_tedges = pd.date_range(start="2023-01-01", periods=n_days + 1, freq="D")
+    t_days = np.arange(n_days, dtype=float)
+    flow_values = q0 + a * (t_days + 0.5)  # midpoint flow
+
+    result = residence_time(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        aquifer_pore_volumes=pore_volume,
+        direction="extraction_to_infiltration",
+    )
+
+    # For constant flow q0=100, tau = V_p/Q = 500/100 = 5 days
+    # With increasing flow, tau should be slightly less than 5 days
+    # (more recent water had higher flow)
+    valid = ~np.isnan(result[0])
+    assert np.any(valid)
+
+    # Residence time should be close to V_p / mean_flow but not exact
+    mean_rt = np.mean(result[0, valid])
+    assert mean_rt < pore_volume / q0  # Less than V_p/q0 since flow increases

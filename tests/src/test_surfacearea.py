@@ -166,3 +166,57 @@ def test_conservation_property():
 
     # Conservation: lower + upper should equal full
     assert_almost_equal(lower_heights[0, 0] + upper_heights[0, 0], full_heights[0, 0])
+
+
+def test_upper_clip_left_to_right_crossing():
+    """Test upper clip where top edge crosses from below to above (review counterexample #1).
+
+    Trapezoid: y_tl=3, y_tr=7, y_lower=0, y_upper=5, width=2.
+    Top edge crosses y_upper=5 at x=1. Left half: trapezoid (3+5)/2*1=4.
+    Right half: rectangle 5*1=5. Total avg = (4+5)/2 = 4.5.
+    """
+    x_edges = np.array([0, 2])
+    y_edges = np.array([[3, 7], [0, 0]])
+
+    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=5)
+
+    assert_almost_equal(avg_heights[0, 0], 4.5)
+
+
+def test_lower_clip_crossing():
+    """Test lower clip crossing (review counterexample #2).
+
+    Quad: y_tl=2, y_tr=2, y_bl=-2, y_br=2, y_lower=0, y_upper=10, width=2.
+    Top edge: constant at 2. Bottom edge: linear from -2 to 2, crosses 0 at x=1.
+    Left half: triangle with height 2 at x=0 (top-bottom = 2-(-2)=4, but clipped at 0, so 2-0=2)
+    and height 0 at x=1 crossing. Area = 0.5*1*2 + 0.5*1*2 = 2 (triangle above 0).
+    Right half: rectangle 2*1=2 minus bottom part above 0 already.
+    Actually: left half [0,1]: top=2, bottom goes from -2 to 0, clipped at 0.
+    So clipped bottom = max(-2+2x, 0) = 0 for x in [0,1]. Height = 2-0=2 for x<0.5 (where bottom is negative, clipped to 0).
+    Wait, bottom at x=0: -2, at x=1: 0, at x=2: 2.
+    Clipped bottom = max(bottom, 0). For x<1: bottom<0 so clipped to 0. For x>=1: bottom>=0.
+    Height = top - clipped_bottom = 2 - 0 = 2 for x in [0,1], 2 - (bottom) for x in [1,2].
+    Bottom at x in [1,2]: -2 + 2x, so height = 2 - (-2+2x) = 4-2x.
+    Integral = 2*1 + integral(4-2x, 1, 2) = 2 + [4x - x²]_1^2 = 2 + (8-4-4+1) = 2+1 = 3.
+    Avg = 3/2 = 1.5.
+    """
+    x_edges = np.array([0, 2])
+    y_edges = np.array([[2, 2], [-2, 2]])
+
+    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=10)
+
+    assert_almost_equal(avg_heights[0, 0], 1.5)
+
+
+def test_upper_clip_right_to_left_crossing():
+    """Test upper clip where top edge crosses from above to below (reversed direction).
+
+    Trapezoid: y_tl=7, y_tr=3, y_lower=0, y_upper=5, width=2.
+    Mirror of test_upper_clip_left_to_right_crossing, should give same result.
+    """
+    x_edges = np.array([0, 2])
+    y_edges = np.array([[7, 3], [0, 0]])
+
+    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=5)
+
+    assert_almost_equal(avg_heights[0, 0], 4.5)

@@ -196,7 +196,7 @@ def extraction_to_infiltration(
     raise NotImplementedError(msg)
 
 
-def compute_sigma_array(
+def compute_diffusive_spreading_length(
     *,
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
@@ -204,27 +204,11 @@ def compute_sigma_array(
     diffusivity: float = 0.1,
     retardation_factor: float = 1.0,
 ) -> npt.NDArray[np.floating]:
-    """Compute scaled sigma values for diffusion based on flow and aquifer properties.
+    """Compute the physical diffusive spreading length for each time step.
 
-    Sigma represents the dimensionless spreading parameter for Gaussian filtering,
-    expressed in units of array indices (time steps). It determines how many
-    neighboring time steps are blended together when applying diffusive smoothing.
-
-    The computation follows these steps:
-
-    1. Calculate residence time (rt) for water parcels traveling through the aquifer
-    2. Compute the diffusive spreading length: L_diff = sqrt(2 * D * rt) [m].
-       This is the physical distance over which concentrations spread due to diffusion.
-    3. Compute the advective step size: dx = (Q * dt / V_pore) * L_aquifer [m].
-       This is the physical distance the water moves during one time step.
-    4. Sigma = L_diff / dx converts the physical spreading into array index units.
-
-    Why divide by dx? The Gaussian filter operates on array indices, not physical
-    distances. If the diffusive spreading is 10 meters and each time step moves
-    water 2 meters, then sigma = 10/2 = 5 means the filter should blend across
-    ~5 time steps. This normalization accounts for variable flow rates: faster
-    flow means larger dx, so fewer time steps are blended (smaller sigma), even
-    though the physical spreading remains the same.
+    The diffusive spreading length L_diff = sqrt(2 * D * rt) [m] represents the
+    physical distance over which concentrations spread due to diffusion during
+    the residence time rt.
 
     Parameters
     ----------
@@ -242,7 +226,7 @@ def compute_sigma_array(
     Returns
     -------
     numpy.ndarray
-        Array of sigma values (in units of array indices), clipped to range [0, 100].
+        Array of diffusive spreading lengths [m].
         Each value corresponds to a time step in the input flow series.
     """
     rt_array = residence_time(
@@ -319,7 +303,7 @@ def compute_scaled_sigma_array(
     gwtransport.diffusion.infiltration_to_extraction : For analytical solutions without this approximation
     """
     # Diffusive spreading length [m]: how far concentrations spread physically
-    diffusive_spreading_length = compute_sigma_array(
+    diffusive_spreading_length = compute_diffusive_spreading_length(
         flow=flow,
         tedges=tedges,
         aquifer_pore_volume=aquifer_pore_volume,

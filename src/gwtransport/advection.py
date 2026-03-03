@@ -797,7 +797,6 @@ def infiltration_to_extraction(
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
-        cin=cin,
         flow=flow,
         retardation_factor=retardation_factor,
     )
@@ -990,7 +989,6 @@ def extraction_to_infiltration(
         tedges=tedges,
         cin_tedges=cin_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
-        cout=cout,
         flow=flow,
         retardation_factor=retardation_factor,
     )
@@ -1002,6 +1000,83 @@ def extraction_to_infiltration(
     out[total_weights == 0] = np.nan
 
     return out
+
+
+def _validate_front_tracking_inputs(
+    *,
+    cin: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    aquifer_pore_volumes: npt.ArrayLike,
+    freundlich_k: float | None,
+    freundlich_n: float | None,
+    bulk_density: float | None,
+    porosity: float | None,
+    retardation_factor: float | None,
+) -> tuple:
+    """Validate inputs and create sorption object for front tracking functions."""
+    cin = np.asarray(cin, dtype=float)
+    flow = np.asarray(flow, dtype=float)
+    tedges = pd.DatetimeIndex(tedges)
+    cout_tedges = pd.DatetimeIndex(cout_tedges)
+    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
+
+    if len(tedges) != len(cin) + 1:
+        msg = "tedges must have length len(cin) + 1"
+        raise ValueError(msg)
+    if len(flow) != len(cin):
+        msg = "flow must have same length as cin"
+        raise ValueError(msg)
+    if np.any(cin < 0):
+        msg = "cin must be non-negative"
+        raise ValueError(msg)
+    if np.any(flow <= 0):
+        msg = "flow must be positive"
+        raise ValueError(msg)
+    if np.any(np.isnan(cin)) or np.any(np.isnan(flow)):
+        msg = "cin and flow must not contain NaN"
+        raise ValueError(msg)
+    if np.any(aquifer_pore_volumes <= 0):
+        msg = "aquifer_pore_volumes must be positive"
+        raise ValueError(msg)
+
+    # Convert cout_tedges to days (relative to tedges[0]) for output computation
+    t_ref = tedges[0]
+    cout_tedges_days = ((cout_tedges - t_ref) / pd.Timedelta(days=1)).values
+
+    # Create sorption object
+    if retardation_factor is not None:
+        if retardation_factor < 1.0:
+            msg = "retardation_factor must be >= 1.0"
+            raise ValueError(msg)
+
+        sorption = ConstantRetardation(retardation_factor=retardation_factor)
+    else:
+        if freundlich_k is None or freundlich_n is None or bulk_density is None or porosity is None:
+            msg = (
+                "Must provide either retardation_factor or all Freundlich parameters "
+                "(freundlich_k, freundlich_n, bulk_density, porosity)"
+            )
+            raise ValueError(msg)
+        if freundlich_k <= 0 or freundlich_n <= 0:
+            msg = "Freundlich parameters must be positive"
+            raise ValueError(msg)
+        if abs(freundlich_n - 1.0) < EPSILON_FREUNDLICH_N:
+            msg = "freundlich_n = 1 not supported (use retardation_factor for linear case)"
+            raise ValueError(msg)
+        if bulk_density <= 0 or not 0 < porosity < 1:
+            msg = "Invalid physical parameters"
+            raise ValueError(msg)
+
+        sorption = FreundlichSorption(
+            k_f=freundlich_k,
+            n=freundlich_n,
+            bulk_density=bulk_density,
+            porosity=porosity,
+        )
+
+    return cin, flow, tedges, cout_tedges, aquifer_pore_volumes, sorption, cout_tedges_days
 
 
 def infiltration_to_extraction_front_tracking(
@@ -1129,66 +1204,18 @@ def infiltration_to_extraction_front_tracking(
     :ref:`concept-nonlinear-sorption` : Freundlich isotherm and front-tracking theory
     :ref:`assumption-advection-dominated` : When diffusion/dispersion is negligible
     """
-    # Input validation
-    cin = np.asarray(cin, dtype=float)
-    flow = np.asarray(flow, dtype=float)
-    tedges = pd.DatetimeIndex(tedges)
-    cout_tedges = pd.DatetimeIndex(cout_tedges)
-    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
-
-    if len(tedges) != len(cin) + 1:
-        msg = "tedges must have length len(cin) + 1"
-        raise ValueError(msg)
-    if len(flow) != len(cin):
-        msg = "flow must have same length as cin"
-        raise ValueError(msg)
-    if np.any(cin < 0):
-        msg = "cin must be non-negative"
-        raise ValueError(msg)
-    if np.any(flow <= 0):
-        msg = "flow must be positive"
-        raise ValueError(msg)
-    if np.any(np.isnan(cin)) or np.any(np.isnan(flow)):
-        msg = "cin and flow must not contain NaN"
-        raise ValueError(msg)
-    if np.any(aquifer_pore_volumes <= 0):
-        msg = "aquifer_pore_volumes must be positive"
-        raise ValueError(msg)
-
-    # Convert cout_tedges to days (relative to tedges[0]) for output computation
-    t_ref = tedges[0]
-    cout_tedges_days = ((cout_tedges - t_ref) / pd.Timedelta(days=1)).values
-
-    # Create sorption object
-    if retardation_factor is not None:
-        if retardation_factor < 1.0:
-            msg = "retardation_factor must be >= 1.0"
-            raise ValueError(msg)
-
-        sorption = ConstantRetardation(retardation_factor=retardation_factor)
-    else:
-        if freundlich_k is None or freundlich_n is None or bulk_density is None or porosity is None:
-            msg = (
-                "Must provide either retardation_factor or all Freundlich parameters "
-                "(freundlich_k, freundlich_n, bulk_density, porosity)"
-            )
-            raise ValueError(msg)
-        if freundlich_k <= 0 or freundlich_n <= 0:
-            msg = "Freundlich parameters must be positive"
-            raise ValueError(msg)
-        if abs(freundlich_n - 1.0) < EPSILON_FREUNDLICH_N:
-            msg = "freundlich_n = 1 not supported (use retardation_factor for linear case)"
-            raise ValueError(msg)
-        if bulk_density <= 0 or not 0 < porosity < 1:
-            msg = "Invalid physical parameters"
-            raise ValueError(msg)
-
-        sorption = FreundlichSorption(
-            k_f=freundlich_k,
-            n=freundlich_n,
-            bulk_density=bulk_density,
-            porosity=porosity,
-        )
+    cin, flow, tedges, cout_tedges, aquifer_pore_volumes, sorption, cout_tedges_days = _validate_front_tracking_inputs(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        freundlich_k=freundlich_k,
+        freundlich_n=freundlich_n,
+        bulk_density=bulk_density,
+        porosity=porosity,
+        retardation_factor=retardation_factor,
+    )
 
     # Loop over each pore volume and compute concentration
     cout_all = np.zeros((len(aquifer_pore_volumes), len(cout_tedges) - 1))
@@ -1319,66 +1346,18 @@ def infiltration_to_extraction_front_tracking_detailed(
     :ref:`concept-nonlinear-sorption` : Freundlich isotherm and front-tracking theory
     :ref:`assumption-advection-dominated` : When diffusion/dispersion is negligible
     """
-    # Input validation (same as main function)
-    cin = np.asarray(cin, dtype=float)
-    flow = np.asarray(flow, dtype=float)
-    tedges = pd.DatetimeIndex(tedges)
-    cout_tedges = pd.DatetimeIndex(cout_tedges)
-    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
-
-    if len(tedges) != len(cin) + 1:
-        msg = "tedges must have length len(cin) + 1"
-        raise ValueError(msg)
-    if len(flow) != len(cin):
-        msg = "flow must have same length as cin"
-        raise ValueError(msg)
-    if np.any(cin < 0):
-        msg = "cin must be non-negative"
-        raise ValueError(msg)
-    if np.any(flow <= 0):
-        msg = "flow must be positive"
-        raise ValueError(msg)
-    if np.any(np.isnan(cin)) or np.any(np.isnan(flow)):
-        msg = "cin and flow must not contain NaN"
-        raise ValueError(msg)
-    if np.any(aquifer_pore_volumes <= 0):
-        msg = "aquifer_pore_volumes must be positive"
-        raise ValueError(msg)
-
-    # Convert cout_tedges to days (relative to tedges[0]) for output computation
-    t_ref = tedges[0]
-    cout_tedges_days = ((cout_tedges - t_ref) / pd.Timedelta(days=1)).values
-
-    # Create sorption object
-    if retardation_factor is not None:
-        if retardation_factor < 1.0:
-            msg = "retardation_factor must be >= 1.0"
-            raise ValueError(msg)
-
-        sorption = ConstantRetardation(retardation_factor=retardation_factor)
-    else:
-        if freundlich_k is None or freundlich_n is None or bulk_density is None or porosity is None:
-            msg = (
-                "Must provide either retardation_factor or all Freundlich parameters "
-                "(freundlich_k, freundlich_n, bulk_density, porosity)"
-            )
-            raise ValueError(msg)
-        if freundlich_k <= 0 or freundlich_n <= 0:
-            msg = "Freundlich parameters must be positive"
-            raise ValueError(msg)
-        if abs(freundlich_n - 1.0) < EPSILON_FREUNDLICH_N:
-            msg = "freundlich_n = 1 not supported (use retardation_factor for linear case)"
-            raise ValueError(msg)
-        if bulk_density <= 0 or not 0 < porosity < 1:
-            msg = "Invalid physical parameters"
-            raise ValueError(msg)
-
-        sorption = FreundlichSorption(
-            k_f=freundlich_k,
-            n=freundlich_n,
-            bulk_density=bulk_density,
-            porosity=porosity,
-        )
+    cin, flow, tedges, cout_tedges, aquifer_pore_volumes, sorption, cout_tedges_days = _validate_front_tracking_inputs(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        freundlich_k=freundlich_k,
+        freundlich_n=freundlich_n,
+        bulk_density=bulk_density,
+        porosity=porosity,
+        retardation_factor=retardation_factor,
+    )
 
     # Loop over each pore volume and compute concentration
     cout_all = np.zeros((len(aquifer_pore_volumes), len(cout_tedges) - 1))

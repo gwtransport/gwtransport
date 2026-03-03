@@ -14,6 +14,7 @@ from gwtransport.advection import (
     infiltration_to_extraction as advection_i2e,
 )
 from gwtransport.diffusion import (
+    _erf_integral_time,
     _erf_mean_space_time,
     extraction_to_infiltration,
     infiltration_to_extraction,
@@ -1368,3 +1369,35 @@ class TestDiffusionRoundTrip:
                 np.mean(roundtrip_setup["cin"]),
                 rtol=0.1,
             )
+
+
+class TestErfIntegralTimeNegativeX:
+    """Tests for _erf_integral_time with negative x values (bug #7 regression)."""
+
+    def test_odd_symmetry(self):
+        """_erf_integral_time should be odd in x: f(t, x) = -f(t, -x)."""
+        t_values = np.array([1.0, 5.0, 10.0, 50.0])
+        x_values = np.array([1.0, 3.0, 10.0, 0.5])
+        diffusivity = 0.1
+
+        result_pos = _erf_integral_time(t_values, x_values, diffusivity)
+        result_neg = _erf_integral_time(t_values, -x_values, diffusivity)
+
+        np.testing.assert_allclose(result_pos, -result_neg, atol=1e-12)
+
+    @pytest.mark.parametrize("x", [-0.5, -2.0, -10.0])
+    def test_negative_x_against_quadrature(self, x):
+        """Compare _erf_integral_time with negative x against scipy.integrate.quad."""
+        t = 5.0
+        diffusivity = 0.5
+
+        # Numerical integration of erf(x/(2*sqrt(D*tau))) from 0 to t
+        def integrand(tau):
+            if tau <= 0:
+                return 0.0
+            return special.erf(x / (2.0 * np.sqrt(diffusivity * tau)))
+
+        expected, _ = integrate.quad(integrand, 0, t, limit=100)
+        result = _erf_integral_time(np.array([t]), np.array([x]), diffusivity)
+
+        np.testing.assert_allclose(result[0], expected, rtol=1e-10)

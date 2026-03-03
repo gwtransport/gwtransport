@@ -4,6 +4,7 @@ import pytest
 from numpy.testing import assert_allclose
 from scipy import ndimage, special
 
+from gwtransport.diffusion import infiltration_to_extraction as diffusion_exact
 from gwtransport.diffusion_fast import (
     compute_scaled_sigma_array,
     convolve_diffusion,
@@ -792,6 +793,69 @@ def test_convolve_diffusion_mixed_zero_and_nonzero_sigma():
     # Points with zero sigma should be unchanged
     assert result[0] == pytest.approx(signal[0], abs=0.1)
     assert result[3] == pytest.approx(signal[3], abs=0.1)
+
+
+def test_diffusion_fast_vs_diffusion_time_grid_difference():
+    """Verify that diffusion_fast and diffusion.py produce results on different time grids.
+
+    diffusion_fast.infiltration_to_extraction returns concentrations on the
+    infiltration time grid (no time shift), while diffusion.infiltration_to_extraction
+    returns on the extraction time grid (shifted by residence time). This is a
+    known API inconsistency (issue #23).
+
+    This test documents the discrepancy: both produce similar breakthrough
+    curve shapes, but the fast version's curve is shifted earlier in time by
+    approximately the residence time.
+    """
+    n_days = 150
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    cout_tedges = tedges.copy()
+
+    # Single-day pulse at day 30 — gives a well-defined peak
+    cin = np.zeros(n_days)
+    cin[30] = 1.0
+    flow = np.full(n_days, 100.0)  # 100 m³/day
+
+    aquifer_pore_volume = 300.0  # 3 day residence time
+    diffusivity = 0.05  # small diffusivity [m²/day]
+    aquifer_length = 80.0
+
+    # Fast (Gaussian smoothing) result — on infiltration time grid
+    cout_fast = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=aquifer_pore_volume,
+        diffusivity=diffusivity,
+        aquifer_length=aquifer_length,
+    )
+
+    # Exact (analytical) result — on extraction time grid
+    cout_exact = diffusion_exact(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([aquifer_pore_volume]),
+        streamline_length=np.array([aquifer_length]),
+        molecular_diffusivity=np.array([diffusivity]),
+        longitudinal_dispersivity=np.array([0.0]),
+    )
+
+    # Both should produce valid (non-NaN, non-negative) output
+    assert np.all(np.isfinite(cout_fast))
+    assert np.all(cout_fast >= -1e-10)
+    assert np.all(np.isfinite(cout_exact))
+    assert np.all(cout_exact >= -1e-10)
+
+    # The centroids (center of mass) should differ by ~residence_time
+    t = np.arange(n_days, dtype=float)
+    centroid_fast = np.sum(t * cout_fast) / np.sum(cout_fast) if np.sum(cout_fast) > 0 else 0
+    centroid_exact = np.sum(t * cout_exact) / np.sum(cout_exact) if np.sum(cout_exact) > 0 else 0
+
+    residence_time_days = aquifer_pore_volume / flow[0]
+    # The exact method shifts by residence time; fast method stays on input grid
+    assert abs(centroid_exact - centroid_fast - residence_time_days) <= 2
 
 
 if __name__ == "__main__":

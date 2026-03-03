@@ -22,7 +22,6 @@ def _infiltration_to_extraction_weights(
     tedges: pd.DatetimeIndex,
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.NDArray[np.floating],
-    cin: npt.NDArray[np.floating],
     flow: npt.NDArray[np.floating],
     retardation_factor: float,
 ) -> npt.NDArray[np.floating]:
@@ -43,8 +42,6 @@ def _infiltration_to_extraction_weights(
         Time edges for extraction bins.
     aquifer_pore_volumes : array-like
         Distribution of pore volumes [m3].
-    cin : array-like
-        Concentration values (needed for dimensions).
     flow : array-like
         Flow rate values [m3/day].
     retardation_factor : float
@@ -53,7 +50,7 @@ def _infiltration_to_extraction_weights(
     Returns
     -------
     numpy.ndarray
-        Normalized weight matrix. Shape: (len(cout_tedges) - 1, len(cin))
+        Normalized weight matrix. Shape: (len(cout_tedges) - 1, len(tedges) - 1)
     """
     # Convert time edges to days
     cin_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
@@ -79,7 +76,7 @@ def _infiltration_to_extraction_weights(
 
     # Accumulate flow-weighted overlap matrices from all pore volumes
     # Each pore volume has equal probability (equal-mass bins from gamma distribution)
-    accumulated_weights = np.zeros((len(cout_tedges) - 1, len(cin)))
+    accumulated_weights = np.zeros((len(cout_tedges) - 1, len(tedges) - 1))
 
     # Loop over each pore volume
     for i in range(len(aquifer_pore_volumes)):
@@ -120,7 +117,10 @@ def _infiltration_to_extraction_weights(
         # Accumulate only the valid bins from this pore volume
         accumulated_weights[valid_bins_2d[i, :], :] += normalized_overlap[valid_bins_2d[i, :], :]
 
-    # Average across all pore volumes (equal probability for equal-mass bins)
+    # Average across all pore volumes assuming equal probability per bin.
+    # This is correct when aquifer_pore_volumes comes from gamma.bins() which
+    # produces equal-probability bins. For user-supplied pore volumes with
+    # unequal probability mass, a weights parameter would be needed.
     return accumulated_weights / len(aquifer_pore_volumes)
 
 
@@ -129,13 +129,10 @@ def _extraction_to_infiltration_weights(
     tedges: pd.DatetimeIndex,
     cin_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.NDArray[np.floating],
-    cout: npt.NDArray[np.floating],
     flow: npt.NDArray[np.floating],
     retardation_factor: float,
 ) -> npt.NDArray[np.floating]:
     """
-    Compute extraction to infiltration transformation weights matrix.
-
     Compute extraction to infiltration transformation weights matrix.
 
     This is a reverse-direction flow-weighted estimate, NOT a true deconvolution
@@ -158,8 +155,6 @@ def _extraction_to_infiltration_weights(
         Time edges for output (infiltration) data bins.
     aquifer_pore_volumes : array-like
         Array of aquifer pore volumes [m3].
-    cout : array-like
-        Concentration values of extracted water.
     flow : array-like
         Flow rate values in the aquifer [m3/day].
     retardation_factor : float
@@ -169,7 +164,7 @@ def _extraction_to_infiltration_weights(
     -------
     numpy.ndarray
         Normalized weight matrix for extraction to infiltration transformation.
-        Shape: (len(cin_tedges) - 1, len(cout))
+        Shape: (len(cin_tedges) - 1, len(tedges) - 1)
     """
     # Convert time edges to days
     cout_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
@@ -195,7 +190,7 @@ def _extraction_to_infiltration_weights(
 
     # Accumulate flow-weighted overlap matrices from all pore volumes
     # Each pore volume has equal probability (equal-mass bins from gamma distribution)
-    accumulated_weights = np.zeros((len(cin_tedges) - 1, len(cout)))
+    accumulated_weights = np.zeros((len(cin_tedges) - 1, len(tedges) - 1))
 
     # Loop over each pore volume (same structure as infiltration_to_extraction)
     for i in range(len(aquifer_pore_volumes)):
@@ -238,5 +233,8 @@ def _extraction_to_infiltration_weights(
         # Accumulate only the valid bins from this pore volume
         accumulated_weights[valid_bins_2d[i, :], :] += normalized_overlap[valid_bins_2d[i, :], :]
 
-    # Average across all pore volumes (equal probability for equal-mass bins)
+    # Average across all pore volumes assuming equal probability per bin.
+    # This is correct when aquifer_pore_volumes comes from gamma.bins() which
+    # produces equal-probability bins. For user-supplied pore volumes with
+    # unequal probability mass, a weights parameter would be needed.
     return accumulated_weights / len(aquifer_pore_volumes)

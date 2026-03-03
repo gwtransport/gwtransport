@@ -103,8 +103,7 @@ def compute_deposition_weights(
     )
     cout_tedges_days_infiltration = cout_tedges_days - rt_edges[0]
 
-    flow_tdelta = np.diff(tedges_days, prepend=0.0)
-    flow_cum = (np.concatenate(([0.0], flow_values)) * flow_tdelta).cumsum()
+    flow_cum = np.concatenate(([0.0], np.cumsum(flow_values * np.diff(tedges_days))))
 
     # Interpolate volumes at concentration time edges
     start_vol = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days_infiltration)

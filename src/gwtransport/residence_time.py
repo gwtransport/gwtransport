@@ -236,10 +236,8 @@ def residence_time_mean(
     flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
     tedges_out_days = np.asarray((tedges_out - flow_tedges[0]) / np.timedelta64(1, "D"))
 
-    # compute cumulative flow at flow_tedges and flow_tedges_days
-    flow_cum = np.diff(flow_tedges_days, prepend=0.0)
-    flow_cum[1:] *= flow
-    flow_cum = flow_cum.cumsum()
+    # compute cumulative flow at flow_tedges
+    flow_cum = np.concatenate(([0.0], np.cumsum(flow * np.diff(flow_tedges_days))))
 
     if direction == "extraction_to_infiltration":
         # How many days ago was the extraced water infiltrated
@@ -363,7 +361,7 @@ def freundlich_retardation(
         Concentration of compound in water [mass/volume].
         Length should match flow (i.e., len(flow_tedges) - 1).
     freundlich_k : float
-        Freundlich sorption constant [(mass/mass)*(volume/mass)^n].
+        Freundlich coefficient [(m³/kg)^(1/n)].
     freundlich_n : float
         Freundlich sorption exponent [dimensionless].
     bulk_density : float
