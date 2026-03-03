@@ -4,6 +4,7 @@
 cache
 min_dependencies.json
 article
+.claude/
 
 # =============================================================================
 # Python
