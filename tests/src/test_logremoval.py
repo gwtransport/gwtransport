@@ -8,12 +8,12 @@ from scipy import integrate, stats
 
 from gwtransport.gamma import bins as gamma_bins
 from gwtransport.logremoval import (
-    decay_rate_to_log10_removal_rate,
+    decay_rate_to_log10_decay_rate,
     gamma_cdf,
     gamma_find_flow_for_target_mean,
     gamma_mean,
     gamma_pdf,
-    log10_removal_rate_to_decay_rate,
+    log10_decay_rate_to_decay_rate,
     parallel_mean,
     residence_time_to_log_removal,
 )
@@ -170,7 +170,7 @@ def test_extreme_weights():
 
 
 @pytest.mark.parametrize(
-    ("apv_alpha", "apv_beta", "log10_removal_rate", "target_mean"),
+    ("apv_alpha", "apv_beta", "log10_decay_rate", "target_mean"),
     [
         (1.5, 5.0, 0.1, 0.5),  # low alpha, small system
         (3.0, 10.0, 0.2, 1.5),  # moderate parameters
@@ -179,16 +179,16 @@ def test_extreme_weights():
         (0.8, 100.0, 0.01, 0.3),  # alpha < 1, very heterogeneous
     ],
 )
-def test_gamma_find_flow_for_target_mean(apv_alpha, apv_beta, log10_removal_rate, target_mean):
+def test_gamma_find_flow_for_target_mean(apv_alpha, apv_beta, log10_decay_rate, target_mean):
     """Test that gamma_find_flow_for_target_mean inverts gamma_mean correctly."""
     required_flow = gamma_find_flow_for_target_mean(
-        target_mean=target_mean, apv_alpha=apv_alpha, apv_beta=apv_beta, log10_removal_rate=log10_removal_rate
+        target_mean=target_mean, apv_alpha=apv_alpha, apv_beta=apv_beta, log10_decay_rate=log10_decay_rate
     )
 
     # Verify the round-trip: flow -> residence time params -> gamma_mean == target
     rt_alpha = apv_alpha
     rt_beta = apv_beta / required_flow
-    verification_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate)
+    verification_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
     assert_allclose(verification_mean, target_mean, rtol=1e-10)
 
 
@@ -306,21 +306,21 @@ def test_empty_array_with_axis():
 def test_compute_log_removal_basic():
     """Test basic functionality of residence_time_to_log_removal."""
     # Test with single values: LR = mu * t
-    assert_allclose(residence_time_to_log_removal(residence_times=0.0, log10_removal_rate=2.0), 0.0)  # 2.0 * 0 = 0
-    assert_allclose(residence_time_to_log_removal(residence_times=10.0, log10_removal_rate=0.2), 2.0)  # 0.2 * 10 = 2
-    assert_allclose(residence_time_to_log_removal(residence_times=20.0, log10_removal_rate=0.15), 3.0)  # 0.15 * 20 = 3
+    assert_allclose(residence_time_to_log_removal(residence_times=0.0, log10_decay_rate=2.0), 0.0)  # 2.0 * 0 = 0
+    assert_allclose(residence_time_to_log_removal(residence_times=10.0, log10_decay_rate=0.2), 2.0)  # 0.2 * 10 = 2
+    assert_allclose(residence_time_to_log_removal(residence_times=20.0, log10_decay_rate=0.15), 3.0)  # 0.15 * 20 = 3
 
-    # Test with different log10_removal_rates
-    assert_allclose(residence_time_to_log_removal(residence_times=10.0, log10_removal_rate=0.1), 1.0)
-    assert_allclose(residence_time_to_log_removal(residence_times=10.0, log10_removal_rate=0.3), 3.0)
+    # Test with different log10_decay_rates
+    assert_allclose(residence_time_to_log_removal(residence_times=10.0, log10_decay_rate=0.1), 1.0)
+    assert_allclose(residence_time_to_log_removal(residence_times=10.0, log10_decay_rate=0.3), 3.0)
 
 
 def test_compute_log_removal_arrays():
     """Test residence_time_to_log_removal with array inputs."""
     residence_times = np.array([10.0, 20.0, 50.0])
-    log10_removal_rate = 0.2
+    log10_decay_rate = 0.2
 
-    result = residence_time_to_log_removal(residence_times=residence_times, log10_removal_rate=log10_removal_rate)
+    result = residence_time_to_log_removal(residence_times=residence_times, log10_decay_rate=log10_decay_rate)
     expected = np.array([2.0, 4.0, 10.0])
 
     assert_allclose(result, expected)
@@ -329,21 +329,21 @@ def test_compute_log_removal_arrays():
 def test_compute_log_removal_2d_arrays():
     """Test residence_time_to_log_removal with 2D array inputs."""
     residence_times_2d = np.array([[10.0, 20.0], [30.0, 40.0]])
-    log10_removal_rate = 0.1
+    log10_decay_rate = 0.1
 
-    result = residence_time_to_log_removal(residence_times=residence_times_2d, log10_removal_rate=log10_removal_rate)
+    result = residence_time_to_log_removal(residence_times=residence_times_2d, log10_decay_rate=log10_decay_rate)
     expected = np.array([[1.0, 2.0], [3.0, 4.0]])
 
     assert_allclose(result, expected)
 
 
 def test_compute_log_removal_formula_verification():
-    """Test that the formula log10_removal_rate * residence_time is correctly implemented."""
+    """Test that the formula log10_decay_rate * residence_time is correctly implemented."""
     residence_times = np.array([5.0, 25.0, 50.0])
-    log10_removal_rate = 0.15
+    log10_decay_rate = 0.15
 
-    result = residence_time_to_log_removal(residence_times=residence_times, log10_removal_rate=log10_removal_rate)
-    expected = log10_removal_rate * residence_times
+    result = residence_time_to_log_removal(residence_times=residence_times, log10_decay_rate=log10_decay_rate)
+    expected = log10_decay_rate * residence_times
 
     assert_allclose(result, expected, rtol=1e-15)
 
@@ -351,16 +351,16 @@ def test_compute_log_removal_formula_verification():
 def test_compute_log_removal_edge_cases():
     """Test residence_time_to_log_removal with edge cases."""
     # Zero residence time
-    result = residence_time_to_log_removal(residence_times=0.0, log10_removal_rate=0.2)
+    result = residence_time_to_log_removal(residence_times=0.0, log10_decay_rate=0.2)
     assert_allclose(result, 0.0)
 
     # Very large residence time
-    result = residence_time_to_log_removal(residence_times=1e6, log10_removal_rate=0.1)
+    result = residence_time_to_log_removal(residence_times=1e6, log10_decay_rate=0.1)
     expected = 0.1 * 1e6
     assert_allclose(result, expected)
 
-    # Zero log10_removal_rate
-    result = residence_time_to_log_removal(residence_times=100.0, log10_removal_rate=0.0)
+    # Zero log10_decay_rate
+    result = residence_time_to_log_removal(residence_times=100.0, log10_decay_rate=0.0)
     assert result == 0.0
 
 
@@ -373,16 +373,16 @@ def test_compute_log_removal_different_log_rates():
     expected_results = [rate * residence_time for rate in rates]
 
     for rate, expected in zip(rates, expected_results, strict=False):
-        result = residence_time_to_log_removal(residence_times=residence_time, log10_removal_rate=rate)
+        result = residence_time_to_log_removal(residence_times=residence_time, log10_decay_rate=rate)
         assert_allclose(result, expected)
 
 
 def test_compute_log_removal_list_input():
     """Test residence_time_to_log_removal with list inputs (should be converted to numpy array)."""
     residence_times = [10.0, 20.0, 50.0]
-    log10_removal_rate = 0.2
+    log10_decay_rate = 0.2
 
-    result = residence_time_to_log_removal(residence_times=residence_times, log10_removal_rate=log10_removal_rate)
+    result = residence_time_to_log_removal(residence_times=residence_times, log10_decay_rate=log10_decay_rate)
     expected = np.array([2.0, 4.0, 10.0])
 
     assert_allclose(result, expected)
@@ -393,17 +393,17 @@ def test_compute_log_removal_shape_preservation():
     """Test that residence_time_to_log_removal preserves input array shape."""
     # Test 1D
     residence_times_1d = np.array([10.0, 20.0, 50.0])
-    result_1d = residence_time_to_log_removal(residence_times=residence_times_1d, log10_removal_rate=0.1)
+    result_1d = residence_time_to_log_removal(residence_times=residence_times_1d, log10_decay_rate=0.1)
     assert result_1d.shape == residence_times_1d.shape
 
     # Test 2D
     residence_times_2d = np.array([[10.0, 20.0], [30.0, 40.0]])
-    result_2d = residence_time_to_log_removal(residence_times=residence_times_2d, log10_removal_rate=0.1)
+    result_2d = residence_time_to_log_removal(residence_times=residence_times_2d, log10_decay_rate=0.1)
     assert result_2d.shape == residence_times_2d.shape
 
     # Test 3D
     residence_times_3d = np.array([[[10.0, 20.0]], [[30.0, 40.0]]])
-    result_3d = residence_time_to_log_removal(residence_times=residence_times_3d, log10_removal_rate=0.1)
+    result_3d = residence_time_to_log_removal(residence_times=residence_times_3d, log10_decay_rate=0.1)
     assert result_3d.shape == residence_times_3d.shape
 
 
@@ -411,18 +411,18 @@ def test_compute_log_removal_docstring_examples():
     """Test the examples from the docstring."""
     # Example 1: Basic array
     residence_times = np.array([10.0, 20.0, 50.0])
-    log10_removal_rate = 0.2
-    result = residence_time_to_log_removal(residence_times=residence_times, log10_removal_rate=log10_removal_rate)
+    log10_decay_rate = 0.2
+    result = residence_time_to_log_removal(residence_times=residence_times, log10_decay_rate=log10_decay_rate)
     expected = np.array([2.0, 4.0, 10.0])
     assert_allclose(result, expected)
 
     # Example 2: Single residence time
-    result = residence_time_to_log_removal(residence_times=5.0, log10_removal_rate=0.3)
+    result = residence_time_to_log_removal(residence_times=5.0, log10_decay_rate=0.3)
     assert_allclose(result, 1.5)
 
     # Example 3: 2D array
     residence_times_2d = np.array([[10.0, 20.0], [30.0, 40.0]])
-    result = residence_time_to_log_removal(residence_times=residence_times_2d, log10_removal_rate=0.1)
+    result = residence_time_to_log_removal(residence_times=residence_times_2d, log10_decay_rate=0.1)
     expected = np.array([[1.0, 2.0], [3.0, 4.0]])
     assert_allclose(result, expected)
 
@@ -430,50 +430,48 @@ def test_compute_log_removal_docstring_examples():
 def test_compute_log_removal_consistency_with_manual_calculation():
     """Test consistency between function result and manual calculation."""
     residence_times = np.array([2.5, 7.3, 15.8, 33.2])
-    log10_removal_rate = 0.23
+    log10_decay_rate = 0.23
 
     # Manual calculation
-    manual_result = log10_removal_rate * residence_times
+    manual_result = log10_decay_rate * residence_times
 
     # Function result
-    function_result = residence_time_to_log_removal(
-        residence_times=residence_times, log10_removal_rate=log10_removal_rate
-    )
+    function_result = residence_time_to_log_removal(residence_times=residence_times, log10_decay_rate=log10_decay_rate)
 
     assert_allclose(function_result, manual_result, rtol=1e-15)
 
 
-def test_decay_rate_to_log10_removal_rate():
+def test_decay_rate_to_log10_decay_rate():
     """Test conversion from natural-log decay rate to log10 removal rate."""
     # lambda = ln(10) should give mu = 1.0
     decay_rate = np.log(10)
-    result = decay_rate_to_log10_removal_rate(decay_rate)
+    result = decay_rate_to_log10_decay_rate(decay_rate)
     assert_allclose(result, 1.0)
 
     # lambda = 0 should give mu = 0
-    assert_allclose(decay_rate_to_log10_removal_rate(0.0), 0.0)
+    assert_allclose(decay_rate_to_log10_decay_rate(0.0), 0.0)
 
 
-def test_log10_removal_rate_to_decay_rate():
+def test_log10_decay_rate_to_decay_rate():
     """Test conversion from log10 removal rate to natural-log decay rate."""
     # mu = 1.0 should give lambda = ln(10)
-    result = log10_removal_rate_to_decay_rate(1.0)
+    result = log10_decay_rate_to_decay_rate(1.0)
     assert_allclose(result, np.log(10))
 
     # mu = 0 should give lambda = 0
-    assert_allclose(log10_removal_rate_to_decay_rate(0.0), 0.0)
+    assert_allclose(log10_decay_rate_to_decay_rate(0.0), 0.0)
 
 
 def test_conversion_round_trip():
     """Test that converting back and forth preserves the value."""
     original_mu = 0.2
-    lambda_val = log10_removal_rate_to_decay_rate(original_mu)
-    recovered_mu = decay_rate_to_log10_removal_rate(lambda_val)
+    lambda_val = log10_decay_rate_to_decay_rate(original_mu)
+    recovered_mu = decay_rate_to_log10_decay_rate(lambda_val)
     assert_allclose(recovered_mu, original_mu, rtol=1e-15)
 
     original_lambda = 0.5
-    mu_val = decay_rate_to_log10_removal_rate(original_lambda)
-    recovered_lambda = log10_removal_rate_to_decay_rate(mu_val)
+    mu_val = decay_rate_to_log10_decay_rate(original_lambda)
+    recovered_lambda = log10_decay_rate_to_decay_rate(mu_val)
     assert_allclose(recovered_lambda, original_lambda, rtol=1e-15)
 
 
@@ -481,10 +479,10 @@ def test_gamma_pdf_integrates_to_one():
     """Test that the gamma PDF integrates to 1."""
     rt_alpha = 3.0
     rt_beta = 10.0
-    log10_removal_rate = 0.2
+    log10_decay_rate = 0.2
 
     result, _ = integrate.quad(
-        lambda r: gamma_pdf(r=r, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate),
+        lambda r: gamma_pdf(r=r, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate),
         0,
         np.inf,
     )
@@ -495,19 +493,19 @@ def test_gamma_cdf_approaches_one():
     """Test that the gamma CDF approaches 1 for large r values."""
     rt_alpha = 3.0
     rt_beta = 10.0
-    log10_removal_rate = 0.2
+    log10_decay_rate = 0.2
 
     # CDF at a very large r should be close to 1
-    result = gamma_cdf(r=1000.0, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate)
+    result = gamma_cdf(r=1000.0, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
     assert_allclose(result, 1.0, atol=1e-10)
 
     # CDF at 0 should be 0
-    result = gamma_cdf(r=0.0, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate)
+    result = gamma_cdf(r=0.0, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
     assert_allclose(result, 0.0, atol=1e-10)
 
 
 @pytest.mark.parametrize(
-    ("rt_alpha", "rt_beta", "log10_removal_rate"),
+    ("rt_alpha", "rt_beta", "log10_decay_rate"),
     [
         (1.5, 5.0, 0.1),  # low alpha
         (3.0, 10.0, 0.2),  # moderate
@@ -516,14 +514,13 @@ def test_gamma_cdf_approaches_one():
         (0.8, 100.0, 0.01),  # alpha < 1
     ],
 )
-def test_gamma_mean_matches_numerical_integration(rt_alpha, rt_beta, log10_removal_rate):
+def test_gamma_mean_matches_numerical_integration(rt_alpha, rt_beta, log10_decay_rate):
     """Test that gamma_mean matches -log10(E[10^(-R)]) via numerical integration."""
-    analytical_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate)
+    analytical_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
 
     # Integrate E[10^(-R)] = integral of 10^(-r) * pdf(r) dr
     expected_decimal_reduction, _ = integrate.quad(
-        lambda r: 10 ** (-r)
-        * gamma_pdf(r=r, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate),
+        lambda r: 10 ** (-r) * gamma_pdf(r=r, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate),
         0,
         np.inf,
     )
@@ -533,7 +530,7 @@ def test_gamma_mean_matches_numerical_integration(rt_alpha, rt_beta, log10_remov
 
 
 @pytest.mark.parametrize(
-    ("apv_alpha", "apv_beta", "flow", "log10_removal_rate"),
+    ("apv_alpha", "apv_beta", "flow", "log10_decay_rate"),
     [
         (1.5, 50.0, 10.0, 0.1),  # low alpha
         (3.0, 100.0, 10.0, 0.2),  # moderate
@@ -542,7 +539,7 @@ def test_gamma_mean_matches_numerical_integration(rt_alpha, rt_beta, log10_remov
         (0.8, 1000.0, 10.0, 0.01),  # alpha < 1
     ],
 )
-def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow, log10_removal_rate):
+def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow, log10_decay_rate):
     """Test gamma_mean matches the full pipeline: bins, residence_time, log_removal, parallel_mean.
 
     Uses the full pipeline:
@@ -556,7 +553,7 @@ def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow,
     # Analytical effective mean
     rt_alpha = apv_alpha
     rt_beta = apv_beta / flow
-    analytical = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate)
+    analytical = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
 
     # Step 1: Discretize aquifer pore volume distribution
     b = gamma_bins(alpha=apv_alpha, beta=apv_beta, n_bins=10000)
@@ -582,7 +579,7 @@ def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow,
     residence_times = rt_array[:, 0]  # shape (n_bins,)
 
     # Step 3: Compute log removals
-    log_removals = residence_time_to_log_removal(residence_times=residence_times, log10_removal_rate=log10_removal_rate)
+    log_removals = residence_time_to_log_removal(residence_times=residence_times, log10_decay_rate=log10_decay_rate)
 
     # Step 4: Compute parallel mean
     discretized = parallel_mean(log_removals=log_removals, flow_fractions=flow_fractions)
@@ -591,7 +588,7 @@ def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow,
 
 
 @pytest.mark.parametrize(
-    ("rt_alpha", "rt_beta", "log10_removal_rate"),
+    ("rt_alpha", "rt_beta", "log10_decay_rate"),
     [
         (1.5, 5.0, 0.1),
         (3.0, 10.0, 0.2),
@@ -600,15 +597,15 @@ def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow,
         (0.8, 100.0, 0.01),
     ],
 )
-def test_gamma_mean_less_than_arithmetic_mean(rt_alpha, rt_beta, log10_removal_rate):
+def test_gamma_mean_less_than_arithmetic_mean(rt_alpha, rt_beta, log10_decay_rate):
     """Test that effective parallel mean is less than arithmetic mean.
 
     The parallel mean is always less than the arithmetic mean because
     short residence time paths contribute disproportionately to output
     concentration.
     """
-    effective_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate)
-    arithmetic_mean = log10_removal_rate * rt_alpha * rt_beta
+    effective_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
+    arithmetic_mean = log10_decay_rate * rt_alpha * rt_beta
 
     assert effective_mean < arithmetic_mean
 
@@ -617,13 +614,13 @@ def test_gamma_pdf_is_scaled_gamma():
     """Test that the log removal PDF matches a scaled gamma distribution."""
     rt_alpha = 4.0
     rt_beta = 5.0
-    log10_removal_rate = 0.3
+    log10_decay_rate = 0.3
 
     r_values = np.linspace(0.1, 20.0, 50)
-    pdf_values = gamma_pdf(r=r_values, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_removal_rate=log10_removal_rate)
+    pdf_values = gamma_pdf(r=r_values, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
 
     # R = mu*T, so R ~ Gamma(alpha, mu*beta)
-    expected = stats.gamma.pdf(r_values, a=rt_alpha, scale=log10_removal_rate * rt_beta)
+    expected = stats.gamma.pdf(r_values, a=rt_alpha, scale=log10_decay_rate * rt_beta)
     assert_allclose(pdf_values, expected, rtol=1e-12)
 
 
@@ -643,7 +640,7 @@ def test_gamma_mean_leq_arithmetic_mean(alpha, beta, mu):
     The parallel (mixed-effluent) mean is always less due to Jensen's inequality
     applied to the convex function 10^(-x).
     """
-    parallel = gamma_mean(rt_alpha=alpha, rt_beta=beta, log10_removal_rate=mu)
+    parallel = gamma_mean(rt_alpha=alpha, rt_beta=beta, log10_decay_rate=mu)
     arithmetic = mu * alpha * beta
 
     assert parallel <= arithmetic + 1e-12  # Allow tiny numerical tolerance
@@ -657,13 +654,13 @@ def test_gamma_mean_matches_parallel_mean_discretized():
     n_bins = 500  # Large number for good approximation
 
     # Compute gamma_mean (analytical via MGF)
-    result_analytical = gamma_mean(rt_alpha=alpha, rt_beta=beta, log10_removal_rate=mu)
+    result_analytical = gamma_mean(rt_alpha=alpha, rt_beta=beta, log10_decay_rate=mu)
 
     # Compute via discretized bins
     bins = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
     log_removals = residence_time_to_log_removal(
         residence_times=bins["expected_values"],
-        log10_removal_rate=mu,
+        log10_decay_rate=mu,
     )
     result_discretized = parallel_mean(log_removals=log_removals)
 
