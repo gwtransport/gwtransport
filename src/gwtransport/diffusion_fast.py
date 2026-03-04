@@ -5,6 +5,9 @@ This module provides a computationally efficient approximation of diffusion/disp
 using Gaussian smoothing. It is much faster than :mod:`gwtransport.diffusion` but
 less physically accurate, especially under variable flow conditions.
 
+Both ``diffusion_fast`` and :mod:`gwtransport.diffusion` add microdispersion and
+molecular diffusion on top of macrodispersion captured by the APVD.
+
 **When to use diffusion_fast vs diffusion:**
 
 - Use ``diffusion_fast`` when: Speed is critical, flow and time steps are relatively
@@ -12,7 +15,7 @@ less physically accurate, especially under variable flow conditions.
 - Use ``diffusion`` when: Physical accuracy is critical, flow varies significantly,
   or you're analyzing periods with changing conditions
 
-See :ref:`concept-dispersion` for background on dispersion processes.
+See :ref:`concept-dispersion` for background on macrodispersion and microdispersion.
 
 This module implements diffusion/dispersion processes that modify advective transport
 in aquifer systems. Diffusion causes spreading and smoothing of concentration or
@@ -112,7 +115,7 @@ def infiltration_to_extraction(
     See Also
     --------
     gwtransport.diffusion.infiltration_to_extraction : Physically rigorous analytical solution (slower)
-    :ref:`concept-dispersion-scales` : When to use dispersion vs APVD spreading
+    :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion
 
     Notes
     -----

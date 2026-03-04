@@ -171,8 +171,8 @@ _Concepts_ (`concepts.rst` → `concepts.html`):
 | `concept-residence-time`           | Time in aquifer (V·R/Q)                  |
 | `concept-retardation-factor`       | Slower movement due to sorption          |
 | `concept-transport-equation`       | Flow-weighted averaging                  |
-| `concept-dispersion`               | Macroscopic spreading from heterogeneity |
-| `concept-dispersion-scales`        | Scale-dependent heterogeneity            |
+| `concept-dispersion`               | Macrodispersion and microdispersion      |
+| `concept-dispersion-scales`        | Scale-dependent: macro vs microdispersion |
 | `concept-gamma-distribution`       | Two-parameter pore volume model          |
 | `concept-nonlinear-sorption`       | Freundlich isotherm, front-tracking      |
 
