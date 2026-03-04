@@ -118,7 +118,7 @@ class TestFreundlichSorption:
         for c in test_concentrations:
             r = sorption.retardation(c)
             c_back = sorption.concentration_from_retardation(r)
-            assert np.isclose(c, c_back, rtol=1e-14), f"Roundtrip failed for C={c}: {c} → {r} → {c_back}"  # type: ignore[no-matching-overload]
+            assert np.isclose(c, c_back, rtol=1e-14), f"Roundtrip failed for C={c}: {c} → {r} → {c_back}"
 
     def test_concentration_from_retardation_r_equals_one(self):
         """Test that R=1 gives C=c_min."""
@@ -161,7 +161,7 @@ class TestFreundlichSorption:
 
         v_shock_expected = (flux_right - flux_left) / (c_total_right - c_total_left)
 
-        assert np.isclose(v_shock, v_shock_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
+        assert np.isclose(v_shock, v_shock_expected, rtol=1e-14)
 
     def test_shock_velocity_equal_concentrations(self):
         """Test shock velocity when c_left = c_right (degenerate case)."""
@@ -173,7 +173,7 @@ class TestFreundlichSorption:
 
         # Should return characteristic velocity
         v_char = flow / sorption.retardation(c)
-        assert np.isclose(v_shock, v_char, rtol=1e-14)  # type: ignore[no-matching-overload]
+        assert np.isclose(v_shock, v_char, rtol=1e-14)
 
     def test_entropy_condition_physical_shock_n_greater_1(self):
         """Test entropy condition for physical compression shock (n > 1)."""
@@ -244,7 +244,7 @@ class TestConstantRetardation:
         sorption = ConstantRetardation(retardation_factor=2.0)
         c = 5.0
         c_total = sorption.total_concentration(c)
-        assert np.isclose(c_total, c * 2.0, rtol=1e-14)  # type: ignore[no-matching-overload]
+        assert np.isclose(c_total, c * 2.0, rtol=1e-14)
 
     def test_concentration_from_retardation_raises_error(self):
         """Test that inversion is not supported."""
@@ -258,7 +258,7 @@ class TestConstantRetardation:
         flow = 100.0
         v_shock = sorption.shock_velocity(c_left=10.0, c_right=2.0, flow=flow)
         v_expected = flow / 2.0
-        assert np.isclose(v_shock, v_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
+        assert np.isclose(v_shock, v_expected, rtol=1e-14)
 
     def test_entropy_condition_always_true(self):
         """Test that entropy condition is always satisfied."""
@@ -281,7 +281,7 @@ class TestCharacteristicFunctions:
         v = characteristic_velocity(c, flow, sorption)
         v_expected = flow / sorption.retardation(c)
 
-        assert np.isclose(v, v_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
+        assert np.isclose(v, v_expected, rtol=1e-14)
 
     def test_characteristic_velocity_constant(self):
         """Test characteristic velocity with constant retardation."""
@@ -292,7 +292,7 @@ class TestCharacteristicFunctions:
         v = characteristic_velocity(c, flow, sorption)
         v_expected = flow / 2.0
 
-        assert np.isclose(v, v_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
+        assert np.isclose(v, v_expected, rtol=1e-14)
 
     def test_characteristic_position_linear_propagation(self):
         """Test that characteristic propagates linearly."""
@@ -305,8 +305,9 @@ class TestCharacteristicFunctions:
         # Test at multiple times
         for t in [1.0, 5.0, 10.0]:
             v_pos = characteristic_position(c, flow, sorption, t_start, v_start, t)
+            assert v_pos is not None
             v_expected = (flow / 2.0) * t
-            assert np.isclose(v_pos, v_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
+            assert np.isclose(v_pos, v_expected, rtol=1e-14)
 
     def test_characteristic_position_before_start(self):
         """Test that position is None for t < t_start."""
@@ -324,10 +325,11 @@ class TestCharacteristicFunctions:
         t = 15.0
 
         v_pos = characteristic_position(c, flow, sorption, t_start, v_start, t)
+        assert v_pos is not None
         velocity = flow / 2.0
         v_expected = v_start + velocity * (t - t_start)
 
-        assert np.isclose(v_pos, v_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
+        assert np.isclose(v_pos, v_expected, rtol=1e-14)
 
 
 class TestFirstArrivalTime:
@@ -349,7 +351,7 @@ class TestFirstArrivalTime:
         # Arrives at day 10 + 10 = 20 days from tedges[0]
         t_expected = 20.0
 
-        assert np.isclose(t_first, t_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
+        assert np.isclose(t_first, t_expected, rtol=1e-14)
 
     def test_first_arrival_starts_at_zero(self):
         """Test first arrival when concentration starts at t=0."""
@@ -366,7 +368,7 @@ class TestFirstArrivalTime:
         # Arrives at 0 + 10 = 10 days from tedges[0]
         t_expected = 10.0
 
-        assert np.isclose(t_first, t_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
+        assert np.isclose(t_first, t_expected, rtol=1e-14)
 
     def test_first_arrival_no_concentration(self):
         """Test that all-zero concentration returns infinity."""
@@ -399,7 +401,7 @@ class TestFirstArrivalTime:
         # Total: 20.0 + 2.5 = 22.5 days from tedges[0]
         t_expected = 22.5
 
-        assert np.isclose(t_first, t_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
+        assert np.isclose(t_first, t_expected, rtol=1e-14)
 
     def test_first_arrival_freundlich_sorption(self):
         """Test first arrival with Freundlich sorption."""
@@ -418,7 +420,7 @@ class TestFirstArrivalTime:
         # Expected: 10.0 + 500.0 * r / 100.0 days from tedges[0]
         t_expected = 10.0 + 500.0 * r / 100.0
 
-        assert np.isclose(t_first, t_expected, rtol=1e-14)  # type: ignore[no-matching-overload]
+        assert np.isclose(t_first, t_expected, rtol=1e-14)
 
     def test_first_arrival_insufficient_flow_history(self):
         """Test that insufficient flow history returns infinity."""

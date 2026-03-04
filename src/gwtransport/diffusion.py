@@ -23,10 +23,11 @@ time, which correctly accounts for time-varying flow. This formulation ensures t
 - Molecular diffusion spreading scales with residence time: sqrt(D_m * tau)
 - Mechanical dispersion spreading scales with travel distance: sqrt(alpha_L * L)
 
-Note: Both the pore volume distribution (APVD) and longitudinal dispersivity (alpha_L)
-represent velocity heterogeneity at different scales—they are the same physical phenomenon
-observed at different resolutions. See :ref:`concept-dispersion-scales` for guidance on
-when to use each approach and how to avoid double-counting spreading effects.
+This module adds microdispersion (alpha_L) and molecular diffusion (D_m) on top of
+macrodispersion captured by the pore volume distribution (APVD). Both represent velocity
+heterogeneity at different scales. Microdispersion is an aquifer property; macrodispersion
+depends additionally on hydrological boundary conditions. See :ref:`concept-dispersion-scales`
+for guidance on when to use each approach and how to avoid double-counting spreading effects.
 """
 
 import warnings
@@ -546,8 +547,8 @@ def infiltration_to_extraction(
     longitudinal_dispersivity : float or array-like
         Longitudinal dispersivity [m]. Can be a scalar (same for all pore
         volumes) or an array with the same length as aquifer_pore_volumes.
-        Must be non-negative. Represents mechanical dispersion due to pore-scale
-        velocity variations. Set to 0 for pure molecular diffusion.
+        Must be non-negative. Represents microdispersion (mechanical dispersion
+        from pore-scale velocity variations). Set to 0 for pure molecular diffusion.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
         Values > 1.0 indicate slower transport due to sorption.
@@ -586,7 +587,7 @@ def infiltration_to_extraction(
     extraction_to_infiltration : Inverse operation (deconvolution)
     gwtransport.advection.infiltration_to_extraction : Pure advection (no dispersion)
     gwtransport.diffusion_fast.infiltration_to_extraction : Fast Gaussian approximation
-    :ref:`concept-dispersion-scales` : When to use dispersion vs APVD spreading
+    :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion
 
     Notes
     -----
@@ -728,9 +729,9 @@ def infiltration_to_extraction(
             "Both represent spreading from velocity heterogeneity at different scales.\n\n"
             "This is appropriate when:\n"
             "  - APVD comes from streamline analysis (explicit geometry)\n"
-            "  - You want to add unresolved pore-scale dispersion\n\n"
+            "  - You want to add unresolved microdispersion and molecular diffusion\n\n"
             "This may double-count spreading when:\n"
-            "  - APVD was calibrated from breakthrough curves (dispersion already included)\n\n"
+            "  - APVD was calibrated from measurements (microdispersion already included)\n\n"
             "For gamma-parameterized APVD, consider using the 'equivalent APVD std' approach\n"
             "from 05_Diffusion_Dispersion.ipynb to combine both effects in the faster advection\n"
             "module. Note: this variance combination is only valid for continuous (gamma)\n"
@@ -981,7 +982,7 @@ def extraction_to_infiltration(
     --------
     infiltration_to_extraction : Forward operation (convolution)
     gwtransport.advection.extraction_to_infiltration : Pure advection (no dispersion)
-    :ref:`concept-dispersion-scales` : When to use dispersion vs APVD spreading
+    :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion
 
     Notes
     -----
@@ -1107,9 +1108,9 @@ def extraction_to_infiltration(
             "Both represent spreading from velocity heterogeneity at different scales.\n\n"
             "This is appropriate when:\n"
             "  - APVD comes from streamline analysis (explicit geometry)\n"
-            "  - You want to add unresolved pore-scale dispersion\n\n"
+            "  - You want to add unresolved microdispersion and molecular diffusion\n\n"
             "This may double-count spreading when:\n"
-            "  - APVD was calibrated from breakthrough curves (dispersion already included)\n\n"
+            "  - APVD was calibrated from measurements (microdispersion already included)\n\n"
             "For gamma-parameterized APVD, consider using the 'equivalent APVD std' approach\n"
             "from 05_Diffusion_Dispersion.ipynb to combine both effects in the faster advection\n"
             "module. Note: this variance combination is only valid for continuous (gamma)\n"

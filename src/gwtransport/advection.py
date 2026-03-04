@@ -26,13 +26,14 @@ Available functions:
   Use case: Heterogeneous aquifer with calibrated gamma parameters.
 
 Note on dispersion: The spreading from the pore volume distribution (APVD) represents
-macro-scale aquifer heterogeneity—this is the same physical phenomenon as "dispersion"
-but at a larger observation scale. If APVD was calibrated from breakthrough curves, this
-spreading already includes all dispersion effects at smaller scales. To add pore-scale
-dispersion separately (when APVD comes from streamline analysis), use
-:mod:`gwtransport.diffusion`. See :ref:`concept-dispersion-scales` for details.
+macrodispersion—aquifer-scale velocity heterogeneity that depends on both aquifer
+properties and hydrological boundary conditions. If APVD was calibrated from
+measurements, this spreading already includes microdispersion and molecular diffusion.
+To add microdispersion and molecular diffusion separately (when APVD comes from
+streamline analysis), use :mod:`gwtransport.diffusion`.
+See :ref:`concept-dispersion-scales` for details.
 
-Note on cross-compound calibration: When APVD is calibrated from breakthrough data of one
+Note on cross-compound calibration: When APVD is calibrated from measurements of one
 compound (e.g., temperature with D_m ~ 0.1 m²/day) and used to predict another (e.g., a
 solute with D_m ~ 1e-4 m²/day), the molecular diffusion contribution baked into the
 calibrated std may need correction. See :doc:`/examples/05_Diffusion_Dispersion` for
@@ -377,7 +378,7 @@ def gamma_infiltration_to_extraction(
     gamma_extraction_to_infiltration : Reverse operation (deconvolution)
     gwtransport.gamma.bins : Create gamma distribution bins
     gwtransport.residence_time.residence_time : Compute residence times
-    gwtransport.diffusion.infiltration_to_extraction : Add pore-scale dispersion
+    gwtransport.diffusion.infiltration_to_extraction : Add microdispersion and molecular diffusion
     :ref:`concept-gamma-distribution` : Two-parameter pore volume model
     :ref:`assumption-gamma-distribution` : When gamma distribution is adequate
 
@@ -386,12 +387,19 @@ def gamma_infiltration_to_extraction(
     The APVD is only time-invariant under the steady-streamlines assumption
     (see :ref:`assumption-steady-streamlines`).
 
-    The spreading from the gamma-distributed pore volumes represents macro-scale aquifer
-    heterogeneity. If parameters (mean, std) were calibrated from breakthrough curves,
-    pore-scale dispersion is already implicitly included. If calibrating with one compound
-    (e.g., temperature) and predicting for another (e.g., a solute), the baked-in molecular
-    diffusion contribution may need correction — see :doc:`/examples/05_Diffusion_Dispersion`.
-    See :ref:`concept-dispersion-scales` for guidance on when to add pore-scale dispersion
+    The spreading from the gamma-distributed pore volumes represents macrodispersion
+    (aquifer-scale heterogeneity). When ``std`` comes from calibration on measurements,
+    it absorbs all mixing: macrodispersion, microdispersion, and an average molecular
+    diffusion contribution. When calibrating with the diffusion module, these three
+    components are taken into account separately. When ``std`` comes from streamline
+    analysis, it represents macrodispersion only; microdispersion and molecular diffusion
+    can be added via the diffusion module or by combining variances
+    (see :doc:`/examples/05_Diffusion_Dispersion`).
+
+    If calibrating with one compound (e.g., temperature) and predicting for another
+    (e.g., a solute), the baked-in molecular diffusion contribution may need
+    correction — see :doc:`/examples/05_Diffusion_Dispersion`.
+    See :ref:`concept-dispersion-scales` for guidance on when to add microdispersion
     using the diffusion module.
 
     Examples
@@ -530,7 +538,7 @@ def gamma_extraction_to_infiltration(
     extraction_to_infiltration : Deconvolution with explicit pore volume distribution
     gamma_infiltration_to_extraction : Forward operation (convolution)
     gwtransport.gamma.bins : Create gamma distribution bins
-    gwtransport.diffusion.extraction_to_infiltration : Deconvolution with pore-scale dispersion
+    gwtransport.diffusion.extraction_to_infiltration : Deconvolution with microdispersion and molecular diffusion
     :ref:`concept-gamma-distribution` : Two-parameter pore volume model
     :ref:`assumption-gamma-distribution` : When gamma distribution is adequate
 
@@ -539,12 +547,19 @@ def gamma_extraction_to_infiltration(
     The APVD is only time-invariant under the steady-streamlines assumption
     (see :ref:`assumption-steady-streamlines`).
 
-    The spreading from the gamma-distributed pore volumes represents macro-scale aquifer
-    heterogeneity. If parameters (mean, std) were calibrated from breakthrough curves,
-    pore-scale dispersion is already implicitly included. If calibrating with one compound
-    (e.g., temperature) and predicting for another (e.g., a solute), the baked-in molecular
-    diffusion contribution may need correction — see :doc:`/examples/05_Diffusion_Dispersion`.
-    See :ref:`concept-dispersion-scales` for guidance on when to add pore-scale dispersion
+    The spreading from the gamma-distributed pore volumes represents macrodispersion
+    (aquifer-scale heterogeneity). When ``std`` comes from calibration on measurements,
+    it absorbs all mixing: macrodispersion, microdispersion, and an average molecular
+    diffusion contribution. When calibrating with the diffusion module, these three
+    components are taken into account separately. When ``std`` comes from streamline
+    analysis, it represents macrodispersion only; microdispersion and molecular diffusion
+    can be added via the diffusion module or by combining variances
+    (see :doc:`/examples/05_Diffusion_Dispersion`).
+
+    If calibrating with one compound (e.g., temperature) and predicting for another
+    (e.g., a solute), the baked-in molecular diffusion contribution may need
+    correction — see :doc:`/examples/05_Diffusion_Dispersion`.
+    See :ref:`concept-dispersion-scales` for guidance on when to add microdispersion
     using the diffusion module.
 
     Examples

@@ -39,13 +39,13 @@ Physical/Hydrogeological Assumptions
 1. Advection-Dominated Transport
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Assumption:** Molecular diffusion and mechanical dispersion are negligible compared to advective spreading caused by aquifer heterogeneity.
+**Assumption:** Microdispersion (mechanical dispersion) and molecular diffusion are negligible compared to macrodispersion (advective spreading from aquifer heterogeneity captured by the APVD).
 
 **Applies to:** ``advection`` module (all functions), ``residence_time``, ``deposition``, ``logremoval``
 
 **Does NOT apply when using:** ``diffusion_fast`` or ``diffusion`` modules (which explicitly add diffusive spreading)
 
-**What this means:** The spreading of solute plumes is dominated by the variation in flow path lengths (different streamlines have different travel times), not by diffusive/dispersive processes within individual streamlines.
+**What this means:** The spreading of solute plumes is dominated by macrodispersion (variation in flow path lengths — different streamlines have different travel times), not by microdispersion and molecular diffusion (processes within individual streamlines).
 
 **When it holds:**
 
@@ -68,16 +68,16 @@ Physical/Hydrogeological Assumptions
 
 **Understanding the scale-dependence:**
 
-What appears as "dispersion" at one scale becomes "advection through heterogeneity" at a finer observation scale. The APVD captures velocity variations at the aquifer scale; :math:`\alpha_L` captures variations at the pore scale. These are the same physical phenomenon at different resolutions. See :ref:`concept-dispersion-scales` for details and :ref:`concept-dispersion` for background on dispersion processes.
+What appears as "dispersion" at one scale becomes "advection through heterogeneity" at a finer observation scale. The APVD captures macrodispersion (velocity variations at the aquifer scale); :math:`\alpha_L` captures microdispersion (velocity variations at the pore scale). These are the same physical phenomenon at different resolutions. See :ref:`concept-dispersion-scales` for details and :ref:`concept-dispersion` for background.
 
 **Relationship to the diffusion module:**
 
-When using the ``advection`` module, only macro-scale spreading from the pore volume distribution is modeled. To add pore-scale diffusive/dispersive spreading, use:
+When using the ``advection`` module alone, only macrodispersion (spreading from the pore volume distribution) is modeled. To add microdispersion and molecular diffusion, use:
 
 - :mod:`gwtransport.diffusion_fast` for approximate but fast Gaussian smoothing
 - :mod:`gwtransport.diffusion` for analytical advection-dispersion solutions
 
-Alternatively, use the "equivalent APVD std" approach described in :doc:`/examples/05_Diffusion_Dispersion` to convert pore-scale dispersion to equivalent APVD spreading, allowing continued use of the fast advection module.
+Alternatively, use the "equivalent APVD std" approach described in :doc:`/examples/05_Diffusion_Dispersion` to convert microdispersion to equivalent APVD spreading, allowing continued use of the fast advection module.
 
 .. _assumption-steady-streamlines:
 

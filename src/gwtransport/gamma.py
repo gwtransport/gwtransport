@@ -59,7 +59,9 @@ def parse_parameters(
     mean : float, optional
         Mean of the gamma distribution.
     std : float, optional
-        Standard deviation of the gamma distribution.
+        Standard deviation of the gamma distribution. See
+        :ref:`concept-dispersion-scales` for what std represents depending
+        on APVD source.
 
     Returns
     -------
@@ -101,7 +103,9 @@ def mean_std_to_alpha_beta(*, mean: float, std: float) -> tuple[float, float]:
     mean : float
         Mean of the gamma distribution.
     std : float
-        Standard deviation of the gamma distribution.
+        Standard deviation of the gamma distribution. See
+        :ref:`concept-dispersion-scales` for what std represents depending
+        on APVD source.
 
     Returns
     -------
@@ -228,6 +232,7 @@ def bins(
     mean_std_to_alpha_beta : Convert mean/std to alpha/beta parameters
     gwtransport.advection.gamma_infiltration_to_extraction : Use bins for transport modeling
     :ref:`concept-gamma-distribution` : Two-parameter pore volume model
+    :ref:`concept-dispersion-scales` : What ``std`` represents (macrodispersion vs total spreading)
     :ref:`assumption-gamma-distribution` : When gamma distribution is adequate
 
     Examples

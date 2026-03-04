@@ -113,16 +113,26 @@ For assumptions about the transport framework, see :ref:`assumption-advection-do
 
 .. _concept-dispersion:
 
-Dispersion Without Numerical Dispersion
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Macrodispersion and Microdispersion
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A key advantage of ``gwtransport`` is how it handles dispersion:
+A key advantage of ``gwtransport`` is how it handles dispersion by distinguishing two forms:
 
-**Macroscopic dispersion** arises naturally from the pore volume distribution:
+**Macrodispersion** arises naturally from the pore volume distribution (APVD):
 
 - Fast flow paths deliver early arrivals
 - Slow flow paths deliver late arrivals
 - The mixture at the well shows a "dispersed" breakthrough curve
+- Depends on both aquifer properties **and** hydrological boundary conditions — when streamlines change due to changed boundary conditions, macrodispersion changes
+
+**Microdispersion** is mechanical dispersion at the pore scale (:math:`\alpha_L`):
+
+- Spreading within individual streamlines due to pore-scale velocity variations
+- An **aquifer property** — determined by pore structure, independent of hydrological boundary conditions
+
+**Molecular diffusion** (:math:`D_m`) is a separate process (Brownian motion), distinct from both macro- and microdispersion.
+
+Both microdispersion and molecular diffusion can be added via the :mod:`gwtransport.diffusion` or :mod:`gwtransport.diffusion_fast` modules, or represented as an equivalent increase of the gamma distribution's ``std`` parameter (variance addition).
 
 **No numerical dispersion** because:
 
@@ -134,22 +144,23 @@ This is fundamentally different from traditional numerical transport models wher
 
 .. _concept-dispersion-scales:
 
-Dispersion as Scale-Dependent Heterogeneity
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Macrodispersion and Microdispersion as Scale-Dependent Heterogeneity
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 All spreading in porous media transport arises from **velocity heterogeneity** at different scales:
 
-1. **Molecular scale**: Brownian motion causes spreading even in uniform flow (:math:`D_m`)
-2. **Pore scale** (~mm to cm): Velocity varies within and between pores (:math:`\alpha_L`, longitudinal dispersivity)
-3. **Local scale** (~m to 10m): Conductivity varies between soil layers and lenses
-4. **Aquifer scale** (~10m to km): Different streamlines have different path lengths (captured by APVD)
+1. **Molecular scale**: Brownian motion causes spreading even in uniform flow (:math:`D_m`) — **molecular diffusion**
+2. **Pore scale** (~mm to cm): Velocity varies within and between pores (:math:`\alpha_L`, longitudinal dispersivity) — **microdispersion**
+3. **Aquifer scale** (~m to km): Different streamlines have different path lengths, reflecting conductivity contrasts from local layers to aquifer-wide heterogeneity (captured by APVD) — **macrodispersion**
+
+**Microdispersion** (scale 2) is an aquifer property determined by pore structure, independent of hydrological boundary conditions. **Macrodispersion** (scale 3) depends on both aquifer properties and hydrological boundary conditions (the streamline geometry). **Molecular diffusion** (scale 1) is a separate process, distinct from both.
 
 The boundaries between these scales are **not sharp**. This is why measured dispersivity (:math:`\alpha_L`) famously increases with experiment scale—larger measurements "see" more heterogeneity.
 
 **gwtransport's approach:**
 
-- The **pore volume distribution (APVD)** captures macro-scale heterogeneity explicitly
-- The **diffusion module** adds molecular diffusion (:math:`D_m`) and mechanical dispersion (:math:`\alpha_L`)
+- The **pore volume distribution (APVD)** captures macrodispersion explicitly
+- The **diffusion module** adds microdispersion (:math:`\alpha_L`) and molecular diffusion (:math:`D_m`)
 
 **Dispersion coefficient vs. breakthrough spreading:**
 
@@ -160,14 +171,14 @@ The longitudinal dispersion coefficient :math:`D_L = D_m + \alpha_L \cdot v` inc
 
 In pore volume units, :math:`\sigma_{V,disp}` is flow-independent, while :math:`\sigma_{V,diff}` decreases with higher flow (proportional to :math:`1/\sqrt{Q}`).
 
-**When calibrating APVD from breakthrough curves**, the fitted :math:`\sigma_{apv}` already includes all spreading sources present during calibration — including pore-scale dispersion and molecular diffusion. Adding :math:`\alpha_L` would double-count. Note: if calibrating with one compound (e.g., temperature, :math:`D_m \approx 0.1` m²/day) and predicting for another (e.g., a solute, :math:`D_m \approx 10^{-4}` m²/day), the baked-in diffusion contribution may need correction — see :doc:`/examples/05_Diffusion_Dispersion`.
+**When calibrating APVD from measurements**, the fitted :math:`\sigma_{apv}` already absorbs all mixing present during calibration — macrodispersion, microdispersion, and an average molecular diffusion contribution. Adding :math:`\alpha_L` would double-count. When calibrating with the diffusion module, these three components are taken into account separately. Note: if calibrating with one compound (e.g., temperature, :math:`D_m \approx 0.1` m²/day) and predicting for another (e.g., a solute, :math:`D_m \approx 10^{-4}` m²/day), the baked-in diffusion contribution may need correction — see :doc:`/examples/05_Diffusion_Dispersion`.
 
-**When computing APVD from streamline analysis**, only macro-scale path lengths are captured. Pore-scale dispersion (:math:`\alpha_L`) can be meaningfully added:
+**When computing APVD from streamline analysis**, only macrodispersion (aquifer-scale path length variation) is captured. Microdispersion (:math:`\alpha_L`) and molecular diffusion (:math:`D_m`) can be meaningfully added:
 
 - **Gamma-parameterized APVD**: Combine variances by adjusting the standard deviation parameter: :math:`\sigma_{total} = \sqrt{\sigma_{apv}^2 + \sigma_{disp}^2 + \sigma_{diff}^2}`
-- **Discrete streamline volumes**: Variance addition is **not** meaningful for an array of specific geometric measurements. Use the :mod:`gwtransport.diffusion` module to apply pore-scale dispersion on top of the advective transport.
+- **Discrete streamline volumes**: Variance addition is **not** meaningful for an array of specific geometric measurements. Use the :mod:`gwtransport.diffusion` module to apply microdispersion on top of the advective transport.
 
-See :doc:`/examples/05_Diffusion_Dispersion` for quantitative guidance on comparing these contributions and formulas to convert dispersion effects to equivalent APVD standard deviation.
+See :doc:`/examples/05_Diffusion_Dispersion` for quantitative guidance on comparing these contributions and formulas to convert microdispersion effects to equivalent APVD standard deviation.
 
 Calibration Approaches
 ----------------------
