@@ -165,16 +165,16 @@ Base URL: `https://gwtransport.github.io/gwtransport/`
 
 _Concepts_ (`concepts.rst` → `concepts.html`):
 
-| Label                              | Topic                                    |
-| ---------------------------------- | ---------------------------------------- |
-| `concept-pore-volume-distribution` | Central concept: aquifer heterogeneity   |
-| `concept-residence-time`           | Time in aquifer (V·R/Q)                  |
-| `concept-retardation-factor`       | Slower movement due to sorption          |
-| `concept-transport-equation`       | Flow-weighted averaging                  |
-| `concept-dispersion`               | Macrodispersion and microdispersion      |
+| Label                              | Topic                                     |
+| ---------------------------------- | ----------------------------------------- |
+| `concept-pore-volume-distribution` | Central concept: aquifer heterogeneity    |
+| `concept-residence-time`           | Time in aquifer (V·R/Q)                   |
+| `concept-retardation-factor`       | Slower movement due to sorption           |
+| `concept-transport-equation`       | Flow-weighted averaging                   |
+| `concept-dispersion`               | Macrodispersion and microdispersion       |
 | `concept-dispersion-scales`        | Scale-dependent: macro vs microdispersion |
-| `concept-gamma-distribution`       | Two-parameter pore volume model          |
-| `concept-nonlinear-sorption`       | Freundlich isotherm, front-tracking      |
+| `concept-gamma-distribution`       | Two-parameter pore volume model           |
+| `concept-nonlinear-sorption`       | Freundlich isotherm, front-tracking       |
 
 _Assumptions_ (`assumptions.rst` → `assumptions.html`):
 
