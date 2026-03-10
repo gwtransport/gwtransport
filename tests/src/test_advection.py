@@ -1743,11 +1743,11 @@ def test_gamma_extraction_to_infiltration_roundtrip():
     reconstructed_middle = cin_reconstructed[middle_region]
     original_middle = cin_original.values[middle_region]
 
-    # Test exact recovery in stable middle region with tight tolerance
+    # lstsq inversion should recover to machine precision in the stable middle region
     np.testing.assert_allclose(
         reconstructed_middle,
         original_middle,
-        rtol=0.15,
+        rtol=1e-6,
         err_msg=f"Roundtrip error: expected mean ~{np.mean(original_middle):.2f}, got {np.mean(reconstructed_middle):.2f}",
     )
 
@@ -2038,8 +2038,8 @@ def test_extraction_to_infiltration_single_pore_volume_roundtrip():
         pytest.skip("No valid recovered values")
     valid_recovered = cin_recovered[valid_mask]
 
-    # Should preserve mean
-    assert np.mean(valid_recovered) == pytest.approx(5.0, abs=2.0)
+    # lstsq inversion should recover mean to machine precision
+    np.testing.assert_allclose(np.mean(valid_recovered), 5.0, atol=1e-8)
 
 
 @pytest.mark.roundtrip
@@ -2090,8 +2090,8 @@ def test_extraction_to_infiltration_multiple_pore_volumes():
         pytest.skip("No valid recovered values")
     valid_recovered = cin_recovered[valid_mask]
 
-    # Should recover constant value
-    assert np.mean(valid_recovered) == pytest.approx(12.0, abs=3.0)
+    # lstsq inversion should recover constant value to machine precision
+    np.testing.assert_allclose(valid_recovered, 12.0, atol=1e-8)
 
 
 def test_extraction_to_infiltration_nan_handling():
