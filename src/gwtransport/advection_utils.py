@@ -76,7 +76,11 @@ def _infiltration_to_extraction_weights(
 
     # Accumulate flow-weighted overlap matrices from all pore volumes
     # Each pore volume has equal probability (equal-mass bins from gamma distribution)
-    accumulated_weights = np.zeros((len(cout_tedges) - 1, len(tedges) - 1))
+    n_cout = len(cout_tedges) - 1
+    n_cin = len(tedges) - 1
+    accumulated_weights = np.zeros((n_cout, n_cin))
+    # Track how many pore volume bins contributed to each output row
+    contributing_bins = np.zeros(n_cout)
 
     # Loop over each pore volume
     for i in range(len(aquifer_pore_volumes)):
@@ -116,9 +120,17 @@ def _infiltration_to_extraction_weights(
 
         # Accumulate only the valid bins from this pore volume
         accumulated_weights[valid_bins_2d[i, :], :] += normalized_overlap[valid_bins_2d[i, :], :]
+        contributing_bins[valid_bins_2d[i, :]] += 1
 
-    # Average across all pore volumes assuming equal probability per bin.
+    # Average across contributing pore volumes for each output row.
+    # During spin-up, only the shorter pore volumes have valid residence times.
+    # We normalize by the number of bins that actually contributed to each row,
+    # so the output represents the average concentration of informed flow paths
+    # rather than being biased toward zero.
     # This is correct when aquifer_pore_volumes comes from gamma.bins() which
     # produces equal-probability bins. For user-supplied pore volumes with
     # unequal probability mass, a weights parameter would be needed.
-    return accumulated_weights / len(aquifer_pore_volumes)
+    valid_rows = contributing_bins > 0
+    result = np.zeros_like(accumulated_weights)
+    result[valid_rows, :] = accumulated_weights[valid_rows, :] / contributing_bins[valid_rows, None]
+    return result
