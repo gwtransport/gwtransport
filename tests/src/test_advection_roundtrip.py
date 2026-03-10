@@ -48,7 +48,6 @@ class TestRoundtripLinear:
 
         # Constant flow and pore volume
         flow_cin = np.full(len(cin_dates), 100.0)
-        flow_cout = np.full(len(cout_dates), 100.0)
         pore_volume = np.array([500.0])
 
         # Constant retardation (linear)
@@ -64,12 +63,12 @@ class TestRoundtripLinear:
             retardation_factor=retardation_factor,
         )
 
-        # Backward pass
+        # Backward pass: tedges = cin/flow grid, cout_tedges = cout grid
         cin_reconstructed = extraction_to_infiltration(
             cout=cout,
-            flow=flow_cout,
-            tedges=cout_tedges,
-            cin_tedges=cin_tedges,
+            flow=flow_cin,
+            tedges=cin_tedges,
+            cout_tedges=cout_tedges,
             aquifer_pore_volumes=pore_volume,
             retardation_factor=retardation_factor,
         )

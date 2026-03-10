@@ -746,13 +746,15 @@ class TestExtractionToInfiltrationDiffusion:
     @pytest.fixture
     def simple_setup(self):
         """Create a simple test setup with constant flow."""
-        tedges = pd.date_range(start="2020-01-01", end="2020-03-01", freq="D")
+        cin_tedges = pd.date_range(start="2020-01-01", end="2020-03-01", freq="D")
         cout_tedges = pd.date_range(start="2020-01-10", end="2020-02-20", freq="D")
 
         # Step input: concentration 1 for 5 days after residence time offset
         cout = np.zeros(len(cout_tedges) - 1)
         cout[5:10] = 1.0
-        flow = np.ones(len(cout_tedges) - 1) * 100.0  # 100 m3/day
+        # Flow on cin grid (for advection module) and cout grid (for diffusion module)
+        flow_cin = np.ones(len(cin_tedges) - 1) * 100.0
+        flow_cout = np.ones(len(cout_tedges) - 1) * 100.0
 
         # Single pore volume: 500 m3 = 5 days residence time at 100 m3/day
         aquifer_pore_volumes = np.array([500.0])
@@ -760,9 +762,10 @@ class TestExtractionToInfiltrationDiffusion:
 
         return {
             "cout": cout,
-            "flow": flow,
-            "tedges": cout_tedges,
-            "cin_tedges": tedges,
+            "flow_cin": flow_cin,
+            "flow_cout": flow_cout,
+            "cin_tedges": cin_tedges,
+            "cout_tedges": cout_tedges,
             "aquifer_pore_volumes": aquifer_pore_volumes,
             "streamline_length": streamline_length,
         }
@@ -771,15 +774,15 @@ class TestExtractionToInfiltrationDiffusion:
         """Test that zero diffusivity gives same result as pure advection."""
         cin_advection = advection_e2i(
             cout=simple_setup["cout"],
-            flow=simple_setup["flow"],
-            tedges=simple_setup["tedges"],
-            cin_tedges=simple_setup["cin_tedges"],
+            flow=simple_setup["flow_cin"],
+            tedges=simple_setup["cin_tedges"],
+            cout_tedges=simple_setup["cout_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
         )
         cin_diffusion = extraction_to_infiltration(
             cout=simple_setup["cout"],
-            flow=simple_setup["flow"],
-            tedges=simple_setup["tedges"],
+            flow=simple_setup["flow_cout"],
+            tedges=simple_setup["cout_tedges"],
             cin_tedges=simple_setup["cin_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
             streamline_length=simple_setup["streamline_length"],
@@ -794,15 +797,15 @@ class TestExtractionToInfiltrationDiffusion:
         """Test that small diffusivity produces result close to advection."""
         cin_advection = advection_e2i(
             cout=simple_setup["cout"],
-            flow=simple_setup["flow"],
-            tedges=simple_setup["tedges"],
-            cin_tedges=simple_setup["cin_tedges"],
+            flow=simple_setup["flow_cin"],
+            tedges=simple_setup["cin_tedges"],
+            cout_tedges=simple_setup["cout_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
         )
         cin_diffusion = extraction_to_infiltration(
             cout=simple_setup["cout"],
-            flow=simple_setup["flow"],
-            tedges=simple_setup["tedges"],
+            flow=simple_setup["flow_cout"],
+            tedges=simple_setup["cout_tedges"],
             cin_tedges=simple_setup["cin_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
             streamline_length=simple_setup["streamline_length"],
@@ -817,8 +820,8 @@ class TestExtractionToInfiltrationDiffusion:
         """Test that output concentrations are bounded by input range."""
         cin = extraction_to_infiltration(
             cout=simple_setup["cout"],
-            flow=simple_setup["flow"],
-            tedges=simple_setup["tedges"],
+            flow=simple_setup["flow_cout"],
+            tedges=simple_setup["cout_tedges"],
             cin_tedges=simple_setup["cin_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
             streamline_length=simple_setup["streamline_length"],
@@ -895,8 +898,8 @@ class TestExtractionToInfiltrationDiffusion:
         with pytest.raises(ValueError, match="molecular_diffusivity must be non-negative"):
             extraction_to_infiltration(
                 cout=simple_setup["cout"],
-                flow=simple_setup["flow"],
-                tedges=simple_setup["tedges"],
+                flow=simple_setup["flow_cout"],
+                tedges=simple_setup["cout_tedges"],
                 cin_tedges=simple_setup["cin_tedges"],
                 aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
                 streamline_length=simple_setup["streamline_length"],
@@ -908,8 +911,8 @@ class TestExtractionToInfiltrationDiffusion:
         with pytest.raises(ValueError, match="longitudinal_dispersivity must be non-negative"):
             extraction_to_infiltration(
                 cout=simple_setup["cout"],
-                flow=simple_setup["flow"],
-                tedges=simple_setup["tedges"],
+                flow=simple_setup["flow_cout"],
+                tedges=simple_setup["cout_tedges"],
                 cin_tedges=simple_setup["cin_tedges"],
                 aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
                 streamline_length=simple_setup["streamline_length"],
@@ -921,8 +924,8 @@ class TestExtractionToInfiltrationDiffusion:
         with pytest.raises(ValueError, match="same length"):
             extraction_to_infiltration(
                 cout=simple_setup["cout"],
-                flow=simple_setup["flow"],
-                tedges=simple_setup["tedges"],
+                flow=simple_setup["flow_cout"],
+                tedges=simple_setup["cout_tedges"],
                 cin_tedges=simple_setup["cin_tedges"],
                 aquifer_pore_volumes=np.array([500.0, 600.0]),
                 streamline_length=np.array([100.0]),
@@ -936,8 +939,8 @@ class TestExtractionToInfiltrationDiffusion:
         with pytest.raises(ValueError, match="NaN"):
             extraction_to_infiltration(
                 cout=cout_with_nan,
-                flow=simple_setup["flow"],
-                tedges=simple_setup["tedges"],
+                flow=simple_setup["flow_cout"],
+                tedges=simple_setup["cout_tedges"],
                 cin_tedges=simple_setup["cin_tedges"],
                 aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
                 streamline_length=simple_setup["streamline_length"],

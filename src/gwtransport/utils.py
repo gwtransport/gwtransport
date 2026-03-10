@@ -1018,24 +1018,19 @@ def _optimize_nullspace_coefficients(
     optimization_method: str,
 ) -> npt.NDArray[np.floating]:
     """Optimize coefficients in the nullspace to minimize the objective."""
+    # For squared_differences, solve the quadratic form analytically:
+    # min ||D(x_ls + N c)||^2 => (N'D'DN) c = -N'D'D x_ls
+    coeffs_sq = _solve_squared_differences_analytical(x_ls=x_ls, nullspace_basis=nullspace_basis)
+
+    if nullspace_objective == "squared_differences":
+        return coeffs_sq
+
+    # For other objectives, use iterative optimization starting from the
+    # squared_differences solution for stability
     nullrank = nullspace_basis.shape[1]
     objective_func = _get_nullspace_objective_function(nullspace_objective=nullspace_objective)
-    coeffs_0 = np.zeros(nullrank)
+    coeffs_0 = coeffs_sq if coeffs_sq is not None else np.zeros(nullrank)
 
-    # For stability, always start with squared differences if using summed differences
-    if nullspace_objective == "summed_differences":
-        res_init = minimize(
-            _squared_differences_objective,
-            x0=coeffs_0,
-            args=(x_ls, nullspace_basis),
-            method=optimization_method,
-        )
-        if not res_init.success:
-            msg = f"Initial optimization failed: {res_init.message}"
-            raise ValueError(msg)
-        coeffs_0 = res_init.x
-
-    # Final optimization with target objective
     res = minimize(
         objective_func,
         x0=coeffs_0,
@@ -1048,6 +1043,30 @@ def _optimize_nullspace_coefficients(
         raise ValueError(msg)
 
     return res.x
+
+
+def _solve_squared_differences_analytical(
+    *,
+    x_ls: np.ndarray,
+    nullspace_basis: np.ndarray,
+) -> npt.NDArray[np.floating]:
+    """Solve the squared-differences nullspace problem analytically.
+
+    Minimizes ``sum((x[i+1] - x[i])^2)`` where ``x = x_ls + N @ c`` by
+    solving the normal equations ``(N^T D^T D N) c = -N^T D^T D x_ls``.
+    """
+    # D is the (n-1, n) first-difference matrix; D @ x = x[1:] - x[:-1]
+    # D^T D is the tridiagonal matrix with 2 on diagonal, -1 on off-diagonals
+    # (except corners which have 1 on diagonal)
+    # Instead of forming D explicitly, compute D @ N and D @ x_ls directly
+    dn = nullspace_basis[1:, :] - nullspace_basis[:-1, :]  # (n-1, nullrank)
+    dx = x_ls[1:] - x_ls[:-1]  # (n-1,)
+
+    # Normal equations: (DN)^T (DN) c = -(DN)^T (D x_ls)
+    dntdn = dn.T @ dn  # (nullrank, nullrank)
+    rhs = -(dn.T @ dx)  # (nullrank,)
+
+    return np.linalg.solve(dntdn, rhs)
 
 
 def _squared_differences_objective(coeffs: np.ndarray, x_ls: np.ndarray, nullspace_basis: np.ndarray) -> float:

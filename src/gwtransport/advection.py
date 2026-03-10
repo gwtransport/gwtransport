@@ -75,12 +75,12 @@ import pandas as pd
 
 from gwtransport import gamma
 from gwtransport.advection_utils import _infiltration_to_extraction_weights
-from gwtransport.utils import solve_underdetermined_system
 from gwtransport.fronttracking.math import EPSILON_FREUNDLICH_N, ConstantRetardation, FreundlichSorption
 from gwtransport.fronttracking.output import compute_bin_averaged_concentration_exact
 from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.residence_time import residence_time
+from gwtransport.utils import solve_underdetermined_system
 
 
 def infiltration_to_extraction_series(
@@ -531,8 +531,16 @@ def gamma_extraction_to_infiltration(
         Cutoff ratio for small singular values in the SVD truncation.
         Singular values smaller than ``rcond * largest_singular_value`` are
         treated as zero, expanding the nullspace available for smoothness
-        optimization. Default is None (machine precision default). Increase
-        for noisy data (e.g. 0.01-0.1).
+        optimization. Default is None (machine precision default).
+
+        A good starting value is the noise standard deviation divided by the
+        signal amplitude: ``rcond ~ noise_std / signal_amplitude``. The
+        forward weight matrix has a largest singular value close to 1, so
+        modes with singular value ``s`` amplify noise by ``1/s``. Setting
+        ``rcond`` to the relative noise level truncates modes that would
+        amplify noise above the signal level. For example, temperature data
+        with 0.1 C noise and ~10 C seasonal amplitude suggests
+        ``rcond ~ 0.01``.
     nullspace_objective : str, optional
         Objective for nullspace optimization. Options: "squared_differences"
         (smooth, default) or "summed_differences" (piecewise constant).
@@ -856,9 +864,10 @@ def extraction_to_infiltration(
     followed by nullspace smoothness optimization to select a physically
     plausible solution from the underdetermined system.
 
-    Only cin bins that are *fully informed* — meaning all cout bins that depend
-    on them have complete pore volume coverage — are returned as valid values.
-    All other cin bins are set to NaN.
+    Cin bins that are *fully informed* — meaning all cout bins that depend
+    on them have complete pore volume coverage — are directly constrained by
+    the equations. Edge bins outside the fully-informed region receive
+    smoothness-extrapolated values from the nullspace optimization.
 
     Parameters
     ----------
@@ -884,8 +893,16 @@ def extraction_to_infiltration(
         Cutoff ratio for small singular values in the SVD truncation.
         Singular values smaller than ``rcond * largest_singular_value`` are
         treated as zero, expanding the nullspace available for smoothness
-        optimization. Default is None (machine precision default). Increase
-        for noisy data (e.g. 0.01-0.1).
+        optimization. Default is None (machine precision default).
+
+        A good starting value is the noise standard deviation divided by the
+        signal amplitude: ``rcond ~ noise_std / signal_amplitude``. The
+        forward weight matrix has a largest singular value close to 1, so
+        modes with singular value ``s`` amplify noise by ``1/s``. Setting
+        ``rcond`` to the relative noise level truncates modes that would
+        amplify noise above the signal level. For example, temperature data
+        with 0.1 C noise and ~10 C seasonal amplitude suggests
+        ``rcond ~ 0.01``.
     nullspace_objective : str, optional
         Objective for nullspace optimization. Options: "squared_differences"
         (smooth, default) or "summed_differences" (piecewise constant).
@@ -895,7 +912,7 @@ def extraction_to_infiltration(
     numpy.ndarray
         Concentration in the infiltrating water. Same units as cout.
         Length equals len(tedges) - 1. NaN values indicate time periods
-        where cin is not fully constrained by the extraction data.
+        with no temporal overlap with the extraction data.
 
     Raises
     ------
@@ -1008,19 +1025,12 @@ def extraction_to_infiltration(
         retardation_factor=retardation_factor,
     )
 
-    # Identify fully-informed cin bins:
-    # A cout bin is "full" if all pore volumes contributed (row sums to ~1).
-    # A cin bin is "fully informed" if every cout bin that depends on it is full.
+    # Identify cout bins with full pore volume coverage (row sums to ~1)
     row_sums = w_forward.sum(axis=1)
     row_full = row_sums > (1.0 - 1e-6)
     col_active = w_forward.sum(axis=0) > 0
 
-    # For each cin column, check that ALL cout rows with nonzero weight are full
-    col_has_contribution = w_forward > 0
-    check_matrix = ~col_has_contribution | row_full[:, None]
-    cin_fully_informed = col_active & np.all(check_matrix, axis=0)
-
-    if not np.any(row_full) or not np.any(cin_fully_informed):
+    if not np.any(row_full) or not np.any(col_active):
         return np.full(n_cin, np.nan)
 
     # Set NaN in cout for non-full rows so solve_underdetermined_system skips them
@@ -1036,9 +1046,11 @@ def extraction_to_infiltration(
         rcond=rcond,
     )
 
-    # Only return valid values for fully-informed cin bins
+    # Return values for all active cin bins. Fully-informed bins are
+    # constrained by equations; edge bins get smoothness-extrapolated values
+    # from the nullspace optimization.
     out = np.full(n_cin, np.nan)
-    out[cin_fully_informed] = cin_solved[cin_fully_informed]
+    out[col_active] = cin_solved[col_active]
 
     return out
 
