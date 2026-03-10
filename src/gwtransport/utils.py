@@ -850,6 +850,7 @@ def solve_underdetermined_system(
     rhs_vector: npt.ArrayLike,
     nullspace_objective: str | Callable[[np.ndarray, np.ndarray, np.ndarray], float] = "squared_differences",
     optimization_method: str = "BFGS",
+    rcond: float | None = None,
 ) -> npt.NDArray[np.floating]:
     """
     Solve an underdetermined linear system with nullspace regularization.
@@ -885,6 +886,13 @@ def solve_underdetermined_system(
     optimization_method : str, optional
         Optimization method passed to scipy.optimize.minimize.
         Default is "BFGS".
+    rcond : float or None, optional
+        Cutoff ratio for small singular values in both ``numpy.linalg.lstsq``
+        and ``scipy.linalg.null_space``. Singular values smaller than
+        ``rcond * largest_singular_value`` are treated as zero.
+        Default is None, which uses the default of each function.
+        Increasing rcond truncates more modes, expanding the nullspace
+        available for smoothness optimization. Useful for noisy data.
 
     Returns
     -------
@@ -981,10 +989,10 @@ def solve_underdetermined_system(
     valid_rhs = rhs[valid_rows]
 
     # Compute least-squares solution
-    x_ls, *_ = np.linalg.lstsq(valid_matrix, valid_rhs, rcond=None)
+    x_ls, *_ = np.linalg.lstsq(valid_matrix, valid_rhs, rcond=rcond)
 
     # Compute nullspace
-    nullspace_basis = null_space(valid_matrix, rcond=None)
+    nullspace_basis = null_space(valid_matrix, rcond=rcond)
     nullrank = nullspace_basis.shape[1]
 
     if nullrank == 0:

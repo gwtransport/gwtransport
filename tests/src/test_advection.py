@@ -1243,8 +1243,8 @@ def test_extraction_to_infiltration_basic_functionality():
     cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=1.0,
     )
@@ -1272,8 +1272,8 @@ def test_extraction_to_infiltration_constant_input():
     cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=1.0,
     )
@@ -1309,8 +1309,8 @@ def test_extraction_to_infiltration_single_pore_volume():
     cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=1.0,
     )
@@ -1335,8 +1335,8 @@ def test_extraction_to_infiltration_retardation_factor():
     cin1 = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=1.0,
     )
@@ -1344,8 +1344,8 @@ def test_extraction_to_infiltration_retardation_factor():
     cin2 = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=2.0,
     )
@@ -1366,14 +1366,14 @@ def test_extraction_to_infiltration_error_conditions():
     flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
     aquifer_pore_volumes = np.array([1000.0])
 
-    # Test mismatched tedges length
-    wrong_tedges = tedges[:-2]  # Too short
-    with pytest.raises(ValueError, match="tedges must have one more element than cout"):
+    # Test mismatched cout_tedges length
+    wrong_cout_tedges = tedges[:-2]  # Too short
+    with pytest.raises(ValueError, match="cout_tedges must have one more element than cout"):
         extraction_to_infiltration(
             cout=cout.values,
             flow=flow.values,
-            tedges=wrong_tedges,
-            cin_tedges=cin_tedges,
+            tedges=cin_tedges,
+            cout_tedges=wrong_cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
         )
 
@@ -1383,8 +1383,8 @@ def test_extraction_to_infiltration_error_conditions():
         extraction_to_infiltration(
             cout=cout.values,
             flow=wrong_flow.values,
-            tedges=tedges,
-            cin_tedges=cin_tedges,
+            tedges=cin_tedges,
+            cout_tedges=tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
         )
 
@@ -1417,8 +1417,8 @@ def test_extraction_to_infiltration_analytical_simple_delay():
     cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=1.0,
     )
@@ -1446,8 +1446,8 @@ def test_extraction_to_infiltration_zero_output_gives_zero_input():
     cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=1.0,
     )
@@ -1481,8 +1481,8 @@ def test_extraction_to_infiltration_no_temporal_overlap():
     cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=1.0,
     )
@@ -1511,8 +1511,8 @@ def test_extraction_to_infiltration_extreme_pore_volumes():
     cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=1.0,
     )
@@ -1540,8 +1540,8 @@ def test_extraction_to_infiltration_zero_flow():
     cin = extraction_to_infiltration(
         cout=cout.values,
         flow=flow.values,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=1.0,
     )
@@ -1574,8 +1574,8 @@ def test_gamma_extraction_to_infiltration_zero_output_gives_zero_input():
 
     cin = gamma_extraction_to_infiltration(
         cout=cout,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         flow=flow,
         alpha=5.0,
         beta=40.0,  # mean pore volume = 200 m3, ~2 day residence time with 100 m3/day flow
@@ -1607,8 +1607,8 @@ def test_gamma_extraction_to_infiltration_constant_input():
 
     cin = gamma_extraction_to_infiltration(
         cout=cout,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         flow=flow,
         alpha=10.0,
         beta=10.0,  # mean pore volume = 100 m3, ~1 day residence time
@@ -1658,8 +1658,8 @@ def test_gamma_extraction_to_infiltration_step_function():
 
     cin = gamma_extraction_to_infiltration(
         cout=cout,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         flow=flow,
         alpha=10.0,
         beta=10.0,  # ~1 day mean residence time
@@ -1715,8 +1715,8 @@ def test_gamma_extraction_to_infiltration_roundtrip():
     cout_series = pd.Series(cout, index=cout_dates)
     cin_reconstructed = gamma_extraction_to_infiltration(
         cout=cout_series,
-        tedges=cout_tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow_cout,
         alpha=10.0,
         beta=10.0,
@@ -1770,8 +1770,8 @@ def test_gamma_extraction_to_infiltration_retardation_factor():
     # Test with retardation factor = 1.0
     cin1 = gamma_extraction_to_infiltration(
         cout=cout,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         flow=flow,
         alpha=10.0,
         beta=10.0,
@@ -1782,8 +1782,8 @@ def test_gamma_extraction_to_infiltration_retardation_factor():
     # Test with retardation factor = 2.0 (doubles residence time)
     cin2 = gamma_extraction_to_infiltration(
         cout=cout,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         flow=flow,
         alpha=10.0,
         beta=10.0,
@@ -1829,8 +1829,8 @@ def test_gamma_extraction_to_infiltration_with_mean_std():
 
     cin = gamma_extraction_to_infiltration(
         cout=cout,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         flow=flow,
         mean=mean,
         std=std,
@@ -1866,7 +1866,7 @@ def test_gamma_extraction_to_infiltration_missing_parameters():
 
     # Test missing both alpha/beta and mean/std
     with pytest.raises(ValueError):
-        gamma_extraction_to_infiltration(cout=cout, tedges=tedges, cin_tedges=cin_tedges, flow=flow)
+        gamma_extraction_to_infiltration(cout=cout, tedges=cin_tedges, cout_tedges=tedges, flow=flow)
 
 
 # =============================================================================
@@ -1911,8 +1911,8 @@ def test_gamma_roundtrip_constant_concentration():
 
     cin_recovered = gamma_extraction_to_infiltration(
         cout=cout,
-        tedges=cout_tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow_backward,
         mean=5000.0,
         std=1000.0,
@@ -1970,8 +1970,8 @@ def test_gamma_roundtrip_step_function():
 
     cin_recovered = gamma_extraction_to_infiltration(
         cout=cout,
-        tedges=cout_tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow_backward,
         alpha=20.0,
         beta=250.0,
@@ -2025,8 +2025,8 @@ def test_extraction_to_infiltration_single_pore_volume_roundtrip():
 
     cin_recovered = extraction_to_infiltration(
         cout=cout,
-        tedges=cout_tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow_backward,
         aquifer_pore_volumes=pore_volumes,
         retardation_factor=1.0,
@@ -2077,8 +2077,8 @@ def test_extraction_to_infiltration_multiple_pore_volumes():
 
     cin_recovered = extraction_to_infiltration(
         cout=cout,
-        tedges=cout_tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow_backward,
         aquifer_pore_volumes=pore_volumes,
         retardation_factor=1.0,
@@ -2110,8 +2110,8 @@ def test_extraction_to_infiltration_nan_handling():
 
     cin_recovered = extraction_to_infiltration(
         cout=cout,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         flow=flow,
         aquifer_pore_volumes=pore_volumes,
         retardation_factor=1.0,
@@ -2144,7 +2144,7 @@ def test_gamma_extraction_to_infiltration_parameter_sensitivity(mean, std):
     cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
 
     cin_recovered = gamma_extraction_to_infiltration(
-        cout=cout, tedges=tedges, cin_tedges=cin_tedges, flow=flow, mean=mean, std=std, retardation_factor=1.0
+        cout=cout, tedges=cin_tedges, cout_tedges=tedges, flow=flow, mean=mean, std=std, retardation_factor=1.0
     )
 
     # Verify outputs
@@ -2195,8 +2195,8 @@ def test_extraction_to_infiltration_with_retardation():
 
     cin_recovered = extraction_to_infiltration(
         cout=cout,
-        tedges=cout_tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow_backward,
         aquifer_pore_volumes=pore_volumes,
         retardation_factor=retardation_factor,
@@ -2248,8 +2248,8 @@ def test_extraction_to_infiltration_variable_flow():
 
     cin_recovered = extraction_to_infiltration(
         cout=cout,
-        tedges=cout_tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=cout_tedges,
         flow=flow_backward,
         aquifer_pore_volumes=pore_volumes,
         retardation_factor=1.0,
@@ -2280,8 +2280,8 @@ def test_gamma_extraction_to_infiltration_mean_preservation():
 
     cin_recovered = gamma_extraction_to_infiltration(
         cout=cout,
-        tedges=tedges,
-        cin_tedges=cin_tedges,
+        tedges=cin_tedges,
+        cout_tedges=tedges,
         flow=flow_forward,
         mean=5000.0,
         std=1000.0,
