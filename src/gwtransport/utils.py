@@ -1066,6 +1066,22 @@ def _solve_squared_differences_analytical(
     dntdn = dn.T @ dn  # (nullrank, nullrank)
     rhs = -(dn.T @ dx)  # (nullrank,)
 
+    cond = np.linalg.cond(dntdn)
+    cond_threshold = 1e12
+    if cond > cond_threshold:
+        msg = (
+            f"The normal equations matrix (DN)^T(DN) is ill-conditioned "
+            f"(condition number: {cond:.2e}). This typically means the "
+            f"nullspace contains a near-constant vector, so the "
+            f"squared-differences objective cannot distinguish between "
+            f"nullspace directions. Consider using a different "
+            f"nullspace_objective (e.g., 'summed_differences'), reducing "
+            f"the problem's degrees of freedom, or lowering rcond to "
+            f"shrink the nullspace (if the near-constant vector has a "
+            f"small but non-zero singular value)."
+        )
+        raise np.linalg.LinAlgError(msg)
+
     return np.linalg.solve(dntdn, rhs)
 
 
