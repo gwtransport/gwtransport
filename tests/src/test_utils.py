@@ -16,6 +16,7 @@ from gwtransport.utils import (
     linear_average,
     linear_interpolate,
     partial_isin,
+    solve_tikhonov,
     time_bin_overlap,
 )
 
@@ -1066,3 +1067,109 @@ def test_time_bin_overlap_boundary_cases():
     result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
     expected = np.array([[0.0, 1.0, 0.0, 0.0]])
     assert_array_almost_equal(result, expected)
+
+
+# =============================================================================
+# Tests for solve_tikhonov resolution diagnostics
+# =============================================================================
+
+
+def test_solve_tikhonov_resolution_well_determined():
+    """Well-determined system: fraction_data should be close to 1 everywhere."""
+    # Overdetermined 4x3 system with good conditioning
+    coeff = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 1]], dtype=float)
+    x_true = np.array([1.0, 2.0, 3.0])
+    rhs = coeff @ x_true
+    x_target = np.zeros(3)
+
+    x, fraction_data = solve_tikhonov(
+        coefficient_matrix=coeff,
+        rhs_vector=rhs,
+        x_target=x_target,
+        regularization_strength=1e-10,
+        return_resolution=True,
+    )
+
+    np.testing.assert_allclose(x, x_true, atol=1e-6)
+    np.testing.assert_allclose(fraction_data, 1.0, atol=1e-4)
+
+
+def test_solve_tikhonov_resolution_underdetermined():
+    """Underdetermined system: some fraction_data values should be < 1."""
+    # 2 equations, 4 unknowns
+    coeff = np.array([[1, 1, 0, 0], [0, 0, 1, 1]], dtype=float)
+    rhs = np.array([3.0, 7.0])
+    x_target = np.array([1.0, 2.0, 3.0, 4.0])
+
+    x, fraction_data = solve_tikhonov(
+        coefficient_matrix=coeff,
+        rhs_vector=rhs,
+        x_target=x_target,
+        regularization_strength=0.1,
+        return_resolution=True,
+    )
+
+    # fraction_data should be in [0, 1]
+    assert np.all(fraction_data >= -1e-10), f"fraction_data has values < 0: {fraction_data}"
+    assert np.all(fraction_data <= 1.0 + 1e-10), f"fraction_data has values > 1: {fraction_data}"
+    # Some elements should be pulled toward target (fraction_data < 1)
+    assert np.any(fraction_data < 0.99), "Expected some target-driven elements in underdetermined system"
+
+
+def test_solve_tikhonov_resolution_bounds():
+    """fraction_data should always be in [0, 1]."""
+    rng = np.random.default_rng(42)
+    coeff = rng.standard_normal((3, 6))
+    x_true = rng.standard_normal(6)
+    rhs = coeff @ x_true
+    x_target = rng.standard_normal(6)
+
+    for lam in [1e-12, 1e-6, 1e-2, 1.0, 100.0]:
+        _, fraction_data = solve_tikhonov(
+            coefficient_matrix=coeff,
+            rhs_vector=rhs,
+            x_target=x_target,
+            regularization_strength=lam,
+            return_resolution=True,
+        )
+        assert np.all(fraction_data >= -1e-10), f"λ={lam}: fraction_data has values < 0"
+        assert np.all(fraction_data <= 1.0 + 1e-10), f"λ={lam}: fraction_data has values > 1"
+
+
+def test_solve_tikhonov_resolution_nan_target():
+    """NaN entries in x_target should have fraction_data = 1.0."""
+    coeff = np.eye(3, dtype=float)
+    rhs = np.array([1.0, 2.0, 3.0])
+    x_target = np.array([0.0, np.nan, 0.0])
+
+    x, fraction_data = solve_tikhonov(
+        coefficient_matrix=coeff,
+        rhs_vector=rhs,
+        x_target=x_target,
+        regularization_strength=0.1,
+        return_resolution=True,
+    )
+
+    # Entry with NaN target is not regularized → fully data-driven
+    assert fraction_data[1] == pytest.approx(1.0), (
+        f"NaN target entry should have fraction_data=1.0, got {fraction_data[1]}"
+    )
+    # Other entries are regularized
+    assert fraction_data[0] < 1.0
+    assert fraction_data[2] < 1.0
+
+
+def test_solve_tikhonov_resolution_not_returned_by_default():
+    """Without return_resolution, only x is returned (not a tuple)."""
+    coeff = np.eye(3, dtype=float)
+    rhs = np.array([1.0, 2.0, 3.0])
+    x_target = np.zeros(3)
+
+    result = solve_tikhonov(
+        coefficient_matrix=coeff,
+        rhs_vector=rhs,
+        x_target=x_target,
+    )
+
+    assert isinstance(result, np.ndarray)
+    assert result.shape == (3,)

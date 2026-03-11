@@ -1196,7 +1196,8 @@ def solve_tikhonov(
     rhs_vector: npt.ArrayLike,
     x_target: npt.NDArray[np.floating],
     regularization_strength: float = 1e-10,
-) -> npt.NDArray[np.floating]:
+    return_resolution: bool = False,
+) -> npt.NDArray[np.floating] | tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
     """Solve a linear system with Tikhonov regularization toward a target.
 
     Minimizes ``||A x - b||² + λ ||x - x_target||²`` by solving the
@@ -1231,18 +1232,32 @@ def solve_tikhonov(
         A good starting value for noisy data is
         ``λ ≈ (noise_std / signal_amplitude)²``. For noiseless synthetic
         data, the default 1e-10 preserves machine precision.
+    return_resolution : bool, optional
+        If True, also return the per-element fraction of the solution that
+        comes from data (vs from the regularization target). Default is
+        False.
 
     Returns
     -------
-    ndarray
-        Solution vector of length n.
+    ndarray or tuple of ndarray
+        If ``return_resolution`` is False (default), returns the solution
+        vector of length n.
+
+        If ``return_resolution`` is True, returns ``(x, fraction_data)``
+        where ``fraction_data[j]`` is the diagonal of the model resolution
+        matrix ``R = (A^T A + λ D)^{-1} A^T A``:
+
+        - ``fraction_data[j] ≈ 1``: element *j* is data-driven
+        - ``fraction_data[j] ≈ 0``: element *j* is target-driven
+        - Non-regularized entries (NaN in ``x_target``):
+          ``fraction_data[j] = 1.0``
 
     See Also
     --------
     compute_reverse_target : Compute the regularization target from the
         forward matrix.
     solve_underdetermined_system : Alternative solver using nullspace
-        optimization (used by :mod:`gwtransport.deposition`).
+        optimization.
     """
     matrix = np.asarray(coefficient_matrix)
     rhs = np.asarray(rhs_vector)
@@ -1278,6 +1293,18 @@ def solve_tikhonov(
     augmented_rhs = np.concatenate([valid_rhs, reg_rhs])
 
     x, *_ = np.linalg.lstsq(augmented_matrix, augmented_rhs, rcond=None)
+
+    if return_resolution:
+        # Compute fraction_data from model resolution matrix diagonal:
+        # R = G^{-1} A^T A  where  G = A^T A + λ diag(d)
+        # fraction_data[j] = R[j,j] = 1 - λ d[j] G_inv[j,j]
+        d_reg = np.zeros(n_cin)
+        d_reg[target_indices] = 1.0
+        gram = valid_matrix.T @ valid_matrix + regularization_strength * np.diag(d_reg)
+        gram_inv_diag = np.diag(np.linalg.inv(gram))
+        fraction_data = 1.0 - regularization_strength * gram_inv_diag * d_reg
+        return x, fraction_data
+
     return x
 
 

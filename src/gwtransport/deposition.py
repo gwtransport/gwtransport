@@ -18,10 +18,14 @@ Available functions:
 
 - :func:`extraction_to_deposition` - Compute deposition rates from concentration changes
   (deconvolution). Given concentration change time series in extracted water [ng/m³], estimates
-  deposition rate history [ng/m²/day] that produced those changes. Solves underdetermined
-  inverse problem using nullspace regularization with configurable objectives ('squared_differences'
-  for smooth solutions, 'summed_differences' for sparse solutions). Handles NaN values in
-  concentration data by excluding corresponding time periods.
+  deposition rate history [ng/m²/day] that produced those changes. Uses Tikhonov regularization
+  toward a physically motivated target (transpose-and-normalize of the forward matrix). Handles
+  NaN values in concentration data by excluding corresponding time periods.
+
+- :func:`extraction_to_deposition_full` - Full-featured inverse solver exposing all options of
+  the nullspace-based solver (:func:`~gwtransport.utils.solve_underdetermined_system`). Allows
+  choosing between different nullspace objectives (``'squared_differences'``,
+  ``'summed_differences'``, or custom callables) and optimization methods.
 
 - :func:`compute_deposition_weights` - Internal helper function. Compute weight matrix relating
   deposition rates to concentration changes. Used by both deposition_to_extraction (forward) and
@@ -37,13 +41,15 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+from collections.abc import Callable
+
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
 from gwtransport.residence_time import residence_time
 from gwtransport.surfacearea import compute_average_heights
-from gwtransport.utils import linear_interpolate, solve_underdetermined_system
+from gwtransport.utils import compute_reverse_target, linear_interpolate, solve_tikhonov, solve_underdetermined_system
 
 
 def compute_deposition_weights(
@@ -231,15 +237,18 @@ def extraction_to_deposition(
     porosity: float,
     thickness: float,
     retardation_factor: float = 1.0,
-    nullspace_objective: str = "squared_differences",
+    regularization_strength: float = 1e-10,
 ) -> npt.NDArray[np.floating]:
-    """
-    Compute deposition rates from concentration changes (deconvolution).
+    """Compute deposition rates from concentration changes (deconvolution).
 
-    The solution for the deposition is fundamentally underdetermined, as multiple
-    deposition histories can lead to the same concentration. This function
-    computes a least-squares solution and then selects a specific solution from the
-    nullspace of the problem based on the provided objective.
+    Inverts the forward model by solving ``W @ dep = cout`` where ``W`` is
+    the weight matrix from :func:`compute_deposition_weights`. Uses Tikhonov
+    regularization to smoothly blend data fitting with a physically motivated
+    target (transpose-and-normalize of the forward matrix).
+
+    Well-determined modes (large singular values relative to ``sqrt(λ)``) are
+    dominated by the data; poorly-determined modes are pulled toward the
+    target.
 
     Parameters
     ----------
@@ -265,17 +274,14 @@ def extraction_to_deposition(
     retardation_factor : float, optional
         Compound retardation factor, by default 1.0. Values > 1.0 indicate
         slower transport due to sorption/interaction.
-    nullspace_objective : str or callable, optional
-        Objective function to minimize in the nullspace. Options:
+    regularization_strength : float, optional
+        Tikhonov regularization parameter λ. Controls the tradeoff between
+        fitting the data (``||W dep - cout||²``) and staying close to the
+        regularization target (``λ ||dep - dep_target||²``). The target is
+        the transpose-and-normalize of the forward matrix applied to cout.
 
-        * "squared_differences" : Minimize sum of squared differences between
-          adjacent deposition rates (default, provides smooth solutions)
-        * "summed_differences" : Minimize sum of absolute differences between
-          adjacent deposition rates (promotes sparse/piecewise constant solutions)
-        * callable : Custom objective function with signature
-          ``objective(coeffs, x_ls, nullspace_basis)``
-
-        Default is "squared_differences".
+        Larger values trust the target more (smoother, more biased); smaller
+        values trust the data more (noisier, less biased). Default is 1e-10.
 
     Returns
     -------
@@ -286,42 +292,33 @@ def extraction_to_deposition(
     Raises
     ------
     ValueError
-        If input dimensions are incompatible, if flow contains NaN values,
-        or if the optimization fails.
+        If input dimensions are incompatible or if flow contains NaN values.
 
     Notes
     -----
-    This function solves the inverse problem of determining deposition rates
-    from observed concentration changes. Since multiple deposition histories
-    can produce the same concentration pattern, regularization in the nullspace
-    is used to select a physically meaningful solution.
-
-    The algorithm:
-
-    1. Validates input dimensions and checks for NaN values in flow
-    2. Computes deposition weight matrix relating deposition to concentration
-    3. Identifies valid rows (no NaN in weights or concentration data)
-    4. Solves the underdetermined system using nullspace regularization
-    5. Returns the regularized deposition rate solution
+    The forward model is ``W @ dep = cout``, where the weight matrix ``W``
+    encodes the physical relationship between deposition rates and
+    concentrations. Unlike advection (where rows sum to ~1), deposition rows
+    sum to ``residence_time / (porosity * thickness)``. The system is
+    row-normalized before solving so that each observation contributes equally
+    and ``compute_reverse_target`` gives the correct scale for the
+    regularization target. Rows where the residence time cannot be computed
+    (spin-up period) contain NaN and are excluded automatically. NaN values
+    in ``cout`` are also excluded.
 
     Examples
     --------
-    Basic usage with default squared differences regularization:
-
     >>> import pandas as pd
     >>> import numpy as np
     >>> from gwtransport.deposition import extraction_to_deposition
     >>>
-    >>> # Create input data
     >>> dates = pd.date_range("2020-01-01", "2020-01-10", freq="D")
     >>> tedges = pd.date_range("2019-12-31 12:00", "2020-01-10 12:00", freq="D")
     >>> cout_tedges = pd.date_range("2020-01-03 12:00", "2020-01-12 12:00", freq="D")
     >>>
-    >>> # Flow and concentration data
     >>> flow = np.full(len(dates), 100.0)  # m3/day
     >>> cout = np.ones(len(cout_tedges) - 1) * 10.0  # ng/m3
     >>>
-    >>> # Compute deposition rates
     >>> dep = extraction_to_deposition(
     ...     flow=flow,
     ...     tedges=tedges,
@@ -336,56 +333,12 @@ def extraction_to_deposition(
     >>> print(f"Mean deposition rate: {np.nanmean(dep):.2f} ng/m2/day")
     Mean deposition rate: 6.00 ng/m2/day
 
-    With summed differences regularization for sparse solutions:
-
-    >>> dep_sparse = extraction_to_deposition(
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     cout=cout,
-    ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volume=500.0,
-    ...     porosity=0.3,
-    ...     thickness=10.0,
-    ...     nullspace_objective="summed_differences",
-    ... )
-
-    With custom regularization objective:
-
-    >>> def l2_norm_objective(coeffs, x_ls, nullspace_basis):
-    ...     x = x_ls + nullspace_basis @ coeffs
-    ...     return np.sum(x**2)  # Minimize L2 norm of solution
-    >>>
-    >>> dep_l2 = extraction_to_deposition(
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     cout=cout,
-    ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volume=500.0,
-    ...     porosity=0.3,
-    ...     thickness=10.0,
-    ...     nullspace_objective=l2_norm_objective,
-    ... )
-
-    Handling missing concentration data:
-
-    >>> # Concentration with some NaN values
-    >>> cout_nan = cout.copy()
-    >>> cout_nan[2:4] = np.nan  # Missing data for some time periods
-    >>>
-    >>> dep_robust = extraction_to_deposition(  # doctest: +SKIP
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     cout=cout_nan,
-    ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volume=500.0,
-    ...     porosity=0.3,
-    ...     thickness=10.0,
-    ... )
-
     See Also
     --------
     deposition_to_extraction : Forward operation (convolution)
+    extraction_to_deposition_full : Full solver with nullspace options
     gwtransport.advection.extraction_to_infiltration : For concentration transport without deposition
+    gwtransport.utils.solve_tikhonov : Solver used for inversion
     :ref:`concept-transport-equation` : Flow-weighted averaging approach
     """
     tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
@@ -424,12 +377,162 @@ def extraction_to_deposition(
         retardation_factor=retardation_factor,
     )
 
-    # Solve underdetermined system using utils function
+    n_dep = len(tedges) - 1
+
+    # Normalize weight matrix rows to sum to 1. The deposition weight matrix
+    # W has row sums equal to residence_time/(porosity*thickness), not 1 like
+    # advection. Normalizing makes each observation equally important and
+    # gives compute_reverse_target the correct scale for the target.
+    # NaN rows (spin-up) and NaN values in cout are excluded by solve_tikhonov.
+    valid_rows = ~np.isnan(deposition_weights).any(axis=1)
+    valid_weights = deposition_weights[valid_rows]
+    row_sums = valid_weights.sum(axis=1, keepdims=True)
+    col_active = np.sum(np.abs(valid_weights), axis=0) > 0
+
+    if not np.any(col_active):
+        return np.full(n_dep, np.nan)
+
+    # Build normalized system: W_norm @ dep = cout_norm
+    w_norm = valid_weights / row_sums
+    cout_norm = cout_values[valid_rows] / row_sums.ravel()
+
+    # Reconstruct full arrays with NaN for invalid rows
+    full_w_norm = np.full_like(deposition_weights, np.nan)
+    full_w_norm[valid_rows] = w_norm
+    full_cout_norm = np.full(len(cout_values), np.nan)
+    full_cout_norm[valid_rows] = cout_norm
+
+    x_target = compute_reverse_target(coeff_matrix=w_norm, rhs_vector=cout_norm)
+
+    dep_solved = solve_tikhonov(
+        coefficient_matrix=full_w_norm,
+        rhs_vector=full_cout_norm,
+        x_target=x_target,
+        regularization_strength=regularization_strength,
+    )
+
+    out = np.full(n_dep, np.nan)
+    out[col_active] = dep_solved[col_active]
+    return out
+
+
+def extraction_to_deposition_full(
+    *,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex | np.ndarray,
+    cout: npt.ArrayLike,
+    cout_tedges: pd.DatetimeIndex | np.ndarray,
+    aquifer_pore_volume: float,
+    porosity: float,
+    thickness: float,
+    retardation_factor: float = 1.0,
+    nullspace_objective: str | Callable = "squared_differences",
+    optimization_method: str = "BFGS",
+    rcond: float | None = None,
+    x_target: npt.NDArray[np.floating] | None = None,
+) -> npt.NDArray[np.floating]:
+    """Compute deposition rates from concentration changes using nullspace solver.
+
+    Full-featured inverse solver exposing all options of
+    :func:`~gwtransport.utils.solve_underdetermined_system`. For most use
+    cases, prefer :func:`extraction_to_deposition` which uses Tikhonov
+    regularization.
+
+    Parameters
+    ----------
+    flow : array-like
+        Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
+        Must not contain NaN values.
+    tedges : pandas.DatetimeIndex
+        Time bin edges for deposition and flow data. Length must equal
+        len(flow) + 1.
+    cout : array-like
+        Concentration changes in extracted water [ng/m3]. Length must equal
+        len(cout_tedges) - 1. May contain NaN values, which will be excluded
+        from the computation along with corresponding rows in the weight matrix.
+    cout_tedges : pandas.DatetimeIndex
+        Time bin edges for output concentration data. Length must equal
+        len(cout) + 1.
+    aquifer_pore_volume : float
+        Aquifer pore volume [m3].
+    porosity : float
+        Aquifer porosity [dimensionless].
+    thickness : float
+        Aquifer thickness [m].
+    retardation_factor : float, optional
+        Compound retardation factor, by default 1.0.
+    nullspace_objective : str or callable, optional
+        Objective function to minimize in the nullspace. Options:
+
+        * ``"squared_differences"`` : Minimize sum of squared differences
+          between adjacent deposition rates (default, smooth solutions).
+        * ``"summed_differences"`` : Minimize sum of absolute differences
+          (sparse/piecewise constant solutions).
+        * callable : Custom objective ``f(coeffs, x_ls, nullspace_basis)``.
+
+    optimization_method : str, optional
+        Scipy optimization method. Default is ``"BFGS"``.
+    rcond : float or None, optional
+        Cutoff for small singular values in the least-squares step.
+        Default is None (uses numpy default).
+    x_target : ndarray or None, optional
+        Optional target solution for the nullspace optimization.
+        Default is None.
+
+    Returns
+    -------
+    numpy.ndarray
+        Mean deposition rates [ng/m2/day] between tedges. Length equals
+        len(tedges) - 1.
+
+    See Also
+    --------
+    extraction_to_deposition : Recommended solver using Tikhonov regularization.
+    gwtransport.utils.solve_underdetermined_system : Underlying solver.
+    """
+    tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
+    cout_values, flow_values = np.asarray(cout), np.asarray(flow)
+
+    # Validate input dimensions and values
+    if len(cout_tedges) != len(cout_values) + 1:
+        msg = "cout_tedges must have one more element than cout"
+        raise ValueError(msg)
+    if len(tedges) != len(flow_values) + 1:
+        msg = "tedges must have one more element than flow"
+        raise ValueError(msg)
+    if np.any(np.isnan(flow_values)):
+        msg = "flow array cannot contain NaN values"
+        raise ValueError(msg)
+
+    # Validate physical parameters
+    if not 0 < porosity < 1:
+        msg = f"Porosity must be in (0, 1), got {porosity}"
+        raise ValueError(msg)
+    if thickness <= 0:
+        msg = f"Thickness must be positive, got {thickness}"
+        raise ValueError(msg)
+    if aquifer_pore_volume <= 0:
+        msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
+        raise ValueError(msg)
+
+    # Compute deposition weights
+    deposition_weights = compute_deposition_weights(
+        flow_values=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=aquifer_pore_volume,
+        porosity=porosity,
+        thickness=thickness,
+        retardation_factor=retardation_factor,
+    )
+
     return solve_underdetermined_system(
         coefficient_matrix=deposition_weights,
         rhs_vector=cout_values,
         nullspace_objective=nullspace_objective,
-        optimization_method="Nelder-Mead",
+        optimization_method=optimization_method,
+        rcond=rcond,
+        x_target=x_target,
     )
 
 

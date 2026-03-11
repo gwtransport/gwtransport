@@ -15,6 +15,7 @@ from gwtransport.deposition import (
     compute_deposition_weights,
     deposition_to_extraction,
     extraction_to_deposition,
+    extraction_to_deposition_full,
     spinup_duration,
 )
 from gwtransport.examples import generate_example_data, generate_example_deposition_timeseries
@@ -195,72 +196,63 @@ def test_exact_analytical_retardation_factor():
 
 def test_perfect_roundtrip_square_system():
     """
-    Test perfect roundtrip: deposition → concentration → deposition.
-    Uses square system where number of equations equals unknowns.
+    Test roundtrip: deposition → concentration → deposition.
+
+    Short time series with spin-up NaN rows creates a highly underdetermined
+    system (4 valid equations for 8 unknowns). Exact dep recovery is
+    impossible, but the mean should be preserved and the solution should
+    be reasonably correlated with the original.
     """
     dates = pd.date_range("2020-01-01", "2020-01-08", freq="D")  # 8 days
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     params = {
-        "aquifer_pore_volume": 400.0,  # Larger volume for better conditioning
+        "aquifer_pore_volume": 400.0,
         "porosity": 0.25,
         "thickness": 4.0,
         "retardation_factor": 1.0,
     }
 
-    # Original deposition pattern
     original_deposition = np.array([10.0, 20.0, 30.0, 25.0, 15.0, 35.0, 40.0, 30.0])
-    flow_values = np.full(len(dates), 100.0)  # Higher flow for better transport
+    flow_values = np.full(len(dates), 100.0)
+    cout_tedges = tedges[2:]
 
-    # Use later time window to avoid initialization issues
-    cout_tedges = tedges[2:]  # Start later for better conditioning
-
-    # Forward: deposition → concentration
     concentration = deposition_to_extraction(
         dep=original_deposition,
         flow=flow_values,
         tedges=tedges,
         cout_tedges=cout_tedges,
-        aquifer_pore_volume=params["aquifer_pore_volume"],
-        porosity=params["porosity"],
-        thickness=params["thickness"],
-        retardation_factor=params["retardation_factor"],
+        **params,
     )
 
-    # Only proceed if we got valid concentrations
-    valid_concentration = concentration[~np.isnan(concentration)]
-    if len(valid_concentration) >= 3:
-        # Backward: concentration → deposition
-        recovered_deposition = extraction_to_deposition(
-            flow=flow_values,
-            tedges=tedges,
-            cout=concentration,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volume=params["aquifer_pore_volume"],
-            porosity=params["porosity"],
-            thickness=params["thickness"],
-            retardation_factor=params["retardation_factor"],
-        )
+    recovered_deposition = extraction_to_deposition(
+        flow=flow_values,
+        tedges=tedges,
+        cout=concentration,
+        cout_tedges=cout_tedges,
+        **params,
+    )
 
-        # Check roundtrip consistency
-        valid_original = original_deposition[~np.isnan(original_deposition)]
-        valid_recovered = recovered_deposition[~np.isnan(recovered_deposition)]
+    valid = ~np.isnan(recovered_deposition)
+    assert valid.sum() == len(original_deposition)
 
-        min_len = min(len(valid_original), len(valid_recovered))
-        if min_len >= 3:
-            # For underdetermined systems, expect reasonable recovery, not perfect
-            mean_original = np.mean(valid_original)
-            mean_recovered = np.mean(valid_recovered)
-            rel_error = abs(mean_recovered - mean_original) / max(abs(mean_original), 1e-12)
-            assert rel_error < 0.5, (
-                f"Roundtrip should preserve overall magnitude: {mean_original:.2f} → {mean_recovered:.2f}"
-            )
+    # Mean should be well-preserved even for underdetermined systems
+    np.testing.assert_allclose(
+        np.mean(recovered_deposition[valid]),
+        np.mean(original_deposition[valid]),
+        rtol=0.01,
+        err_msg="Roundtrip should preserve mean deposition",
+    )
+
+    # Correlation should be positive (solution tracks the trend)
+    correlation = np.corrcoef(recovered_deposition[valid], original_deposition[valid])[0, 1]
+    assert correlation > 0.5, f"Expected positive correlation, got {correlation:.4f}"
 
 
 def test_perfect_roundtrip_overdetermined_system():
     """
     Test roundtrip with overdetermined system (more equations than unknowns).
-    Should recover smooth solution due to regularization.
+    Constant deposition should be recovered near-exactly.
     """
     dates = pd.date_range("2020-01-01", "2020-01-08", freq="D")  # 8 days → 8 unknowns
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -293,28 +285,28 @@ def test_perfect_roundtrip_overdetermined_system():
 
     # Only proceed if we got valid concentrations
     valid_concentration = concentration[~np.isnan(concentration)]
-    if len(valid_concentration) >= 2:
-        # Backward: concentration → deposition
-        recovered_deposition = extraction_to_deposition(
-            flow=flow_values,
-            tedges=tedges,
-            cout=concentration,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volume=params["aquifer_pore_volume"],
-            porosity=params["porosity"],
-            thickness=params["thickness"],
-            retardation_factor=params["retardation_factor"],
-        )
+    assert len(valid_concentration) >= 2, "Must have at least 2 valid concentrations"
 
-        # For constant input, should recover reasonably smooth output
-        valid_recovered = recovered_deposition[~np.isnan(recovered_deposition)]
-        if len(valid_recovered) >= 2:
-            variation = np.std(valid_recovered) / np.mean(valid_recovered)
-            assert variation < 0.5, f"Should recover reasonably smooth solution, got variation {variation:.3f}"
+    # Backward: concentration → deposition
+    recovered_deposition = extraction_to_deposition(
+        flow=flow_values,
+        tedges=tedges,
+        cout=concentration,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=params["aquifer_pore_volume"],
+        porosity=params["porosity"],
+        thickness=params["thickness"],
+        retardation_factor=params["retardation_factor"],
+    )
 
-            mean_recovered = np.mean(valid_recovered)
-            rel_error = abs(mean_recovered - 25.0) / 25.0
-            assert rel_error < 0.5, f"Should recover approximately correct magnitude: {mean_recovered:.2f} vs 25.0"
+    # For constant input, should recover near-exactly
+    valid_mask = ~np.isnan(recovered_deposition)
+    np.testing.assert_allclose(
+        recovered_deposition[valid_mask],
+        original_deposition[valid_mask],
+        rtol=1e-6,
+        err_msg="Constant deposition should be recovered near-exactly",
+    )
 
 
 def test_zero_deposition_zero_concentration():
@@ -576,6 +568,180 @@ def test_regularization_objectives():
     # Should be finite and reasonable
     assert np.all(np.isfinite(result)), "Solution should be finite"
     assert np.max(np.abs(result)) < 100, "Solution should be reasonable magnitude"
+
+
+def test_extraction_to_deposition_full_default():
+    """Test extraction_to_deposition_full with default nullspace objective."""
+    dates = pd.date_range("2020-01-01", "2020-01-08", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    params = {
+        "aquifer_pore_volume": 400.0,
+        "porosity": 0.25,
+        "thickness": 4.0,
+        "retardation_factor": 1.0,
+    }
+
+    original_deposition = np.full(len(dates), 25.0)
+    flow_values = np.full(len(dates), 100.0)
+    cout_tedges = tedges[3:]
+
+    concentration = deposition_to_extraction(
+        dep=original_deposition,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        **params,
+    )
+
+    recovered = extraction_to_deposition_full(
+        flow=flow_values,
+        tedges=tedges,
+        cout=concentration,
+        cout_tedges=cout_tedges,
+        **params,
+    )
+
+    assert recovered.shape == original_deposition.shape
+    assert np.all(np.isfinite(recovered))
+
+
+def test_extraction_to_deposition_full_objectives():
+    """Test extraction_to_deposition_full with different nullspace objectives."""
+    dates = pd.date_range("2020-01-01", "2020-01-06", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    params = {
+        "aquifer_pore_volume": 300.0,
+        "porosity": 0.25,
+        "thickness": 4.0,
+        "retardation_factor": 1.0,
+    }
+
+    original_deposition = np.full(len(dates), 20.0)
+    flow_values = np.full(len(dates), 100.0)
+    cout_tedges = tedges[2:]
+
+    concentration = deposition_to_extraction(
+        dep=original_deposition,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        **params,
+    )
+
+    for objective, method in [("squared_differences", "BFGS"), ("summed_differences", "Nelder-Mead")]:
+        recovered = extraction_to_deposition_full(
+            flow=flow_values,
+            tedges=tedges,
+            cout=concentration,
+            cout_tedges=cout_tedges,
+            nullspace_objective=objective,
+            optimization_method=method,
+            **params,
+        )
+        assert np.all(np.isfinite(recovered)), f"Failed for objective={objective}"
+
+
+def test_extraction_to_deposition_full_with_rcond():
+    """Test extraction_to_deposition_full with rcond parameter."""
+    dates = pd.date_range("2020-01-01", "2020-01-06", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    params = {
+        "aquifer_pore_volume": 300.0,
+        "porosity": 0.25,
+        "thickness": 4.0,
+        "retardation_factor": 1.0,
+    }
+
+    original_deposition = np.full(len(dates), 20.0)
+    flow_values = np.full(len(dates), 100.0)
+    cout_tedges = tedges[2:]
+
+    concentration = deposition_to_extraction(
+        dep=original_deposition,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        **params,
+    )
+
+    recovered = extraction_to_deposition_full(
+        flow=flow_values,
+        tedges=tedges,
+        cout=concentration,
+        cout_tedges=cout_tedges,
+        rcond=1e-10,
+        **params,
+    )
+
+    assert recovered.shape == original_deposition.shape
+    assert np.all(np.isfinite(recovered))
+
+
+def test_roundtrip_varying_deposition():
+    """Test roundtrip with varying deposition pattern using Tikhonov solver.
+
+    Uses a longer time series (32 days) so that spin-up NaN rows are a
+    small fraction and the system is nearly square. Verifies per-element
+    recovery with a tight tolerance.
+    """
+    dates = pd.date_range("2020-01-01", "2020-02-01", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    params = {
+        "aquifer_pore_volume": 300.0,
+        "porosity": 0.25,
+        "thickness": 4.0,
+        "retardation_factor": 1.0,
+    }
+
+    # Smoothly varying deposition (sinusoidal)
+    t = np.arange(len(dates), dtype=float)
+    original_deposition = 20.0 + 10.0 * np.sin(2 * np.pi * t / len(dates))
+    flow_values = np.full(len(dates), 100.0)
+
+    cout_tedges = tedges  # Same grid → near-square system
+
+    concentration = deposition_to_extraction(
+        dep=original_deposition,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        **params,
+    )
+
+    recovered = extraction_to_deposition(
+        flow=flow_values,
+        tedges=tedges,
+        cout=concentration,
+        cout_tedges=cout_tedges,
+        **params,
+    )
+
+    valid = ~np.isnan(recovered)
+    assert valid.sum() == len(original_deposition)
+
+    # Per-element recovery: max relative error < 5%
+    np.testing.assert_allclose(
+        recovered[valid],
+        original_deposition[valid],
+        rtol=0.05,
+        err_msg="Varying deposition roundtrip should recover per-element values",
+    )
+
+    # Mean should be very well preserved
+    np.testing.assert_allclose(
+        np.mean(recovered[valid]),
+        np.mean(original_deposition[valid]),
+        rtol=1e-4,
+        err_msg="Roundtrip should preserve mean deposition",
+    )
+
+    # Correlation should be very high
+    correlation = np.corrcoef(recovered[valid], original_deposition[valid])[0, 1]
+    assert correlation > 0.999, f"Expected high correlation, got {correlation:.6f}"
 
 
 def test_extraction_to_deposition_sparse_weekly_sampling():
