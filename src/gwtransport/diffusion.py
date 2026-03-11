@@ -39,6 +39,7 @@ from numpy.typing import NDArray
 from scipy import special
 
 from gwtransport.residence_time import residence_time, residence_time_mean
+from gwtransport.utils import compute_reverse_target, solve_underdetermined_system
 
 # Numerical tolerance for coefficient sum to determine valid output bins
 EPSILON_COEFF_SUM = 1e-10
@@ -481,6 +482,158 @@ def _erf_mean_space_time(xedges, tedges, diffusivity, *, asymptotic_cutoff_sigma
     return out
 
 
+def _infiltration_to_extraction_coeff_matrix(
+    *,
+    flow: npt.NDArray[np.floating],
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    aquifer_pore_volumes: npt.NDArray[np.floating],
+    streamline_length: npt.NDArray[np.floating],
+    molecular_diffusivity: npt.NDArray[np.floating],
+    longitudinal_dispersivity: npt.NDArray[np.floating],
+    retardation_factor: float,
+    asymptotic_cutoff_sigma: float | None,
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool_]]:
+    """Build the forward coefficient matrix for diffusion transport.
+
+    Constructs the matrix W such that ``cout = W @ cin``, accounting for
+    advection and longitudinal dispersion. NaN entries in the raw coefficient
+    matrix are replaced with zero.
+
+    Parameters
+    ----------
+    flow : ndarray
+        Flow rate of water [m3/day]. Already validated.
+    tedges : DatetimeIndex
+        Cin/flow time edges (not yet extended for spin-up).
+    cout_tedges : DatetimeIndex
+        Cout time edges.
+    aquifer_pore_volumes : ndarray
+        Pore volumes [m3]. Already validated.
+    streamline_length : ndarray
+        Travel distances [m]. Already validated.
+    molecular_diffusivity : ndarray
+        Molecular diffusion coefficients [m2/day]. Already broadcasted.
+    longitudinal_dispersivity : ndarray
+        Longitudinal dispersivities [m]. Already broadcasted.
+    retardation_factor : float
+        Retardation factor.
+    asymptotic_cutoff_sigma : float or None
+        Erf cutoff threshold.
+
+    Returns
+    -------
+    coeff_matrix : ndarray
+        Filled coefficient matrix of shape (n_cout, n_cin). NaN replaced
+        with zero.
+    valid_cout_bins : ndarray
+        Boolean mask of shape (n_cout,) indicating valid output bins.
+    """
+    # Extend tedges for spin up
+    tedges = pd.DatetimeIndex([
+        tedges[0] - pd.Timedelta("36500D"),
+        *list(tedges[1:-1]),
+        tedges[-1] + pd.Timedelta("36500D"),
+    ])
+
+    # Compute the cumulative flow at tedges
+    infiltration_volume = flow * (np.diff(tedges) / pd.Timedelta("1D"))  # m3
+    cumulative_volume_at_cin_tedges = np.concatenate(([0], np.cumsum(infiltration_volume)))
+
+    # Compute the cumulative flow at cout_tedges
+    cumulative_volume_at_cout_tedges = np.interp(cout_tedges, tedges, cumulative_volume_at_cin_tedges)
+
+    rt_edges_2d = residence_time(
+        flow=flow,
+        flow_tedges=tedges,
+        index=tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=retardation_factor,
+        direction="infiltration_to_extraction",
+    )
+
+    # Compute residence time at cout_tedges to identify valid output bins
+    # RT is NaN for cout_tedges beyond the input data range
+    rt_at_cout_tedges = residence_time(
+        flow=flow,
+        flow_tedges=tedges,
+        index=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=retardation_factor,
+        direction="extraction_to_infiltration",
+    )
+    # Output bin i is valid if both cout_tedges[i] and cout_tedges[i+1] have valid RT for all pore volumes
+    valid_cout_bins = ~np.any(np.isnan(rt_at_cout_tedges[:, :-1]) | np.isnan(rt_at_cout_tedges[:, 1:]), axis=0)
+
+    # Compute mean residence time per (pore_volume, cout_bin) for velocity calculation
+    rt_mean_2d = residence_time_mean(
+        flow=flow,
+        flow_tedges=tedges,
+        tedges_out=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        direction="extraction_to_infiltration",
+        retardation_factor=retardation_factor,
+    )
+
+    # Compute velocity: v = L / tau_mean
+    valid_rt = np.isfinite(rt_mean_2d) & (rt_mean_2d > 0)
+    velocity_2d = np.where(valid_rt, streamline_length[:, None] / rt_mean_2d, 0.0)
+
+    # Compute D_L = D_m + alpha_L * v
+    diffusivity_2d = np.where(
+        valid_rt,
+        molecular_diffusivity[:, None] + longitudinal_dispersivity[:, None] * velocity_2d,
+        molecular_diffusivity[:, None],
+    )
+
+    # Initialize coefficient matrix accumulator
+    n_cout_bins = len(cout_tedges) - 1
+    n_cin_bins = len(flow)
+    n_cin_edges = len(tedges)
+    accumulated_coeff = np.zeros((n_cout_bins, n_cin_bins))
+
+    # Determine when infiltration has occurred: cout_tedge must be >= tedge (infiltration time)
+    isactive = cout_tedges.to_numpy()[:, None] >= tedges.to_numpy()[None, :]
+
+    # Loop over each pore volume
+    for i_pv in range(len(aquifer_pore_volumes)):
+        delta_volume = (
+            cumulative_volume_at_cout_tedges[:, None]
+            - cumulative_volume_at_cin_tedges[None, :]
+            - (retardation_factor * aquifer_pore_volumes[i_pv])
+        )
+        delta_volume[~isactive] = np.nan
+
+        step_widths = delta_volume / (retardation_factor * aquifer_pore_volumes[i_pv]) * streamline_length[i_pv]
+
+        time_active = (cout_tedges.to_numpy()[:, None] - tedges.to_numpy()[None, :]) / pd.to_timedelta(1, unit="D")
+        time_active[~isactive] = np.nan
+        time_active = np.minimum(time_active, rt_edges_2d[[i_pv]])
+
+        response = np.zeros((n_cout_bins, n_cin_edges))
+        diff_pv = diffusivity_2d[i_pv, :]
+
+        for j in range(n_cin_edges):
+            xedges_j = step_widths[:, j]
+            tedges_j = time_active[:, j]
+            response[:, j] = _erf_mean_space_time(
+                xedges_j, tedges_j, diff_pv, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
+            )
+
+        frac = 0.5 * (1 + response)
+        frac_start = frac[:, :-1]
+        frac_end = frac[:, 1:]
+        frac_end_filled = np.where(np.isnan(frac_end) & ~np.isnan(frac_start), 0.0, frac_end)
+        coeff = frac_start - frac_end_filled
+
+        accumulated_coeff += coeff
+
+    coeff_matrix = accumulated_coeff / len(aquifer_pore_volumes)
+    coeff_matrix_filled = np.nan_to_num(coeff_matrix, nan=0.0)
+
+    return coeff_matrix_filled, valid_cout_bins
+
+
 def infiltration_to_extraction(
     *,
     cin: npt.ArrayLike,
@@ -740,143 +893,25 @@ def infiltration_to_extraction(
         )
         warnings.warn(msg, UserWarning, stacklevel=2)
 
-    # Extend tedges for spin up
-    tedges = pd.DatetimeIndex([
-        tedges[0] - pd.Timedelta("36500D"),
-        *list(tedges[1:-1]),
-        tedges[-1] + pd.Timedelta("36500D"),
-    ])
-
-    # Compute the cumulative flow at tedges
-    infiltration_volume = flow * (np.diff(tedges) / pd.Timedelta("1D"))  # m3
-    cumulative_volume_at_cin_tedges = np.concatenate(([0], np.cumsum(infiltration_volume)))
-
-    # Compute the cumulative flow at cout_tedges
-    cumulative_volume_at_cout_tedges = np.interp(cout_tedges, tedges, cumulative_volume_at_cin_tedges)
-
-    rt_edges_2d = residence_time(
+    coeff_matrix, valid_cout_bins = _infiltration_to_extraction_coeff_matrix(
         flow=flow,
-        flow_tedges=tedges,
-        index=tedges,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
-        direction="infiltration_to_extraction",
+        asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
     )
-
-    # Compute residence time at cout_tedges to identify valid output bins
-    # RT is NaN for cout_tedges beyond the input data range
-    rt_at_cout_tedges = residence_time(
-        flow=flow,
-        flow_tedges=tedges,
-        index=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=retardation_factor,
-        direction="extraction_to_infiltration",
-    )
-    # Output bin i is valid if both cout_tedges[i] and cout_tedges[i+1] have valid RT for all pore volumes
-    # Check if any pore volume has NaN RT at the bin edges
-    valid_cout_bins = ~np.any(np.isnan(rt_at_cout_tedges[:, :-1]) | np.isnan(rt_at_cout_tedges[:, 1:]), axis=0)
-
-    # Compute mean residence time per (pore_volume, cout_bin) for velocity calculation
-    # Shape: (n_pore_volumes, n_cout_bins)
-    rt_mean_2d = residence_time_mean(
-        flow=flow,
-        flow_tedges=tedges,
-        tedges_out=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        direction="extraction_to_infiltration",
-        retardation_factor=retardation_factor,
-    )
-
-    # Compute velocity: v = L / tau_mean
-    # Shape: (n_pore_volumes, n_cout_bins)
-    # Use explicit validity handling instead of error suppression
-    valid_rt = np.isfinite(rt_mean_2d) & (rt_mean_2d > 0)
-    velocity_2d = np.where(valid_rt, streamline_length[:, None] / rt_mean_2d, 0.0)
-
-    # Compute D_L = D_m + alpha_L * v
-    # Shape: (n_pore_volumes, n_cout_bins)
-    # Fall back to molecular diffusivity only where RT is invalid (spinup period)
-    diffusivity_2d = np.where(
-        valid_rt,
-        molecular_diffusivity[:, None] + longitudinal_dispersivity[:, None] * velocity_2d,
-        molecular_diffusivity[:, None],
-    )
-
-    # Initialize coefficient matrix accumulator
-    # Shape: (n_cout_bins, n_cin_bins) - each row represents contributions to one output bin
-    n_cout_bins = len(cout_tedges) - 1
-    n_cin_bins = len(cin)
-    n_cin_edges = len(tedges)
-    accumulated_coeff = np.zeros((n_cout_bins, n_cin_bins))
-
-    # Determine when infiltration has occurred: cout_tedge must be >= tedge (infiltration time)
-    isactive = cout_tedges.to_numpy()[:, None] >= tedges.to_numpy()[None, :]
-
-    # Loop over each pore volume
-    for i_pv in range(len(aquifer_pore_volumes)):
-        # Compute volume relationship for the erf x-coordinate:
-        # delta_volume = volume extracted at cout_tedge - volume at infiltration - R*APV
-        # This represents how far past the pore volume the concentration front has traveled
-        delta_volume = (
-            cumulative_volume_at_cout_tedges[:, None]
-            - cumulative_volume_at_cin_tedges[None, :]
-            - (retardation_factor * aquifer_pore_volumes[i_pv])
-        )
-        delta_volume[~isactive] = np.nan
-
-        # Convert volume to spatial distance x (erf coordinate)
-        # x = delta_volume / (R * APV) * L
-        step_widths = delta_volume / (retardation_factor * aquifer_pore_volumes[i_pv]) * streamline_length[i_pv]
-
-        # Compute diffusion time: time since infiltration, limited by residence time
-        time_active = (cout_tedges.to_numpy()[:, None] - tedges.to_numpy()[None, :]) / pd.to_timedelta(1, unit="D")
-        time_active[~isactive] = np.nan
-        time_active = np.minimum(time_active, rt_edges_2d[[i_pv]])
-
-        # Compute erf response: response[i_cout_bin, j_cin_edge] = mean erf for cin edge j at cout bin i
-        response = np.zeros((n_cout_bins, n_cin_edges))
-
-        # Get diffusivity for this pore volume across all cout bins
-        diff_pv = diffusivity_2d[i_pv, :]  # shape (n_cout_bins,)
-
-        for j in range(n_cin_edges):
-            # For each infiltration edge, compute erf response at all extraction bins
-            xedges_j = step_widths[:, j]  # shape (n_cout_edges,)
-            tedges_j = time_active[:, j]  # shape (n_cout_edges,)
-            response[:, j] = _erf_mean_space_time(
-                xedges_j, tedges_j, diff_pv, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
-            )
-
-        # Convert erf response [-1, 1] to breakthrough fraction [0, 1]
-        frac = 0.5 * (1 + response)  # shape (n_cout_bins, n_cin_edges)
-
-        # Coefficient for bin j: coeff[i, j] = frac[i, j] - frac[i, j+1]
-        # This is the fraction of cin[j] that arrives in cout[i]
-        frac_start = frac[:, :-1]
-        frac_end = frac[:, 1:]
-
-        # Handle NaN: if frac_end is NaN but frac_start is valid, use 0.0 for frac_end
-        # (the concentration step hasn't fully passed through yet)
-        frac_end_filled = np.where(np.isnan(frac_end) & ~np.isnan(frac_start), 0.0, frac_end)
-        coeff = frac_start - frac_end_filled  # shape (n_cout_bins, n_cin_bins)
-
-        accumulated_coeff += coeff
-
-    # Average across pore volumes
-    coeff_matrix = accumulated_coeff / len(aquifer_pore_volumes)
-
-    # Replace NaN with 0 for matrix multiplication
-    # NaN indicates infiltration hasn't occurred yet for that (cout, cin) pair
-    coeff_matrix_filled = np.nan_to_num(coeff_matrix, nan=0.0)
 
     # Matrix multiply: cout = W @ cin
-    cout = coeff_matrix_filled @ cin
+    cout = coeff_matrix @ cin
 
     # Mark output bins as invalid where no valid contributions exist:
     # 1. Sum of coefficients near zero (no cin has broken through yet - spinup)
     # 2. Output bin extends beyond input data range (from valid_cout_bins)
-    total_coeff = np.sum(coeff_matrix_filled, axis=1)
+    total_coeff = np.sum(coeff_matrix, axis=1)
     no_valid_contribution = (total_coeff < EPSILON_COEFF_SUM) | ~valid_cout_bins
     cout[no_valid_contribution] = np.nan
 
@@ -888,7 +923,7 @@ def extraction_to_infiltration(
     cout: npt.ArrayLike,
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
-    cin_tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
     streamline_length: npt.ArrayLike,
     molecular_diffusivity: npt.ArrayLike,
@@ -896,42 +931,35 @@ def extraction_to_infiltration(
     retardation_factor: float = 1.0,
     suppress_dispersion_warning: bool = False,
     asymptotic_cutoff_sigma: float | None = 3.0,
+    rcond: float | None = None,
+    nullspace_objective: str = "reverse_matrix",
 ) -> npt.NDArray[np.floating]:
     """
     Compute infiltration concentration from extracted water (deconvolution with dispersion).
 
-    This function implements the inverse of infiltration_to_extraction, reconstructing
-    the original infiltration concentration from the extracted water concentration.
-    It explicitly constructs the weights matrix (rather than inverting the forward matrix)
-    to ensure numerical stability and proper handling of dispersion effects.
+    Inverts the forward transport model by building the forward coefficient
+    matrix ``W_forward`` from :func:`infiltration_to_extraction` and solving
+    ``W_forward @ cin = cout`` via truncated SVD with nullspace regularization.
 
-    The physical model assumes:
-    1. Water is extracted with concentration cout at time t_out
-    2. Water traveled distance L through aquifer with residence time tau = V_pore / Q
-    3. During transport, longitudinal dispersion caused spreading
-    4. At infiltration, the concentration is reconstructed from the diffused signal
-
-    The longitudinal dispersion coefficient D_L is computed internally as:
-
-        D_L = D_m + alpha_L * v
-
-    where v = L / tau_mean is the mean pore velocity computed from the mean
-    residence time for each (pore_volume, cin_bin) combination.
+    The default ``"reverse_matrix"`` objective combines pseudoinverse
+    exactness for well-determined modes with a physically motivated
+    regularization target (transpose-and-normalize of the forward matrix)
+    for undetermined modes.
 
     Parameters
     ----------
     cout : array-like
         Concentration of the compound in extracted water [concentration units].
-        Length must match the number of time bins defined by tedges.
+        Length must match the number of time bins defined by cout_tedges.
     flow : array-like
         Flow rate of water in the aquifer [m3/day].
-        Length must match cout and the number of time bins defined by tedges.
+        Length must match the number of time bins defined by tedges.
     tedges : pandas.DatetimeIndex
-        Time edges defining bins for both cout and flow data (extraction times).
-        Has length of len(cout) + 1.
-    cin_tedges : pandas.DatetimeIndex
-        Time edges for output infiltration data bins. Has length of desired output + 1.
-        The output concentration is averaged over each bin.
+        Time edges defining bins for cin (output) and flow data.
+        Has length of len(flow) + 1. Output cin has length len(tedges) - 1.
+    cout_tedges : pandas.DatetimeIndex
+        Time edges for cout data bins. Has length of len(cout) + 1.
+        Can have different time alignment and resolution than tedges.
     aquifer_pore_volumes : array-like
         Array of aquifer pore volumes [m3] representing the distribution
         of flow paths. Each pore volume determines the residence time for
@@ -954,17 +982,21 @@ def extraction_to_infiltration(
         If True, suppress the warning when using multiple pore volumes with
         non-zero longitudinal_dispersivity. Default is False.
     asymptotic_cutoff_sigma : float or None, optional
-        Performance optimization. Cells where the erf argument magnitude exceeds
-        this threshold are assigned asymptotic values (±1) instead of computing
-        the expensive integral. Since erf(3) ≈ 0.99998, the default of 3.0
-        provides excellent accuracy with significant speedup. Set to None to
-        disable the optimization. Default is 3.0.
+        Performance optimization for the forward matrix construction.
+        Default is 3.0.
+    rcond : float or None, optional
+        Cutoff ratio for small singular values in the SVD truncation.
+        Default is None (machine precision default).
+    nullspace_objective : str, optional
+        Objective for nullspace optimization. See
+        :func:`gwtransport.advection.extraction_to_infiltration` for available
+        options. Default is ``"reverse_matrix"``.
 
     Returns
     -------
     numpy.ndarray
         Bin-averaged concentration in the infiltrating water. Same units as cout.
-        Length equals len(cin_tedges) - 1. NaN values indicate time periods
+        Length equals len(tedges) - 1. NaN values indicate time periods
         with no valid contributions from the extraction data.
 
     Raises
@@ -986,29 +1018,10 @@ def extraction_to_infiltration(
 
     Notes
     -----
-    The algorithm constructs a coefficient matrix W where cin = W @ cout:
-
-    1. For each pore volume, compute the deconvolution contribution:
-       - extraction_times: when water infiltrated at cin_tedges will be extracted
-       - delta_volume: volume between infiltration event and extraction point
-       - step_widths: convert volume to spatial distance x (erf coordinate)
-       - time_active: diffusion time, limited by residence time
-
-    2. For each extraction time edge, compute the erf response at all
-       infiltration time edges using analytical space-time averaging.
-
-    3. Convert erf response to breakthrough fraction: frac = 0.5 * (1 + erf)
-
-    4. Coefficient for bin: coeff[i,j] = frac_start - frac_end
-       This represents the fraction of cout[j] that originated from cin[i].
-
-    5. Average coefficients across all pore volumes, using nan_to_num to
-       prevent NaN propagation when different pore volumes have different
-       valid time ranges.
-
-    The error function solution assumes an initial step function that diffuses
-    over time. The position coordinate x represents the distance from the
-    concentration front to the observation point.
+    The algorithm builds the forward coefficient matrix ``W_forward`` (same as
+    used by :func:`infiltration_to_extraction`) and solves ``W_forward @ cin = cout``
+    using :func:`gwtransport.utils.solve_underdetermined_system`. This ensures
+    mathematical consistency between forward and inverse operations.
 
     Examples
     --------
@@ -1018,12 +1031,12 @@ def extraction_to_infiltration(
     >>> import numpy as np
     >>> from gwtransport.diffusion import extraction_to_infiltration
     >>>
-    >>> # Create time edges for extraction data
-    >>> tedges = pd.date_range(start="2020-01-05", end="2020-01-25", freq="D")
-    >>> cin_tedges = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
+    >>> # Create time edges: tedges for cin/flow, cout_tedges for cout
+    >>> tedges = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
+    >>> cout_tedges = pd.date_range(start="2020-01-05", end="2020-01-25", freq="D")
     >>>
     >>> # Extracted concentration and constant flow
-    >>> cout = np.zeros(len(tedges) - 1)
+    >>> cout = np.zeros(len(cout_tedges) - 1)
     >>> cout[5:10] = 1.0  # Observed pulse at extraction
     >>> flow = np.ones(len(tedges) - 1) * 100.0  # 100 m3/day
     >>>
@@ -1036,7 +1049,7 @@ def extraction_to_infiltration(
     ...     cout=cout,
     ...     flow=flow,
     ...     tedges=tedges,
-    ...     cin_tedges=cin_tedges,
+    ...     cout_tedges=cout_tedges,
     ...     aquifer_pore_volumes=aquifer_pore_volumes,
     ...     streamline_length=streamline_length,
     ...     molecular_diffusivity=1e-4,
@@ -1044,8 +1057,8 @@ def extraction_to_infiltration(
     ... )
     """
     # Convert to pandas DatetimeIndex if needed
-    cin_tedges = pd.DatetimeIndex(cin_tedges)
     tedges = pd.DatetimeIndex(tedges)
+    cout_tedges = pd.DatetimeIndex(cout_tedges)
 
     # Convert to arrays
     cout = np.asarray(cout, dtype=float)
@@ -1065,11 +1078,11 @@ def extraction_to_infiltration(
         longitudinal_dispersivity = np.broadcast_to(longitudinal_dispersivity, (n_pore_volumes,)).copy()
 
     # Input validation
-    if len(tedges) != len(cout) + 1:
-        msg = "tedges must have one more element than cout"
-        raise ValueError(msg)
     if len(tedges) != len(flow) + 1:
         msg = "tedges must have one more element than flow"
+        raise ValueError(msg)
+    if len(cout_tedges) != len(cout) + 1:
+        msg = "cout_tedges must have one more element than cout"
         raise ValueError(msg)
     if len(aquifer_pore_volumes) != len(streamline_length):
         msg = "aquifer_pore_volumes and streamline_length must have the same length"
@@ -1099,9 +1112,7 @@ def extraction_to_infiltration(
         msg = "streamline_length must be positive"
         raise ValueError(msg)
 
-    # Check for conflicting approaches: multiple pore volumes with longitudinal dispersivity
-    # Both represent the same physical phenomenon (velocity heterogeneity) at different scales.
-    # See concept-dispersion-scales in the documentation for details.
+    # Check for conflicting approaches
     if n_pore_volumes > 1 and np.any(longitudinal_dispersivity > 0) and not suppress_dispersion_warning:
         msg = (
             "Using multiple aquifer_pore_volumes with non-zero longitudinal_dispersivity. "
@@ -1119,146 +1130,50 @@ def extraction_to_infiltration(
         )
         warnings.warn(msg, UserWarning, stacklevel=2)
 
-    # Extend tedges for spin up (same as forward function)
-    tedges = pd.DatetimeIndex([
-        tedges[0] - pd.Timedelta("36500D"),
-        *list(tedges[1:-1]),
-        tedges[-1] + pd.Timedelta("36500D"),
-    ])
+    n_cin = len(tedges) - 1
 
-    # Compute the cumulative flow at tedges (extraction times)
-    extraction_volume = flow * (np.diff(tedges) / pd.Timedelta("1D"))  # m3
-    cumulative_volume_at_cout_tedges = np.concatenate(([0], np.cumsum(extraction_volume)))
-
-    # Compute the cumulative flow at cin_tedges (interpolated)
-    cumulative_volume_at_cin_tedges = np.interp(cin_tedges, tedges, cumulative_volume_at_cout_tedges)
-
-    # Compute residence times at cin_tedges using forward direction
-    # (from infiltration perspective: when will water infiltrated at cin_tedges be extracted?)
-    rt_edges_2d = residence_time(
+    # Build forward weight matrix: W_forward @ cin = cout
+    w_forward, valid_cout_bins = _infiltration_to_extraction_coeff_matrix(
         flow=flow,
-        flow_tedges=tedges,
-        index=cin_tedges,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
-        direction="infiltration_to_extraction",
+        asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
     )
 
-    # Determine valid cin bins immediately (reuse rt_edges_2d, no duplicate computation)
-    # A cin bin is valid if both its edges have finite residence times across all pore volumes
-    valid_cin_bins = ~np.any(np.isnan(rt_edges_2d[:, :-1]) | np.isnan(rt_edges_2d[:, 1:]), axis=0)
+    # Identify cout bins with full pore volume coverage (row sums to ~1)
+    row_sums = w_forward.sum(axis=1)
+    row_full = (row_sums > (1.0 - 1e-6)) & valid_cout_bins
+    col_active = w_forward.sum(axis=0) > 0
 
-    # Compute mean residence time per (pore_volume, cin_bin) for velocity calculation
-    # Shape: (n_pore_volumes, n_cin_bins)
-    rt_mean_2d = residence_time_mean(
-        flow=flow,
-        flow_tedges=tedges,
-        tedges_out=cin_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        direction="infiltration_to_extraction",
-        retardation_factor=retardation_factor,
+    if not np.any(row_full) or not np.any(col_active):
+        return np.full(n_cin, np.nan)
+
+    # Set NaN in cout for non-full rows so solve_underdetermined_system skips them
+    cout_for_solve = np.where(row_full, cout, np.nan)
+    w_for_solve = w_forward.copy()
+    w_for_solve[~row_full, :] = np.nan
+
+    # Compute reverse target if needed
+    x_target = None
+    if nullspace_objective == "reverse_matrix":
+        x_target = compute_reverse_target(coeff_matrix=w_forward, rhs_vector=cout)
+
+    # Solve W @ cin = cout using truncated SVD + nullspace optimization
+    cin_solved = solve_underdetermined_system(
+        coefficient_matrix=w_for_solve,
+        rhs_vector=cout_for_solve,
+        nullspace_objective=nullspace_objective,
+        rcond=rcond,
+        x_target=x_target,
     )
 
-    # Compute velocity: v = L / tau_mean
-    # Shape: (n_pore_volumes, n_cin_bins)
-    # Use explicit validity handling instead of error suppression
-    valid_rt = np.isfinite(rt_mean_2d) & (rt_mean_2d > 0)
-    velocity_2d = np.where(valid_rt, streamline_length[:, None] / rt_mean_2d, 0.0)
+    # Return values for all active cin bins
+    out = np.full(n_cin, np.nan)
+    out[col_active] = cin_solved[col_active]
 
-    # Compute D_L = D_m + alpha_L * v
-    # Shape: (n_pore_volumes, n_cin_bins)
-    # Fall back to molecular diffusivity only where RT is invalid (spinup period)
-    diffusivity_2d = np.where(
-        valid_rt,
-        molecular_diffusivity[:, None] + longitudinal_dispersivity[:, None] * velocity_2d,
-        molecular_diffusivity[:, None],
-    )
-
-    # Initialize coefficient matrix accumulator
-    # Shape: (n_cin_bins, n_cout_bins) - each row represents contributions to one output bin
-    n_cin_bins = len(cin_tedges) - 1
-    n_cout_bins = len(cout)
-    n_cout_edges = len(tedges)
-    accumulated_coeff = np.zeros((n_cin_bins, n_cout_bins))
-
-    # Loop over each pore volume
-    for i_pv in range(len(aquifer_pore_volumes)):
-        # Compute extraction times: when water infiltrated at cin_tedges will be extracted
-        # t_extraction = t_infiltration + residence_time
-        extraction_times = cin_tedges + pd.to_timedelta(rt_edges_2d[i_pv, :], unit="D")
-
-        # Convert to days relative to tedges[0] for computation
-        cout_tedges_days = ((tedges - tedges[0]) / pd.Timedelta("1D")).values
-        extraction_times_days = ((extraction_times - tedges[0]) / pd.Timedelta("1D")).values
-
-        # Compute volume relationship for the erf x-coordinate:
-        # delta_volume = volume at infiltration + R*APV - volume extracted at cout_tedge
-        # This represents how far past the pore volume the concentration front has traveled
-        delta_volume = (
-            cumulative_volume_at_cin_tedges[:, None]
-            + (retardation_factor * aquifer_pore_volumes[i_pv])
-            - cumulative_volume_at_cout_tedges[None, :]
-        )
-
-        # Determine when extraction has occurred: extraction_time must be >= cout_tedge
-        isactive = extraction_times_days[:, None] >= cout_tedges_days[None, :]
-        delta_volume[~isactive] = np.nan
-
-        # Convert volume to spatial distance x (erf coordinate)
-        # x = delta_volume / (R * APV) * L
-        step_widths = delta_volume / (retardation_factor * aquifer_pore_volumes[i_pv]) * streamline_length[i_pv]
-
-        # Compute diffusion time: time from extraction until cout_tedge, limited by residence time
-        time_active = extraction_times_days[:, None] - cout_tedges_days[None, :]
-        time_active[~isactive] = np.nan
-        time_active = np.maximum(time_active, 0)  # No negative times
-        time_active = np.minimum(time_active, rt_edges_2d[[i_pv]].T)  # Limited by residence time
-
-        # Compute erf response: response[i_cin_bin, j_cout_edge] = mean erf for cin bin i at cout edge j
-        response = np.zeros((n_cin_bins, n_cout_edges))
-
-        # Get diffusivity for this pore volume across all cin bins
-        diff_pv = diffusivity_2d[i_pv, :]  # shape (n_cin_bins,)
-
-        for j in range(n_cout_edges):
-            # For each extraction edge, compute erf response at all infiltration bins
-            xedges_j = step_widths[:, j]  # shape (n_cin_edges,)
-            tedges_j = time_active[:, j]  # shape (n_cin_edges,)
-            response[:, j] = _erf_mean_space_time(
-                xedges_j, tedges_j, diff_pv, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
-            )
-
-        # Convert erf response [-1, 1] to breakthrough fraction [0, 1]
-        frac = 0.5 * (1 + response)  # shape (n_cin_bins, n_cout_edges)
-
-        # Coefficient for bin j: coeff[i, j] = frac[i, j] - frac[i, j+1]
-        # This is the fraction of cout[j] that originated from cin[i]
-        frac_start = frac[:, :-1]
-        frac_end = frac[:, 1:]
-
-        # Handle NaN: if frac_end is NaN but frac_start is valid, use 0.0 for frac_end
-        # (the concentration step hasn't fully passed through yet)
-        frac_end_filled = np.where(np.isnan(frac_end) & ~np.isnan(frac_start), 0.0, frac_end)
-        coeff = frac_start - frac_end_filled  # shape (n_cin_bins, n_cout_bins)
-
-        # Replace NaN with 0 BEFORE accumulating to avoid NaN propagation
-        # (NaN + valid = NaN would lose valid contributions from other pore volumes)
-        accumulated_coeff += np.nan_to_num(coeff, nan=0.0)
-
-    # Average across pore volumes
-    coeff_matrix = accumulated_coeff / len(aquifer_pore_volumes)
-
-    # coeff_matrix is already NaN-free due to nan_to_num in the loop
-    coeff_matrix_filled = coeff_matrix
-
-    # Matrix multiply: cin = W @ cout
-    cin = coeff_matrix_filled @ cout
-
-    # Mark output bins as invalid where no valid contributions exist:
-    # 1. Sum of coefficients near zero (no cout data covers this time - spinup)
-    # 2. Output bin extends beyond input data range (from valid_cin_bins)
-    total_coeff = np.sum(coeff_matrix_filled, axis=1)
-    no_valid_contribution = (total_coeff < EPSILON_COEFF_SUM) | ~valid_cin_bins
-    cin[no_valid_contribution] = np.nan
-
-    return cin
+    return out

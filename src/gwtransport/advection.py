@@ -80,7 +80,7 @@ from gwtransport.fronttracking.output import compute_bin_averaged_concentration_
 from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import solve_underdetermined_system
+from gwtransport.utils import compute_reverse_target, solve_underdetermined_system
 
 
 def infiltration_to_extraction_series(
@@ -486,7 +486,7 @@ def gamma_extraction_to_infiltration(
     n_bins: int = 100,
     retardation_factor: float = 1.0,
     rcond: float | None = None,
-    nullspace_objective: str = "squared_differences",
+    nullspace_objective: str = "reverse_matrix",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
@@ -542,8 +542,9 @@ def gamma_extraction_to_infiltration(
         with 0.1 C noise and ~10 C seasonal amplitude suggests
         ``rcond ~ 0.01``.
     nullspace_objective : str, optional
-        Objective for nullspace optimization. Options: "squared_differences"
-        (smooth, default) or "summed_differences" (piecewise constant).
+        Objective for nullspace optimization. See
+        :func:`extraction_to_infiltration` for available options.
+        Default is ``"reverse_matrix"``.
 
     Returns
     -------
@@ -853,7 +854,7 @@ def extraction_to_infiltration(
     aquifer_pore_volumes: npt.ArrayLike,
     retardation_factor: float = 1.0,
     rcond: float | None = None,
-    nullspace_objective: str = "squared_differences",
+    nullspace_objective: str = "reverse_matrix",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
@@ -861,13 +862,18 @@ def extraction_to_infiltration(
     Inverts the forward transport model by solving the linear system
     ``W_forward @ cin = cout`` where ``W_forward`` is the weight matrix from
     :func:`infiltration_to_extraction`. Uses truncated SVD via least-squares
-    followed by nullspace smoothness optimization to select a physically
-    plausible solution from the underdetermined system.
+    followed by nullspace optimization to select a physically plausible
+    solution from the underdetermined system.
+
+    The default ``"reverse_matrix"`` objective combines pseudoinverse
+    exactness for well-determined modes with a physically motivated
+    regularization target (transpose-and-normalize of the forward matrix)
+    for undetermined modes.
 
     Cin bins that are *fully informed* — meaning all cout bins that depend
     on them have complete pore volume coverage — are directly constrained by
     the equations. Edge bins outside the fully-informed region receive
-    smoothness-extrapolated values from the nullspace optimization.
+    target-regularized values from the nullspace optimization.
 
     Parameters
     ----------
@@ -904,8 +910,15 @@ def extraction_to_infiltration(
         with 0.1 C noise and ~10 C seasonal amplitude suggests
         ``rcond ~ 0.01``.
     nullspace_objective : str, optional
-        Objective for nullspace optimization. Options: "squared_differences"
-        (smooth, default) or "summed_differences" (piecewise constant).
+        Objective for nullspace optimization. Options:
+
+        * ``"reverse_matrix"`` (default): Minimize distance to the
+          transpose-and-normalize target of the forward matrix. Combines
+          pseudoinverse exactness with physically motivated regularization.
+        * ``"squared_differences"``: Minimize sum of squared differences
+          between adjacent elements (smooth solutions).
+        * ``"summed_differences"``: Minimize sum of absolute differences
+          between adjacent elements (piecewise constant solutions).
 
     Returns
     -------
@@ -1038,12 +1051,18 @@ def extraction_to_infiltration(
     w_for_solve = w_forward.copy()
     w_for_solve[~row_full, :] = np.nan
 
-    # Solve W @ cin = cout using truncated SVD + nullspace smoothness
+    # Compute reverse target if needed
+    x_target = None
+    if nullspace_objective == "reverse_matrix":
+        x_target = compute_reverse_target(coeff_matrix=w_forward, rhs_vector=cout)
+
+    # Solve W @ cin = cout using truncated SVD + nullspace optimization
     cin_solved = solve_underdetermined_system(
         coefficient_matrix=w_for_solve,
         rhs_vector=cout_for_solve,
         nullspace_objective=nullspace_objective,
         rcond=rcond,
+        x_target=x_target,
     )
 
     # Return values for all active cin bins. Fully-informed bins are

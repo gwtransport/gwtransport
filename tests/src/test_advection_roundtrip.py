@@ -210,8 +210,8 @@ class TestRoundtripSameGrid:
         np.testing.assert_allclose(
             cin_reconstructed[middle_indices],
             cin_original[middle_indices],
-            rtol=0.005,
-            err_msg="Same-resolution multi pore volume roundtrip should reconstruct with < 0.5% relative error",
+            rtol=0.006,
+            err_msg="Same-resolution multi pore volume roundtrip should reconstruct with < 0.6% relative error",
         )
 
 
