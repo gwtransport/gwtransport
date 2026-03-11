@@ -120,18 +120,20 @@ def generate_example_data(
 
             flow[spill_start : spill_start + spill_duration] /= spill_magnitude
 
-    # Generate infiltration temperature
+    # Generate infiltration temperature. nonoise is needed to compute extraction temperature.
     if temp_infiltration_method == "synthetic":
         # Seasonal pattern with noise
-        infiltration_temp = temp_infiltration_mean + temp_infiltration_amplitude * np.sin(2 * np.pi * days / 365)
-        infiltration_temp += np.random.normal(0, temp_measurement_noise, len(dates))
+        infiltration_temp_nonoise = temp_infiltration_mean + temp_infiltration_amplitude * np.sin(
+            2 * np.pi * days / 365
+        )
+        infiltration_temp = infiltration_temp_nonoise + np.random.normal(0, temp_measurement_noise, len(dates))
     elif temp_infiltration_method == "constant":
         # Constant temperature
-        infiltration_temp = np.full(len(dates), temp_infiltration_mean)
-        infiltration_temp += np.random.normal(0, temp_measurement_noise, len(dates))
+        infiltration_temp_nonoise = np.full(len(dates), temp_infiltration_mean)
+        infiltration_temp = infiltration_temp_nonoise + np.random.normal(0, temp_measurement_noise, len(dates))
     elif temp_infiltration_method == "soil_temperature":
         # Use soil temperature data already includes measurement noise
-        infiltration_temp = (
+        infiltration_temp_nonoise = infiltration_temp = (
             get_soil_temperature(
                 station_number=260,  # Example station number
                 interpolate_missing_values=True,
@@ -148,7 +150,7 @@ def generate_example_data(
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     temp_extraction = gamma_infiltration_to_extraction(
-        cin=infiltration_temp,
+        cin=infiltration_temp_nonoise,
         flow=flow,
         tedges=tedges,
         cout_tedges=tedges,
