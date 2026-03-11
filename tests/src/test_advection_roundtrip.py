@@ -88,13 +88,14 @@ class TestRoundtripLinear:
         reconstructed_middle = cin_reconstructed[middle_indices]
         original_middle = cin_original[middle_indices]
 
-        # Linear retardation should have tight roundtrip (< 2% error)
-        # Note: Even with constant R, numerical discretization introduces ~1% error
+        # Single PV with retardation: error limited by the 120-dimensional
+        # nullspace (n_cin=365 unknowns, n_cout=245 equations). The Tikhonov
+        # target fills the nullspace approximately. Actual error ~0.06%.
         np.testing.assert_allclose(
             reconstructed_middle,
             original_middle,
-            rtol=0.02,  # 2% tolerance for linear case (discretization effects)
-            err_msg="Linear roundtrip should reconstruct with < 2% error",
+            rtol=0.002,
+            err_msg="Linear roundtrip should reconstruct with < 0.2% error",
         )
 
 

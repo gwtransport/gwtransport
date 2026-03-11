@@ -39,9 +39,14 @@ Available functions:
   start times, or end times. Validates consistency with expected number of bins and handles
   uniform spacing extrapolation.
 
+- :func:`solve_tikhonov` - Solve linear system with Tikhonov regularization toward a target.
+  Well-determined modes follow the data; poorly-determined modes are pulled toward the target.
+  Used by advection and diffusion ``extraction_to_infiltration``.
+
 - :func:`solve_underdetermined_system` - Solve underdetermined linear system (Ax = b, m < n)
   with nullspace regularization. Handles NaN values by row exclusion. Supports built-in
   objectives ('squared_differences', 'summed_differences') or custom callable objectives.
+  Used by :mod:`gwtransport.deposition`.
 
 - :func:`get_soil_temperature` - Download soil temperature data from KNMI weather stations with
   automatic caching. Supports stations 260 (De Bilt), 273 (Marknesse), 286 (Nieuw Beerta),
@@ -1183,6 +1188,97 @@ def compute_reverse_target(
     x_target = w_reverse @ rhs_vector
     x_target[~valid] = np.nan
     return x_target
+
+
+def solve_tikhonov(
+    *,
+    coefficient_matrix: npt.ArrayLike,
+    rhs_vector: npt.ArrayLike,
+    x_target: npt.NDArray[np.floating],
+    regularization_strength: float = 1e-10,
+) -> npt.NDArray[np.floating]:
+    """Solve a linear system with Tikhonov regularization toward a target.
+
+    Minimizes ``||A x - b||² + λ ||x - x_target||²`` by solving the
+    equivalent augmented least-squares problem::
+
+        [A; √λ I_v] x = [b; √λ x_target_v]
+
+    where ``I_v`` selects only entries where ``x_target`` is not NaN.
+
+    Well-determined modes (large singular values relative to √λ) are
+    dominated by the data; poorly-determined modes are pulled toward
+    ``x_target``. The solution varies continuously with λ, unlike the
+    hard singular-value cutoff of ``rcond`` in truncated SVD.
+
+    Parameters
+    ----------
+    coefficient_matrix : array-like
+        Coefficient matrix of shape (m, n). May contain NaN rows, which
+        are excluded from the system.
+    rhs_vector : array-like
+        Right-hand side vector of length m. May contain NaN values
+        corresponding to NaN rows in coefficient_matrix.
+    x_target : ndarray
+        Target solution of length n, typically from
+        :func:`compute_reverse_target`. NaN entries are excluded from the
+        regularization term.
+    regularization_strength : float, optional
+        Tikhonov parameter λ. Controls the tradeoff between fitting the
+        data and staying close to ``x_target``. Larger values trust the
+        target more; smaller values trust the data more. Default is 1e-10.
+
+        A good starting value for noisy data is
+        ``λ ≈ (noise_std / signal_amplitude)²``. For noiseless synthetic
+        data, the default 1e-10 preserves machine precision.
+
+    Returns
+    -------
+    ndarray
+        Solution vector of length n.
+
+    See Also
+    --------
+    compute_reverse_target : Compute the regularization target from the
+        forward matrix.
+    solve_underdetermined_system : Alternative solver using nullspace
+        optimization (used by :mod:`gwtransport.deposition`).
+    """
+    matrix = np.asarray(coefficient_matrix)
+    rhs = np.asarray(rhs_vector)
+
+    if matrix.shape[0] != len(rhs):
+        msg = f"coefficient_matrix has {matrix.shape[0]} rows but rhs_vector has {len(rhs)} elements"
+        raise ValueError(msg)
+
+    # Filter NaN rows
+    valid_rows = ~np.isnan(matrix).any(axis=1) & ~np.isnan(rhs)
+
+    if not np.any(valid_rows):
+        msg = "No valid rows found (all contain NaN values)"
+        raise ValueError(msg)
+
+    valid_matrix = matrix[valid_rows]
+    valid_rhs = rhs[valid_rows]
+
+    n_cin = valid_matrix.shape[1]
+    sqrt_lam = np.sqrt(regularization_strength)
+
+    # Only regularize entries where x_target is valid
+    valid_target = ~np.isnan(x_target)
+    target_indices = np.where(valid_target)[0]
+
+    # Build augmented system: [A; √λ I_v] x = [b; √λ x_target_v]
+    n_reg = len(target_indices)
+    reg_matrix = np.zeros((n_reg, n_cin))
+    reg_matrix[np.arange(n_reg), target_indices] = sqrt_lam
+    reg_rhs = sqrt_lam * x_target[target_indices]
+
+    augmented_matrix = np.vstack([valid_matrix, reg_matrix])
+    augmented_rhs = np.concatenate([valid_rhs, reg_rhs])
+
+    x, *_ = np.linalg.lstsq(augmented_matrix, augmented_rhs, rcond=None)
+    return x
 
 
 def _squared_differences_objective(coeffs: np.ndarray, x_ls: np.ndarray, nullspace_basis: np.ndarray) -> float:

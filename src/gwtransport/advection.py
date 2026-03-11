@@ -80,7 +80,7 @@ from gwtransport.fronttracking.output import compute_bin_averaged_concentration_
 from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import compute_reverse_target, solve_underdetermined_system
+from gwtransport.utils import compute_reverse_target, solve_tikhonov
 
 
 def infiltration_to_extraction_series(
@@ -485,8 +485,7 @@ def gamma_extraction_to_infiltration(
     std: float | None = None,
     n_bins: int = 100,
     retardation_factor: float = 1.0,
-    rcond: float | None = None,
-    nullspace_objective: str = "reverse_matrix",
+    regularization_strength: float = 1e-10,
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
@@ -527,24 +526,9 @@ def gamma_extraction_to_infiltration(
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
         Values > 1.0 indicate slower transport due to sorption/interaction.
-    rcond : float or None, optional
-        Cutoff ratio for small singular values in the SVD truncation.
-        Singular values smaller than ``rcond * largest_singular_value`` are
-        treated as zero, expanding the nullspace available for smoothness
-        optimization. Default is None (machine precision default).
-
-        A good starting value is the noise standard deviation divided by the
-        signal amplitude: ``rcond ~ noise_std / signal_amplitude``. The
-        forward weight matrix has a largest singular value close to 1, so
-        modes with singular value ``s`` amplify noise by ``1/s``. Setting
-        ``rcond`` to the relative noise level truncates modes that would
-        amplify noise above the signal level. For example, temperature data
-        with 0.1 C noise and ~10 C seasonal amplitude suggests
-        ``rcond ~ 0.01``.
-    nullspace_objective : str, optional
-        Objective for nullspace optimization. See
-        :func:`extraction_to_infiltration` for available options.
-        Default is ``"reverse_matrix"``.
+    regularization_strength : float, optional
+        Tikhonov regularization parameter λ. See
+        :func:`extraction_to_infiltration` for details. Default is 1e-10.
 
     Returns
     -------
@@ -650,8 +634,7 @@ def gamma_extraction_to_infiltration(
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=bins["expected_values"],
         retardation_factor=retardation_factor,
-        rcond=rcond,
-        nullspace_objective=nullspace_objective,
+        regularization_strength=regularization_strength,
     )
 
 
@@ -853,27 +836,21 @@ def extraction_to_infiltration(
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
     retardation_factor: float = 1.0,
-    rcond: float | None = None,
-    nullspace_objective: str = "reverse_matrix",
+    regularization_strength: float = 1e-10,
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
 
     Inverts the forward transport model by solving the linear system
     ``W_forward @ cin = cout`` where ``W_forward`` is the weight matrix from
-    :func:`infiltration_to_extraction`. Uses truncated SVD via least-squares
-    followed by nullspace optimization to select a physically plausible
-    solution from the underdetermined system.
+    :func:`infiltration_to_extraction`. Uses Tikhonov regularization to
+    smoothly blend data fitting with a physically motivated target
+    (transpose-and-normalize of the forward matrix).
 
-    The default ``"reverse_matrix"`` objective combines pseudoinverse
-    exactness for well-determined modes with a physically motivated
-    regularization target (transpose-and-normalize of the forward matrix)
-    for undetermined modes.
-
-    Cin bins that are *fully informed* — meaning all cout bins that depend
-    on them have complete pore volume coverage — are directly constrained by
-    the equations. Edge bins outside the fully-informed region receive
-    target-regularized values from the nullspace optimization.
+    Well-determined modes (large singular values relative to √λ) are
+    dominated by the data; poorly-determined modes are pulled toward the
+    target. This avoids edge oscillations and is less sensitive to the
+    regularization parameter than truncated SVD (``rcond``).
 
     Parameters
     ----------
@@ -895,30 +872,23 @@ def extraction_to_infiltration(
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
         Values > 1.0 indicate slower transport due to sorption/interaction.
-    rcond : float or None, optional
-        Cutoff ratio for small singular values in the SVD truncation.
-        Singular values smaller than ``rcond * largest_singular_value`` are
-        treated as zero, expanding the nullspace available for smoothness
-        optimization. Default is None (machine precision default).
+    regularization_strength : float, optional
+        Tikhonov regularization parameter λ. Controls the tradeoff between
+        fitting the data (``||W cin - cout||²``) and staying close to the
+        regularization target (``λ ||cin - cin_target||²``). The target is
+        the transpose-and-normalize of the forward matrix applied to cout.
 
-        A good starting value is the noise standard deviation divided by the
-        signal amplitude: ``rcond ~ noise_std / signal_amplitude``. The
-        forward weight matrix has a largest singular value close to 1, so
-        modes with singular value ``s`` amplify noise by ``1/s``. Setting
-        ``rcond`` to the relative noise level truncates modes that would
-        amplify noise above the signal level. For example, temperature data
-        with 0.1 C noise and ~10 C seasonal amplitude suggests
-        ``rcond ~ 0.01``.
-    nullspace_objective : str, optional
-        Objective for nullspace optimization. Options:
+        Larger values trust the target more (smoother, more biased); smaller
+        values trust the data more (noisier, less biased). The solution
+        varies continuously with λ. Default is 1e-10.
 
-        * ``"reverse_matrix"`` (default): Minimize distance to the
-          transpose-and-normalize target of the forward matrix. Combines
-          pseudoinverse exactness with physically motivated regularization.
-        * ``"squared_differences"``: Minimize sum of squared differences
-          between adjacent elements (smooth solutions).
-        * ``"summed_differences"``: Minimize sum of absolute differences
-          between adjacent elements (piecewise constant solutions).
+        A good starting value for noisy data is
+        ``λ ≈ (noise_std / signal_amplitude)²``. For example, temperature
+        data with 0.05 °C noise and ~10 °C seasonal amplitude suggests
+        ``regularization_strength ≈ (0.05 / 10)² ≈ 2.5e-5``. Increase by
+        a factor of 2-10 for additional smoothing. For noiseless synthetic
+        data (e.g., roundtrip tests), the default 1e-10 preserves machine
+        precision.
 
     Returns
     -------
@@ -939,7 +909,7 @@ def extraction_to_infiltration(
     infiltration_to_extraction : Forward operation (convolution)
     extraction_to_infiltration_series : Simple time-shift for single pore volume
     gwtransport.residence_time.residence_time : Compute residence times from flow and pore volume
-    gwtransport.utils.solve_underdetermined_system : Solver used for inversion
+    gwtransport.utils.solve_tikhonov : Solver used for inversion
     :ref:`concept-pore-volume-distribution` : Background on aquifer heterogeneity modeling
     :ref:`concept-transport-equation` : Flow-weighted averaging approach
 
@@ -1038,36 +1008,25 @@ def extraction_to_infiltration(
         retardation_factor=retardation_factor,
     )
 
-    # Identify cout bins with full pore volume coverage (row sums to ~1)
+    # For partial rows, W[i,:] @ cin ≈ row_sum[i] * cout[i] (assuming
+    # missing cin bins have similar concentration to known ones), so use
+    # row_sums * cout as RHS. Rows with row_sum ≈ 0 contribute negligibly.
     row_sums = w_forward.sum(axis=1)
-    row_full = row_sums > (1.0 - 1e-6)
     col_active = w_forward.sum(axis=0) > 0
 
-    if not np.any(row_full) or not np.any(col_active):
+    if not np.any(col_active):
         return np.full(n_cin, np.nan)
 
-    # Set NaN in cout for non-full rows so solve_underdetermined_system skips them
-    cout_for_solve = np.where(row_full, cout, np.nan)
-    w_for_solve = w_forward.copy()
-    w_for_solve[~row_full, :] = np.nan
+    x_target = compute_reverse_target(coeff_matrix=w_forward, rhs_vector=cout)
 
-    # Compute reverse target if needed
-    x_target = None
-    if nullspace_objective == "reverse_matrix":
-        x_target = compute_reverse_target(coeff_matrix=w_forward, rhs_vector=cout)
-
-    # Solve W @ cin = cout using truncated SVD + nullspace optimization
-    cin_solved = solve_underdetermined_system(
-        coefficient_matrix=w_for_solve,
-        rhs_vector=cout_for_solve,
-        nullspace_objective=nullspace_objective,
-        rcond=rcond,
+    cin_solved = solve_tikhonov(
+        coefficient_matrix=w_forward,
+        rhs_vector=row_sums * cout,
         x_target=x_target,
+        regularization_strength=regularization_strength,
     )
 
-    # Return values for all active cin bins. Fully-informed bins are
-    # constrained by equations; edge bins get smoothness-extrapolated values
-    # from the nullspace optimization.
+    # Return values for all active cin bins
     out = np.full(n_cin, np.nan)
     out[col_active] = cin_solved[col_active]
 

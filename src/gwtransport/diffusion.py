@@ -39,7 +39,7 @@ from numpy.typing import NDArray
 from scipy import special
 
 from gwtransport.residence_time import residence_time, residence_time_mean
-from gwtransport.utils import compute_reverse_target, solve_underdetermined_system
+from gwtransport.utils import compute_reverse_target, solve_tikhonov
 
 # Numerical tolerance for coefficient sum to determine valid output bins
 EPSILON_COEFF_SUM = 1e-10
@@ -931,20 +931,17 @@ def extraction_to_infiltration(
     retardation_factor: float = 1.0,
     suppress_dispersion_warning: bool = False,
     asymptotic_cutoff_sigma: float | None = 3.0,
-    rcond: float | None = None,
-    nullspace_objective: str = "reverse_matrix",
+    regularization_strength: float = 1e-10,
 ) -> npt.NDArray[np.floating]:
     """
     Compute infiltration concentration from extracted water (deconvolution with dispersion).
 
     Inverts the forward transport model by building the forward coefficient
     matrix ``W_forward`` from :func:`infiltration_to_extraction` and solving
-    ``W_forward @ cin = cout`` via truncated SVD with nullspace regularization.
-
-    The default ``"reverse_matrix"`` objective combines pseudoinverse
-    exactness for well-determined modes with a physically motivated
-    regularization target (transpose-and-normalize of the forward matrix)
-    for undetermined modes.
+    ``W_forward @ cin = cout`` via Tikhonov regularization. Well-determined
+    modes are dominated by the data; poorly-determined modes are pulled
+    toward the physically motivated target (transpose-and-normalize of the
+    forward matrix).
 
     Parameters
     ----------
@@ -984,13 +981,10 @@ def extraction_to_infiltration(
     asymptotic_cutoff_sigma : float or None, optional
         Performance optimization for the forward matrix construction.
         Default is 3.0.
-    rcond : float or None, optional
-        Cutoff ratio for small singular values in the SVD truncation.
-        Default is None (machine precision default).
-    nullspace_objective : str, optional
-        Objective for nullspace optimization. See
-        :func:`gwtransport.advection.extraction_to_infiltration` for available
-        options. Default is ``"reverse_matrix"``.
+    regularization_strength : float, optional
+        Tikhonov regularization parameter λ. See
+        :func:`gwtransport.advection.extraction_to_infiltration` for details.
+        Default is 1e-10.
 
     Returns
     -------
@@ -1020,8 +1014,8 @@ def extraction_to_infiltration(
     -----
     The algorithm builds the forward coefficient matrix ``W_forward`` (same as
     used by :func:`infiltration_to_extraction`) and solves ``W_forward @ cin = cout``
-    using :func:`gwtransport.utils.solve_underdetermined_system`. This ensures
-    mathematical consistency between forward and inverse operations.
+    using :func:`gwtransport.utils.solve_tikhonov`. This ensures mathematical
+    consistency between forward and inverse operations.
 
     Examples
     --------
@@ -1145,31 +1139,27 @@ def extraction_to_infiltration(
         asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
     )
 
-    # Identify cout bins with full pore volume coverage (row sums to ~1)
+    # For partial rows, W[i,:] @ cin ≈ row_sum[i] * cout[i] (assuming
+    # missing cin bins have similar concentration to known ones), so use
+    # row_sums * cout as RHS. Rows with row_sum ≈ 0 contribute negligibly.
+    # Rows flagged as invalid by the forward matrix builder are excluded.
     row_sums = w_forward.sum(axis=1)
-    row_full = (row_sums > (1.0 - 1e-6)) & valid_cout_bins
     col_active = w_forward.sum(axis=0) > 0
 
-    if not np.any(row_full) or not np.any(col_active):
+    if not np.any(col_active):
         return np.full(n_cin, np.nan)
 
-    # Set NaN in cout for non-full rows so solve_underdetermined_system skips them
-    cout_for_solve = np.where(row_full, cout, np.nan)
+    rhs_for_solve = np.where(valid_cout_bins, row_sums * cout, np.nan)
     w_for_solve = w_forward.copy()
-    w_for_solve[~row_full, :] = np.nan
+    w_for_solve[~valid_cout_bins, :] = np.nan
 
-    # Compute reverse target if needed
-    x_target = None
-    if nullspace_objective == "reverse_matrix":
-        x_target = compute_reverse_target(coeff_matrix=w_forward, rhs_vector=cout)
+    x_target = compute_reverse_target(coeff_matrix=w_forward, rhs_vector=cout)
 
-    # Solve W @ cin = cout using truncated SVD + nullspace optimization
-    cin_solved = solve_underdetermined_system(
+    cin_solved = solve_tikhonov(
         coefficient_matrix=w_for_solve,
-        rhs_vector=cout_for_solve,
-        nullspace_objective=nullspace_objective,
-        rcond=rcond,
+        rhs_vector=rhs_for_solve,
         x_target=x_target,
+        regularization_strength=regularization_strength,
     )
 
     # Return values for all active cin bins
