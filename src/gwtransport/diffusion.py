@@ -50,6 +50,7 @@ def _erf_integral_time(
     t: NDArray[np.float64],
     x: NDArray[np.float64],
     diffusivity: npt.ArrayLike,
+    asymptotic_cutoff_sigma: float | None = None,
 ) -> NDArray[np.float64]:
     r"""Compute the integral of the error function over time at each (t[i], x[i]) point.
 
@@ -72,6 +73,10 @@ def _erf_integral_time(
         Position values. Broadcastable with t and diffusivity.
     diffusivity : float or ndarray
         Diffusivity [m²/day]. Must be positive. Broadcastable with t and x.
+    asymptotic_cutoff_sigma : float, optional
+        When |x|/(2√(D·t)) exceeds this threshold, use the asymptotic
+        approximation sign(x)·t instead of the full formula. Values of 3-5
+        give good accuracy.
 
     Returns
     -------
@@ -88,6 +93,14 @@ def _erf_integral_time(
 
     # Mask for valid computation: t > 0, x != 0, and diffusivity > 0
     mask_valid = (t > 0.0) & (x != 0.0) & (diffusivity > 0.0)
+
+    # Apply asymptotic shortcut: G(t, x, D) ≈ sign(x) * t
+    if asymptotic_cutoff_sigma is not None:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            arg = np.abs(x) / (2.0 * np.sqrt(diffusivity * t))
+        mask_asymptotic = mask_valid & np.isfinite(arg) & (arg >= asymptotic_cutoff_sigma)
+        out[mask_asymptotic] = np.sign(x[mask_asymptotic]) * t[mask_asymptotic]
+        mask_valid &= ~mask_asymptotic
 
     if np.any(mask_valid):
         t_v = t[mask_valid]
@@ -124,7 +137,7 @@ def _erf_integral_time(
     return out
 
 
-def _erf_integral_space_time(x, t, diffusivity):
+def _erf_integral_space_time(x, t, diffusivity, asymptotic_cutoff_sigma=None):
     """
     Compute the integral of the error function in space and time at (x, t) points.
 
@@ -146,6 +159,10 @@ def _erf_integral_space_time(x, t, diffusivity):
     diffusivity : float or ndarray
         Diffusivity [m²/day]. Must be positive. Can be a scalar or array
         broadcastable with x and t.
+    asymptotic_cutoff_sigma : float, optional
+        When |x|/(2√(D·t)) exceeds this threshold, use the asymptotic
+        approximation |x|*t - 4*sqrt(D)*t^(3/2)/(3*sqrt(pi)) instead of the full formula.
+        Values of 3-5 give good accuracy.
 
     Returns
     -------
@@ -165,28 +182,49 @@ def _erf_integral_space_time(x, t, diffusivity):
 
     isnan = np.isnan(x) | np.isnan(t) | np.isnan(diffusivity)
 
+    # Determine which points need full computation vs asymptotic shortcut
+    mask_compute = (t > 0.0) & (diffusivity > 0.0) & ~isnan
+    mask_asymptotic = np.zeros_like(x, dtype=bool)
+
+    if asymptotic_cutoff_sigma is not None:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            arg = x / (2.0 * np.sqrt(diffusivity * t))
+        mask_asymptotic = mask_compute & np.isfinite(arg) & (arg >= asymptotic_cutoff_sigma)
+        mask_compute &= ~mask_asymptotic
+
     sqrt_diffusivity = np.sqrt(diffusivity)
     sqrt_pi = np.sqrt(np.pi)
 
-    # Handle t <= 0 or diffusivity <= 0 to avoid sqrt of negative / division by zero
-    with np.errstate(divide="ignore", invalid="ignore"):
-        safe_t = np.maximum(t, 1e-30)
-        safe_d = np.maximum(diffusivity, 1e-30)
-        sqrt_t = np.sqrt(safe_t)
-        exp_term = np.exp(-(x**2) / (4 * safe_d * safe_t))
-        erf_term = special.erf(x / (2 * np.sqrt(safe_d) * sqrt_t))
+    # Asymptotic: F ~ |x|*t - 4*sqrt(D)*t^(3/2)/(3*sqrt(pi))
+    out = np.where(
+        mask_asymptotic,
+        x * t - 4 * sqrt_diffusivity * t ** (3 / 2) / (3 * sqrt_pi),
+        0.0,
+    )
 
-        term1 = -4 * sqrt_diffusivity * t ** (3 / 2) / (3 * sqrt_pi)
-        term2 = (2 * sqrt_diffusivity / sqrt_pi) * (
-            (2 * t ** (3 / 2) * exp_term / 3)
-            - (sqrt_t * x**2 * exp_term / (3 * safe_d))
-            - (sqrt_pi * x**3 * erf_term / (6 * safe_d ** (3 / 2)))
+    # Full computation for remaining points (only on mask_compute subset)
+    if np.any(mask_compute):
+        xc = x[mask_compute]
+        tc = t[mask_compute]
+        dc = diffusivity[mask_compute]
+        sqrt_dc = sqrt_diffusivity[mask_compute]
+
+        sqrt_tc = np.sqrt(tc)
+        exp_term = np.exp(-(xc**2) / (4 * dc * tc))
+        erf_term = special.erf(xc / (2 * sqrt_dc * sqrt_tc))
+
+        term1 = -4 * sqrt_dc * tc ** (3 / 2) / (3 * sqrt_pi)
+        term2 = (2 * sqrt_dc / sqrt_pi) * (
+            (2 * tc ** (3 / 2) * exp_term / 3)
+            - (sqrt_tc * xc**2 * exp_term / (3 * dc))
+            - (sqrt_pi * xc**3 * erf_term / (6 * dc ** (3 / 2)))
         )
-        term3 = x * (
-            t * erf_term + (x**2 * erf_term / (2 * safe_d)) + (sqrt_t * x * exp_term / (sqrt_pi * np.sqrt(safe_d)))
+        term3 = xc * (
+            tc * erf_term + (xc**2 * erf_term / (2 * dc)) + (sqrt_tc * xc * exp_term / (sqrt_pi * sqrt_dc))
         )
-        term4 = -(x**3) / (6 * safe_d)
-        out = term1 + term2 + term3 + term4
+        term4 = -(xc**3) / (6 * dc)
+
+        out[mask_compute] = term1 + term2 + term3 + term4
 
     out = np.where(isnan, np.nan, out)
     out = np.where(t <= 0.0, 0.0, out)
@@ -271,180 +309,6 @@ def _erf_integral_space(
 
 def _erf_mean_space_time(xedges, tedges, diffusivity, *, asymptotic_cutoff_sigma=None):
     """
-    Compute the mean of the error function over paired space-time cells.
-
-    Computes the average value of erf(x/(2*sqrt(D*t))) over cells where
-    cell i spans [xedges[i], xedges[i+1]] x [tedges[i], tedges[i+1]].
-
-    The mean is computed using the inclusion-exclusion principle:
-        (F(x₁,t₁,D) - F(x₀,t₁,D) - F(x₁,t₀,D) + F(x₀,t₀,D)) / ((x₁-x₀)(t₁-t₀))
-
-    where F(x,t,D) = ∫₀ᵗ ∫₀ˣ erf(ξ/(2√(D·τ))) dξ dτ
-
-    Parameters
-    ----------
-    xedges : ndarray
-        Cell edges in space of size n.
-    tedges : ndarray
-        Cell edges in time of size n (same length as xedges).
-    diffusivity : float or ndarray
-        Diffusivity [m²/day]. Must be non-negative. Can be a scalar (same for
-        all cells) or an array of size n-1 (one value per cell).
-    asymptotic_cutoff_sigma : float, optional
-        Performance optimization. When set, cells where the erf argument
-        magnitude exceeds this threshold are assigned asymptotic values (+1 or -1)
-        instead of computing the expensive double integral. Since erf(3) ≈ 0.99998
-        and erf(4) ≈ 0.9999999846, values of 3-5 provide good accuracy with
-        significant speedup for transport problems where most cells are far
-        from the concentration front. Default is None (no cutoff, compute all).
-
-    Returns
-    -------
-    ndarray
-        Mean of the error function over each cell.
-        Returns 1D array of length n-1, or scalar if n=2.
-
-    Notes
-    -----
-    The asymptotic cutoff optimization works by checking the "weakest" erf
-    argument in each cell (minimum |x| with maximum t). If this argument
-    exceeds the cutoff threshold, the entire cell is in the asymptotic region
-    and no computation is needed. This is particularly effective for advection-
-    dispersion problems where most cells are far from the moving front.
-    """
-    xedges = np.asarray(xedges)
-    tedges = np.asarray(tedges)
-    diffusivity = np.atleast_1d(np.asarray(diffusivity))
-
-    if len(xedges) != len(tedges):
-        msg = "xedges and tedges must have the same length"
-        raise ValueError(msg)
-
-    n_cells = len(xedges) - 1
-
-    # Broadcast scalar diffusivity to all cells
-    if diffusivity.size == 1:
-        diffusivity = np.broadcast_to(diffusivity, (n_cells,))
-
-    if len(diffusivity) != n_cells:
-        msg = "diffusivity must be a scalar or have length n_cells (len(xedges) - 1)"
-        raise ValueError(msg)
-
-    dx = xedges[1:] - xedges[:-1]
-    dt = tedges[1:] - tedges[:-1]
-
-    # Early exit for asymptotic cells (performance optimization)
-    # For cells far from the concentration front, erf ≈ ±1
-    mask_asymptotic = np.zeros(n_cells, dtype=bool)
-    if asymptotic_cutoff_sigma is not None:
-        x0, x1 = xedges[:-1], xedges[1:]
-        t1, d = tedges[1:], diffusivity
-        min_abs_x = np.where(x0 >= 0, x0, -x1)
-        mask = ((x0 >= 0) | (x1 <= 0)) & (t1 > 0) & (d > 0)
-        mask[mask] &= min_abs_x[mask] / (2.0 * np.sqrt(d[mask] * t1[mask])) >= asymptotic_cutoff_sigma
-        mask_asymptotic = mask
-
-    # Compute 4N-corner double integral for all non-asymptotic cells
-    mask_compute = ~mask_asymptotic
-    idx = np.where(mask_compute)[0]
-
-    x_corners = np.concatenate([
-        xedges[idx],  # x0
-        xedges[idx + 1],  # x1
-        xedges[idx],  # x0
-        xedges[idx + 1],  # x1
-    ])
-    t_corners = np.concatenate([
-        tedges[idx],  # t0
-        tedges[idx + 1],  # t1
-        tedges[idx + 1],  # t1
-        tedges[idx],  # t0
-    ])
-    d_corners = np.tile(diffusivity[idx], 4)
-
-    f = _erf_integral_space_time(x_corners, t_corners, d_corners)
-    n = len(idx)
-    f_00 = f[:n]
-    f_11 = f[n : 2 * n]
-    f_01 = f[2 * n : 3 * n]
-    f_10 = f[3 * n :]
-
-    double_integrals = f_11 - f_10 - f_01 + f_00
-    cell_areas = dx[idx] * dt[idx]
-
-    with np.errstate(divide="ignore", invalid="ignore"):
-        out = np.full(n_cells, np.nan, dtype=float)
-        out[idx] = double_integrals / cell_areas
-
-    # Fix asymptotic cells
-    if np.any(mask_asymptotic):
-        out[mask_asymptotic] = np.sign(xedges[:-1][mask_asymptotic] + xedges[1:][mask_asymptotic])
-
-    # Fix zero diffusivity cells: _erf_integral_space_time returns 0 for D=0,
-    # but erf(x/(2*sqrt(D*t))) -> sign(x) as D -> 0
-    mask_d_zero = (diffusivity == 0.0) & ~mask_asymptotic
-    if np.any(mask_d_zero):
-        x_mid = (xedges[:-1][mask_d_zero] + xedges[1:][mask_d_zero]) / 2
-        out[mask_d_zero] = np.sign(x_mid)
-
-    # Fix zero-area cells where 4N-corner gives 0/0
-    # dx=0, dt!=0: mean over time at fixed x
-    mask_dx_zero = (dx == 0.0) & ~mask_asymptotic
-    if np.any(mask_dx_zero):
-        idx_dx = np.where(mask_dx_zero)[0]
-        t_edges_flat = np.concatenate([tedges[idx_dx], tedges[idx_dx + 1]])
-        x_edges_flat = np.concatenate([xedges[idx_dx], xedges[idx_dx + 1]])
-        d_edges = np.tile(diffusivity[idx_dx], 2)
-        erfint = _erf_integral_time(t_edges_flat, x=x_edges_flat, diffusivity=d_edges)
-        n_dx = len(idx_dx)
-        out[idx_dx] = (erfint[n_dx:] - erfint[:n_dx]) / dt[idx_dx]
-
-    # dt=0, dx!=0: mean over space at fixed time
-    mask_dt_zero = (dt == 0.0) & (dx != 0.0) & ~mask_asymptotic
-    if np.any(mask_dt_zero):
-        idx_dt = np.where(mask_dt_zero)[0]
-        x_edges_flat = np.concatenate([xedges[idx_dt], xedges[idx_dt + 1]])
-        t_edges_flat = np.concatenate([tedges[idx_dt], tedges[idx_dt + 1]])
-        d_edges = np.tile(diffusivity[idx_dt], 2)
-        erfint = _erf_integral_space(x_edges_flat, diffusivity=d_edges, t=t_edges_flat)
-        n_dt = len(idx_dt)
-        out[idx_dt] = (erfint[n_dt:] - erfint[:n_dt]) / dx[idx_dt]
-
-    # dx=0 and dt=0: point evaluation of erf
-    mask_both_zero = (dx == 0.0) & (dt == 0.0) & ~mask_asymptotic
-    if np.any(mask_both_zero):
-        x_pts = xedges[:-1][mask_both_zero]
-        t_pts = tedges[:-1][mask_both_zero]
-        d_pts = diffusivity[mask_both_zero]
-        with np.errstate(divide="ignore", invalid="ignore"):
-            a_pts = np.where(
-                (d_pts == 0.0) | (t_pts == 0.0),
-                np.inf,
-                1.0 / (2.0 * np.sqrt(d_pts * t_pts)),
-            )
-        result = np.where(np.isinf(a_pts), np.sign(x_pts), special.erf(a_pts * x_pts))
-        out[mask_both_zero] = result
-
-    # Handle infinite x edges
-    le, ue = xedges[:-1], xedges[1:]
-    out[np.isinf(le) & ~np.isinf(ue)] = -1.0
-    out[np.isneginf(le) & np.isneginf(ue)] = -1.0
-    out[~np.isinf(le) & np.isinf(ue)] = 1.0
-    out[np.isposinf(le) & np.isposinf(ue)] = 1.0
-    out[np.isneginf(le) & np.isposinf(ue)] = 0.0
-    out[np.isposinf(le) & np.isneginf(ue)] = 0.0
-
-    # Handle NaN in edges
-    out[np.isnan(xedges[:-1]) | np.isnan(xedges[1:])] = np.nan
-    out[np.isnan(tedges[:-1]) | np.isnan(tedges[1:])] = np.nan
-
-    if len(out) == 1:
-        return out[0]
-    return out
-
-
-def _erf_mean_space_time_2d(xedges, tedges, diffusivity):
-    """
     Compute the mean of erf(x/(2*sqrt(D*t))) over a 2D space-time grid.
 
     Cell (i,j) spans [xedges[i], xedges[i+1]] x [tedges[j], tedges[j+1]].
@@ -457,43 +321,96 @@ def _erf_mean_space_time_2d(xedges, tedges, diffusivity):
             dx[i] * dt[j]
         )
 
+    where F(x,t,D) = ∫₀ᵗ ∫₀ˣ erf(ξ/(2√(D·τ))) dξ dτ
+
     This is ~4x more efficient than evaluating 4 corners per cell separately,
     since adjacent cells share corner points.
 
     Parameters
     ----------
     xedges : array-like
-        Cell edges in space, shape (nx+1,). Must be finite and non-NaN.
+        Cell edges in space, shape (nx+1,).
     tedges : array-like
-        Cell edges in time, shape (nt+1,). Must be finite and non-NaN.
+        Cell edges in time, shape (nt+1,).
     diffusivity : float
         Diffusivity [m²/day]. Must be positive.
+    asymptotic_cutoff_sigma : float, optional
+        Performance optimization passed through to the integral functions.
+        When |x|/(2*sqrt(D*t)) exceeds this threshold, asymptotic
+        approximations are used instead of the full formulas. Since
+        erf(3) ≈ 0.99998 and erf(4) ≈ 0.9999999846, values of 3-5 provide
+        good accuracy with significant speedup for transport problems where
+        most cells are far from the concentration front.
 
     Returns
     -------
     ndarray
         Mean of erf over each cell, shape (nx, nt).
-
-    See Also
-    --------
-    _erf_mean_space_time : 1D paired-cell version for non-grid layouts.
     """
     xedges = np.asarray(xedges, dtype=float)
     tedges = np.asarray(tedges, dtype=float)
     diffusivity = float(diffusivity)
 
-    # Evaluate at all (nx+1)*(nt+1) unique corner points using broadcasting
+    dx = np.diff(xedges)  # (nx,)
+    dt = np.diff(tedges)  # (nt,)
+
+    # Evaluate F at all (nx+1)*(nt+1) unique corner points using broadcasting
     f_corners = _erf_integral_space_time(
         xedges[:, np.newaxis],  # (nx+1, 1)
         tedges[np.newaxis, :],  # (1, nt+1)
         diffusivity,
+        asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
     )  # (nx+1, nt+1)
 
     # Bin averages via inclusion-exclusion using views on f_corners
     double_integrals = f_corners[1:, 1:] - f_corners[:-1, 1:] - f_corners[1:, :-1] + f_corners[:-1, :-1]
-    cell_areas = np.diff(xedges)[:, np.newaxis] * np.diff(tedges)[np.newaxis, :]
+    cell_areas = dx[:, np.newaxis] * dt[np.newaxis, :]
 
-    return double_integrals / cell_areas
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = double_integrals / cell_areas
+
+    # Fix dx=0 rows: mean over time at fixed x, dispatched to _erf_integral_time
+    mask_dx_zero = dx == 0.0
+    if np.any(mask_dx_zero):
+        idx_dx = np.where(mask_dx_zero)[0]
+        erfint = _erf_integral_time(
+            tedges[np.newaxis, :],  # (1, nt+1)
+            x=xedges[idx_dx, np.newaxis],  # (n_dx, 1)
+            diffusivity=diffusivity,
+            asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
+        )  # (n_dx, nt+1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out[idx_dx, :] = (erfint[:, 1:] - erfint[:, :-1]) / dt[np.newaxis, :]
+
+    # Fix dt=0 columns: mean over space at fixed time, dispatched to _erf_integral_space
+    mask_dt_zero = dt == 0.0
+    if np.any(mask_dt_zero):
+        idx_dt = np.where(mask_dt_zero)[0]
+        clip_kw = {"clip_to_inf": asymptotic_cutoff_sigma} if asymptotic_cutoff_sigma is not None else {}
+        erfint = _erf_integral_space(
+            xedges[:, np.newaxis],  # (nx+1, 1)
+            diffusivity=diffusivity,
+            t=tedges[idx_dt][np.newaxis, :],  # (1, n_dt)
+            **clip_kw,
+        )  # (nx+1, n_dt)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out[:, idx_dt] = (erfint[1:, :] - erfint[:-1, :]) / dx[:, np.newaxis]
+
+    # Fix cells where both dx=0 and dt=0: point evaluation of erf
+    if np.any(mask_dx_zero) and np.any(mask_dt_zero):
+        ix = np.where(mask_dx_zero)[0]
+        jt = np.where(mask_dt_zero)[0]
+        x_pts = xedges[ix, np.newaxis]  # (n_dx, 1)
+        t_pts = tedges[jt][np.newaxis, :]  # (1, n_dt)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            a = np.where(
+                t_pts <= 0.0,
+                np.inf,
+                1.0 / (2.0 * np.sqrt(diffusivity * t_pts)),
+            )
+        out[np.ix_(ix, jt)] = np.where(np.isinf(a), np.sign(x_pts), special.erf(a * x_pts))
+
+    return out
 
 
 def _infiltration_to_extraction_coeff_matrix(
@@ -638,9 +555,7 @@ def _infiltration_to_extraction_coeff_matrix(
         for j in range(n_cin_edges):
             xedges_j = step_widths[:, j]
             tedges_j = time_active[:, j]
-            response[:, j] = _erf_mean_space_time(
-                xedges_j, tedges_j, diff_pv, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
-            )
+            response[:, j] = _erf_mean_space_time(xedges=xedges_j, tedges=tedges_j, diffusivity=diff_pv, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma)
 
         frac = 0.5 * (1 + response)
         frac_start = frac[:, :-1]

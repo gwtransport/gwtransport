@@ -15,6 +15,7 @@ from gwtransport.advection import (
 )
 from gwtransport.diffusion import (
     _erf_integral_time,
+    _erf_mean_paired_cells,
     _erf_mean_space_time,
     extraction_to_infiltration,
     infiltration_to_extraction,
@@ -447,7 +448,7 @@ class TestInfiltrationToExtractionDiffusionPhysics:
 class TestErfMeanSpaceTimeAnalytical:
     """Tests for _erf_mean_space_time against known analytical solutions.
 
-    The function computes the mean of erf(x/(2√(D*t))) over space-time cells.
+    The function computes the mean of erf(x/(2√(D*t))) over a 2D space-time grid.
     """
 
     def test_against_numerical_double_integration(self):
@@ -469,59 +470,58 @@ class TestErfMeanSpaceTimeAnalytical:
         expected = integral / (dx * dt)
 
         result = _erf_mean_space_time(xedges, tedges, diffusivity)
-        np.testing.assert_allclose(result, expected, rtol=1e-6)
+        np.testing.assert_allclose(result[0, 0], expected, rtol=1e-6)
 
     def test_symmetric_edges_around_zero_in_x(self):
         """Mean over symmetric x interval around 0 should be 0."""
         xedges = np.array([-1.0, 1.0])
         tedges = np.array([1.0, 2.0])
         result = _erf_mean_space_time(xedges, tedges, diffusivity=1.0)
-        np.testing.assert_allclose(result, 0.0, atol=1e-10)
+        np.testing.assert_allclose(result[0, 0], 0.0, atol=1e-10)
 
     def test_large_positive_x(self):
         """For large positive x, mean erf should approach 1."""
         xedges = np.array([100.0, 200.0])
         tedges = np.array([1.0, 2.0])
         result = _erf_mean_space_time(xedges, tedges, diffusivity=1.0)
-        np.testing.assert_allclose(result, 1.0, rtol=1e-4)
+        np.testing.assert_allclose(result[0, 0], 1.0, rtol=1e-4)
+
+
+class TestErfMeanPairedCellsAsymptoticCutoff:
+    """Tests for _erf_mean_paired_cells asymptotic cutoff optimization."""
 
     def test_asymptotic_cutoff_matches_full_computation(self):
         """Test that asymptotic cutoff produces same results as full computation."""
-        # Create a range of cells: some near the front, some far away
         n_cells = 50
         xedges = np.linspace(-20, 20, n_cells + 1)
         tedges = np.linspace(1, 5, n_cells + 1)
-        diffusivity = 1.0
+        diffusivity = np.full(n_cells, 1.0)
 
-        result_full = _erf_mean_space_time(xedges, tedges, diffusivity)
-        result_cutoff = _erf_mean_space_time(xedges, tedges, diffusivity, asymptotic_cutoff_sigma=4.0)
+        result_full = _erf_mean_paired_cells(xedges, tedges, diffusivity)
+        result_cutoff = _erf_mean_paired_cells(xedges, tedges, diffusivity, asymptotic_cutoff_sigma=4.0)
 
-        # Results should be very close (cutoff at 4 sigma gives error < 1e-8)
         np.testing.assert_allclose(result_cutoff, result_full, rtol=1e-6, atol=1e-6)
 
     def test_asymptotic_cutoff_handles_edge_cases(self):
         """Test asymptotic cutoff with dx=0, dt=0, and mixed cells."""
-        # Mix of edge cases - xedges and tedges must be sorted per cell
         xedges = np.array([0.0, 0.0, 10.0, 20.0, 25.0, 30.0])  # dx=0 first cell
         tedges = np.array([1.0, 1.0, 2.0, 2.0, 3.0, 4.0])  # dt=0 third cell
         diffusivity = np.array([1.0, 1.0, 1.0, 1.0, 1.0])
 
-        result_full = _erf_mean_space_time(xedges, tedges, diffusivity)
-        result_cutoff = _erf_mean_space_time(xedges, tedges, diffusivity, asymptotic_cutoff_sigma=3.0)
+        result_full = _erf_mean_paired_cells(xedges, tedges, diffusivity)
+        result_cutoff = _erf_mean_paired_cells(xedges, tedges, diffusivity, asymptotic_cutoff_sigma=3.0)
 
         np.testing.assert_allclose(result_cutoff, result_full, rtol=1e-5, atol=1e-5)
 
     def test_asymptotic_cutoff_cell_straddling_zero_not_optimized(self):
         """Test that cells straddling x=0 are not assigned asymptotic values."""
-        # Cell that spans from negative to positive x should not be optimized
         xedges = np.array([-5.0, 5.0])
         tedges = np.array([1.0, 2.0])
-        diffusivity = 1.0
+        diffusivity = np.array([1.0])
 
-        result_full = _erf_mean_space_time(xedges, tedges, diffusivity)
-        result_cutoff = _erf_mean_space_time(xedges, tedges, diffusivity, asymptotic_cutoff_sigma=0.1)
+        result_full = _erf_mean_paired_cells(xedges, tedges, diffusivity)
+        result_cutoff = _erf_mean_paired_cells(xedges, tedges, diffusivity, asymptotic_cutoff_sigma=0.1)
 
-        # Should get same result since cell straddles x=0
         np.testing.assert_allclose(result_cutoff, result_full, rtol=1e-10)
 
 
