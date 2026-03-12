@@ -11,15 +11,16 @@ Key function:
 The dispersion is characterized by the longitudinal dispersion coefficient D_L,
 which is computed internally from:
 
-    D_L = D_m + alpha_L * v
+    D_L = D_m + alpha_L * v_s
 
 where:
 - D_m is the molecular diffusion coefficient [m^2/day]
 - alpha_L is the longitudinal dispersivity [m]
-- v is the pore velocity [m/day], computed as v = L / tau_mean
+- v_s is the retarded velocity [m/day], computed as v_s = L / (R * tau_mean)
 
-The velocity v is computed per (pore_volume, output_bin) using the mean residence
-time, which correctly accounts for time-varying flow. This formulation ensures that:
+The velocity v_s is computed per (pore_volume, output_bin) using the mean residence
+time (which includes retardation), correctly accounting for time-varying flow.
+This formulation ensures that:
 - Molecular diffusion spreading scales with residence time: sqrt(D_m * tau)
 - Mechanical dispersion spreading scales with travel distance: sqrt(alpha_L * L)
 
@@ -482,6 +483,59 @@ def _erf_mean_space_time(xedges, tedges, diffusivity, *, asymptotic_cutoff_sigma
     return out
 
 
+def _erf_mean_space_time_2d(xedges, tedges, diffusivity):
+    """
+    Compute the mean of erf(x/(2*sqrt(D*t))) over a 2D space-time grid.
+
+    Cell (i,j) spans [xedges[i], xedges[i+1]] x [tedges[j], tedges[j+1]].
+
+    Uses shared-corner evaluation: the double integral F(x,t,D) is computed
+    once at each of the (nx+1)*(nt+1) unique grid corners, then bin averages
+    are formed via inclusion-exclusion::
+
+        mean[i, j] = (F[i + 1, j + 1] - F[i, j + 1] - F[i + 1, j] + F[i, j]) / (
+            dx[i] * dt[j]
+        )
+
+    This is ~4x more efficient than evaluating 4 corners per cell separately,
+    since adjacent cells share corner points.
+
+    Parameters
+    ----------
+    xedges : array-like
+        Cell edges in space, shape (nx+1,). Must be finite and non-NaN.
+    tedges : array-like
+        Cell edges in time, shape (nt+1,). Must be finite and non-NaN.
+    diffusivity : float
+        Diffusivity [m²/day]. Must be positive.
+
+    Returns
+    -------
+    ndarray
+        Mean of erf over each cell, shape (nx, nt).
+
+    See Also
+    --------
+    _erf_mean_space_time : 1D paired-cell version for non-grid layouts.
+    """
+    xedges = np.asarray(xedges, dtype=float)
+    tedges = np.asarray(tedges, dtype=float)
+    diffusivity = float(diffusivity)
+
+    # Evaluate at all (nx+1)*(nt+1) unique corner points using broadcasting
+    f_corners = _erf_integral_space_time(
+        xedges[:, np.newaxis],  # (nx+1, 1)
+        tedges[np.newaxis, :],  # (1, nt+1)
+        diffusivity,
+    )  # (nx+1, nt+1)
+
+    # Bin averages via inclusion-exclusion using views on f_corners
+    double_integrals = f_corners[1:, 1:] - f_corners[:-1, 1:] - f_corners[1:, :-1] + f_corners[:-1, :-1]
+    cell_areas = np.diff(xedges)[:, np.newaxis] * np.diff(tedges)[np.newaxis, :]
+
+    return double_integrals / cell_areas
+
+
 def _infiltration_to_extraction_coeff_matrix(
     *,
     flow: npt.NDArray[np.floating],
@@ -513,7 +567,8 @@ def _infiltration_to_extraction_coeff_matrix(
     streamline_length : ndarray
         Travel distances [m]. Already validated.
     molecular_diffusivity : ndarray
-        Molecular diffusion coefficients [m2/day]. Already broadcasted.
+        Effective molecular diffusivities [m2/day]. Already broadcasted.
+        See :func:`infiltration_to_extraction` for physical interpretation.
     longitudinal_dispersivity : ndarray
         Longitudinal dispersivities [m]. Already broadcasted.
     retardation_factor : float
@@ -575,11 +630,18 @@ def _infiltration_to_extraction_coeff_matrix(
         retardation_factor=retardation_factor,
     )
 
-    # Compute velocity: v = L / tau_mean
+    # Compute retarded velocity: v_s = L / (R * tau) = v / R.
+    # Using R*tau (from residence_time with retardation) gives the retarded
+    # velocity, not the pore velocity. This is intentional:
+    # - Dispersivity term: alpha_L * v_s * R * tau = alpha_L * L — R cancels,
+    #   giving correct distance-dependent mechanical dispersion.
+    # - Molecular term: D_m * R * tau — exact when D_m represents D_eff = D_m/R.
+    #   For solutes D_m ~ 1e-5 m²/day (negligible); for heat, users pass
+    #   D_th = lambda/(rho*c)_eff which is already the effective diffusivity.
     valid_rt = np.isfinite(rt_mean_2d) & (rt_mean_2d > 0)
     velocity_2d = np.where(valid_rt, streamline_length[:, None] / rt_mean_2d, 0.0)
 
-    # Compute D_L = D_m + alpha_L * v
+    # Compute D_L = D_m + alpha_L * v_s
     diffusivity_2d = np.where(
         valid_rt,
         molecular_diffusivity[:, None] + longitudinal_dispersivity[:, None] * velocity_2d,
@@ -663,13 +725,14 @@ def infiltration_to_extraction(
 
     The longitudinal dispersion coefficient D_L is computed internally as:
 
-        D_L = D_m + alpha_L * v
+        D_L = D_m + alpha_L * v_s
 
-    where v = L / tau_mean is the mean pore velocity computed from the mean
-    residence time for each (pore_volume, output_bin) combination. This
-    formulation correctly captures that:
-    - Molecular diffusion spreading scales with residence time: sqrt(D_m * tau)
-    - Mechanical dispersion spreading scales with travel distance: sqrt(alpha_L * L)
+    where v_s = L / (R * tau_mean) is the retarded velocity computed from the
+    mean residence time (which includes retardation) for each (pore_volume,
+    output_bin) combination. For the dispersivity term, the R factors cancel
+    (alpha_L * v_s * R * tau = alpha_L * L), giving correct distance-dependent
+    mechanical dispersion. See the ``molecular_diffusivity`` parameter for how
+    the molecular term interacts with retardation.
 
     Parameters
     ----------
@@ -693,10 +756,23 @@ def infiltration_to_extraction(
         Array of travel distances [m] corresponding to each pore volume.
         Must have the same length as aquifer_pore_volumes.
     molecular_diffusivity : float or array-like
-        Molecular diffusion coefficient [m2/day]. Can be a scalar (same for all
+        Effective molecular diffusivity [m2/day]. Can be a scalar (same for all
         pore volumes) or an array with the same length as aquifer_pore_volumes.
-        Must be non-negative. Represents Brownian motion of solute molecules,
-        independent of velocity.
+        Must be non-negative. For solute transport, this is the molecular
+        diffusion coefficient D_m [m2/day] — typically ~1e-5 m2/day, negligible
+        compared to mechanical dispersion. For heat transport, pass the thermal
+        diffusivity D_th = lambda / (rho*c)_eff [m2/day], typically 0.01-0.1
+        m2/day.
+
+        Internally, this value enters the dispersion formula as
+        D_L = molecular_diffusivity + alpha_L * v_s, where v_s = L / (R * tau)
+        is the retarded velocity. For the dispersivity term, the R factors cancel
+        (alpha_L * L / (R * tau) * R * tau = alpha_L * L), giving correct
+        distance-dependent spreading. For the molecular term, the spreading
+        scales as molecular_diffusivity * R * tau. This is exact when
+        molecular_diffusivity equals D_m/R — which is negligible for solutes
+        (D_m ~ 1e-5) and correct for heat (where thermal diffusivity already
+        represents D_eff, not D_m * R).
     longitudinal_dispersivity : float or array-like
         Longitudinal dispersivity [m]. Can be a scalar (same for all pore
         volumes) or an array with the same length as aquifer_pore_volumes.
@@ -965,9 +1041,11 @@ def extraction_to_infiltration(
         Array of travel distances [m] corresponding to each pore volume.
         Must have the same length as aquifer_pore_volumes.
     molecular_diffusivity : float or array-like
-        Molecular diffusion coefficient [m2/day]. Can be a scalar (same for all
+        Effective molecular diffusivity [m2/day]. Can be a scalar (same for all
         pore volumes) or an array with the same length as aquifer_pore_volumes.
-        Must be non-negative.
+        Must be non-negative. See :func:`infiltration_to_extraction` for
+        details on the physical interpretation and the interaction with
+        retardation_factor.
     longitudinal_dispersivity : float or array-like
         Longitudinal dispersivity [m]. Can be a scalar (same for all pore
         volumes) or an array with the same length as aquifer_pore_volumes.
