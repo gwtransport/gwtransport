@@ -41,6 +41,7 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+import warnings
 from collections.abc import Callable
 
 import numpy as np
@@ -295,6 +296,16 @@ def extraction_to_deposition(
     ValueError
         If input dimensions are incompatible or if flow contains NaN values.
 
+    Warns
+    -----
+    UserWarning
+        When the weight matrix is rank-deficient. This occurs with constant
+        flow when the residence time is an integer multiple of the time step
+        width. The deposition weight matrix then acts as a uniform moving
+        average whose transfer function has exact zeros, making certain
+        deposition patterns invisible in the concentration signal. To fix,
+        adjust ``aquifer_pore_volume`` slightly (e.g., multiply by 1.001).
+
     Notes
     -----
     The forward model is ``W @ dep = cout``, where the weight matrix ``W``
@@ -396,6 +407,23 @@ def extraction_to_deposition(
     # Build normalized system: W_norm @ dep = cout_norm
     w_norm = valid_weights / row_sums
     cout_norm = cout_values[valid_rows] / row_sums.ravel()
+
+    # Check for rank deficiency. With constant flow and integer RT/dt, the
+    # deposition weight matrix acts as a uniform moving average whose transfer
+    # function has exact zeros, making certain deposition patterns invisible.
+    n_active = int(col_active.sum())
+    rank = np.linalg.matrix_rank(w_norm[:, col_active])
+    if rank < n_active:
+        warnings.warn(
+            f"Weight matrix is rank-deficient (rank {rank} < {n_active} active "
+            f"columns). This occurs with constant flow when the residence time "
+            f"is an integer multiple of the time step width, creating deposition "
+            f"patterns that are invisible in the concentration signal. The "
+            f"underdetermined modes will be pulled toward the regularization "
+            f"target instead of being determined by data. To achieve full rank, "
+            f"adjust aquifer_pore_volume slightly (e.g., multiply by 1.001).",
+            stacklevel=2,
+        )
 
     # Reconstruct full arrays with NaN for invalid rows
     full_w_norm = np.full_like(deposition_weights, np.nan)
