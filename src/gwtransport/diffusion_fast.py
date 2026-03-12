@@ -84,6 +84,12 @@ def infiltration_to_extraction(
     when flow and tedges are relatively constant. Under variable flow conditions, errors
     increase but mass balance is preserved.
 
+    This function applies only the diffusive spreading component. The advective
+    delay (residence time shift) must be applied separately — typically via
+    :func:`gwtransport.advection.infiltration_to_extraction`. In contrast,
+    :func:`gwtransport.diffusion.infiltration_to_extraction` handles both
+    advection and diffusion in a single call.
+
     For physically rigorous solutions that handle variable flow correctly, use
     :func:`gwtransport.diffusion.infiltration_to_extraction` instead. That function is
     slower but provides analytical solutions to the advection-dispersion equation.
@@ -353,8 +359,13 @@ def convolve_diffusion(
 
     Notes
     -----
-    At the boundaries, the outer values are repeated to avoid edge effects. Equal to mode=`nearest`
-    in `scipy.ndimage.gaussian_filter1d`.
+    At the boundaries, the outer values are repeated to avoid edge effects
+    (equivalent to mode='nearest' in `scipy.ndimage.gaussian_filter1d`).
+    This means boundary values are treated as if they extend infinitely,
+    which can bias results near array edges when sigma is large relative to
+    the distance from the boundary. For transport applications, ensure the
+    signal array extends well beyond the region of interest, or interpret
+    near-boundary results with caution.
 
     The function constructs a sparse convolution matrix where each row represents
     a position-specific Gaussian kernel. The kernel width adapts to local sigma

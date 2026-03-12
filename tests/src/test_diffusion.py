@@ -390,6 +390,59 @@ class TestInfiltrationToExtractionDiffusionPhysics:
         # Retarded breakthrough should persist longer
         assert last_r2 > last_r1
 
+    def test_retardation_scales_mean_breakthrough_time(self):
+        """Mean breakthrough time scales linearly with retardation factor.
+
+        The first moment (centroid) of the ADE impulse response at x=L is
+        R*V/Q, independent of dispersion parameters. For a pulse input at
+        bin ``pulse_bin``, the centroid delay between R=2 and R=1 should
+        equal (R2-R1)*V/Q.
+
+        Uses alpha_L=1 m (Pe=L/alpha_L~100) so diffusion spreading is
+        non-trivial. Both R values have nearly identical Pe because D_m is
+        negligible compared to alpha_L*v_s, so discretization errors in the
+        centroid cancel in the difference.
+        """
+        flow_rate = 100.0  # m3/day
+        pore_volume = 500.0  # m3, tau_0 = V/Q = 5 days
+        length = 100.0  # m
+        d_m = 0.05  # m2/day
+        alpha_l = 1.0  # m, Pe ~ L/alpha_L = 100
+        r1 = 1.0
+        r2 = 2.0
+        pulse_bin = 5  # pulse at day 5-6, away from spin-up edge
+
+        n_days = 60
+        tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+
+        cin = np.zeros(n_days)
+        cin[pulse_bin] = 100.0
+        flow = np.full(n_days, flow_rate)
+
+        centroids = {}
+        for r in [r1, r2]:
+            n_out = n_days + int(r * pore_volume / flow_rate) + 20
+            cout_tedges = pd.date_range("2020-01-01", periods=n_out + 1, freq="D")
+            cout = infiltration_to_extraction(
+                cin=cin,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=cout_tedges,
+                aquifer_pore_volumes=np.array([pore_volume]),
+                streamline_length=np.array([length]),
+                molecular_diffusivity=d_m,
+                longitudinal_dispersivity=alpha_l,
+                retardation_factor=r,
+            )
+            valid = ~np.isnan(cout) & (cout > 0)
+            tmid = np.arange(len(cout)) + 0.5
+            centroids[r] = np.sum(tmid[valid] * cout[valid]) / np.sum(cout[valid])
+
+        expected_delay = (r2 - r1) * pore_volume / flow_rate  # 5.0 days
+        actual_delay = centroids[r2] - centroids[r1]
+
+        np.testing.assert_allclose(actual_delay, expected_delay, rtol=0.01)
+
 
 class TestErfMeanSpaceTimeAnalytical:
     """Tests for _erf_mean_space_time against known analytical solutions.

@@ -330,33 +330,88 @@ def _erf_mean_space_time(xedges, tedges, diffusivity, *, asymptotic_cutoff_sigma
         msg = "diffusivity must be a scalar or have length n_cells (len(xedges) - 1)"
         raise ValueError(msg)
 
-    out = np.full(n_cells, np.nan, dtype=float)
-
-    # Early exit for asymptotic cells (performance optimization)
-    # For cells far from the concentration front, erf ≈ ±1
-    # Assumes xedges and tedges are sorted (x0 <= x1, t0 <= t1)
-    if asymptotic_cutoff_sigma is not None:
-        x0, x1 = xedges[:-1], xedges[1:]
-        t1, d = tedges[1:], diffusivity
-        # Cell doesn't straddle zero if x0 >= 0 (all positive) or x1 <= 0 (all negative)
-        # min(|x|) = x0 if x0 >= 0, else -x1 if x1 <= 0
-        min_abs_x = np.where(x0 >= 0, x0, -x1)
-        # Asymptotic if min(|x|) / (2 * sqrt(D * t1)) >= cutoff, with valid t1 > 0 and d > 0
-        mask = ((x0 >= 0) | (x1 <= 0)) & (t1 > 0) & (d > 0)
-        mask[mask] &= min_abs_x[mask] / (2.0 * np.sqrt(d[mask] * t1[mask])) >= asymptotic_cutoff_sigma
-        out[mask] = np.sign(x0[mask] + x1[mask])
-
-    # Track which cells still need computation
-    mask_computed = ~np.isnan(out)
-
     dx = xedges[1:] - xedges[:-1]
     dt = tedges[1:] - tedges[:-1]
 
-    mask_dx_zero = (dx == 0.0) & ~mask_computed
-    mask_dt_zero = (dt == 0.0) & ~mask_computed
+    # Early exit for asymptotic cells (performance optimization)
+    # For cells far from the concentration front, erf ≈ ±1
+    mask_asymptotic = np.zeros(n_cells, dtype=bool)
+    if asymptotic_cutoff_sigma is not None:
+        x0, x1 = xedges[:-1], xedges[1:]
+        t1, d = tedges[1:], diffusivity
+        min_abs_x = np.where(x0 >= 0, x0, -x1)
+        mask = ((x0 >= 0) | (x1 <= 0)) & (t1 > 0) & (d > 0)
+        mask[mask] &= min_abs_x[mask] / (2.0 * np.sqrt(d[mask] * t1[mask])) >= asymptotic_cutoff_sigma
+        mask_asymptotic = mask
 
-    # Handle cells where both dx=0 AND dt=0 (point evaluation of erf)
-    mask_both_zero = mask_dx_zero & mask_dt_zero
+    # Compute 4N-corner double integral for all non-asymptotic cells
+    mask_compute = ~mask_asymptotic
+    idx = np.where(mask_compute)[0]
+
+    x_corners = np.concatenate([
+        xedges[idx],  # x0
+        xedges[idx + 1],  # x1
+        xedges[idx],  # x0
+        xedges[idx + 1],  # x1
+    ])
+    t_corners = np.concatenate([
+        tedges[idx],  # t0
+        tedges[idx + 1],  # t1
+        tedges[idx + 1],  # t1
+        tedges[idx],  # t0
+    ])
+    d_corners = np.tile(diffusivity[idx], 4)
+
+    f = _erf_integral_space_time(x_corners, t_corners, d_corners)
+    n = len(idx)
+    f_00 = f[:n]
+    f_11 = f[n : 2 * n]
+    f_01 = f[2 * n : 3 * n]
+    f_10 = f[3 * n :]
+
+    double_integrals = f_11 - f_10 - f_01 + f_00
+    cell_areas = dx[idx] * dt[idx]
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = np.full(n_cells, np.nan, dtype=float)
+        out[idx] = double_integrals / cell_areas
+
+    # Fix asymptotic cells
+    if np.any(mask_asymptotic):
+        out[mask_asymptotic] = np.sign(xedges[:-1][mask_asymptotic] + xedges[1:][mask_asymptotic])
+
+    # Fix zero diffusivity cells: _erf_integral_space_time returns 0 for D=0,
+    # but erf(x/(2*sqrt(D*t))) -> sign(x) as D -> 0
+    mask_d_zero = (diffusivity == 0.0) & ~mask_asymptotic
+    if np.any(mask_d_zero):
+        x_mid = (xedges[:-1][mask_d_zero] + xedges[1:][mask_d_zero]) / 2
+        out[mask_d_zero] = np.sign(x_mid)
+
+    # Fix zero-area cells where 4N-corner gives 0/0
+    # dx=0, dt!=0: mean over time at fixed x
+    mask_dx_zero = (dx == 0.0) & ~mask_asymptotic
+    if np.any(mask_dx_zero):
+        idx_dx = np.where(mask_dx_zero)[0]
+        t_edges_flat = np.concatenate([tedges[idx_dx], tedges[idx_dx + 1]])
+        x_edges_flat = np.concatenate([xedges[idx_dx], xedges[idx_dx + 1]])
+        d_edges = np.tile(diffusivity[idx_dx], 2)
+        erfint = _erf_integral_time(t_edges_flat, x=x_edges_flat, diffusivity=d_edges)
+        n_dx = len(idx_dx)
+        out[idx_dx] = (erfint[n_dx:] - erfint[:n_dx]) / dt[idx_dx]
+
+    # dt=0, dx!=0: mean over space at fixed time
+    mask_dt_zero = (dt == 0.0) & (dx != 0.0) & ~mask_asymptotic
+    if np.any(mask_dt_zero):
+        idx_dt = np.where(mask_dt_zero)[0]
+        x_edges_flat = np.concatenate([xedges[idx_dt], xedges[idx_dt + 1]])
+        t_edges_flat = np.concatenate([tedges[idx_dt], tedges[idx_dt + 1]])
+        d_edges = np.tile(diffusivity[idx_dt], 2)
+        erfint = _erf_integral_space(x_edges_flat, diffusivity=d_edges, t=t_edges_flat)
+        n_dt = len(idx_dt)
+        out[idx_dt] = (erfint[n_dt:] - erfint[:n_dt]) / dx[idx_dt]
+
+    # dx=0 and dt=0: point evaluation of erf
+    mask_both_zero = (dx == 0.0) & (dt == 0.0) & ~mask_asymptotic
     if np.any(mask_both_zero):
         x_pts = xedges[:-1][mask_both_zero]
         t_pts = tedges[:-1][mask_both_zero]
@@ -367,103 +422,8 @@ def _erf_mean_space_time(xedges, tedges, diffusivity, *, asymptotic_cutoff_sigma
                 np.inf,
                 1.0 / (2.0 * np.sqrt(d_pts * t_pts)),
             )
-        mask_a_inf = np.isinf(a_pts)
-        result = np.zeros(np.sum(mask_both_zero))
-        if np.any(mask_a_inf):
-            result[mask_a_inf] = np.sign(x_pts[mask_a_inf])
-        if np.any(~mask_a_inf):
-            result[~mask_a_inf] = special.erf(a_pts[~mask_a_inf] * x_pts[~mask_a_inf])
+        result = np.where(np.isinf(a_pts), np.sign(x_pts), special.erf(a_pts * x_pts))
         out[mask_both_zero] = result
-
-    # Handle remaining dt=0 cells (mean over space at fixed time)
-    mask_dt_zero_only = mask_dt_zero & ~mask_dx_zero
-    if np.any(mask_dt_zero_only):
-        idx_dt_zero = np.where(mask_dt_zero_only)[0]
-        n_dt_zero = len(idx_dt_zero)
-
-        # Build edge arrays for all dt=0 cells
-        x_edges_flat = np.concatenate([xedges[idx_dt_zero], xedges[idx_dt_zero + 1]])
-        t_edges_flat = np.concatenate([tedges[idx_dt_zero], tedges[idx_dt_zero + 1]])
-        d_cells = diffusivity[idx_dt_zero]
-
-        # Replicate diffusivity for both edges of each cell
-        d_edges = np.concatenate([d_cells, d_cells])
-
-        # Compute integral at all edge points
-        erfint_flat = _erf_integral_space(x_edges_flat, diffusivity=d_edges, t=t_edges_flat)
-        erfint_lower = erfint_flat[:n_dt_zero]
-        erfint_upper = erfint_flat[n_dt_zero:]
-
-        dx_cells = xedges[idx_dt_zero + 1] - xedges[idx_dt_zero]
-        out[idx_dt_zero] = (erfint_upper - erfint_lower) / dx_cells
-
-    # Handle remaining dx=0 cells (mean over time at fixed x)
-    mask_dx_zero_only = mask_dx_zero & ~mask_dt_zero
-    if np.any(mask_dx_zero_only):
-        idx_dx_zero = np.where(mask_dx_zero_only)[0]
-        n_dx_zero = len(idx_dx_zero)
-
-        # Build edge arrays for all dx=0 cells
-        t_edges_flat = np.concatenate([tedges[idx_dx_zero], tedges[idx_dx_zero + 1]])
-        x_edges_flat = np.concatenate([xedges[idx_dx_zero], xedges[idx_dx_zero + 1]])
-        d_cells = diffusivity[idx_dx_zero]
-
-        # Replicate diffusivity for both edges of each cell
-        d_edges = np.concatenate([d_cells, d_cells])
-
-        # Compute integral at all edge points
-        erfint_flat = _erf_integral_time(t_edges_flat, x=x_edges_flat, diffusivity=d_edges)
-        erfint_lower = erfint_flat[:n_dx_zero]
-        erfint_upper = erfint_flat[n_dx_zero:]
-
-        dt_cells = tedges[idx_dx_zero + 1] - tedges[idx_dx_zero]
-        out[idx_dx_zero] = (erfint_upper - erfint_lower) / dt_cells
-
-    # Handle remaining cells with full double integral
-    mask_remainder = ~mask_dx_zero & ~mask_dt_zero & ~mask_computed
-    if np.any(mask_remainder):
-        # Check for zero diffusivity cells
-        d_remainder = diffusivity[mask_remainder]
-        mask_d_zero = d_remainder == 0.0
-
-        if np.any(mask_d_zero):
-            # For zero diffusivity, erf becomes sign function
-            idx_d_zero = np.where(mask_remainder)[0][mask_d_zero]
-            x_mid = (xedges[idx_d_zero] + xedges[idx_d_zero + 1]) / 2
-            out[idx_d_zero] = np.sign(x_mid)
-
-        # Handle non-zero diffusivity cells
-        mask_d_nonzero = ~mask_d_zero
-        if np.any(mask_d_nonzero):
-            idx_remainder = np.where(mask_remainder)[0][mask_d_nonzero]
-            d_nonzero = d_remainder[mask_d_nonzero]
-
-            # Build corner arrays: each cell has 4 corners, all using same diffusivity
-            x_corners = np.concatenate([
-                xedges[idx_remainder],  # x0
-                xedges[idx_remainder + 1],  # x1
-                xedges[idx_remainder],  # x0
-                xedges[idx_remainder + 1],  # x1
-            ])
-            t_corners = np.concatenate([
-                tedges[idx_remainder],  # t0
-                tedges[idx_remainder + 1],  # t1
-                tedges[idx_remainder + 1],  # t1
-                tedges[idx_remainder],  # t0
-            ])
-            # Replicate diffusivity for all 4 corners of each cell
-            d_corners = np.concatenate([d_nonzero, d_nonzero, d_nonzero, d_nonzero])
-
-            f = _erf_integral_space_time(x_corners, t_corners, d_corners)
-            n_rem = len(idx_remainder)
-            f_00 = f[:n_rem]
-            f_11 = f[n_rem : 2 * n_rem]
-            f_01 = f[2 * n_rem : 3 * n_rem]
-            f_10 = f[3 * n_rem :]
-
-            double_integrals = f_11 - f_10 - f_01 + f_00
-            cell_areas = dx[idx_remainder] * dt[idx_remainder]
-            out[idx_remainder] = double_integrals / cell_areas
 
     # Handle infinite x edges
     le, ue = xedges[:-1], xedges[1:]
