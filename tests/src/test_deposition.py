@@ -226,9 +226,9 @@ def test_perfect_roundtrip_square_system():
     )
 
     recovered_deposition = extraction_to_deposition(
+        cout=concentration,
         flow=flow_values,
         tedges=tedges,
-        cout=concentration,
         cout_tedges=cout_tedges,
         **params,
     )
@@ -289,9 +289,9 @@ def test_perfect_roundtrip_overdetermined_system():
 
     # Backward: concentration → deposition
     recovered_deposition = extraction_to_deposition(
+        cout=concentration,
         flow=flow_values,
         tedges=tedges,
-        cout=concentration,
         cout_tedges=cout_tedges,
         aquifer_pore_volume=params["aquifer_pore_volume"],
         porosity=params["porosity"],
@@ -524,9 +524,9 @@ def test_input_validation():
     # Test cout_tedges length mismatch in extraction_to_deposition
     with pytest.raises(ValueError, match="cout_tedges must have one more element than cout"):
         extraction_to_deposition(
+            cout=np.ones(3),
             flow=np.ones(3),
             tedges=tedges[:4],
-            cout=np.ones(3),
             cout_tedges=tedges[:3],
             aquifer_pore_volume=params["aquifer_pore_volume"],
             porosity=params["porosity"],
@@ -538,9 +538,9 @@ def test_input_validation():
     flow_with_nan = np.array([50.0, np.nan, 60.0])
     with pytest.raises(ValueError, match="flow array cannot contain NaN values"):
         extraction_to_deposition(
+            cout=np.ones(2),
             flow=flow_with_nan,
             tedges=tedges[:4],
-            cout=np.ones(2),
             cout_tedges=tedges[1:4],
             aquifer_pore_volume=params["aquifer_pore_volume"],
             porosity=params["porosity"],
@@ -595,9 +595,9 @@ def test_extraction_to_deposition_full_default():
     )
 
     recovered = extraction_to_deposition_full(
+        cout=concentration,
         flow=flow_values,
         tedges=tedges,
-        cout=concentration,
         cout_tedges=cout_tedges,
         **params,
     )
@@ -632,9 +632,9 @@ def test_extraction_to_deposition_full_objectives():
 
     for objective, method in [("squared_differences", "BFGS"), ("summed_differences", "Nelder-Mead")]:
         recovered = extraction_to_deposition_full(
+            cout=concentration,
             flow=flow_values,
             tedges=tedges,
-            cout=concentration,
             cout_tedges=cout_tedges,
             nullspace_objective=objective,
             optimization_method=method,
@@ -668,9 +668,9 @@ def test_extraction_to_deposition_full_with_rcond():
     )
 
     recovered = extraction_to_deposition_full(
+        cout=concentration,
         flow=flow_values,
         tedges=tedges,
-        cout=concentration,
         cout_tedges=cout_tedges,
         rcond=1e-10,
         **params,
@@ -713,9 +713,9 @@ def test_roundtrip_varying_deposition():
     )
 
     recovered = extraction_to_deposition(
+        cout=concentration,
         flow=flow_values,
         tedges=tedges,
-        cout=concentration,
         cout_tedges=cout_tedges,
         **params,
     )
@@ -949,7 +949,7 @@ def test_compute_deposition_weights_structure():
     retardation_factor = 1.0
 
     weights = compute_deposition_weights(
-        flow_values=flow,
+        flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
@@ -983,7 +983,7 @@ def test_compute_deposition_weights_causality():
     retardation_factor = 1.0
 
     weights = compute_deposition_weights(
-        flow_values=flow,
+        flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
@@ -1013,7 +1013,7 @@ def test_compute_deposition_weights_with_retardation():
 
     # Test with R=1.0
     weights_r1 = compute_deposition_weights(
-        flow_values=flow,
+        flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
@@ -1024,7 +1024,7 @@ def test_compute_deposition_weights_with_retardation():
 
     # Test with R=2.0 (more retardation)
     weights_r2 = compute_deposition_weights(
-        flow_values=flow,
+        flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
@@ -1054,7 +1054,7 @@ def test_compute_deposition_weights_porosity_effect():
 
     # Low porosity (more contact area)
     weights_low_por = compute_deposition_weights(
-        flow_values=flow,
+        flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
@@ -1065,7 +1065,7 @@ def test_compute_deposition_weights_porosity_effect():
 
     # High porosity (less contact area)
     weights_high_por = compute_deposition_weights(
-        flow_values=flow,
+        flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
@@ -1076,6 +1076,226 @@ def test_compute_deposition_weights_porosity_effect():
 
     # Weights should be affected by porosity (different contact areas)
     assert not np.allclose(weights_low_por, weights_high_por)
+
+
+# =============================================================================
+# Variable-timestep tests
+# =============================================================================
+
+
+def test_variable_timestep_constant_deposition():
+    """Constant deposition and flow on irregular time edges.
+
+    After spin-up, the analytical solution C = rt * dep_rate / (porosity * thickness)
+    holds exactly regardless of timestep width.
+    """
+    # Irregular intervals: 1, 3, 2, 5, 7, 4, 2, 3, 1, 6, 4, 2, 5, 3 days = 48 days total
+    day_widths = [1, 3, 2, 5, 7, 4, 2, 3, 1, 6, 4, 2, 5, 3]
+    cumdays = np.concatenate(([0], np.cumsum(day_widths)))
+    t0 = pd.Timestamp("2020-01-01")
+    tedges = pd.DatetimeIndex([t0 + pd.Timedelta(days=int(d)) for d in cumdays])
+    n = len(tedges) - 1
+
+    params = {
+        "aquifer_pore_volume": 500.0,
+        "porosity": 0.25,
+        "thickness": 4.0,
+        "retardation_factor": 1.0,
+    }
+
+    deposition_rate = 100.0
+    flow_rate = 100.0  # RT = 500/100 = 5 days
+    dep_values = np.full(n, deposition_rate)
+    flow_values = np.full(n, flow_rate)
+
+    # Use late output edges to be past spin-up
+    cout_tedges = tedges[8:]  # Start well after spin-up
+
+    cout_result = deposition_to_extraction(
+        dep=dep_values,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        **params,
+    )
+
+    # For constant flow, RT is constant: V*R/Q = 500*1/100 = 5 days
+    expected_rt = params["aquifer_pore_volume"] * params["retardation_factor"] / flow_rate
+    expected_c = expected_rt * deposition_rate / (params["porosity"] * params["thickness"])
+
+    valid = ~np.isnan(cout_result)
+    assert valid.sum() >= 1
+    np.testing.assert_allclose(cout_result[valid], expected_c, rtol=1e-12)
+
+
+def test_variable_timestep_roundtrip():
+    """Forward then inverse with variable timesteps and constant deposition/flow.
+
+    Constant deposition produces a well-conditioned system where the roundtrip
+    should recover to machine precision.
+    """
+    day_widths = [1, 3, 2, 5, 7, 4, 2, 3, 1, 6, 4, 2, 5, 3, 2, 4, 1, 3, 6, 2]
+    cumdays = np.concatenate(([0], np.cumsum(day_widths)))
+    t0 = pd.Timestamp("2020-01-01")
+    tedges = pd.DatetimeIndex([t0 + pd.Timedelta(days=int(d)) for d in cumdays])
+    n = len(tedges) - 1
+
+    params = {
+        "aquifer_pore_volume": 300.0,
+        "porosity": 0.25,
+        "thickness": 4.0,
+        "retardation_factor": 1.0,
+    }
+
+    deposition_rate = 50.0
+    flow_rate = 100.0  # RT = 3 days, well within 59-day series
+    dep_values = np.full(n, deposition_rate)
+    flow_values = np.full(n, flow_rate)
+
+    cout_tedges = tedges  # Same grid
+
+    cout = deposition_to_extraction(
+        dep=dep_values,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        **params,
+    )
+
+    recovered = extraction_to_deposition(
+        cout=cout,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        **params,
+    )
+
+    valid = ~np.isnan(recovered)
+    assert valid.sum() >= n - 1  # First column may be inactive (before spin-up)
+    np.testing.assert_allclose(recovered[valid], dep_values[valid], rtol=1e-6)
+
+
+def test_variable_cout_tedges_constant_deposition():
+    """Daily input data but variable-width cout_tedges (3-day and 7-day bins).
+
+    Constant deposition + constant flow produces the same analytical solution
+    regardless of output bin width.
+    """
+    # Daily tedges for 40 days
+    tedges = pd.date_range("2020-01-01", periods=41, freq="D")
+    n = len(tedges) - 1
+
+    params = {
+        "aquifer_pore_volume": 500.0,
+        "porosity": 0.25,
+        "thickness": 4.0,
+        "retardation_factor": 1.0,
+    }
+
+    deposition_rate = 80.0
+    flow_rate = 100.0  # RT = 5 days
+    dep_values = np.full(n, deposition_rate)
+    flow_values = np.full(n, flow_rate)
+
+    # Variable-width output bins: 3-day, 7-day, 3-day, 7-day, ...
+    cout_days = [0]
+    widths = [3, 7]
+    i = 0
+    while cout_days[-1] < 30:
+        cout_days.append(cout_days[-1] + widths[i % 2])
+        i += 1
+    # Offset to start after spin-up
+    t0 = tedges[8]
+    cout_tedges = pd.DatetimeIndex([t0 + pd.Timedelta(days=d) for d in cout_days])
+
+    cout_result = deposition_to_extraction(
+        dep=dep_values,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        **params,
+    )
+
+    # For constant flow, RT is constant: V*R/Q = 500*1/100 = 5 days
+    expected_rt = params["aquifer_pore_volume"] * params["retardation_factor"] / flow_rate
+    expected_c = expected_rt * deposition_rate / (params["porosity"] * params["thickness"])
+
+    valid = ~np.isnan(cout_result)
+    assert valid.sum() >= 1
+    np.testing.assert_allclose(cout_result[valid], expected_c, rtol=1e-12)
+
+
+def test_variable_timestep_linearity():
+    """With variable timesteps, verify exact linearity: 2 * dep produces exactly 2 * cout."""
+    day_widths = [1, 3, 2, 5, 7, 4, 2, 3, 1, 6, 4, 2]
+    cumdays = np.concatenate(([0], np.cumsum(day_widths)))
+    t0 = pd.Timestamp("2020-01-01")
+    tedges = pd.DatetimeIndex([t0 + pd.Timedelta(days=int(d)) for d in cumdays])
+    n = len(tedges) - 1
+
+    params = {
+        "aquifer_pore_volume": 400.0,
+        "porosity": 0.2,
+        "thickness": 8.0,
+        "retardation_factor": 1.0,
+    }
+
+    base_dep = np.full(n, 20.0)
+    double_dep = 2.0 * base_dep
+    flow_values = np.full(n, 80.0)
+
+    cout_tedges = tedges[5:]
+
+    cout_base = deposition_to_extraction(
+        dep=base_dep,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        **params,
+    )
+    cout_double = deposition_to_extraction(
+        dep=double_dep,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        **params,
+    )
+
+    valid = ~np.isnan(cout_base) & ~np.isnan(cout_double)
+    assert valid.sum() >= 1
+    np.testing.assert_allclose(cout_double[valid], 2.0 * cout_base[valid], rtol=1e-12)
+
+
+def test_variable_timestep_zero_deposition():
+    """Zero deposition with variable timesteps produces exactly zero concentration."""
+    day_widths = [1, 3, 2, 5, 7, 4, 2, 3, 1, 6]
+    cumdays = np.concatenate(([0], np.cumsum(day_widths)))
+    t0 = pd.Timestamp("2020-01-01")
+    tedges = pd.DatetimeIndex([t0 + pd.Timedelta(days=int(d)) for d in cumdays])
+    n = len(tedges) - 1
+
+    params = {
+        "aquifer_pore_volume": 300.0,
+        "porosity": 0.3,
+        "thickness": 5.0,
+        "retardation_factor": 1.0,
+    }
+
+    dep_values = np.zeros(n)
+    flow_values = np.full(n, 100.0)
+    cout_tedges = tedges[3:]
+
+    cout_result = deposition_to_extraction(
+        dep=dep_values,
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        **params,
+    )
+
+    valid = ~np.isnan(cout_result)
+    assert valid.sum() >= 1
+    np.testing.assert_allclose(cout_result[valid], 0.0, atol=1e-15)
 
 
 if __name__ == "__main__":

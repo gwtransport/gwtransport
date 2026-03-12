@@ -54,7 +54,7 @@ from gwtransport.utils import compute_reverse_target, linear_interpolate, solve_
 
 def compute_deposition_weights(
     *,
-    flow_values: npt.ArrayLike,
+    flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volume: float,
@@ -66,7 +66,7 @@ def compute_deposition_weights(
 
     Parameters
     ----------
-    flow_values : array-like
+    flow : array-like
         Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
     tedges : pandas.DatetimeIndex
         Time bin edges for flow data.
@@ -99,6 +99,7 @@ def compute_deposition_weights(
     cout_tedges_days = ((cout_tedges - t0) / pd.Timedelta(days=1)).values
 
     # Compute residence times and cumulative flow
+    flow_values = np.asarray(flow)
     rt_edges = residence_time(
         flow=flow_values,
         flow_tedges=tedges,
@@ -215,7 +216,7 @@ def deposition_to_extraction(
 
     # Compute deposition weights
     deposition_weights = compute_deposition_weights(
-        flow_values=flow_values,
+        flow=flow_values,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
@@ -229,9 +230,9 @@ def deposition_to_extraction(
 
 def extraction_to_deposition(
     *,
+    cout: npt.ArrayLike,
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex | np.ndarray,
-    cout: npt.ArrayLike,
     cout_tedges: pd.DatetimeIndex | np.ndarray,
     aquifer_pore_volume: float,
     porosity: float,
@@ -252,16 +253,16 @@ def extraction_to_deposition(
 
     Parameters
     ----------
+    cout : array-like
+        Concentration changes in extracted water [ng/m3]. Length must equal
+        len(cout_tedges) - 1. May contain NaN values, which will be excluded
+        from the computation along with corresponding rows in the weight matrix.
     flow : array-like
         Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
         Must not contain NaN values.
     tedges : pandas.DatetimeIndex
         Time bin edges for deposition and flow data. Length must equal
         len(flow) + 1.
-    cout : array-like
-        Concentration changes in extracted water [ng/m3]. Length must equal
-        len(cout_tedges) - 1. May contain NaN values, which will be excluded
-        from the computation along with corresponding rows in the weight matrix.
     cout_tedges : pandas.DatetimeIndex
         Time bin edges for output concentration data. Length must equal
         len(cout) + 1.
@@ -320,9 +321,9 @@ def extraction_to_deposition(
     >>> cout = np.ones(len(cout_tedges) - 1) * 10.0  # ng/m3
     >>>
     >>> dep = extraction_to_deposition(
+    ...     cout=cout,
     ...     flow=flow,
     ...     tedges=tedges,
-    ...     cout=cout,
     ...     cout_tedges=cout_tedges,
     ...     aquifer_pore_volume=500.0,
     ...     porosity=0.3,
@@ -368,7 +369,7 @@ def extraction_to_deposition(
 
     # Compute deposition weights
     deposition_weights = compute_deposition_weights(
-        flow_values=flow_values,
+        flow=flow_values,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
@@ -418,9 +419,9 @@ def extraction_to_deposition(
 
 def extraction_to_deposition_full(
     *,
+    cout: npt.ArrayLike,
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex | np.ndarray,
-    cout: npt.ArrayLike,
     cout_tedges: pd.DatetimeIndex | np.ndarray,
     aquifer_pore_volume: float,
     porosity: float,
@@ -440,16 +441,16 @@ def extraction_to_deposition_full(
 
     Parameters
     ----------
+    cout : array-like
+        Concentration changes in extracted water [ng/m3]. Length must equal
+        len(cout_tedges) - 1. May contain NaN values, which will be excluded
+        from the computation along with corresponding rows in the weight matrix.
     flow : array-like
         Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
         Must not contain NaN values.
     tedges : pandas.DatetimeIndex
         Time bin edges for deposition and flow data. Length must equal
         len(flow) + 1.
-    cout : array-like
-        Concentration changes in extracted water [ng/m3]. Length must equal
-        len(cout_tedges) - 1. May contain NaN values, which will be excluded
-        from the computation along with corresponding rows in the weight matrix.
     cout_tedges : pandas.DatetimeIndex
         Time bin edges for output concentration data. Length must equal
         len(cout) + 1.
@@ -517,7 +518,7 @@ def extraction_to_deposition_full(
 
     # Compute deposition weights
     deposition_weights = compute_deposition_weights(
-        flow_values=flow_values,
+        flow=flow_values,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
