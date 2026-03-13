@@ -146,9 +146,8 @@ def _erf_integral_space_time(x, t, diffusivity, asymptotic_cutoff_sigma=None):
     This is useful for batched computations where we need F at arbitrary
     (x, t, D) triplets.
 
-    The double integral F(x,t,D) = ∫₀ᵗ ∫₀ˣ erf(ξ/(2√(Dτ))) dξ dτ is symmetric in x:
-    F(-x, t, D) = F(x, t, D). The analytical formula is only valid for x >= 0, so we
-    compute using |x| and the symmetry property.
+    The double integral F(x,t,D) = ∫₀ᵗ ∫₀ˡˣˡ erf(ξ/(2√(Dτ))) dξ dτ is symmetric in x:
+    F(-x, t, D) = F(x, t, D).
 
     Parameters
     ----------
