@@ -241,7 +241,7 @@ class TestInfiltrationToExtractionDiffusion:
                 tedges=simple_setup["tedges"],
                 cout_tedges=simple_setup["cout_tedges"],
                 aquifer_pore_volumes=np.array([500.0, 600.0]),
-                streamline_length=np.array([100.0]),
+                streamline_length=np.array([100.0, 200.0, 300.0]),
                 molecular_diffusivity=1.0,
                 longitudinal_dispersivity=0.0,
             )
@@ -1095,7 +1095,7 @@ class TestExtractionToInfiltrationDiffusion:
                 tedges=simple_setup["cin_tedges"],
                 cout_tedges=simple_setup["cout_tedges"],
                 aquifer_pore_volumes=np.array([500.0, 600.0]),
-                streamline_length=np.array([100.0]),
+                streamline_length=np.array([100.0, 200.0, 300.0]),
                 molecular_diffusivity=1.0,
                 longitudinal_dispersivity=0.0,
             )
