@@ -40,8 +40,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from gwtransport.advection import gamma_infiltration_to_extraction
-from gwtransport.diffusion_fast import infiltration_to_extraction as diffusion_infiltration_to_extraction
-from gwtransport.gamma import bins as gamma_bins
+from gwtransport.diffusion_fast import gamma_infiltration_to_extraction as diffusion_gamma_infiltration_to_extraction
 from gwtransport.gamma import mean_std_to_alpha_beta
 from gwtransport.utils import compute_time_edges, get_soil_temperature
 
@@ -192,28 +191,24 @@ def generate_example_data(
     alpha, beta = mean_std_to_alpha_beta(mean=aquifer_pore_volume_gamma_mean, std=aquifer_pore_volume_gamma_std)
 
     # Compute cout using diffusion or advection
-    diffusion_params = (molecular_diffusivity, longitudinal_dispersivity, streamline_length)
-    if any(p is not None for p in diffusion_params):
-        if not all(p is not None for p in diffusion_params):
-            msg = (
-                "molecular_diffusivity, longitudinal_dispersivity, and streamline_length must all be provided together."
-            )
-            raise ValueError(msg)
-
-        gb = gamma_bins(alpha=alpha, beta=beta, n_bins=aquifer_pore_volume_gamma_nbins)
-
-        cout_values = diffusion_infiltration_to_extraction(
+    if molecular_diffusivity is not None and longitudinal_dispersivity is not None and streamline_length is not None:
+        cout_values = diffusion_gamma_infiltration_to_extraction(
             cin=cin_nonoise,
             flow=flow,
             tedges=tedges,
             cout_tedges=tedges,
-            aquifer_pore_volumes=gb["expected_values"],
+            alpha=alpha,
+            beta=beta,
+            n_bins=aquifer_pore_volume_gamma_nbins,
             streamline_length=streamline_length,
             molecular_diffusivity=molecular_diffusivity,
             longitudinal_dispersivity=longitudinal_dispersivity,
             retardation_factor=retardation_factor,
             suppress_dispersion_warning=True,
         )
+    elif molecular_diffusivity is not None or longitudinal_dispersivity is not None or streamline_length is not None:
+        msg = "molecular_diffusivity, longitudinal_dispersivity, and streamline_length must all be provided together."
+        raise ValueError(msg)
     else:
         cout_values = gamma_infiltration_to_extraction(
             cin=cin_nonoise,
