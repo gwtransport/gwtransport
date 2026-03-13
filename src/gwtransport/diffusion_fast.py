@@ -40,6 +40,13 @@ Available functions:
   the combined forward matrix (advection + Gaussian diffusion) and solves the inverse problem
   to reconstruct infiltration concentrations from extraction data.
 
+- :func:`gamma_infiltration_to_extraction` - Gamma-distributed pore volumes with fast
+  Gaussian diffusion. Convenience wrapper that parameterizes the pore volume distribution
+  as a gamma distribution.
+
+- :func:`gamma_extraction_to_infiltration` - Gamma-distributed pore volumes, inverse
+  fast Gaussian diffusion. Symmetric inverse of gamma_infiltration_to_extraction.
+
 - :func:`compute_scaled_sigma_array` - Calculate position-dependent diffusion parameters. Computes
   standard deviation (sigma) for Gaussian smoothing at each time step based on residence time,
   molecular diffusivity, longitudinal dispersivity, and spatial discretization.
@@ -65,6 +72,7 @@ from numpy.typing import NDArray
 from scipy import sparse
 from scipy.special import erf
 
+from gwtransport import gamma
 from gwtransport.advection_utils import _infiltration_to_extraction_weights
 from gwtransport.residence_time import residence_time
 from gwtransport.utils import compute_reverse_target, solve_tikhonov
@@ -356,8 +364,8 @@ def extraction_to_infiltration(
         retardation_factor=retardation_factor,
     )
 
-    # Combined forward matrix: W_combined = W_adv @ G
-    w_forward = w_adv @ g_matrix.toarray()
+    # Combined forward matrix: W_adv @ G via sparse @ dense (avoids dense G allocation)
+    w_forward = (g_matrix.T @ w_adv.T).T
 
     # Tikhonov inversion (same pattern as diffusion.py)
     row_sums = w_forward.sum(axis=1)
@@ -400,6 +408,280 @@ def extraction_to_infiltration(
     out[col_active] = cin_solved[col_active]
 
     return out
+
+
+def gamma_infiltration_to_extraction(
+    *,
+    cin: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    alpha: float | None = None,
+    beta: float | None = None,
+    mean: float | None = None,
+    std: float | None = None,
+    n_bins: int = 100,
+    streamline_length: float,
+    molecular_diffusivity: float,
+    longitudinal_dispersivity: float,
+    retardation_factor: float = 1.0,
+    suppress_dispersion_warning: bool = False,
+    asymptotic_cutoff_sigma: float | None = 3.0,
+) -> NDArray[np.floating]:
+    """
+    Compute extracted concentration with fast Gaussian diffusion for gamma-distributed pore volumes.
+
+    Combines advective transport (based on gamma-distributed pore volumes) with
+    fast Gaussian diffusion. This is a convenience wrapper around
+    :func:`infiltration_to_extraction` that parameterizes the aquifer pore volume
+    distribution as a gamma distribution.
+
+    Provide either (alpha, beta) or (mean, std) for the gamma distribution.
+
+    Parameters
+    ----------
+    cin : array-like
+        Concentration of the compound in infiltrating water.
+    flow : array-like
+        Flow rate of water in the aquifer [m3/day].
+    tedges : pandas.DatetimeIndex
+        Time edges for cin and flow data. Has length len(cin) + 1.
+    cout_tedges : pandas.DatetimeIndex
+        Time edges for output data bins. Has length of desired output + 1.
+    alpha : float, optional
+        Shape parameter of gamma distribution of the aquifer pore volume (must be > 0).
+    beta : float, optional
+        Scale parameter of gamma distribution of the aquifer pore volume (must be > 0).
+    mean : float, optional
+        Mean of the gamma distribution.
+    std : float, optional
+        Standard deviation of the gamma distribution.
+    n_bins : int, optional
+        Number of bins to discretize the gamma distribution. Default is 100.
+    streamline_length : float
+        Travel distance through the aquifer [m]. Applied uniformly to all
+        gamma-discretized pore volumes.
+    molecular_diffusivity : float
+        Effective molecular diffusivity [m2/day]. Must be non-negative.
+    longitudinal_dispersivity : float
+        Longitudinal dispersivity [m]. Must be non-negative.
+    retardation_factor : float, optional
+        Retardation factor (default 1.0). Values > 1.0 indicate slower transport.
+    suppress_dispersion_warning : bool, optional
+        Suppress warning about combining multiple pore volumes with dispersivity.
+        Default is False.
+    asymptotic_cutoff_sigma : float or None, optional
+        Truncate the Gaussian kernel at this many standard deviations.
+        Default is 3.0.
+
+    Returns
+    -------
+    numpy.ndarray
+        Bin-averaged concentration in extracted water. Length equals
+        len(cout_tedges) - 1. NaN values indicate time periods with no valid
+        contributions from the infiltration data.
+
+    See Also
+    --------
+    infiltration_to_extraction : Transport with explicit pore volume distribution
+    gamma_extraction_to_infiltration : Reverse operation (deconvolution)
+    gwtransport.gamma.bins : Create gamma distribution bins
+    gwtransport.diffusion.gamma_infiltration_to_extraction : Physically rigorous analytical solution
+    gwtransport.advection.gamma_infiltration_to_extraction : Pure advection (no dispersion)
+    :ref:`concept-gamma-distribution` : Two-parameter pore volume model
+    :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion
+
+    Notes
+    -----
+    The APVD is only time-invariant under the steady-streamlines assumption
+    (see :ref:`assumption-steady-streamlines`).
+
+    The spreading from the gamma-distributed pore volumes represents macrodispersion
+    (aquifer-scale heterogeneity). When ``std`` comes from calibration on measurements,
+    it absorbs all mixing: macrodispersion, microdispersion, and an average molecular
+    diffusion contribution. When ``std`` comes from streamline analysis, it represents
+    macrodispersion only; microdispersion and molecular diffusion can be added via the
+    dispersion parameters.
+    See :ref:`concept-dispersion-scales` for guidance on when to add microdispersion.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> import numpy as np
+    >>> from gwtransport.diffusion_fast import gamma_infiltration_to_extraction
+    >>>
+    >>> tedges = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
+    >>> cout_tedges = pd.date_range(start="2020-01-05", end="2020-01-25", freq="D")
+    >>> cin = np.zeros(len(tedges) - 1)
+    >>> cin[5:10] = 1.0
+    >>> flow = np.ones(len(tedges) - 1) * 100.0
+    >>>
+    >>> cout = gamma_infiltration_to_extraction(
+    ...     cin=cin,
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cout_tedges=cout_tedges,
+    ...     mean=500.0,
+    ...     std=100.0,
+    ...     n_bins=5,
+    ...     streamline_length=100.0,
+    ...     molecular_diffusivity=1e-4,
+    ...     longitudinal_dispersivity=1.0,
+    ... )
+    """
+    bins = gamma.bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
+    return infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=bins["expected_values"],
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
+        retardation_factor=retardation_factor,
+        suppress_dispersion_warning=suppress_dispersion_warning,
+        asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
+    )
+
+
+def gamma_extraction_to_infiltration(
+    *,
+    cout: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    alpha: float | None = None,
+    beta: float | None = None,
+    mean: float | None = None,
+    std: float | None = None,
+    n_bins: int = 100,
+    streamline_length: float,
+    molecular_diffusivity: float,
+    longitudinal_dispersivity: float,
+    retardation_factor: float = 1.0,
+    suppress_dispersion_warning: bool = False,
+    asymptotic_cutoff_sigma: float | None = 3.0,
+    regularization_strength: float = 1e-10,
+) -> NDArray[np.floating]:
+    """
+    Reconstruct infiltration concentration from extracted water for gamma-distributed pore volumes.
+
+    Inverts the forward transport model (fast Gaussian diffusion + advection with
+    gamma-distributed pore volumes) via Tikhonov regularization. This is a convenience
+    wrapper around :func:`extraction_to_infiltration` that parameterizes the aquifer
+    pore volume distribution as a gamma distribution.
+
+    Provide either (alpha, beta) or (mean, std) for the gamma distribution.
+
+    Parameters
+    ----------
+    cout : array-like
+        Concentration of the compound in extracted water.
+    flow : array-like
+        Flow rate of water in the aquifer [m3/day].
+    tedges : pandas.DatetimeIndex
+        Time edges for cin (output) and flow data. Has length of len(flow) + 1.
+    cout_tedges : pandas.DatetimeIndex
+        Time edges for cout data bins. Has length of len(cout) + 1.
+    alpha : float, optional
+        Shape parameter of gamma distribution of the aquifer pore volume (must be > 0).
+    beta : float, optional
+        Scale parameter of gamma distribution of the aquifer pore volume (must be > 0).
+    mean : float, optional
+        Mean of the gamma distribution.
+    std : float, optional
+        Standard deviation of the gamma distribution.
+    n_bins : int, optional
+        Number of bins to discretize the gamma distribution. Default is 100.
+    streamline_length : float
+        Travel distance through the aquifer [m]. Applied uniformly to all
+        gamma-discretized pore volumes.
+    molecular_diffusivity : float
+        Effective molecular diffusivity [m2/day]. Must be non-negative.
+    longitudinal_dispersivity : float
+        Longitudinal dispersivity [m]. Must be non-negative.
+    retardation_factor : float, optional
+        Retardation factor (default 1.0). Values > 1.0 indicate slower transport.
+    suppress_dispersion_warning : bool, optional
+        Suppress warning about combining multiple pore volumes with dispersivity.
+        Default is False.
+    asymptotic_cutoff_sigma : float or None, optional
+        Truncate the Gaussian kernel at this many standard deviations.
+        Default is 3.0.
+    regularization_strength : float, optional
+        Tikhonov regularization parameter. Default is 1e-10.
+
+    Returns
+    -------
+    numpy.ndarray
+        Bin-averaged concentration in infiltrating water. Length equals
+        len(tedges) - 1. NaN values indicate time periods with no valid
+        contributions from the extraction data.
+
+    See Also
+    --------
+    extraction_to_infiltration : Deconvolution with explicit pore volume distribution
+    gamma_infiltration_to_extraction : Forward operation (convolution)
+    gwtransport.gamma.bins : Create gamma distribution bins
+    gwtransport.diffusion.gamma_extraction_to_infiltration : Physically rigorous analytical solution
+    gwtransport.advection.gamma_extraction_to_infiltration : Pure advection (no dispersion)
+    :ref:`concept-gamma-distribution` : Two-parameter pore volume model
+    :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion
+
+    Notes
+    -----
+    The APVD is only time-invariant under the steady-streamlines assumption
+    (see :ref:`assumption-steady-streamlines`).
+
+    The spreading from the gamma-distributed pore volumes represents macrodispersion
+    (aquifer-scale heterogeneity). When ``std`` comes from calibration on measurements,
+    it absorbs all mixing: macrodispersion, microdispersion, and an average molecular
+    diffusion contribution. When ``std`` comes from streamline analysis, it represents
+    macrodispersion only; microdispersion and molecular diffusion can be added via the
+    dispersion parameters.
+    See :ref:`concept-dispersion-scales` for guidance on when to add microdispersion.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> import numpy as np
+    >>> from gwtransport.diffusion_fast import gamma_extraction_to_infiltration
+    >>>
+    >>> tedges = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
+    >>> cout_tedges = pd.date_range(start="2020-01-05", end="2020-01-25", freq="D")
+    >>> cout = np.zeros(len(cout_tedges) - 1)
+    >>> cout[5:10] = 1.0
+    >>> flow = np.ones(len(tedges) - 1) * 100.0
+    >>>
+    >>> cin = gamma_extraction_to_infiltration(
+    ...     cout=cout,
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     cout_tedges=cout_tedges,
+    ...     mean=500.0,
+    ...     std=100.0,
+    ...     n_bins=5,
+    ...     streamline_length=100.0,
+    ...     molecular_diffusivity=1e-4,
+    ...     longitudinal_dispersivity=1.0,
+    ... )
+    """
+    bins = gamma.bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
+    return extraction_to_infiltration(
+        cout=cout,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=bins["expected_values"],
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
+        retardation_factor=retardation_factor,
+        suppress_dispersion_warning=suppress_dispersion_warning,
+        asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
+        regularization_strength=regularization_strength,
+    )
 
 
 def compute_diffusive_spreading_length(
@@ -582,21 +864,20 @@ def _build_gaussian_matrix(
     # Shape: (1, max_kernel_size)
     kernel_positions = positions[np.newaxis, :]
 
-    # Calculate the relative positions for each point
-    relative_positions = kernel_positions
-
-    # Calculate CDF-integrated weights for proper bin averaging
+    # Calculate CDF-integrated weights for proper bin averaging.
+    # Compute erf at unique bin edges, then take differences. Adjacent bins
+    # share an edge, so this halves the number of erf evaluations.
     sigmas = sigma_array[valid_sigma][:, np.newaxis]
     sqrt2 = np.sqrt(2)
-    weights = 0.5 * (
-        erf((relative_positions + 0.5) / (sigmas * sqrt2)) - erf((relative_positions - 0.5) / (sigmas * sqrt2))
-    )
+    edges = np.arange(-max_radius - 0.5, max_radius + 1.5)  # (2*max_radius + 2,)
+    erf_at_edges = erf(edges[np.newaxis, :] / (sigmas * sqrt2))  # (n_valid, 2*max_radius+2)
+    weights = 0.5 * np.diff(erf_at_edges, axis=1)  # (n_valid, 2*max_radius+1)
 
     # Normalize each kernel
     weights /= np.sum(weights, axis=1)[:, np.newaxis]
 
     # Calculate absolute positions in the signal
-    absolute_positions = center_positions + relative_positions
+    absolute_positions = center_positions + kernel_positions
 
     # Handle boundary conditions (nearest-neighbor extrapolation)
     absolute_positions = np.clip(absolute_positions, 0, n - 1)

@@ -3,19 +3,27 @@ Example Data Generation for Groundwater Transport Modeling.
 
 This module provides utilities to generate synthetic datasets for demonstrating
 and testing groundwater transport models. It creates realistic flow patterns,
-temperature/concentration time series, and deposition events suitable for testing
+concentration/temperature time series, and deposition events suitable for testing
 advection, diffusion, and deposition analysis functions.
 
 Available functions:
 
 - :func:`generate_example_data` - Generate comprehensive synthetic dataset with flow and
-  temperature time series. Creates seasonal flow patterns with optional spill events,
-  temperature data via synthetic sinusoidal patterns or real KNMI soil temperature, and
-  extracted temperature computed through gamma-distributed pore volume transport. Returns
-  DataFrame with flow, temp_infiltration, temp_extraction columns plus attrs containing
-  generation parameters and aquifer properties. Temperature generation methods: 'synthetic'
-  (seasonal sinusoidal pattern), 'constant' (constant temperature with noise), or
-  'soil_temperature' (real data from KNMI station 260).
+  concentration time series. Creates seasonal flow patterns with optional spill events,
+  input concentration data via synthetic sinusoidal patterns, constant values, or real KNMI
+  soil temperature, and extracted concentration computed through gamma-distributed pore volume
+  transport. When diffusion parameters are provided, uses the diffusion module instead of
+  pure advection. Returns DataFrame with flow, cin, cout columns plus attrs containing
+  generation parameters and aquifer properties.
+
+- :func:`generate_temperature_example_data` - Convenience wrapper around
+  :func:`generate_example_data` with sensible defaults for temperature transport including
+  thermal retardation, thermal diffusivity, and longitudinal dispersivity.
+
+- :func:`generate_ec_example_data` - Convenience wrapper around
+  :func:`generate_example_data` with sensible defaults for electrical conductivity (EC)
+  transport. EC is a conservative tracer (retardation factor 1.0) with negligible molecular
+  diffusivity compared to thermal transport.
 
 - :func:`generate_example_deposition_timeseries` - Generate synthetic deposition time series
   for pathogen/contaminant deposition analysis. Combines baseline deposition, seasonal patterns,
@@ -32,6 +40,8 @@ import numpy.typing as npt
 import pandas as pd
 
 from gwtransport.advection import gamma_infiltration_to_extraction
+from gwtransport.diffusion_fast import infiltration_to_extraction as diffusion_infiltration_to_extraction
+from gwtransport.gamma import bins as gamma_bins
 from gwtransport.gamma import mean_std_to_alpha_beta
 from gwtransport.utils import compute_time_edges, get_soil_temperature
 
@@ -44,62 +54,93 @@ def generate_example_data(
     flow_mean: float = 100.0,  # m3/day
     flow_amplitude: float = 30.0,  # m3/day
     flow_noise: float = 10.0,  # m3/day
-    temp_infiltration_method: str = "synthetic",  # Method for generating infiltration temperature
-    temp_infiltration_mean: float = 12.0,  # °C
-    temp_infiltration_amplitude: float = 8.0,  # °C
-    temp_measurement_noise: float = 1.0,  # °C
+    cin_method: str = "synthetic",
+    cin_mean: float = 12.0,
+    cin_amplitude: float = 8.0,
+    measurement_noise: float = 1.0,
     aquifer_pore_volume_gamma_mean: float = 1000.0,  # m3
     aquifer_pore_volume_gamma_std: float = 200.0,  # m3
-    aquifer_pore_volume_gamma_nbins: int = 250,  # Discretization resolution
+    aquifer_pore_volume_gamma_nbins: int = 250,
     retardation_factor: float = 1.0,
+    molecular_diffusivity: float | None = None,
+    longitudinal_dispersivity: float | None = None,
+    streamline_length: float | None = None,
 ) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
     """
-    Generate synthetic temperature and flow data for groundwater transport examples.
+    Generate synthetic concentration/temperature and flow data for groundwater transport.
+
+    Creates a synthetic dataset with seasonal flow patterns, input concentration (cin),
+    and output concentration (cout) computed via gamma-distributed pore volume transport.
+    When ``molecular_diffusivity``, ``longitudinal_dispersivity``, and ``streamline_length``
+    are provided, the diffusion module is used instead of pure advection.
 
     Parameters
     ----------
     date_start, date_end : str
         Start and end dates for the generated time series (YYYY-MM-DD).
     date_freq : str, default "D"
-        Frequency string for pandas.date_range (default 'D').
+        Frequency string for pandas.date_range.
     flow_mean : float, default 100.0
-        Mean flow rate in m3/day
+        Mean flow rate [m3/day].
     flow_amplitude : float, default 30.0
-        Seasonal amplitude of flow rate in m3/day
+        Seasonal amplitude of flow rate [m3/day].
     flow_noise : float, default 10.0
-        Random noise level for flow rate in m3/day
-    temp_infiltration_method : str, default "synthetic"
-        Method for generating infiltration temperature. Options:
-        - "synthetic": Seasonal pattern. temp_infiltration_mean and temp_infiltration_amplitude define the pattern. temp_measurement_noise is applied.
-        - "constant": Constant temperature equal to temp_infiltration_mean. temp_measurement_noise is still applied.
-        - "soil_temperature": Use real soil temperature data from KNMI station
-    temp_infiltration_mean : float, default 12.0
-        Mean temperature of infiltrating water in °C
-    temp_infiltration_amplitude : float, default 8.0
-        Seasonal amplitude of infiltration temperature in °C (only used for "synthetic" method)
-    temp_measurement_noise : float, default 1.0
-        Random noise level for infiltration temperature in °C
+        Random noise level for flow rate [m3/day].
+    cin_method : str, default "synthetic"
+        Method for generating infiltration concentration. Options:
+
+        - ``"synthetic"``: Seasonal sinusoidal pattern defined by ``cin_mean`` and
+          ``cin_amplitude``. Measurement noise is applied.
+        - ``"constant"``: Constant value equal to ``cin_mean``. Measurement noise
+          is still applied.
+        - ``"soil_temperature"``: Real soil temperature data from KNMI station 260.
+    cin_mean : float, default 12.0
+        Mean value of infiltrating concentration.
+    cin_amplitude : float, default 8.0
+        Seasonal amplitude of infiltration concentration (only used for
+        ``"synthetic"`` method).
+    measurement_noise : float, default 1.0
+        Random noise level applied to both cin and cout to represent
+        measurement errors.
     aquifer_pore_volume_gamma_mean : float, default 1000.0
-        Mean pore volume of the aquifer gamma distribution in m3
+        Mean pore volume of the aquifer gamma distribution [m3].
     aquifer_pore_volume_gamma_std : float, default 200.0
-        Standard deviation of aquifer pore volume gamma distribution in m3
+        Standard deviation of aquifer pore volume gamma distribution [m3].
     aquifer_pore_volume_gamma_nbins : int, default 250
-        Number of bins to discretize the aquifer pore volume gamma distribution
+        Number of bins to discretize the aquifer pore volume gamma distribution.
     retardation_factor : float, default 1.0
-        Retardation factor for temperature transport
+        Retardation factor for transport.
+    molecular_diffusivity : float or None, default None
+        Effective molecular diffusivity [m2/day]. When provided together with
+        ``longitudinal_dispersivity`` and ``streamline_length``, the diffusion
+        module is used instead of pure advection. For solutes, typically ~1e-5
+        m2/day (negligible). For heat, use thermal diffusivity ~0.01-0.1 m2/day.
+    longitudinal_dispersivity : float or None, default None
+        Longitudinal dispersivity [m]. Must be provided together with
+        ``molecular_diffusivity`` and ``streamline_length``.
+    streamline_length : float or None, default None
+        Travel distance along the streamline [m]. Must be provided together
+        with ``molecular_diffusivity`` and ``longitudinal_dispersivity``.
 
     Returns
     -------
     tuple
         A tuple containing:
-        - pandas.DataFrame: DataFrame with columns 'flow', 'temp_infiltration', 'temp_extraction'
-          and metadata attributes for the aquifer parameters
-        - pandas.DatetimeIndex: Time edges (tedges) used for the flow calculations
+
+        - pandas.DataFrame: DataFrame with columns ``'flow'``, ``'cin'``,
+          ``'cout'`` and metadata attributes for the aquifer parameters.
+        - pandas.DatetimeIndex: Time edges (tedges) used for the flow
+          calculations.
 
     Raises
     ------
     ValueError
-        If temp_infiltration_method is not one of the supported methods
+        If ``cin_method`` is not one of the supported methods, or if only
+        some of the diffusion parameters are provided.
+
+    See Also
+    --------
+    generate_temperature_example_data : Wrapper with thermal transport defaults.
     """
     # Create date range
     dates = pd.date_range(start=date_start, end=date_end, freq=date_freq).tz_localize("UTC")
@@ -120,20 +161,18 @@ def generate_example_data(
 
             flow[spill_start : spill_start + spill_duration] /= spill_magnitude
 
-    # Generate infiltration temperature. nonoise is needed to compute extraction temperature.
-    if temp_infiltration_method == "synthetic":
+    # Generate infiltration concentration. nonoise is needed to compute cout.
+    if cin_method == "synthetic":
         # Seasonal pattern with noise
-        infiltration_temp_nonoise = temp_infiltration_mean + temp_infiltration_amplitude * np.sin(
-            2 * np.pi * days / 365
-        )
-        infiltration_temp = infiltration_temp_nonoise + np.random.normal(0, temp_measurement_noise, len(dates))
-    elif temp_infiltration_method == "constant":
-        # Constant temperature
-        infiltration_temp_nonoise = np.full(len(dates), temp_infiltration_mean)
-        infiltration_temp = infiltration_temp_nonoise + np.random.normal(0, temp_measurement_noise, len(dates))
-    elif temp_infiltration_method == "soil_temperature":
-        # Use soil temperature data already includes measurement noise
-        infiltration_temp_nonoise = infiltration_temp = (
+        cin_nonoise = cin_mean + cin_amplitude * np.sin(2 * np.pi * days / 365)
+        cin_values = cin_nonoise + np.random.normal(0, measurement_noise, len(dates))
+    elif cin_method == "constant":
+        # Constant value
+        cin_nonoise = np.full(len(dates), cin_mean)
+        cin_values = cin_nonoise + np.random.normal(0, measurement_noise, len(dates))
+    elif cin_method == "soil_temperature":
+        # Use soil temperature data (already includes measurement noise)
+        cin_nonoise = cin_values = (
             get_soil_temperature(
                 station_number=260,  # Example station number
                 interpolate_missing_values=True,
@@ -143,30 +182,56 @@ def generate_example_data(
             .values
         )
     else:
-        msg = f"Unknown temperature method: {temp_infiltration_method}"
+        msg = f"Unknown cin_method: {cin_method}"
         raise ValueError(msg)
 
     # Compute tedges for the flow series
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    temp_extraction = gamma_infiltration_to_extraction(
-        cin=infiltration_temp_nonoise,
-        flow=flow,
-        tedges=tedges,
-        cout_tedges=tedges,
-        mean=aquifer_pore_volume_gamma_mean,  # Use mean pore volume
-        std=aquifer_pore_volume_gamma_std,  # Use standard deviation for heterogeneity
-        n_bins=aquifer_pore_volume_gamma_nbins,  # Discretization resolution
-        retardation_factor=retardation_factor,
-    )
+    # Compute alpha, beta for gamma distribution
+    alpha, beta = mean_std_to_alpha_beta(mean=aquifer_pore_volume_gamma_mean, std=aquifer_pore_volume_gamma_std)
+
+    # Compute cout using diffusion or advection
+    diffusion_params = (molecular_diffusivity, longitudinal_dispersivity, streamline_length)
+    if any(p is not None for p in diffusion_params):
+        if not all(p is not None for p in diffusion_params):
+            msg = (
+                "molecular_diffusivity, longitudinal_dispersivity, and streamline_length must all be provided together."
+            )
+            raise ValueError(msg)
+
+        gb = gamma_bins(alpha=alpha, beta=beta, n_bins=aquifer_pore_volume_gamma_nbins)
+
+        cout_values = diffusion_infiltration_to_extraction(
+            cin=cin_nonoise,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=gb["expected_values"],
+            streamline_length=streamline_length,
+            molecular_diffusivity=molecular_diffusivity,
+            longitudinal_dispersivity=longitudinal_dispersivity,
+            retardation_factor=retardation_factor,
+            suppress_dispersion_warning=True,
+        )
+    else:
+        cout_values = gamma_infiltration_to_extraction(
+            cin=cin_nonoise,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            mean=aquifer_pore_volume_gamma_mean,
+            std=aquifer_pore_volume_gamma_std,
+            n_bins=aquifer_pore_volume_gamma_nbins,
+            retardation_factor=retardation_factor,
+        )
 
     # Add some noise to represent measurement errors
-    temp_extraction += np.random.normal(0, temp_measurement_noise, len(dates))
+    cout_values += np.random.normal(0, measurement_noise, len(dates))
 
     # Create data frame
-    alpha, beta = mean_std_to_alpha_beta(mean=aquifer_pore_volume_gamma_mean, std=aquifer_pore_volume_gamma_std)
     df = pd.DataFrame(
-        data={"flow": flow, "temp_infiltration": infiltration_temp, "temp_extraction": temp_extraction},
+        data={"flow": flow, "cin": cin_values, "cout": cout_values},
         index=dates,
     )
     df.attrs = {
@@ -184,12 +249,133 @@ def generate_example_data(
         "flow_mean": flow_mean,
         "flow_amplitude": flow_amplitude,
         "flow_noise": flow_noise,
-        "temp_infiltration_method": temp_infiltration_method,
-        "temp_infiltration_mean": temp_infiltration_mean,
-        "temp_infiltration_amplitude": temp_infiltration_amplitude,
-        "temp_measurement_noise": temp_measurement_noise,
+        "cin_method": cin_method,
+        "cin_mean": cin_mean,
+        "cin_amplitude": cin_amplitude,
+        "measurement_noise": measurement_noise,
     }
+    if molecular_diffusivity is not None:
+        df.attrs["molecular_diffusivity"] = molecular_diffusivity
+        df.attrs["longitudinal_dispersivity"] = longitudinal_dispersivity
+        df.attrs["streamline_length"] = streamline_length
+
     return df, tedges
+
+
+def generate_temperature_example_data(**kwargs: object) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
+    """
+    Generate synthetic temperature and flow data for groundwater transport examples.
+
+    Convenience wrapper around :func:`generate_example_data` with sensible
+    defaults for temperature transport: thermal retardation factor, thermal
+    diffusivity, longitudinal dispersivity, and streamline length.
+
+    Typical parameter values for temperature transport in various sand types:
+
+    +---------------------------------+------------+-------------+--------------------+
+    | Parameter                       | Fine sand  | Medium sand | Coarse sand/gravel |
+    +=================================+============+=============+====================+
+    | retardation_factor R            | 2.0--3.0   | 1.5--2.5    | 1.2--2.0           |
+    +---------------------------------+------------+-------------+--------------------+
+    | molecular_diffusivity (m2/day)  | 0.03--0.06 | 0.05--0.08  | 0.08--0.12         |
+    +---------------------------------+------------+-------------+--------------------+
+    | longitudinal_dispersivity (m)   | 0.1--1.0   | 0.5--5.0    | 1.0--10.0          |
+    +---------------------------------+------------+-------------+--------------------+
+    | streamline_length (m)           | site-specific                                 |
+    +---------------------------------+------------+-------------+--------------------+
+
+    Parameters
+    ----------
+    **kwargs
+        All keyword arguments are forwarded to :func:`generate_example_data`.
+        Defaults that differ from ``generate_example_data``:
+
+        - ``retardation_factor`` : 2.0 (thermal retardation)
+        - ``molecular_diffusivity`` : 0.05 m2/day (thermal diffusivity)
+        - ``longitudinal_dispersivity`` : 1.0 m
+        - ``streamline_length`` : 100.0 m
+
+    Returns
+    -------
+    tuple
+        See :func:`generate_example_data`.
+
+    See Also
+    --------
+    generate_example_data : Generic version with full parameter control.
+    """
+    defaults = {
+        "retardation_factor": 2.0,
+        "molecular_diffusivity": 0.05,
+        "longitudinal_dispersivity": 1.0,
+        "streamline_length": 100.0,
+    }
+    for key, value in defaults.items():
+        kwargs.setdefault(key, value)
+    return generate_example_data(**kwargs)
+
+
+def generate_ec_example_data(**kwargs: object) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
+    """
+    Generate synthetic electrical conductivity and flow data for groundwater transport examples.
+
+    Convenience wrapper around :func:`generate_example_data` with sensible
+    defaults for electrical conductivity (EC) transport. EC is a conservative
+    tracer: dissolved ions travel at water velocity without retardation.
+
+    Typical parameter values for EC (dissolved ion) transport in various sand
+    types. The molecular diffusivity represents effective ionic diffusion in
+    porous media (free-water D_0 reduced by porosity/tortuosity). It is
+    negligible compared to mechanical dispersion at field scale.
+
+    +---------------------------------+----------------+----------------+--------------------+
+    | Parameter                       | Fine sand      | Medium sand    | Coarse sand/gravel |
+    +=================================+================+================+====================+
+    | retardation_factor R            | 1.0            | 1.0            | 1.0                |
+    +---------------------------------+----------------+----------------+--------------------+
+    | molecular_diffusivity (m2/day)  | 3e-5 -- 5e-5   | 4e-5 -- 8e-5   | 5e-5 -- 1e-4       |
+    +---------------------------------+----------------+----------------+--------------------+
+    | longitudinal_dispersivity (m)   | 0.1--1.0       | 0.5--5.0       | 1.0--10.0          |
+    +---------------------------------+----------------+----------------+--------------------+
+    | streamline_length (m)           | site-specific                                        |
+    +---------------------------------+----------------+----------------+--------------------+
+
+    Parameters
+    ----------
+    **kwargs
+        All keyword arguments are forwarded to :func:`generate_example_data`.
+        Defaults that differ from ``generate_example_data``:
+
+        - ``cin_mean`` : 500.0 (uS/cm, typical surface water EC)
+        - ``cin_amplitude`` : 150.0 (uS/cm, seasonal variation)
+        - ``measurement_noise`` : 10.0 (uS/cm)
+        - ``retardation_factor`` : 1.0 (conservative tracer)
+        - ``molecular_diffusivity`` : 5e-5 m2/day (effective ionic diffusion)
+        - ``longitudinal_dispersivity`` : 1.0 m
+        - ``streamline_length`` : 100.0 m
+
+    Returns
+    -------
+    tuple
+        See :func:`generate_example_data`.
+
+    See Also
+    --------
+    generate_example_data : Generic version with full parameter control.
+    generate_temperature_example_data : Wrapper with thermal transport defaults.
+    """
+    defaults = {
+        "cin_mean": 500.0,
+        "cin_amplitude": 150.0,
+        "measurement_noise": 10.0,
+        "retardation_factor": 1.0,
+        "molecular_diffusivity": 5e-5,
+        "longitudinal_dispersivity": 1.0,
+        "streamline_length": 100.0,
+    }
+    for key, value in defaults.items():
+        kwargs.setdefault(key, value)
+    return generate_example_data(**kwargs)
 
 
 def generate_example_deposition_timeseries(
