@@ -328,10 +328,10 @@ def test_infiltration_to_extraction_output_bounded_by_input():
     )
 
     valid = ~np.isnan(cout)
-    # Forward matrix is non-negative with row sums = 1, so output is a
-    # convex combination of input values.
-    assert np.all(cout[valid] >= np.min(cin) - 1e-10)
-    assert np.all(cout[valid] <= np.max(cin) + 1e-10)
+    # Forward matrix is non-negative with row sums ≤ 1, so output is a
+    # convex combination of input values — strictly within [min, max].
+    assert np.all(cout[valid] >= np.min(cin) - 1e-14)
+    assert np.all(cout[valid] <= np.max(cin) + 1e-14)
 
 
 # =============================================================================
@@ -462,7 +462,7 @@ def test_infiltration_to_extraction_with_variable_flow():
     assert np.any(valid)
     # Under variable flow, constant preservation holds because the combined
     # matrix (W_adv @ G) has row sums ≤ 1 for valid rows, and cin is constant.
-    assert_allclose(cout[valid], 10.0, atol=1e-10)
+    assert_allclose(cout[valid], 10.0, atol=1e-13)
 
 
 # =============================================================================
@@ -489,12 +489,16 @@ def test_extraction_to_infiltration_constant_input():
 
     valid = ~np.isnan(cin)
     assert np.sum(valid) > 50
-    # Tikhonov with regularization_strength=1e-10 limits precision
-    assert_allclose(cin[valid], 7.0, atol=1e-5)
+    assert_allclose(cin[valid], 7.0, atol=1e-13)
 
 
 def test_round_trip():
-    """Forward then inverse recovers the original signal."""
+    """Forward then inverse recovers the original signal at machine precision.
+
+    The forward matrix W = W_adv @ G is built identically in both functions,
+    so the Tikhonov solve recovers the original cin exactly (up to floating-point
+    arithmetic).
+    """
     tedges, cout_tedges, flow = _make_transport_data(n_days=200)
     n_days = len(flow)
     cin_original = np.sin(np.linspace(0, 2 * np.pi, n_days)) + 5.0
@@ -519,7 +523,7 @@ def test_round_trip():
     # Compare where both forward and inverse give valid results
     valid = ~np.isnan(cin_recovered) & ~np.isnan(cout)
     assert np.sum(valid) > 50
-    assert_allclose(cin_recovered[valid], cin_original[valid], atol=0.05)
+    assert_allclose(cin_recovered[valid], cin_original[valid], atol=1e-13)
 
 
 # =============================================================================
@@ -710,23 +714,21 @@ def test_create_example_data_different_sizes():
 # =============================================================================
 
 
-def test_diffusion_fast_produces_extraction_grid_output():
+def test_diffusion_fast_vs_diffusion_same_grid():
     """Both modules return results on the same extraction time grid.
 
-    Under constant flow, the fast (Gaussian) and exact (erf) methods should
-    agree reasonably well, since the Gaussian approximation is accurate when
-    flow and time steps are constant.
+    Under constant flow, the fast (Gaussian smoothing) and exact (analytical
+    erf) methods agree within the inherent approximation error. The Gaussian
+    kernel is an approximation of the erf-based analytical solution, so
+    exact agreement is not expected. The error is largest near sharp fronts
+    (step function) and smallest for smooth signals.
     """
     n_days = 200
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
     cout_tedges = tedges.copy()
-
-    cin = np.zeros(n_days)
-    cin[30:] = 1.0
     flow = np.full(n_days, 100.0)
 
-    kwargs = {
-        "cin": cin,
+    base_kwargs = {
         "flow": flow,
         "tedges": tedges,
         "cout_tedges": cout_tedges,
@@ -736,10 +738,11 @@ def test_diffusion_fast_produces_extraction_grid_output():
         "longitudinal_dispersivity": 0.0,
     }
 
-    cout_fast = infiltration_to_extraction(**kwargs)
-    cout_exact = diffusion_exact(**kwargs)
+    # Test with smooth signal (sinusoidal) — better agreement
+    cin_smooth = np.sin(np.linspace(0, 4 * np.pi, n_days)) + 2.0
+    cout_fast = infiltration_to_extraction(cin=cin_smooth, **base_kwargs)
+    cout_exact = diffusion_exact(cin=cin_smooth, **base_kwargs)
 
-    # Same length (same extraction grid)
     assert len(cout_fast) == len(cout_exact) == n_days
 
     both_valid = ~np.isnan(cout_fast) & ~np.isnan(cout_exact)
@@ -748,8 +751,17 @@ def test_diffusion_fast_produces_extraction_grid_output():
     assert np.all(cout_fast[~np.isnan(cout_fast)] >= -1e-10)
     assert np.all(cout_exact[~np.isnan(cout_exact)] >= -1e-10)
 
-    # Approximate agreement under constant flow
-    assert_allclose(cout_fast[both_valid], cout_exact[both_valid], rtol=0.2, atol=0.05)
+    # Smooth signal: Gaussian approximation agrees within 0.2% of signal range
+    assert_allclose(cout_fast[both_valid], cout_exact[both_valid], atol=2e-3)
+
+    # Test with step function — larger approximation gap
+    cin_step = np.zeros(n_days)
+    cin_step[30:] = 1.0
+    cout_fast_step = infiltration_to_extraction(cin=cin_step, **base_kwargs)
+    cout_exact_step = diffusion_exact(cin=cin_step, **base_kwargs)
+
+    both_valid_step = ~np.isnan(cout_fast_step) & ~np.isnan(cout_exact_step)
+    assert_allclose(cout_fast_step[both_valid_step], cout_exact_step[both_valid_step], atol=0.02)
 
 
 if __name__ == "__main__":
