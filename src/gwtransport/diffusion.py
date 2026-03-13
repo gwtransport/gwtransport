@@ -219,9 +219,7 @@ def _erf_integral_space_time(x, t, diffusivity, asymptotic_cutoff_sigma=None):
             - (sqrt_tc * xc**2 * exp_term / (3 * dc))
             - (sqrt_pi * xc**3 * erf_term / (6 * dc ** (3 / 2)))
         )
-        term3 = xc * (
-            tc * erf_term + (xc**2 * erf_term / (2 * dc)) + (sqrt_tc * xc * exp_term / (sqrt_pi * sqrt_dc))
-        )
+        term3 = xc * (tc * erf_term + (xc**2 * erf_term / (2 * dc)) + (sqrt_tc * xc * exp_term / (sqrt_pi * sqrt_dc)))
         term4 = -(xc**3) / (6 * dc)
 
         out[mask_compute] = term1 + term2 + term3 + term4
@@ -309,31 +307,34 @@ def _erf_integral_space(
 
 def _erf_mean_space_time(xedges, tedges, diffusivity, *, asymptotic_cutoff_sigma=None):
     """
-    Compute the mean of erf(x/(2*sqrt(D*t))) over a 2D space-time grid.
+    Compute the mean of erf(x/(2*sqrt(D*t))) over space-time cells.
 
-    Cell (i,j) spans [xedges[i], xedges[i+1]] x [tedges[j], tedges[j+1]].
+    Two modes of operation:
 
-    Uses shared-corner evaluation: the double integral F(x,t,D) is computed
+    **Grid mode** (1D edges): Cell (i,j) spans
+    [xedges[i], xedges[i+1]] x [tedges[j], tedges[j+1]]. Uses shared-corner
+    evaluation where F(x,t,D) = ∫₀ᵗ ∫₀ˣ erf(ξ/(2√(D·τ))) dξ dτ is computed
     once at each of the (nx+1)*(nt+1) unique grid corners, then bin averages
-    are formed via inclusion-exclusion::
+    are formed via inclusion-exclusion. This is ~4x more efficient than
+    evaluating 4 corners per cell separately.
 
-        mean[i, j] = (F[i + 1, j + 1] - F[i, j + 1] - F[i + 1, j] + F[i, j]) / (
-            dx[i] * dt[j]
-        )
-
-    where F(x,t,D) = ∫₀ᵗ ∫₀ˣ erf(ξ/(2√(D·τ))) dξ dτ
-
-    This is ~4x more efficient than evaluating 4 corners per cell separately,
-    since adjacent cells share corner points.
+    **Paired-cell mode** (ndim >= 2 edges): Each cell has its own independent
+    edges along axis 0. Cell i spans
+    [xedges[i], xedges[i+1]] x [tedges[i], tedges[i+1]] with its own
+    diffusivity. No corners are shared, so 4 evaluations of F are needed per
+    cell, but diffusivity may vary across cells.
 
     Parameters
     ----------
     xedges : array-like
-        Cell edges in space, shape (nx+1,).
+        Cell edges in space. For grid mode: shape (nx+1,). For paired-cell
+        mode: shape (n+1, ...) where cells are paired along axis 0.
     tedges : array-like
-        Cell edges in time, shape (nt+1,).
-    diffusivity : float
-        Diffusivity [m²/day]. Must be positive.
+        Cell edges in time. For grid mode: shape (nt+1,). For paired-cell
+        mode: shape (n+1, ...), same shape as xedges.
+    diffusivity : float or array-like
+        Diffusivity [m²/day]. Must be positive. Scalar for grid mode,
+        or broadcastable with (n, ...) cell shapes for paired-cell mode.
     asymptotic_cutoff_sigma : float, optional
         Performance optimization passed through to the integral functions.
         When |x|/(2*sqrt(D*t)) exceeds this threshold, asymptotic
@@ -345,10 +346,92 @@ def _erf_mean_space_time(xedges, tedges, diffusivity, *, asymptotic_cutoff_sigma
     Returns
     -------
     ndarray
-        Mean of erf over each cell, shape (nx, nt).
+        Mean of erf over each cell. Shape (nx, nt) for grid mode,
+        or (n, ...) for paired-cell mode.
     """
     xedges = np.asarray(xedges, dtype=float)
     tedges = np.asarray(tedges, dtype=float)
+
+    if xedges.ndim >= 2:  # noqa: PLR2004
+        # Paired-cell mode: each cell has independent edges along axis 0.
+        diffusivity = np.asarray(diffusivity, dtype=float)
+
+        x_lo, x_hi = xedges[:-1], xedges[1:]
+        t_lo, t_hi = tedges[:-1], tedges[1:]
+        dx = x_hi - x_lo
+        dt = t_hi - t_lo
+
+        kw = {"asymptotic_cutoff_sigma": asymptotic_cutoff_sigma}
+
+        # Double integral at all four corners
+        f_hh = _erf_integral_space_time(x_hi, t_hi, diffusivity, **kw)
+        f_lh = _erf_integral_space_time(x_lo, t_hi, diffusivity, **kw)
+        f_hl = _erf_integral_space_time(x_hi, t_lo, diffusivity, **kw)
+        f_ll = _erf_integral_space_time(x_lo, t_lo, diffusivity, **kw)
+
+        double_integrals = f_hh - f_lh - f_hl + f_ll
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out = double_integrals / (dx * dt)
+
+        # Fix dx=0: mean over time at fixed x
+        mask_dx_zero = dx == 0.0
+        if np.any(mask_dx_zero):
+            idx = mask_dx_zero
+            d_bc = np.broadcast_to(diffusivity, dx.shape)
+            g_hi = _erf_integral_time(
+                t_hi[idx],
+                x=x_lo[idx],
+                diffusivity=d_bc[idx],
+                asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
+            )
+            g_lo = _erf_integral_time(
+                t_lo[idx],
+                x=x_lo[idx],
+                diffusivity=d_bc[idx],
+                asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
+            )
+            with np.errstate(divide="ignore", invalid="ignore"):
+                out[idx] = (g_hi - g_lo) / dt[idx]
+
+        # Fix dt=0: mean over space at fixed t
+        mask_dt_zero = dt == 0.0
+        if np.any(mask_dt_zero):
+            idx = mask_dt_zero
+            d_bc = np.broadcast_to(diffusivity, dx.shape)
+            clip_kw = {"clip_to_inf": asymptotic_cutoff_sigma} if asymptotic_cutoff_sigma is not None else {}
+            h_hi = _erf_integral_space(x_hi[idx], diffusivity=d_bc[idx], t=t_lo[idx], **clip_kw)
+            h_lo = _erf_integral_space(x_lo[idx], diffusivity=d_bc[idx], t=t_lo[idx], **clip_kw)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                out[idx] = (h_hi - h_lo) / dx[idx]
+
+        # Fix both dx=0 and dt=0: point evaluation of erf
+        mask_both_zero = mask_dx_zero & mask_dt_zero
+        if np.any(mask_both_zero):
+            idx = mask_both_zero
+            d_bc = np.broadcast_to(diffusivity, dx.shape)[idx]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                a = np.where(
+                    (t_lo[idx] <= 0.0) | (d_bc <= 0.0),
+                    np.inf,
+                    1.0 / (2.0 * np.sqrt(d_bc * t_lo[idx])),
+                )
+            out[idx] = np.where(np.isinf(a), np.sign(x_lo[idx]), special.erf(a * x_lo[idx]))
+
+        # Fix diffusivity=0: erf(x/(2√(0·t))) = sign(x), time-independent.
+        # Mean over [x_lo, x_hi] is (|x_hi| - |x_lo|) / dx.
+        # _erf_integral_space_time returns 0 for D=0, so the normal path gives
+        # 0/(dx*dt) = 0 which is wrong; override here.
+        mask_d_zero = np.broadcast_to(diffusivity, dx.shape) == 0.0
+        if np.any(mask_d_zero):
+            with np.errstate(divide="ignore", invalid="ignore"):
+                d_zero_vals = (np.abs(x_hi) - np.abs(x_lo)) / dx
+            # Sub-case dx=0: point evaluation sign(x)
+            d_zero_vals = np.where(dx == 0.0, np.sign(x_lo), d_zero_vals)
+            out = np.where(mask_d_zero, d_zero_vals, out)
+
+        return out
+
     diffusivity = float(diffusivity)
 
     dx = np.diff(xedges)  # (nx,)
@@ -528,7 +611,6 @@ def _infiltration_to_extraction_coeff_matrix(
     # Initialize coefficient matrix accumulator
     n_cout_bins = len(cout_tedges) - 1
     n_cin_bins = len(flow)
-    n_cin_edges = len(tedges)
     accumulated_coeff = np.zeros((n_cout_bins, n_cin_bins))
 
     # Determine when infiltration has occurred: cout_tedge must be >= tedge (infiltration time)
@@ -549,13 +631,13 @@ def _infiltration_to_extraction_coeff_matrix(
         time_active[~isactive] = np.nan
         time_active = np.minimum(time_active, rt_edges_2d[[i_pv]])
 
-        response = np.zeros((n_cout_bins, n_cin_edges))
         diff_pv = diffusivity_2d[i_pv, :]
-
-        for j in range(n_cin_edges):
-            xedges_j = step_widths[:, j]
-            tedges_j = time_active[:, j]
-            response[:, j] = _erf_mean_space_time(xedges=xedges_j, tedges=tedges_j, diffusivity=diff_pv, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma)
+        response = _erf_mean_space_time(
+            xedges=step_widths,
+            tedges=time_active,
+            diffusivity=diff_pv[:, np.newaxis],
+            asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
+        )
 
         frac = 0.5 * (1 + response)
         frac_start = frac[:, :-1]
