@@ -39,9 +39,14 @@ Available functions:
   start times, or end times. Validates consistency with expected number of bins and handles
   uniform spacing extrapolation.
 
+- :func:`solve_tikhonov` - Solve linear system with Tikhonov regularization toward a target.
+  Well-determined modes follow the data; poorly-determined modes are pulled toward the target.
+  Used by advection and diffusion ``extraction_to_infiltration``.
+
 - :func:`solve_underdetermined_system` - Solve underdetermined linear system (Ax = b, m < n)
   with nullspace regularization. Handles NaN values by row exclusion. Supports built-in
   objectives ('squared_differences', 'summed_differences') or custom callable objectives.
+  Used by :mod:`gwtransport.deposition`.
 
 - :func:`get_soil_temperature` - Download soil temperature data from KNMI weather stations with
   automatic caching. Supports stations 260 (De Bilt), 273 (Marknesse), 286 (Nieuw Beerta),
@@ -850,6 +855,8 @@ def solve_underdetermined_system(
     rhs_vector: npt.ArrayLike,
     nullspace_objective: str | Callable[[np.ndarray, np.ndarray, np.ndarray], float] = "squared_differences",
     optimization_method: str = "BFGS",
+    rcond: float | None = None,
+    x_target: npt.NDArray[np.floating] | None = None,
 ) -> npt.NDArray[np.floating]:
     """
     Solve an underdetermined linear system with nullspace regularization.
@@ -874,6 +881,10 @@ def solve_underdetermined_system(
           adjacent elements: ``sum((x[i+1] - x[i])**2)``
         * "summed_differences" : Minimize sum of absolute differences between
           adjacent elements: ``sum(|x[i+1] - x[i]|)``
+        * "reverse_matrix" : Minimize distance to a target solution:
+          ``sum((x - x_target)**2)``. Requires ``x_target`` parameter.
+          Combines pseudoinverse exactness for well-determined modes with
+          physically motivated regularization for undetermined modes.
         * callable : Custom objective function with signature
           ``objective(coeffs, x_ls, nullspace_basis)`` where:
 
@@ -885,6 +896,17 @@ def solve_underdetermined_system(
     optimization_method : str, optional
         Optimization method passed to scipy.optimize.minimize.
         Default is "BFGS".
+    rcond : float or None, optional
+        Cutoff ratio for small singular values in both ``numpy.linalg.lstsq``
+        and ``scipy.linalg.null_space``. Singular values smaller than
+        ``rcond * largest_singular_value`` are treated as zero.
+        Default is None, which uses the default of each function.
+        Increasing rcond truncates more modes, expanding the nullspace
+        available for smoothness optimization. Useful for noisy data.
+    x_target : ndarray or None, optional
+        Target solution vector for the ``"reverse_matrix"`` nullspace objective.
+        Required when ``nullspace_objective="reverse_matrix"``. The nullspace
+        coefficients are chosen to minimize ``||x - x_target||^2``.
 
     Returns
     -------
@@ -981,10 +1003,10 @@ def solve_underdetermined_system(
     valid_rhs = rhs[valid_rows]
 
     # Compute least-squares solution
-    x_ls, *_ = np.linalg.lstsq(valid_matrix, valid_rhs, rcond=None)
+    x_ls, *_ = np.linalg.lstsq(valid_matrix, valid_rhs, rcond=rcond)
 
     # Compute nullspace
-    nullspace_basis = null_space(valid_matrix, rcond=None)
+    nullspace_basis = null_space(valid_matrix, rcond=rcond)
     nullrank = nullspace_basis.shape[1]
 
     if nullrank == 0:
@@ -997,6 +1019,7 @@ def solve_underdetermined_system(
         nullspace_basis=nullspace_basis,
         nullspace_objective=nullspace_objective,
         optimization_method=optimization_method,
+        x_target=x_target,
     )
 
     return x_ls + nullspace_basis @ coeffs
@@ -1008,26 +1031,28 @@ def _optimize_nullspace_coefficients(
     nullspace_basis: np.ndarray,
     nullspace_objective: str | Callable[[np.ndarray, np.ndarray, np.ndarray], float],
     optimization_method: str,
+    x_target: np.ndarray | None = None,
 ) -> npt.NDArray[np.floating]:
     """Optimize coefficients in the nullspace to minimize the objective."""
+    if nullspace_objective == "reverse_matrix":
+        if x_target is None:
+            msg = "x_target is required when nullspace_objective='reverse_matrix'"
+            raise ValueError(msg)
+        return _solve_target_analytical(x_ls=x_ls, nullspace_basis=nullspace_basis, x_target=x_target)
+
+    # For squared_differences, solve the quadratic form analytically:
+    # min ||D(x_ls + N c)||^2 => (N'D'DN) c = -N'D'D x_ls
+    coeffs_sq = _solve_squared_differences_analytical(x_ls=x_ls, nullspace_basis=nullspace_basis)
+
+    if nullspace_objective == "squared_differences":
+        return coeffs_sq
+
+    # For other objectives, use iterative optimization starting from the
+    # squared_differences solution for stability
     nullrank = nullspace_basis.shape[1]
     objective_func = _get_nullspace_objective_function(nullspace_objective=nullspace_objective)
-    coeffs_0 = np.zeros(nullrank)
+    coeffs_0 = coeffs_sq if coeffs_sq is not None else np.zeros(nullrank)
 
-    # For stability, always start with squared differences if using summed differences
-    if nullspace_objective == "summed_differences":
-        res_init = minimize(
-            _squared_differences_objective,
-            x0=coeffs_0,
-            args=(x_ls, nullspace_basis),
-            method=optimization_method,
-        )
-        if not res_init.success:
-            msg = f"Initial optimization failed: {res_init.message}"
-            raise ValueError(msg)
-        coeffs_0 = res_init.x
-
-    # Final optimization with target objective
     res = minimize(
         objective_func,
         x0=coeffs_0,
@@ -1040,6 +1065,247 @@ def _optimize_nullspace_coefficients(
         raise ValueError(msg)
 
     return res.x
+
+
+def _solve_squared_differences_analytical(
+    *,
+    x_ls: np.ndarray,
+    nullspace_basis: np.ndarray,
+) -> npt.NDArray[np.floating]:
+    """Solve the squared-differences nullspace problem analytically.
+
+    Minimizes ``sum((x[i+1] - x[i])^2)`` where ``x = x_ls + N @ c`` by
+    solving the normal equations ``(N^T D^T D N) c = -N^T D^T D x_ls``.
+    """
+    # D is the (n-1, n) first-difference matrix; D @ x = x[1:] - x[:-1]
+    # D^T D is the tridiagonal matrix with 2 on diagonal, -1 on off-diagonals
+    # (except corners which have 1 on diagonal)
+    # Instead of forming D explicitly, compute D @ N and D @ x_ls directly
+    dn = nullspace_basis[1:, :] - nullspace_basis[:-1, :]  # (n-1, nullrank)
+    dx = x_ls[1:] - x_ls[:-1]  # (n-1,)
+
+    # Normal equations: (DN)^T (DN) c = -(DN)^T (D x_ls)
+    dntdn = dn.T @ dn  # (nullrank, nullrank)
+    rhs = -(dn.T @ dx)  # (nullrank,)
+
+    cond = np.linalg.cond(dntdn)
+    cond_threshold = 1e12
+    if cond > cond_threshold:
+        msg = (
+            f"The normal equations matrix (DN)^T(DN) is ill-conditioned "
+            f"(condition number: {cond:.2e}). This typically means the "
+            f"nullspace contains a near-constant vector, so the "
+            f"squared-differences objective cannot distinguish between "
+            f"nullspace directions. Consider using a different "
+            f"nullspace_objective (e.g., 'summed_differences'), reducing "
+            f"the problem's degrees of freedom, or lowering rcond to "
+            f"shrink the nullspace (if the near-constant vector has a "
+            f"small but non-zero singular value)."
+        )
+        raise np.linalg.LinAlgError(msg)
+
+    return np.linalg.solve(dntdn, rhs)
+
+
+def _solve_target_analytical(
+    *,
+    x_ls: np.ndarray,
+    nullspace_basis: np.ndarray,
+    x_target: np.ndarray,
+) -> npt.NDArray[np.floating]:
+    """Solve the target-based nullspace problem analytically.
+
+    Minimizes ``||x_ls + N @ c - x_target||^2`` over non-NaN entries of
+    x_target by solving the normal equations
+    ``(N_v^T N_v) c = N_v^T (x_target_v - x_ls_v)`` where ``_v`` denotes
+    the valid (non-NaN) subset.
+
+    Parameters
+    ----------
+    x_ls : ndarray
+        Least-squares solution vector.
+    nullspace_basis : ndarray
+        Nullspace basis matrix of shape (n, nullrank).
+    x_target : ndarray
+        Target solution vector of length n. May contain NaN for entries
+        that should be excluded from the minimization.
+
+    Returns
+    -------
+    ndarray
+        Optimal nullspace coefficients of length nullrank.
+    """
+    valid = ~np.isnan(x_target)
+    if not np.any(valid):
+        return np.zeros(nullspace_basis.shape[1])
+
+    delta = x_target[valid] - x_ls[valid]
+    n_valid = nullspace_basis[valid]
+    ntn = n_valid.T @ n_valid
+    rhs = n_valid.T @ delta
+
+    # Use lstsq to handle ill-conditioned systems gracefully.
+    # When valid target entries don't span all nullspace directions,
+    # lstsq returns the minimum-norm solution (zero coefficients for
+    # unconstrained directions, preserving x_ls there).
+    coeffs, *_ = np.linalg.lstsq(ntn, rhs, rcond=None)
+    return coeffs
+
+
+def compute_reverse_target(
+    *,
+    coeff_matrix: npt.NDArray[np.floating],
+    rhs_vector: npt.NDArray[np.floating],
+) -> npt.NDArray[np.floating]:
+    """Compute reverse matrix target from forward coefficient matrix.
+
+    Constructs a target solution for the inverse problem by transposing the
+    forward coefficient matrix and normalizing rows. For ``W_forward[i,j]``
+    representing the fraction of ``cin[j]`` arriving in ``cout[i]``, the
+    transpose-and-normalize approach reconstructs ``cin[j]`` as a weighted
+    average of ``cout`` bins, weighted by how much ``cin[j]`` contributed
+    to each ``cout`` bin.
+
+    Parameters
+    ----------
+    coeff_matrix : ndarray
+        Forward coefficient matrix of shape (n_cout, n_cin).
+    rhs_vector : ndarray
+        Right-hand side vector of length n_cout (e.g., cout values).
+
+    Returns
+    -------
+    ndarray
+        Target solution vector of length n_cin. Entries with near-zero
+        column sums in the forward matrix are set to NaN.
+    """
+    _min_row_sum = 1e-10
+    wt = coeff_matrix.T  # (n_cin, n_cout)
+    row_sums = wt.sum(axis=1)
+    valid = row_sums > _min_row_sum
+    w_reverse = np.zeros_like(wt)
+    w_reverse[valid] = wt[valid] / row_sums[valid, None]
+    x_target = w_reverse @ rhs_vector
+    x_target[~valid] = np.nan
+    return x_target
+
+
+def solve_tikhonov(
+    *,
+    coefficient_matrix: npt.ArrayLike,
+    rhs_vector: npt.ArrayLike,
+    x_target: npt.NDArray[np.floating],
+    regularization_strength: float = 1e-10,
+    return_resolution: bool = False,
+) -> npt.NDArray[np.floating] | tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+    """Solve a linear system with Tikhonov regularization toward a target.
+
+    Minimizes ``||A x - b||² + λ ||x - x_target||²`` by solving the
+    equivalent augmented least-squares problem::
+
+        [A; √λ I_v] x = [b; √λ x_target_v]
+
+    where ``I_v`` selects only entries where ``x_target`` is not NaN.
+
+    Well-determined modes (large singular values relative to √λ) are
+    dominated by the data; poorly-determined modes are pulled toward
+    ``x_target``. The solution varies continuously with λ, unlike the
+    hard singular-value cutoff of ``rcond`` in truncated SVD.
+
+    Parameters
+    ----------
+    coefficient_matrix : array-like
+        Coefficient matrix of shape (m, n). May contain NaN rows, which
+        are excluded from the system.
+    rhs_vector : array-like
+        Right-hand side vector of length m. May contain NaN values
+        corresponding to NaN rows in coefficient_matrix.
+    x_target : ndarray
+        Target solution of length n, typically from
+        :func:`compute_reverse_target`. NaN entries are excluded from the
+        regularization term.
+    regularization_strength : float, optional
+        Tikhonov parameter λ. Controls the tradeoff between fitting the
+        data and staying close to ``x_target``. Larger values trust the
+        target more; smaller values trust the data more. Default is 1e-10.
+
+        A good starting value for noisy data is
+        ``λ ≈ (noise_std / signal_amplitude)²``. For noiseless synthetic
+        data, the default 1e-10 preserves machine precision.
+    return_resolution : bool, optional
+        If True, also return the per-element fraction of the solution that
+        comes from data (vs from the regularization target). Default is
+        False.
+
+    Returns
+    -------
+    ndarray or tuple of ndarray
+        If ``return_resolution`` is False (default), returns the solution
+        vector of length n.
+
+        If ``return_resolution`` is True, returns ``(x, fraction_data)``
+        where ``fraction_data[j]`` is the diagonal of the model resolution
+        matrix ``R = (A^T A + λ D)^{-1} A^T A``:
+
+        - ``fraction_data[j] ≈ 1``: element *j* is data-driven
+        - ``fraction_data[j] ≈ 0``: element *j* is target-driven
+        - Non-regularized entries (NaN in ``x_target``):
+          ``fraction_data[j] = 1.0``
+
+    See Also
+    --------
+    compute_reverse_target : Compute the regularization target from the
+        forward matrix.
+    solve_underdetermined_system : Alternative solver using nullspace
+        optimization.
+    """
+    matrix = np.asarray(coefficient_matrix)
+    rhs = np.asarray(rhs_vector)
+
+    if matrix.shape[0] != len(rhs):
+        msg = f"coefficient_matrix has {matrix.shape[0]} rows but rhs_vector has {len(rhs)} elements"
+        raise ValueError(msg)
+
+    # Filter NaN rows
+    valid_rows = ~np.isnan(matrix).any(axis=1) & ~np.isnan(rhs)
+
+    if not np.any(valid_rows):
+        msg = "No valid rows found (all contain NaN values)"
+        raise ValueError(msg)
+
+    valid_matrix = matrix[valid_rows]
+    valid_rhs = rhs[valid_rows]
+
+    n_cin = valid_matrix.shape[1]
+    sqrt_lam = np.sqrt(regularization_strength)
+
+    # Only regularize entries where x_target is valid
+    valid_target = ~np.isnan(x_target)
+    target_indices = np.where(valid_target)[0]
+
+    # Build augmented system: [A; √λ I_v] x = [b; √λ x_target_v]
+    n_reg = len(target_indices)
+    reg_matrix = np.zeros((n_reg, n_cin))
+    reg_matrix[np.arange(n_reg), target_indices] = sqrt_lam
+    reg_rhs = sqrt_lam * x_target[target_indices]
+
+    augmented_matrix = np.vstack([valid_matrix, reg_matrix])
+    augmented_rhs = np.concatenate([valid_rhs, reg_rhs])
+
+    x, *_ = np.linalg.lstsq(augmented_matrix, augmented_rhs, rcond=None)
+
+    if return_resolution:
+        # Compute fraction_data from model resolution matrix diagonal:
+        # R = G^{-1} A^T A  where  G = A^T A + λ diag(d)
+        # fraction_data[j] = R[j,j] = 1 - λ d[j] G_inv[j,j]
+        d_reg = np.zeros(n_cin)
+        d_reg[target_indices] = 1.0
+        gram = valid_matrix.T @ valid_matrix + regularization_strength * np.diag(d_reg)
+        gram_inv_diag = np.diag(np.linalg.inv(gram))
+        fraction_data = 1.0 - regularization_strength * gram_inv_diag * d_reg
+        return x, fraction_data
+
+    return x
 
 
 def _squared_differences_objective(coeffs: np.ndarray, x_ls: np.ndarray, nullspace_basis: np.ndarray) -> float:

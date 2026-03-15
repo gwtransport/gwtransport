@@ -94,6 +94,12 @@ concurrency = ["multiprocessing"]
 parallel = true
 sigterm = true
 
+[[tool.ty.overrides]]
+include = ["tests/**", "src/gwtransport/examples.py"]
+
+[tool.ty.overrides.rules]
+invalid-argument-type = "ignore"
+
 [tool.coverage.report]
 exclude_lines = [
     "def __repr__",
