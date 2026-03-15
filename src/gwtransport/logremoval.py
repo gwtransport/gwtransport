@@ -275,6 +275,15 @@ def parallel_mean(
         If log_removals is multi-dimensional and axis is specified,
         returns an array with the specified axis removed.
 
+    Raises
+    ------
+    ValueError
+        If ``flow_fractions`` does not sum to 1.0 along the specified axis.
+
+    See Also
+    --------
+    residence_time_to_log_removal : Compute log removal from residence times
+
     Notes
     -----
     Log removal is a logarithmic measure of pathogen reduction:
@@ -306,10 +315,6 @@ def parallel_mean(
     >>> log_removals_2d = np.array([[3, 4, 5], [2, 3, 4]])
     >>> parallel_mean(log_removals=log_removals_2d, axis=1)
     array([3.43179828, 2.43179828])
-
-    See Also
-    --------
-    residence_time_to_log_removal : Compute log removal from residence times
     """
     # Convert log_removals to numpy array if it isn't already
     log_removals = np.asarray(log_removals, dtype=float)

@@ -117,6 +117,10 @@ def linear_interpolate(
     numpy.ndarray
         Interpolated y-values with the same shape as x_query.
 
+    See Also
+    --------
+    interp_series : Interpolate pandas Series with datetime index
+
     Examples
     --------
     Basic interpolation with clamping (default):
@@ -142,10 +146,6 @@ def linear_interpolate(
     >>> y_unsorted = np.array([30.0, 10.0, 40.0, 20.0])
     >>> linear_interpolate(x_ref=x_unsorted, y_ref=y_unsorted, x_query=x_query)
     array([10., 15., 25., 35., 40.])
-
-    See Also
-    --------
-    interp_series : Interpolate pandas Series with datetime index
     """
     # Convert inputs to arrays
     x_ref = np.asarray(x_ref)
@@ -793,7 +793,7 @@ def get_soil_temperature(*, station_number: int = 260, interpolate_missing_value
 
     # Check if cached file exists and is from today
     if cache_path.exists():
-        return cast(pd.DataFrame, pd.read_pickle(cache_path))  # noqa: S301
+        return cast("pd.DataFrame", pd.read_pickle(cache_path))  # noqa: S301
 
     # Clean up old cache files to prevent disk bloat
     for old_file in cache_dir.glob(f"soil_temp_{station_number}_{interpolate_missing_values}_*.pkl"):
@@ -1179,10 +1179,10 @@ def compute_reverse_target(
         Target solution vector of length n_cin. Entries with near-zero
         column sums in the forward matrix are set to NaN.
     """
-    _min_row_sum = 1e-10
+    min_row_sum = 1e-10
     wt = coeff_matrix.T  # (n_cin, n_cout)
     row_sums = wt.sum(axis=1)
-    valid = row_sums > _min_row_sum
+    valid = row_sums > min_row_sum
     w_reverse = np.zeros_like(wt)
     w_reverse[valid] = wt[valid] / row_sums[valid, None]
     x_target = w_reverse @ rhs_vector

@@ -186,6 +186,11 @@ def residence_time_mean(
         defined by tedges_out. The first dimension corresponds to the different pore volumes
         and the second to the residence times between tedges_out.
 
+    See Also
+    --------
+    residence_time : Compute residence time at specific time indices
+    :ref:`concept-residence-time` : Time in aquifer between infiltration and extraction
+
     Notes
     -----
     - The function converts datetime objects to days since the start of the time series.
@@ -215,11 +220,6 @@ def residence_time_mean(
     >>> # mean residence time should be approximately 2 days
     >>> print(mean_times)  # doctest: +NORMALIZE_WHITESPACE
     [[nan nan  2.  2.  2.  2.  2.  2.  2.]]
-
-    See Also
-    --------
-    residence_time : Compute residence time at specific time indices
-    :ref:`concept-residence-time` : Time in aquifer between infiltration and extraction
     """
     flow = np.asarray(flow)
     flow_tedges = pd.DatetimeIndex(flow_tedges)
@@ -329,8 +329,8 @@ def fraction_explained(
             retardation_factor=retardation_factor,
         )
 
-    _expected_ndim = 2
-    if rt.ndim != _expected_ndim:
+    expected_ndim = 2
+    if rt.ndim != expected_ndim:
         msg = f"rt must be 2D with shape (n_pore_volumes, n_times), got {rt.ndim}D"
         raise ValueError(msg)
 
@@ -375,6 +375,12 @@ def freundlich_retardation(
         Retardation factors for each flow interval.
         Length equals len(concentration) for use as retardation_factor in residence_time.
 
+    See Also
+    --------
+    residence_time : Compute residence times with retardation
+    gwtransport.advection.infiltration_to_extraction_front_tracking : Transport with nonlinear sorption
+    :ref:`concept-nonlinear-sorption` : Freundlich isotherm and concentration-dependent retardation
+
     Examples
     --------
     >>> concentration = np.array([0.1, 0.2, 0.3])  # same length as flow
@@ -386,12 +392,6 @@ def freundlich_retardation(
     ...     porosity=0.35,
     ... )
     >>> # Use R in residence_time as retardation_factor
-
-    See Also
-    --------
-    residence_time : Compute residence times with retardation
-    gwtransport.advection.infiltration_to_extraction_front_tracking : Transport with nonlinear sorption
-    :ref:`concept-nonlinear-sorption` : Freundlich isotherm and concentration-dependent retardation
     """
     concentration = np.asarray(concentration)
 

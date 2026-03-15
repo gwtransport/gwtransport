@@ -1101,7 +1101,7 @@ def test_solve_tikhonov_resolution_underdetermined():
     rhs = np.array([3.0, 7.0])
     x_target = np.array([1.0, 2.0, 3.0, 4.0])
 
-    x, fraction_data = solve_tikhonov(
+    _x, fraction_data = solve_tikhonov(
         coefficient_matrix=coeff,
         rhs_vector=rhs,
         x_target=x_target,
@@ -1142,7 +1142,7 @@ def test_solve_tikhonov_resolution_nan_target():
     rhs = np.array([1.0, 2.0, 3.0])
     x_target = np.array([0.0, np.nan, 0.0])
 
-    x, fraction_data = solve_tikhonov(
+    _x, fraction_data = solve_tikhonov(
         coefficient_matrix=coeff,
         rhs_vector=rhs,
         x_target=x_target,

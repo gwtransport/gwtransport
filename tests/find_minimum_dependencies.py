@@ -119,7 +119,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 import requests
 from packaging.version import parse as parse_version
@@ -136,7 +135,7 @@ class VersionTestResult:
     version: str
     install_success: bool
     test_success: bool
-    error_message: Optional[str] = None
+    error_message: str | None = None
     timestamp: str = ""
 
     def __post_init__(self):
@@ -150,7 +149,7 @@ class MinimumVersionResult:
     """Final result for a package's minimum version."""
 
     package: str
-    minimum_version: Optional[str]
+    minimum_version: str | None
     tested_versions: list[str]
     install_failures: list[str]
     test_failures: list[str]

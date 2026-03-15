@@ -52,6 +52,12 @@ def handle_characteristic_collision(
     list of ShockWave or RarefactionWave
         Single shock or rarefaction wave created at collision point
 
+    Raises
+    ------
+    RuntimeError
+        If the characteristic collision creates a non-entropic shock,
+        indicating a bug in the collision detection logic.
+
     Notes
     -----
     The shock has:
@@ -209,6 +215,12 @@ def handle_shock_collision(
     list of ShockWave
         Single merged shock wave
 
+    Raises
+    ------
+    RuntimeError
+        If shock velocities are not set, or if the merged shock violates
+        the entropy condition.
+
     Notes
     -----
     The merged shock has:
@@ -298,6 +310,11 @@ def handle_shock_characteristic_collision(
     list
         List containing new wave(s): ShockWave if compression, RarefactionWave
         if expansion, or empty list in edge cases
+
+    Raises
+    ------
+    RuntimeError
+        If the shock velocity is not set (i.e., ``shock.velocity`` is None).
 
     Notes
     -----
@@ -443,6 +460,12 @@ def handle_shock_rarefaction_collision(
     list
         List of new waves created: may include shock and modified rarefaction
         for tail collision, or compression shock for head collision
+
+    Raises
+    ------
+    RuntimeError
+        If the shock velocity is not set (i.e., ``shock.velocity`` is None)
+        when processing a head collision.
 
     Notes
     -----
@@ -746,6 +769,11 @@ def recreate_characteristic_with_new_flow(
     CharacteristicWave
         New characteristic at current position with new flow
 
+    Raises
+    ------
+    ValueError
+        If the characteristic is not yet active at ``t_change``.
+
     Notes
     -----
     The parent characteristic should be deactivated by the caller.
@@ -803,6 +831,11 @@ def recreate_shock_with_new_flow(
     -------
     ShockWave
         New shock at current position with updated velocity
+
+    Raises
+    ------
+    ValueError
+        If the shock is not yet active at ``t_change``.
 
     Notes
     -----
@@ -872,6 +905,11 @@ def recreate_rarefaction_with_new_flow(
     RarefactionWave
         New rarefaction at current position with updated velocities
 
+    Raises
+    ------
+    ValueError
+        If the rarefaction is not yet active at ``t_change``.
+
     Notes
     -----
     The parent rarefaction should be deactivated by the caller.
@@ -940,6 +978,11 @@ def handle_flow_change(
     -------
     list
         New waves created at current positions with new flow
+
+    Raises
+    ------
+    TypeError
+        If an unrecognized wave type is encountered in ``active_waves``.
 
     Notes
     -----

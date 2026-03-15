@@ -181,11 +181,25 @@ class CharacteristicWave(Wave):
         return self.v_start + self.velocity() * (t - self.t_start)
 
     def concentration_left(self) -> float:
-        """Get upstream concentration (same as concentration for characteristics)."""
+        """
+        Get upstream concentration (same as concentration for characteristics).
+
+        Returns
+        -------
+        c_left : float
+            Upstream concentration [mass/volume].
+        """
         return self.concentration
 
     def concentration_right(self) -> float:
-        """Get downstream concentration (same as concentration for characteristics)."""
+        """
+        Get downstream concentration (same as concentration for characteristics).
+
+        Returns
+        -------
+        c_right : float
+            Downstream concentration [mass/volume].
+        """
         return self.concentration
 
     def concentration_at_point(self, v: float, t: float) -> float | None:

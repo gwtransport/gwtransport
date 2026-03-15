@@ -222,6 +222,11 @@ def compute_breakthrough_curve(
     c_out : numpy.ndarray
         Array of concentrations matching t_array [mass/volume].
 
+    See Also
+    --------
+    concentration_at_point : Point-wise concentration
+    compute_bin_averaged_concentration_exact : Bin-averaged concentrations
+
     Examples
     --------
     ::
@@ -231,11 +236,6 @@ def compute_breakthrough_curve(
             t_array, v_outlet=500.0, waves=all_waves, sorption=sorption
         )
         len(c_out) == len(t_array)
-
-    See Also
-    --------
-    concentration_at_point : Point-wise concentration
-    compute_bin_averaged_concentration_exact : Bin-averaged concentrations
     """
     t_array = np.asarray(t_array, dtype=float)
     c_out = np.zeros(len(t_array))
@@ -660,6 +660,12 @@ def compute_bin_averaged_concentration_exact(
     c_avg : numpy.ndarray
         Bin-averaged concentrations [mass/volume]. Length N.
 
+    See Also
+    --------
+    concentration_at_point : Point-wise concentration
+    compute_breakthrough_curve : Breakthrough curve
+    integrate_rarefaction_exact : Exact rarefaction integration
+
     Notes
     -----
     **Algorithm**:
@@ -704,12 +710,6 @@ def compute_bin_averaged_concentration_exact(
         )
         len(c_avg) == len(t_edges) - 1
         np.all(c_avg >= 0)
-
-    See Also
-    --------
-    concentration_at_point : Point-wise concentration
-    compute_breakthrough_curve : Breakthrough curve
-    integrate_rarefaction_exact : Exact rarefaction integration
     """
     t_edges = np.asarray(t_edges, dtype=float)
     n_bins = len(t_edges) - 1
@@ -794,6 +794,12 @@ def compute_domain_mass(
     mass : float
         Total mass in domain [mass]. Computed to machine precision (~1e-14).
 
+    See Also
+    --------
+    compute_cumulative_inlet_mass : Cumulative inlet mass
+    compute_cumulative_outlet_mass : Cumulative outlet mass
+    concentration_at_point : Point-wise concentration
+
     Notes
     -----
     **Algorithm**:
@@ -837,12 +843,6 @@ def compute_domain_mass(
             t=10.0, v_outlet=500.0, waves=tracker.state.waves, sorption=sorption
         )
         mass >= 0.0
-
-    See Also
-    --------
-    compute_cumulative_inlet_mass : Cumulative inlet mass
-    compute_cumulative_outlet_mass : Cumulative outlet mass
-    concentration_at_point : Point-wise concentration
     """
     # Partition spatial domain into segments based on wave structure
     # We'll evaluate concentration at many points and identify constant regions
@@ -1476,6 +1476,12 @@ def compute_total_outlet_mass(
         Time until which integration was performed [days].
         This is the time when the last wave passes the outlet.
 
+    See Also
+    --------
+    compute_cumulative_outlet_mass : Cumulative outlet mass up to time t
+    find_last_rarefaction_start_time : Find when last rarefaction starts
+    integrate_rarefaction_total_mass : Total mass in rarefaction to infinity
+
     Notes
     -----
     This function:
@@ -1499,12 +1505,6 @@ def compute_total_outlet_mass(
         )
         total_mass >= 0.0
         t_end >= tedges_days[0]
-
-    See Also
-    --------
-    compute_cumulative_outlet_mass : Cumulative outlet mass up to time t
-    find_last_rarefaction_start_time : Find when last rarefaction starts
-    integrate_rarefaction_total_mass : Total mass in rarefaction to infinity
     """
     # Find when the last rarefaction starts at the outlet
     t_last_raref_start = find_last_rarefaction_start_time(v_outlet, waves)

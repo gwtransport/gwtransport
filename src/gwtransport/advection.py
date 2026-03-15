@@ -1046,7 +1046,23 @@ def _validate_front_tracking_inputs(
     porosity: float | None,
     retardation_factor: float | None,
 ) -> tuple:
-    """Validate inputs and create sorption object for front tracking functions."""
+    """Validate inputs and create sorption object for front tracking functions.
+
+    Returns
+    -------
+    tuple
+        Validated and converted inputs: (cin, flow, tedges, cout_tedges,
+        aquifer_pore_volumes, sorption, cout_tedges_days).
+
+    Raises
+    ------
+    ValueError
+        If array lengths are inconsistent, values are non-physical (negative
+        concentrations, non-positive flows, NaN values, non-positive pore
+        volumes), retardation_factor < 1, Freundlich parameters are missing
+        or non-positive, freundlich_n equals 1, or physical parameters are
+        invalid.
+    """
     cin = np.asarray(cin, dtype=float)
     flow = np.asarray(flow, dtype=float)
     tedges = pd.DatetimeIndex(tedges)
@@ -1171,6 +1187,14 @@ def infiltration_to_extraction_front_tracking(
         Bin-averaged extraction concentration averaged across all pore volumes.
         Length = len(cout_tedges) - 1.
 
+    See Also
+    --------
+    infiltration_to_extraction_front_tracking_detailed : Returns detailed structure
+    infiltration_to_extraction : Convolution-based approach for linear case
+    gamma_infiltration_to_extraction : For distributions of pore volumes
+    :ref:`concept-nonlinear-sorption` : Freundlich isotherm and front-tracking theory
+    :ref:`assumption-advection-dominated` : When diffusion/dispersion is negligible
+
     Notes
     -----
     **Spin-up Period**:
@@ -1226,14 +1250,6 @@ def infiltration_to_extraction_front_tracking(
     ...     bulk_density=1500.0,
     ...     porosity=0.3,
     ... )
-
-    See Also
-    --------
-    infiltration_to_extraction_front_tracking_detailed : Returns detailed structure
-    infiltration_to_extraction : Convolution-based approach for linear case
-    gamma_infiltration_to_extraction : For distributions of pore volumes
-    :ref:`concept-nonlinear-sorption` : Freundlich isotherm and front-tracking theory
-    :ref:`assumption-advection-dominated` : When diffusion/dispersion is negligible
     """
     cin, flow, tedges, cout_tedges, aquifer_pore_volumes, sorption, cout_tedges_days = _validate_front_tracking_inputs(
         cin=cin,
@@ -1348,6 +1364,12 @@ def infiltration_to_extraction_front_tracking_detailed(
         - 'tracker_state': FrontTrackerState - Complete simulation state
         - 'aquifer_pore_volume': float - Pore volume for this simulation
 
+    See Also
+    --------
+    infiltration_to_extraction_front_tracking : Returns concentrations only (simpler interface)
+    :ref:`concept-nonlinear-sorption` : Freundlich isotherm and front-tracking theory
+    :ref:`assumption-advection-dominated` : When diffusion/dispersion is negligible
+
     Examples
     --------
     ::
@@ -1370,12 +1392,6 @@ def infiltration_to_extraction_front_tracking_detailed(
         # Analyze events for first pore volume
         for event in structures[0]["events"]:
             print(f"t={event['time']:.2f}: {event['type']}")
-
-    See Also
-    --------
-    infiltration_to_extraction_front_tracking : Returns concentrations only (simpler interface)
-    :ref:`concept-nonlinear-sorption` : Freundlich isotherm and front-tracking theory
-    :ref:`assumption-advection-dominated` : When diffusion/dispersion is negligible
     """
     cin, flow, tedges, cout_tedges, aquifer_pore_volumes, sorption, cout_tedges_days = _validate_front_tracking_inputs(
         cin=cin,

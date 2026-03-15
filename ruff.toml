@@ -54,6 +54,7 @@ convention = "numpy"
 "examples/**/*.py" = [
     "INP001",  # __init__.py is not needed for the examples folder
     "T201",  # Allow for print statements
+    "DOC201",  # Small example helpers don't need Returns docs
 ]
 "examples/**/*.ipynb" = [
     "INP001",  # __init__.py is not needed for the examples folder
@@ -61,6 +62,12 @@ convention = "numpy"
     "B018", # allow notebooks printing out variables in the mid cell with variable names only
     "PLR2004",
     "E402",
+    "DOC201",  # Small notebook helpers don't need Returns docs
+]
+"tests/**/*.py" = [
+    "DOC201",  # Test functions returning None don't need Returns docs
+    "DOC501",  # Test functions don't need Raises docs
+    "DOC502",  # Test helpers may document exceptions not directly raised
 ]
 "tests/**/test_*.py" = [
     "S101", # asserts allowed in tests

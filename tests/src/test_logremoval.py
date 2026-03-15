@@ -116,10 +116,10 @@ def test_weight_sum_behavior():
     """Test behavior when weights don't sum to 1.0 raises ValueError."""
     log_removals = [3.0, 4.0]
 
-    with pytest.raises(ValueError, match="flow_fractions must sum to 1.0"):
+    with pytest.raises(ValueError, match=r"flow_fractions must sum to 1\.0"):
         parallel_mean(log_removals=log_removals, flow_fractions=[0.7, 0.4])  # Sum > 1
 
-    with pytest.raises(ValueError, match="flow_fractions must sum to 1.0"):
+    with pytest.raises(ValueError, match=r"flow_fractions must sum to 1\.0"):
         parallel_mean(log_removals=log_removals, flow_fractions=[0.7, 0.2])  # Sum < 1
 
 

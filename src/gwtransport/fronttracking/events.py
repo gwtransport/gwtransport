@@ -19,7 +19,6 @@ All calculations return exact floating-point results with machine precision.
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 from gwtransport.fronttracking.math import characteristic_position, characteristic_velocity
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
@@ -91,22 +90,34 @@ class Event:
     event_type: EventType
     waves_involved: list  # List[Wave] - can't type hint due to circular import
     location: float
-    flow_new: Optional[float] = None
-    boundary_type: Optional[str] = None
+    flow_new: float | None = None
+    boundary_type: str | None = None
 
     def __lt__(self, other):
-        """Events ordered by time (for priority queue)."""
+        """Events ordered by time (for priority queue).
+
+        Returns
+        -------
+        bool
+            True if this event occurs before ``other``.
+        """
         return self.time < other.time
 
     def __repr__(self):
-        """Return string representation of Event."""
+        """Return string representation of Event.
+
+        Returns
+        -------
+        str
+            Human-readable summary of the event.
+        """
         return (
             f"Event(t={self.time:.3f}, type={self.event_type.value}, "
             f"location={self.location:.3f}, n_waves={len(self.waves_involved)})"
         )
 
 
-def find_characteristic_intersection(char1, char2, t_current: float) -> Optional[tuple[float, float]]:
+def find_characteristic_intersection(char1, char2, t_current: float) -> tuple[float, float] | None:
     """
     Find exact analytical intersection of two characteristics.
 
@@ -189,7 +200,7 @@ def find_characteristic_intersection(char1, char2, t_current: float) -> Optional
     return (t_intersect, v_intersect)
 
 
-def find_shock_shock_intersection(shock1, shock2, t_current: float) -> Optional[tuple[float, float]]:
+def find_shock_shock_intersection(shock1, shock2, t_current: float) -> tuple[float, float] | None:
     """
     Find exact analytical intersection of two shocks.
 
@@ -252,7 +263,7 @@ def find_shock_shock_intersection(shock1, shock2, t_current: float) -> Optional[
     return (t_intersect, v_intersect)
 
 
-def find_shock_characteristic_intersection(shock, char, t_current: float) -> Optional[tuple[float, float]]:
+def find_shock_characteristic_intersection(shock, char, t_current: float) -> tuple[float, float] | None:
     """
     Find exact analytical intersection of shock and characteristic.
 
@@ -438,7 +449,7 @@ def find_rarefaction_boundary_intersections(raref, other_wave, t_current: float)
     return intersections
 
 
-def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> Optional[float]:
+def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> float | None:
     """
     Find exact analytical time when wave crosses outlet.
 

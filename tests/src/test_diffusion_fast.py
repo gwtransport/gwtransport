@@ -705,7 +705,7 @@ def test_create_example_data_custom_parameters():
 def test_create_example_data_different_sizes():
     """Works for various grid sizes."""
     for nx in [100, 500, 2000]:
-        x, signal, sigma_array, dt = create_example_data(nx=nx, seed=0)
+        x, _signal, _sigma_array, _dt = create_example_data(nx=nx, seed=0)
         assert len(x) == nx
 
 

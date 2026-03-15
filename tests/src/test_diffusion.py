@@ -662,20 +662,20 @@ class TestDiffusionMatchesApvdCombined:
 
         # Set up time bins
         n_days = 350
-        _tedges = pd.date_range("2019-12-31", periods=n_days + 1, freq="D")
+        tedges_ = pd.date_range("2019-12-31", periods=n_days + 1, freq="D")
 
-        _flow = np.full(n_days, mean_flow)
-        _cin = np.zeros(n_days)
-        _cin[50] = 100.0
+        flow_ = np.full(n_days, mean_flow)
+        cin_ = np.zeros(n_days)
+        cin_[50] = 100.0
 
         # Compress bins for efficiency
-        cin_itedges = np.flatnonzero(np.diff(_cin, prepend=1.0, append=1.0))
-        flow_itedges = np.flatnonzero(np.diff(_flow, prepend=1.0, append=1.0))
+        cin_itedges = np.flatnonzero(np.diff(cin_, prepend=1.0, append=1.0))
+        flow_itedges = np.flatnonzero(np.diff(flow_, prepend=1.0, append=1.0))
         itedges = np.unique(np.concatenate([cin_itedges, flow_itedges]))
-        tedges = _tedges[itedges]
-        cin = _cin[itedges[:-1]]
-        flow = _flow[itedges[:-1]]
-        cout_tedges = _tedges.copy()
+        tedges = tedges_[itedges]
+        cin = cin_[itedges[:-1]]
+        flow = flow_[itedges[:-1]]
+        cout_tedges = tedges_.copy()
 
         # Discretization
         nbins = 5000

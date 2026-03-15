@@ -936,14 +936,19 @@ def convolve_diffusion(
     numpy.ndarray
         The filtered input signal. Has the same shape as input_signal.
 
-    Notes
-    -----
-    At the boundaries, the outer values are repeated to avoid edge effects
-    (equivalent to mode='nearest' in `scipy.ndimage.gaussian_filter1d`).
+    Raises
+    ------
+    ValueError
+        If input_signal and sigma_array do not have the same length.
 
     See Also
     --------
     scipy.ndimage.gaussian_filter1d : Fixed-sigma Gaussian filtering
+
+    Notes
+    -----
+    At the boundaries, the outer values are repeated to avoid edge effects
+    (equivalent to mode='nearest' in `scipy.ndimage.gaussian_filter1d`).
 
     Examples
     --------
@@ -1040,7 +1045,16 @@ def _validate_inputs(
     mean_longitudinal_dispersivity: float,
     is_forward: bool,
 ) -> None:
-    """Validate inputs for infiltration_to_extraction and extraction_to_infiltration."""
+    """Validate inputs for infiltration_to_extraction and extraction_to_infiltration.
+
+    Raises
+    ------
+    ValueError
+        If array lengths are inconsistent, mean_molecular_diffusivity or
+        mean_longitudinal_dispersivity are negative, cin or cout or flow
+        contain NaN values, aquifer_pore_volumes contains non-positive
+        values, or mean_streamline_length is non-positive.
+    """
     if is_forward:
         if len(tedges) != len(cin_or_cout) + 1:
             msg = "tedges must have one more element than cin"

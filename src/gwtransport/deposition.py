@@ -164,6 +164,20 @@ def deposition_to_extraction(
     numpy.ndarray
         Concentration changes [ng/m3] with length len(cout_tedges) - 1.
 
+    Raises
+    ------
+    ValueError
+        If tedges does not have one more element than dep or flow, if input
+        arrays contain NaN values, or if physical parameters are out of
+        valid range (porosity not in (0, 1), non-positive thickness or
+        aquifer pore volume).
+
+    See Also
+    --------
+    extraction_to_deposition : Inverse operation (deconvolution)
+    gwtransport.advection.infiltration_to_extraction : For concentration transport without deposition
+    :ref:`concept-transport-equation` : Flow-weighted averaging approach
+
     Examples
     --------
     >>> import pandas as pd
@@ -183,37 +197,31 @@ def deposition_to_extraction(
     ...     porosity=0.3,
     ...     thickness=10.0,
     ... )
-
-    See Also
-    --------
-    extraction_to_deposition : Inverse operation (deconvolution)
-    gwtransport.advection.infiltration_to_extraction : For concentration transport without deposition
-    :ref:`concept-transport-equation` : Flow-weighted averaging approach
     """
     tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
     dep_values, flow_values = np.asarray(dep), np.asarray(flow)
 
     # Validate input dimensions and values
     if len(tedges) != len(dep_values) + 1:
-        _msg = "tedges must have one more element than dep"
-        raise ValueError(_msg)
+        msg = "tedges must have one more element than dep"
+        raise ValueError(msg)
     if len(tedges) != len(flow_values) + 1:
-        _msg = "tedges must have one more element than flow"
-        raise ValueError(_msg)
+        msg = "tedges must have one more element than flow"
+        raise ValueError(msg)
     if np.any(np.isnan(dep_values)) or np.any(np.isnan(flow_values)):
-        _msg = "Input arrays cannot contain NaN values"
-        raise ValueError(_msg)
+        msg = "Input arrays cannot contain NaN values"
+        raise ValueError(msg)
 
     # Validate physical parameters
     if not 0 < porosity < 1:
-        _msg = f"Porosity must be in (0, 1), got {porosity}"
-        raise ValueError(_msg)
+        msg = f"Porosity must be in (0, 1), got {porosity}"
+        raise ValueError(msg)
     if thickness <= 0:
-        _msg = f"Thickness must be positive, got {thickness}"
-        raise ValueError(_msg)
+        msg = f"Thickness must be positive, got {thickness}"
+        raise ValueError(msg)
     if aquifer_pore_volume <= 0:
-        _msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
-        raise ValueError(_msg)
+        msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
+        raise ValueError(msg)
 
     # Compute deposition weights
     deposition_weights = compute_deposition_weights(
@@ -306,6 +314,14 @@ def extraction_to_deposition(
         deposition patterns invisible in the concentration signal. To fix,
         adjust ``aquifer_pore_volume`` slightly (e.g., multiply by 1.001).
 
+    See Also
+    --------
+    deposition_to_extraction : Forward operation (convolution)
+    extraction_to_deposition_full : Full solver with nullspace options
+    gwtransport.advection.extraction_to_infiltration : For concentration transport without deposition
+    gwtransport.utils.solve_tikhonov : Solver used for inversion
+    :ref:`concept-transport-equation` : Flow-weighted averaging approach
+
     Notes
     -----
     The forward model is ``W @ dep = cout``, where the weight matrix ``W``
@@ -344,14 +360,6 @@ def extraction_to_deposition(
     Deposition rates shape: (10,)
     >>> print(f"Mean deposition rate: {np.nanmean(dep):.2f} ng/m2/day")
     Mean deposition rate: 6.00 ng/m2/day
-
-    See Also
-    --------
-    deposition_to_extraction : Forward operation (convolution)
-    extraction_to_deposition_full : Full solver with nullspace options
-    gwtransport.advection.extraction_to_infiltration : For concentration transport without deposition
-    gwtransport.utils.solve_tikhonov : Solver used for inversion
-    :ref:`concept-transport-equation` : Flow-weighted averaging approach
     """
     tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
     cout_values, flow_values = np.asarray(cout), np.asarray(flow)
@@ -514,6 +522,14 @@ def extraction_to_deposition_full(
         Mean deposition rates [ng/m2/day] between tedges. Length equals
         len(tedges) - 1.
 
+    Raises
+    ------
+    ValueError
+        If cout_tedges does not have one more element than cout, if tedges
+        does not have one more element than flow, if flow contains NaN
+        values, or if physical parameters are out of valid range (porosity
+        not in (0, 1), non-positive thickness or aquifer pore volume).
+
     See Also
     --------
     extraction_to_deposition : Recommended solver using Tikhonov regularization.
@@ -594,6 +610,12 @@ def spinup_duration(
     -------
     float
         Spinup duration in days.
+
+    Raises
+    ------
+    ValueError
+        If the residence time at the first time step is NaN, indicating the
+        flow timeseries is too short to fully characterise the aquifer.
     """
     rt = residence_time(
         flow=flow,

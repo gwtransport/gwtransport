@@ -114,6 +114,11 @@ def mean_std_to_alpha_beta(*, mean: float, std: float) -> tuple[float, float]:
     beta : float
         Scale parameter of gamma distribution
 
+    Raises
+    ------
+    ValueError
+        If ``std`` or ``mean`` are not positive.
+
     See Also
     --------
     alpha_beta_to_mean_std : Convert shape and scale parameters to mean and std
@@ -226,6 +231,11 @@ def bins(
         - ``expected_values``: expected values in bins. Is what you would expect to observe if you repeatedly sampled from the probability distribution, but only considered samples that fall within that particular bin
         - ``probability_mass``: probability mass in bins
 
+    Raises
+    ------
+    ValueError
+        If ``n_bins`` is not greater than 1.
+
     See Also
     --------
     bin_masses : Calculate probability mass for bins
@@ -301,6 +311,13 @@ def bin_masses(*, alpha: float, beta: float, bin_edges: npt.ArrayLike) -> npt.ND
     -------
     numpy.ndarray
         Probability mass for each bin
+
+    Raises
+    ------
+    ValueError
+        If ``alpha`` or ``beta`` are not positive, if ``bin_edges`` contains fewer than two
+        values, if ``bin_edges`` are not monotonically increasing, or if any ``bin_edges``
+        are negative.
     """
     # Convert inputs to numpy arrays
     bin_edges = np.asarray(bin_edges)

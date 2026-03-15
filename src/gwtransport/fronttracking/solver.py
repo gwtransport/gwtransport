@@ -20,7 +20,6 @@ All calculations are exact analytical with machine precision.
 import logging
 from dataclasses import dataclass
 from heapq import heappop, heappush
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -63,6 +62,8 @@ from gwtransport.fronttracking.waves import (
     ShockWave,
     Wave,
 )
+
+logger = logging.getLogger(__name__)
 
 # Numerical tolerance constants
 EPSILON_CONCENTRATION = 1e-15  # Tolerance for concentration changes
@@ -151,6 +152,15 @@ class FrontTracker:
     t_first_arrival : float
         First arrival time (end of spin-up period) [days]
 
+    Notes
+    -----
+    The solver uses exact analytical calculations throughout with no numerical
+    tolerances or iterative methods. All wave interactions are detected and
+    handled with machine precision.
+
+    The spin-up period (t < t_first_arrival) is affected by unknown initial
+    conditions. Results are only valid for t >= t_first_arrival.
+
     Examples
     --------
     ::
@@ -166,15 +176,6 @@ class FrontTracker:
         # Access results
         print(f"Total events: {len(tracker.state.events)}")
         print(f"Active waves: {sum(1 for w in tracker.state.waves if w.is_active)}")
-
-    Notes
-    -----
-    The solver uses exact analytical calculations throughout with no numerical
-    tolerances or iterative methods. All wave interactions are detected and
-    handled with machine precision.
-
-    The spin-up period (t < t_first_arrival) is affected by unknown initial
-    conditions. Results are only valid for t >= t_first_arrival.
     """
 
     def __init__(
@@ -309,7 +310,7 @@ class FrontTracker:
 
         return flow_changes
 
-    def find_next_event(self) -> Optional[Event]:
+    def find_next_event(self) -> Event | None:
         """
         Find the next event (earliest in time).
 
@@ -475,12 +476,12 @@ class FrontTracker:
             flow_new = extra if event_type == EventType.FLOW_CHANGE else None
 
             # For rarefaction collision events, extra contains boundary_type
-            _raref_types = {
+            raref_types = {
                 EventType.RAREF_CHAR_COLLISION,
                 EventType.SHOCK_RAREF_COLLISION,
                 EventType.RAREF_RAREF_COLLISION,
             }
-            boundary_type = extra if event_type in _raref_types else None
+            boundary_type = extra if event_type in raref_types else None
 
             return Event(
                 time=t,
@@ -612,9 +613,9 @@ class FrontTracker:
         iteration = 0
 
         if verbose:
-            logging.info("Starting simulation at t=%.3f", self.state.t_current)
-            logging.info("Initial waves: %d", len(self.state.waves))
-            logging.info("First arrival time: %.3f days", self.t_first_arrival)
+            logger.info("Starting simulation at t=%.3f", self.state.t_current)
+            logger.info("Initial waves: %d", len(self.state.waves))
+            logger.info("First arrival time: %.3f days", self.t_first_arrival)
 
         while iteration < max_iterations:
             # Find next event
@@ -622,7 +623,7 @@ class FrontTracker:
 
             if event is None:
                 if verbose:
-                    logging.info("Simulation complete after %d events at t=%.6f", iteration, self.state.t_current)
+                    logger.info("Simulation complete after %d events at t=%.6f", iteration, self.state.t_current)
                 break
 
             # Advance time
@@ -632,7 +633,7 @@ class FrontTracker:
             try:
                 self.handle_event(event)
             except Exception:
-                logging.exception("Error handling event at t=%.3f", event.time)
+                logger.exception("Error handling event at t=%.3f", event.time)
                 raise
 
             # Optional: verify physics periodically
@@ -641,19 +642,19 @@ class FrontTracker:
 
             if verbose and iteration % 10 == 0:
                 active = sum(1 for w in self.state.waves if w.is_active)
-                logging.debug("Iteration %d: t=%.3f, active_waves=%d", iteration, event.time, active)
+                logger.debug("Iteration %d: t=%.3f, active_waves=%d", iteration, event.time, active)
 
             iteration += 1
 
         if iteration >= max_iterations:
-            logging.warning("Reached max_iterations=%d", max_iterations)
+            logger.warning("Reached max_iterations=%d", max_iterations)
 
         if verbose:
-            logging.info("Final statistics:")
-            logging.info("  Total events: %d", len(self.state.events))
-            logging.info("  Total waves created: %d", len(self.state.waves))
-            logging.info("  Active waves: %d", sum(1 for w in self.state.waves if w.is_active))
-            logging.info("  First arrival time: %.6f days", self.t_first_arrival)
+            logger.info("Final statistics:")
+            logger.info("  Total events: %d", len(self.state.events))
+            logger.info("  Total waves created: %d", len(self.state.waves))
+            logger.info("  Active waves: %d", sum(1 for w in self.state.waves if w.is_active))
+            logger.info("  First arrival time: %.6f days", self.t_first_arrival)
 
     def verify_physics(self, *, check_mass_balance: bool = False, mass_balance_rtol: float = 1e-12):
         """

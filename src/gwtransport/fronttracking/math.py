@@ -57,16 +57,6 @@ class FreundlichSorption:
         Minimum concentration threshold. For n>1, prevents infinite retardation
         as C→0. Default: 0.1 for n>1, 0.0 for n<1 (set automatically if not provided).
 
-    Examples
-    --------
-    >>> sorption = FreundlichSorption(
-    ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
-    ... )
-    >>> r = sorption.retardation(5.0)
-    >>> c_back = sorption.concentration_from_retardation(r)
-    >>> bool(np.isclose(c_back, 5.0))
-    True
-
     Notes
     -----
     The retardation factor is defined as:
@@ -78,6 +68,16 @@ class FreundlichSorption:
     For n>1 (higher C travels faster), R(C)→∞ as C→0, which can cause extremely slow
     wave propagation. The c_min parameter prevents this by enforcing a minimum
     concentration, making R(C) finite for all C≥0.
+
+    Examples
+    --------
+    >>> sorption = FreundlichSorption(
+    ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+    ... )
+    >>> r = sorption.retardation(5.0)
+    >>> c_back = sorption.concentration_from_retardation(r)
+    >>> bool(np.isclose(c_back, 5.0))
+    True
     """
 
     k_f: float
@@ -92,7 +92,15 @@ class FreundlichSorption:
     """Minimum concentration threshold to prevent infinite retardation."""
 
     def __post_init__(self):
-        """Validate parameters after initialization."""
+        """Validate parameters after initialization.
+
+        Raises
+        ------
+        ValueError
+            If any parameter is outside its valid range: ``k_f`` <= 0,
+            ``n`` <= 0, ``n`` == 1, ``bulk_density`` <= 0, ``porosity``
+            outside (0, 1), or ``c_min`` < 0.
+        """
         if self.k_f <= 0:
             msg = f"k_f must be positive, got {self.k_f}"
             raise ValueError(msg)
@@ -151,7 +159,18 @@ class FreundlichSorption:
         return result if is_array else float(result)
 
     def _compute_retardation(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        """Compute retardation for positive concentrations."""
+        """Compute retardation for positive concentrations.
+
+        Parameters
+        ----------
+        c : numpy.ndarray
+            Dissolved concentration [mass/volume]. Must be positive.
+
+        Returns
+        -------
+        numpy.ndarray
+            Retardation factor [-]. Always >= 1.0.
+        """
         exponent = (1.0 / self.n) - 1.0
         coefficient = (self.bulk_density * self.k_f) / (self.porosity * self.n)
         return 1.0 + coefficient * (c**exponent)
@@ -674,6 +693,10 @@ def compute_first_front_arrival_time(
         Time when first wave reaches outlet, measured in days from tedges[0].
         Returns np.inf if no concentration ever arrives.
 
+    See Also
+    --------
+    compute_first_fully_informed_bin_edge : Get first valid output bin edge
+
     Notes
     -----
     The residence time accounts for retardation:
@@ -697,10 +720,6 @@ def compute_first_front_arrival_time(
     >>> # Result is in days from tedges[0]
     >>> bool(np.isclose(t_first, 11.0))  # 1 day (offset) + 10 days (travel time)
     True
-
-    See Also
-    --------
-    compute_first_fully_informed_bin_edge : Get first valid output bin edge
     """
     # Find first non-zero concentration
     nonzero_indices = np.where(cin > 0)[0]
@@ -798,6 +817,10 @@ def compute_first_fully_informed_bin_edge(
         Returns last edge in days if no bin is fully informed.
         Returns np.inf if output_tedges is empty.
 
+    See Also
+    --------
+    compute_first_front_arrival_time : Get exact arrival time
+
     Notes
     -----
     This differs from compute_first_front_arrival_time in that it returns
@@ -832,10 +855,6 @@ def compute_first_fully_informed_bin_edge(
     >>> # Result is in days from output_tedges[0]
     >>> t_bin >= 11.0  # First bin edge >= arrival time
     True
-
-    See Also
-    --------
-    compute_first_front_arrival_time : Get exact arrival time
     """
     if len(output_tedges) == 0:
         return np.inf
