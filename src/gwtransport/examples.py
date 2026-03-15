@@ -200,9 +200,9 @@ def generate_example_data(
             alpha=alpha,
             beta=beta,
             n_bins=aquifer_pore_volume_gamma_nbins,
-            streamline_length=streamline_length,
-            molecular_diffusivity=molecular_diffusivity,
-            longitudinal_dispersivity=longitudinal_dispersivity,
+            mean_streamline_length=streamline_length,
+            mean_molecular_diffusivity=molecular_diffusivity,
+            mean_longitudinal_dispersivity=longitudinal_dispersivity,
             retardation_factor=retardation_factor,
             suppress_dispersion_warning=True,
         )

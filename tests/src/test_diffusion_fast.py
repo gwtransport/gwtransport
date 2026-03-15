@@ -270,9 +270,9 @@ def test_infiltration_to_extraction_zero_diffusion_matches_advection():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
-        streamline_length=np.array([80.0]),
-        molecular_diffusivity=0.0,
-        longitudinal_dispersivity=0.0,
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.0,
+        mean_longitudinal_dispersivity=0.0,
     )
 
     cout_adv = advection_i2e(
@@ -300,9 +300,9 @@ def test_infiltration_to_extraction_constant_input():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        streamline_length=np.array([80.0]),
-        molecular_diffusivity=0.03,
-        longitudinal_dispersivity=0.0,
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.03,
+        mean_longitudinal_dispersivity=0.0,
     )
 
     valid = ~np.isnan(cout)
@@ -322,9 +322,9 @@ def test_infiltration_to_extraction_output_bounded_by_input():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        streamline_length=np.array([80.0]),
-        molecular_diffusivity=0.05,
-        longitudinal_dispersivity=1.0,
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.05,
+        mean_longitudinal_dispersivity=1.0,
     )
 
     valid = ~np.isnan(cout)
@@ -352,9 +352,9 @@ def test_infiltration_to_extraction_multiple_pore_volumes():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([400.0, 500.0, 600.0]),
-        streamline_length=np.array([80.0, 100.0, 120.0]),
-        molecular_diffusivity=0.03,
-        longitudinal_dispersivity=0.0,
+        mean_streamline_length=100.0,
+        mean_molecular_diffusivity=0.03,
+        mean_longitudinal_dispersivity=0.0,
         suppress_dispersion_warning=True,
     )
 
@@ -378,9 +378,9 @@ def test_infiltration_to_extraction_cout_tedges_different_resolution():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        streamline_length=np.array([80.0]),
-        molecular_diffusivity=0.03,
-        longitudinal_dispersivity=0.0,
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.03,
+        mean_longitudinal_dispersivity=0.0,
     )
 
     assert len(cout) == len(cout_tedges) - 1
@@ -405,9 +405,9 @@ def test_infiltration_to_extraction_with_retardation(retardation_factor):
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([1000.0]),
-        streamline_length=np.array([80.0]),
-        molecular_diffusivity=0.03,
-        longitudinal_dispersivity=0.0,
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.03,
+        mean_longitudinal_dispersivity=0.0,
         retardation_factor=retardation_factor,
     )
 
@@ -429,9 +429,9 @@ def test_infiltration_to_extraction_with_various_diffusivity(molecular_diffusivi
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        streamline_length=np.array([80.0]),
-        molecular_diffusivity=molecular_diffusivity,
-        longitudinal_dispersivity=0.0,
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=molecular_diffusivity,
+        mean_longitudinal_dispersivity=0.0,
     )
 
     valid = ~np.isnan(cout)
@@ -453,9 +453,9 @@ def test_infiltration_to_extraction_with_variable_flow():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        streamline_length=np.array([80.0]),
-        molecular_diffusivity=0.03,
-        longitudinal_dispersivity=0.0,
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.03,
+        mean_longitudinal_dispersivity=0.0,
     )
 
     valid = ~np.isnan(cout)
@@ -482,9 +482,9 @@ def test_extraction_to_infiltration_constant_input():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        streamline_length=np.array([80.0]),
-        molecular_diffusivity=0.03,
-        longitudinal_dispersivity=0.0,
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.03,
+        mean_longitudinal_dispersivity=0.0,
     )
 
     valid = ~np.isnan(cin)
@@ -508,9 +508,9 @@ def test_round_trip():
         "tedges": tedges,
         "cout_tedges": cout_tedges,
         "aquifer_pore_volumes": np.array([500.0]),
-        "streamline_length": np.array([80.0]),
-        "molecular_diffusivity": 0.01,
-        "longitudinal_dispersivity": 0.0,
+        "mean_streamline_length": 80.0,
+        "mean_molecular_diffusivity": 0.01,
+        "mean_longitudinal_dispersivity": 0.0,
     }
 
     cout = infiltration_to_extraction(cin=cin_original, **kwargs)
@@ -728,11 +728,20 @@ def test_diffusion_fast_vs_diffusion_same_grid():
     cout_tedges = tedges.copy()
     flow = np.full(n_days, 100.0)
 
-    base_kwargs = {
+    common_kwargs = {
         "flow": flow,
         "tedges": tedges,
         "cout_tedges": cout_tedges,
         "aquifer_pore_volumes": np.array([500.0]),
+    }
+    fast_kwargs = {
+        **common_kwargs,
+        "mean_streamline_length": 80.0,
+        "mean_molecular_diffusivity": 0.05,
+        "mean_longitudinal_dispersivity": 0.0,
+    }
+    exact_kwargs = {
+        **common_kwargs,
         "streamline_length": np.array([80.0]),
         "molecular_diffusivity": 0.05,
         "longitudinal_dispersivity": 0.0,
@@ -740,8 +749,8 @@ def test_diffusion_fast_vs_diffusion_same_grid():
 
     # Test with smooth signal (sinusoidal) — better agreement
     cin_smooth = np.sin(np.linspace(0, 4 * np.pi, n_days)) + 2.0
-    cout_fast = infiltration_to_extraction(cin=cin_smooth, **base_kwargs)
-    cout_exact = diffusion_exact(cin=cin_smooth, **base_kwargs)
+    cout_fast = infiltration_to_extraction(cin=cin_smooth, **fast_kwargs)
+    cout_exact = diffusion_exact(cin=cin_smooth, **exact_kwargs)
 
     assert len(cout_fast) == len(cout_exact) == n_days
 
@@ -757,8 +766,8 @@ def test_diffusion_fast_vs_diffusion_same_grid():
     # Test with step function — larger approximation gap
     cin_step = np.zeros(n_days)
     cin_step[30:] = 1.0
-    cout_fast_step = infiltration_to_extraction(cin=cin_step, **base_kwargs)
-    cout_exact_step = diffusion_exact(cin=cin_step, **base_kwargs)
+    cout_fast_step = infiltration_to_extraction(cin=cin_step, **fast_kwargs)
+    cout_exact_step = diffusion_exact(cin=cin_step, **exact_kwargs)
 
     both_valid_step = ~np.isnan(cout_fast_step) & ~np.isnan(cout_exact_step)
     assert_allclose(cout_fast_step[both_valid_step], cout_exact_step[both_valid_step], atol=0.02)
