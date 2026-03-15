@@ -1,19 +1,20 @@
-# https://github.com/pypa/hatch/blob/master/ruff_defaults.toml
 extend = "ruff_defaults.toml"
 
-# https://github.com/astral-sh/ruff/issues/8627
-exclude = [".git", ".mypy_cache", ".ruff_cache", ".venv", ".direnv",
+exclude = [
     ".bzr",
     ".direnv",
     ".eggs",
+    ".git",
     ".git-rewrite",
     ".hg",
     ".ipynb_checkpoints",
+    ".mypy_cache",
     ".nox",
     ".pants.d",
     ".pyenv",
     ".pytest_cache",
     ".pytype",
+    ".ruff_cache",
     ".svn",
     ".tox",
     ".venv",
@@ -36,8 +37,7 @@ preview = true
 [lint]
 preview = true
 
-# Documentation and ensure that the defaults are included
-extend-select = ["D", "E4", "E7", "E9", "F", "C901"]
+extend-select = ["D"]
 
 [lint.pydocstyle]
 convention = "numpy"
@@ -46,10 +46,6 @@ convention = "numpy"
 '**/*.py' = [
     "RUF001",
     "TC003",    # Type checking is fine.
-    "C901",     # Complex functions are okay for now.
-]
-'modelscripts/**/*.py' = [
-    'INP001',  # Missing return type annotation for public function
 ]
 "examples/**/*.py" = [
     "INP001",  # __init__.py is not needed for the examples folder
@@ -70,9 +66,9 @@ convention = "numpy"
     "DOC502",  # Test helpers may document exceptions not directly raised
 ]
 "tests/**/test_*.py" = [
-    "S101", # asserts allowed in tests
+    "S101",    # asserts allowed in tests
     "D",
-    "PT011",  # Valueerror should be allowed
+    "PT011",   # ValueError should be allowed
     "PLR2004",
     "PLR6301",  # Tests may be grouped in classes for clarity
     "INP001",  # __init__.py is not needed for the test folders
