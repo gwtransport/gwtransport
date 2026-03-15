@@ -506,6 +506,11 @@ class FrontTracker:
         event : Event
             Event to handle
 
+        Raises
+        ------
+        RuntimeError
+            If the FLOW_CHANGE event does not have ``flow_new`` set.
+
         Notes
         -----
         Event handlers may:

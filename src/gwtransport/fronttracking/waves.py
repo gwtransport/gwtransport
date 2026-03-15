@@ -315,6 +315,11 @@ class ShockWave(Wave):
         -------
         position : float or None
             Position [m³], or None if t < t_start or inactive.
+
+        Raises
+        ------
+        RuntimeError
+            If shock velocity is None (should have been set in ``__post_init__``).
         """
         if t < self.t_start or not self.is_active:
             return None
@@ -324,11 +329,25 @@ class ShockWave(Wave):
         return self.v_start + self.velocity * (t - self.t_start)
 
     def concentration_left(self) -> float:
-        """Get upstream concentration."""
+        """
+        Get upstream concentration.
+
+        Returns
+        -------
+        c_left : float
+            Upstream concentration [mass/volume].
+        """
         return self.c_left
 
     def concentration_right(self) -> float:
-        """Get downstream concentration."""
+        """
+        Get downstream concentration.
+
+        Returns
+        -------
+        c_right : float
+            Downstream concentration [mass/volume].
+        """
         return self.c_right
 
     def concentration_at_point(self, v: float, t: float) -> float | None:
@@ -380,6 +399,11 @@ class ShockWave(Wave):
         -------
         satisfies : bool
             True if shock satisfies entropy condition.
+
+        Raises
+        ------
+        RuntimeError
+            If shock velocity is None (should have been set in ``__post_init__``).
 
         Notes
         -----
@@ -453,7 +477,15 @@ class RarefactionWave(Wave):
     """Sorption model (must be concentration-dependent)."""
 
     def __post_init__(self):
-        """Verify this is actually a rarefaction (head faster than tail)."""
+        """
+        Verify this is actually a rarefaction (head faster than tail).
+
+        Raises
+        ------
+        ValueError
+            If head velocity is not greater than tail velocity, indicating a
+            compression wave (shock) rather than a rarefaction.
+        """
         v_head = self.head_velocity()
         v_tail = self.tail_velocity()
 
@@ -568,11 +600,25 @@ class RarefactionWave(Wave):
         return v_tail <= v <= v_head
 
     def concentration_left(self) -> float:
-        """Get upstream concentration (tail)."""
+        """
+        Get upstream concentration (tail).
+
+        Returns
+        -------
+        c_left : float
+            Upstream concentration at the trailing edge [mass/volume].
+        """
         return self.c_tail
 
     def concentration_right(self) -> float:
-        """Get downstream concentration (head)."""
+        """
+        Get downstream concentration (head).
+
+        Returns
+        -------
+        c_right : float
+            Downstream concentration at the leading edge [mass/volume].
+        """
         return self.c_head
 
     def concentration_at_point(self, v: float, t: float) -> float | None:

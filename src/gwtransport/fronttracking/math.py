@@ -233,6 +233,12 @@ class FreundlichSorption:
         c : float or numpy.ndarray
             Dissolved concentration [mass/volume]. Non-negative.
 
+        Raises
+        ------
+        ValueError
+            If the retardation exponent is effectively zero (i.e., ``n`` ≈ 1),
+            making inversion undefined.
+
         Notes
         -----
         This inverts the relation:
@@ -454,7 +460,13 @@ class ConstantRetardation:
     """Constant retardation factor [-]. Must be >= 1.0."""
 
     def __post_init__(self):
-        """Validate parameters after initialization."""
+        """Validate parameters after initialization.
+
+        Raises
+        ------
+        ValueError
+            If ``retardation_factor`` is less than 1.0.
+        """
         if self.retardation_factor < 1.0:
             msg = f"retardation_factor must be >= 1.0, got {self.retardation_factor}"
             raise ValueError(msg)

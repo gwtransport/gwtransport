@@ -522,6 +522,13 @@ def integrate_rarefaction_exact(
     integral : float
         Exact integral value [concentration * time].
 
+    Raises
+    ------
+    ValueError
+        If the sorption exponent ``n`` equals 1 (linear sorption), which requires
+        ``ConstantRetardation`` instead, or if the integral diverges at ``t_end=+∞``
+        when the antiderivative exponent is positive (n < 1 case with unbounded fan).
+
     Notes
     -----
     **Derivation**:
@@ -600,7 +607,20 @@ def integrate_rarefaction_exact(
     coeff = 1.0 / (alpha ** (1.0 / beta) * kappa * exponent)
 
     def antiderivative(t: float) -> float:
-        """Evaluate antiderivative at time t."""
+        """
+        Evaluate antiderivative at time t.
+
+        Returns
+        -------
+        value : float
+            Antiderivative value at ``t``.
+
+        Raises
+        ------
+        ValueError
+            If ``t=+∞`` and the antiderivative exponent is positive, causing
+            the integral to diverge.
+        """
         # Handle infinite bounds
         if np.isinf(t):
             if t > 0:
@@ -659,6 +679,12 @@ def compute_bin_averaged_concentration_exact(
     -------
     c_avg : numpy.ndarray
         Bin-averaged concentrations [mass/volume]. Length N.
+
+    Raises
+    ------
+    ValueError
+        If any time bin has non-positive width (``t_edges[i] >= t_edges[i+1]``),
+        or if an unknown segment type is encountered during integration.
 
     See Also
     --------

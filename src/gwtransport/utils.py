@@ -202,6 +202,11 @@ def diff(*, a: npt.ArrayLike, alignment: str = "centered") -> npt.NDArray[np.flo
     -------
     numpy.ndarray
         Array with differences between elements.
+
+    Raises
+    ------
+    ValueError
+        If ``alignment`` is not ``'centered'``, ``'left'``, or ``'right'``.
     """
     # Convert input to array
     a = np.asarray(a)
@@ -252,6 +257,15 @@ def linear_average(
         2D array of average values between consecutive pairs of x_edges.
         Shape is (n_series, n_bins) where n_bins = n_edges - 1.
         If x_edges is 1D, n_series = 1.
+
+    Raises
+    ------
+    ValueError
+        If ``x_edges`` is not 1D or 2D. If ``x_data`` and ``y_data`` have different
+        lengths or are empty. If ``x_edges`` has fewer than 2 values per row. If
+        ``x_data`` is not in ascending order. If ``x_edges`` rows are not in ascending
+        order. If ``extrapolate_method`` is ``'raise'`` and any edge falls outside the
+        data range.
 
     Examples
     --------
@@ -399,6 +413,13 @@ def partial_isin(*, bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -
         represents the fraction of input bin i that overlaps with output bin j.
         Values range from 0 (no overlap) to 1 (complete overlap).
 
+    Raises
+    ------
+    ValueError
+        If ``bin_edges_in`` or ``bin_edges_out`` are not 1D arrays. If either edge
+        array has fewer than 2 elements. If ``bin_edges_in`` or ``bin_edges_out``
+        are not in ascending order.
+
     Notes
     -----
     - Both input arrays must be sorted in ascending order
@@ -488,6 +509,12 @@ def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.N
         time bins. Each element (i, j) represents the fraction of time bin j
         that overlaps with time range i. Values range from 0 (no overlap) to
         1 (complete overlap).
+
+    Raises
+    ------
+    ValueError
+        If ``tedges`` is not a 1D array, has fewer than 2 elements, or if
+        ``bin_tedges`` is empty.
 
     Notes
     -----
@@ -583,6 +610,12 @@ def combine_bin_series(
         Values from series b mapped to the combined edge structure.
     d_edges : numpy.ndarray
         Combined unique edges from a_edges and b_edges (same as c_edges).
+
+    Raises
+    ------
+    ValueError
+        If ``a_edges`` does not have ``len(a) + 1`` elements, or if ``b_edges`` does not
+        have ``len(b) + 1`` elements.
 
     Notes
     -----
@@ -1033,7 +1066,36 @@ def _optimize_nullspace_coefficients(
     optimization_method: str,
     x_target: np.ndarray | None = None,
 ) -> npt.NDArray[np.floating]:
-    """Optimize coefficients in the nullspace to minimize the objective."""
+    """Optimize coefficients in the nullspace to minimize the objective.
+
+    Parameters
+    ----------
+    x_ls : ndarray
+        Least-squares solution vector.
+    nullspace_basis : ndarray
+        Nullspace basis matrix of shape (n, nullrank).
+    nullspace_objective : str or callable
+        Objective to minimize. Supported string values are
+        ``'squared_differences'``, ``'summed_differences'``, and
+        ``'reverse_matrix'``. A callable with signature
+        ``objective(coeffs, x_ls, nullspace_basis)`` is also accepted.
+    optimization_method : str
+        Optimization method passed to ``scipy.optimize.minimize``.
+    x_target : ndarray or None, optional
+        Target solution vector required when
+        ``nullspace_objective='reverse_matrix'``. Default is None.
+
+    Returns
+    -------
+    ndarray
+        Optimal nullspace coefficient vector of length nullrank.
+
+    Raises
+    ------
+    ValueError
+        If ``nullspace_objective`` is ``'reverse_matrix'`` and ``x_target`` is
+        None. If iterative optimization fails to converge.
+    """
     if nullspace_objective == "reverse_matrix":
         if x_target is None:
             msg = "x_target is required when nullspace_objective='reverse_matrix'"
@@ -1076,6 +1138,24 @@ def _solve_squared_differences_analytical(
 
     Minimizes ``sum((x[i+1] - x[i])^2)`` where ``x = x_ls + N @ c`` by
     solving the normal equations ``(N^T D^T D N) c = -N^T D^T D x_ls``.
+
+    Parameters
+    ----------
+    x_ls : ndarray
+        Least-squares solution vector of length n.
+    nullspace_basis : ndarray
+        Nullspace basis matrix of shape (n, nullrank).
+
+    Returns
+    -------
+    ndarray
+        Optimal nullspace coefficient vector of length nullrank.
+
+    Raises
+    ------
+    numpy.linalg.LinAlgError
+        If the normal equations matrix ``(DN)^T(DN)`` is ill-conditioned
+        (condition number exceeds 1e12).
     """
     # D is the (n-1, n) first-difference matrix; D @ x = x[1:] - x[:-1]
     # D^T D is the tridiagonal matrix with 2 on diagonal, -1 on off-diagonals
@@ -1252,6 +1332,12 @@ def solve_tikhonov(
         - Non-regularized entries (NaN in ``x_target``):
           ``fraction_data[j] = 1.0``
 
+    Raises
+    ------
+    ValueError
+        If ``coefficient_matrix`` and ``rhs_vector`` have incompatible shapes, or if
+        all rows contain NaN values.
+
     See Also
     --------
     compute_reverse_target : Compute the regularization target from the
@@ -1309,13 +1395,43 @@ def solve_tikhonov(
 
 
 def _squared_differences_objective(coeffs: np.ndarray, x_ls: np.ndarray, nullspace_basis: np.ndarray) -> float:
-    """Minimize sum of squared differences between adjacent elements."""
+    """Minimize sum of squared differences between adjacent elements.
+
+    Parameters
+    ----------
+    coeffs : ndarray
+        Nullspace coefficient vector.
+    x_ls : ndarray
+        Least-squares solution vector.
+    nullspace_basis : ndarray
+        Nullspace basis matrix.
+
+    Returns
+    -------
+    float
+        Sum of squared differences between adjacent elements of the solution.
+    """
     x = x_ls + nullspace_basis @ coeffs
     return np.sum(np.square(x[1:] - x[:-1]))
 
 
 def _summed_differences_objective(coeffs: np.ndarray, x_ls: np.ndarray, nullspace_basis: np.ndarray) -> float:
-    """Minimize sum of absolute differences between adjacent elements."""
+    """Minimize sum of absolute differences between adjacent elements.
+
+    Parameters
+    ----------
+    coeffs : ndarray
+        Nullspace coefficient vector.
+    x_ls : ndarray
+        Least-squares solution vector.
+    nullspace_basis : ndarray
+        Nullspace basis matrix.
+
+    Returns
+    -------
+    float
+        Sum of absolute differences between adjacent elements of the solution.
+    """
     x = x_ls + nullspace_basis @ coeffs
     return np.sum(np.abs(x[1:] - x[:-1]))
 
@@ -1324,7 +1440,27 @@ def _get_nullspace_objective_function(
     *,
     nullspace_objective: str | Callable[[np.ndarray, np.ndarray, np.ndarray], float],
 ) -> Callable[[np.ndarray, np.ndarray, np.ndarray], float]:
-    """Get the objective function for nullspace optimization."""
+    """Get the objective function for nullspace optimization.
+
+    Parameters
+    ----------
+    nullspace_objective : str or callable
+        Objective identifier. Supported string values are
+        ``'squared_differences'`` and ``'summed_differences'``. A callable
+        with signature ``objective(coeffs, x_ls, nullspace_basis)`` is also
+        accepted and returned as-is.
+
+    Returns
+    -------
+    callable
+        Objective function with signature
+        ``(coeffs, x_ls, nullspace_basis) -> float``.
+
+    Raises
+    ------
+    ValueError
+        If ``nullspace_objective`` is an unrecognized string.
+    """
     if nullspace_objective == "squared_differences":
         return _squared_differences_objective
     if nullspace_objective == "summed_differences":

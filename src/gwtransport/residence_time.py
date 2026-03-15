@@ -75,6 +75,13 @@ def residence_time(
     numpy.ndarray
         Residence time of the retarded compound in the aquifer [days].
 
+    Raises
+    ------
+    ValueError
+        If ``flow_tedges`` does not have exactly one more element than ``flow``.
+        If ``direction`` is not ``'extraction_to_infiltration'`` or
+        ``'infiltration_to_extraction'``.
+
     See Also
     --------
     residence_time_mean : Compute mean residence time over time intervals
@@ -185,6 +192,12 @@ def residence_time_mean(
         Mean residence time of the retarded compound in the aquifer [days] for each interval
         defined by tedges_out. The first dimension corresponds to the different pore volumes
         and the second to the residence times between tedges_out.
+
+    Raises
+    ------
+    ValueError
+        If ``direction`` is not ``'extraction_to_infiltration'`` or
+        ``'infiltration_to_extraction'``.
 
     See Also
     --------
@@ -307,6 +320,12 @@ def fraction_explained(
     -------
     numpy.ndarray
         Fraction of the aquifer that is informed with respect to the retarded flow.
+
+    Raises
+    ------
+    ValueError
+        If ``rt`` is not provided and any of ``flow``, ``flow_tedges``, or
+        ``aquifer_pore_volumes`` are missing. If ``rt`` is provided but is not 2D.
     """
     if rt is None:
         # Validate that required parameters are provided for computing rt
@@ -374,6 +393,12 @@ def freundlich_retardation(
     numpy.ndarray
         Retardation factors for each flow interval.
         Length equals len(concentration) for use as retardation_factor in residence_time.
+
+    Raises
+    ------
+    ValueError
+        If ``porosity`` is not in ``(0, 1)``, if ``bulk_density`` is not positive, or if
+        ``freundlich_k`` is negative.
 
     See Also
     --------
