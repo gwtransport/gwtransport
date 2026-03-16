@@ -23,11 +23,13 @@ temperature fronts as they travel through the aquifer. While advection moves com
 with water flow, diffusion causes spreading due to molecular diffusion, mechanical
 dispersion, and thermal diffusion (for temperature).
 
-Limitation: This fast approximation works best when flow and tedges are relatively
-constant. The underlying assumption is that dx (spatial step between cells) remains
-approximately constant, which holds for steady flow but breaks down under highly
-variable conditions. For scenarios with significant flow variability, consider using
-:mod:`gwtransport.diffusion` instead.
+Limitation: When ``flow_out`` is not provided, this fast approximation works best when
+flow and tedges are relatively constant. The underlying assumption is that dx (spatial
+step between cells) remains approximately constant, which holds for steady flow but
+breaks down under highly variable conditions. When input time bins are non-uniform
+(e.g., from signal compression), provide ``flow_out`` to apply Gaussian smoothing on
+the (typically uniform) output grid instead. For scenarios with significant flow
+variability, consider using :mod:`gwtransport.diffusion` instead.
 
 Available functions:
 
@@ -94,6 +96,8 @@ def infiltration_to_extraction(
     retardation_factor: float = 1.0,
     suppress_dispersion_warning: bool = False,
     asymptotic_cutoff_sigma: float | None = 3.0,
+    flow_out: npt.ArrayLike | None = None,
+    suppress_uniform_tedges_check: bool = False,
 ) -> NDArray[np.floating]:
     """Compute diffusion during 1D transport using fast Gaussian smoothing.
 
@@ -102,14 +106,10 @@ def infiltration_to_extraction(
     This is the fast approximate counterpart of
     :func:`gwtransport.diffusion.infiltration_to_extraction`.
 
-    The algorithm:
-
-    1. Compute position-dependent sigma from the **mean** pore volume and streamline
-       length. The APVD already captures macrodispersion; Gaussian smoothing adds
-       microdispersion as a second-order correction.
-    2. Apply Gaussian diffusion to ``cin`` on the infiltration time grid.
-    3. Apply advective transport via the weight matrix to produce ``cout`` on the
-       extraction time grid.
+    When ``flow_out`` is provided, diffusion is applied on the output grid
+    (advect-then-smooth), which correctly handles non-uniform ``tedges``
+    (e.g., from signal compression). Without ``flow_out``, diffusion is applied
+    on the input grid and ``tedges`` must have constant time steps.
 
     Parameters
     ----------
@@ -125,17 +125,11 @@ def infiltration_to_extraction(
         Array of aquifer pore volumes [m3] representing the distribution of
         flow paths.
     mean_streamline_length : float
-        Mean travel distance [m] averaged over all aquifer pore volumes.
-        Must be positive. For per-pore-volume arrays, use
-        :func:`gwtransport.diffusion.infiltration_to_extraction`.
+        Mean travel distance [m]. Must be positive.
     mean_molecular_diffusivity : float
-        Mean effective molecular diffusivity [m2/day] averaged over all
-        aquifer pore volumes. Must be non-negative. For per-pore-volume
-        arrays, use :func:`gwtransport.diffusion.infiltration_to_extraction`.
+        Mean effective molecular diffusivity [m2/day]. Must be non-negative.
     mean_longitudinal_dispersivity : float
-        Mean longitudinal dispersivity [m] averaged over all aquifer pore
-        volumes. Must be non-negative. For per-pore-volume arrays, use
-        :func:`gwtransport.diffusion.infiltration_to_extraction`.
+        Mean longitudinal dispersivity [m]. Must be non-negative.
     retardation_factor : float, optional
         Retardation factor (default 1.0). Values > 1.0 indicate slower transport.
     suppress_dispersion_warning : bool, optional
@@ -143,9 +137,14 @@ def infiltration_to_extraction(
         Default is False.
     asymptotic_cutoff_sigma : float or None, optional
         Truncate the Gaussian kernel at this many standard deviations.
-        Since erf(3) ~ 0.99998, the default of 3.0 provides excellent accuracy
-        with significant speedup. Set to None to disable truncation.
         Default is 3.0.
+    flow_out : array-like or None, optional
+        Flow rate [m3/day] on the output grid (aligned to ``cout_tedges``).
+        Required when ``tedges`` has non-uniform time steps. Length must
+        equal ``len(cout_tedges) - 1``. Default is None.
+    suppress_uniform_tedges_check : bool, optional
+        Skip the constant-dt check on ``tedges`` when ``flow_out`` is None.
+        Default is False.
 
     Returns
     -------
@@ -169,6 +168,9 @@ def infiltration_to_extraction(
     flow = np.asarray(flow, dtype=float)
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
 
+    if flow_out is not None:
+        flow_out = np.asarray(flow_out, dtype=float)
+
     n_pore_volumes = len(aquifer_pore_volumes)
 
     # Input validation
@@ -182,29 +184,14 @@ def infiltration_to_extraction(
         mean_molecular_diffusivity=mean_molecular_diffusivity,
         mean_longitudinal_dispersivity=mean_longitudinal_dispersivity,
         is_forward=True,
+        flow_out=flow_out,
     )
 
     # Dispersion warning
     if n_pore_volumes > 1 and mean_longitudinal_dispersivity > 0 and not suppress_dispersion_warning:
         _warn_dispersion()
 
-    # Step 1: Compute sigma from mean pore volume and streamline length
-    sigma_array = compute_scaled_sigma_array(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=float(np.mean(aquifer_pore_volumes)),
-        streamline_length=mean_streamline_length,
-        molecular_diffusivity=mean_molecular_diffusivity,
-        longitudinal_dispersivity=mean_longitudinal_dispersivity,
-        retardation_factor=retardation_factor,
-    )
-
-    # Step 2: Apply diffusion (Gaussian smoothing on infiltration grid)
-    cin_diffused = convolve_diffusion(
-        input_signal=cin, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
-    )
-
-    # Step 3: Build advection weight matrix and apply
+    # Build advection weight matrix (needed in both branches)
     w_adv = _infiltration_to_extraction_weights(
         tedges=tedges,
         cout_tedges=cout_tedges,
@@ -212,7 +199,53 @@ def infiltration_to_extraction(
         flow=flow,
         retardation_factor=retardation_factor,
     )
-    cout = w_adv @ cin_diffused
+
+    if flow_out is None:
+        # Original algorithm: smooth-then-advect (requires uniform tedges)
+        _check_uniform_tedges(tedges=tedges, suppress=suppress_uniform_tedges_check)
+
+        sigma_array = compute_scaled_sigma_array(
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=float(np.mean(aquifer_pore_volumes)),
+            streamline_length=mean_streamline_length,
+            molecular_diffusivity=mean_molecular_diffusivity,
+            longitudinal_dispersivity=mean_longitudinal_dispersivity,
+            retardation_factor=retardation_factor,
+        )
+        cin_diffused = convolve_diffusion(
+            input_signal=cin, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
+        )
+        cout = w_adv @ cin_diffused
+    else:
+        # New algorithm: advect-then-smooth (works with any tedges spacing)
+        cout_unsmoothed = w_adv @ cin
+
+        # Invalid rows (no breakthrough yet) have near-zero values that would
+        # bleed into valid neighbors during smoothing. Use normalized convolution:
+        # smooth(signal * mask) / smooth(mask) to properly renormalize the kernel.
+        total_coeff = np.sum(w_adv, axis=1)
+        invalid_mask = total_coeff < EPSILON_COEFF_SUM
+        cout_unsmoothed[invalid_mask] = 0.0
+        validity = np.where(invalid_mask, 0.0, 1.0)
+
+        sigma_out = _compute_sigma_on_cout_grid(
+            flow_out=flow_out,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volume=float(np.mean(aquifer_pore_volumes)),
+            streamline_length=mean_streamline_length,
+            molecular_diffusivity=mean_molecular_diffusivity,
+            longitudinal_dispersivity=mean_longitudinal_dispersivity,
+            retardation_factor=retardation_factor,
+        )
+        smoothed = convolve_diffusion(
+            input_signal=cout_unsmoothed, sigma_array=sigma_out, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
+        )
+        smoothed_validity = convolve_diffusion(
+            input_signal=validity, sigma_array=sigma_out, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
+        )
+        with np.errstate(invalid="ignore"):
+            cout = np.where(smoothed_validity > EPSILON_COEFF_SUM, smoothed / smoothed_validity, np.nan)
 
     # Mark invalid rows as NaN (where no cin has broken through)
     total_coeff = np.sum(w_adv, axis=1)
@@ -235,40 +268,39 @@ def extraction_to_infiltration(
     suppress_dispersion_warning: bool = False,
     asymptotic_cutoff_sigma: float | None = 3.0,
     regularization_strength: float = 1e-10,
+    flow_out: npt.ArrayLike | None = None,
+    suppress_uniform_tedges_check: bool = False,
 ) -> NDArray[np.floating]:
     """Reconstruct infiltration concentration from extracted water via Tikhonov inversion.
 
     Inverts the forward transport model (Gaussian diffusion + advection) by building
-    the combined forward matrix ``W_combined = W_adv @ G`` and solving
-    ``W_combined @ cin = cout`` via Tikhonov regularization. This is the fast
-    approximate counterpart of :func:`gwtransport.diffusion.extraction_to_infiltration`.
+    the combined forward matrix and solving via Tikhonov regularization. This is the
+    fast approximate counterpart of
+    :func:`gwtransport.diffusion.extraction_to_infiltration`.
+
+    When ``flow_out`` is provided, diffusion is applied on the output grid,
+    which correctly handles non-uniform ``tedges``. Without ``flow_out``,
+    diffusion is applied on the input grid and ``tedges`` must have constant
+    time steps.
 
     Parameters
     ----------
     cout : array-like
         Concentration of the compound in extracted water.
-        Length must match the number of time bins defined by cout_tedges.
     flow : array-like
         Flow rate of water in the aquifer [m3/day].
     tedges : pandas.DatetimeIndex
         Time edges for cin (output) and flow data. Has length of len(flow) + 1.
-        Output cin has length len(tedges) - 1.
     cout_tedges : pandas.DatetimeIndex
         Time edges for cout data bins. Has length of len(cout) + 1.
     aquifer_pore_volumes : array-like
         Array of aquifer pore volumes [m3].
     mean_streamline_length : float
-        Mean travel distance [m] averaged over all aquifer pore volumes.
-        Must be positive. For per-pore-volume arrays, use
-        :func:`gwtransport.diffusion.extraction_to_infiltration`.
+        Mean travel distance [m]. Must be positive.
     mean_molecular_diffusivity : float
-        Mean effective molecular diffusivity [m2/day] averaged over all
-        aquifer pore volumes. Must be non-negative. For per-pore-volume
-        arrays, use :func:`gwtransport.diffusion.extraction_to_infiltration`.
+        Mean effective molecular diffusivity [m2/day]. Must be non-negative.
     mean_longitudinal_dispersivity : float
-        Mean longitudinal dispersivity [m] averaged over all aquifer pore
-        volumes. Must be non-negative. For per-pore-volume arrays, use
-        :func:`gwtransport.diffusion.extraction_to_infiltration`.
+        Mean longitudinal dispersivity [m]. Must be non-negative.
     retardation_factor : float, optional
         Retardation factor (default 1.0).
     suppress_dispersion_warning : bool, optional
@@ -276,11 +308,16 @@ def extraction_to_infiltration(
         Default is False.
     asymptotic_cutoff_sigma : float or None, optional
         Truncate the Gaussian kernel at this many standard deviations.
-        Since erf(3) ~ 0.99998, the default of 3.0 provides excellent accuracy
-        with significant speedup. Set to None to disable truncation.
         Default is 3.0.
     regularization_strength : float, optional
         Tikhonov regularization parameter. Default is 1e-10.
+    flow_out : array-like or None, optional
+        Flow rate [m3/day] on the output grid (aligned to ``cout_tedges``).
+        Required when ``tedges`` has non-uniform time steps. Length must
+        equal ``len(cout_tedges) - 1``. Default is None.
+    suppress_uniform_tedges_check : bool, optional
+        Skip the constant-dt check on ``tedges`` when ``flow_out`` is None.
+        Default is False.
 
     Returns
     -------
@@ -312,6 +349,9 @@ def extraction_to_infiltration(
     flow = np.asarray(flow, dtype=float)
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
 
+    if flow_out is not None:
+        flow_out = np.asarray(flow_out, dtype=float)
+
     n_pore_volumes = len(aquifer_pore_volumes)
 
     # Input validation
@@ -325,6 +365,7 @@ def extraction_to_infiltration(
         mean_molecular_diffusivity=mean_molecular_diffusivity,
         mean_longitudinal_dispersivity=mean_longitudinal_dispersivity,
         is_forward=False,
+        flow_out=flow_out,
     )
 
     # Dispersion warning
@@ -332,18 +373,7 @@ def extraction_to_infiltration(
         _warn_dispersion()
 
     n_cin = len(tedges) - 1
-
-    # Build Gaussian matrix
-    sigma_array = compute_scaled_sigma_array(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=float(np.mean(aquifer_pore_volumes)),
-        streamline_length=mean_streamline_length,
-        molecular_diffusivity=mean_molecular_diffusivity,
-        longitudinal_dispersivity=mean_longitudinal_dispersivity,
-        retardation_factor=retardation_factor,
-    )
-    g_matrix = _build_gaussian_matrix(n=n_cin, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma)
+    n_cout = len(cout_tedges) - 1
 
     # Build advection weight matrix
     w_adv = _infiltration_to_extraction_weights(
@@ -354,8 +384,39 @@ def extraction_to_infiltration(
         retardation_factor=retardation_factor,
     )
 
-    # Combined forward matrix: W_adv @ G via sparse @ dense (avoids dense G allocation)
-    w_forward = (g_matrix.T @ w_adv.T).T
+    if flow_out is None:
+        # Original algorithm: G on input grid, W_forward = W_adv @ G
+        _check_uniform_tedges(tedges=tedges, suppress=suppress_uniform_tedges_check)
+
+        sigma_array = compute_scaled_sigma_array(
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=float(np.mean(aquifer_pore_volumes)),
+            streamline_length=mean_streamline_length,
+            molecular_diffusivity=mean_molecular_diffusivity,
+            longitudinal_dispersivity=mean_longitudinal_dispersivity,
+            retardation_factor=retardation_factor,
+        )
+        g_matrix = _build_gaussian_matrix(
+            n=n_cin, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
+        )
+        # Combined forward matrix: W_adv @ G via sparse @ dense (avoids dense G allocation)
+        w_forward = (g_matrix.T @ w_adv.T).T
+    else:
+        # New algorithm: G on output grid, W_forward = G @ W_adv
+        sigma_out = _compute_sigma_on_cout_grid(
+            flow_out=flow_out,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volume=float(np.mean(aquifer_pore_volumes)),
+            streamline_length=mean_streamline_length,
+            molecular_diffusivity=mean_molecular_diffusivity,
+            longitudinal_dispersivity=mean_longitudinal_dispersivity,
+            retardation_factor=retardation_factor,
+        )
+        g_matrix = _build_gaussian_matrix(
+            n=n_cout, sigma_array=sigma_out, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
+        )
+        w_forward = g_matrix @ w_adv  # sparse @ dense
 
     # Tikhonov inversion (same pattern as diffusion.py)
     row_sums = w_forward.sum(axis=1)
@@ -417,6 +478,8 @@ def gamma_infiltration_to_extraction(
     retardation_factor: float = 1.0,
     suppress_dispersion_warning: bool = False,
     asymptotic_cutoff_sigma: float | None = 3.0,
+    flow_out: npt.ArrayLike | None = None,
+    suppress_uniform_tedges_check: bool = False,
 ) -> NDArray[np.floating]:
     """
     Compute extracted concentration with fast Gaussian diffusion for gamma-distributed pore volumes.
@@ -468,6 +531,13 @@ def gamma_infiltration_to_extraction(
     asymptotic_cutoff_sigma : float or None, optional
         Truncate the Gaussian kernel at this many standard deviations.
         Default is 3.0.
+    flow_out : array-like or None, optional
+        Flow rate [m3/day] on the output grid (aligned to ``cout_tedges``).
+        Required when ``tedges`` has non-uniform time steps. Length must
+        equal ``len(cout_tedges) - 1``. Default is None.
+    suppress_uniform_tedges_check : bool, optional
+        Skip the constant-dt check on ``tedges`` when ``flow_out`` is None.
+        Default is False.
 
     Returns
     -------
@@ -539,6 +609,8 @@ def gamma_infiltration_to_extraction(
         retardation_factor=retardation_factor,
         suppress_dispersion_warning=suppress_dispersion_warning,
         asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
+        flow_out=flow_out,
+        suppress_uniform_tedges_check=suppress_uniform_tedges_check,
     )
 
 
@@ -560,6 +632,8 @@ def gamma_extraction_to_infiltration(
     suppress_dispersion_warning: bool = False,
     asymptotic_cutoff_sigma: float | None = 3.0,
     regularization_strength: float = 1e-10,
+    flow_out: npt.ArrayLike | None = None,
+    suppress_uniform_tedges_check: bool = False,
 ) -> NDArray[np.floating]:
     """
     Reconstruct infiltration concentration from extracted water for gamma-distributed pore volumes.
@@ -613,6 +687,13 @@ def gamma_extraction_to_infiltration(
         Default is 3.0.
     regularization_strength : float, optional
         Tikhonov regularization parameter. Default is 1e-10.
+    flow_out : array-like or None, optional
+        Flow rate [m3/day] aligned to ``cout_tedges``. When provided, the
+        Gaussian matrix operates on the output grid. Length must equal
+        ``len(cout_tedges) - 1``. Default is None.
+    suppress_uniform_tedges_check : bool, optional
+        When True, skip the check that ``tedges`` has constant time steps
+        (only relevant when ``flow_out`` is None). Default is False.
 
     Returns
     -------
@@ -685,6 +766,8 @@ def gamma_extraction_to_infiltration(
         suppress_dispersion_warning=suppress_dispersion_warning,
         asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
         regularization_strength=regularization_strength,
+        flow_out=flow_out,
+        suppress_uniform_tedges_check=suppress_uniform_tedges_check,
     )
 
 
@@ -817,6 +900,72 @@ def compute_scaled_sigma_array(
     # Sigma in array index units: number of time steps to blend
     sigma_array = diffusive_spreading_length / dx
     return np.clip(sigma_array, 0.0, 100.0)
+
+
+def _compute_sigma_on_cout_grid(
+    *,
+    flow_out: NDArray[np.floating],
+    cout_tedges: pd.DatetimeIndex,
+    aquifer_pore_volume: float,
+    streamline_length: float,
+    molecular_diffusivity: float,
+    longitudinal_dispersivity: float,
+    retardation_factor: float,
+) -> NDArray[np.floating]:
+    """Compute sigma on the output grid using ``flow_out`` and ``cout_tedges``.
+
+    Same physics as :func:`compute_scaled_sigma_array` but on the extraction grid.
+
+    Returns
+    -------
+    ndarray
+        Sigma values in array index units, clipped to [0, 100].
+    """
+    # Compute residence time on the output grid (extraction direction)
+    rt_array = residence_time(
+        flow=flow_out,
+        flow_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volume,
+        direction="extraction_to_infiltration",
+        retardation_factor=retardation_factor,
+    )[0]
+
+    # Interpolate NaN values (same pattern as compute_diffusive_spreading_length)
+    valid_mask = ~np.isnan(rt_array)
+    if np.any(valid_mask):
+        rt_array = np.interp(np.arange(len(rt_array)), np.where(valid_mask)[0], rt_array[valid_mask])
+
+    # Retarded velocity and longitudinal dispersion coefficient
+    v_s = streamline_length / rt_array
+    d_l = molecular_diffusivity + longitudinal_dispersivity * v_s
+
+    # Diffusive spreading length [m]
+    l_diff = np.sqrt(2 * d_l * rt_array)
+
+    # Advective step size on output grid [m]
+    dt_out = np.diff(cout_tedges) / pd.to_timedelta(1, unit="D")
+    dx_out = flow_out * dt_out / aquifer_pore_volume * streamline_length
+
+    return np.clip(l_diff / dx_out, 0.0, 100.0)
+
+
+def _check_uniform_tedges(*, tedges: pd.DatetimeIndex, suppress: bool) -> None:
+    """Raise ValueError if tedges has non-constant time steps.
+
+    Raises
+    ------
+    ValueError
+        If tedges has non-constant time steps and suppress is False.
+    """
+    if suppress:
+        return
+    dt = np.diff(tedges)
+    if not np.all(dt == dt[0]):
+        msg = (
+            "tedges must have constant time steps when flow_out is not provided. "
+            "Either provide flow_out or set suppress_uniform_tedges_check=True."
+        )
+        raise ValueError(msg)
 
 
 def _build_gaussian_matrix(
@@ -1044,6 +1193,7 @@ def _validate_inputs(
     mean_molecular_diffusivity: float,
     mean_longitudinal_dispersivity: float,
     is_forward: bool,
+    flow_out: np.ndarray | None = None,
 ) -> None:
     """Validate inputs for infiltration_to_extraction and extraction_to_infiltration.
 
@@ -1083,6 +1233,17 @@ def _validate_inputs(
     if mean_streamline_length <= 0:
         msg = "mean_streamline_length must be positive"
         raise ValueError(msg)
+    if flow_out is not None:
+        n_cout = len(cout_tedges) - 1
+        if len(flow_out) != n_cout:
+            msg = f"flow_out must have length len(cout_tedges) - 1 = {n_cout}, got {len(flow_out)}"
+            raise ValueError(msg)
+        if np.any(np.isnan(flow_out)):
+            msg = "flow_out contains NaN values, which are not allowed"
+            raise ValueError(msg)
+        if np.any(flow_out <= 0):
+            msg = "flow_out must be positive"
+            raise ValueError(msg)
 
 
 def _warn_dispersion() -> None:

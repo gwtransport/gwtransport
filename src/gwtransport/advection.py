@@ -343,9 +343,11 @@ def gamma_infiltration_to_extraction(
     ----------
     cin : array-like
         Concentration of the compound in infiltrating water or temperature of infiltrating
-        water.
+        water. The model assumes this value is constant over each interval
+        ``[tedges[i], tedges[i+1])``.
     flow : array-like
-        Flow rate of water in the aquifer [m3/day].
+        Flow rate of water in the aquifer [m3/day]. The model assumes this value is
+        constant over each interval ``[tedges[i], tedges[i+1])``.
     tedges : pandas.DatetimeIndex
         Time edges for both cin and flow data. Used to compute the cumulative concentration.
         Has a length of one more than `cin` and `flow`.
@@ -504,9 +506,11 @@ def gamma_extraction_to_infiltration(
     ----------
     cout : array-like
         Concentration of the compound in extracted water or temperature of extracted
-        water.
+        water. The model assumes this value is constant over each interval
+        ``[cout_tedges[i], cout_tedges[i+1])``.
     flow : array-like
-        Flow rate of water in the aquifer [m3/day].
+        Flow rate of water in the aquifer [m3/day]. The model assumes this value is
+        constant over each interval ``[tedges[i], tedges[i+1])``.
     tedges : pandas.DatetimeIndex
         Time edges for cin (output) and flow data.
         Has a length of one more than `flow`.
@@ -665,10 +669,12 @@ def infiltration_to_extraction(
     ----------
     cin : array-like
         Concentration values of infiltrating water or temperature [concentration units].
-        Length must match the number of time bins defined by tedges.
+        Length must match the number of time bins defined by tedges. The model assumes
+        this value is constant over each interval ``[tedges[i], tedges[i+1])``.
     flow : array-like
         Flow rate values in the aquifer [m3/day].
-        Length must match cin and the number of time bins defined by tedges.
+        Length must match cin and the number of time bins defined by tedges. The model
+        assumes this value is constant over each interval ``[tedges[i], tedges[i+1])``.
     tedges : pandas.DatetimeIndex
         Time edges defining bins for both cin and flow data. Has length of
         len(cin) + 1 and len(flow) + 1.
@@ -856,10 +862,13 @@ def extraction_to_infiltration(
     ----------
     cout : array-like
         Concentration values of extracted water [concentration units].
-        Length must match the number of time bins defined by cout_tedges.
+        Length must match the number of time bins defined by cout_tedges. The model
+        assumes this value is constant over each interval
+        ``[cout_tedges[i], cout_tedges[i+1])``.
     flow : array-like
         Flow rate values in the aquifer [m3/day].
-        Length must match the number of time bins defined by tedges.
+        Length must match the number of time bins defined by tedges. The model assumes
+        this value is constant over each interval ``[tedges[i], tedges[i+1])``.
     tedges : pandas.DatetimeIndex
         Time edges defining bins for both cin (output) and flow data. Has length of
         len(flow) + 1. Output cin has length len(tedges) - 1.
@@ -1151,10 +1160,12 @@ def infiltration_to_extraction_front_tracking(
     ----------
     cin : array-like
         Infiltration concentration [mg/L or any units].
-        Length = len(tedges) - 1.
+        Length = len(tedges) - 1. The model assumes this value is constant over each
+        interval ``[tedges[i], tedges[i+1])``.
     flow : array-like
         Flow rate [m³/day]. Must be positive.
-        Length = len(tedges) - 1.
+        Length = len(tedges) - 1. The model assumes this value is constant over each
+        interval ``[tedges[i], tedges[i+1])``.
     tedges : pandas.DatetimeIndex
         Time bin edges. Length = len(cin) + 1.
     cout_tedges : pandas.DatetimeIndex
@@ -1184,7 +1195,7 @@ def infiltration_to_extraction_front_tracking(
     Returns
     -------
     cout : numpy.ndarray
-        Bin-averaged extraction concentration averaged across all pore volumes.
+        Flow-weighted extraction concentration averaged across all pore volumes.
         Length = len(cout_tedges) - 1.
 
     See Also
@@ -1314,10 +1325,12 @@ def infiltration_to_extraction_front_tracking_detailed(
     ----------
     cin : array-like
         Infiltration concentration [mg/L or any units].
-        Length = len(tedges) - 1.
+        Length = len(tedges) - 1. The model assumes this value is constant over each
+        interval ``[tedges[i], tedges[i+1])``.
     flow : array-like
         Flow rate [m³/day]. Must be positive.
-        Length = len(tedges) - 1.
+        Length = len(tedges) - 1. The model assumes this value is constant over each
+        interval ``[tedges[i], tedges[i+1])``.
     tedges : pandas.DatetimeIndex
         Time bin edges. Length = len(cin) + 1.
     cout_tedges : pandas.DatetimeIndex
@@ -1347,7 +1360,7 @@ def infiltration_to_extraction_front_tracking_detailed(
     Returns
     -------
     cout : numpy.ndarray
-        Bin-averaged concentrations averaged across all pore volumes.
+        Flow-weighted concentrations averaged across all pore volumes.
 
     structures : list of dict
         List of detailed simulation structures, one for each pore volume, with keys:

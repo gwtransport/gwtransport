@@ -706,10 +706,12 @@ def infiltration_to_extraction(
     ----------
     cin : array-like
         Concentration of the compound in infiltrating water [concentration units].
-        Length must match the number of time bins defined by tedges.
+        Length must match the number of time bins defined by tedges. The model assumes
+        this value is constant over each interval ``[tedges[i], tedges[i+1])``.
     flow : array-like
         Flow rate of water in the aquifer [m3/day].
-        Length must match cin and the number of time bins defined by tedges.
+        Length must match cin and the number of time bins defined by tedges. The model
+        assumes this value is constant over each interval ``[tedges[i], tedges[i+1])``.
     tedges : pandas.DatetimeIndex
         Time edges defining bins for both cin and flow data. Has length of
         len(cin) + 1.

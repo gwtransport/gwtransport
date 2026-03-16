@@ -141,8 +141,8 @@ tedges = pd.DatetimeIndex([...])  # n+1 edges
 values = np.array([...])           # n values
 ```
 
-- Values represent **average** over interval
-- Interval: `[tedges[i], tedges[i+1])`
+- Concentration (`cin`, `cout`) and flow (`flow`) values are assumed **constant within each time interval** `[tedges[i], tedges[i+1])`
+- Provide time-averaged values per bin (for flow: total volume / duration; for concentration: any representative average)
 - Same holds for the spatial dimension: xedges
 
 Units must be consistent within calculation

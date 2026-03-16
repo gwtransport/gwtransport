@@ -773,5 +773,353 @@ def test_diffusion_fast_vs_diffusion_same_grid():
     assert_allclose(cout_fast_step[both_valid_step], cout_exact_step[both_valid_step], atol=0.02)
 
 
+# =============================================================================
+# Tests for flow_out (advect-then-smooth) algorithm
+# =============================================================================
+
+
+def test_nonuniform_tedges_raises_without_flow_out():
+    """Non-uniform tedges with flow_out=None raises ValueError."""
+    n_days = 200
+    # Create non-uniform tedges (3 bins: 50 days, 1 day, 149 days)
+    tedges = pd.DatetimeIndex([
+        pd.Timestamp("2020-01-01"),
+        pd.Timestamp("2020-02-20"),
+        pd.Timestamp("2020-02-21"),
+        pd.Timestamp("2020-07-19"),
+    ])
+    cin = np.array([1.0, 2.0, 3.0])
+    flow = np.array([100.0, 100.0, 100.0])
+    cout_tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+
+    with pytest.raises(ValueError, match="tedges must have constant time steps"):
+        infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            mean_streamline_length=80.0,
+            mean_molecular_diffusivity=0.03,
+            mean_longitudinal_dispersivity=0.0,
+        )
+
+
+def test_nonuniform_tedges_suppressed():
+    """Non-uniform tedges with suppress_uniform_tedges_check=True does not raise."""
+    tedges = pd.DatetimeIndex([
+        pd.Timestamp("2020-01-01"),
+        pd.Timestamp("2020-02-20"),
+        pd.Timestamp("2020-02-21"),
+        pd.Timestamp("2020-07-19"),
+    ])
+    cin = np.array([1.0, 2.0, 3.0])
+    flow = np.array([100.0, 100.0, 100.0])
+    cout_tedges = pd.date_range("2020-01-01", periods=201, freq="D")
+
+    # Should not raise
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([500.0]),
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.03,
+        mean_longitudinal_dispersivity=0.0,
+        suppress_uniform_tedges_check=True,
+    )
+    assert len(cout) == 200
+
+
+def test_flow_out_constant_input():
+    """Constant cin with non-uniform bins + flow_out produces constant output (exact)."""
+    tedges = pd.DatetimeIndex([
+        pd.Timestamp("2020-01-01"),
+        pd.Timestamp("2020-02-20"),
+        pd.Timestamp("2020-02-21"),
+        pd.Timestamp("2020-12-16"),
+    ])
+    cin = np.array([10.0, 10.0, 10.0])
+    flow = np.array([100.0, 100.0, 100.0])
+    cout_tedges = pd.date_range("2020-01-01", periods=351, freq="D")
+    flow_out = np.full(len(cout_tedges) - 1, 100.0)
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([500.0]),
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.05,
+        mean_longitudinal_dispersivity=1.0,
+        flow_out=flow_out,
+    )
+
+    valid = ~np.isnan(cout)
+    assert np.sum(valid) > 50
+    assert_allclose(cout[valid], 10.0, atol=1e-13)
+
+
+def test_flow_out_constant_input_variable_flow():
+    """Constant cin with non-uniform bins + variable flow_out produces constant output (exact)."""
+    tedges = pd.DatetimeIndex([
+        pd.Timestamp("2020-01-01"),
+        pd.Timestamp("2020-02-20"),
+        pd.Timestamp("2020-02-21"),
+        pd.Timestamp("2020-12-16"),
+    ])
+    cin = np.array([10.0, 10.0, 10.0])
+    flow = np.array([80.0, 150.0, 120.0])
+    cout_tedges = pd.date_range("2020-01-01", periods=351, freq="D")
+    t = np.arange(350)
+    flow_out = 100.0 + 30.0 * np.sin(2 * np.pi * t / 365)
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([500.0]),
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.05,
+        mean_longitudinal_dispersivity=1.0,
+        flow_out=flow_out,
+    )
+
+    valid = ~np.isnan(cout)
+    assert np.sum(valid) > 50
+    assert_allclose(cout[valid], 10.0, atol=1e-13)
+
+
+def test_flow_out_zero_diffusion_matches_advection():
+    """Zero diffusion with flow_out on non-uniform grid matches pure advection (exact)."""
+    tedges = pd.DatetimeIndex([
+        pd.Timestamp("2020-01-01"),
+        pd.Timestamp("2020-02-20"),
+        pd.Timestamp("2020-02-21"),
+        pd.Timestamp("2020-12-16"),
+    ])
+    cin = np.array([0.0, 100.0, 0.0])
+    flow = np.array([80.0, 150.0, 120.0])
+    cout_tedges = pd.date_range("2020-01-01", periods=351, freq="D")
+    t = np.arange(len(cout_tedges) - 1)
+    flow_out = 100.0 + 30.0 * np.sin(2 * np.pi * t / 365)
+
+    cout_fast = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([500.0]),
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.0,
+        mean_longitudinal_dispersivity=0.0,
+        flow_out=flow_out,
+    )
+
+    cout_adv = advection_i2e(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([500.0]),
+    )
+
+    valid = ~np.isnan(cout_fast) & ~np.isnan(cout_adv)
+    assert np.sum(valid) > 50
+    assert_allclose(cout_fast[valid], cout_adv[valid], atol=0.0)
+
+
+def test_flow_out_uniform_bins_matches_default():
+    """With uniform bins + constant flow, flow_out produces same result as default (exact)."""
+    tedges, cout_tedges, flow = _make_transport_data(n_days=200)
+    n_days = len(flow)
+    cin = np.sin(np.linspace(0, 4 * np.pi, n_days)) + 2.0
+    flow_out = flow.copy()
+
+    common_kwargs = {
+        "cin": cin,
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([500.0]),
+        "mean_streamline_length": 80.0,
+        "mean_molecular_diffusivity": 0.03,
+        "mean_longitudinal_dispersivity": 0.0,
+    }
+
+    cout_default = infiltration_to_extraction(**common_kwargs)
+    cout_flow_out = infiltration_to_extraction(**common_kwargs, flow_out=flow_out)
+
+    valid = ~np.isnan(cout_default) & ~np.isnan(cout_flow_out)
+    assert np.sum(valid) > 50
+    assert_allclose(cout_flow_out[valid], cout_default[valid], atol=1e-13)
+
+
+def test_flow_out_output_bounded_by_input():
+    """Output concentration bounded by input range on non-uniform grid (convex combination)."""
+    tedges = pd.DatetimeIndex([
+        pd.Timestamp("2020-01-01"),
+        pd.Timestamp("2020-02-20"),
+        pd.Timestamp("2020-02-21"),
+        pd.Timestamp("2020-12-16"),
+    ])
+    cin = np.array([0.0, 100.0, 0.0])
+    flow = np.array([80.0, 150.0, 120.0])
+    cout_tedges = pd.date_range("2020-01-01", periods=351, freq="D")
+    t = np.arange(len(cout_tedges) - 1)
+    flow_out = 100.0 + 30.0 * np.sin(2 * np.pi * t / 365)
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([500.0]),
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.05,
+        mean_longitudinal_dispersivity=1.0,
+        flow_out=flow_out,
+    )
+
+    valid = ~np.isnan(cout)
+    assert np.sum(valid) > 50
+    assert np.all(cout[valid] >= np.min(cin) - 1e-14)
+    assert np.all(cout[valid] <= np.max(cin) + 1e-14)
+
+
+def test_flow_out_nonuniform_bins_pulse():
+    """Compressed non-uniform bins with flow_out gives identical result to uncompressed uniform bins."""
+    n_days = 350
+    tedges_full = pd.date_range("2019-12-31", periods=n_days + 1, freq="D")
+    flow_full = np.full(n_days, 100.0)
+    cin_full = np.zeros(n_days)
+    cin_full[50] = 100.0
+
+    # Compress to non-uniform bins (same as notebook 05)
+    cin_itedges = np.flatnonzero(np.diff(cin_full, prepend=1.0, append=1.0))
+    flow_itedges = np.flatnonzero(np.diff(flow_full, prepend=1.0, append=1.0))
+    itedges = np.unique(np.concatenate([cin_itedges, flow_itedges]))
+    tedges_compressed = tedges_full[itedges]
+    cin_compressed = cin_full[itedges[:-1]]
+    flow_compressed = flow_full[itedges[:-1]]
+
+    cout_tedges = tedges_full.copy()
+    flow_out = np.full(len(cout_tedges) - 1, 100.0)
+
+    kwargs = {
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([10000.0]),
+        "mean_streamline_length": 100.0,
+        "mean_molecular_diffusivity": 1e-4,
+        "mean_longitudinal_dispersivity": 1.0,
+        "retardation_factor": 2.0,
+        "flow_out": flow_out,
+    }
+
+    # Compressed (non-uniform bins)
+    cout_compressed = infiltration_to_extraction(
+        cin=cin_compressed, flow=flow_compressed, tedges=tedges_compressed, **kwargs
+    )
+
+    # Uncompressed (uniform daily bins)
+    cout_uncompressed = infiltration_to_extraction(cin=cin_full, flow=flow_full, tedges=tedges_full, **kwargs)
+
+    both_valid = ~np.isnan(cout_compressed) & ~np.isnan(cout_uncompressed)
+    assert np.sum(both_valid) > 50
+    assert_allclose(cout_compressed[both_valid], cout_uncompressed[both_valid], atol=0.0)
+
+
+def test_flow_out_validation_wrong_length():
+    """flow_out with wrong length raises ValueError."""
+    tedges, cout_tedges, flow = _make_transport_data(n_days=200)
+    cin = np.full(200, 10.0)
+    flow_out = np.full(100, 100.0)  # Wrong length
+
+    with pytest.raises(ValueError, match="flow_out must have length"):
+        infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            mean_streamline_length=80.0,
+            mean_molecular_diffusivity=0.03,
+            mean_longitudinal_dispersivity=0.0,
+            flow_out=flow_out,
+        )
+
+
+def test_flow_out_validation_nan():
+    """flow_out with NaN raises ValueError."""
+    tedges, cout_tedges, flow = _make_transport_data(n_days=200)
+    cin = np.full(200, 10.0)
+    flow_out = np.full(200, 100.0)
+    flow_out[50] = np.nan
+
+    with pytest.raises(ValueError, match="flow_out contains NaN"):
+        infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            mean_streamline_length=80.0,
+            mean_molecular_diffusivity=0.03,
+            mean_longitudinal_dispersivity=0.0,
+            flow_out=flow_out,
+        )
+
+
+def test_flow_out_validation_nonpositive():
+    """flow_out with non-positive values raises ValueError."""
+    tedges, cout_tedges, flow = _make_transport_data(n_days=200)
+    cin = np.full(200, 10.0)
+    flow_out = np.full(200, 100.0)
+    flow_out[50] = 0.0
+
+    with pytest.raises(ValueError, match="flow_out must be positive"):
+        infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            mean_streamline_length=80.0,
+            mean_molecular_diffusivity=0.03,
+            mean_longitudinal_dispersivity=0.0,
+            flow_out=flow_out,
+        )
+
+
+def test_extraction_to_infiltration_flow_out_round_trip():
+    """Round-trip with flow_out recovers original signal (machine precision)."""
+    tedges, cout_tedges, flow = _make_transport_data(n_days=200)
+    n_days = len(flow)
+    cin_original = np.sin(np.linspace(0, 2 * np.pi, n_days)) + 5.0
+    flow_out = flow.copy()
+
+    kwargs = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([500.0]),
+        "mean_streamline_length": 80.0,
+        "mean_molecular_diffusivity": 0.01,
+        "mean_longitudinal_dispersivity": 0.0,
+        "flow_out": flow_out,
+    }
+
+    cout = infiltration_to_extraction(cin=cin_original, **kwargs)
+    cout_clean = np.where(np.isnan(cout), np.nanmean(cout), cout)
+    cin_recovered = extraction_to_infiltration(cout=cout_clean, **kwargs)
+
+    valid = ~np.isnan(cin_recovered) & ~np.isnan(cout)
+    assert np.sum(valid) > 50
+    assert_allclose(cin_recovered[valid], cin_original[valid], atol=1e-14)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
