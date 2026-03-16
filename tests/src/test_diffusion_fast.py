@@ -641,6 +641,48 @@ def test_retardation_compressed_matches_uncompressed(retardation_factor):
     assert_allclose(cout_compressed[both_valid], cout_uncompressed[both_valid], atol=0.0)
 
 
+@pytest.mark.parametrize("retardation_factor", [1.0, 2.7])
+def test_retardation_nonuniform_cout_tedges_constant_input(retardation_factor):
+    """Constant cin with non-uniform cout_tedges produces constant output (exact)."""
+    tedges = pd.date_range("2020-01-01", periods=401, freq="D")
+    flow = np.full(400, 100.0)
+    cin = np.full(400, 10.0)
+
+    # Non-uniform output grid: mix of 1-day, 3-day, and 7-day bins
+    cout_dates = [pd.Timestamp("2020-01-01")]
+    t = cout_dates[0]
+    end = tedges[-1]
+    widths = [1, 3, 7]
+    i = 0
+    while t < end:
+        t += pd.Timedelta(days=widths[i % len(widths)])
+        if t <= end:
+            cout_dates.append(t)
+        i += 1
+    cout_tedges = pd.DatetimeIndex(cout_dates)
+    n_cout = len(cout_tedges) - 1
+
+    # flow_out must align with cout_tedges
+    flow_out = np.full(n_cout, 100.0)
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([500.0]),
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.05,
+        mean_longitudinal_dispersivity=1.0,
+        retardation_factor=retardation_factor,
+        flow_out=flow_out,
+    )
+
+    valid = ~np.isnan(cout)
+    assert np.sum(valid) > 50
+    assert_allclose(cout[valid], 10.0, atol=1e-12)
+
+
 # =============================================================================
 # Tests for extraction_to_infiltration
 # =============================================================================
