@@ -892,10 +892,11 @@ def compute_scaled_sigma_array(
         retardation_factor=retardation_factor,
     )
 
-    # Advective step size [m]: how far water moves during one time step
+    # Advective step size [m]: how far the solute front moves during one time step
+    # Includes retardation because sigma measures spreading relative to solute velocity
     timedelta_at_departure = np.diff(tedges) / pd.to_timedelta(1, unit="D")
     volume_infiltrated_at_departure = flow * timedelta_at_departure
-    dx = volume_infiltrated_at_departure / aquifer_pore_volume * streamline_length
+    dx = volume_infiltrated_at_departure / (aquifer_pore_volume * retardation_factor) * streamline_length
 
     # Sigma in array index units: number of time steps to blend
     sigma_array = diffusive_spreading_length / dx
@@ -942,9 +943,9 @@ def _compute_sigma_on_cout_grid(
     # Diffusive spreading length [m]
     l_diff = np.sqrt(2 * d_l * rt_array)
 
-    # Advective step size on output grid [m]
+    # Advective step size on output grid [m]: solute front advance per time step
     dt_out = np.diff(cout_tedges) / pd.to_timedelta(1, unit="D")
-    dx_out = flow_out * dt_out / aquifer_pore_volume * streamline_length
+    dx_out = flow_out * dt_out / (aquifer_pore_volume * retardation_factor) * streamline_length
 
     return np.clip(l_diff / dx_out, 0.0, 100.0)
 

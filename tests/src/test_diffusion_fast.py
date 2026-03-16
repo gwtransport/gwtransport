@@ -466,6 +466,182 @@ def test_infiltration_to_extraction_with_variable_flow():
 
 
 # =============================================================================
+# Machine-precision tests for retardation (R != 1)
+#
+# With R=1, the retardation factor cancels from the dx computation. These tests
+# use non-integer R=2.7 to verify that the retardation factor is correctly
+# included in the sigma calculation. Each test uses an invariant that holds
+# exactly regardless of R.
+# =============================================================================
+
+
+@pytest.mark.parametrize("retardation_factor", [1.0, 2.7])
+def test_retardation_constant_input(retardation_factor):
+    """Constant cin with retardation produces constant output (exact, row sums)."""
+    tedges, cout_tedges, flow = _make_transport_data(n_days=400)
+    n_days = len(flow)
+    cin = np.full(n_days, 10.0)
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([500.0]),
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.05,
+        mean_longitudinal_dispersivity=1.0,
+        retardation_factor=retardation_factor,
+    )
+
+    valid = ~np.isnan(cout)
+    assert np.sum(valid) > 50
+    assert_allclose(cout[valid], 10.0, atol=1e-12)
+
+
+@pytest.mark.parametrize("retardation_factor", [1.0, 2.7])
+def test_retardation_zero_diffusion_matches_advection(retardation_factor):
+    """Zero diffusion with retardation matches pure advection (exact, G=I)."""
+    tedges, cout_tedges, flow = _make_transport_data(n_days=400)
+    n_days = len(flow)
+    cin = np.sin(np.linspace(0, 4 * np.pi, n_days)) + 2.0
+
+    kwargs = {
+        "cin": cin,
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([500.0]),
+        "retardation_factor": retardation_factor,
+    }
+
+    cout_fast = infiltration_to_extraction(
+        **kwargs,
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.0,
+        mean_longitudinal_dispersivity=0.0,
+    )
+
+    cout_adv = advection_i2e(**kwargs)
+
+    valid = ~np.isnan(cout_fast) & ~np.isnan(cout_adv)
+    assert np.sum(valid) > 50
+    assert_allclose(cout_fast[valid], cout_adv[valid], atol=1e-13)
+
+
+@pytest.mark.parametrize("retardation_factor", [1.0, 2.7])
+def test_retardation_sigma_analytical(retardation_factor):
+    """Sigma from compute_scaled_sigma_array matches analytical formula (exact).
+
+    For constant flow Q, single PV V, retardation R, streamline length L:
+        rt = V * R / Q
+        v_s = L / rt
+        D_l = D_m + alpha_L * v_s
+        l_diff = sqrt(2 * D_l * rt)
+        dx = Q * dt / (V * R) * L
+        sigma = l_diff / dx
+    """
+    n_days = 50
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    flow_rate = 100.0
+    flow = np.full(n_days, flow_rate)
+    pore_volume = 500.0
+    length = 80.0
+    mol_diff = 0.03
+    dispersivity = 1.0
+    dt = 1.0
+
+    sigma_array = compute_scaled_sigma_array(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=pore_volume,
+        streamline_length=length,
+        molecular_diffusivity=mol_diff,
+        longitudinal_dispersivity=dispersivity,
+        retardation_factor=retardation_factor,
+    )
+
+    # Analytical sigma for interior bins (away from residence-time boundary effects)
+    rt = pore_volume * retardation_factor / flow_rate
+    v_s = length / rt
+    d_l = mol_diff + dispersivity * v_s
+    l_diff = np.sqrt(2 * d_l * rt)
+    dx = flow_rate * dt / (pore_volume * retardation_factor) * length
+    sigma_expected = l_diff / dx
+
+    # Interior bins should match the analytical value exactly
+    # (edge bins may differ due to residence time interpolation)
+    margin = int(np.ceil(pore_volume * retardation_factor / flow_rate)) + 2
+    interior = slice(margin, n_days - margin)
+    assert_allclose(sigma_array[interior], sigma_expected, atol=1e-14)
+
+
+@pytest.mark.parametrize("retardation_factor", [1.0, 2.7])
+def test_retardation_output_bounded_by_input(retardation_factor):
+    """Output bounded by input range with retardation (convex combination)."""
+    tedges, cout_tedges, flow = _make_transport_data(n_days=400)
+    n_days = len(flow)
+    cin = np.sin(np.linspace(0, 4 * np.pi, n_days)) * 3.0 + 5.0
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([500.0]),
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.05,
+        mean_longitudinal_dispersivity=1.0,
+        retardation_factor=retardation_factor,
+    )
+
+    valid = ~np.isnan(cout)
+    assert np.sum(valid) > 50
+    assert np.all(cout[valid] >= np.min(cin) - 1e-14)
+    assert np.all(cout[valid] <= np.max(cin) + 1e-14)
+
+
+@pytest.mark.parametrize("retardation_factor", [1.0, 2.7])
+def test_retardation_compressed_matches_uncompressed(retardation_factor):
+    """Compressed non-uniform bins match uncompressed uniform bins with retardation (exact)."""
+    n_days = 500
+    tedges_full = pd.date_range("2019-12-31", periods=n_days + 1, freq="D")
+    flow_full = np.full(n_days, 100.0)
+    cin_full = np.zeros(n_days)
+    cin_full[50] = 100.0
+
+    # Compress to non-uniform bins
+    cin_itedges = np.flatnonzero(np.diff(cin_full, prepend=1.0, append=1.0))
+    flow_itedges = np.flatnonzero(np.diff(flow_full, prepend=1.0, append=1.0))
+    itedges = np.unique(np.concatenate([cin_itedges, flow_itedges]))
+    tedges_compressed = tedges_full[itedges]
+    cin_compressed = cin_full[itedges[:-1]]
+    flow_compressed = flow_full[itedges[:-1]]
+
+    cout_tedges = tedges_full.copy()
+    flow_out = np.full(n_days, 100.0)
+
+    kwargs = {
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([10000.0]),
+        "mean_streamline_length": 100.0,
+        "mean_molecular_diffusivity": 1e-4,
+        "mean_longitudinal_dispersivity": 1.0,
+        "retardation_factor": retardation_factor,
+        "flow_out": flow_out,
+    }
+
+    cout_compressed = infiltration_to_extraction(
+        cin=cin_compressed, flow=flow_compressed, tedges=tedges_compressed, **kwargs
+    )
+    cout_uncompressed = infiltration_to_extraction(cin=cin_full, flow=flow_full, tedges=tedges_full, **kwargs)
+
+    both_valid = ~np.isnan(cout_compressed) & ~np.isnan(cout_uncompressed)
+    assert np.sum(both_valid) > 50
+    assert_allclose(cout_compressed[both_valid], cout_uncompressed[both_valid], atol=0.0)
+
+
+# =============================================================================
 # Tests for extraction_to_infiltration
 # =============================================================================
 
