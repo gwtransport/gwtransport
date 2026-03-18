@@ -85,6 +85,7 @@ src/gwtransport/
 ├── diffusion_fast.py     # Diffusive corrections via Gaussian smoothing (fast, approximate)
 ├── residence_time.py     # Residence time calculations with retardation
 ├── deposition.py         # Deposition process analysis
+├── deposition_utils.py   # Geometric utilities for the deposition module
 ├── logremoval.py         # Log removal efficiency calculations
 ├── gamma.py              # Gamma distribution utilities for pore volumes
 ├── utils.py              # General utilities (interpolation, bin operations)

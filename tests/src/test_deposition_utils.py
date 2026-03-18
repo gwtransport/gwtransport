@@ -1,7 +1,7 @@
 import numpy as np
 from numpy.testing import assert_almost_equal, assert_array_almost_equal
 
-from gwtransport.surfacearea import compute_average_heights
+from gwtransport.deposition_utils import compute_average_heights
 
 
 def test_rectangle_no_clipping():

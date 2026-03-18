@@ -134,10 +134,10 @@ residence_time
    :undoc-members:
    :show-inheritance:
 
-surfacearea
-===========
+deposition_utils
+================
 
-.. automodule:: gwtransport.surfacearea
+.. automodule:: gwtransport.deposition_utils
    :members:
    :undoc-members:
    :show-inheritance:
