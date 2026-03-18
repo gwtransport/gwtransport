@@ -16,6 +16,7 @@ from gwtransport.advection import (
 from gwtransport.diffusion import (
     _erf_integral_time,
     _erf_mean_space_time,
+    _erf_mean_volume,
     extraction_to_infiltration,
     infiltration_to_extraction,
 )
@@ -1609,3 +1610,208 @@ class TestErfIntegralTimeNegativeX:
         result = _erf_integral_time(np.array([t]), np.array([x]), diffusivity)
 
         np.testing.assert_allclose(result[0], expected, rtol=1e-10)
+
+
+class TestFlowWeightedDiffusion:
+    """Tests that verify flow-weighted output concentrations.
+
+    These tests use varying flow within output bins to expose the difference
+    between a 2D (x, τ) rectangle average and the correct 1D volume-space
+    trajectory average.  With constant flow both averages coincide, so these
+    scenarios are the minimal tests that distinguish the two approaches.
+    """
+
+    def test_zero_diffusivity_varying_flow_matches_advection(self):
+        """D=0 with varying flow: diffusion module must match pure advection."""
+        tedges = pd.date_range("2020-01-01", periods=31, freq="D")
+        # Coarser output bins so that multiple flow bins fall inside one cout bin
+        cout_tedges = pd.date_range("2020-01-01", periods=11, freq="3D")
+
+        cin = np.zeros(len(tedges) - 1)
+        cin[0:10] = 1.0
+        # Flow varies significantly across consecutive days
+        flow = 100.0 + 60.0 * np.sin(np.arange(len(cin)) * 2 * np.pi / 7)
+
+        aquifer_pore_volumes = np.array([500.0])
+        streamline_length = np.array([100.0])
+
+        cout_adv = advection_i2e(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+        )
+        cout_diff = infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            streamline_length=streamline_length,
+            molecular_diffusivity=0.0,
+            longitudinal_dispersivity=0.0,
+        )
+
+        valid = ~np.isnan(cout_adv)
+        np.testing.assert_allclose(cout_adv[valid], cout_diff[valid])
+
+    def test_mass_conservation_varying_flow(self):
+        """Coefficient rows must sum to ~1 for valid bins under varying flow."""
+        from gwtransport.diffusion import _infiltration_to_extraction_coeff_matrix
+        from gwtransport.residence_time import residence_time
+
+        tedges = pd.date_range("2020-01-01", periods=31, freq="D")
+        cout_tedges = pd.date_range("2020-01-01", periods=11, freq="3D")
+
+        flow_arr = 100.0 + 60.0 * np.sin(np.arange(30) * 2 * np.pi / 7)
+        aquifer_pore_volumes = np.array([500.0])
+        streamline_length = np.array([100.0])
+
+        coeff, valid = _infiltration_to_extraction_coeff_matrix(
+            flow=flow_arr,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            streamline_length=streamline_length,
+            molecular_diffusivity=np.array([1.0]),
+            longitudinal_dispersivity=np.array([0.0]),
+            retardation_factor=1.0,
+            asymptotic_cutoff_sigma=3.0,
+        )
+
+        row_sums = coeff[valid].sum(axis=1)
+        np.testing.assert_allclose(row_sums, 1.0, atol=1e-6)
+
+    def test_constant_cin_varying_flow_gives_constant_cout(self):
+        """Constant cin with varying flow must produce constant cout."""
+        tedges = pd.date_range("2020-01-01", periods=61, freq="D")
+        cout_tedges = pd.date_range("2020-01-20", periods=11, freq="3D")
+
+        cin = np.ones(len(tedges) - 1) * 7.0
+        flow = 100.0 + 50.0 * np.sin(np.arange(len(cin)) * 2 * np.pi / 5)
+
+        cout = infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([400.0]),
+            streamline_length=np.array([80.0]),
+            molecular_diffusivity=1.0,
+            longitudinal_dispersivity=0.0,
+        )
+
+        valid = ~np.isnan(cout)
+        np.testing.assert_allclose(cout[valid], 7.0, atol=1e-8)
+
+    def test_volume_mean_capped_matches_space_integral(self):
+        """For fully capped cells, _erf_mean_volume must match _erf_integral_space."""
+        from gwtransport.diffusion import _erf_integral_space
+
+        n_cout_edges = 6
+        n_cin_edges = 4
+        rng = np.random.default_rng(42)
+
+        # Build monotonically increasing cumulative volumes
+        cum_cout = np.cumsum(rng.uniform(80, 120, n_cout_edges))
+        cum_cin = np.cumsum(rng.uniform(80, 120, n_cin_edges))
+        tedges_days = np.cumsum(np.concatenate([[0], rng.uniform(0.8, 1.2, n_cin_edges - 1)]))
+
+        R_Vpv = 500.0
+        L = 100.0
+
+        # Build step_widths: (n_cout_edges, n_cin_edges)
+        delta_vol = cum_cout[:, None] - cum_cin[None, :] - R_Vpv
+        step_widths = delta_vol / R_Vpv * L
+
+        # Use very small RT so all cells are fully capped
+        rt_at_cin_edges = np.full(n_cin_edges, 0.1)
+        raw_time = np.full((n_cout_edges, n_cin_edges), 1000.0)
+
+        diffusivity = rng.uniform(0.5, 2.0, n_cout_edges - 1)
+
+        result = _erf_mean_volume(
+            step_widths=step_widths,
+            raw_time=raw_time,
+            rt_at_cin_edges=rt_at_cin_edges,
+            diffusivity=diffusivity,
+            cumulative_volume_at_cout_tedges=cum_cout,
+            cumulative_volume_at_cin_tedges=cum_cin,
+            tedges_days=tedges_days,
+            R_Vpv=R_Vpv,
+            L=L,
+            asymptotic_cutoff_sigma=3.0,
+        )
+
+        # Reference: _erf_integral_space at fixed t=RT for each cell
+        x_lo = step_widths[:-1]
+        x_hi = step_widths[1:]
+        dx = x_hi - x_lo
+        n_cout_bins = n_cout_edges - 1
+
+        for i in range(n_cout_bins):
+            for j in range(n_cin_edges):
+                D = diffusivity[i]
+                RT = rt_at_cin_edges[j]
+                h_hi = _erf_integral_space(np.array([x_hi[i, j]]), diffusivity=D, t=np.array([RT]))[0]
+                h_lo = _erf_integral_space(np.array([x_lo[i, j]]), diffusivity=D, t=np.array([RT]))[0]
+                expected = (h_hi - h_lo) / dx[i, j]
+                np.testing.assert_allclose(result[i, j], expected, atol=1e-12)
+
+    def test_volume_mean_uncapped_vs_quad(self):
+        """Uncapped GL quadrature must match scipy.integrate.quad reference."""
+        from gwtransport.diffusion import _erf_integral_space
+
+        # Single cell: 1 cout bin, 1 cin edge
+        n_cout_edges = 2
+        n_cin_edges = 3  # 3 flow bins
+        cum_cin = np.array([0.0, 100.0, 250.0])
+        tedges_days = np.array([0.0, 1.0, 2.5])  # varying flow: Q=100, Q=100
+
+        R_Vpv = 200.0
+        L = 50.0
+        D = 1.5
+        # cout edges straddle the boundary: V ∈ [50, 180]
+        cum_cout = np.array([50.0, 180.0])
+
+        # RT large enough that the cell is fully uncapped
+        rt_at_cin_edges = np.array([100.0, 100.0, 100.0])
+
+        delta_vol = cum_cout[:, None] - cum_cin[None, :] - R_Vpv
+        step_widths = delta_vol / R_Vpv * L
+
+        raw_time = np.full((n_cout_edges, n_cin_edges), 0.5)  # << RT → uncapped
+
+        result = _erf_mean_volume(
+            step_widths=step_widths,
+            raw_time=raw_time,
+            rt_at_cin_edges=rt_at_cin_edges,
+            diffusivity=np.array([D]),
+            cumulative_volume_at_cout_tedges=cum_cout,
+            cumulative_volume_at_cin_tedges=cum_cin,
+            tedges_days=tedges_days,
+            R_Vpv=R_Vpv,
+            L=L,
+            asymptotic_cutoff_sigma=None,
+        )
+
+        # Reference via scipy.integrate.quad
+        V_lo, V_hi = cum_cout[0], cum_cout[1]
+
+        for j in range(n_cin_edges):
+            V_j = cum_cin[j]
+            t_j = tedges_days[j]
+            RT_j = rt_at_cin_edges[j]
+
+            def integrand(V):
+                x = (V - V_j - R_Vpv) * L / R_Vpv
+                t_V = np.interp(V, cum_cin, tedges_days)
+                tau = min(max(t_V - t_j, 0.0), RT_j)
+                if tau <= 0 or D <= 0:
+                    return np.sign(x)
+                return special.erf(x / (2.0 * np.sqrt(D * tau)))
+
+            ref, _ = integrate.quad(integrand, V_lo, V_hi, limit=200)
+            ref_mean = ref / (V_hi - V_lo)
+            np.testing.assert_allclose(result[0, j], ref_mean, atol=1e-10)

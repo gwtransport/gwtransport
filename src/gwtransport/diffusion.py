@@ -57,6 +57,9 @@ from gwtransport.utils import compute_reverse_target, solve_tikhonov
 # Numerical tolerance for coefficient sum to determine valid output bins
 EPSILON_COEFF_SUM = 1e-10
 
+# Gauss-Legendre quadrature nodes and weights for volume-space integration
+_GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(16)
+
 
 def _erf_integral_time(
     t: NDArray[np.float64],
@@ -507,6 +510,217 @@ def _erf_mean_space_time(xedges, tedges, diffusivity, *, asymptotic_cutoff_sigma
     return out
 
 
+def _erf_mean_volume(
+    *,
+    step_widths: NDArray[np.float64],
+    raw_time: NDArray[np.float64],
+    rt_at_cin_edges: NDArray[np.float64],
+    diffusivity: NDArray[np.float64],
+    cumulative_volume_at_cout_tedges: NDArray[np.float64],
+    cumulative_volume_at_cin_tedges: NDArray[np.float64],
+    tedges_days: NDArray[np.float64],
+    R_Vpv: float,
+    L: float,
+    asymptotic_cutoff_sigma: float | None,
+) -> NDArray[np.float64]:
+    r"""Compute mean erf along the physical trajectory in cumulative volume space.
+
+    For each cell (cout_bin *i*, cin_edge *j*), computes the flow-weighted
+    average of the error function along the 1D extraction trajectory:
+
+    .. math::
+
+        \text{mean\_erf}_{i,j} = \frac{1}{\Delta V_i}
+        \int_{V_i}^{V_{i+1}} \text{erf}\!\left(
+            \frac{x(V)}{2\sqrt{D \cdot \tau(V)}}
+        \right) dV
+
+    where *x(V)* is the normalized distance (linear in *V*) and *τ(V)* is the
+    elapsed time since infiltration (capped at the residence time *RT*).
+    Averaging over cumulative volume gives a flow-weighted average because
+    dV = Q(t) dt.
+
+    **Fully capped cells** (both cout edges have elapsed time ≥ RT):
+    τ = RT (constant), so the integral reduces to ``_erf_integral_space``
+    at fixed *t* = RT. This path gives machine precision.
+
+    **Uncapped cells** (at least one cout edge has elapsed time < RT):
+    Vectorized 16-point Gauss-Legendre quadrature in volume space.  The
+    integration is split at flow-bin boundaries (where *Q* changes) so
+    that within each sub-interval the integrand is smooth, and at the
+    capping transition (where *τ* switches from linear growth to the
+    constant *RT*) where the exact ``_erf_integral_space`` is used for
+    the capped portion.  The outer loop runs over flow bins; within each
+    iteration all overlapping uncapped cells are evaluated simultaneously.
+
+    Parameters
+    ----------
+    step_widths : ndarray, shape (n_cout_edges, n_cin_edges)
+        Normalized x-position at each (cout_edge, cin_edge) point.
+        NaN for inactive cells.
+    raw_time : ndarray, shape (n_cout_edges, n_cin_edges)
+        Raw elapsed time in days (before capping at RT).
+        NaN for inactive cells.
+    rt_at_cin_edges : ndarray, shape (n_cin_edges,)
+        Residence time at each cin edge for this pore volume [days].
+    diffusivity : ndarray, shape (n_cout_bins,)
+        Longitudinal dispersion coefficient per cout bin [m²/day].
+    cumulative_volume_at_cout_tedges : ndarray, shape (n_cout_edges,)
+        Cumulative extracted volume at each cout time edge [m³].
+    cumulative_volume_at_cin_tedges : ndarray, shape (n_cin_edges,)
+        Cumulative volume at each cin (flow) time edge [m³].
+    tedges_days : ndarray, shape (n_cin_edges,)
+        Flow time edges in days (same reference as raw_time).
+    R_Vpv : float
+        Retardation factor times pore volume [m³].
+    L : float
+        Streamline length [m].
+    asymptotic_cutoff_sigma : float or None
+        Erf cutoff threshold for ``_erf_integral_space``.
+
+    Returns
+    -------
+    ndarray, shape (n_cout_bins, n_cin_edges)
+        Mean erf value for each cell. NaN for inactive cells.
+    """
+    n_cout_edges, n_cin_edges = step_widths.shape
+    n_cout_bins = n_cout_edges - 1
+
+    x_lo = step_widths[:-1]
+    x_hi = step_widths[1:]
+    dx = x_hi - x_lo
+
+    V_lo_arr = cumulative_volume_at_cout_tedges[:-1]
+    V_hi_arr = cumulative_volume_at_cout_tedges[1:]
+
+    is_valid = ~np.isnan(x_lo) & ~np.isnan(x_hi)
+
+    # Determine capping status at each cell edge
+    with np.errstate(invalid="ignore"):
+        is_capped_lo = raw_time[:-1] >= rt_at_cin_edges[np.newaxis, :]
+        is_capped_hi = raw_time[1:] >= rt_at_cin_edges[np.newaxis, :]
+    is_fully_capped = is_capped_lo & is_capped_hi
+
+    response = np.full((n_cout_bins, n_cin_edges), np.nan)
+
+    # --- D = 0: erf = sign(x), exact for any τ ---
+    mask_d_zero = diffusivity == 0.0
+    if np.any(mask_d_zero):
+        mask_d_zero_2d = is_valid & np.broadcast_to(mask_d_zero[:, np.newaxis], (n_cout_bins, n_cin_edges))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            d_zero_vals = (np.abs(x_hi) - np.abs(x_lo)) / dx
+        d_zero_vals = np.where(dx == 0.0, np.sign(x_lo), d_zero_vals)
+        response = np.where(mask_d_zero_2d, d_zero_vals, response)
+        is_valid = is_valid & ~mask_d_zero_2d
+
+    # --- Fully capped cells: exact via _erf_integral_space ---
+    mask_capped = is_valid & is_fully_capped
+    if np.any(mask_capped):
+        t_const = np.broadcast_to(rt_at_cin_edges[np.newaxis, :], (n_cout_bins, n_cin_edges))[mask_capped]
+        d_bc = np.broadcast_to(diffusivity[:, np.newaxis], (n_cout_bins, n_cin_edges))[mask_capped]
+
+        clip_kw = {"clip_to_inf": asymptotic_cutoff_sigma} if asymptotic_cutoff_sigma is not None else {}
+        h_hi = _erf_integral_space(x_hi[mask_capped], diffusivity=d_bc, t=t_const, **clip_kw)
+        h_lo = _erf_integral_space(x_lo[mask_capped], diffusivity=d_bc, t=t_const, **clip_kw)
+        dx_c = dx[mask_capped]
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            a_vals = np.where(
+                (t_const <= 0) | (d_bc <= 0),
+                np.inf,
+                1.0 / (2.0 * np.sqrt(d_bc * t_const)),
+            )
+        point_val = np.where(np.isinf(a_vals), np.sign(x_lo[mask_capped]), special.erf(a_vals * x_lo[mask_capped]))
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            response[mask_capped] = np.where(dx_c == 0.0, point_val, (h_hi - h_lo) / dx_c)
+
+    # --- Uncapped cells: vectorized Gauss-Legendre quadrature in volume space ---
+    mask_uncapped = is_valid & ~is_fully_capped
+    if np.any(mask_uncapped):
+        idx_i, idx_j = np.nonzero(mask_uncapped)
+        n_cells = len(idx_i)
+
+        # Gather cell parameters (all shape (n_cells,))
+        v_lo_cells = V_lo_arr[idx_i]
+        v_hi_cells = V_hi_arr[idx_i]
+        v_cin_cells = cumulative_volume_at_cin_tedges[idx_j]
+        rt_cells = rt_at_cin_edges[idx_j]
+        t_j_cells = tedges_days[idx_j]
+        D_cells = diffusivity[idx_i]
+        total_dV = v_hi_cells - v_lo_cells
+
+        valid_cells = np.isfinite(rt_cells) & (total_dV > 0)
+
+        # Partially capped: start uncapped, end capped
+        has_capped = is_capped_hi[idx_i, idx_j] & ~is_capped_lo[idx_i, idx_j]
+        t_kink_all = t_j_cells + rt_cells
+        v_kink_all = np.interp(t_kink_all, tedges_days, cumulative_volume_at_cin_tedges)
+        v_kink_all = np.clip(v_kink_all, v_lo_cells, v_hi_cells)
+        v_end = np.where(has_capped, v_kink_all, v_hi_cells)
+
+        # --- GL quadrature over [v_lo, v_end] for all cells simultaneously ---
+        # Split at flow bin boundaries for smoothness within each sub-interval.
+        # Loop over consecutive pairs of flow-bin volume edges; vectorize
+        # across all cells whose uncapped interval overlaps that sub-interval.
+        uncapped_integral = np.zeros(n_cells)
+        vol_edges = cumulative_volume_at_cin_tedges  # monotonic volume grid
+
+        for k in range(len(vol_edges) - 1):
+            ve_lo, ve_hi = vol_edges[k], vol_edges[k + 1]
+            # Clip to each cell's uncapped interval
+            sub_lo = np.maximum(v_lo_cells, ve_lo)
+            sub_hi = np.minimum(v_end, ve_hi)
+            overlap = (sub_hi > sub_lo) & valid_cells
+            if not np.any(overlap):
+                continue
+
+            dv_sub = sub_hi[overlap] - sub_lo[overlap]  # (n_overlap,)
+            v_mid_sub = (sub_hi[overlap] + sub_lo[overlap]) / 2
+            v_half_sub = dv_sub / 2
+
+            # GL nodes: (n_overlap, n_gl)
+            n_gl = len(_GL_NODES)
+            v_nodes = v_mid_sub[:, np.newaxis] + v_half_sub[:, np.newaxis] * _GL_NODES[np.newaxis, :]
+
+            # x(V): (n_overlap, n_gl)
+            x_nodes = (v_nodes - v_cin_cells[overlap, np.newaxis] - R_Vpv) * L / R_Vpv
+
+            # t(V) via interpolation: flatten, interp, reshape
+            t_nodes = np.interp(v_nodes.ravel(), vol_edges, tedges_days).reshape(-1, n_gl)
+
+            # τ(V) = clip(t(V) - t_j, 0, RT_j): (n_overlap, n_gl)
+            tau_nodes = np.clip(
+                t_nodes - t_j_cells[overlap, np.newaxis], 0.0, rt_cells[overlap, np.newaxis]
+            )
+
+            # erf(x / (2√(Dτ))): (n_overlap, n_gl)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                arg = x_nodes / (2.0 * np.sqrt(D_cells[overlap, np.newaxis] * tau_nodes))
+            erf_vals = np.where(np.isfinite(arg), special.erf(arg), np.sign(x_nodes))
+
+            # Accumulate weighted integral for overlapping cells
+            uncapped_integral[overlap] += (dv_sub / 2) * (erf_vals @ _GL_WEIGHTS)
+
+        # --- Capped sub-interval [v_kink, v_hi]: exact via _erf_integral_space ---
+        capped_integral = np.zeros(n_cells)
+        mask_cap = has_capped & (v_kink_all < v_hi_cells) & valid_cells
+        if np.any(mask_cap):
+            x_at_kink = (v_kink_all[mask_cap] - v_cin_cells[mask_cap] - R_Vpv) * L / R_Vpv
+            x_at_hi_cap = x_hi[idx_i[mask_cap], idx_j[mask_cap]]
+            clip_kw = {"clip_to_inf": asymptotic_cutoff_sigma} if asymptotic_cutoff_sigma is not None else {}
+            h_hi_val = _erf_integral_space(x_at_hi_cap, diffusivity=D_cells[mask_cap], t=rt_cells[mask_cap], **clip_kw)
+            h_lo_val = _erf_integral_space(x_at_kink, diffusivity=D_cells[mask_cap], t=rt_cells[mask_cap], **clip_kw)
+            capped_integral[mask_cap] = (h_hi_val - h_lo_val) * (R_Vpv / L)
+
+        # Combine: mean erf = (uncapped + capped) / total_dV
+        with np.errstate(divide="ignore", invalid="ignore"):
+            response_cells = np.where(valid_cells, (uncapped_integral + capped_integral) / total_dV, np.nan)
+        response[idx_i, idx_j] = response_cells
+
+    return response
+
+
 def _infiltration_to_extraction_coeff_matrix(
     *,
     flow: npt.NDArray[np.floating],
@@ -627,26 +841,35 @@ def _infiltration_to_extraction_coeff_matrix(
     # Determine when infiltration has occurred: cout_tedge must be >= tedge (infiltration time)
     isactive = cout_tedges.to_numpy()[:, None] >= tedges.to_numpy()[None, :]
 
+    # Compute raw elapsed time (before capping at RT) once for all pore volumes
+    raw_time = (cout_tedges.to_numpy()[:, None] - tedges.to_numpy()[None, :]) / pd.to_timedelta(1, unit="D")
+    raw_time[~isactive] = np.nan
+
+    # Convert tedges to days for volume→time interpolation
+    tedges_days_arr = ((tedges - tedges[0]) / pd.Timedelta("1D")).values.astype(float)
+
     # Loop over each pore volume
     for i_pv in range(len(aquifer_pore_volumes)):
+        R_Vpv = retardation_factor * aquifer_pore_volumes[i_pv]
+
         delta_volume = (
-            cumulative_volume_at_cout_tedges[:, None]
-            - cumulative_volume_at_cin_tedges[None, :]
-            - (retardation_factor * aquifer_pore_volumes[i_pv])
+            cumulative_volume_at_cout_tedges[:, None] - cumulative_volume_at_cin_tedges[None, :] - R_Vpv
         )
         delta_volume[~isactive] = np.nan
 
-        step_widths = delta_volume / (retardation_factor * aquifer_pore_volumes[i_pv]) * streamline_length[i_pv]
-
-        time_active = (cout_tedges.to_numpy()[:, None] - tedges.to_numpy()[None, :]) / pd.to_timedelta(1, unit="D")
-        time_active[~isactive] = np.nan
-        time_active = np.minimum(time_active, rt_edges_2d[[i_pv]])
+        step_widths = delta_volume / R_Vpv * streamline_length[i_pv]
 
         diff_pv = diffusivity_2d[i_pv, :]
-        response = _erf_mean_space_time(
-            xedges=step_widths,
-            tedges=time_active,
-            diffusivity=diff_pv[:, np.newaxis],
+        response = _erf_mean_volume(
+            step_widths=step_widths,
+            raw_time=raw_time,
+            rt_at_cin_edges=rt_edges_2d[i_pv],
+            diffusivity=diff_pv,
+            cumulative_volume_at_cout_tedges=cumulative_volume_at_cout_tedges,
+            cumulative_volume_at_cin_tedges=cumulative_volume_at_cin_tedges,
+            tedges_days=tedges_days_arr,
+            R_Vpv=R_Vpv,
+            L=streamline_length[i_pv],
             asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
         )
 
