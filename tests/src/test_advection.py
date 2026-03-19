@@ -8,6 +8,7 @@ from gwtransport.advection import (
     gamma_extraction_to_infiltration,
     gamma_infiltration_to_extraction,
     infiltration_to_extraction,
+    infiltration_to_extraction_front_tracking,
     infiltration_to_extraction_series,
 )
 from gwtransport.utils import compute_time_edges
@@ -2293,3 +2294,95 @@ def test_gamma_extraction_to_infiltration_mean_preservation():
     valid_recovered = cin_recovered[valid_mask]
 
     assert np.mean(valid_recovered) == pytest.approx(25.0, rel=0.15)
+
+
+# ===============================================================================
+# FLOW-WEIGHTED FRONT TRACKING TESTS
+# ===============================================================================
+
+
+class TestFlowWeightedFrontTracking:
+    """Tests that verify flow-weighted output for front-tracking transport."""
+
+    def test_constant_flow_unchanged(self):
+        """With constant flow, front-tracking must match pure advection."""
+
+        tedges = pd.date_range("2020-01-01", periods=31, freq="D")
+        cout_tedges = pd.date_range("2020-01-01", periods=11, freq="3D")
+
+        cin = np.zeros(30)
+        cin[0:5] = 10.0
+        flow = np.full(30, 100.0)
+        aquifer_pore_volumes = np.array([500.0])
+
+        cout_ft = infiltration_to_extraction_front_tracking(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            retardation_factor=1.0,
+        )
+
+        cout_adv = infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            retardation_factor=1.0,
+        )
+
+        valid = ~np.isnan(cout_adv)
+        np.testing.assert_allclose(cout_ft[valid], cout_adv[valid])
+
+    def test_constant_cin_varying_flow_gives_constant_cout(self):
+        """Constant cin with varying flow must produce constant cout."""
+
+        tedges = pd.date_range("2020-01-01", periods=61, freq="D")
+        cout_tedges = pd.date_range("2020-01-20", periods=11, freq="3D")
+
+        cin = np.ones(60) * 7.0
+        flow = 100.0 + 50.0 * np.sin(np.arange(60) * 2 * np.pi / 5)
+
+        cout = infiltration_to_extraction_front_tracking(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([400.0]),
+            retardation_factor=1.0,
+        )
+
+        valid = cout > 0
+        if np.any(valid):
+            np.testing.assert_allclose(cout[valid], 7.0, atol=1e-13)
+
+    def test_constant_flow_mass_conservation(self):
+        """Mass must be conserved under constant flow."""
+
+        tedges = pd.date_range("2020-01-01", periods=61, freq="D")
+        # Use coarser cout so multiple flow bins fall in one cout bin
+        cout_tedges = pd.date_range("2020-01-01", periods=21, freq="3D")
+
+        cin = np.zeros(60)
+        cin[5:10] = 10.0
+        flow = np.full(60, 100.0)
+
+        cout = infiltration_to_extraction_front_tracking(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([300.0]),
+            retardation_factor=1.0,
+        )
+
+        # Mass in = Σ cin_i * Q_i * dt_i
+        dt_in = np.ones(60)
+        mass_in = np.sum(cin * flow * dt_in)
+        # Mass out = Σ cout_i * Q_cout_i * dt_cout_i
+        # With constant flow, Q_cout = Q = 100
+        dt_out = np.diff(((cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)).values)
+        mass_out = np.sum(cout * flow[0] * dt_out)
+        np.testing.assert_allclose(mass_out, mass_in, rtol=1e-13)
