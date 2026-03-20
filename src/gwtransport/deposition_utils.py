@@ -1,10 +1,8 @@
 """
-Surface Area Calculations for Streamline-Based Transport Analysis.
+Utility Functions for the Deposition Module.
 
-This module provides geometric utilities for computing surface areas and average
-heights between streamlines in heterogeneous aquifer systems. These calculations
-support direct estimation of pore volume distributions from streamline analysis,
-providing an alternative to gamma distribution approximations.
+This module provides geometric utilities used by the deposition module for computing
+surface areas and average heights between streamlines.
 
 Available functions:
 
@@ -136,7 +134,7 @@ def compute_average_heights(
     Examples
     --------
     >>> import numpy as np
-    >>> from gwtransport.surfacearea import compute_average_heights
+    >>> from gwtransport.deposition_utils import compute_average_heights
     >>> # Create simple grid
     >>> x_edges = np.array([0.0, 1.0, 2.0])
     >>> y_edges = np.array([[0.0, 0.5, 1.0], [1.0, 1.5, 2.0], [2.0, 2.5, 3.0]])

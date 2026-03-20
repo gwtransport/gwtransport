@@ -48,8 +48,8 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from gwtransport.deposition_utils import compute_average_heights
 from gwtransport.residence_time import residence_time
-from gwtransport.surfacearea import compute_average_heights
 from gwtransport.utils import compute_reverse_target, linear_interpolate, solve_tikhonov, solve_underdetermined_system
 
 

@@ -741,7 +741,7 @@ def compute_first_front_arrival_time(
         return np.inf
 
     idx_first = nonzero_indices[0]
-    c_first = cin[idx_first]
+    c_first = float(cin[idx_first])
 
     # Compute retardation for this concentration
     r_first = sorption.retardation(c_first)

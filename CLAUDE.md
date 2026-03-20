@@ -9,9 +9,9 @@ Scientific Python package for timeseries analysis of groundwater transport of so
 uv sync --all-extras
 
 # Testing (run before committing)
-uv run pytest tests/src                    # Unit tests
-uv run pytest tests/examples               # Example notebooks
-uv run pytest tests/docs                   # Documentation code snippets
+uv run pytest tests/src -n auto                   # Unit tests
+uv run pytest tests/examples -n auto              # Example notebooks
+uv run pytest tests/docs -n auto                  # Documentation code snippets
 
 # Linting (run before committing)
 uv run ruff format .                       # Format code
@@ -85,6 +85,7 @@ src/gwtransport/
 ├── diffusion_fast.py     # Diffusive corrections via Gaussian smoothing (fast, approximate)
 ├── residence_time.py     # Residence time calculations with retardation
 ├── deposition.py         # Deposition process analysis
+├── deposition_utils.py   # Geometric utilities for the deposition module
 ├── logremoval.py         # Log removal efficiency calculations
 ├── gamma.py              # Gamma distribution utilities for pore volumes
 ├── utils.py              # General utilities (interpolation, bin operations)

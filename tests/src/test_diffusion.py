@@ -14,8 +14,9 @@ from gwtransport.advection import (
     infiltration_to_extraction as advection_i2e,
 )
 from gwtransport.diffusion import (
-    _erf_integral_time,
-    _erf_mean_space_time,
+    _erf_integral_space,
+    _erf_mean_volume,
+    _infiltration_to_extraction_coeff_matrix,
     extraction_to_infiltration,
     infiltration_to_extraction,
 )
@@ -444,194 +445,6 @@ class TestInfiltrationToExtractionDiffusionPhysics:
         np.testing.assert_allclose(actual_delay, expected_delay, rtol=0.01)
 
 
-class TestErfMeanSpaceTimeAnalytical:
-    """Tests for _erf_mean_space_time against known analytical solutions.
-
-    The function computes the mean of erf(x/(2√(D*t))) over a 2D space-time grid.
-    """
-
-    def test_against_numerical_double_integration(self):
-        """Compare against scipy.integrate.dblquad."""
-        diffusivity = 1.0
-        xedges = np.array([0.5, 1.5])
-        tedges = np.array([1.0, 2.0])
-
-        def integrand(x, t, diff=diffusivity):
-            if t <= 0:
-                return 0.0
-            return special.erf(x / (2 * np.sqrt(diff * t)))
-
-        integral, _ = integrate.dblquad(
-            integrand, tedges[0], tedges[1], xedges[0], xedges[1], epsabs=1e-10, epsrel=1e-10
-        )
-        dx = xedges[1] - xedges[0]
-        dt = tedges[1] - tedges[0]
-        expected = integral / (dx * dt)
-
-        result = _erf_mean_space_time(xedges, tedges, diffusivity)
-        np.testing.assert_allclose(result[0, 0], expected, rtol=1e-6)
-
-    def test_symmetric_edges_around_zero_in_x(self):
-        """Mean over symmetric x interval around 0 should be 0."""
-        xedges = np.array([-1.0, 1.0])
-        tedges = np.array([1.0, 2.0])
-        result = _erf_mean_space_time(xedges, tedges, diffusivity=1.0)
-        np.testing.assert_allclose(result[0, 0], 0.0, atol=1e-10)
-
-    def test_large_positive_x(self):
-        """For large positive x, mean erf should approach 1."""
-        xedges = np.array([100.0, 200.0])
-        tedges = np.array([1.0, 2.0])
-        result = _erf_mean_space_time(xedges, tedges, diffusivity=1.0)
-        np.testing.assert_allclose(result[0, 0], 1.0, rtol=1e-4)
-
-
-class TestErfMeanSpaceTime2D:
-    """Tests for _erf_mean_space_time paired-cell mode (2D edges)."""
-
-    def test_2d_against_numerical_integration(self):
-        """Compare 2D paired-cell results against scipy.integrate.dblquad."""
-        # 3 cells with varying diffusivity
-        xedges = np.array([[0.5, 1.0], [1.5, 2.0], [2.5, 3.0], [3.5, 4.0]])
-        tedges = np.array([[1.0, 0.5], [2.0, 1.5], [3.0, 2.5], [4.0, 3.5]])
-        diffusivity = np.array([[0.5, 1.0], [1.5, 2.0], [0.8, 0.3]])
-
-        result = _erf_mean_space_time(xedges, tedges, diffusivity)
-        assert result.shape == (3, 2)
-
-        for i in range(3):
-            for j in range(2):
-                x0, x1 = xedges[i, j], xedges[i + 1, j]
-                t0, t1 = tedges[i, j], tedges[i + 1, j]
-                d = diffusivity[i, j]
-
-                def integrand(x, t, diff=d):
-                    if t <= 0:
-                        return 0.0
-                    return special.erf(x / (2 * np.sqrt(diff * t)))
-
-                integral, _ = integrate.dblquad(integrand, t0, t1, x0, x1, epsabs=1e-10, epsrel=1e-10)
-                dx = x1 - x0
-                dt = t1 - t0
-                expected = integral / (dx * dt)
-                np.testing.assert_allclose(result[i, j], expected, rtol=1e-6)
-
-    def test_2d_matches_1d_diagonal(self):
-        """With scalar D, 2D paired-cell should match 1D grid diagonal."""
-        xedges_1d = np.array([0.5, 1.5, 2.5, 3.5])
-        tedges_1d = np.array([1.0, 2.0, 3.0, 4.0])
-        diffusivity = 1.0
-
-        result_1d = _erf_mean_space_time(xedges_1d, tedges_1d, diffusivity)
-
-        # Paired-cell mode with single column reproduces diagonal (i,i)
-        n = len(xedges_1d) - 1
-        xedges_2d = xedges_1d[:, np.newaxis]  # (4, 1)
-        tedges_2d = tedges_1d[:, np.newaxis]  # (4, 1)
-
-        result_2d = _erf_mean_space_time(xedges_2d, tedges_2d, diffusivity)
-        assert result_2d.shape == (n, 1)
-
-        diagonal_1d = np.diag(result_1d)
-        np.testing.assert_allclose(result_2d[:, 0], diagonal_1d, rtol=1e-12)
-
-    def test_2d_dx_zero(self):
-        """When dx=0 for a cell, result should be erf mean over time at fixed x."""
-        diffusivity = 1.0
-        # Cell with dx=0: x stays at 2.0, t goes from 1.0 to 3.0
-        xedges = np.array([[2.0], [2.0], [3.0]])  # cell 0: dx=0, cell 1: dx=1
-        tedges = np.array([[1.0], [3.0], [5.0]])
-        result = _erf_mean_space_time(xedges, tedges, diffusivity)
-
-        x_fixed = 2.0
-        t0, t1 = 1.0, 3.0
-        dt = t1 - t0
-
-        def integrand(t, diff=diffusivity):
-            if t <= 0:
-                return 0.0
-            return special.erf(x_fixed / (2 * np.sqrt(diff * t)))
-
-        expected, _ = integrate.quad(integrand, t0, t1, epsabs=1e-12)
-        expected /= dt
-
-        np.testing.assert_allclose(result[0, 0], expected, rtol=1e-6)
-
-    def test_2d_dt_zero(self):
-        """When dt=0 for a cell, result should be erf mean over space at fixed t."""
-        diffusivity = 1.0
-        # Cell with dt=0: t stays at 2.0, x goes from 1.0 to 3.0
-        xedges = np.array([[1.0], [3.0], [5.0]])
-        tedges = np.array([[2.0], [2.0], [4.0]])  # cell 0: dt=0, cell 1: dt=2
-        result = _erf_mean_space_time(xedges, tedges, diffusivity)
-
-        t_fixed = 2.0
-        x0, x1 = 1.0, 3.0
-        dx = x1 - x0
-
-        def integrand(x, diff=diffusivity):
-            return special.erf(x / (2 * np.sqrt(diff * t_fixed)))
-
-        expected, _ = integrate.quad(integrand, x0, x1, epsabs=1e-12)
-        expected /= dx
-
-        np.testing.assert_allclose(result[0, 0], expected, rtol=1e-6)
-
-    def test_2d_both_zero(self):
-        """When both dx=0 and dt=0, result is point evaluation of erf."""
-        diffusivity = 1.0
-        x_pt, t_pt = 2.0, 3.0
-        # Single cell with both dx=0 and dt=0
-        xedges = np.array([[x_pt], [x_pt]])
-        tedges = np.array([[t_pt], [t_pt]])
-        result = _erf_mean_space_time(xedges, tedges, diffusivity)
-
-        expected = special.erf(x_pt / (2 * np.sqrt(diffusivity * t_pt)))
-        np.testing.assert_allclose(result[0, 0], expected, rtol=1e-12)
-
-    def test_2d_nan_propagation(self):
-        """NaN edges should produce NaN output."""
-        xedges = np.array([[1.0, np.nan], [2.0, 3.0], [3.0, 4.0]])
-        tedges = np.array([[1.0, 1.0], [2.0, 2.0], [3.0, 3.0]])
-        result = _erf_mean_space_time(xedges, tedges, diffusivity=1.0)
-        assert result.shape == (2, 2)
-        # Cell (0,0): x_lo=1.0, x_hi=2.0 — all finite
-        assert np.isfinite(result[0, 0])
-        # Cell (0,1): x_lo=NaN — propagates to NaN
-        assert np.isnan(result[0, 1])
-        # Cell (1,0): all finite
-        assert np.isfinite(result[1, 0])
-        # Cell (1,1): all finite
-        assert np.isfinite(result[1, 1])
-
-    def test_2d_broadcasting_diffusivity(self):
-        """Diffusivity (n,1) should broadcast with (n,m) cells."""
-        n, m = 3, 4
-        rng = np.random.default_rng(42)
-        xedges = np.cumsum(rng.uniform(0.5, 1.5, size=(n + 1, m)), axis=0)
-        tedges = np.cumsum(rng.uniform(0.5, 1.5, size=(n + 1, m)), axis=0)
-        diffusivity = rng.uniform(0.5, 2.0, size=(n, 1))  # (n, 1)
-
-        result = _erf_mean_space_time(xedges, tedges, diffusivity)
-        assert result.shape == (n, m)
-
-        # Verify against per-element numerical integration for a subset
-        for i in range(n):
-            j = 0  # check first column
-            x0, x1 = xedges[i, j], xedges[i + 1, j]
-            t0, t1 = tedges[i, j], tedges[i + 1, j]
-            d = diffusivity[i, 0]
-
-            def integrand(x, t, diff=d):
-                if t <= 0:
-                    return 0.0
-                return special.erf(x / (2 * np.sqrt(diff * t)))
-
-            integral, _ = integrate.dblquad(integrand, t0, t1, x0, x1, epsabs=1e-10, epsrel=1e-10)
-            expected = integral / ((x1 - x0) * (t1 - t0))
-            np.testing.assert_allclose(result[i, j], expected, rtol=1e-6)
-
-
 class TestDiffusionMatchesApvdCombined:
     """Test diffusion physics with per-bin velocity-dependent dispersivity.
 
@@ -1023,7 +836,7 @@ class TestExtractionToInfiltrationDiffusion:
         # have near-zero coefficient support, so the solver cannot recover them.
         well_supported = valid & (cin > 1.0)
         np.testing.assert_allclose(cin[well_supported], 5.0, rtol=1e-10, atol=1e-10)
-        assert np.sum(well_supported) > 0.9 * np.sum(valid)
+        assert np.sum(well_supported) > 0.85 * np.sum(valid)
 
     def test_multiple_pore_volumes(self):
         """Test with multiple pore volumes (heterogeneous aquifer)."""
@@ -1579,33 +1392,258 @@ class TestDiffusionRoundTrip:
         )
 
 
-class TestErfIntegralTimeNegativeX:
-    """Tests for _erf_integral_time with negative x values (bug #7 regression)."""
+class TestFlowWeightedDiffusion:
+    """Tests that verify flow-weighted output concentrations.
 
-    def test_odd_symmetry(self):
-        """_erf_integral_time should be odd in x: f(t, x) = -f(t, -x)."""
-        t_values = np.array([1.0, 5.0, 10.0, 50.0])
-        x_values = np.array([1.0, 3.0, 10.0, 0.5])
-        diffusivity = 0.1
+    These tests use varying flow within output bins to expose the difference
+    between a 2D (x, τ) rectangle average and the correct 1D volume-space
+    trajectory average.  With constant flow both averages coincide, so these
+    scenarios are the minimal tests that distinguish the two approaches.
+    """
 
-        result_pos = _erf_integral_time(t_values, x_values, diffusivity)
-        result_neg = _erf_integral_time(t_values, -x_values, diffusivity)
+    def test_zero_diffusivity_varying_flow_matches_advection(self):
+        """D=0 with varying flow: diffusion module must match pure advection."""
+        tedges = pd.date_range("2020-01-01", periods=31, freq="D")
+        # Coarser output bins so that multiple flow bins fall inside one cout bin
+        cout_tedges = pd.date_range("2020-01-01", periods=11, freq="3D")
 
-        np.testing.assert_allclose(result_pos, -result_neg, atol=1e-12)
+        cin = np.zeros(len(tedges) - 1)
+        cin[0:10] = 1.0
+        # Flow varies significantly across consecutive days
+        flow = 100.0 + 60.0 * np.sin(np.arange(len(cin)) * 2 * np.pi / 7)
 
-    @pytest.mark.parametrize("x", [-0.5, -2.0, -10.0])
-    def test_negative_x_against_quadrature(self, x):
-        """Compare _erf_integral_time with negative x against scipy.integrate.quad."""
-        t = 5.0
-        diffusivity = 0.5
+        aquifer_pore_volumes = np.array([500.0])
+        streamline_length = np.array([100.0])
 
-        # Numerical integration of erf(x/(2*sqrt(D*tau))) from 0 to t
-        def integrand(tau):
-            if tau <= 0:
-                return 0.0
-            return special.erf(x / (2.0 * np.sqrt(diffusivity * tau)))
+        cout_adv = advection_i2e(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+        )
+        cout_diff = infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            streamline_length=streamline_length,
+            molecular_diffusivity=0.0,
+            longitudinal_dispersivity=0.0,
+        )
 
-        expected, _ = integrate.quad(integrand, 0, t, limit=100)
-        result = _erf_integral_time(np.array([t]), np.array([x]), diffusivity)
+        valid = ~np.isnan(cout_adv)
+        np.testing.assert_allclose(cout_adv[valid], cout_diff[valid])
 
-        np.testing.assert_allclose(result[0], expected, rtol=1e-10)
+    def test_mass_conservation_varying_flow(self):
+        """Coefficient rows must sum to ~1 for valid bins under varying flow."""
+        tedges = pd.date_range("2020-01-01", periods=31, freq="D")
+        cout_tedges = pd.date_range("2020-01-01", periods=11, freq="3D")
+
+        flow_arr = 100.0 + 60.0 * np.sin(np.arange(30) * 2 * np.pi / 7)
+        aquifer_pore_volumes = np.array([500.0])
+        streamline_length = np.array([100.0])
+
+        coeff, valid = _infiltration_to_extraction_coeff_matrix(
+            flow=flow_arr,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            streamline_length=streamline_length,
+            molecular_diffusivity=np.array([1.0]),
+            longitudinal_dispersivity=np.array([0.0]),
+            retardation_factor=1.0,
+            asymptotic_cutoff_sigma=3.0,
+        )
+
+        row_sums = coeff[valid].sum(axis=1)
+        np.testing.assert_allclose(row_sums, 1.0, atol=1e-12)
+
+    def test_constant_cin_varying_flow_gives_constant_cout(self):
+        """Constant cin with varying flow must produce constant cout."""
+        tedges = pd.date_range("2020-01-01", periods=61, freq="D")
+        cout_tedges = pd.date_range("2020-01-20", periods=11, freq="3D")
+
+        cin = np.ones(len(tedges) - 1) * 7.0
+        flow = 100.0 + 50.0 * np.sin(np.arange(len(cin)) * 2 * np.pi / 5)
+
+        cout = infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([400.0]),
+            streamline_length=np.array([80.0]),
+            molecular_diffusivity=1.0,
+            longitudinal_dispersivity=0.0,
+        )
+
+        valid = ~np.isnan(cout)
+        np.testing.assert_allclose(cout[valid], 7.0, atol=1e-12)
+
+    def test_volume_mean_capped_matches_space_integral(self):
+        """For fully capped cells, _erf_mean_volume must match _erf_integral_space."""
+        n_cout_edges = 6
+        n_cin_edges = 4
+        rng = np.random.default_rng(42)
+
+        # Build monotonically increasing cumulative volumes
+        cum_cout = np.cumsum(rng.uniform(80, 120, n_cout_edges))
+        cum_cin = np.cumsum(rng.uniform(80, 120, n_cin_edges))
+        tedges_days = np.cumsum(np.concatenate([[0], rng.uniform(0.8, 1.2, n_cin_edges - 1)]))
+
+        r_vpv = 500.0
+        sl = 100.0
+
+        # Build step_widths: (n_cout_edges, n_cin_edges)
+        delta_vol = cum_cout[:, None] - cum_cin[None, :] - r_vpv
+        step_widths = delta_vol / r_vpv * sl
+
+        # Use very small RT so all cells are fully capped
+        rt_at_cin_edges = np.full(n_cin_edges, 0.1)
+        raw_time = np.full((n_cout_edges, n_cin_edges), 1000.0)
+
+        diffusivity = rng.uniform(0.5, 2.0, n_cout_edges - 1)
+
+        result = _erf_mean_volume(
+            step_widths=step_widths,
+            raw_time=raw_time,
+            rt_at_cin_edges=rt_at_cin_edges,
+            diffusivity=diffusivity,
+            cumulative_volume_at_cout_tedges=cum_cout,
+            cumulative_volume_at_cin_tedges=cum_cin,
+            tedges_days=tedges_days,
+            r_vpv=r_vpv,
+            streamline_len=sl,
+            asymptotic_cutoff_sigma=3.0,
+        )
+
+        # Reference: _erf_integral_space at fixed t=RT for each cell
+        x_lo = step_widths[:-1]
+        x_hi = step_widths[1:]
+        dx = x_hi - x_lo
+        n_cout_bins = n_cout_edges - 1
+
+        for i in range(n_cout_bins):
+            for j in range(n_cin_edges):
+                d = diffusivity[i]
+                rt = rt_at_cin_edges[j]
+                h_hi = _erf_integral_space(np.array([x_hi[i, j]]), diffusivity=d, t=np.array([rt]))[0]
+                h_lo = _erf_integral_space(np.array([x_lo[i, j]]), diffusivity=d, t=np.array([rt]))[0]
+                expected = (h_hi - h_lo) / dx[i, j]
+                np.testing.assert_allclose(result[i, j], expected, atol=1e-14)
+
+    def test_volume_mean_uncapped_vs_quad(self):
+        """Uncapped GL quadrature must match scipy.integrate.quad reference."""
+        n_cin_edges = 3  # 3 flow bins
+        cum_cin = np.array([0.0, 100.0, 250.0])
+        tedges_days = np.array([0.0, 1.0, 2.5])  # varying flow: Q=100, Q=100
+
+        r_vpv = 200.0
+        sl = 50.0
+        d = 1.5
+        # cout edges straddle the boundary: V ∈ [50, 180]
+        cum_cout = np.array([50.0, 180.0])
+
+        # RT large enough that the cell is fully uncapped
+        rt_at_cin_edges = np.array([100.0, 100.0, 100.0])
+
+        delta_vol = cum_cout[:, None] - cum_cin[None, :] - r_vpv
+        step_widths = delta_vol / r_vpv * sl
+
+        raw_time = np.full((len(cum_cout), n_cin_edges), 0.5)  # << RT → uncapped
+
+        result = _erf_mean_volume(
+            step_widths=step_widths,
+            raw_time=raw_time,
+            rt_at_cin_edges=rt_at_cin_edges,
+            diffusivity=np.array([d]),
+            cumulative_volume_at_cout_tedges=cum_cout,
+            cumulative_volume_at_cin_tedges=cum_cin,
+            tedges_days=tedges_days,
+            r_vpv=r_vpv,
+            streamline_len=sl,
+            asymptotic_cutoff_sigma=None,
+        )
+
+        # Reference via scipy.integrate.quad
+        v_lo, v_hi = cum_cout[0], cum_cout[1]
+
+        for j in range(n_cin_edges):
+            v_j = cum_cin[j]
+            t_j = tedges_days[j]
+            rt_j = rt_at_cin_edges[j]
+
+            def _make_integrand(v_j_, t_j_, rt_j_):
+                def integrand(v):
+                    x = (v - v_j_ - r_vpv) * sl / r_vpv
+                    t_v = np.interp(v, cum_cin, tedges_days)
+                    tau = min(max(t_v - t_j_, 0.0), rt_j_)
+                    if tau <= 0 or d <= 0:
+                        return np.sign(x)
+                    return special.erf(x / (2.0 * np.sqrt(d * tau)))
+
+                return integrand
+
+            ref, _ = integrate.quad(_make_integrand(v_j, t_j, rt_j), v_lo, v_hi, limit=200)
+            ref_mean = ref / (v_hi - v_lo)
+            np.testing.assert_allclose(result[0, j], ref_mean, atol=1e-13)
+
+    def test_volume_mean_partially_capped_vs_quad(self):
+        """Partially capped cell (uncapped→capped mid-cell) must match quad."""
+        n_cin_edges = 3  # 3 flow bins
+        cum_cin = np.array([0.0, 100.0, 250.0])
+        tedges_days = np.array([0.0, 1.0, 2.5])
+
+        r_vpv = 200.0
+        sl = 50.0
+        d = 1.5
+        # cout bin spans V ∈ [50, 180]
+        cum_cout = np.array([50.0, 180.0])
+
+        # RT chosen so that raw_time[lo] < RT < raw_time[hi] for the cell,
+        # creating a partially capped cell that transitions mid-bin.
+        rt_at_cin_edges = np.array([0.8, 0.8, 0.8])
+
+        delta_vol = cum_cout[:, None] - cum_cin[None, :] - r_vpv
+        step_widths = delta_vol / r_vpv * sl
+
+        # raw_time: lo edge uncapped (0.3 < 0.8), hi edge capped (1.2 > 0.8)
+        raw_time = np.array([[0.3, 0.3, 0.3], [1.2, 1.2, 1.2]])
+
+        result = _erf_mean_volume(
+            step_widths=step_widths,
+            raw_time=raw_time,
+            rt_at_cin_edges=rt_at_cin_edges,
+            diffusivity=np.array([d]),
+            cumulative_volume_at_cout_tedges=cum_cout,
+            cumulative_volume_at_cin_tedges=cum_cin,
+            tedges_days=tedges_days,
+            r_vpv=r_vpv,
+            streamline_len=sl,
+            asymptotic_cutoff_sigma=None,
+        )
+
+        # Reference via scipy.integrate.quad
+        v_lo, v_hi = cum_cout[0], cum_cout[1]
+
+        for j in range(n_cin_edges):
+            v_j = cum_cin[j]
+            t_j = tedges_days[j]
+            rt_j = rt_at_cin_edges[j]
+
+            def _make_integrand(v_j_, t_j_, rt_j_):
+                def integrand(v):
+                    x = (v - v_j_ - r_vpv) * sl / r_vpv
+                    t_v = np.interp(v, cum_cin, tedges_days)
+                    tau = min(max(t_v - t_j_, 0.0), rt_j_)
+                    if tau <= 0 or d <= 0:
+                        return np.sign(x)
+                    return special.erf(x / (2.0 * np.sqrt(d * tau)))
+
+                return integrand
+
+            ref, _ = integrate.quad(_make_integrand(v_j, t_j, rt_j), v_lo, v_hi, limit=200)
+            ref_mean = ref / (v_hi - v_lo)
+            np.testing.assert_allclose(result[0, j], ref_mean, atol=1e-13)

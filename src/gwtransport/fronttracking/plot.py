@@ -79,7 +79,7 @@ def plot_vt_diagram(
     if t_max is None:
         # Default to input data time range instead of simulation end time
         # Convert tedges[-1] from Timestamp to days from tedges[0]
-        t_max = (state.tedges[-1] - state.tedges[0]) / pd.Timedelta(days=1)
+        t_max = float((state.tedges[-1] - state.tedges[0]) / pd.Timedelta(days=1))
 
     if ax is None:
         _, ax = plt.subplots(figsize=figsize)
@@ -244,9 +244,9 @@ def plot_vt_diagram(
             # Fill between head and tail
             if valid_head and valid_tail and len(valid_head) == len(valid_tail):
                 ax.fill_between(
-                    t_h,
-                    v_h,
-                    v_t,
+                    t_h,  # type: ignore[possibly-undefined]
+                    v_h,  # type: ignore[possibly-undefined]
+                    v_t,  # type: ignore[possibly-undefined]
                     color="green",
                     alpha=0.1 if not wave.is_active else 0.2,
                 )
@@ -386,7 +386,7 @@ def plot_breakthrough_curve(
     if t_max is None:
         # Default to input data time range instead of simulation end time
         # Convert tedges[-1] from Timestamp to days from tedges[0]
-        t_max = (state.tedges[-1] - state.tedges[0]) / pd.Timedelta(days=1)
+        t_max = float((state.tedges[-1] - state.tedges[0]) / pd.Timedelta(days=1))
 
     # Use exact analytical segments
     segments = identify_outlet_segments(0.0, t_max, state.v_outlet, state.waves, state.sorption)

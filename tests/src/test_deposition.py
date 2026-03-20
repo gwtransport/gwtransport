@@ -655,7 +655,7 @@ def test_extraction_to_deposition_full_default():
         flow=flow_values,
         tedges=tedges,
         cout_tedges=cout_tedges,
-        **params,
+        **params,  # type: ignore[arg-type]
     )
 
     assert recovered.shape == original_deposition.shape
@@ -694,7 +694,7 @@ def test_extraction_to_deposition_full_objectives():
             cout_tedges=cout_tedges,
             nullspace_objective=objective,
             optimization_method=method,
-            **params,
+            **params,  # type: ignore[arg-type]
         )
         assert np.all(np.isfinite(recovered)), f"Failed for objective={objective}"
 
@@ -729,7 +729,7 @@ def test_extraction_to_deposition_full_with_rcond():
         tedges=tedges,
         cout_tedges=cout_tedges,
         rcond=1e-10,
-        **params,
+        **params,  # type: ignore[arg-type]
     )
 
     assert recovered.shape == original_deposition.shape
@@ -845,8 +845,8 @@ def test_extraction_to_deposition_sparse_weekly_sampling():
 
     # Generate weekly concentrations using forward modeling
     weekly_concentrations = deposition_to_extraction(
-        dep=deposition_series.values,
-        flow=flow_series.values,
+        dep=deposition_series.to_numpy(),
+        flow=flow_series.to_numpy(),
         tedges=deposition_tedges,
         cout_tedges=weekly_cout_tedges,
         aquifer_pore_volume=params["aquifer_pore_volume"],
@@ -856,7 +856,7 @@ def test_extraction_to_deposition_sparse_weekly_sampling():
     )
 
     # Prepare flow data for inverse modeling
-    weekly_flow_for_inverse = flow_series.reindex(weekly_extraction_dates, method="nearest").values
+    weekly_flow_for_inverse = flow_series.reindex(weekly_extraction_dates, method="nearest").to_numpy()
 
     # Test weekly inverse modeling - this should fail like in the notebook
     # The key is using weekly_cout_tedges for both tedges and cout_tedges
