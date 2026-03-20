@@ -66,8 +66,8 @@ def test_ipynb(ipynb_path):
         if stripped.startswith(("%", "!")):
             continue
         # Replace input() calls with a noop to avoid blocking
-    safe_line = src_line.replace("input(", "lambda *args, **kw: None(") if "input(" in src_line else src_line
-    sanitized_lines.append(safe_line)
+        safe_line = src_line.replace("input(", "lambda *args, **kw: None(") if "input(" in src_line else src_line
+        sanitized_lines.append(safe_line)
 
     sanitized_body = "\n".join(sanitized_lines)
 

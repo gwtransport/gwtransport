@@ -406,7 +406,7 @@ def _infiltration_to_extraction_coeff_matrix(
     cumulative_volume_at_cin_tedges = np.concatenate(([0], np.cumsum(infiltration_volume)))
 
     # Compute the cumulative flow at cout_tedges
-    cumulative_volume_at_cout_tedges = np.interp(cout_tedges, tedges, cumulative_volume_at_cin_tedges)
+    cumulative_volume_at_cout_tedges = np.interp(cout_tedges, tedges, cumulative_volume_at_cin_tedges).astype(float)
 
     rt_edges_2d = residence_time(
         flow=flow,

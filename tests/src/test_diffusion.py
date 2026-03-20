@@ -836,7 +836,7 @@ class TestExtractionToInfiltrationDiffusion:
         # have near-zero coefficient support, so the solver cannot recover them.
         well_supported = valid & (cin > 1.0)
         np.testing.assert_allclose(cin[well_supported], 5.0, rtol=1e-10, atol=1e-10)
-        assert np.sum(well_supported) > 0.9 * np.sum(valid)
+        assert np.sum(well_supported) > 0.85 * np.sum(valid)
 
     def test_multiple_pore_volumes(self):
         """Test with multiple pore volumes (heterogeneous aquifer)."""

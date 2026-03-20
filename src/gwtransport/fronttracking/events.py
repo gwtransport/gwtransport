@@ -513,6 +513,8 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> float | Non
         return t_eval + dt
 
     if isinstance(wave, ShockWave):
+        if wave.velocity is None:
+            return None
         # Current position (use wave start time if not yet active)
         t_eval = max(t_current, wave.t_start)
         v_current = wave.v_start + wave.velocity * (t_eval - wave.t_start)

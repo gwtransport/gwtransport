@@ -420,7 +420,7 @@ def extraction_to_infiltration(
 
     # Tikhonov inversion (same pattern as diffusion.py)
     row_sums = w_forward.sum(axis=1)
-    col_active = w_forward.sum(axis=0) > 0
+    col_active: npt.NDArray[np.bool_] = w_forward.sum(axis=0) > 0
 
     if not np.any(col_active):
         return np.full(n_cin, np.nan)
@@ -456,7 +456,7 @@ def extraction_to_infiltration(
     )
 
     out = np.full(n_cin, np.nan)
-    out[col_active] = cin_solved[col_active]
+    out[col_active] = cin_solved[col_active]  # type: ignore[index]
 
     return out
 
@@ -999,7 +999,7 @@ def _build_gaussian_matrix(
     # Handle zero sigma values
     zero_mask = sigma_array == 0
     if np.all(zero_mask):
-        return sparse.eye(n, format="csr")
+        return sparse.eye(n, format="csr", dtype=float)  # type: ignore[return-value]
 
     # Get maximum kernel size and create position arrays
     max_sigma = np.max(sigma_array)

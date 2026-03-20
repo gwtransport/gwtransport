@@ -30,6 +30,7 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+from collections.abc import Sequence
 from operator import itemgetter
 
 import mpmath as mp
@@ -53,7 +54,7 @@ EPSILON_CONCENTRATION = 1e-10  # Tolerance for checking if concentration is effe
 def concentration_at_point(
     v: float,
     t: float,
-    waves: list[Wave],
+    waves: Sequence[Wave],
     sorption: FreundlichSorption | ConstantRetardation,  # noqa: ARG001
 ) -> float:
     """
@@ -198,7 +199,7 @@ def concentration_at_point(
 def compute_breakthrough_curve(
     t_array: npt.NDArray[np.floating],
     v_outlet: float,
-    waves: list[Wave],
+    waves: Sequence[Wave],
     sorption: FreundlichSorption | ConstantRetardation,
 ) -> npt.NDArray[np.floating]:
     """
@@ -247,7 +248,11 @@ def compute_breakthrough_curve(
 
 
 def identify_outlet_segments(
-    t_start: float, t_end: float, v_outlet: float, waves: list[Wave], sorption: FreundlichSorption | ConstantRetardation
+    t_start: float,
+    t_end: float,
+    v_outlet: float,
+    waves: Sequence[Wave],
+    sorption: FreundlichSorption | ConstantRetardation,
 ) -> list[dict]:
     """
     Identify which waves control outlet concentration in time interval [t_start, t_end].
@@ -652,7 +657,7 @@ def integrate_rarefaction_exact(
 def compute_bin_averaged_concentration_exact(
     t_edges: npt.NDArray[np.floating],
     v_outlet: float,
-    waves: list[Wave],
+    waves: Sequence[Wave],
     sorption: FreundlichSorption | ConstantRetardation,
 ) -> npt.NDArray[np.floating]:
     """
@@ -791,7 +796,7 @@ def compute_bin_averaged_concentration_exact(
 def compute_domain_mass(
     t: float,
     v_outlet: float,
-    waves: list[Wave],
+    waves: Sequence[Wave],
     sorption: FreundlichSorption | ConstantRetardation,
 ) -> float:
     """
@@ -1113,9 +1118,9 @@ def _integrate_rarefaction_spatial_exact(
 
 def compute_cumulative_inlet_mass(
     t: float,
-    cin: npt.NDArray[np.floating],
-    flow: npt.NDArray[np.floating],
-    tedges_days: npt.NDArray[np.floating],
+    cin: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    tedges_days: npt.ArrayLike,
 ) -> float:
     """
     Compute cumulative mass entering domain from t=0 to t.
@@ -1197,7 +1202,7 @@ def compute_cumulative_inlet_mass(
 
 def find_last_rarefaction_start_time(
     v_outlet: float,
-    waves: list[Wave],
+    waves: Sequence[Wave],
 ) -> float:
     """
     Find the time when the last rarefaction head reaches the outlet.
@@ -1258,10 +1263,10 @@ def find_last_rarefaction_start_time(
 def compute_cumulative_outlet_mass(
     t: float,
     v_outlet: float,
-    waves: list[Wave],
+    waves: Sequence[Wave],
     sorption: FreundlichSorption | ConstantRetardation,
-    flow: npt.NDArray[np.floating],
-    tedges_days: npt.NDArray[np.floating],
+    flow: npt.ArrayLike,
+    tedges_days: npt.ArrayLike,
 ) -> float:
     """
     Compute cumulative mass exiting domain from t=0 to t.
@@ -1468,10 +1473,10 @@ def integrate_rarefaction_total_mass(
 
 def compute_total_outlet_mass(
     v_outlet: float,
-    waves: list[Wave],
+    waves: Sequence[Wave],
     sorption: FreundlichSorption | ConstantRetardation,
-    flow: npt.NDArray[np.floating],
-    tedges_days: npt.NDArray[np.floating],
+    flow: npt.ArrayLike,
+    tedges_days: npt.ArrayLike,
 ) -> tuple[float, float]:
     """
     Compute total integrated outlet mass until all mass has exited.

@@ -1054,7 +1054,15 @@ def _validate_front_tracking_inputs(
     bulk_density: float | None,
     porosity: float | None,
     retardation_factor: float | None,
-) -> tuple:
+) -> tuple[
+    npt.NDArray[np.float64],
+    npt.NDArray[np.float64],
+    pd.DatetimeIndex,
+    pd.DatetimeIndex,
+    npt.NDArray[np.float64],
+    FreundlichSorption | ConstantRetardation,
+    npt.NDArray[np.float64],
+]:
     """Validate inputs and create sorption object for front tracking functions.
 
     Returns

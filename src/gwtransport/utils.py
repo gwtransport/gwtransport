@@ -161,7 +161,7 @@ def linear_interpolate(
     return np.interp(x_query, x_ref_sorted, y_ref_sorted, left=left, right=right)
 
 
-def interp_series(*, series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwargs: object) -> pd.Series:
+def interp_series(*, series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwargs) -> pd.Series:
     """
     Interpolate a pandas.Series to a new index.
 
@@ -179,10 +179,10 @@ def interp_series(*, series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_
     pandas.Series
         Interpolated series.
     """
-    series = series[series.index.notna() & series.notna()]
+    series = series[series.index.notna() & series.notna()]  # type: ignore[assignment]
     dt = (series.index - series.index[0]) / pd.to_timedelta(1, unit="D")
     dt_interp = (index_new - series.index[0]) / pd.to_timedelta(1, unit="D")
-    interp_obj = interpolate.interp1d(dt, series.values, bounds_error=False, **interp1d_kwargs)
+    interp_obj = interpolate.interp1d(dt, series.values, bounds_error=False, **interp1d_kwargs)  # type: ignore[arg-type]
     return pd.Series(interp_obj(dt_interp), index=index_new)
 
 
@@ -855,8 +855,8 @@ def get_soil_temperature(*, station_number: int = 260, interpolate_missing_value
     df = pd.read_csv(  # type: ignore[call-overload]
         io.BytesIO(response.content),
         compression="zip",
-        dtype=dtypes,
-        usecols=list(dtypes.keys()),
+        dtype=dtypes,  # type: ignore[arg-type]
+        usecols=list(dtypes.keys()),  # type: ignore[arg-type]
         skiprows=16,
         sep=",",
         na_values=["     "],
