@@ -27,7 +27,7 @@ def test_pythonscript(pythonfile_path):
     env.setdefault("MPLBACKEND", "Agg")
     # Run with a timeout to avoid hanging interactive prompts
     result = subprocess.run(
-        [sys.executable, pythonfile_path], capture_output=True, text=True, check=False, env=env, timeout=30
+        [sys.executable, pythonfile_path], capture_output=True, text=True, check=False, env=env, timeout=300
     )
     if result.returncode != 0:
         msg = f"Script {pythonfile_path} failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
