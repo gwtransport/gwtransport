@@ -178,7 +178,7 @@ def test_expected_bin_values_monte_carlo():
         upper_bounds = bin_result["upper_bound"]
 
         # Generate samples from gamma distribution
-        samples = gamma_dist.rvs(alpha, scale=beta, size=n_samples, random_state=42)
+        samples = np.array(gamma_dist.rvs(alpha, scale=beta, size=n_samples, random_state=42))
 
         # Calculate empirical expected values for each bin
         empirical_expected = np.zeros(n_bins)
@@ -227,7 +227,7 @@ def test_expected_bin_values_convergence():
     sample_sizes = [1000, 5000, 25000, 100000]
 
     for n_samples in sample_sizes:
-        samples = gamma_dist.rvs(alpha, scale=beta, size=n_samples, random_state=123)
+        samples = np.array(gamma_dist.rvs(alpha, scale=beta, size=n_samples, random_state=123))
 
         empirical_expected = np.zeros(n_bins)
 
@@ -286,7 +286,7 @@ def test_multiple_gamma_distributions_expected_values():
         upper_bounds = bin_result["upper_bound"]
 
         # Generate samples
-        samples = gamma_dist.rvs(alpha, scale=beta, size=n_samples, random_state=456)
+        samples = np.array(gamma_dist.rvs(alpha, scale=beta, size=n_samples, random_state=456))
 
         # Calculate empirical expected values
         empirical_expected = np.zeros(n_bins)

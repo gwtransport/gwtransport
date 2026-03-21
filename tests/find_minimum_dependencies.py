@@ -326,13 +326,17 @@ class DependencyTester:
         logger.info("Testing %s==%s", package, version)
         logger.info("=" * 60)
 
+        uv_path = shutil.which("uv")
+        if uv_path is None:
+            msg = "uv not found in PATH"
+            raise RuntimeError(msg)
+
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             venv_path = tmpdir_path / ".venv"
 
             try:
                 # Create virtual environment with uv and specific Python version
-                uv_path = shutil.which("uv")
                 logger.info("Creating virtual environment with Python %s using uv at %s", self.python_version, uv_path)
                 subprocess.run(
                     [uv_path, "venv", str(venv_path), "--python", self.python_version],

@@ -9,9 +9,9 @@ Scientific Python package for timeseries analysis of groundwater transport of so
 uv sync --all-extras
 
 # Testing (run before committing)
-uv run pytest tests/src                    # Unit tests
-uv run pytest tests/examples               # Example notebooks
-uv run pytest tests/docs                   # Documentation code snippets
+uv run pytest tests/src -n auto                   # Unit tests
+uv run pytest tests/examples -n auto              # Example notebooks
+uv run pytest tests/docs -n auto                  # Documentation code snippets
 
 # Linting (run before committing)
 uv run ruff format .                       # Format code

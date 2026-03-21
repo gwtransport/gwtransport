@@ -114,6 +114,7 @@ class TestAnalyticalCorrectness:
         assert len(shocks) >= 1, "Should create at least one shock for extreme ratio"
 
         for shock in shocks:
+            assert shock.velocity is not None
             v_expected = sorption.shock_velocity(shock.c_left, shock.c_right, shock.flow)
             np.testing.assert_allclose(
                 shock.velocity,

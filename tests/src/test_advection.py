@@ -8,6 +8,7 @@ from gwtransport.advection import (
     gamma_extraction_to_infiltration,
     gamma_infiltration_to_extraction,
     infiltration_to_extraction,
+    infiltration_to_extraction_front_tracking,
     infiltration_to_extraction_series,
 )
 from gwtransport.utils import compute_time_edges
@@ -131,7 +132,7 @@ def test_infiltration_to_extraction_series_time_edges_consistency():
     )
 
     # Output time edges should be monotonically increasing (excluding NaT values)
-    time_diffs = tedges_out.to_series().diff()[1:]
+    time_diffs = tedges_out.to_series().diff().iloc[1:]
     valid_diffs = time_diffs.dropna()
     assert (valid_diffs > pd.Timedelta(0)).all(), "Valid output time edges must be monotonically increasing"
 
@@ -237,7 +238,7 @@ def test_extraction_to_infiltration_series_time_edges_consistency():
     )
 
     # Output time edges should be monotonically increasing (excluding NaT values)
-    time_diffs = tedges_out.to_series().diff()[1:]
+    time_diffs = tedges_out.to_series().diff().iloc[1:]
     valid_diffs = time_diffs.dropna()
     assert (valid_diffs > pd.Timedelta(0)).all(), "Valid output time edges must be monotonically increasing"
 
@@ -541,8 +542,8 @@ def test_infiltration_to_extraction_basic_functionality():
     aquifer_pore_volumes = np.array([100.0, 200.0, 300.0])
 
     cout = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -569,8 +570,8 @@ def test_infiltration_to_extraction_constant_input():
     aquifer_pore_volumes = np.array([500.0, 1000.0])  # Two pore volumes
 
     cout = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -608,8 +609,8 @@ def test_infiltration_to_extraction_single_pore_volume():
     aquifer_pore_volumes = np.array([500.0])  # Single pore volume
 
     cout = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -634,8 +635,8 @@ def test_infiltration_to_extraction_retardation_factor():
 
     # Test different retardation factors
     cout1 = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -643,8 +644,8 @@ def test_infiltration_to_extraction_retardation_factor():
     )
 
     cout2 = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -671,8 +672,8 @@ def test_infiltration_to_extraction_error_conditions():
     wrong_tedges = tedges[:-2]  # Too short
     with pytest.raises(ValueError, match="tedges must have one more element than cin"):
         infiltration_to_extraction(
-            cin=cin.values,
-            flow=flow.values,
+            cin=cin.to_numpy(),
+            flow=flow.to_numpy(),
             tedges=wrong_tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
@@ -682,8 +683,8 @@ def test_infiltration_to_extraction_error_conditions():
     wrong_flow = flow[:-2]  # Too short
     with pytest.raises(ValueError, match="tedges must have one more element than flow"):
         infiltration_to_extraction(
-            cin=cin.values,
-            flow=wrong_flow.values,
+            cin=cin.to_numpy(),
+            flow=wrong_flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
@@ -711,8 +712,8 @@ def test_infiltration_to_extraction_no_temporal_overlap():
 
     # No temporal overlap should return all NaN values
     cout = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -746,8 +747,8 @@ def test_infiltration_to_extraction_zero_concentrations():
     aquifer_pore_volumes = np.array([300.0])  # 300/100 = 3 day residence time
 
     cout = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -787,8 +788,8 @@ def test_infiltration_to_extraction_extreme_conditions():
 
     # Should handle extreme conditions gracefully
     cout = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -816,8 +817,8 @@ def test_infiltration_to_extraction_extreme_pore_volumes():
 
     # Should handle extreme pore volumes gracefully
     cout = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -845,8 +846,8 @@ def test_infiltration_to_extraction_zero_flow():
 
     # Zero flow creates infinite residence times but should be handled gracefully
     cout = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -878,8 +879,8 @@ def test_infiltration_to_extraction_mixed_pore_volumes():
 
     # Should handle mixed pore volumes gracefully
     cout = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -927,8 +928,8 @@ def test_infiltration_to_extraction_analytical_mass_conservation():
 
     # Run infiltration_to_extraction
     cout = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -938,11 +939,11 @@ def test_infiltration_to_extraction_analytical_mass_conservation():
     # Mass conservation check
     # Input mass = concentration * flow * time (for each time step)
     dt = 1.0  # 1 day time steps
-    input_mass = np.sum(cin_values * flow.values * dt)
+    input_mass = np.sum(cin_values * flow.to_numpy() * dt)
 
     # Output mass = concentration * flow * time (for each time step)
     # Use average flow for output period
-    output_flow = np.mean(flow.values)
+    output_flow = np.mean(flow.to_numpy())
     valid_mask = ~np.isnan(cout)
     output_mass = np.sum(cout[valid_mask] * output_flow * dt)
 
@@ -974,8 +975,8 @@ def test_infiltration_to_extraction_known_constant_delay():
     aquifer_pore_volumes = np.array([pore_volume])
 
     cout = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1012,8 +1013,8 @@ def test_infiltration_to_extraction_known_average_of_pore_volumes():
     double_pv = np.array([500.0, 500.0])
 
     cout_single = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=single_pv,
@@ -1021,8 +1022,8 @@ def test_infiltration_to_extraction_known_average_of_pore_volumes():
     )
 
     cout_double = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=double_pv,
@@ -1054,8 +1055,8 @@ def test_infiltration_to_extraction_known_zero_input_gives_zero_output():
     aquifer_pore_volumes = np.array([200.0, 400.0])
 
     cout = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1093,8 +1094,8 @@ def test_infiltration_to_extraction_known_retardation_effect():
 
     # Test different retardation factors
     cout_no_retard = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1102,8 +1103,8 @@ def test_infiltration_to_extraction_known_retardation_effect():
     )
 
     cout_retarded = infiltration_to_extraction(
-        cin=cin.values,
-        flow=flow.values,
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1241,8 +1242,8 @@ def test_extraction_to_infiltration_basic_functionality():
     aquifer_pore_volumes = np.array([100.0, 200.0, 300.0])
 
     cin = extraction_to_infiltration(
-        cout=cout.values,
-        flow=flow.values,
+        cout=cout.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=cin_tedges,
         cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1270,8 +1271,8 @@ def test_extraction_to_infiltration_constant_input():
     aquifer_pore_volumes = np.array([500.0, 1000.0])  # 5 and 10 day residence times
 
     cin = extraction_to_infiltration(
-        cout=cout.values,
-        flow=flow.values,
+        cout=cout.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=cin_tedges,
         cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1307,8 +1308,8 @@ def test_extraction_to_infiltration_single_pore_volume():
     aquifer_pore_volumes = np.array([500.0])  # Single pore volume
 
     cin = extraction_to_infiltration(
-        cout=cout.values,
-        flow=flow.values,
+        cout=cout.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=cin_tedges,
         cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1333,8 +1334,8 @@ def test_extraction_to_infiltration_retardation_factor():
 
     # Test different retardation factors
     cin1 = extraction_to_infiltration(
-        cout=cout.values,
-        flow=flow.values,
+        cout=cout.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=cin_tedges,
         cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1342,8 +1343,8 @@ def test_extraction_to_infiltration_retardation_factor():
     )
 
     cin2 = extraction_to_infiltration(
-        cout=cout.values,
-        flow=flow.values,
+        cout=cout.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=cin_tedges,
         cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1370,8 +1371,8 @@ def test_extraction_to_infiltration_error_conditions():
     wrong_cout_tedges = tedges[:-2]  # Too short
     with pytest.raises(ValueError, match="cout_tedges must have one more element than cout"):
         extraction_to_infiltration(
-            cout=cout.values,
-            flow=flow.values,
+            cout=cout.to_numpy(),
+            flow=flow.to_numpy(),
             tedges=cin_tedges,
             cout_tedges=wrong_cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1381,8 +1382,8 @@ def test_extraction_to_infiltration_error_conditions():
     wrong_flow = flow[:-2]  # Too short
     with pytest.raises(ValueError, match="tedges must have one more element than flow"):
         extraction_to_infiltration(
-            cout=cout.values,
-            flow=wrong_flow.values,
+            cout=cout.to_numpy(),
+            flow=wrong_flow,
             tedges=cin_tedges,
             cout_tedges=tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1415,8 +1416,8 @@ def test_extraction_to_infiltration_analytical_simple_delay():
     aquifer_pore_volumes = np.array([pore_volume])
 
     cin = extraction_to_infiltration(
-        cout=cout.values,
-        flow=flow.values,
+        cout=cout.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=cin_tedges,
         cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1444,8 +1445,8 @@ def test_extraction_to_infiltration_zero_output_gives_zero_input():
     aquifer_pore_volumes = np.array([200.0, 400.0])
 
     cin = extraction_to_infiltration(
-        cout=cout.values,
-        flow=flow.values,
+        cout=cout.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=cin_tedges,
         cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1479,8 +1480,8 @@ def test_extraction_to_infiltration_no_temporal_overlap():
 
     # No temporal overlap should return all NaN values
     cin = extraction_to_infiltration(
-        cout=cout.values,
-        flow=flow.values,
+        cout=cout.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=cin_tedges,
         cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1509,8 +1510,8 @@ def test_extraction_to_infiltration_extreme_pore_volumes():
 
     # Should handle extreme pore volumes gracefully
     cin = extraction_to_infiltration(
-        cout=cout.values,
-        flow=flow.values,
+        cout=cout.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=cin_tedges,
         cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1538,8 +1539,8 @@ def test_extraction_to_infiltration_zero_flow():
 
     # Zero flow creates infinite residence times but should be handled gracefully
     cin = extraction_to_infiltration(
-        cout=cout.values,
-        flow=flow.values,
+        cout=cout.to_numpy(),
+        flow=flow.to_numpy(),
         tedges=cin_tedges,
         cout_tedges=tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1741,7 +1742,7 @@ def test_gamma_extraction_to_infiltration_roundtrip():
     middle_region = slice(middle_start, middle_end)
 
     reconstructed_middle = cin_reconstructed[middle_region]
-    original_middle = cin_original.values[middle_region]
+    original_middle = cin_original.to_numpy()[middle_region]
 
     # lstsq inversion should recover to machine precision in the stable middle region
     np.testing.assert_allclose(
@@ -2293,3 +2294,95 @@ def test_gamma_extraction_to_infiltration_mean_preservation():
     valid_recovered = cin_recovered[valid_mask]
 
     assert np.mean(valid_recovered) == pytest.approx(25.0, rel=0.15)
+
+
+# ===============================================================================
+# FLOW-WEIGHTED FRONT TRACKING TESTS
+# ===============================================================================
+
+
+class TestFlowWeightedFrontTracking:
+    """Tests that verify flow-weighted output for front-tracking transport."""
+
+    def test_constant_flow_unchanged(self):
+        """With constant flow, front-tracking must match pure advection."""
+
+        tedges = pd.date_range("2020-01-01", periods=31, freq="D")
+        cout_tedges = pd.date_range("2020-01-01", periods=11, freq="3D")
+
+        cin = np.zeros(30)
+        cin[0:5] = 10.0
+        flow = np.full(30, 100.0)
+        aquifer_pore_volumes = np.array([500.0])
+
+        cout_ft = infiltration_to_extraction_front_tracking(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            retardation_factor=1.0,
+        )
+
+        cout_adv = infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            retardation_factor=1.0,
+        )
+
+        valid = ~np.isnan(cout_adv)
+        np.testing.assert_allclose(cout_ft[valid], cout_adv[valid])
+
+    def test_constant_cin_varying_flow_gives_constant_cout(self):
+        """Constant cin with varying flow must produce constant cout."""
+
+        tedges = pd.date_range("2020-01-01", periods=61, freq="D")
+        cout_tedges = pd.date_range("2020-01-20", periods=11, freq="3D")
+
+        cin = np.ones(60) * 7.0
+        flow = 100.0 + 50.0 * np.sin(np.arange(60) * 2 * np.pi / 5)
+
+        cout = infiltration_to_extraction_front_tracking(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([400.0]),
+            retardation_factor=1.0,
+        )
+
+        valid = cout > 0
+        if np.any(valid):
+            np.testing.assert_allclose(cout[valid], 7.0, atol=1e-13)
+
+    def test_constant_flow_mass_conservation(self):
+        """Mass must be conserved under constant flow."""
+
+        tedges = pd.date_range("2020-01-01", periods=61, freq="D")
+        # Use coarser cout so multiple flow bins fall in one cout bin
+        cout_tedges = pd.date_range("2020-01-01", periods=21, freq="3D")
+
+        cin = np.zeros(60)
+        cin[5:10] = 10.0
+        flow = np.full(60, 100.0)
+
+        cout = infiltration_to_extraction_front_tracking(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([300.0]),
+            retardation_factor=1.0,
+        )
+
+        # Mass in = Σ cin_i * Q_i * dt_i
+        dt_in = np.ones(60)
+        mass_in = np.sum(cin * flow * dt_in)
+        # Mass out = Σ cout_i * Q_cout_i * dt_cout_i
+        # With constant flow, Q_cout = Q = 100
+        dt_out = np.diff(((cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)).values)
+        mass_out = np.sum(cout * flow[0] * dt_out)
+        np.testing.assert_allclose(mass_out, mass_in, rtol=1e-13)

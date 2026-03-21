@@ -1054,7 +1054,15 @@ def _validate_front_tracking_inputs(
     bulk_density: float | None,
     porosity: float | None,
     retardation_factor: float | None,
-) -> tuple:
+) -> tuple[
+    npt.NDArray[np.float64],
+    npt.NDArray[np.float64],
+    pd.DatetimeIndex,
+    pd.DatetimeIndex,
+    npt.NDArray[np.float64],
+    FreundlichSorption | ConstantRetardation,
+    npt.NDArray[np.float64],
+]:
     """Validate inputs and create sorption object for front tracking functions.
 
     Returns
@@ -1133,6 +1141,80 @@ def _validate_front_tracking_inputs(
         )
 
     return cin, flow, tedges, cout_tedges, aquifer_pore_volumes, sorption, cout_tedges_days
+
+
+def _flow_weighted_front_tracking_output(
+    cout_tedges_days: npt.NDArray[np.floating],
+    flow_tedges_days: npt.NDArray[np.floating],
+    flow: npt.NDArray[np.floating],
+    v_outlet: float,
+    waves: list,
+    sorption: FreundlichSorption | ConstantRetardation,
+) -> npt.NDArray[np.floating]:
+    """Compute flow-weighted bin-averaged concentration from front-tracking output.
+
+    Splits output bins at flow boundaries so that Q is constant within each
+    sub-bin, then combines sub-bins with flow-weighting:
+    ``c_avg = Σ(Q_k · c_k · dt_k) / Σ(Q_k · dt_k)``.
+
+    Parameters
+    ----------
+    cout_tedges_days : ndarray
+        Output time bin edges [days from reference].
+    flow_tedges_days : ndarray
+        Flow time bin edges [days from reference].
+    flow : ndarray
+        Flow rate per flow bin [m³/day].
+    v_outlet : float
+        Outlet volume position [m³].
+    waves : list
+        Wave list from front tracking simulation.
+    sorption : object
+        Sorption model.
+
+    Returns
+    -------
+    ndarray
+        Flow-weighted bin-averaged concentrations.
+    """
+    # Merge cout edges with flow edges that fall within the cout range
+    inner_flow_edges = flow_tedges_days[
+        (flow_tedges_days > cout_tedges_days[0]) & (flow_tedges_days < cout_tedges_days[-1])
+    ]
+    fine_edges = np.unique(np.concatenate([cout_tedges_days, inner_flow_edges]))
+
+    # Compute time-averaged C on fine grid
+    c_fine = compute_bin_averaged_concentration_exact(
+        t_edges=fine_edges,
+        v_outlet=v_outlet,
+        waves=waves,
+        sorption=sorption,
+    )
+
+    # Map each fine sub-bin to its flow value
+    fine_mids = (fine_edges[:-1] + fine_edges[1:]) / 2
+    flow_idx = np.searchsorted(flow_tedges_days[1:], fine_mids, side="left")
+    flow_idx = np.clip(flow_idx, 0, len(flow) - 1)
+    q_fine = flow[flow_idx]
+    dt_fine = np.diff(fine_edges)
+
+    # Map each fine sub-bin to its original output bin
+    cout_bin_idx = np.searchsorted(cout_tedges_days[1:], fine_mids, side="left")
+    cout_bin_idx = np.clip(cout_bin_idx, 0, len(cout_tedges_days) - 2)
+
+    # Flow-weighted combination per output bin
+    n_cout = len(cout_tedges_days) - 1
+    c_out = np.zeros(n_cout)
+    qdt_product = q_fine * dt_fine
+    cqdt_product = c_fine * qdt_product
+
+    for i in range(n_cout):
+        mask = cout_bin_idx == i
+        total_qdt = np.sum(qdt_product[mask])
+        if total_qdt > 0:
+            c_out[i] = np.sum(cqdt_product[mask]) / total_qdt
+
+    return c_out
 
 
 def infiltration_to_extraction_front_tracking(
@@ -1275,6 +1357,10 @@ def infiltration_to_extraction_front_tracking(
         retardation_factor=retardation_factor,
     )
 
+    # Flow time edges in days (same reference as cout_tedges_days)
+    t_ref = tedges[0]
+    flow_tedges_days = ((tedges - t_ref) / pd.Timedelta(days=1)).values
+
     # Loop over each pore volume and compute concentration
     cout_all = np.zeros((len(aquifer_pore_volumes), len(cout_tedges) - 1))
 
@@ -1290,9 +1376,11 @@ def infiltration_to_extraction_front_tracking(
 
         tracker.run(max_iterations=max_iterations)
 
-        # Extract bin-averaged concentrations at outlet for this pore volume
-        cout_all[i, :] = compute_bin_averaged_concentration_exact(
-            t_edges=cout_tedges_days,
+        # Extract flow-weighted bin-averaged concentrations at outlet
+        cout_all[i, :] = _flow_weighted_front_tracking_output(
+            cout_tedges_days=cout_tedges_days,
+            flow_tedges_days=flow_tedges_days,
+            flow=flow,
             v_outlet=aquifer_pore_volume,
             waves=tracker.state.waves,
             sorption=sorption,
@@ -1419,6 +1507,10 @@ def infiltration_to_extraction_front_tracking_detailed(
         retardation_factor=retardation_factor,
     )
 
+    # Flow time edges in days (same reference as cout_tedges_days)
+    t_ref = tedges[0]
+    flow_tedges_days = ((tedges - t_ref) / pd.Timedelta(days=1)).values
+
     # Loop over each pore volume and compute concentration
     cout_all = np.zeros((len(aquifer_pore_volumes), len(cout_tedges) - 1))
     structures = []
@@ -1435,9 +1527,11 @@ def infiltration_to_extraction_front_tracking_detailed(
 
         tracker.run(max_iterations=max_iterations)
 
-        # Extract bin-averaged concentrations for this pore volume
-        cout_all[i, :] = compute_bin_averaged_concentration_exact(
-            t_edges=cout_tedges_days,
+        # Extract flow-weighted bin-averaged concentrations for this pore volume
+        cout_all[i, :] = _flow_weighted_front_tracking_output(
+            cout_tedges_days=cout_tedges_days,
+            flow_tedges_days=flow_tedges_days,
+            flow=flow,
             v_outlet=aquifer_pore_volume,
             waves=tracker.state.waves,
             sorption=sorption,
