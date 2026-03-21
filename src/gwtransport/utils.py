@@ -936,7 +936,7 @@ def solve_underdetermined_system(
         Default is None, which uses the default of each function.
         Increasing rcond truncates more modes, expanding the nullspace
         available for smoothness optimization. Useful for noisy data.
-    x_target : ndarray or None, optional
+    x_target : numpy.ndarray or None, optional
         Target solution vector for the ``"reverse_matrix"`` nullspace objective.
         Required when ``nullspace_objective="reverse_matrix"``. The nullspace
         coefficients are chosen to minimize ``||x - x_target||^2``.
@@ -1248,14 +1248,14 @@ def compute_reverse_target(
 
     Parameters
     ----------
-    coeff_matrix : ndarray
+    coeff_matrix : numpy.ndarray
         Forward coefficient matrix of shape (n_cout, n_cin).
-    rhs_vector : ndarray
+    rhs_vector : numpy.ndarray
         Right-hand side vector of length n_cout (e.g., cout values).
 
     Returns
     -------
-    ndarray
+    numpy.ndarray
         Target solution vector of length n_cin. Entries with near-zero
         column sums in the forward matrix are set to NaN.
     """
@@ -1300,7 +1300,7 @@ def solve_tikhonov(
     rhs_vector : array-like
         Right-hand side vector of length m. May contain NaN values
         corresponding to NaN rows in coefficient_matrix.
-    x_target : ndarray
+    x_target : numpy.ndarray
         Target solution of length n, typically from
         :func:`compute_reverse_target`. NaN entries are excluded from the
         regularization term.
@@ -1319,7 +1319,7 @@ def solve_tikhonov(
 
     Returns
     -------
-    ndarray or tuple of ndarray
+    numpy.ndarray or tuple of numpy.ndarray
         If ``return_resolution`` is False (default), returns the solution
         vector of length n.
 

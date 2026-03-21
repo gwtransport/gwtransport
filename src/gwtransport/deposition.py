@@ -516,7 +516,7 @@ def extraction_to_deposition_full(
     rcond : float or None, optional
         Cutoff for small singular values in the least-squares step.
         Default is None (uses numpy default).
-    x_target : ndarray or None, optional
+    x_target : numpy.ndarray or None, optional
         Optional target solution for the nullspace optimization.
         Default is None.
 
