@@ -244,9 +244,9 @@ def plot_vt_diagram(
             # Fill between head and tail
             if valid_head and valid_tail and len(valid_head) == len(valid_tail):
                 ax.fill_between(
-                    t_h,  # type: ignore[possibly-undefined]
-                    v_h,  # type: ignore[possibly-undefined]
-                    v_t,  # type: ignore[possibly-undefined]
+                    t_h,  # pyright: ignore[reportPossiblyUnboundVariable]
+                    v_h,  # pyright: ignore[reportPossiblyUnboundVariable]
+                    v_t,  # pyright: ignore[reportPossiblyUnboundVariable]
                     color="green",
                     alpha=0.1 if not wave.is_active else 0.2,
                 )

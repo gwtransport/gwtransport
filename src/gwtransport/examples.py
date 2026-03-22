@@ -307,7 +307,7 @@ def generate_temperature_example_data(**kwargs: object) -> tuple[pd.DataFrame, p
     }
     for key, value in defaults.items():
         kwargs.setdefault(key, value)
-    return generate_example_data(**kwargs)  # type: ignore[arg-type]
+    return generate_example_data(**kwargs)  # pyright: ignore[reportArgumentType]
 
 
 def generate_ec_example_data(**kwargs: object) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
@@ -370,7 +370,7 @@ def generate_ec_example_data(**kwargs: object) -> tuple[pd.DataFrame, pd.Datetim
     }
     for key, value in defaults.items():
         kwargs.setdefault(key, value)
-    return generate_example_data(**kwargs)  # type: ignore[arg-type]
+    return generate_example_data(**kwargs)  # pyright: ignore[reportArgumentType]
 
 
 def generate_example_deposition_timeseries(

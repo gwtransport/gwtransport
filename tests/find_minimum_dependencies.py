@@ -344,7 +344,7 @@ class DependencyTester:
                     check=True,
                     capture_output=True,
                     text=True,
-                )  # type: ignore[no-matching-overload]
+                )
 
                 # Install package with specific dependency version
                 logger.info("Installing package with %s==%s", package, version)

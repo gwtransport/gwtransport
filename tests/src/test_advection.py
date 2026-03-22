@@ -2036,7 +2036,7 @@ def test_extraction_to_infiltration_single_pore_volume_roundtrip():
     # Verify roundtrip
     valid_mask = ~np.isnan(cin_recovered)
     if not np.any(valid_mask):
-        pytest.skip("No valid recovered values")
+        pytest.skip("No valid recovered values")  # type: ignore[too-many-positional-arguments]
     valid_recovered = cin_recovered[valid_mask]
 
     # lstsq inversion should recover mean to machine precision
@@ -2088,7 +2088,7 @@ def test_extraction_to_infiltration_multiple_pore_volumes():
     # Verify roundtrip
     valid_mask = ~np.isnan(cin_recovered)
     if not np.any(valid_mask):
-        pytest.skip("No valid recovered values")
+        pytest.skip("No valid recovered values")  # type: ignore[too-many-positional-arguments]
     valid_recovered = cin_recovered[valid_mask]
 
     # lstsq inversion should recover constant value to machine precision
@@ -2151,7 +2151,7 @@ def test_gamma_extraction_to_infiltration_parameter_sensitivity(mean, std):
     # Verify outputs
     valid_mask = ~np.isnan(cin_recovered)
     if not np.any(valid_mask):
-        pytest.skip("No valid recovered values")
+        pytest.skip("No valid recovered values")  # type: ignore[too-many-positional-arguments]
     valid_recovered = cin_recovered[valid_mask]
 
     assert len(valid_recovered) > 0
@@ -2206,7 +2206,7 @@ def test_extraction_to_infiltration_with_retardation():
     # Verify roundtrip
     valid_mask = ~np.isnan(cin_recovered)
     if not np.any(valid_mask):
-        pytest.skip("No valid recovered values")
+        pytest.skip("No valid recovered values")  # type: ignore[too-many-positional-arguments]
     valid_recovered = cin_recovered[valid_mask]
 
     assert np.mean(valid_recovered) == pytest.approx(10.0, rel=0.3)
@@ -2259,7 +2259,7 @@ def test_extraction_to_infiltration_variable_flow():
     # Verify outputs
     valid_mask = ~np.isnan(cin_recovered)
     if not np.any(valid_mask):
-        pytest.skip("No valid recovered values")
+        pytest.skip("No valid recovered values")  # type: ignore[too-many-positional-arguments]
     valid_recovered = cin_recovered[valid_mask]
 
     assert len(valid_recovered) > 0

@@ -876,7 +876,7 @@ def _build_gaussian_matrix(
     # Handle zero sigma values
     zero_mask = sigma_array == 0
     if np.all(zero_mask):
-        return sparse.eye(n, format="csr", dtype=float)  # type: ignore[return-value]
+        return sparse.eye(n, format="csr", dtype=float)  # pyright: ignore[reportReturnType]
 
     # Get maximum kernel size and create position arrays
     max_sigma = np.max(sigma_array)

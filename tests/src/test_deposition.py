@@ -655,7 +655,7 @@ def test_extraction_to_deposition_full_default():
         flow=flow_values,
         tedges=tedges,
         cout_tedges=cout_tedges,
-        **params,  # type: ignore[arg-type]
+        **params,  # pyright: ignore[reportArgumentType]
     )
 
     assert recovered.shape == original_deposition.shape
@@ -694,7 +694,7 @@ def test_extraction_to_deposition_full_objectives():
             cout_tedges=cout_tedges,
             nullspace_objective=objective,
             optimization_method=method,
-            **params,  # type: ignore[arg-type]
+            **params,  # pyright: ignore[reportArgumentType]
         )
         assert np.all(np.isfinite(recovered)), f"Failed for objective={objective}"
 
@@ -729,7 +729,7 @@ def test_extraction_to_deposition_full_with_rcond():
         tedges=tedges,
         cout_tedges=cout_tedges,
         rcond=1e-10,
-        **params,  # type: ignore[arg-type]
+        **params,  # pyright: ignore[reportArgumentType]
     )
 
     assert recovered.shape == original_deposition.shape
