@@ -439,7 +439,3 @@ class TestExactMassBalanceVaryingFlow:
 
         # Exact mass balance should hold despite multiple flow changes
         tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-10)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

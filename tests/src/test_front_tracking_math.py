@@ -437,7 +437,3 @@ class TestFirstArrivalTime:
         # Available from day 10 to day 20: 10 * 10 = 100 m³
         # Not enough flow history
         assert t_first == np.inf
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

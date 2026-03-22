@@ -1351,7 +1351,3 @@ def test_variable_timestep_zero_deposition():
     valid = ~np.isnan(cout_result)
     assert valid.sum() >= 1
     np.testing.assert_allclose(cout_result[valid], 0.0, atol=1e-15)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

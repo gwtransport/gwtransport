@@ -1962,7 +1962,3 @@ class TestGammaExtractionToInfiltrationFast:
                 mean_longitudinal_dispersivity=1.0,
                 suppress_dispersion_warning=True,
             )
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])

@@ -1141,23 +1141,3 @@ def _warn_dispersion() -> None:
         "Suppress this warning with suppress_dispersion_warning=True."
     )
     warnings.warn(msg, UserWarning, stacklevel=3)
-
-
-if __name__ == "__main__":
-    from matplotlib import pyplot as plt
-    from scipy import ndimage
-
-    # Generate example data
-    x, signal, sigma_array, dt = create_example_data(seed=42)
-
-    # Apply variable-sigma filtering
-    filtered = convolve_diffusion(input_signal=signal, sigma_array=sigma_array * 5)
-
-    # Compare with regular Gaussian filter
-    avg_sigma = np.mean(sigma_array)
-    regular_filtered = ndimage.gaussian_filter1d(signal, avg_sigma)
-    plt.figure(figsize=(10, 6))
-    plt.plot(x, signal, label="Original signal", lw=0.8)
-    plt.plot(x, filtered, label="Variable-sigma filtered", lw=1.0)
-
-    plt.plot(x, regular_filtered, label="Regular Gaussian filter", lw=0.8, ls="--")

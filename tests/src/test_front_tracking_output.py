@@ -764,7 +764,3 @@ class TestMassBalanceFunctions:
         mass_balance = mass_inlet - mass_outlet
         # Should be close to domain mass (allowing for some numerical tolerance)
         assert mass_balance == pytest.approx(mass_domain, rel=0.2)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

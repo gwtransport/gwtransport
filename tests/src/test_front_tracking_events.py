@@ -1175,7 +1175,3 @@ class TestMachinePrecision:
 
             assert np.isclose(v1, v2, rtol=1e-14, atol=1e-15)
             assert np.isclose(v1, v_int, rtol=1e-14, atol=1e-15)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

@@ -396,7 +396,3 @@ class TestRarefactionWave:
         # So we can't even create a rarefaction (would raise ValueError)
         with pytest.raises(ValueError, match="Not a rarefaction"):
             RarefactionWave(t_start=0.0, v_start=0.0, flow=100.0, c_head=10.0, c_tail=2.0, sorption=sorption)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
