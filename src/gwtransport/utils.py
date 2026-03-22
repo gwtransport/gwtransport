@@ -12,7 +12,7 @@ Available functions:
   Automatically handles unsorted data with configurable extrapolation (None for clamping,
   float for constant values). Handles multi-dimensional query arrays.
 
-- :func:`interp_series` - Interpolate pandas Series to new DatetimeIndex using
+- :func:`_interp_series` - Interpolate pandas Series to new DatetimeIndex using
   scipy.interpolate.interp1d. Automatically filters NaN values and converts datetime to
   numerical representation.
 
@@ -20,7 +20,7 @@ Available functions:
   specified x-edges. Supports 1D or 2D edge arrays for batch processing. Handles NaN values
   and offers multiple extrapolation methods ('nan', 'outer', 'raise').
 
-- :func:`diff` - Compute cell widths from cell coordinate arrays with configurable alignment
+- :func:`_diff` - Compute cell widths from cell coordinate arrays with configurable alignment
   ('centered', 'left', 'right'). Returns widths matching input array length.
 
 - :func:`partial_isin` - Calculate fraction of each input bin overlapping with each output bin.
@@ -41,7 +41,10 @@ Available functions:
 
 - :func:`solve_tikhonov` - Solve linear system with Tikhonov regularization toward a target.
   Well-determined modes follow the data; poorly-determined modes are pulled toward the target.
-  Used by advection and diffusion ``extraction_to_infiltration``.
+
+- :func:`solve_inverse_transport` - Solve the inverse transport problem (deconvolution) via
+  Tikhonov regularization. Shared by advection, diffusion, and diffusion_fast
+  ``extraction_to_infiltration`` functions.
 
 - :func:`solve_underdetermined_system` - Solve underdetermined linear system (Ax = b, m < n)
   with nullspace regularization. Handles NaN values by row exclusion. Supports built-in
@@ -53,7 +56,7 @@ Available functions:
   323 (Wilhelminadorp). Returns DataFrame with columns TB1-TB5, TNB1-TNB2, TXB1-TXB2 at various
   depths. Daily cache prevents redundant downloads.
 
-- :func:`generate_failed_coverage_badge` - Generate SVG badge indicating failed coverage using
+- :func:`_generate_failed_coverage_badge` - Generate SVG badge indicating failed coverage using
   genbadge library. Used in CI/CD workflows.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
@@ -63,6 +66,7 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 from __future__ import annotations
 
 import io
+import warnings
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -161,7 +165,7 @@ def linear_interpolate(
     return np.interp(x_query, x_ref_sorted, y_ref_sorted, left=left, right=right)
 
 
-def interp_series(*, series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwargs) -> pd.Series:
+def _interp_series(*, series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwargs) -> pd.Series:
     """
     Interpolate a pandas.Series to a new index.
 
@@ -186,7 +190,7 @@ def interp_series(*, series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_
     return pd.Series(interp_obj(dt_interp), index=index_new)
 
 
-def diff(*, a: npt.ArrayLike, alignment: str = "centered") -> npt.NDArray[np.floating]:
+def _diff(*, a: npt.ArrayLike, alignment: str = "centered") -> npt.NDArray[np.floating]:
     """Compute the cell widths for a given array of cell coordinates.
 
     If alignment is "centered", the coordinates are assumed to be centered in the cells.
@@ -562,7 +566,7 @@ def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.N
     )
 
 
-def generate_failed_coverage_badge() -> None:
+def _generate_failed_coverage_badge() -> None:
     """Generate a badge indicating failed coverage."""
     from genbadge import Badge  # type: ignore # noqa: PLC0415
 
@@ -1392,6 +1396,92 @@ def solve_tikhonov(
         return x, fraction_data
 
     return x
+
+
+# Numerical tolerance for coefficient sum to determine valid output bins
+_EPSILON_COEFF_SUM = 1e-10
+
+
+def solve_inverse_transport(
+    *,
+    w_forward: npt.NDArray[np.floating],
+    observed: npt.NDArray[np.floating],
+    n_output: int,
+    regularization_strength: float,
+    valid_rows: npt.NDArray[np.bool_] | None = None,
+    warn_rank_deficient: bool = False,
+) -> npt.NDArray[np.floating]:
+    """Solve the inverse transport problem via Tikhonov regularization.
+
+    Given the forward model ``w_forward @ x = observed``, recovers ``x`` by
+    building the regularization target from the transpose of ``w_forward`` and
+    solving the regularized least-squares problem.
+
+    Parameters
+    ----------
+    w_forward : ndarray, shape (n_obs, n_output)
+        Forward coefficient matrix.
+    observed : ndarray, shape (n_obs,)
+        Observed values (e.g., extraction concentrations).
+    n_output : int
+        Length of the output vector (e.g., number of cin bins).
+    regularization_strength : float
+        Tikhonov regularization parameter.
+    valid_rows : ndarray of bool, shape (n_obs,), optional
+        Which observation rows are valid. If None, rows with
+        ``row_sum > 1e-10`` are considered valid.
+    warn_rank_deficient : bool, optional
+        If True, emit a warning when the forward matrix has rank
+        deficiency among its active columns. Default is False.
+
+    Returns
+    -------
+    ndarray, shape (n_output,)
+        Recovered signal. NaN for bins with no active columns.
+
+    Warns
+    -----
+    UserWarning
+        When ``warn_rank_deficient=True`` and the matrix is rank-deficient.
+    """
+    row_sums = w_forward.sum(axis=1)
+    col_active: npt.NDArray[np.bool_] = w_forward.sum(axis=0) > 0
+
+    if not np.any(col_active):
+        return np.full(n_output, np.nan)
+
+    if warn_rank_deficient:
+        n_active = int(col_active.sum())
+        rank = np.linalg.matrix_rank(w_forward[:, col_active])
+        if rank < n_active:
+            warnings.warn(
+                f"Forward matrix is rank-deficient (rank {rank} < {n_active} active "
+                f"columns). This occurs with constant flow when the residence time "
+                f"is an integer multiple of the time step width. The "
+                f"underdetermined modes will be pulled toward the regularization "
+                f"target instead of being determined by data. To achieve full rank, "
+                f"adjust aquifer_pore_volumes slightly (e.g., multiply by 1.001).",
+                stacklevel=2,
+            )
+
+    valid: npt.NDArray[np.bool_] = row_sums > _EPSILON_COEFF_SUM if valid_rows is None else valid_rows
+
+    rhs = np.where(valid, row_sums * observed, np.nan)
+    w_solve = w_forward.copy()
+    w_solve[~valid, :] = np.nan
+
+    x_target = compute_reverse_target(coeff_matrix=w_forward, rhs_vector=observed)
+
+    x_solved = solve_tikhonov(
+        coefficient_matrix=w_solve,
+        rhs_vector=rhs,
+        x_target=x_target,
+        regularization_strength=regularization_strength,
+    )
+
+    out = np.full(n_output, np.nan)
+    out[col_active] = x_solved[col_active]
+    return out
 
 
 def _squared_differences_objective(coeffs: np.ndarray, x_ls: np.ndarray, nullspace_basis: np.ndarray) -> float:

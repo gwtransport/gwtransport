@@ -52,7 +52,7 @@ from scipy import special
 
 from gwtransport import gamma
 from gwtransport.residence_time import residence_time, residence_time_mean
-from gwtransport.utils import compute_reverse_target, solve_tikhonov
+from gwtransport.utils import solve_inverse_transport
 
 # Numerical tolerance for coefficient sum to determine valid output bins
 EPSILON_COEFF_SUM = 1e-10
@@ -1040,34 +1040,13 @@ def extraction_to_infiltration(
         asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
     )
 
-    # For partial rows, W[i,:] @ cin ≈ row_sum[i] * cout[i] (assuming
-    # missing cin bins have similar concentration to known ones), so use
-    # row_sums * cout as RHS. Rows with row_sum ≈ 0 contribute negligibly.
-    # Rows flagged as invalid by the forward matrix builder are excluded.
-    row_sums = w_forward.sum(axis=1)
-    col_active = w_forward.sum(axis=0) > 0
-
-    if not np.any(col_active):
-        return np.full(n_cin, np.nan)
-
-    rhs_for_solve = np.where(valid_cout_bins, row_sums * cout, np.nan)
-    w_for_solve = w_forward.copy()
-    w_for_solve[~valid_cout_bins, :] = np.nan
-
-    x_target = compute_reverse_target(coeff_matrix=w_forward, rhs_vector=cout)
-
-    cin_solved = solve_tikhonov(
-        coefficient_matrix=w_for_solve,
-        rhs_vector=rhs_for_solve,
-        x_target=x_target,
+    return solve_inverse_transport(
+        w_forward=w_forward,
+        observed=cout,
+        n_output=n_cin,
         regularization_strength=regularization_strength,
+        valid_rows=valid_cout_bins,
     )
-
-    # Return values for all active cin bins
-    out = np.full(n_cin, np.nan)
-    out[col_active] = cin_solved[col_active]
-
-    return out
 
 
 def gamma_infiltration_to_extraction(

@@ -1,3 +1,5 @@
+import warnings as warn_module
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -18,8 +20,13 @@ from gwtransport.diffusion import (
     _erf_mean_volume,
     _infiltration_to_extraction_coeff_matrix,
     extraction_to_infiltration,
+    gamma_extraction_to_infiltration,
     infiltration_to_extraction,
 )
+from gwtransport.diffusion import (
+    gamma_infiltration_to_extraction as diffusion_gamma_i2e,
+)
+from gwtransport.gamma import mean_std_to_alpha_beta
 
 
 class TestInfiltrationToExtractionDiffusion:
@@ -1633,7 +1640,7 @@ class TestFlowWeightedDiffusion:
             t_j = tedges_days[j]
             rt_j = rt_at_cin_edges[j]
 
-            def _make_integrand(v_j_, t_j_, rt_j_):
+            def _make_integrand_partial(v_j_, t_j_, rt_j_):
                 def integrand(v):
                     x = (v - v_j_ - r_vpv) * sl / r_vpv
                     t_v = np.interp(v, cum_cin, tedges_days)
@@ -1644,6 +1651,383 @@ class TestFlowWeightedDiffusion:
 
                 return integrand
 
-            ref, _ = integrate.quad(_make_integrand(v_j, t_j, rt_j), v_lo, v_hi, limit=200)
+            ref, _ = integrate.quad(_make_integrand_partial(v_j, t_j, rt_j), v_lo, v_hi, limit=200)
             ref_mean = ref / (v_hi - v_lo)
             np.testing.assert_allclose(result[0, j], ref_mean, atol=1e-13)
+
+
+class TestGammaExtractionToInfiltrationDiffusion:
+    """Tests for gamma_extraction_to_infiltration in the diffusion module.
+
+    Verifies that the gamma convenience wrapper correctly delegates to
+    extraction_to_infiltration and that the combined gamma + dispersion
+    deconvolution produces physically correct results.
+    """
+
+    @pytest.fixture
+    def gamma_setup(self):
+        """Create test data with long time series for gamma transport.
+
+        Uses a 1-year cin grid and 200-day cout window. With mean pore
+        volume 500 m3 and flow 100 m3/day, the mean residence time is
+        5 days (R=1) or 10 days (R=2).
+        """
+        tedges = pd.date_range(start="2020-01-01", end="2021-01-01", freq="D")
+        cout_tedges = pd.date_range(start="2020-01-10", end="2020-07-30", freq="D")
+
+        cin = 5.0 + 2.0 * np.sin(2 * np.pi * np.arange(len(tedges) - 1) / 30.0)
+        flow = np.ones(len(tedges) - 1) * 100.0
+
+        return {
+            "cin": cin,
+            "flow": flow,
+            "tedges": tedges,
+            "cout_tedges": cout_tedges,
+            "mean": 500.0,
+            "std": 100.0,
+            "n_bins": 20,
+            "streamline_length": 100.0,
+        }
+
+    def test_zero_cout_gives_zero_cin(self):
+        """Zero extraction concentration must produce zero infiltration."""
+        tedges = pd.date_range(start="2020-01-01", end="2020-06-01", freq="D")
+        cout_tedges = pd.date_range(start="2020-01-10", end="2020-05-01", freq="D")
+        cout = np.zeros(len(cout_tedges) - 1)
+        flow = np.ones(len(tedges) - 1) * 100.0
+
+        cin = gamma_extraction_to_infiltration(
+            cout=cout,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            mean=500.0,
+            std=100.0,
+            n_bins=10,
+            streamline_length=100.0,
+            molecular_diffusivity=1e-4,
+            longitudinal_dispersivity=1.0,
+        )
+
+        valid = ~np.isnan(cin)
+        assert np.sum(valid) > 20
+        np.testing.assert_allclose(cin[valid], 0.0, atol=1e-14)
+
+    def test_constant_cout_gives_constant_cin(self, gamma_setup):
+        """Constant extraction concentration must produce constant infiltration."""
+        n_cout = len(gamma_setup["cout_tedges"]) - 1
+        cout = np.full(n_cout, 7.0)
+
+        cin = gamma_extraction_to_infiltration(
+            cout=cout,
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            mean=gamma_setup["mean"],
+            std=gamma_setup["std"],
+            n_bins=gamma_setup["n_bins"],
+            streamline_length=gamma_setup["streamline_length"],
+            molecular_diffusivity=1e-4,
+            longitudinal_dispersivity=0.5,
+        )
+
+        valid = ~np.isnan(cin)
+        # Well-supported interior bins should recover the constant exactly
+        well_supported = valid & (cin > 1.0)
+        assert np.sum(well_supported) > 50
+        np.testing.assert_allclose(cin[well_supported], 7.0, rtol=1e-10, atol=1e-10)
+
+    def test_roundtrip_single_pore_volume_limit(self, gamma_setup):
+        """Roundtrip with very narrow gamma (single-PV-like) recovers cin.
+
+        A gamma distribution with very small std relative to mean behaves
+        like a single pore volume. The roundtrip should recover the original
+        signal to machine precision in the well-supported interior.
+        """
+        # Very narrow gamma -> effectively single pore volume
+        narrow_std = 1.0  # std/mean = 0.002
+        diffusion_kwargs = {
+            "mean": gamma_setup["mean"],
+            "std": narrow_std,
+            "n_bins": 5,
+            "streamline_length": gamma_setup["streamline_length"],
+            "molecular_diffusivity": 1e-4,
+            "longitudinal_dispersivity": 0.0,
+        }
+
+        cout = diffusion_gamma_i2e(
+            cin=gamma_setup["cin"],
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            **diffusion_kwargs,
+        )
+
+        cin_recovered = gamma_extraction_to_infiltration(
+            cout=cout,
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            **diffusion_kwargs,
+        )
+
+        # Compute valid interior mask (exclude edges)
+        valid = ~np.isnan(cin_recovered) & ~np.isnan(
+            np.interp(
+                np.arange(len(cin_recovered)),
+                np.arange(len(cout)) + 5,  # offset for cout_tedges start
+                np.where(np.isnan(cout), 0, 1),
+            )
+        )
+        # Skip first and last 50 bins for edge effects
+        interior = np.zeros(len(cin_recovered), dtype=bool)
+        valid_indices = np.where(valid)[0]
+        if len(valid_indices) > 100:
+            interior[valid_indices[50:-50]] = True
+
+        assert np.sum(interior) > 20
+        np.testing.assert_allclose(
+            cin_recovered[interior],
+            gamma_setup["cin"][interior],
+            rtol=1e-9,
+            atol=1e-9,
+        )
+
+    def test_roundtrip_moderate_gamma(self, gamma_setup):
+        """Roundtrip with moderate gamma spread recovers cin in interior."""
+        diffusion_kwargs = {
+            "mean": gamma_setup["mean"],
+            "std": gamma_setup["std"],
+            "n_bins": gamma_setup["n_bins"],
+            "streamline_length": gamma_setup["streamline_length"],
+            "molecular_diffusivity": 1e-4,
+            "longitudinal_dispersivity": 0.0,
+        }
+
+        cout = diffusion_gamma_i2e(
+            cin=gamma_setup["cin"],
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            **diffusion_kwargs,
+        )
+
+        cin_recovered = gamma_extraction_to_infiltration(
+            cout=cout,
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            **diffusion_kwargs,
+        )
+
+        valid = ~np.isnan(cin_recovered)
+        valid_indices = np.where(valid)[0]
+        interior = np.zeros(len(cin_recovered), dtype=bool)
+        if len(valid_indices) > 100:
+            interior[valid_indices[50:-50]] = True
+
+        assert np.sum(interior) > 20
+        np.testing.assert_allclose(
+            cin_recovered[interior],
+            gamma_setup["cin"][interior],
+            rtol=5e-3,
+            atol=0.01,
+        )
+
+    def test_roundtrip_with_retardation(self, gamma_setup):
+        """Roundtrip with retardation factor > 1 recovers cin in interior."""
+        retardation = 2.0
+        diffusion_kwargs = {
+            "mean": gamma_setup["mean"],
+            "std": 1.0,  # narrow gamma for near-exact recovery
+            "n_bins": 5,
+            "streamline_length": gamma_setup["streamline_length"],
+            "molecular_diffusivity": 1e-4,
+            "longitudinal_dispersivity": 0.0,
+            "retardation_factor": retardation,
+        }
+
+        cout = diffusion_gamma_i2e(
+            cin=gamma_setup["cin"],
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            **diffusion_kwargs,
+        )
+
+        cin_recovered = gamma_extraction_to_infiltration(
+            cout=cout,
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            **diffusion_kwargs,
+        )
+
+        valid = ~np.isnan(cin_recovered)
+        valid_indices = np.where(valid)[0]
+        interior = np.zeros(len(cin_recovered), dtype=bool)
+        if len(valid_indices) > 100:
+            interior[valid_indices[50:-50]] = True
+
+        assert np.sum(interior) > 10
+        np.testing.assert_allclose(
+            cin_recovered[interior],
+            gamma_setup["cin"][interior],
+            rtol=1e-9,
+            atol=1e-9,
+        )
+
+    def test_alpha_beta_matches_mean_std(self, gamma_setup):
+        """Alpha/beta parameterization gives identical result to mean/std."""
+        alpha, beta = mean_std_to_alpha_beta(mean=gamma_setup["mean"], std=gamma_setup["std"])
+        n_cout = len(gamma_setup["cout_tedges"]) - 1
+        cout = np.full(n_cout, 5.0)
+        cout[30:50] = 10.0
+
+        common_kwargs = {
+            "cout": cout,
+            "flow": gamma_setup["flow"],
+            "tedges": gamma_setup["tedges"],
+            "cout_tedges": gamma_setup["cout_tedges"],
+            "n_bins": gamma_setup["n_bins"],
+            "streamline_length": gamma_setup["streamline_length"],
+            "molecular_diffusivity": 1e-4,
+            "longitudinal_dispersivity": 0.5,
+        }
+
+        cin_mean_std = gamma_extraction_to_infiltration(
+            mean=gamma_setup["mean"],
+            std=gamma_setup["std"],
+            **common_kwargs,
+        )
+        cin_alpha_beta = gamma_extraction_to_infiltration(
+            alpha=alpha,
+            beta=beta,
+            **common_kwargs,
+        )
+
+        valid = ~np.isnan(cin_mean_std) & ~np.isnan(cin_alpha_beta)
+        assert np.sum(valid) > 50
+        np.testing.assert_allclose(cin_mean_std[valid], cin_alpha_beta[valid], atol=0.0)
+
+    def test_matches_explicit_extraction_to_infiltration(self, gamma_setup):
+        """Gamma wrapper must produce identical result to explicit call."""
+        n_cout = len(gamma_setup["cout_tedges"]) - 1
+        cout = np.full(n_cout, 5.0)
+        cout[20:40] = 8.0
+
+        bins = gamma_utils.bins(
+            mean=gamma_setup["mean"],
+            std=gamma_setup["std"],
+            n_bins=gamma_setup["n_bins"],
+        )
+
+        cin_gamma = gamma_extraction_to_infiltration(
+            cout=cout,
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            mean=gamma_setup["mean"],
+            std=gamma_setup["std"],
+            n_bins=gamma_setup["n_bins"],
+            streamline_length=gamma_setup["streamline_length"],
+            molecular_diffusivity=1e-4,
+            longitudinal_dispersivity=0.5,
+        )
+
+        cin_explicit = extraction_to_infiltration(
+            cout=cout,
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            aquifer_pore_volumes=bins["expected_values"],
+            streamline_length=np.full(gamma_setup["n_bins"], gamma_setup["streamline_length"]),
+            molecular_diffusivity=1e-4,
+            longitudinal_dispersivity=0.5,
+        )
+
+        valid = ~np.isnan(cin_gamma) & ~np.isnan(cin_explicit)
+        assert np.sum(valid) > 50
+        np.testing.assert_allclose(cin_gamma[valid], cin_explicit[valid], atol=0.0)
+
+    def test_dispersion_warning_with_multiple_bins(self, gamma_setup):
+        """Multiple pore volumes with dispersivity emits UserWarning."""
+        n_cout = len(gamma_setup["cout_tedges"]) - 1
+        cout = np.ones(n_cout) * 5.0
+
+        with pytest.warns(UserWarning, match="multiple.*pore.*volumes|velocity heterogeneity"):
+            gamma_extraction_to_infiltration(
+                cout=cout,
+                flow=gamma_setup["flow"],
+                tedges=gamma_setup["tedges"],
+                cout_tedges=gamma_setup["cout_tedges"],
+                mean=gamma_setup["mean"],
+                std=gamma_setup["std"],
+                n_bins=gamma_setup["n_bins"],
+                streamline_length=gamma_setup["streamline_length"],
+                molecular_diffusivity=0.0,
+                longitudinal_dispersivity=1.0,
+            )
+
+    def test_suppress_dispersion_warning(self, gamma_setup):
+        """suppress_dispersion_warning=True silences the warning."""
+        n_cout = len(gamma_setup["cout_tedges"]) - 1
+        cout = np.ones(n_cout) * 5.0
+
+        with warn_module.catch_warnings():
+            warn_module.simplefilter("error")
+            gamma_extraction_to_infiltration(
+                cout=cout,
+                flow=gamma_setup["flow"],
+                tedges=gamma_setup["tedges"],
+                cout_tedges=gamma_setup["cout_tedges"],
+                mean=gamma_setup["mean"],
+                std=gamma_setup["std"],
+                n_bins=gamma_setup["n_bins"],
+                streamline_length=gamma_setup["streamline_length"],
+                molecular_diffusivity=0.0,
+                longitudinal_dispersivity=1.0,
+                suppress_dispersion_warning=True,
+            )
+
+    def test_roundtrip_with_dispersivity(self, gamma_setup):
+        """Roundtrip with non-zero dispersivity recovers cin."""
+        diffusion_kwargs = {
+            "mean": gamma_setup["mean"],
+            "std": 1.0,  # narrow gamma
+            "n_bins": 5,
+            "streamline_length": gamma_setup["streamline_length"],
+            "molecular_diffusivity": 1e-4,
+            "longitudinal_dispersivity": 1.0,
+            "suppress_dispersion_warning": True,
+        }
+
+        cout = diffusion_gamma_i2e(
+            cin=gamma_setup["cin"],
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            **diffusion_kwargs,
+        )
+
+        cin_recovered = gamma_extraction_to_infiltration(
+            cout=cout,
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            **diffusion_kwargs,
+        )
+
+        valid = ~np.isnan(cin_recovered)
+        valid_indices = np.where(valid)[0]
+        interior = np.zeros(len(cin_recovered), dtype=bool)
+        if len(valid_indices) > 100:
+            interior[valid_indices[50:-50]] = True
+
+        assert np.sum(interior) > 10
+        np.testing.assert_allclose(
+            cin_recovered[interior],
+            gamma_setup["cin"][interior],
+            rtol=1e-9,
+            atol=1e-9,
+        )

@@ -80,7 +80,7 @@ from gwtransport.fronttracking.output import compute_bin_averaged_concentration_
 from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import compute_reverse_target, solve_tikhonov
+from gwtransport.utils import solve_inverse_transport
 
 
 def infiltration_to_extraction_series(
@@ -1017,29 +1017,12 @@ def extraction_to_infiltration(
         retardation_factor=retardation_factor,
     )
 
-    # For partial rows, W[i,:] @ cin ≈ row_sum[i] * cout[i] (assuming
-    # missing cin bins have similar concentration to known ones), so use
-    # row_sums * cout as RHS. Rows with row_sum ≈ 0 contribute negligibly.
-    row_sums = w_forward.sum(axis=1)
-    col_active = w_forward.sum(axis=0) > 0
-
-    if not np.any(col_active):
-        return np.full(n_cin, np.nan)
-
-    x_target = compute_reverse_target(coeff_matrix=w_forward, rhs_vector=cout)
-
-    cin_solved = solve_tikhonov(
-        coefficient_matrix=w_forward,
-        rhs_vector=row_sums * cout,
-        x_target=x_target,
+    return solve_inverse_transport(
+        w_forward=w_forward,
+        observed=cout,
+        n_output=n_cin,
         regularization_strength=regularization_strength,
     )
-
-    # Return values for all active cin bins
-    out = np.full(n_cin, np.nan)
-    out[col_active] = cin_solved[col_active]
-
-    return out
 
 
 def _validate_front_tracking_inputs(

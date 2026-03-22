@@ -1,19 +1,25 @@
+import warnings as warn_module
+
 import numpy as np
 import pandas as pd
 import pytest
 from numpy.testing import assert_allclose
 from scipy.special import erf
 
+from gwtransport import gamma as gamma_utils
 from gwtransport.advection import infiltration_to_extraction as advection_i2e
 from gwtransport.diffusion import infiltration_to_extraction as diffusion_exact
 from gwtransport.diffusion_fast import (
     _build_gaussian_matrix,
-    compute_scaled_sigma_array,
+    _compute_sigma,
     convolve_diffusion,
     create_example_data,
     extraction_to_infiltration,
+    gamma_extraction_to_infiltration,
+    gamma_infiltration_to_extraction,
     infiltration_to_extraction,
 )
+from gwtransport.gamma import mean_std_to_alpha_beta
 
 # =============================================================================
 # Machine-precision tests for convolve_diffusion (CDF-integrated kernel)
@@ -531,7 +537,7 @@ def test_retardation_zero_diffusion_matches_advection(retardation_factor):
 
 @pytest.mark.parametrize("retardation_factor", [1.0, 2.7])
 def test_retardation_sigma_analytical(retardation_factor):
-    """Sigma from compute_scaled_sigma_array matches analytical formula (exact).
+    """Sigma from _compute_sigma matches analytical formula (exact).
 
     For constant flow Q, single PV V, retardation R, streamline length L:
         rt = V * R / Q
@@ -551,14 +557,15 @@ def test_retardation_sigma_analytical(retardation_factor):
     dispersivity = 1.0
     dt = 1.0
 
-    sigma_array = compute_scaled_sigma_array(
+    sigma_array = _compute_sigma(
         flow=flow,
         tedges=tedges,
-        aquifer_pore_volume=pore_volume,
+        aquifer_pore_volumes=pore_volume,
         streamline_length=length,
         molecular_diffusivity=mol_diff,
         longitudinal_dispersivity=dispersivity,
         retardation_factor=retardation_factor,
+        direction="infiltration_to_extraction",
     )
 
     # Analytical sigma for interior bins (away from residence-time boundary effects)
@@ -745,23 +752,25 @@ def test_round_trip():
 
 
 # =============================================================================
-# Tests for compute_scaled_sigma_array
+# Tests for _compute_sigma
 # =============================================================================
 
 
-def test_compute_scaled_sigma_array_constant_flow():
+def test_compute_sigma_constant_flow():
     """With constant flow, sigma should be uniform."""
     n_days = 50
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
     flow = np.full(n_days, 100.0)
 
-    sigma_array = compute_scaled_sigma_array(
+    sigma_array = _compute_sigma(
         flow=flow,
         tedges=tedges,
-        aquifer_pore_volume=1000.0,
+        aquifer_pore_volumes=1000.0,
         streamline_length=80.0,
         molecular_diffusivity=0.03,
         longitudinal_dispersivity=0.0,
+        retardation_factor=1.0,
+        direction="infiltration_to_extraction",
     )
 
     assert len(sigma_array) == n_days
@@ -771,21 +780,22 @@ def test_compute_scaled_sigma_array_constant_flow():
     assert np.std(sigma_array) < np.mean(sigma_array) * 0.1
 
 
-def test_compute_scaled_sigma_array_variable_flow():
+def test_compute_sigma_variable_flow():
     """Variable flow produces variable sigma."""
     n_days = 50
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
     t = np.arange(n_days)
     flow = 100.0 * (1.0 + 0.5 * np.sin(2 * np.pi * t / 20))
 
-    sigma_array = compute_scaled_sigma_array(
+    sigma_array = _compute_sigma(
         flow=flow,
         tedges=tedges,
-        aquifer_pore_volume=500.0,
+        aquifer_pore_volumes=500.0,
         streamline_length=80.0,
         molecular_diffusivity=0.03,
         longitudinal_dispersivity=0.0,
         retardation_factor=2.0,
+        direction="infiltration_to_extraction",
     )
 
     assert len(sigma_array) == n_days
@@ -794,20 +804,22 @@ def test_compute_scaled_sigma_array_variable_flow():
     assert np.std(sigma_array) > 0.0
 
 
-def test_compute_scaled_sigma_array_with_nan_in_residence_time():
+def test_compute_sigma_with_nan_in_residence_time():
     """NaN residence times are interpolated, producing finite sigma."""
     n_days = 50
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
     flow = np.full(n_days, 100.0)
     flow[10:15] = 1e-10
 
-    sigma_array = compute_scaled_sigma_array(
+    sigma_array = _compute_sigma(
         flow=flow,
         tedges=tedges,
-        aquifer_pore_volume=1000.0,
+        aquifer_pore_volumes=1000.0,
         streamline_length=80.0,
         molecular_diffusivity=0.03,
         longitudinal_dispersivity=0.0,
+        retardation_factor=1.0,
+        direction="infiltration_to_extraction",
     )
 
     assert len(sigma_array) == n_days
@@ -815,20 +827,21 @@ def test_compute_scaled_sigma_array_with_nan_in_residence_time():
     assert np.all(sigma_array >= 0.0)
 
 
-def test_compute_scaled_sigma_array_clipping():
+def test_compute_sigma_clipping():
     """Extreme sigma values are clipped to [0, 100]."""
     n_days = 100
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
     flow = np.full(n_days, 10.0)
 
-    sigma_array = compute_scaled_sigma_array(
+    sigma_array = _compute_sigma(
         flow=flow,
         tedges=tedges,
-        aquifer_pore_volume=100.0,
+        aquifer_pore_volumes=100.0,
         streamline_length=80.0,
         molecular_diffusivity=10.0,
         longitudinal_dispersivity=0.0,
         retardation_factor=5.0,
+        direction="infiltration_to_extraction",
     )
 
     assert np.all(sigma_array <= 100.0)
@@ -839,20 +852,21 @@ def test_compute_scaled_sigma_array_clipping():
     ("molecular_diffusivity", "retardation"),
     [(0.01, 1.0), (0.05, 2.0), (0.10, 1.5)],
 )
-def test_compute_scaled_sigma_array_parametrized(molecular_diffusivity, retardation):
+def test_compute_sigma_parametrized(molecular_diffusivity, retardation):
     """Various parameter combinations produce positive finite sigma."""
     n_days = 50
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
     flow = np.full(n_days, 100.0)
 
-    sigma_array = compute_scaled_sigma_array(
+    sigma_array = _compute_sigma(
         flow=flow,
         tedges=tedges,
-        aquifer_pore_volume=1000.0,
+        aquifer_pore_volumes=1000.0,
         streamline_length=100.0,
         molecular_diffusivity=molecular_diffusivity,
         longitudinal_dispersivity=0.0,
         retardation_factor=retardation,
+        direction="infiltration_to_extraction",
     )
 
     assert len(sigma_array) == n_days
@@ -860,7 +874,7 @@ def test_compute_scaled_sigma_array_parametrized(molecular_diffusivity, retardat
     assert np.mean(sigma_array) > 0.0
 
 
-def test_compute_scaled_sigma_array_dispersivity_increases_sigma():
+def test_compute_sigma_dispersivity_increases_sigma():
     """Adding longitudinal dispersivity increases sigma."""
     n_days = 50
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
@@ -869,16 +883,230 @@ def test_compute_scaled_sigma_array_dispersivity_increases_sigma():
     kwargs = {
         "flow": flow,
         "tedges": tedges,
-        "aquifer_pore_volume": 1000.0,
+        "aquifer_pore_volumes": 1000.0,
         "streamline_length": 80.0,
         "molecular_diffusivity": 0.03,
+        "retardation_factor": 1.0,
+        "direction": "infiltration_to_extraction",
     }
 
-    sigma_no_disp = compute_scaled_sigma_array(**kwargs, longitudinal_dispersivity=0.0)
-    sigma_with_disp = compute_scaled_sigma_array(**kwargs, longitudinal_dispersivity=1.0)
+    sigma_no_disp = _compute_sigma(**kwargs, longitudinal_dispersivity=0.0)
+    sigma_with_disp = _compute_sigma(**kwargs, longitudinal_dispersivity=1.0)
 
     assert np.all(sigma_with_disp >= sigma_no_disp - 1e-14)
     assert np.mean(sigma_with_disp) > np.mean(sigma_no_disp)
+
+
+# =============================================================================
+# Tests for moment-based sigma correction
+# =============================================================================
+
+
+def test_compute_sigma_single_pv_equals_scalar():
+    """A single pore volume gives E[V^2]=V^2, E[V^3]=V^3, so no correction."""
+    n_days = 50
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    flow = np.full(n_days, 100.0)
+    pv = 1000.0
+
+    sigma_scalar = _compute_sigma(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volumes=pv,
+        streamline_length=80.0,
+        molecular_diffusivity=0.03,
+        longitudinal_dispersivity=1.0,
+        retardation_factor=1.0,
+        direction="infiltration_to_extraction",
+    )
+    sigma_array = _compute_sigma(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volumes=np.array([pv]),
+        streamline_length=80.0,
+        molecular_diffusivity=0.03,
+        longitudinal_dispersivity=1.0,
+        retardation_factor=1.0,
+        direction="infiltration_to_extraction",
+    )
+
+    assert_allclose(sigma_array, sigma_scalar)
+
+
+def test_compute_sigma_identical_pvs_equals_scalar():
+    """N identical pore volumes give the same result as a single scalar."""
+    n_days = 50
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    flow = np.full(n_days, 100.0)
+    pv = 1000.0
+
+    sigma_scalar = _compute_sigma(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volumes=pv,
+        streamline_length=80.0,
+        molecular_diffusivity=0.03,
+        longitudinal_dispersivity=1.0,
+        retardation_factor=1.0,
+        direction="infiltration_to_extraction",
+    )
+    sigma_many = _compute_sigma(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volumes=np.full(50, pv),
+        streamline_length=80.0,
+        molecular_diffusivity=0.03,
+        longitudinal_dispersivity=1.0,
+        retardation_factor=1.0,
+        direction="infiltration_to_extraction",
+    )
+
+    assert_allclose(sigma_many, sigma_scalar)
+
+
+def test_compute_sigma_distributed_pvs_larger_than_mean():
+    """Distributed PVs give larger sigma than using mean alone (Jensen's inequality).
+
+    Since sigma_idx^2(V) is convex in V (quadratic + cubic terms), E[sigma^2] > sigma^2(mean).
+    """
+    n_days = 50
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    flow = np.full(n_days, 100.0)
+    mean_pv = 1000.0
+    pvs = np.array([700.0, 800.0, 900.0, 1000.0, 1100.0, 1200.0, 1300.0])
+
+    common = {
+        "flow": flow,
+        "tedges": tedges,
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.03,
+        "longitudinal_dispersivity": 1.0,
+        "retardation_factor": 1.0,
+        "direction": "infiltration_to_extraction",
+    }
+
+    sigma_mean = _compute_sigma(aquifer_pore_volumes=mean_pv, **common)
+    sigma_dist = _compute_sigma(aquifer_pore_volumes=pvs, **common)
+
+    assert np.all(sigma_dist >= sigma_mean - 1e-14)
+
+
+def test_compute_sigma_molecular_diffusion_only_correction():
+    """Moment correction for molecular diffusion only (alpha_L=0).
+
+    For constant flow, interior bins:
+        sigma_idx^2 = 2*D_m*tau_bar/V_bar * E[V^3] / dx_ref^2
+    Correction factor on sigma: sqrt(E[V^3] / V_bar^3).
+    """
+    n_days = 100
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    flow_rate = 100.0
+    flow = np.full(n_days, flow_rate)
+    mean_pv = 1000.0
+    cv = 0.3
+    std_pv = cv * mean_pv
+
+    rng = np.random.default_rng(42)
+    alpha = (mean_pv / std_pv) ** 2
+    beta = std_pv**2 / mean_pv
+    pvs = rng.gamma(alpha, beta, size=10000)
+
+    common = {
+        "flow": flow,
+        "tedges": tedges,
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.03,
+        "longitudinal_dispersivity": 0.0,
+        "retardation_factor": 1.0,
+        "direction": "infiltration_to_extraction",
+    }
+
+    sigma_mean = _compute_sigma(aquifer_pore_volumes=mean_pv, **common)
+    sigma_dist = _compute_sigma(aquifer_pore_volumes=pvs, **common)
+
+    margin = int(np.ceil(mean_pv / flow_rate)) + 2
+    interior = slice(margin, n_days - margin)
+
+    ev3_empirical = np.mean(pvs**3)
+    expected_ratio = np.sqrt(ev3_empirical / mean_pv**3)
+    actual_ratio = np.mean(sigma_dist[interior]) / np.mean(sigma_mean[interior])
+    assert_allclose(actual_ratio, expected_ratio, rtol=1e-3)
+
+
+def test_compute_sigma_dispersivity_only_correction():
+    """Moment correction for dispersivity only (D_m=0).
+
+    For constant flow, interior bins:
+        sigma_idx^2 = 2*alpha_L*L * E[V^2] / dx_ref^2
+    Correction factor on sigma: sqrt(E[V^2] / V_bar^2) = sqrt(1 + CV^2).
+    """
+    n_days = 100
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    flow_rate = 100.0
+    flow = np.full(n_days, flow_rate)
+    mean_pv = 1000.0
+    cv = 0.3
+    std_pv = cv * mean_pv
+
+    rng = np.random.default_rng(42)
+    alpha = (mean_pv / std_pv) ** 2
+    beta = std_pv**2 / mean_pv
+    pvs = rng.gamma(alpha, beta, size=10000)
+
+    common = {
+        "flow": flow,
+        "tedges": tedges,
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.0,
+        "longitudinal_dispersivity": 1.0,
+        "retardation_factor": 1.0,
+        "direction": "infiltration_to_extraction",
+    }
+
+    sigma_mean = _compute_sigma(aquifer_pore_volumes=mean_pv, **common)
+    sigma_dist = _compute_sigma(aquifer_pore_volumes=pvs, **common)
+
+    margin = int(np.ceil(mean_pv / flow_rate)) + 2
+    interior = slice(margin, n_days - margin)
+
+    ev2_empirical = np.mean(pvs**2)
+    expected_ratio = np.sqrt(ev2_empirical / mean_pv**2)
+    actual_ratio = np.mean(sigma_dist[interior]) / np.mean(sigma_mean[interior])
+    assert_allclose(actual_ratio, expected_ratio, rtol=1e-3)
+
+
+def test_compute_sigma_correction_scales_with_cv():
+    """Correction magnitude increases with coefficient of variation."""
+    n_days = 100
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    flow = np.full(n_days, 100.0)
+    mean_pv = 1000.0
+
+    common = {
+        "flow": flow,
+        "tedges": tedges,
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.03,
+        "longitudinal_dispersivity": 1.0,
+        "retardation_factor": 1.0,
+        "direction": "infiltration_to_extraction",
+    }
+
+    sigma_ref = _compute_sigma(aquifer_pore_volumes=mean_pv, **common)
+
+    corrections = []
+    for cv in [0.1, 0.2, 0.3, 0.5]:
+        std_pv = cv * mean_pv
+        rng = np.random.default_rng(42)
+        alpha = (mean_pv / std_pv) ** 2
+        beta = std_pv**2 / mean_pv
+        pvs = rng.gamma(alpha, beta, size=10000)
+
+        sigma_dist = _compute_sigma(aquifer_pore_volumes=pvs, **common)
+        corrections.append(np.mean(sigma_dist) / np.mean(sigma_ref))
+
+    for i in range(len(corrections) - 1):
+        assert corrections[i + 1] > corrections[i]
 
 
 # =============================================================================
@@ -1337,6 +1565,403 @@ def test_extraction_to_infiltration_flow_out_round_trip():
     valid = ~np.isnan(cin_recovered) & ~np.isnan(cout)
     assert np.sum(valid) > 50
     assert_allclose(cin_recovered[valid], cin_original[valid], atol=1e-14)
+
+
+# =============================================================================
+# Tests for gamma_extraction_to_infiltration
+# =============================================================================
+
+
+class TestGammaExtractionToInfiltrationFast:
+    """Tests for gamma_extraction_to_infiltration in the diffusion_fast module.
+
+    Verifies that the gamma convenience wrapper correctly delegates to
+    extraction_to_infiltration and that the combined gamma + fast Gaussian
+    diffusion deconvolution produces physically correct results.
+    """
+
+    @pytest.fixture
+    def gamma_setup(self):
+        """Create test data with long time series for gamma transport."""
+        tedges = pd.date_range(start="2020-01-01", end="2020-08-01", freq="D")
+        cout_tedges = pd.date_range(start="2020-01-10", end="2020-07-01", freq="D")
+
+        cin = 5.0 + 2.0 * np.sin(2 * np.pi * np.arange(len(tedges) - 1) / 30.0)
+        flow = np.full(len(tedges) - 1, 100.0)
+
+        return {
+            "cin": cin,
+            "flow": flow,
+            "tedges": tedges,
+            "cout_tedges": cout_tedges,
+            "mean": 500.0,
+            "std": 100.0,
+            "n_bins": 20,
+            "mean_streamline_length": 80.0,
+            "mean_molecular_diffusivity": 0.03,
+            "mean_longitudinal_dispersivity": 0.0,
+        }
+
+    def test_zero_cout_gives_zero_cin(self):
+        """Zero extraction concentration must produce zero infiltration."""
+        tedges, cout_tedges, flow = _make_transport_data(n_days=200)
+        cout = np.zeros(len(cout_tedges) - 1)
+
+        cin = gamma_extraction_to_infiltration(
+            cout=cout,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            mean=500.0,
+            std=100.0,
+            n_bins=10,
+            mean_streamline_length=80.0,
+            mean_molecular_diffusivity=0.03,
+            mean_longitudinal_dispersivity=0.0,
+        )
+
+        valid = ~np.isnan(cin)
+        assert np.sum(valid) > 20
+        assert_allclose(cin[valid], 0.0, atol=1e-14)
+
+    def test_constant_cout_gives_constant_cin(self, gamma_setup):
+        """Constant extraction concentration must produce constant infiltration."""
+        n_cout = len(gamma_setup["cout_tedges"]) - 1
+        cout = np.full(n_cout, 7.0)
+
+        cin = gamma_extraction_to_infiltration(
+            cout=cout,
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            mean=gamma_setup["mean"],
+            std=gamma_setup["std"],
+            n_bins=gamma_setup["n_bins"],
+            mean_streamline_length=gamma_setup["mean_streamline_length"],
+            mean_molecular_diffusivity=gamma_setup["mean_molecular_diffusivity"],
+            mean_longitudinal_dispersivity=gamma_setup["mean_longitudinal_dispersivity"],
+        )
+
+        valid = ~np.isnan(cin)
+        well_supported = valid & (cin > 1.0)
+        assert np.sum(well_supported) > 30
+        assert_allclose(cin[well_supported], 7.0, atol=1e-12)
+
+    def test_roundtrip_recovers_signal(self):
+        """Forward then inverse roundtrip recovers the original signal.
+
+        Machine precision is achieved in the interior. Boundary bins are
+        excluded because the forward matrix has incomplete column coverage
+        there: the first/last input bins lack enough output observations for
+        the Tikhonov inverse to fully constrain them.
+        """
+        n_days = 500
+        tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+        cout_tedges = tedges.copy()
+        cin = np.sin(np.linspace(0, 2 * np.pi, n_days)) + 5.0
+        flow = np.full(n_days, 100.0)
+
+        diffusion_kwargs = {
+            "mean": 501.3,
+            "std": 100.0,
+            "n_bins": 20,
+            "mean_streamline_length": 80.0,
+            "mean_molecular_diffusivity": 0.03,
+            "mean_longitudinal_dispersivity": 0.0,
+        }
+
+        cout = gamma_infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **diffusion_kwargs,
+        )
+
+        cout_clean = np.where(np.isnan(cout), np.nanmean(cout), cout)
+
+        cin_recovered = gamma_extraction_to_infiltration(
+            cout=cout_clean,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **diffusion_kwargs,
+        )
+
+        margin = 50
+        valid = ~np.isnan(cin_recovered) & ~np.isnan(cout)
+        valid[:margin] = False
+        valid[-margin:] = False
+        assert np.sum(valid) > 300
+        assert_allclose(cin_recovered[valid], cin[valid], atol=1e-12)
+
+    def test_roundtrip_with_retardation(self):
+        """Roundtrip with retardation factor recovers signal approximately.
+
+        Machine precision is NOT achievable here. Retardation R=2.7 multiplies
+        the effective pore volumes (V*R), which with 20 gamma bins creates a
+        forward matrix with rank deficiency ~4-10. These rank-deficient modes
+        are global (not just boundary): the Tikhonov regularization pulls them
+        toward the regularization target, introducing O(1e-4) errors throughout
+        the interior. This is a mathematical property of the combined advection
+        weight matrix when multiple shifted pore volumes produce near-degenerate
+        columns.
+        """
+        retardation = 2.7
+
+        n_days = 800
+        tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+        cout_tedges = tedges.copy()
+        cin = 5.0 + 2.0 * np.sin(2 * np.pi * np.arange(n_days) / 30.0)
+        flow = np.full(n_days, 100.0)
+
+        # mean=489.2 minimizes near-integer residence times for R=2.7
+        diffusion_kwargs = {
+            "mean": 489.2,
+            "std": 100.0,
+            "n_bins": 20,
+            "mean_streamline_length": 80.0,
+            "mean_molecular_diffusivity": 0.03,
+            "mean_longitudinal_dispersivity": 0.0,
+            "retardation_factor": retardation,
+        }
+
+        cout = gamma_infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **diffusion_kwargs,
+        )
+
+        cout_clean = np.where(np.isnan(cout), np.nanmean(cout), cout)
+
+        cin_recovered = gamma_extraction_to_infiltration(
+            cout=cout_clean,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **diffusion_kwargs,
+        )
+
+        margin = 80
+        valid = ~np.isnan(cin_recovered) & ~np.isnan(cout)
+        valid[:margin] = False
+        valid[-margin:] = False
+        assert np.sum(valid) > 500
+        assert_allclose(cin_recovered[valid], cin[valid], atol=2e-3)
+
+    def test_alpha_beta_matches_mean_std(self, gamma_setup):
+        """Alpha/beta parameterization gives identical result to mean/std."""
+        alpha, beta = mean_std_to_alpha_beta(mean=gamma_setup["mean"], std=gamma_setup["std"])
+        n_cout = len(gamma_setup["cout_tedges"]) - 1
+        cout = np.full(n_cout, 5.0)
+        cout[30:50] = 10.0
+
+        common_kwargs = {
+            "cout": cout,
+            "flow": gamma_setup["flow"],
+            "tedges": gamma_setup["tedges"],
+            "cout_tedges": gamma_setup["cout_tedges"],
+            "n_bins": gamma_setup["n_bins"],
+            "mean_streamline_length": gamma_setup["mean_streamline_length"],
+            "mean_molecular_diffusivity": gamma_setup["mean_molecular_diffusivity"],
+            "mean_longitudinal_dispersivity": gamma_setup["mean_longitudinal_dispersivity"],
+        }
+
+        cin_mean_std = gamma_extraction_to_infiltration(
+            mean=gamma_setup["mean"],
+            std=gamma_setup["std"],
+            **common_kwargs,
+        )
+        cin_alpha_beta = gamma_extraction_to_infiltration(
+            alpha=alpha,
+            beta=beta,
+            **common_kwargs,
+        )
+
+        valid = ~np.isnan(cin_mean_std) & ~np.isnan(cin_alpha_beta)
+        assert np.sum(valid) > 50
+        assert_allclose(cin_mean_std[valid], cin_alpha_beta[valid], atol=0.0)
+
+    def test_matches_explicit_extraction_to_infiltration(self, gamma_setup):
+        """Gamma wrapper must produce identical result to explicit call."""
+        n_cout = len(gamma_setup["cout_tedges"]) - 1
+        cout = np.full(n_cout, 5.0)
+        cout[20:40] = 8.0
+
+        bins = gamma_utils.bins(
+            mean=gamma_setup["mean"],
+            std=gamma_setup["std"],
+            n_bins=gamma_setup["n_bins"],
+        )
+
+        cin_gamma = gamma_extraction_to_infiltration(
+            cout=cout,
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            mean=gamma_setup["mean"],
+            std=gamma_setup["std"],
+            n_bins=gamma_setup["n_bins"],
+            mean_streamline_length=gamma_setup["mean_streamline_length"],
+            mean_molecular_diffusivity=gamma_setup["mean_molecular_diffusivity"],
+            mean_longitudinal_dispersivity=gamma_setup["mean_longitudinal_dispersivity"],
+        )
+
+        cin_explicit = extraction_to_infiltration(
+            cout=cout,
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            aquifer_pore_volumes=bins["expected_values"],
+            mean_streamline_length=gamma_setup["mean_streamline_length"],
+            mean_molecular_diffusivity=gamma_setup["mean_molecular_diffusivity"],
+            mean_longitudinal_dispersivity=gamma_setup["mean_longitudinal_dispersivity"],
+        )
+
+        valid = ~np.isnan(cin_gamma) & ~np.isnan(cin_explicit)
+        assert np.sum(valid) > 50
+        assert_allclose(cin_gamma[valid], cin_explicit[valid], atol=0.0)
+
+    def test_roundtrip_with_dispersivity(self):
+        """Roundtrip with non-zero dispersivity recovers signal.
+
+        Near-machine precision is achieved in the interior. The Gaussian
+        kernel from dispersivity adds slight numerical diffusion that lifts
+        the error floor to ~1e-11 (vs ~1e-13 without dispersivity).
+        """
+        n_days = 500
+        tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+        cout_tedges = tedges.copy()
+        cin = np.sin(np.linspace(0, 2 * np.pi, n_days)) + 5.0
+        flow = np.full(n_days, 100.0)
+
+        diffusion_kwargs = {
+            "mean": 501.3,
+            "std": 100.0,
+            "n_bins": 20,
+            "mean_streamline_length": 80.0,
+            "mean_molecular_diffusivity": 0.03,
+            "mean_longitudinal_dispersivity": 1.0,
+            "suppress_dispersion_warning": True,
+        }
+
+        cout = gamma_infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **diffusion_kwargs,
+        )
+
+        cout_clean = np.where(np.isnan(cout), np.nanmean(cout), cout)
+
+        cin_recovered = gamma_extraction_to_infiltration(
+            cout=cout_clean,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **diffusion_kwargs,
+        )
+
+        margin = 50
+        valid = ~np.isnan(cin_recovered) & ~np.isnan(cout)
+        valid[:margin] = False
+        valid[-margin:] = False
+        assert np.sum(valid) > 300
+        assert_allclose(cin_recovered[valid], cin[valid], atol=1e-10)
+
+    def test_roundtrip_with_flow_out(self):
+        """Roundtrip with flow_out parameter recovers signal.
+
+        Machine precision is achieved in the interior, same as the basic
+        roundtrip. The flow_out path applies diffusion on the output grid
+        but uses the same Tikhonov inversion.
+        """
+        n_days = 500
+        tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+        cout_tedges = tedges.copy()
+        cin = np.sin(np.linspace(0, 2 * np.pi, n_days)) + 5.0
+        flow = np.full(n_days, 100.0)
+        flow_out = flow.copy()
+
+        diffusion_kwargs = {
+            "mean": 501.3,
+            "std": 100.0,
+            "n_bins": 20,
+            "mean_streamline_length": 80.0,
+            "mean_molecular_diffusivity": 0.03,
+            "mean_longitudinal_dispersivity": 0.0,
+            "flow_out": flow_out,
+        }
+
+        cout = gamma_infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **diffusion_kwargs,
+        )
+
+        cout_clean = np.where(np.isnan(cout), np.nanmean(cout), cout)
+
+        cin_recovered = gamma_extraction_to_infiltration(
+            cout=cout_clean,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **diffusion_kwargs,
+        )
+
+        margin = 50
+        valid = ~np.isnan(cin_recovered) & ~np.isnan(cout)
+        valid[:margin] = False
+        valid[-margin:] = False
+        assert np.sum(valid) > 300
+        assert_allclose(cin_recovered[valid], cin[valid], atol=1e-12)
+
+    def test_dispersion_warning_emitted(self, gamma_setup):
+        """Multiple pore volumes with dispersivity emits UserWarning."""
+        n_cout = len(gamma_setup["cout_tedges"]) - 1
+        cout = np.ones(n_cout) * 5.0
+
+        with pytest.warns(UserWarning, match="multiple.*pore.*volumes|velocity heterogeneity"):
+            gamma_extraction_to_infiltration(
+                cout=cout,
+                flow=gamma_setup["flow"],
+                tedges=gamma_setup["tedges"],
+                cout_tedges=gamma_setup["cout_tedges"],
+                mean=gamma_setup["mean"],
+                std=gamma_setup["std"],
+                n_bins=gamma_setup["n_bins"],
+                mean_streamline_length=gamma_setup["mean_streamline_length"],
+                mean_molecular_diffusivity=0.0,
+                mean_longitudinal_dispersivity=1.0,
+            )
+
+    def test_suppress_dispersion_warning(self, gamma_setup):
+        """suppress_dispersion_warning=True silences the dispersion warning."""
+        n_cout = len(gamma_setup["cout_tedges"]) - 1
+        cout = np.ones(n_cout) * 5.0
+
+        with warn_module.catch_warnings():
+            warn_module.simplefilter("error")
+            # Allow the rank-deficient warning (separate concern)
+            warn_module.filterwarnings("ignore", message="Forward matrix is rank-deficient")
+            gamma_extraction_to_infiltration(
+                cout=cout,
+                flow=gamma_setup["flow"],
+                tedges=gamma_setup["tedges"],
+                cout_tedges=gamma_setup["cout_tedges"],
+                mean=gamma_setup["mean"],
+                std=gamma_setup["std"],
+                n_bins=gamma_setup["n_bins"],
+                mean_streamline_length=gamma_setup["mean_streamline_length"],
+                mean_molecular_diffusivity=0.0,
+                mean_longitudinal_dispersivity=1.0,
+                suppress_dispersion_warning=True,
+            )
 
 
 if __name__ == "__main__":

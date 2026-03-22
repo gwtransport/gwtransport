@@ -180,6 +180,42 @@ In pore volume units, :math:`\sigma_{V,disp}` is flow-independent, while :math:`
 
 See :doc:`/examples/05_Diffusion_Dispersion` for quantitative guidance on comparing these contributions and formulas to convert microdispersion effects to equivalent APVD standard deviation.
 
+.. _concept-variance-components:
+
+Variance Components of Breakthrough Spreading
+""""""""""""""""""""""""""""""""""""""""""""""
+
+The total variance of the output breakthrough curve (in volume units) is the sum of three independent components. Since the streamtubes are independent, the correct micro/diff contribution is the average of the per-streamtube variances (law of total variance), not the variance evaluated at the mean pore volume:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 18 20 22 26
+
+   * - Method
+     - Macrodispersion
+     - Microdispersion
+     - Molecular diffusion
+     - Total
+   * - Mean PV
+     - :math:`\sigma_{apv}^2`
+     - :math:`\frac{2 \alpha_L \bar{V}^2}{L}`
+     - :math:`\frac{2 D_m R \bar{V}^3}{L^2 Q}`
+     - :math:`\sigma_{apv}^2 + \frac{2 \bar{V}^2}{L}\left(\alpha_L + \frac{D_m R \bar{V}}{L Q}\right)`
+   * - Discrete bins
+     - :math:`\sigma_{apv}^2`
+     - :math:`\frac{2 \alpha_L}{L} \overline{V^2}`
+     - :math:`\frac{2 D_m R}{L^2 Q} \overline{V^3}`
+     - :math:`\sigma_{apv}^2 + \frac{2}{L}\left(\alpha_L \overline{V^2} + \frac{D_m R}{L Q} \overline{V^3}\right)`
+   * - Gamma
+     - :math:`\sigma_{apv}^2`
+     - :math:`\frac{2 \alpha_L}{L}\left(\bar{V}^2 + \sigma_{apv}^2\right)`
+     - :math:`\frac{2 D_m R \left(\bar{V}^2 + \sigma_{apv}^2\right)\left(\bar{V}^2 + 2\sigma_{apv}^2\right)}{L^2 Q \bar{V}}`
+     - :math:`\sigma_{apv}^2 + \frac{2\left(\bar{V}^2 + \sigma_{apv}^2\right)}{L}\left(\alpha_L + \frac{D_m R \left(\bar{V}^2 + 2\sigma_{apv}^2\right)}{L Q \bar{V}}\right)`
+
+where :math:`\overline{V^k} = \frac{1}{n}\sum_i V_i^k` is the :math:`k`-th sample moment over the discrete pore volume bins. For a gamma distribution, :math:`\mathbb{E}[V^2] = \bar{V}^2 + \sigma_{apv}^2` and :math:`\mathbb{E}[V^3] = (\bar{V}^2 + \sigma_{apv}^2)(\bar{V}^2 + 2\sigma_{apv}^2)/\bar{V}`.
+
+**Mean PV** is the current ``diffusion_fast`` approximation. **Discrete bins** and **Gamma** average the per-streamtube variances, which is more accurate because :math:`\sigma^2(V)` is nonlinear in :math:`V`. The correction is of order :math:`\text{CV}^2 = (\sigma_{apv}/\bar{V})^2`.
+
 Calibration Approaches
 ----------------------
 

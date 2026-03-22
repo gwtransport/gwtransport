@@ -10,8 +10,8 @@ import requests.exceptions
 from numpy.testing import assert_array_almost_equal
 
 from gwtransport.utils import (
+    _diff,
     combine_bin_series,
-    diff,
     get_soil_temperature,
     linear_average,
     linear_interpolate,
@@ -73,28 +73,28 @@ def test_diff():
     x = np.array([0, 1, 2, 3, 4, 6])
     expected = np.array([1, 1, 1, 1, 1.5, 2])
 
-    result = diff(a=x, alignment="centered")
+    result = _diff(a=x, alignment="centered")
     assert_array_almost_equal(result, expected, decimal=6)
 
 
 def test_diff_centered_two_points():
     x = np.array([10, 20])
     expected = np.array([10, 10])
-    result = diff(a=x, alignment="centered")
+    result = _diff(a=x, alignment="centered")
     assert_array_almost_equal(result, expected, decimal=6)
 
 
 def test_diff_left():
     x = np.array([0, 1, 2, 3, 4, 6])
     expected = np.array([1, 1, 1, 1, 2, 2])
-    result = diff(a=x, alignment="left")
+    result = _diff(a=x, alignment="left")
     assert_array_almost_equal(result, expected, decimal=6)
 
 
 def test_diff_right():
     x = np.array([0, 1, 2, 3, 4, 6])
     expected = np.array([1, 1, 1, 1, 1, 2])
-    result = diff(a=x, alignment="right")
+    result = _diff(a=x, alignment="right")
     assert_array_almost_equal(result, expected, decimal=6)
 
 

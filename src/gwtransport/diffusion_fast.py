@@ -49,10 +49,6 @@ Available functions:
 - :func:`gamma_extraction_to_infiltration` - Gamma-distributed pore volumes, inverse
   fast Gaussian diffusion. Symmetric inverse of gamma_infiltration_to_extraction.
 
-- :func:`compute_scaled_sigma_array` - Calculate position-dependent diffusion parameters. Computes
-  standard deviation (sigma) for Gaussian smoothing at each time step based on residence time,
-  molecular diffusivity, longitudinal dispersivity, and spatial discretization.
-
 - :func:`convolve_diffusion` - Apply variable-sigma Gaussian filtering. Extends
   scipy.ndimage.gaussian_filter1d to position-dependent sigma using sparse matrix representation
   for efficiency. Handles boundary conditions via nearest-neighbor extrapolation.
@@ -77,10 +73,10 @@ from scipy.special import erf
 from gwtransport import gamma
 from gwtransport.advection_utils import _infiltration_to_extraction_weights
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import compute_reverse_target, solve_tikhonov
+from gwtransport.utils import solve_inverse_transport
 
 # Minimum coefficient sum to consider a row valid
-EPSILON_COEFF_SUM = 1e-10
+_EPSILON_COEFF_SUM = 1e-10
 
 
 def infiltration_to_extraction(
@@ -204,14 +200,15 @@ def infiltration_to_extraction(
         # Original algorithm: smooth-then-advect (requires uniform tedges)
         _check_uniform_tedges(tedges=tedges, suppress=suppress_uniform_tedges_check)
 
-        sigma_array = compute_scaled_sigma_array(
+        sigma_array = _compute_sigma(
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volume=float(np.mean(aquifer_pore_volumes)),
+            aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=mean_streamline_length,
             molecular_diffusivity=mean_molecular_diffusivity,
             longitudinal_dispersivity=mean_longitudinal_dispersivity,
             retardation_factor=retardation_factor,
+            direction="infiltration_to_extraction",
         )
         cin_diffused = convolve_diffusion(
             input_signal=cin, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
@@ -225,18 +222,19 @@ def infiltration_to_extraction(
         # bleed into valid neighbors during smoothing. Use normalized convolution:
         # smooth(signal * mask) / smooth(mask) to properly renormalize the kernel.
         total_coeff = np.sum(w_adv, axis=1)
-        invalid_mask = total_coeff < EPSILON_COEFF_SUM
+        invalid_mask = total_coeff < _EPSILON_COEFF_SUM
         cout_unsmoothed[invalid_mask] = 0.0
         validity = np.where(invalid_mask, 0.0, 1.0)
 
-        sigma_out = _compute_sigma_on_cout_grid(
-            flow_out=flow_out,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volume=float(np.mean(aquifer_pore_volumes)),
+        sigma_out = _compute_sigma(
+            flow=flow_out,
+            tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=mean_streamline_length,
             molecular_diffusivity=mean_molecular_diffusivity,
             longitudinal_dispersivity=mean_longitudinal_dispersivity,
             retardation_factor=retardation_factor,
+            direction="extraction_to_infiltration",
         )
         smoothed = convolve_diffusion(
             input_signal=cout_unsmoothed, sigma_array=sigma_out, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
@@ -245,11 +243,11 @@ def infiltration_to_extraction(
             input_signal=validity, sigma_array=sigma_out, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
         )
         with np.errstate(invalid="ignore"):
-            cout = np.where(smoothed_validity > EPSILON_COEFF_SUM, smoothed / smoothed_validity, np.nan)
+            cout = np.where(smoothed_validity > _EPSILON_COEFF_SUM, smoothed / smoothed_validity, np.nan)
 
     # Mark invalid rows as NaN (where no cin has broken through)
     total_coeff = np.sum(w_adv, axis=1)
-    cout[total_coeff < EPSILON_COEFF_SUM] = np.nan
+    cout[total_coeff < _EPSILON_COEFF_SUM] = np.nan
 
     return cout
 
@@ -388,14 +386,15 @@ def extraction_to_infiltration(
         # Original algorithm: G on input grid, W_forward = W_adv @ G
         _check_uniform_tedges(tedges=tedges, suppress=suppress_uniform_tedges_check)
 
-        sigma_array = compute_scaled_sigma_array(
+        sigma_array = _compute_sigma(
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volume=float(np.mean(aquifer_pore_volumes)),
+            aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=mean_streamline_length,
             molecular_diffusivity=mean_molecular_diffusivity,
             longitudinal_dispersivity=mean_longitudinal_dispersivity,
             retardation_factor=retardation_factor,
+            direction="infiltration_to_extraction",
         )
         g_matrix = _build_gaussian_matrix(
             n=n_cin, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
@@ -404,61 +403,28 @@ def extraction_to_infiltration(
         w_forward = (g_matrix.T @ w_adv.T).T
     else:
         # New algorithm: G on output grid, W_forward = G @ W_adv
-        sigma_out = _compute_sigma_on_cout_grid(
-            flow_out=flow_out,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volume=float(np.mean(aquifer_pore_volumes)),
+        sigma_out = _compute_sigma(
+            flow=flow_out,
+            tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=mean_streamline_length,
             molecular_diffusivity=mean_molecular_diffusivity,
             longitudinal_dispersivity=mean_longitudinal_dispersivity,
             retardation_factor=retardation_factor,
+            direction="extraction_to_infiltration",
         )
         g_matrix = _build_gaussian_matrix(
             n=n_cout, sigma_array=sigma_out, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
         )
         w_forward = g_matrix @ w_adv  # sparse @ dense
 
-    # Tikhonov inversion (same pattern as diffusion.py)
-    row_sums = w_forward.sum(axis=1)
-    col_active: npt.NDArray[np.bool_] = w_forward.sum(axis=0) > 0
-
-    if not np.any(col_active):
-        return np.full(n_cin, np.nan)
-
-    # Check for rank deficiency
-    n_active = int(col_active.sum())
-    rank = np.linalg.matrix_rank(w_forward[:, col_active])
-    if rank < n_active:
-        warnings.warn(
-            f"Forward matrix is rank-deficient (rank {rank} < {n_active} active "
-            f"columns). This occurs with constant flow when the residence time "
-            f"is an integer multiple of the time step width. The "
-            f"underdetermined modes will be pulled toward the regularization "
-            f"target instead of being determined by data. To achieve full rank, "
-            f"adjust aquifer_pore_volumes slightly (e.g., multiply by 1.001).",
-            stacklevel=2,
-        )
-
-    # Determine valid cout rows (row sum > epsilon)
-    valid_cout_bins = row_sums > EPSILON_COEFF_SUM
-
-    rhs_for_solve = np.where(valid_cout_bins, row_sums * cout, np.nan)
-    w_for_solve = w_forward.copy()
-    w_for_solve[~valid_cout_bins, :] = np.nan
-
-    x_target = compute_reverse_target(coeff_matrix=w_forward, rhs_vector=cout)
-
-    cin_solved = solve_tikhonov(
-        coefficient_matrix=w_for_solve,
-        rhs_vector=rhs_for_solve,
-        x_target=x_target,
+    return solve_inverse_transport(
+        w_forward=w_forward,
+        observed=cout,
+        n_output=n_cin,
         regularization_strength=regularization_strength,
+        warn_rank_deficient=True,
     )
-
-    out = np.full(n_cin, np.nan)
-    out[col_active] = cin_solved[col_active]  # type: ignore[index]
-
-    return out
 
 
 def gamma_infiltration_to_extraction(
@@ -771,183 +737,94 @@ def gamma_extraction_to_infiltration(
     )
 
 
-def compute_diffusive_spreading_length(
+def _compute_sigma(
     *,
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
-    aquifer_pore_volume: float,
-    streamline_length: float,
-    molecular_diffusivity: float,
-    longitudinal_dispersivity: float = 0.0,
-    retardation_factor: float = 1.0,
-) -> NDArray[np.floating]:
-    """Compute the physical diffusive spreading length for each time step.
-
-    The diffusive spreading length L_diff = sqrt(2 * D_L * rt) [m] represents the
-    physical distance over which concentrations spread due to diffusion during
-    the residence time rt.
-
-    Parameters
-    ----------
-    flow : array-like
-        Flow rate of water in the aquifer [m3/day].
-    tedges : pandas.DatetimeIndex
-        Time edges corresponding to the flow values.
-    aquifer_pore_volume : float
-        Pore volume of the aquifer [m3].
-    streamline_length : float
-        Length of the streamline through the aquifer [m].
-    molecular_diffusivity : float
-        Effective molecular diffusivity [m2/day].
-    longitudinal_dispersivity : float, optional
-        Longitudinal dispersivity [m]. Default is 0.0.
-    retardation_factor : float, optional
-        Retardation factor [dimensionless]. Default is 1.0.
-
-    Returns
-    -------
-    numpy.ndarray
-        Array of diffusive spreading lengths [m].
-    """
-    rt_array = residence_time(
-        flow=flow,
-        flow_tedges=tedges,
-        aquifer_pore_volumes=aquifer_pore_volume,
-        retardation_factor=retardation_factor,
-        direction="infiltration_to_extraction",
-    )[0]  # Extract first pore volume
-
-    # Interpolate NaN values using linear interpolation with nearest extrapolation
-    valid_mask = ~np.isnan(rt_array)
-    if np.any(valid_mask):
-        rt_array = np.interp(np.arange(len(rt_array)), np.where(valid_mask)[0], rt_array[valid_mask])
-
-    # Compute retarded velocity and longitudinal dispersion coefficient
-    v_s = streamline_length / rt_array
-    d_l = molecular_diffusivity + longitudinal_dispersivity * v_s
-
-    # Diffusive spreading length [m]: how far concentrations spread physically
-    return np.sqrt(2 * d_l * rt_array)
-
-
-def compute_scaled_sigma_array(
-    *,
-    flow: npt.ArrayLike,
-    tedges: pd.DatetimeIndex,
-    aquifer_pore_volume: float,
-    streamline_length: float,
-    molecular_diffusivity: float,
-    longitudinal_dispersivity: float = 0.0,
-    retardation_factor: float = 1.0,
-) -> NDArray[np.floating]:
-    """Compute scaled sigma values for diffusion based on flow and aquifer properties.
-
-    Sigma represents the dimensionless spreading parameter for Gaussian filtering,
-    expressed in units of array indices (time steps). It determines how many
-    neighboring time steps are blended together when applying diffusive smoothing.
-
-    The computation follows these steps:
-
-    1. Calculate residence time (rt) for water parcels traveling through the aquifer
-    2. Compute the retarded velocity: v_s = L / rt [m/day]
-    3. Compute the longitudinal dispersion coefficient: D_L = D_m + alpha_L * v_s [m2/day]
-    4. Compute the diffusive spreading length: L_diff = sqrt(2 * D_L * rt) [m]
-    5. Compute the advective step size: dx = (Q * dt / V_pore) * L [m]
-    6. Sigma = L_diff / dx converts the physical spreading into array index units.
-
-    Parameters
-    ----------
-    flow : array-like
-        Flow rate of water in the aquifer [m3/day].
-    tedges : pandas.DatetimeIndex
-        Time edges corresponding to the flow values.
-    aquifer_pore_volume : float
-        Pore volume of the aquifer [m3].
-    streamline_length : float
-        Length of the streamline through the aquifer [m].
-    molecular_diffusivity : float
-        Effective molecular diffusivity [m2/day].
-    longitudinal_dispersivity : float, optional
-        Longitudinal dispersivity [m]. Default is 0.0.
-    retardation_factor : float, optional
-        Retardation factor [dimensionless]. Default is 1.0.
-
-    Returns
-    -------
-    numpy.ndarray
-        Array of sigma values (in units of array indices), clipped to range [0, 100].
-
-    See Also
-    --------
-    gwtransport.diffusion.infiltration_to_extraction : For analytical solutions without this approximation
-    """
-    # Diffusive spreading length [m]
-    diffusive_spreading_length = compute_diffusive_spreading_length(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=aquifer_pore_volume,
-        streamline_length=streamline_length,
-        molecular_diffusivity=molecular_diffusivity,
-        longitudinal_dispersivity=longitudinal_dispersivity,
-        retardation_factor=retardation_factor,
-    )
-
-    # Advective step size [m]: how far the solute front moves during one time step
-    # Includes retardation because sigma measures spreading relative to solute velocity
-    timedelta_at_departure = np.diff(tedges) / pd.to_timedelta(1, unit="D")
-    volume_infiltrated_at_departure = flow * timedelta_at_departure
-    dx = volume_infiltrated_at_departure / (aquifer_pore_volume * retardation_factor) * streamline_length
-
-    # Sigma in array index units: number of time steps to blend
-    sigma_array = diffusive_spreading_length / dx
-    return np.clip(sigma_array, 0.0, 100.0)
-
-
-def _compute_sigma_on_cout_grid(
-    *,
-    flow_out: NDArray[np.floating],
-    cout_tedges: pd.DatetimeIndex,
-    aquifer_pore_volume: float,
+    aquifer_pore_volumes: npt.ArrayLike,
     streamline_length: float,
     molecular_diffusivity: float,
     longitudinal_dispersivity: float,
     retardation_factor: float,
+    direction: str,
 ) -> NDArray[np.floating]:
-    """Compute sigma on the output grid using ``flow_out`` and ``cout_tedges``.
+    """Compute sigma in array-index units with moment-based averaging.
 
-    Same physics as :func:`compute_scaled_sigma_array` but on the extraction grid.
+    The per-streamtube variance of the Gaussian kernel (in index units)
+    is sigma_idx^2(V) = L_diff^2(V) * V^2 * R^2 / (Q * dt * L)^2.
+    L_diff^2 = 2*D_m*tau + 2*alpha_L*L is linear in V (via tau ~ V),
+    so sigma_idx^2 is cubic + quadratic in V.  The averaged variance
+    over the pore volume distribution is (law of total variance):
+
+        E[sigma_idx^2] = R^2 / (Q*dt*L)^2
+            * (2*D_m*tau_bar/Vbar * E[V^3] + 2*alpha_L*L * E[V^2])
+
+    When a single pore volume is given this reduces to the classical formula.
+
+    See :ref:`concept-variance-components` for the derivation.
+
+    Parameters
+    ----------
+    flow : array-like
+        Flow rate [m3/day].
+    tedges : DatetimeIndex
+        Time edges for flow data.
+    aquifer_pore_volumes : array-like
+        Pore volumes [m3]. Moments E[V^2] and E[V^3] are computed
+        from this array.
+    streamline_length : float
+        Streamline length [m].
+    molecular_diffusivity : float
+        Effective molecular diffusivity [m2/day].
+    longitudinal_dispersivity : float
+        Longitudinal dispersivity [m].
+    retardation_factor : float
+        Retardation factor [-].
+    direction : {'infiltration_to_extraction', 'extraction_to_infiltration'}
+        Direction for residence time computation.
 
     Returns
     -------
     ndarray
-        Sigma values in array index units, clipped to [0, 100].
+        Sigma values in array-index units, clipped to [0, 100].
     """
-    # Compute residence time on the output grid (extraction direction)
+    flow = np.asarray(flow, dtype=float)
+    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
+
+    mean_pv = float(np.mean(aquifer_pore_volumes))
+    ev2 = float(np.mean(aquifer_pore_volumes**2))
+    ev3 = float(np.mean(aquifer_pore_volumes**3))
+
+    # Residence time at the mean pore volume [days]
     rt_array = residence_time(
-        flow=flow_out,
-        flow_tedges=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volume,
-        direction="extraction_to_infiltration",
+        flow=flow,
+        flow_tedges=tedges,
+        aquifer_pore_volumes=mean_pv,
         retardation_factor=retardation_factor,
+        direction=direction,
     )[0]
 
-    # Interpolate NaN values (same pattern as compute_diffusive_spreading_length)
+    # Interpolate NaN values
     valid_mask = ~np.isnan(rt_array)
     if np.any(valid_mask):
         rt_array = np.interp(np.arange(len(rt_array)), np.where(valid_mask)[0], rt_array[valid_mask])
 
-    # Retarded velocity and longitudinal dispersion coefficient
-    v_s = streamline_length / rt_array
-    d_l = molecular_diffusivity + longitudinal_dispersivity * v_s
+    # Two independent spatial variance components [m^2]:
+    #   molecular:    2 * D_m * tau          (linear in V via tau)
+    #   dispersive:   2 * alpha_L * L        (constant in V)
+    mol_var_x = 2.0 * molecular_diffusivity * rt_array
+    disp_var_x = 2.0 * longitudinal_dispersivity * streamline_length
 
-    # Diffusive spreading length [m]
-    l_diff = np.sqrt(2 * d_l * rt_array)
+    # Averaged variance in index units (see docstring):
+    var_numerator = mol_var_x / mean_pv * ev3 + disp_var_x * ev2
 
-    # Advective step size on output grid [m]: solute front advance per time step
-    dt_out = np.diff(cout_tedges) / pd.to_timedelta(1, unit="D")
-    dx_out = flow_out * dt_out / (aquifer_pore_volume * retardation_factor) * streamline_length
+    timedelta = np.diff(tedges) / pd.to_timedelta(1, unit="D")
+    dx_ref = flow * timedelta * streamline_length / retardation_factor
 
-    return np.clip(l_diff / dx_out, 0.0, 100.0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sigma_sq = np.where(dx_ref > 0.0, var_numerator / dx_ref**2, 0.0)
+
+    return np.clip(np.sqrt(np.maximum(sigma_sq, 0.0)), 0.0, 100.0)
 
 
 def _check_uniform_tedges(*, tedges: pd.DatetimeIndex, suppress: bool) -> None:
