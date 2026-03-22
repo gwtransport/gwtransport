@@ -1696,16 +1696,17 @@ class TestGammaExtractionToInfiltrationFast:
         assert_allclose(cin_recovered[valid], cin[valid], atol=1e-12)
 
     def test_roundtrip_with_retardation(self):
-        """Roundtrip with retardation factor recovers signal approximately.
+        """Roundtrip with retardation factor recovers signal.
 
-        Machine precision is NOT achievable here. Retardation R=2.7 multiplies
-        the effective pore volumes (V*R), which with 20 gamma bins creates a
-        forward matrix with rank deficiency ~4-10. These rank-deficient modes
-        are global (not just boundary): the Tikhonov regularization pulls them
-        toward the regularization target, introducing O(1e-4) errors throughout
-        the interior. This is a mathematical property of the combined advection
-        weight matrix when multiple shifted pore volumes produce near-degenerate
-        columns.
+        Machine precision is NOT achievable here. Retardation stretches the
+        effective residence times (V*R/flow), spreading the 20 gamma bins
+        over a wider range of shifts. Adjacent bins then produce nearly
+        collinear advection columns, making the forward matrix ill-conditioned
+        (smallest significant singular value ~3e-4 for R=2.7, giving ~3000x
+        noise amplification). The Tikhonov regularization adds bias
+        proportional to regularization_strength / s_i^2 for each mode,
+        which is O(1e-7) for the ill-conditioned modes with the default
+        regularization_strength=1e-10.
         """
         retardation = 2.7
 
@@ -1744,12 +1745,12 @@ class TestGammaExtractionToInfiltrationFast:
             **diffusion_kwargs,
         )
 
-        margin = 80
+        margin = 100
         valid = ~np.isnan(cin_recovered) & ~np.isnan(cout)
         valid[:margin] = False
         valid[-margin:] = False
         assert np.sum(valid) > 500
-        assert_allclose(cin_recovered[valid], cin[valid], atol=2e-3)
+        assert_allclose(cin_recovered[valid], cin[valid], atol=1e-3)
 
     def test_alpha_beta_matches_mean_std(self, gamma_setup):
         """Alpha/beta parameterization gives identical result to mean/std."""
