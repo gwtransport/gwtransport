@@ -17,6 +17,7 @@ Calibration refers to the estimation of the aquifer pore volume distribution. On
 - **Design treatment systems** with quantified pathogen removal efficiency, compatible with tracer dating decay rates
 - **Assess groundwater vulnerability** to contamination with a retardation that may depend on its concentration (non-linear sorption)
 - **Enable early warning systems** as digital twins for drinking water protection
+- **Backwards model** to estimate infiltration concentrations from extracted concentrations
 
 ## Two ways to obtain model parameters
 
@@ -52,9 +53,9 @@ cout = infiltration_to_extraction(
 # Note: Initial output values are NaN until the first cin value has fully passed the aquifer
 ```
 
-This efficiently computes `cout` with 1D transport for every aquifer pore volume and then averages over the aquifer pore volumes.
+This efficiently computes `cout` with 1D transport for every aquifer pore volume and then averages over the aquifer pore volumes. Diffusion is demonstrated in the [example notebook 5](https://gwtransport.github.io/gwtransport/examples/05_Diffusion_Implementation.html).
 
-### 2. Temperature Tracer Test
+### 2. Temperature/Electrical conductivity Tracer Test
 
 Approximate the aquifer pore volume distribution with a two-parameter gamma distribution. Estimate these parameters from measured temperatures of infiltrated and extracted water. Temperature acts as a natural tracer, revealing flow paths through heterogeneous aquifers via calibration. No groundwater model is required.
 
