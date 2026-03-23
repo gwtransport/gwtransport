@@ -759,7 +759,7 @@ def characteristic_velocity(c: float, flow: float, sorption: SorptionModel) -> f
         Dissolved concentration [mass/volume].
     flow : float
         Flow rate [volume/time].
-    sorption : FreundlichSorption or ConstantRetardation
+    sorption : SorptionModel
         Sorption model.
 
     Returns
@@ -796,7 +796,7 @@ def characteristic_position(
         Concentration carried by characteristic [mass/volume].
     flow : float
         Flow rate [volume/time].
-    sorption : FreundlichSorption or ConstantRetardation
+    sorption : SorptionModel
         Sorption model.
     t_start : float
         Time when characteristic starts [days].
@@ -869,7 +869,7 @@ def compute_first_front_arrival_time(
         Expected to be DatetimeIndex.
     aquifer_pore_volume : float
         Total pore volume [volume]. Must be positive.
-    sorption : FreundlichSorption or ConstantRetardation
+    sorption : SorptionModel
         Sorption model.
 
     Returns
@@ -987,7 +987,7 @@ def compute_first_fully_informed_bin_edge(
         Expected to be DatetimeIndex.
     aquifer_pore_volume : float
         Total pore volume [volume]. Must be positive.
-    sorption : FreundlichSorption or ConstantRetardation
+    sorption : SorptionModel
         Sorption model.
     output_tedges : pandas.DatetimeIndex
         Output time bin edges. These are the bins for which we want

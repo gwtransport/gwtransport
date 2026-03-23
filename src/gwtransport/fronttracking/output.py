@@ -78,7 +78,7 @@ def concentration_at_point(
         Time [days].
     waves : list of Wave
         All waves in the simulation (active and inactive).
-    sorption : FreundlichSorption or ConstantRetardation
+    sorption : SorptionModel
         Sorption model.
 
     Returns
@@ -221,7 +221,7 @@ def compute_breakthrough_curve(
         Outlet position [m³].
     waves : list of Wave
         All waves in the simulation.
-    sorption : FreundlichSorption or ConstantRetardation
+    sorption : SorptionModel
         Sorption model.
 
     Returns
@@ -276,7 +276,7 @@ def identify_outlet_segments(
         Outlet position [m³].
     waves : list of Wave
         All waves in the simulation.
-    sorption : FreundlichSorption or ConstantRetardation
+    sorption : SorptionModel
         Sorption model.
 
     Returns
@@ -674,7 +674,7 @@ def compute_bin_averaged_concentration_exact(
         Outlet position [m³].
     waves : list of Wave
         All waves from front tracking simulation.
-    sorption : FreundlichSorption or ConstantRetardation
+    sorption : SorptionModel
         Sorption model.
 
     Returns
@@ -814,7 +814,7 @@ def compute_domain_mass(
         Outlet position (domain extent) [m³].
     waves : list of Wave
         All waves in the simulation.
-    sorption : FreundlichSorption or ConstantRetardation
+    sorption : SorptionModel
         Sorption model.
 
     Returns
@@ -1277,7 +1277,7 @@ def compute_cumulative_outlet_mass(
         Outlet position [m³].
     waves : list of Wave
         All waves in the simulation.
-    sorption : FreundlichSorption or ConstantRetardation
+    sorption : SorptionModel
         Sorption model.
     flow : array-like
         Flow rate time series [m³/day].
@@ -1359,7 +1359,7 @@ def compute_cumulative_outlet_mass(
             if seg["type"] == "constant":
                 integral_c_dt += seg["concentration"] * seg_dt
             elif seg["type"] == "rarefaction":
-                if isinstance(sorption, FreundlichSorption):
+                if isinstance(sorption, NonlinearSorption):
                     raref = seg["wave"]
                     integral_c_dt += integrate_rarefaction_exact(raref, v_outlet, seg_t_start, seg_t_end, sorption)
                 else:
@@ -1398,7 +1398,7 @@ def integrate_rarefaction_total_mass(
         Outlet position [m³].
     t_start : float
         Time when rarefaction head reaches outlet [days].
-    sorption : FreundlichSorption or ConstantRetardation
+    sorption : SorptionModel
         Sorption model.
     flow : float
         Flow rate [m³/day] (assumed constant).
@@ -1483,7 +1483,7 @@ def compute_total_outlet_mass(
         Outlet position [m³].
     waves : list of Wave
         All waves in the simulation.
-    sorption : FreundlichSorption or ConstantRetardation
+    sorption : SorptionModel
         Sorption model.
     flow : array-like
         Flow rate time series [m³/day].
@@ -1570,7 +1570,7 @@ def compute_total_outlet_mass(
             if seg["type"] == "constant":
                 integral_c_dt += seg["concentration"] * seg_dt
             elif seg["type"] == "rarefaction":
-                if isinstance(sorption, FreundlichSorption):
+                if isinstance(sorption, NonlinearSorption):
                     raref = seg["wave"]
                     integral_c_dt += integrate_rarefaction_exact(raref, v_outlet, seg_t_start, seg_t_end, sorption)
                 else:
