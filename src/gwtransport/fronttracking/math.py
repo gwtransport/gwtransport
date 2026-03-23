@@ -44,17 +44,17 @@ class NonlinearSorption(ABC):
     @abstractmethod
     def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """Compute retardation factor R(C)."""
-        ...
+        raise NotImplementedError
 
     @abstractmethod
     def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """Compute total concentration (dissolved + sorbed per unit pore volume)."""
-        ...
+        raise NotImplementedError
 
     @abstractmethod
     def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """Invert retardation factor to obtain concentration."""
-        ...
+        raise NotImplementedError
 
     def shock_velocity(self, c_left: float, c_right: float, flow: float) -> float:
         """
