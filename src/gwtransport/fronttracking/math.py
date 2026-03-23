@@ -2,7 +2,7 @@
 Mathematical Foundation for Front Tracking with Nonlinear Sorption.
 
 This module provides exact analytical computations for:
-- Freundlich and constant retardation models
+- Freundlich, Langmuir, and constant retardation models
 - Shock velocities via Rankine-Hugoniot condition
 - Characteristic velocities and positions
 - First arrival time calculations
@@ -14,6 +14,7 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import numpy as np
@@ -26,8 +27,123 @@ EPSILON_EXPONENT = 1e-10  # Tolerance for checking if exponent ≈ 0
 EPSILON_DENOMINATOR = 1e-15  # Tolerance for near-zero denominators in shock velocity
 
 
+class NonlinearSorption(ABC):
+    """Abstract base for concentration-dependent sorption models.
+
+    Subclasses must implement `retardation`, `total_concentration`, and
+    `concentration_from_retardation`. Shock velocity and entropy checking
+    are provided generically via the Rankine-Hugoniot and Lax conditions.
+
+    See Also
+    --------
+    FreundlichSorption : Freundlich isotherm implementation.
+    LangmuirSorption : Langmuir isotherm implementation.
+    ConstantRetardation : Linear (constant R) retardation model.
+    """
+
+    @abstractmethod
+    def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
+        """Compute retardation factor R(C)."""
+        ...
+
+    @abstractmethod
+    def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
+        """Compute total concentration (dissolved + sorbed per unit pore volume)."""
+        ...
+
+    @abstractmethod
+    def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
+        """Invert retardation factor to obtain concentration."""
+        ...
+
+    def shock_velocity(self, c_left: float, c_right: float, flow: float) -> float:
+        """
+        Compute shock velocity via Rankine-Hugoniot condition.
+
+        The Rankine-Hugoniot condition ensures mass conservation across the shock:
+            s_shock = [flux(C_R) - flux(C_L)] / [C_total(C_R) - C_total(C_L)]
+
+        where flux(C) = flow * C (only dissolved species are transported).
+
+        Parameters
+        ----------
+        c_left : float
+            Concentration upstream (behind) shock [mass/volume].
+        c_right : float
+            Concentration downstream (ahead of) shock [mass/volume].
+        flow : float
+            Flow rate [volume/time]. Must be positive.
+
+        Returns
+        -------
+        s_shock : float
+            Shock velocity [volume/time].
+
+        Notes
+        -----
+        The Rankine-Hugoniot condition is derived from integrating the conservation
+        law across the shock discontinuity. It ensures that the total mass flux
+        (advective transport) is conserved.
+        """
+        # Flux = flow * C (only dissolved species flow)
+        flux_left = flow * c_left
+        flux_right = flow * c_right
+
+        # Total concentration (dissolved + sorbed)
+        c_total_left = self.total_concentration(c_left)
+        c_total_right = self.total_concentration(c_right)
+
+        # Rankine-Hugoniot condition
+        denom = c_total_right - c_total_left
+
+        if abs(denom) < EPSILON_DENOMINATOR:
+            avg_retardation = 0.5 * (self.retardation(c_left) + self.retardation(c_right))
+            return float(flow / avg_retardation)
+
+        return float((flux_right - flux_left) / denom)
+
+    def check_entropy_condition(self, c_left: float, c_right: float, shock_vel: float, flow: float) -> bool:
+        """
+        Verify Lax entropy condition for physical admissibility of shock.
+
+        The Lax entropy condition ensures that characteristics flow INTO the shock
+        from both sides, which is required for physical shocks::
+
+            λ(C_L) > s_shock > λ(C_R)
+
+        where λ(C) = flow / R(C) is the characteristic velocity.
+
+        Parameters
+        ----------
+        c_left : float
+            Concentration upstream of shock [mass/volume].
+        c_right : float
+            Concentration downstream of shock [mass/volume].
+        shock_vel : float
+            Shock velocity [volume/time].
+        flow : float
+            Flow rate [volume/time].
+
+        Returns
+        -------
+        satisfies : bool
+            True if shock satisfies entropy condition (is physical).
+        """
+        # Characteristic velocities
+        lambda_left = flow / self.retardation(c_left)
+        lambda_right = flow / self.retardation(c_right)
+
+        if not np.isfinite(lambda_left) or not np.isfinite(lambda_right) or not np.isfinite(shock_vel):
+            return False
+
+        # Lax condition: λ(C_L) > s_shock > λ(C_R)
+        tolerance = 1e-14 * max(abs(lambda_left), abs(lambda_right), abs(shock_vel))
+
+        return bool((lambda_left > shock_vel - tolerance) and (shock_vel > lambda_right - tolerance))
+
+
 @dataclass
-class FreundlichSorption:
+class FreundlichSorption(NonlinearSorption):
     """
     Freundlich sorption isotherm with exact analytical methods.
 
@@ -280,144 +396,6 @@ class FreundlichSorption:
 
         return result if is_array else float(result)
 
-    def shock_velocity(self, c_left: float, c_right: float, flow: float) -> float:
-        """
-        Compute shock velocity via Rankine-Hugoniot condition.
-
-        The Rankine-Hugoniot condition ensures mass conservation across the shock:
-            s_shock = [flux(C_R) - flux(C_L)] / [C_total(C_R) - C_total(C_L)]
-
-        where flux(C) = flow * C (only dissolved species are transported).
-
-        Parameters
-        ----------
-        c_left : float
-            Concentration upstream (behind) shock [mass/volume].
-        c_right : float
-            Concentration downstream (ahead of) shock [mass/volume].
-        flow : float
-            Flow rate [volume/time]. Must be positive.
-
-        Returns
-        -------
-        s_shock : float
-            Shock velocity [volume/time].
-
-        Notes
-        -----
-        The Rankine-Hugoniot condition is derived from integrating the conservation
-        law across the shock discontinuity. It ensures that the total mass flux
-        (advective transport) is conserved.
-
-        For physical shocks with n > 1 (higher C travels faster):
-        - c_left > c_right (concentration decreases across shock)
-        - The shock velocity is between the characteristic velocities
-
-        Examples
-        --------
-        >>> sorption = FreundlichSorption(
-        ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
-        ... )
-        >>> v_shock = sorption.shock_velocity(c_left=10.0, c_right=2.0, flow=100.0)
-        >>> v_shock > 0
-        True
-        """
-        # Flux = flow * C (only dissolved species flow)
-        flux_left = flow * c_left
-        flux_right = flow * c_right
-
-        # Total concentration (dissolved + sorbed)
-        c_total_left = self.total_concentration(c_left)
-        c_total_right = self.total_concentration(c_right)
-
-        # Rankine-Hugoniot condition
-        # s_shock = Δflux / ΔC_total
-        denom = c_total_right - c_total_left
-
-        # Guard against degenerate "shock" states where the total
-        # concentration jump tends to zero. In the analytic limit
-        # ΔC_total → 0, the Rankine-Hugoniot speed approaches the
-        # characteristic velocity, so we fall back to that value
-        # instead of dividing by an extremely small number.
-        if abs(denom) < EPSILON_DENOMINATOR:
-            avg_retardation = 0.5 * (self.retardation(c_left) + self.retardation(c_right))
-            return float(flow / avg_retardation)
-
-        return float((flux_right - flux_left) / denom)
-
-    def check_entropy_condition(self, c_left: float, c_right: float, shock_vel: float, flow: float) -> bool:
-        """
-        Verify Lax entropy condition for physical admissibility of shock.
-
-        The Lax entropy condition ensures that characteristics flow INTO the shock
-        from both sides, which is required for physical shocks::
-
-            λ(C_L) > s_shock > λ(C_R)
-
-        where λ(C) = flow / R(C) is the characteristic velocity.
-
-        Parameters
-        ----------
-        c_left : float
-            Concentration upstream of shock [mass/volume].
-        c_right : float
-            Concentration downstream of shock [mass/volume].
-        shock_vel : float
-            Shock velocity [volume/time].
-        flow : float
-            Flow rate [volume/time].
-
-        Returns
-        -------
-        satisfies : bool
-            True if shock satisfies entropy condition (is physical).
-
-        Notes
-        -----
-        Shocks that violate the entropy condition are unphysical and should be
-        replaced by rarefaction waves. The entropy condition prevents non-physical
-        expansion shocks.
-
-        For n > 1 (higher C travels faster):
-        - Physical shocks have c_left > c_right
-        - Characteristic from left is faster: λ(c_left) > λ(c_right)
-        - Shock velocity is between them
-
-        For n < 1 (lower C travels faster):
-        - Physical shocks have c_left < c_right
-        - Characteristic from left is slower: λ(c_left) < λ(c_right)
-        - Shock velocity is still between them
-
-        Examples
-        --------
-        >>> sorption = FreundlichSorption(
-        ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
-        ... )
-        >>> # Physical shock (compression for n>1)
-        >>> v_shock = sorption.shock_velocity(10.0, 2.0, 100.0)
-        >>> sorption.check_entropy_condition(10.0, 2.0, v_shock, 100.0)
-        True
-        >>> # Unphysical shock (expansion for n>1)
-        >>> v_shock_bad = sorption.shock_velocity(2.0, 10.0, 100.0)
-        >>> sorption.check_entropy_condition(2.0, 10.0, v_shock_bad, 100.0)
-        False
-        """
-        # Characteristic velocities
-        lambda_left = flow / self.retardation(c_left)
-        lambda_right = flow / self.retardation(c_right)
-
-        # If any of the velocities are non-finite (can occur for
-        # test-generated edge states), treat the entropy condition as
-        # violated rather than propagating RuntimeWarnings.
-        if not np.isfinite(lambda_left) or not np.isfinite(lambda_right) or not np.isfinite(shock_vel):
-            return False
-
-        # Lax condition: λ(C_L) > s_shock > λ(C_R)
-        # Use small tolerance for floating-point comparison
-        tolerance = 1e-14 * max(abs(lambda_left), abs(lambda_right), abs(shock_vel))
-
-        return bool((lambda_left > shock_vel - tolerance) and (shock_vel > lambda_right - tolerance))
-
 
 @dataclass
 class ConstantRetardation:
@@ -573,7 +551,202 @@ class ConstantRetardation:
         return True
 
 
-def characteristic_velocity(c: float, flow: float, sorption: FreundlichSorption | ConstantRetardation) -> float:
+@dataclass
+class LangmuirSorption(NonlinearSorption):
+    """
+    Langmuir sorption isotherm with exact analytical methods.
+
+    The Langmuir isotherm is: s(C) = s_max * C / (K_L + C)
+
+    where:
+    - s is sorbed concentration [mass/mass of solid]
+    - C is dissolved concentration [mass/volume of water]
+    - s_max is maximum sorption capacity [mass/mass of solid]
+    - K_L is half-saturation constant [mass/volume]
+
+    Retardation always decreases with C (favorable isotherm), and R(0) is
+    finite — unlike Freundlich with n > 1, no minimum concentration threshold
+    is needed.
+
+    Parameters
+    ----------
+    s_max : float
+        Maximum sorption capacity [mass/mass of solid]. Must be positive.
+    k_l : float
+        Half-saturation constant [mass/volume]. Concentration at which
+        s = s_max / 2. Must be positive.
+    bulk_density : float
+        Bulk density of porous medium [kg/m³]. Must be positive.
+    porosity : float
+        Porosity [-]. Must be in (0, 1).
+
+    See Also
+    --------
+    FreundlichSorption : Freundlich isotherm (unbounded sorption).
+    ConstantRetardation : Linear (constant R) retardation model.
+    :ref:`concept-nonlinear-sorption` : Background on nonlinear sorption.
+
+    Notes
+    -----
+    The retardation factor is defined as:
+        R(C) = 1 + (rho_b * s_max * K_L) / (n_por * (K_L + C)^2)
+
+    Key properties:
+
+    - R(0) = 1 + rho_b * s_max / (n_por * K_L) -- finite for all parameters
+    - R -> 1 as C -> infinity (all sorption sites saturated)
+    - R always decreases with increasing C (higher C travels faster)
+    - Shocks form on concentration increases, rarefaction fans on decreases
+
+    Examples
+    --------
+    >>> sorption = LangmuirSorption(
+    ...     s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3
+    ... )
+    >>> r = sorption.retardation(5.0)
+    >>> c_back = sorption.concentration_from_retardation(r)
+    >>> bool(np.isclose(c_back, 5.0))
+    True
+    """
+
+    s_max: float
+    """Maximum sorption capacity [mass/mass of solid]."""
+    k_l: float
+    """Half-saturation constant [mass/volume]."""
+    bulk_density: float
+    """Bulk density of porous medium [kg/m³]."""
+    porosity: float
+    """Porosity [-]."""
+
+    def __post_init__(self):
+        """Validate parameters after initialization.
+
+        Raises
+        ------
+        ValueError
+            If any parameter is outside its valid range: ``s_max`` <= 0,
+            ``k_l`` <= 0, ``bulk_density`` <= 0, or ``porosity``
+            outside (0, 1).
+        """
+        if self.s_max <= 0:
+            msg = f"s_max must be positive, got {self.s_max}"
+            raise ValueError(msg)
+        if self.k_l <= 0:
+            msg = f"k_l must be positive, got {self.k_l}"
+            raise ValueError(msg)
+        if self.bulk_density <= 0:
+            msg = f"bulk_density must be positive, got {self.bulk_density}"
+            raise ValueError(msg)
+        if not 0 < self.porosity < 1:
+            msg = f"porosity must be in (0, 1), got {self.porosity}"
+            raise ValueError(msg)
+
+        # Precompute constant: A = rho_b * s_max * K_L / n_por
+        self._A: float = self.bulk_density * self.s_max * self.k_l / self.porosity
+
+    def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
+        """
+        Compute retardation factor R(C).
+
+        For Langmuir sorption:
+            R(C) = 1 + A / (K_L + C)²
+
+        where A = rho_b * s_max * K_L / n_por.
+
+        Parameters
+        ----------
+        c : float or array-like
+            Dissolved concentration [mass/volume]. Non-negative.
+
+        Returns
+        -------
+        r : float or numpy.ndarray
+            Retardation factor [-]. Always >= 1.0.
+
+        Notes
+        -----
+        - R(0) = 1 + rho_b * s_max / (n_por * K_L) — always finite
+        - R decreases with increasing C (higher C travels faster)
+        - R → 1 as C → ∞ (all sorption sites saturated)
+        """
+        is_array = isinstance(c, np.ndarray)
+        c_arr = np.asarray(c)
+        c_eff = np.maximum(c_arr, 0.0)
+        result = 1.0 + self._A / (self.k_l + c_eff) ** 2
+        return result if is_array else float(result)
+
+    def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
+        """
+        Compute total concentration (dissolved + sorbed per unit pore volume).
+
+        For Langmuir sorption:
+            C_total = C + (rho_b / n_por) * s_max * C / (K_L + C)
+
+        Parameters
+        ----------
+        c : float or array-like
+            Dissolved concentration [mass/volume]. Non-negative.
+
+        Returns
+        -------
+        c_total : float or numpy.ndarray
+            Total concentration [mass/volume]. Always >= c.
+        """
+        is_array = isinstance(c, np.ndarray)
+        c_arr = np.asarray(c)
+        c_eff = np.maximum(c_arr, 0.0)
+        sorbed = (self.bulk_density / self.porosity) * self.s_max * c_eff / (self.k_l + c_eff)
+        result = c_arr + sorbed
+        return result if is_array else float(result)
+
+    def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
+        """
+        Invert retardation factor to obtain concentration analytically.
+
+        Given R, solves R = 1 + A / (K_L + C)² for C:
+            C = sqrt(A / (R - 1)) - K_L
+
+        Parameters
+        ----------
+        r : float or array-like
+            Retardation factor [-]. Must be >= 1.0.
+
+        Returns
+        -------
+        c : float or numpy.ndarray
+            Dissolved concentration [mass/volume]. Non-negative.
+
+        Notes
+        -----
+        For R <= 1, returns 0.0 (unphysical region).
+        For R >= R(0) = 1 + A/K_L², returns 0.0 (at or below zero concentration).
+
+        Examples
+        --------
+        >>> sorption = LangmuirSorption(
+        ...     s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3
+        ... )
+        >>> r = sorption.retardation(5.0)
+        >>> c = sorption.concentration_from_retardation(r)
+        >>> bool(np.isclose(c, 5.0, rtol=1e-14))
+        True
+        """
+        is_array = isinstance(r, np.ndarray)
+        r_arr = np.asarray(r)
+
+        r_minus_1 = r_arr - 1.0
+        # For R <= 1 or very large R, return 0
+        c = np.where(r_minus_1 > 0, np.sqrt(self._A / r_minus_1) - self.k_l, 0.0)
+        result = np.maximum(c, 0.0)
+
+        return result if is_array else float(result)
+
+
+SorptionModel = NonlinearSorption | ConstantRetardation
+"""Type alias for all sorption models accepted by the front-tracking solver."""
+
+
+def characteristic_velocity(c: float, flow: float, sorption: SorptionModel) -> float:
     """
     Compute characteristic velocity for given concentration.
 
@@ -607,7 +780,7 @@ def characteristic_velocity(c: float, flow: float, sorption: FreundlichSorption 
 
 
 def characteristic_position(
-    c: float, flow: float, sorption: FreundlichSorption | ConstantRetardation, t_start: float, v_start: float, t: float
+    c: float, flow: float, sorption: SorptionModel, t_start: float, v_start: float, t: float
 ) -> float | None:
     """
     Compute exact position of characteristic at time t.
@@ -660,7 +833,7 @@ def compute_first_front_arrival_time(
     flow: npt.NDArray[np.floating],
     tedges: pd.DatetimeIndex,
     aquifer_pore_volume: float,
-    sorption: FreundlichSorption | ConstantRetardation,
+    sorption: SorptionModel,
 ) -> float:
     """
     Compute exact time when first wave reaches outlet (v_max).
@@ -778,7 +951,7 @@ def compute_first_fully_informed_bin_edge(
     flow: npt.NDArray[np.floating],
     tedges: pd.DatetimeIndex,
     aquifer_pore_volume: float,
-    sorption: FreundlichSorption | ConstantRetardation,
+    sorption: SorptionModel,
     output_tedges: pd.DatetimeIndex,
 ) -> float:
     """

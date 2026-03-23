@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
+from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption, LangmuirSorption
 from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import RarefactionWave
 
@@ -685,3 +685,91 @@ class TestRuntimeMassBalanceVerification:
         # At t=0, no mass has entered, so all masses should be zero
         # verify_physics should handle this gracefully
         tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-12)
+
+
+class TestLangmuirSorption:
+    """Test FrontTracker with Langmuir sorption."""
+
+    @pytest.fixture
+    def langmuir_sorption(self):
+        """Standard Langmuir sorption for testing."""
+        return LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+
+    def test_step_input_completes(self, simple_step_input, langmuir_sorption):
+        """Test that step input simulation with Langmuir completes."""
+        cin, flow, tedges = simple_step_input
+
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=500.0,
+            sorption=langmuir_sorption,
+        )
+
+        tracker.run(max_iterations=100, verbose=False)
+
+        assert len(tracker.state.events) > 0
+        assert tracker.state.t_current >= 0.0
+
+    def test_pulse_input_creates_rarefaction(self, pulse_input, langmuir_sorption):
+        """Test that pulse input creates rarefaction waves with Langmuir."""
+        cin, flow, tedges = pulse_input
+
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=500.0,
+            sorption=langmuir_sorption,
+        )
+
+        tracker.run(max_iterations=200, verbose=False)
+
+        # Langmuir is favorable → concentration decrease (10→0) creates rarefaction
+        rarefactions = [w for w in tracker.state.waves if isinstance(w, RarefactionWave)]
+        assert len(rarefactions) > 0
+
+    def test_mass_balance_step_input(self, langmuir_sorption):
+        """Test mass balance with Langmuir step input.
+
+        Uses a small domain so the shock exits within the input period.
+        """
+        tedges = pd.to_datetime(["2020-01-01", "2020-01-11", "2020-04-11"])
+        cin = np.array([0.0, 10.0])
+        flow = np.array([100.0, 100.0])
+
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=100.0,  # Small domain so shock exits in time
+            sorption=langmuir_sorption,
+        )
+
+        tracker.run(max_iterations=100, verbose=False)
+
+        tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-6)
+
+    def test_finite_rarefaction_tail_time(self, pulse_input, langmuir_sorption):
+        """Test that Langmuir rarefaction tails arrive in finite time.
+
+        Unlike Freundlich n>1 where R(0)→∞ makes tail velocity 0,
+        Langmuir has finite R(0) so tails arrive at finite time.
+        """
+        cin, flow, tedges = pulse_input
+
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=500.0,
+            sorption=langmuir_sorption,
+        )
+
+        tracker.run(max_iterations=200, verbose=False)
+
+        for wave in tracker.state.waves:
+            if isinstance(wave, RarefactionWave) and wave.is_active:
+                tail_vel = wave.tail_velocity()
+                assert tail_vel > 0, "Langmuir rarefaction tail velocity must be positive"

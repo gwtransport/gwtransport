@@ -14,6 +14,7 @@ import pytest
 from gwtransport.fronttracking.math import (
     ConstantRetardation,
     FreundlichSorption,
+    LangmuirSorption,
     characteristic_position,
     characteristic_velocity,
     compute_first_front_arrival_time,
@@ -211,6 +212,183 @@ class TestFreundlichSorption:
         satisfies = sorption.check_entropy_condition(c_left, c_right, v_shock, flow)
 
         assert satisfies, "Physical shock for n<1 should satisfy entropy"
+
+
+class TestLangmuirSorption:
+    """Test LangmuirSorption class."""
+
+    def test_initialization_valid(self):
+        """Test valid initialization."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        assert sorption.s_max == 0.1
+        assert sorption.k_l == 5.0
+        assert sorption.bulk_density == 1500.0
+        assert sorption.porosity == 0.3
+
+    def test_initialization_invalid_s_max(self):
+        """Test that non-positive s_max raises error."""
+        with pytest.raises(ValueError, match="s_max must be positive"):
+            LangmuirSorption(s_max=-0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+
+    def test_initialization_invalid_k_l(self):
+        """Test that non-positive k_l raises error."""
+        with pytest.raises(ValueError, match="k_l must be positive"):
+            LangmuirSorption(s_max=0.1, k_l=0.0, bulk_density=1500.0, porosity=0.3)
+
+    def test_initialization_invalid_bulk_density(self):
+        """Test that non-positive bulk_density raises error."""
+        with pytest.raises(ValueError, match="bulk_density must be positive"):
+            LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=-1500.0, porosity=0.3)
+
+    def test_initialization_invalid_porosity(self):
+        """Test that invalid porosity raises error."""
+        with pytest.raises(ValueError, match="porosity must be in"):
+            LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=1.5)
+
+    def test_retardation_zero_concentration_finite(self):
+        """Test R(0) is finite — key difference from Freundlich n>1."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        r0 = sorption.retardation(0.0)
+        r0_expected = 1.0 + sorption.bulk_density * sorption.s_max / (sorption.porosity * sorption.k_l)
+        assert np.isclose(r0, r0_expected, rtol=1e-14)
+        assert np.isfinite(r0)
+
+    def test_retardation_positive_concentration(self):
+        """Test R(C) > 1 for C > 0."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        assert sorption.retardation(5.0) > 1.0
+
+    def test_retardation_decreases_with_concentration(self):
+        """Test R decreases with C (always favorable)."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        r1 = sorption.retardation(1.0)
+        r2 = sorption.retardation(10.0)
+        assert r1 > r2, "R should decrease with increasing C for Langmuir"
+
+    def test_retardation_approaches_one_at_high_concentration(self):
+        """Test R → 1 as C → ∞ (all sites saturated)."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        r_high = sorption.retardation(1e8)
+        assert np.isclose(r_high, 1.0, atol=1e-8)
+
+    def test_retardation_array_input(self):
+        """Test retardation with array input."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        c = np.array([0.0, 1.0, 5.0, 10.0, 100.0])
+        r = sorption.retardation(c)
+        assert isinstance(r, np.ndarray)
+        assert len(r) == 5
+        assert np.all(r >= 1.0)
+        # Verify monotonically decreasing
+        assert np.all(np.diff(r) < 0)
+
+    def test_total_concentration_zero(self):
+        """Test C_total(0) = 0."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        assert sorption.total_concentration(0.0) == 0.0
+
+    def test_total_concentration_positive(self):
+        """Test C_total > C for C > 0."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        c = 5.0
+        c_total = sorption.total_concentration(c)
+        assert c_total > c
+
+    def test_total_concentration_saturation_limit(self):
+        """Test C_total → C + rho_b*s_max/n_por as C → ∞."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        c_large = 1e10
+        c_total = sorption.total_concentration(c_large)
+        sorbed_max = sorption.bulk_density * sorption.s_max / sorption.porosity
+        assert np.isclose(c_total, c_large + sorbed_max, rtol=1e-8)
+
+    def test_retardation_roundtrip_machine_precision(self):
+        """Test C → R → C roundtrip with machine precision."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+
+        test_concentrations = [0.01, 0.1, 1.0, 5.0, 10.0, 100.0, 1000.0]
+
+        for c in test_concentrations:
+            r = sorption.retardation(c)
+            c_back = sorption.concentration_from_retardation(r)
+            assert np.isclose(c, c_back, rtol=1e-14), f"Roundtrip failed for C={c}: {c} → {r} → {c_back}"
+
+    def test_concentration_from_retardation_r_equals_one(self):
+        """Test that R=1 gives C=0 (sites fully saturated)."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        c = sorption.concentration_from_retardation(1.0)
+        assert c == 0.0
+
+    def test_concentration_from_retardation_r_at_maximum(self):
+        """Test that R=R(0) gives C=0."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        r_max = sorption.retardation(0.0)
+        c = sorption.concentration_from_retardation(r_max)
+        assert np.isclose(c, 0.0, atol=1e-14)
+
+    def test_shock_velocity_rankine_hugoniot(self):
+        """Test shock velocity satisfies Rankine-Hugoniot exactly."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        c_left = 10.0
+        c_right = 2.0
+        flow = 100.0
+
+        v_shock = sorption.shock_velocity(c_left, c_right, flow)
+
+        # Verify Rankine-Hugoniot
+        flux_left = flow * c_left
+        flux_right = flow * c_right
+        c_total_left = sorption.total_concentration(c_left)
+        c_total_right = sorption.total_concentration(c_right)
+
+        v_shock_expected = (flux_right - flux_left) / (c_total_right - c_total_left)
+
+        assert np.isclose(v_shock, v_shock_expected, rtol=1e-14)
+
+    def test_shock_velocity_equal_concentrations(self):
+        """Test shock velocity when c_left = c_right (degenerate case)."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        c = 5.0
+        flow = 100.0
+
+        v_shock = sorption.shock_velocity(c, c, flow)
+        v_char = flow / sorption.retardation(c)
+        assert np.isclose(v_shock, v_char, rtol=1e-14)
+
+    def test_entropy_condition_physical_shock(self):
+        """Test entropy for physical compression shock (c_left > c_right)."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        c_left = 10.0
+        c_right = 2.0
+        flow = 100.0
+
+        v_shock = sorption.shock_velocity(c_left, c_right, flow)
+        assert sorption.check_entropy_condition(c_left, c_right, v_shock, flow)
+
+    def test_entropy_condition_unphysical_shock(self):
+        """Test entropy for unphysical expansion shock (c_left < c_right)."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        c_left = 2.0
+        c_right = 10.0
+        flow = 100.0
+
+        v_shock = sorption.shock_velocity(c_left, c_right, flow)
+        assert not sorption.check_entropy_condition(c_left, c_right, v_shock, flow)
+
+    def test_first_arrival_langmuir_sorption(self):
+        """Test first arrival time with Langmuir sorption."""
+        cin = np.array([0.0] + [10.0] * 19)
+        flow = np.array([100.0] * 20)
+        tedges = pd.date_range("2020-01-01", periods=21, freq="10D")
+        aquifer_pore_volume = 500.0
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+
+        t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
+
+        r = sorption.retardation(10.0)
+        t_expected = 10.0 + 500.0 * r / 100.0
+
+        assert np.isclose(t_first, t_expected, rtol=1e-14)
 
 
 class TestConstantRetardation:

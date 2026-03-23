@@ -40,7 +40,13 @@ from scipy.special import beta as beta_func
 from scipy.special import betainc
 
 from gwtransport.fronttracking.events import find_outlet_crossing
-from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
+from gwtransport.fronttracking.math import (
+    ConstantRetardation,
+    FreundlichSorption,
+    LangmuirSorption,
+    NonlinearSorption,
+    SorptionModel,
+)
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave, Wave
 
 # Numerical tolerance constants
@@ -55,7 +61,7 @@ def concentration_at_point(
     v: float,
     t: float,
     waves: Sequence[Wave],
-    sorption: FreundlichSorption | ConstantRetardation,  # noqa: ARG001
+    sorption: SorptionModel,  # noqa: ARG001
 ) -> float:
     """
     Compute concentration at point (v, t) with exact analytical value.
@@ -200,7 +206,7 @@ def compute_breakthrough_curve(
     t_array: npt.NDArray[np.floating],
     v_outlet: float,
     waves: Sequence[Wave],
-    sorption: FreundlichSorption | ConstantRetardation,
+    sorption: SorptionModel,
 ) -> npt.NDArray[np.floating]:
     """
     Compute concentration at outlet over time array.
@@ -252,7 +258,7 @@ def identify_outlet_segments(
     t_end: float,
     v_outlet: float,
     waves: Sequence[Wave],
-    sorption: FreundlichSorption | ConstantRetardation,
+    sorption: SorptionModel,
 ) -> list[dict]:
     """
     Identify which waves control outlet concentration in time interval [t_start, t_end].
@@ -496,31 +502,27 @@ def identify_outlet_segments(
 
 
 def integrate_rarefaction_exact(
-    raref: RarefactionWave, v_outlet: float, t_start: float, t_end: float, sorption: FreundlichSorption
+    raref: RarefactionWave, v_outlet: float, t_start: float, t_end: float, sorption: SorptionModel
 ) -> float:
     """
     Exact analytical integral of rarefaction concentration over time at fixed position.
 
-    For Freundlich sorption, the concentration within a rarefaction fan varies as:
-        R(C) = flow*(t - t_origin)/(v_outlet - v_origin)
-
-    This function computes the exact integral:
-        ∫_{t_start}^{t_end} C(t) dt
-
-    where C(t) is obtained by inverting the retardation relation.
+    Computes integral of C(t) dt from t_start to t_end where C(t) is the
+    self-similar rarefaction solution at the outlet. Dispatches to
+    isotherm-specific closed-form formulas.
 
     Parameters
     ----------
     raref : RarefactionWave
         Rarefaction wave controlling the outlet.
     v_outlet : float
-        Outlet position [m³].
+        Outlet position [m3].
     t_start : float
         Integration start time [days]. Can be -np.inf.
     t_end : float
         Integration end time [days]. Can be np.inf.
-    sorption : FreundlichSorption
-        Freundlich sorption model.
+    sorption : SorptionModel
+        Sorption model (FreundlichSorption or LangmuirSorption).
 
     Returns
     -------
@@ -529,128 +531,123 @@ def integrate_rarefaction_exact(
 
     Raises
     ------
+    TypeError
+        If sorption model does not support exact rarefaction integration.
+    """
+    if isinstance(sorption, FreundlichSorption):
+        return _integrate_rarefaction_exact_freundlich(raref, v_outlet, t_start, t_end, sorption)
+    if isinstance(sorption, LangmuirSorption):
+        return _integrate_rarefaction_exact_langmuir(raref, v_outlet, t_start, t_end, sorption)
+    msg = f"Exact rarefaction integration not supported for {type(sorption).__name__}"
+    raise TypeError(msg)
+
+
+def _integrate_rarefaction_exact_freundlich(
+    raref: RarefactionWave, v_outlet: float, t_start: float, t_end: float, sorption: FreundlichSorption
+) -> float:
+    """Exact temporal integral for Freundlich rarefaction.
+
+    See `integrate_rarefaction_exact` for parameters.
+
+    Returns
+    -------
+    float
+        Exact integral value [concentration * time].
+
+    Raises
+    ------
     ValueError
-        If the sorption exponent ``n`` equals 1 (linear sorption), which requires
-        ``ConstantRetardation`` instead, or if the integral diverges at ``t_end=+∞``
-        when the antiderivative exponent is positive (n < 1 case with unbounded fan).
+        If sorption is linear (n = 1) or integral diverges.
 
     Notes
     -----
-    **Derivation**:
+    For Freundlich: C(t) = [(kappa*t + mu - 1)/alpha]^(1/beta) where
+    kappa = flow/(v_outlet - v_origin), mu = -flow*t_origin/(v_outlet - v_origin),
+    alpha = rho_b*k_f/(n_por*n), beta = 1/n - 1.
 
-    For Freundlich: R(C) = 1 + alpha*C^beta where:
-        alpha = rho_b*k_f/(n_por*n)
-        beta = 1/n - 1
-
-    At outlet: R = kappa*t + mu where:
-        kappa = flow/(v_outlet - v_origin)
-        mu = -flow*t_origin/(v_outlet - v_origin)
-
-    Inverting: C = [(R-1)/alpha]^(1/beta) = [(kappa*t + mu - 1)/alpha]^(1/beta)
-
-    Integral:
-        ∫ C dt = (1/alpha^(1/beta)) * ∫ (kappa*t + mu - 1)^(1/beta) dt
-               = (1/alpha^(1/beta)) * (1/kappa) * [(kappa*t + mu - 1)^(1/beta + 1) / (1/beta + 1)]
-
-    evaluated from t_start to t_end.
-
-    **Special Cases**:
-    - If (kappa*t + mu - 1) <= 0, concentration is 0 (unphysical region)
-    - For beta = 0 (n = 1), use ConstantRetardation instead
-    - For t_end = +∞ with exponent < 0 (n>1), integral converges to 0
-    - For t_start = -∞, antiderivative evaluates to 0
-
-    Examples
-    --------
-    ::
-
-        sorption = FreundlichSorption(
-            k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
-        )
-        raref = RarefactionWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            c_head=10.0,
-            c_tail=2.0,
-            sorption=sorption,
-        )
-        integral = integrate_rarefaction_exact(
-            raref, v_outlet=500.0, t_start=5.0, t_end=15.0, sorption=sorption
-        )
-        integral > 0
-        # Integration to infinity
-        integral_inf = integrate_rarefaction_exact(
-            raref, v_outlet=500.0, t_start=5.0, t_end=np.inf, sorption=sorption
-        )
-        integral_inf > integral
+    Antiderivative: F(t) = coeff * (kappa*t + mu - 1)^(1/beta + 1)
     """
-    # Extract parameters
     t_origin = raref.t_start
     v_origin = raref.v_start
     flow = raref.flow
 
-    # Coefficients in R = kappa*t + μ
     kappa = flow / (v_outlet - v_origin)
     mu = -flow * t_origin / (v_outlet - v_origin)
 
-    # Freundlich parameters: R = 1 + alpha*C^beta
     alpha = sorption.bulk_density * sorption.k_f / (sorption.porosity * sorption.n)
     beta = 1.0 / sorption.n - 1.0
 
-    # For integration, we need exponent = 1/beta + 1
     if abs(beta) < EPSILON_BETA:
-        # Linear case - shouldn't happen with Freundlich
-        # Fall back to numerical integration or raise error
         msg = "integrate_rarefaction_exact requires nonlinear sorption (n != 1)"
         raise ValueError(msg)
 
     exponent = 1.0 / beta + 1.0
-
-    # Coefficient for antiderivative
-    # F(t) = (1/(alpha^(1/beta)*kappa*exponent)) * (kappa*t + mu - 1)^exponent
     coeff = 1.0 / (alpha ** (1.0 / beta) * kappa * exponent)
 
     def antiderivative(t: float) -> float:
-        """
-        Evaluate antiderivative at time t.
-
-        Returns
-        -------
-        value : float
-            Antiderivative value at ``t``.
-
-        Raises
-        ------
-        ValueError
-            If ``t=+∞`` and the antiderivative exponent is positive, causing
-            the integral to diverge.
-        """
-        # Handle infinite bounds
         if np.isinf(t):
             if t > 0:
-                # t = +∞
                 if exponent < 0:
-                    # For n > 1 (higher C travels faster, beta < 0, exponent < 0):
-                    # As t → +∞, base → +∞, so base^exponent → 0
                     return 0.0
-                # For n < 1 (lower C travels faster, beta > 0, exponent > 0):
-                # As t → +∞, base → +∞, so base^exponent → +∞
-                # This should not happen for physical rarefactions to C=0
                 msg = f"Integral diverges at t=+∞ with exponent={exponent} > 0"
                 raise ValueError(msg)
-            # t = -∞: always returns 0
             return 0.0
 
         base = kappa * t + mu - 1.0
-
-        # Check if we're in physical region (R > 1)
         if base <= 0:
             return 0.0
-
         return coeff * base**exponent
 
-    # Evaluate definite integral
+    return antiderivative(t_end) - antiderivative(t_start)
+
+
+def _integrate_rarefaction_exact_langmuir(
+    raref: RarefactionWave, v_outlet: float, t_start: float, t_end: float, sorption: LangmuirSorption
+) -> float:
+    """Exact temporal integral for Langmuir rarefaction.
+
+    See `integrate_rarefaction_exact` for parameters.
+
+    Returns
+    -------
+    float
+        Exact integral value [concentration * time].
+
+    Notes
+    -----
+    For Langmuir: C(t) = sqrt(A / B(t)) - K_L where
+    B(t) = kappa*t + mu - 1,
+    kappa = flow/(v_outlet - v_origin), mu = -flow*t_origin/(v_outlet - v_origin),
+    A = rho_b * s_max * K_L / n_por.
+
+    Antiderivative: F(t) = (2*sqrt(A)/kappa) * sqrt(B(t)) - K_L * t
+    """
+    t_origin = raref.t_start
+    v_origin = raref.v_start
+    flow = raref.flow
+
+    kappa = flow / (v_outlet - v_origin)
+    mu = -flow * t_origin / (v_outlet - v_origin)
+    a_coeff = sorption._A  # noqa: SLF001
+    k_l = sorption.k_l
+
+    coeff_sqrt = 2.0 * np.sqrt(a_coeff) / kappa
+
+    def antiderivative(t: float) -> float:
+        if np.isinf(t):
+            if t > 0:
+                # For Langmuir, sqrt(B) → ∞ as t → ∞: integral diverges.
+                # Physical Langmuir rarefactions always have finite tail velocity,
+                # so t_end should always be finite.
+                msg = "Langmuir rarefaction integral diverges at t=+∞"
+                raise ValueError(msg)
+            return 0.0
+
+        base = kappa * t + mu - 1.0
+        if base <= 0:
+            return 0.0
+        return coeff_sqrt * np.sqrt(base) - k_l * t
+
     return antiderivative(t_end) - antiderivative(t_start)
 
 
@@ -658,7 +655,7 @@ def compute_bin_averaged_concentration_exact(
     t_edges: npt.NDArray[np.floating],
     v_outlet: float,
     waves: Sequence[Wave],
-    sorption: FreundlichSorption | ConstantRetardation,
+    sorption: SorptionModel,
 ) -> npt.NDArray[np.floating]:
     """
     Compute bin-averaged concentration using EXACT analytical integration.
@@ -775,7 +772,7 @@ def compute_bin_averaged_concentration_exact(
 
             elif seg["type"] == "rarefaction":
                 # C(t) given by self-similar solution - use exact analytical integral
-                if isinstance(sorption, FreundlichSorption):
+                if isinstance(sorption, NonlinearSorption):
                     raref = seg["wave"]
                     integral = integrate_rarefaction_exact(raref, v_outlet, seg_t_start, seg_t_end, sorption)
                 else:
@@ -797,7 +794,7 @@ def compute_domain_mass(
     t: float,
     v_outlet: float,
     waves: Sequence[Wave],
-    sorption: FreundlichSorption | ConstantRetardation,
+    sorption: SorptionModel,
 ) -> float:
     """
     Compute total mass in domain [0, v_outlet] at time t using exact analytical integration.
@@ -952,80 +949,50 @@ def _integrate_rarefaction_spatial_exact(
     v_start: float,
     v_end: float,
     t: float,
-    sorption: FreundlichSorption | ConstantRetardation,
+    sorption: SorptionModel,
 ) -> float:
     """
-    EXACT analytical spatial integral of rarefaction total concentration at fixed time.
+    Exact analytical spatial integral of rarefaction total concentration at fixed time.
 
-    Computes ∫_{v_start}^{v_end} C_total(v) dv analytically using closed-form
-    antiderivatives for specific Freundlich n values. This maintains machine precision
-    for the mass balance diagnostic.
-
-    For rarefaction at time t: R(C) = kappa/(v - v₀) where kappa = flow*(t - t₀)
-
-    For Freundlich: R = 1 + alpha*C^beta where alpha = rho_b*k_f/(n_por*n), beta = 1/n - 1
-    Total concentration: C_total = C + (rho_b/n_por)*k_f*C^(1/n)
-
-    **Exact formulas implemented**:
-    - n = 2 (beta = -0.5): Closed-form using polynomial expansion (optimized path)
-    - n = 1: No rarefactions (constant retardation)
-    - All other n > 0: Unified formula using generalized incomplete beta function via mpmath
+    Computes integral of C_total(v) dv from v_start to v_end analytically using
+    closed-form antiderivatives. This maintains machine precision for the mass
+    balance diagnostic.
 
     Parameters
     ----------
     raref : RarefactionWave
-    v_start, v_end : float
-        Integration bounds [m³]
+        Rarefaction wave.
+    v_start : float
+        Integration start position [m3].
+    v_end : float
+        Integration end position [m3].
     t : float
-        Time [days]
-    sorption : FreundlichSorption or ConstantRetardation
+        Time [days].
+    sorption : SorptionModel
+        Sorption model.
 
     Returns
     -------
     mass : float
-        Exact mass in segment to machine precision
+        Exact mass in segment to machine precision.
+
+    Raises
+    ------
+    TypeError
+        If sorption model does not support exact spatial integration.
 
     Notes
     -----
-    **Derivation for n=2** (beta = -0.5):
+    For rarefaction at time t: R(C) = kappa/(v - v0) where kappa = flow*(t - t0).
 
-    C(v) = [(kappa/(v-v₀) - 1) / alpha]^(-2) = [alpha*(v-v₀)]² / (kappa - (v-v₀))²
+    For Freundlich: R = 1 + alpha*C^beta where alpha = rho_b*k_f/(n_por*n),
+    beta = 1/n - 1.
+    Total concentration: C_total = C + (rho_b/n_por)*k_f*C^(1/n).
 
-    Let u = v - v₀, then ∫ C du requires integrating u²/(kappa-u)².
-    Using substitution w = kappa - u:
+    Both integrals reduce to power-law forms u^p (kappa-u)^q du which can be
+    expressed using the generalized incomplete beta function via mpmath.betainc().
 
-    ∫ u²/(kappa-u)² du = alpha²[kappa²/(kappa-u) + 2kappa*ln|kappa-u| - (kappa-u)]
-
-    For C_total, we integrate both C and (rho_b/n_por)*k_f*C^0.5 terms.
-
-    **Unified Formula for All n > 0**:
-
-    The spatial integral has the structure:
-
-        ∫ C_total(u) du = ∫ C(u) du + ∫ (rho_b/n_por)*k_f*C(u)^(1/n) du
-
-    where C(u) = [(kappa-u)/(alpha*u)]^(1/beta) with beta = 1/n - 1.
-
-    Both integrals reduce to power-law forms:
-
-        ∫ u^p (kappa-u)^q du
-
-    which can be expressed using the generalized incomplete beta function:
-
-        ∫_{u₁}^{u₂} u^p (kappa-u)^q du = kappa^(p+q+1) B(u₁/kappa, u₂/kappa; p+1, q+1)
-
-    where B(x₁, x₂; a, b) = ∫_{x₁}^{x₂} t^(a-1) (1-t)^(b-1) dt.
-
-    For many n values, the parameters a and b can be negative or zero, which
-    requires analytic continuation beyond the standard incomplete beta function.
-    The mpmath library provides this through mpmath.betainc(), which handles
-    all parameter values and achieves machine precision (~1e-15 relative error).
-
-    **Mathematical Properties**:
-    - Continuous for all n > 0 (no discontinuities)
-    - Achieves machine precision (~1e-14 to 1e-15 relative error)
-    - No numerical quadrature (uses special function evaluation)
-    - Single unified formula (no conditional logic based on n)
+    For Langmuir, the integral uses only sqrt operations.
     """
     if isinstance(sorption, ConstantRetardation):
         # Constant retardation: no rarefactions
@@ -1034,7 +1001,6 @@ def _integrate_rarefaction_spatial_exact(
         c_total = sorption.total_concentration(c)
         return c_total * (v_end - v_start)
 
-    # Extract parameters
     t_origin = raref.t_start
     v_origin = raref.v_start
     flow = raref.flow
@@ -1042,78 +1008,104 @@ def _integrate_rarefaction_spatial_exact(
     if t <= t_origin:
         return 0.0
 
-    kappa = flow * (t - t_origin)  # kappa
-    alpha = sorption.bulk_density * sorption.k_f / (sorption.porosity * sorption.n)  # alpha
-    rho_b = sorption.bulk_density
-    n_por = sorption.porosity
-    k_f = sorption.k_f
-    n = sorption.n
-
-    # Transform to u coordinates
+    kappa = flow * (t - t_origin)
     u_start = v_start - v_origin
     u_end = v_end - v_origin
 
     if u_start <= 0 or u_end <= 0:
         return 0.0
 
-    # Unified formula for all n > 0 using generalized incomplete beta function
-    beta = 1 / n - 1  # beta parameter
+    if isinstance(sorption, LangmuirSorption):
+        return _integrate_rarefaction_spatial_langmuir(sorption, kappa, u_start, u_end)
 
-    # Transform to [0,1] domain: t = u/kappa (use regular floats)
-    t_start = u_start / kappa
-    t_end = u_end / kappa
+    if isinstance(sorption, FreundlichSorption):
+        return _integrate_rarefaction_spatial_freundlich(sorption, kappa, u_start, u_end)
 
-    # Integral 1: Dissolved concentration
-    # ∫ C(u) du = ∫ [(kappa-u)/(alpha*u)]^(1/beta) du
-    #           = (1/alpha)^(1/beta) ∫ u^(-1/beta) (kappa-u)^(1/beta) du
-    #           = (1/alpha)^(1/beta) * kappa * B(t_start, t_end; 1-1/beta, 1+1/beta)
-    #
-    # where B(x1, x2; a, b) = ∫_{x1}^{x2} t^(a-1) (1-t)^(b-1) dt
+    msg = f"Exact spatial rarefaction integration not supported for {type(sorption).__name__}"
+    raise TypeError(msg)
 
-    # Beta function parameters (use regular floats)
+
+def _integrate_rarefaction_spatial_freundlich(
+    sorption: FreundlichSorption, kappa: float, u_start: float, u_end: float
+) -> float:
+    """Exact spatial integral for Freundlich rarefaction using beta functions.
+
+    Returns
+    -------
+    float
+        Exact mass in segment.
+    """
+    alpha = sorption.bulk_density * sorption.k_f / (sorption.porosity * sorption.n)
+    rho_b = sorption.bulk_density
+    n_por = sorption.porosity
+    k_f = sorption.k_f
+    n = sorption.n
+
+    beta = 1 / n - 1
+    t_start_norm = u_start / kappa
+    t_end_norm = u_end / kappa
+
+    # Dissolved: ∫ C(u) du via incomplete beta function
     a_diss = 1 - 1 / beta
     b_diss = 1 + 1 / beta
 
-    # Use scipy.special.betainc when parameters are positive (faster),
-    # fall back to mpmath for negative parameters (requires analytic continuation)
     if a_diss > 0 and b_diss > 0:
-        # scipy.special.betainc is regularized, so multiply by beta function
-        beta_diss = betainc(a_diss, b_diss, t_end) - betainc(a_diss, b_diss, t_start)
+        beta_diss = betainc(a_diss, b_diss, t_end_norm) - betainc(a_diss, b_diss, t_start_norm)
         beta_diss *= beta_func(a_diss, b_diss)
     else:
-        # Use mpmath for negative parameters (analytic continuation)
-        beta_diss = float(mp.betainc(a_diss, b_diss, t_start, t_end, regularized=False))
+        beta_diss = float(mp.betainc(a_diss, b_diss, t_start_norm, t_end_norm, regularized=False))
 
-    # Compute coefficient using regular float arithmetic
     coeff_diss = (1 / alpha) ** (1 / beta)
     mass_dissolved = coeff_diss * kappa * beta_diss
 
-    # Integral 2: Sorbed concentration
-    # ∫ (rho_b/n_por)*k_f*C^(1/n) du
-    #
-    # where C^(1/n) = [(kappa-u)/(alpha*u)]^(1/(1-n))
-    #
-    # This gives: ∫ u^(-1/(1-n)) (kappa-u)^(1/(1-n)) du
-    #
-    # Using same transformation: = kappa * B(t_start, t_end; 1-1/(1-n), 1+1/(1-n))
-
-    # Beta function parameters (use regular floats)
+    # Sorbed: ∫ (rho_b/n_por)*k_f*C^(1/n) du
     exponent_sorb = 1 / (1 - n)
     a_sorb = 1 - exponent_sorb
     b_sorb = 1 + exponent_sorb
 
-    # Use scipy when possible, mpmath for negative parameters
     if a_sorb > 0 and b_sorb > 0:
-        beta_sorb = betainc(a_sorb, b_sorb, t_end) - betainc(a_sorb, b_sorb, t_start)
+        beta_sorb = betainc(a_sorb, b_sorb, t_end_norm) - betainc(a_sorb, b_sorb, t_start_norm)
         beta_sorb *= beta_func(a_sorb, b_sorb)
     else:
-        beta_sorb = float(mp.betainc(a_sorb, b_sorb, t_start, t_end, regularized=False))
+        beta_sorb = float(mp.betainc(a_sorb, b_sorb, t_start_norm, t_end_norm, regularized=False))
 
-    # Compute coefficient using regular float arithmetic
     coeff_sorb = (rho_b / n_por) * k_f / (alpha**exponent_sorb)
     mass_sorbed = coeff_sorb * kappa * beta_sorb
 
     return mass_dissolved + mass_sorbed
+
+
+def _integrate_rarefaction_spatial_langmuir(
+    sorption: LangmuirSorption, kappa: float, u_start: float, u_end: float
+) -> float:
+    """Exact spatial integral of C_total(v) for Langmuir rarefaction.
+
+    Returns
+    -------
+    float
+        Exact mass in segment.
+
+    Notes
+    -----
+    With u = v - v_origin, kappa = flow*(t - t_origin):
+        C(u) = sqrt(a_coeff*u/(kappa-u)) - K_L
+        C_total = C + (rho_b/n_por) * s_max * C/(K_L + C)
+
+    Since K_L + C = sqrt(a_coeff*u/(kappa-u)):
+        C/(K_L+C) = 1 - K_L*sqrt((kappa-u)/(a_coeff*u))
+
+    The integral simplifies to:
+        integral C_total du = -2*sqrt(a_coeff)*[sqrt(u*(kappa-u))]_start^end
+                              + (rho_b*s_max/n_por - K_L)*(u_end - u_start)
+    """
+    a_coeff = sorption._A  # noqa: SLF001
+    k_l = sorption.k_l
+    sorbed_max = sorption.bulk_density * sorption.s_max / sorption.porosity
+
+    term_sqrt_end = np.sqrt(u_end * (kappa - u_end))
+    term_sqrt_start = np.sqrt(u_start * (kappa - u_start))
+
+    return -2.0 * np.sqrt(a_coeff) * (term_sqrt_end - term_sqrt_start) + (sorbed_max - k_l) * (u_end - u_start)
 
 
 def compute_cumulative_inlet_mass(
@@ -1264,7 +1256,7 @@ def compute_cumulative_outlet_mass(
     t: float,
     v_outlet: float,
     waves: Sequence[Wave],
-    sorption: FreundlichSorption | ConstantRetardation,
+    sorption: SorptionModel,
     flow: npt.ArrayLike,
     tedges_days: npt.ArrayLike,
 ) -> float:
@@ -1385,7 +1377,7 @@ def integrate_rarefaction_total_mass(
     raref: RarefactionWave,
     v_outlet: float,
     t_start: float,
-    sorption: FreundlichSorption | ConstantRetardation,
+    sorption: SorptionModel,
     flow: float,
 ) -> float:
     """
@@ -1474,7 +1466,7 @@ def integrate_rarefaction_total_mass(
 def compute_total_outlet_mass(
     v_outlet: float,
     waves: Sequence[Wave],
-    sorption: FreundlichSorption | ConstantRetardation,
+    sorption: SorptionModel,
     flow: npt.ArrayLike,
     tedges_days: npt.ArrayLike,
 ) -> tuple[float, float]:

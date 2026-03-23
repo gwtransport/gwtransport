@@ -12,7 +12,7 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
+from gwtransport.fronttracking.math import SorptionModel
 
 # Numerical tolerance constants
 EPSILON_POSITION = 1e-15  # Tolerance for checking if two positions are equal
@@ -144,7 +144,7 @@ class CharacteristicWave(Wave):
 
     concentration: float
     """Constant concentration carried [mass/volume]."""
-    sorption: FreundlichSorption | ConstantRetardation
+    sorption: SorptionModel
     """Sorption model determining velocity."""
 
     def velocity(self) -> float:
@@ -290,7 +290,7 @@ class ShockWave(Wave):
     """Concentration upstream (behind) shock [mass/volume]."""
     c_right: float
     """Concentration downstream (ahead of) shock [mass/volume]."""
-    sorption: FreundlichSorption | ConstantRetardation
+    sorption: SorptionModel
     """Sorption model."""
     velocity: float | None = None
     """Shock velocity computed from Rankine-Hugoniot [m³/day]."""
@@ -473,7 +473,7 @@ class RarefactionWave(Wave):
     """Concentration at leading edge (faster) [mass/volume]."""
     c_tail: float
     """Concentration at trailing edge (slower) [mass/volume]."""
-    sorption: FreundlichSorption | ConstantRetardation
+    sorption: SorptionModel
     """Sorption model (must be concentration-dependent)."""
 
     def __post_init__(self):
