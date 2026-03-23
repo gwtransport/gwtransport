@@ -628,7 +628,7 @@ def _integrate_rarefaction_exact_langmuir(
 
     kappa = flow / (v_outlet - v_origin)
     mu = -flow * t_origin / (v_outlet - v_origin)
-    a_coeff = sorption._A  # noqa: SLF001
+    a_coeff = sorption.a_coeff
     k_l = sorption.k_l
 
     coeff_sqrt = 2.0 * np.sqrt(a_coeff) / kappa
@@ -1098,7 +1098,7 @@ def _integrate_rarefaction_spatial_langmuir(
         integral C_total du = -2*sqrt(a_coeff)*[sqrt(u*(kappa-u))]_start^end
                               + (rho_b*s_max/n_por - K_L)*(u_end - u_start)
     """
-    a_coeff = sorption._A  # noqa: SLF001
+    a_coeff = sorption.a_coeff
     k_l = sorption.k_l
     sorbed_max = sorption.bulk_density * sorption.s_max / sorption.porosity
 

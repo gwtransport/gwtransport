@@ -641,8 +641,8 @@ class LangmuirSorption(NonlinearSorption):
             msg = f"porosity must be in (0, 1), got {self.porosity}"
             raise ValueError(msg)
 
-        # Precompute constant: A = rho_b * s_max * K_L / n_por
-        self._A: float = self.bulk_density * self.s_max * self.k_l / self.porosity
+        self.a_coeff: float = self.bulk_density * self.s_max * self.k_l / self.porosity
+        """Lumped retardation constant rho_b * s_max * K_L / n_por."""
 
     def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """
@@ -672,7 +672,7 @@ class LangmuirSorption(NonlinearSorption):
         is_array = isinstance(c, np.ndarray)
         c_arr = np.asarray(c)
         c_eff = np.maximum(c_arr, 0.0)
-        result = 1.0 + self._A / (self.k_l + c_eff) ** 2
+        result = 1.0 + self.a_coeff / (self.k_l + c_eff) ** 2
         return result if is_array else float(result)
 
     def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
@@ -736,7 +736,7 @@ class LangmuirSorption(NonlinearSorption):
 
         r_minus_1 = r_arr - 1.0
         # For R <= 1 or very large R, return 0
-        c = np.where(r_minus_1 > 0, np.sqrt(self._A / r_minus_1) - self.k_l, 0.0)
+        c = np.where(r_minus_1 > 0, np.sqrt(self.a_coeff / r_minus_1) - self.k_l, 0.0)
         result = np.maximum(c, 0.0)
 
         return result if is_array else float(result)
