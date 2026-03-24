@@ -304,7 +304,7 @@ Model Parameterization Assumptions
 
 **Does NOT apply to:**
 
-- :py:func:`~gwtransport.advection.infiltration_to_extraction_front_tracking` — supports Freundlich (non-linear) sorption
+- :py:func:`~gwtransport.advection.infiltration_to_extraction_front_tracking` — supports Freundlich and Langmuir (non-linear) sorption
 - :py:func:`~gwtransport.residence_time.freundlich_retardation` — computes concentration-dependent R
 
 **What this means:** All concentrations travel at the same retarded velocity. The sorption isotherm is linear. See :ref:`concept-retardation-factor` for background on retardation.
@@ -322,11 +322,11 @@ Model Parameterization Assumptions
 - High concentrations approaching sorption capacity
 - Concentration-dependent retardation
 
-**Testable:** Yes - compare predictions with constant R vs. concentration-dependent R (Freundlich). The package supports non-linear sorption via :py:func:`~gwtransport.advection.infiltration_to_extraction_front_tracking`.
+**Testable:** Yes - compare predictions with constant R vs. concentration-dependent R (Freundlich or Langmuir). The package supports non-linear sorption via :py:func:`~gwtransport.advection.infiltration_to_extraction_front_tracking`.
 
 .. note::
 
-   ``gwtransport`` provides exact solutions for Freundlich sorption using front-tracking. If non-linear sorption is suspected, use the front-tracking functions instead of assuming linear retardation.
+   ``gwtransport`` provides exact solutions for Freundlich and Langmuir sorption using front-tracking. If non-linear sorption is suspected, use the front-tracking functions instead of assuming linear retardation.
 
 .. _assumption-thermal-retardation:
 
