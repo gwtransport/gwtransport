@@ -281,20 +281,33 @@ For assumptions about the gamma distribution, see :ref:`assumption-gamma-distrib
 Non-Linear Sorption: Exact Solutions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-For contaminants with concentration-dependent retardation (Freundlich isotherm), ``gwtransport`` provides exact analytical solutions using front-tracking:
+For contaminants with concentration-dependent retardation, ``gwtransport`` provides exact analytical solutions using front-tracking. Two non-linear sorption isotherms are supported:
+
+**Freundlich isotherm** — unbounded sorption:
 
 .. math::
 
-   R(C) = 1 + \frac{\rho_b}{\theta n} k_f C^{(1/n)-1}
+   s(C) = k_f C^{1/n}, \qquad R(C) = 1 + \frac{\rho_b k_f}{\theta n} C^{(1/n)-1}
 
-**Wave physics:**
+- For n > 1 (favorable): Higher C travels faster → sharp rise, gradual decline
+- For n < 1 (unfavorable): Higher C travels slower → gradual rise, sharp decline
+
+**Langmuir isotherm** — bounded sorption with maximum capacity:
+
+.. math::
+
+   s(C) = s_{\max} \frac{C}{K_L + C}, \qquad R(C) = 1 + \frac{\rho_b \, s_{\max} \, K_L}{\theta \, (K_L + C)^2}
+
+- Always favorable: R decreases with increasing C (higher C travels faster)
+- R(0) is finite (no minimum-concentration threshold needed)
+- R → 1 as C → ∞ (all sorption sites saturated)
+
+**Wave physics (both isotherms):**
 
 - **Shocks** form when faster concentrations overtake slower ones
 - **Rarefaction waves** form when concentrations spread apart
-- For n > 1 (favorable sorption): Sharp rise, gradual decline
-- For n < 1 (unfavorable sorption): Gradual rise, sharp decline
 
-The solver tracks these waves analytically, eliminating numerical artifacts. Use :py:func:`gwtransport.advection.infiltration_to_extraction_front_tracking` for non-linear sorption.
+The solver tracks these waves analytically, eliminating numerical artifacts. Use :py:func:`gwtransport.advection.infiltration_to_extraction_front_tracking` for non-linear sorption (pass Freundlich or Langmuir parameters).
 
 See :doc:`/examples/10_Advection_with_non_linear_sorption` for a complete example.
 
