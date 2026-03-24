@@ -16,7 +16,7 @@ Handlers modify wave states in-place by deactivating parent waves and
 creating new child waves.
 """
 
-from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption, characteristic_velocity
+from gwtransport.fronttracking.math import FreundlichSorption, SorptionModel, characteristic_velocity
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 
 # Numerical tolerance constants
@@ -1034,7 +1034,7 @@ def create_inlet_waves_at_time(
     c_new: float,
     t: float,
     flow: float,
-    sorption: FreundlichSorption | ConstantRetardation,
+    sorption: SorptionModel,
     v_inlet: float = 0.0,
 ) -> list:
     """

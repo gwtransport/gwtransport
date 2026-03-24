@@ -17,7 +17,7 @@ from gwtransport.advection import (
     infiltration_to_extraction_front_tracking,
     infiltration_to_extraction_front_tracking_detailed,
 )
-from gwtransport.fronttracking.math import FreundlichSorption, compute_first_front_arrival_time
+from gwtransport.fronttracking.math import FreundlichSorption, LangmuirSorption, compute_first_front_arrival_time
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.utils import compute_time_edges
 
@@ -151,7 +151,7 @@ class TestFrontTrackingAPI:
             number_of_bins=len(cout_dates),
         )
 
-        with pytest.raises(ValueError, match="Must provide either retardation_factor"):
+        with pytest.raises(ValueError, match="Must provide one of"):
             infiltration_to_extraction_front_tracking(
                 cin=cin,
                 flow=flow,
@@ -351,3 +351,107 @@ class TestFrontTrackingAPI:
         assert not np.any(np.isnan(cout))
         assert np.all(cout >= 0.0)
         assert np.all(cout <= np.max(cin) * (1.0 + 1e-14))
+
+    def test_api_langmuir_sorption(self):
+        """API works with Langmuir sorption parameters."""
+        dates = pd.date_range(start="2020-01-01", periods=5, freq="D")
+        tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+        cin = np.array([0.0, 0.0, 10.0, 10.0, 10.0])
+        flow = np.full(len(dates), 100.0)
+
+        cout_dates = pd.date_range(start=dates[0], periods=20, freq="D")
+        cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+        cout = infiltration_to_extraction_front_tracking(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            langmuir_s_max=1.0,
+            langmuir_k_l=5.0,
+            bulk_density=1500.0,
+            porosity=0.3,
+        )
+
+        assert cout.shape == (len(cout_tedges) - 1,)
+        assert not np.any(np.isnan(cout))
+        assert np.all(cout >= 0.0)
+        assert np.all(cout <= np.max(cin) * (1.0 + 1e-14))
+
+    def test_api_langmuir_detailed_returns_langmuir_sorption(self):
+        """Detailed API returns LangmuirSorption in structure."""
+        dates = pd.date_range(start="2020-01-01", periods=5, freq="D")
+        tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+        cin = np.array([0.0, 0.0, 10.0, 10.0, 10.0])
+        flow = np.full(len(dates), 100.0)
+
+        cout_dates = pd.date_range(start=dates[0], periods=20, freq="D")
+        cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+        cout, structures = infiltration_to_extraction_front_tracking_detailed(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            langmuir_s_max=1.0,
+            langmuir_k_l=5.0,
+            bulk_density=1500.0,
+            porosity=0.3,
+        )
+
+        assert len(structures) == 1
+        assert isinstance(structures[0]["sorption"], LangmuirSorption)
+        assert not np.any(np.isnan(cout))
+
+    def test_api_conflicting_sorption_models_raises(self):
+        """Error when both Freundlich and Langmuir parameters are provided."""
+        dates = pd.date_range(start="2020-01-01", periods=5, freq="D")
+        tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+        cin = np.array([0.0, 0.0, 10.0, 10.0, 10.0])
+        flow = np.full(len(dates), 100.0)
+
+        cout_dates = pd.date_range(start=dates[0], periods=10, freq="D")
+        cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+        with pytest.raises(ValueError, match="Only one sorption model"):
+            infiltration_to_extraction_front_tracking(
+                cin=cin,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=cout_tedges,
+                aquifer_pore_volumes=np.array([500.0]),
+                freundlich_k=0.01,
+                freundlich_n=2.0,
+                langmuir_s_max=1.0,
+                langmuir_k_l=5.0,
+                bulk_density=1500.0,
+                porosity=0.3,
+            )
+
+    def test_api_langmuir_partial_params_raises(self):
+        """Error when only some Langmuir parameters are provided."""
+        dates = pd.date_range(start="2020-01-01", periods=5, freq="D")
+        tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+        cin = np.array([0.0, 0.0, 10.0, 10.0, 10.0])
+        flow = np.full(len(dates), 100.0)
+
+        cout_dates = pd.date_range(start=dates[0], periods=10, freq="D")
+        cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+        with pytest.raises(ValueError, match="All Langmuir parameters required"):
+            infiltration_to_extraction_front_tracking(
+                cin=cin,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=cout_tedges,
+                aquifer_pore_volumes=np.array([500.0]),
+                langmuir_s_max=1.0,
+                langmuir_k_l=5.0,
+                # missing bulk_density and porosity
+            )

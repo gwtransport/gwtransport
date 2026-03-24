@@ -45,8 +45,7 @@ from gwtransport.fronttracking.handlers import (
     handle_shock_rarefaction_collision,
 )
 from gwtransport.fronttracking.math import (
-    ConstantRetardation,
-    FreundlichSorption,
+    SorptionModel,
     compute_first_front_arrival_time,
 )
 
@@ -118,7 +117,7 @@ class FrontTrackerState:
     events: list[dict]
     t_current: float
     v_outlet: float
-    sorption: FreundlichSorption | ConstantRetardation
+    sorption: SorptionModel
     cin: np.ndarray
     flow: np.ndarray
     tedges: pd.DatetimeIndex
@@ -184,7 +183,7 @@ class FrontTracker:
         flow: np.ndarray,
         tedges: pd.DatetimeIndex,
         aquifer_pore_volume: float,
-        sorption: FreundlichSorption | ConstantRetardation,
+        sorption: SorptionModel,
     ):
         """
         Initialize tracker with inlet conditions and physical parameters.

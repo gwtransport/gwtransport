@@ -54,11 +54,11 @@ the correction procedure.
   gamma_infiltration_to_extraction. Use case: Calibrating infiltration conditions from
   extraction measurements.
 
-- :func:`infiltration_to_extraction_front_tracking` - Exact front tracking with Freundlich sorption.
-  Event-driven algorithm that solves 1D advective transport with Freundlich isotherm using
-  analytical integration of shock and rarefaction waves. Machine-precision physics (no numerical
-  dispersion). Returns bin-averaged concentrations. Use case: Sharp concentration fronts with
-  exact mass balance required, single deterministic flow path.
+- :func:`infiltration_to_extraction_front_tracking` - Exact front tracking with nonlinear sorption.
+  Event-driven algorithm that solves 1D advective transport with Freundlich or Langmuir isotherm
+  using analytical integration of shock and rarefaction waves. Machine-precision physics (no
+  numerical dispersion). Returns bin-averaged concentrations. Use case: Sharp concentration fronts
+  with exact mass balance required, single deterministic flow path.
 
 - :func:`infiltration_to_extraction_front_tracking_detailed` - Front tracking with piecewise structure.
   Same as infiltration_to_extraction_front_tracking but also returns complete piecewise analytical
@@ -75,7 +75,13 @@ import pandas as pd
 
 from gwtransport import gamma
 from gwtransport.advection_utils import _infiltration_to_extraction_weights
-from gwtransport.fronttracking.math import EPSILON_FREUNDLICH_N, ConstantRetardation, FreundlichSorption
+from gwtransport.fronttracking.math import (
+    EPSILON_FREUNDLICH_N,
+    ConstantRetardation,
+    FreundlichSorption,
+    LangmuirSorption,
+    SorptionModel,
+)
 from gwtransport.fronttracking.output import compute_bin_averaged_concentration_exact
 from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
@@ -1037,13 +1043,15 @@ def _validate_front_tracking_inputs(
     bulk_density: float | None,
     porosity: float | None,
     retardation_factor: float | None,
+    langmuir_s_max: float | None,
+    langmuir_k_l: float | None,
 ) -> tuple[
     npt.NDArray[np.float64],
     npt.NDArray[np.float64],
     pd.DatetimeIndex,
     pd.DatetimeIndex,
     npt.NDArray[np.float64],
-    FreundlichSorption | ConstantRetardation,
+    SorptionModel,
     npt.NDArray[np.float64],
 ]:
     """Validate inputs and create sorption object for front tracking functions.
@@ -1059,9 +1067,9 @@ def _validate_front_tracking_inputs(
     ValueError
         If array lengths are inconsistent, values are non-physical (negative
         concentrations, non-positive flows, NaN values, non-positive pore
-        volumes), retardation_factor < 1, Freundlich parameters are missing
-        or non-positive, freundlich_n equals 1, or physical parameters are
-        invalid.
+        volumes), retardation_factor < 1, Freundlich or Langmuir parameters
+        are missing or non-positive, freundlich_n equals 1, or physical
+        parameters are invalid.
     """
     cin = np.asarray(cin, dtype=float)
     flow = np.asarray(flow, dtype=float)
@@ -1092,19 +1100,33 @@ def _validate_front_tracking_inputs(
     t_ref = tedges[0]
     cout_tedges_days = ((cout_tedges - t_ref) / pd.Timedelta(days=1)).values
 
+    # Determine which sorption model is requested
+    has_retardation = retardation_factor is not None
+    has_freundlich = freundlich_k is not None or freundlich_n is not None
+    has_langmuir = langmuir_s_max is not None or langmuir_k_l is not None
+    n_models = has_retardation + has_freundlich + has_langmuir
+
+    if n_models == 0:
+        msg = (
+            "Must provide one of: retardation_factor, Freundlich parameters "
+            "(freundlich_k, freundlich_n, bulk_density, porosity), or Langmuir parameters "
+            "(langmuir_s_max, langmuir_k_l, bulk_density, porosity)"
+        )
+        raise ValueError(msg)
+    if n_models > 1:
+        msg = "Only one sorption model can be specified (retardation_factor, Freundlich, or Langmuir)"
+        raise ValueError(msg)
+
     # Create sorption object
-    if retardation_factor is not None:
-        if retardation_factor < 1.0:
+    if has_retardation:
+        if retardation_factor < 1.0:  # type: ignore[operator]
             msg = "retardation_factor must be >= 1.0"
             raise ValueError(msg)
 
-        sorption = ConstantRetardation(retardation_factor=retardation_factor)
-    else:
+        sorption: SorptionModel = ConstantRetardation(retardation_factor=retardation_factor)  # type: ignore[arg-type]
+    elif has_freundlich:
         if freundlich_k is None or freundlich_n is None or bulk_density is None or porosity is None:
-            msg = (
-                "Must provide either retardation_factor or all Freundlich parameters "
-                "(freundlich_k, freundlich_n, bulk_density, porosity)"
-            )
+            msg = "All Freundlich parameters required (freundlich_k, freundlich_n, bulk_density, porosity)"
             raise ValueError(msg)
         if freundlich_k <= 0 or freundlich_n <= 0:
             msg = "Freundlich parameters must be positive"
@@ -1122,6 +1144,23 @@ def _validate_front_tracking_inputs(
             bulk_density=bulk_density,
             porosity=porosity,
         )
+    else:
+        if langmuir_s_max is None or langmuir_k_l is None or bulk_density is None or porosity is None:
+            msg = "All Langmuir parameters required (langmuir_s_max, langmuir_k_l, bulk_density, porosity)"
+            raise ValueError(msg)
+        if langmuir_s_max <= 0 or langmuir_k_l <= 0:
+            msg = "Langmuir parameters must be positive"
+            raise ValueError(msg)
+        if bulk_density <= 0 or not 0 < porosity < 1:
+            msg = "Invalid physical parameters"
+            raise ValueError(msg)
+
+        sorption = LangmuirSorption(
+            s_max=langmuir_s_max,
+            k_l=langmuir_k_l,
+            bulk_density=bulk_density,
+            porosity=porosity,
+        )
 
     return cin, flow, tedges, cout_tedges, aquifer_pore_volumes, sorption, cout_tedges_days
 
@@ -1132,7 +1171,7 @@ def _flow_weighted_front_tracking_output(
     flow: npt.NDArray[np.floating],
     v_outlet: float,
     waves: list,
-    sorption: FreundlichSorption | ConstantRetardation,
+    sorption: SorptionModel,
 ) -> npt.NDArray[np.floating]:
     """Compute flow-weighted bin-averaged concentration from front-tracking output.
 
@@ -1212,6 +1251,8 @@ def infiltration_to_extraction_front_tracking(
     bulk_density: float | None = None,
     porosity: float | None = None,
     retardation_factor: float | None = None,
+    langmuir_s_max: float | None = None,
+    langmuir_k_l: float | None = None,
     max_iterations: int = 10000,
 ) -> npt.NDArray[np.floating]:
     """
@@ -1220,6 +1261,14 @@ def infiltration_to_extraction_front_tracking(
     Uses event-driven analytical algorithm that tracks shock waves, rarefaction waves,
     and characteristics with machine precision. No numerical dispersion, exact mass
     balance to floating-point precision.
+
+    Exactly one sorption model must be specified:
+
+    - ``retardation_factor`` for constant (linear) retardation.
+    - ``freundlich_k`` + ``freundlich_n`` + ``bulk_density`` + ``porosity`` for
+      Freundlich isotherm.
+    - ``langmuir_s_max`` + ``langmuir_k_l`` + ``bulk_density`` + ``porosity`` for
+      Langmuir isotherm.
 
     Parameters
     ----------
@@ -1241,19 +1290,20 @@ def infiltration_to_extraction_front_tracking(
         of residence times in the aquifer system. Each pore volume must be positive.
     freundlich_k : float, optional
         Freundlich coefficient [(m³/kg)^(1/n)]. Must be positive.
-        Used if retardation_factor is None.
     freundlich_n : float, optional
         Freundlich exponent [-]. Must be positive and != 1.
-        Used if retardation_factor is None.
     bulk_density : float, optional
         Bulk density [kg/m³]. Must be positive.
-        Used if retardation_factor is None.
+        Shared by Freundlich and Langmuir models.
     porosity : float, optional
         Porosity [-]. Must be in (0, 1).
-        Used if retardation_factor is None.
+        Shared by Freundlich and Langmuir models.
     retardation_factor : float, optional
-        Constant retardation factor [-]. If provided, uses linear retardation
-        instead of Freundlich sorption. Must be >= 1.0.
+        Constant retardation factor [-]. Must be >= 1.0.
+    langmuir_s_max : float, optional
+        Langmuir maximum sorption capacity [mg/kg]. Must be positive.
+    langmuir_k_l : float, optional
+        Langmuir half-saturation constant [mg/L]. Must be positive.
     max_iterations : int, optional
         Maximum number of events. Default 10000.
 
@@ -1338,6 +1388,8 @@ def infiltration_to_extraction_front_tracking(
         bulk_density=bulk_density,
         porosity=porosity,
         retardation_factor=retardation_factor,
+        langmuir_s_max=langmuir_s_max,
+        langmuir_k_l=langmuir_k_l,
     )
 
     # Flow time edges in days (same reference as cout_tedges_days)
@@ -1385,12 +1437,22 @@ def infiltration_to_extraction_front_tracking_detailed(
     bulk_density: float | None = None,
     porosity: float | None = None,
     retardation_factor: float | None = None,
+    langmuir_s_max: float | None = None,
+    langmuir_k_l: float | None = None,
     max_iterations: int = 10000,
 ) -> tuple[npt.NDArray[np.floating], list[dict]]:
     """
     Compute extracted concentration with complete diagnostic information.
 
     Returns both bin-averaged concentrations and detailed simulation structure for each pore volume.
+
+    Exactly one sorption model must be specified:
+
+    - ``retardation_factor`` for constant (linear) retardation.
+    - ``freundlich_k`` + ``freundlich_n`` + ``bulk_density`` + ``porosity`` for
+      Freundlich isotherm.
+    - ``langmuir_s_max`` + ``langmuir_k_l`` + ``bulk_density`` + ``porosity`` for
+      Langmuir isotherm.
 
     Parameters
     ----------
@@ -1412,19 +1474,20 @@ def infiltration_to_extraction_front_tracking_detailed(
         of residence times in the aquifer system. Each pore volume must be positive.
     freundlich_k : float, optional
         Freundlich coefficient [(m³/kg)^(1/n)]. Must be positive.
-        Used if retardation_factor is None.
     freundlich_n : float, optional
         Freundlich exponent [-]. Must be positive and != 1.
-        Used if retardation_factor is None.
     bulk_density : float, optional
         Bulk density [kg/m³]. Must be positive.
-        Used if retardation_factor is None.
+        Shared by Freundlich and Langmuir models.
     porosity : float, optional
         Porosity [-]. Must be in (0, 1).
-        Used if retardation_factor is None.
+        Shared by Freundlich and Langmuir models.
     retardation_factor : float, optional
-        Constant retardation factor [-]. If provided, uses linear retardation
-        instead of Freundlich sorption. Must be >= 1.0.
+        Constant retardation factor [-]. Must be >= 1.0.
+    langmuir_s_max : float, optional
+        Langmuir maximum sorption capacity [mg/kg]. Must be positive.
+    langmuir_k_l : float, optional
+        Langmuir half-saturation constant [mg/L]. Must be positive.
     max_iterations : int, optional
         Maximum number of events. Default 10000.
 
@@ -1444,7 +1507,7 @@ def infiltration_to_extraction_front_tracking_detailed(
         - 'n_rarefactions': int - Number of rarefactions created
         - 'n_characteristics': int - Number of characteristics created
         - 'final_time': float - Final simulation time
-        - 'sorption': FreundlichSorption | ConstantRetardation - Sorption object
+        - 'sorption': SorptionModel - Sorption object
         - 'tracker_state': FrontTrackerState - Complete simulation state
         - 'aquifer_pore_volume': float - Pore volume for this simulation
 
@@ -1488,6 +1551,8 @@ def infiltration_to_extraction_front_tracking_detailed(
         bulk_density=bulk_density,
         porosity=porosity,
         retardation_factor=retardation_factor,
+        langmuir_s_max=langmuir_s_max,
+        langmuir_k_l=langmuir_k_l,
     )
 
     # Flow time edges in days (same reference as cout_tedges_days)
