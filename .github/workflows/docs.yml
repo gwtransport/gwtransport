@@ -66,10 +66,10 @@ jobs:
       - name: Check documentation links
         run: |
           uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck
-      - name: Check links in README.md and pyproject.toml
+      - name: Check links in README.md, pyproject.toml, and FUNDING.yml
         uses: lychee/lychee-action@v2
         with:
-          args: README.md pyproject.toml
+          args: README.md pyproject.toml .github/FUNDING.yml
 
   deploy-documentation:
     if: ${{ github.ref == 'refs/heads/main' }}
