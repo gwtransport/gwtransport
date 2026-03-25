@@ -84,6 +84,11 @@ def plot_vt_diagram(
     if ax is None:
         _, ax = plt.subplots(figsize=figsize)
 
+    char_labeled = False
+    shock_labeled = False
+    raref_labeled = False
+    event_labeled = False
+
     # Plot characteristics (blue lines)
     for wave in state.waves:
         if isinstance(wave, CharacteristicWave):
@@ -121,9 +126,9 @@ def plot_vt_diagram(
                     "b-",
                     linewidth=0.5,
                     alpha=alpha,
-                    label="Characteristic" if not hasattr(ax, "gw_char_labeled") else "",
+                    label="Characteristic" if not char_labeled else "",
                 )
-                ax.gw_char_labeled = True  # type: ignore[attr-defined]
+                char_labeled = True
 
     # Plot shocks (red lines)
     for wave in state.waves:
@@ -162,9 +167,9 @@ def plot_vt_diagram(
                     "r-",
                     linewidth=2,
                     alpha=alpha,
-                    label="Shock" if not hasattr(ax, "gw_shock_labeled") else "",
+                    label="Shock" if not shock_labeled else "",
                 )
-                ax.gw_shock_labeled = True  # type: ignore[attr-defined]
+                shock_labeled = True
 
     # Plot rarefactions (green fans)
     for wave in state.waves:
@@ -226,14 +231,14 @@ def plot_vt_diagram(
 
             # Plot head and tail boundaries
             alpha = 0.5 if not wave.is_active else 0.8
-            label = "Rarefaction" if not hasattr(ax, "gw_raref_labeled") else ""
+            label = "Rarefaction" if not raref_labeled else ""
 
             # Plot head (faster boundary)
             valid_head = [(t, v) for t, v in zip(t_plot_used, v_head_plot, strict=False) if v is not None]
             if valid_head:
                 t_h, v_h = zip(*valid_head, strict=False)
                 ax.plot(t_h, v_h, "g-", linewidth=1.5, alpha=alpha, label=label)
-                ax.gw_raref_labeled = True  # type: ignore[attr-defined]
+                raref_labeled = True
 
             # Plot tail (slower boundary)
             valid_tail = [(t, v) for t, v in zip(t_plot_used, v_tail_plot, strict=False) if v is not None]
@@ -307,9 +312,9 @@ def plot_vt_diagram(
                         linewidths=1.5,
                         alpha=0.8,
                         zorder=10,
-                        label="Event" if not hasattr(ax, "gw_event_labeled") else "",
+                        label="Event" if not event_labeled else "",
                     )
-                    ax.gw_event_labeled = True  # type: ignore[attr-defined]
+                    event_labeled = True
 
     ax.set_xlabel("Time [days]", fontsize=12)
     ax.set_ylabel("Position (Pore Volume) [m³]", fontsize=12)

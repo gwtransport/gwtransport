@@ -95,10 +95,24 @@ parallel = true
 sigterm = true
 
 [[tool.ty.overrides]]
-include = ["tests/**", "src/gwtransport/examples.py"]
+include = ["tests/**"]
 
 [tool.ty.overrides.rules]
+# pytest.skip's @_with_exception decorator confuses ty's signature analysis
+too-many-positional-arguments = "ignore"
+# **kwargs / **params dict unpacking with mixed-type values in parameterized tests
 invalid-argument-type = "ignore"
+# Tests intentionally call functions with wrong/missing args to verify error handling
+missing-argument = "ignore"
+# builtins monkey-patching in conftest.py
+invalid-assignment = "ignore"
+
+[[tool.ty.overrides]]
+include = ["tests/notebooks/**/*.ipynb"]
+
+[tool.ty.overrides.rules]
+# Intentionally broken notebook for testing error handling
+unresolved-reference = "ignore"
 
 [tool.coverage.report]
 exclude_lines = [

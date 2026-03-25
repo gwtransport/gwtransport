@@ -331,7 +331,7 @@ class TestRarefactionIntersections:
                 assert t >= 10.0
                 assert v >= 0
         else:
-            pytest.skip("This test is only defined for n!=1.")  # type: ignore[too-many-positional-arguments]
+            pytest.skip("This test is only defined for n!=1.")
 
     def test_rarefaction_head_characteristic_invalid_and_valid_regimes(self, freundlich_sorption):
         """Regime-aware validity check: invalid for n<1, valid for n>1."""
@@ -361,7 +361,7 @@ class TestRarefactionIntersections:
                 sorption=freundlich_sorption,
             )
         else:
-            pytest.skip("This test is only defined for n!=1.")  # type: ignore[too-many-positional-arguments]
+            pytest.skip("This test is only defined for n!=1.")
 
     def test_rarefaction_shock_intersection(self, freundlich_sorption):
         """Test rarefaction boundary intersecting with shock."""
@@ -438,7 +438,7 @@ class TestRarefactionIntersections:
 
             assert v_head > v_tail
         else:
-            pytest.skip("This check is only defined for n!=1.")  # type: ignore[too-many-positional-arguments]
+            pytest.skip("This check is only defined for n!=1.")
 
     def test_valid_rarefaction_boundary_intersection_with_characteristic_regime_aware(self, freundlich_sorption):
         """Regime-aware test of rarefaction boundary intersection with a characteristic."""
@@ -487,7 +487,7 @@ class TestRarefactionIntersections:
 
             t_current = 5.0
         else:
-            pytest.skip("This check is only defined for n!=1.")  # type: ignore[too-many-positional-arguments]
+            pytest.skip("This check is only defined for n!=1.")
 
         intersections = find_rarefaction_boundary_intersections(raref, char, t_current=t_current)
 
@@ -788,7 +788,7 @@ class TestRarefactionRarefactionIntersections:
                 sorption=freundlich_sorption,
             )
         else:
-            pytest.skip("This test is only defined for n!=1.")  # type: ignore[too-many-positional-arguments]
+            pytest.skip("This test is only defined for n!=1.")
 
         intersections = find_rarefaction_boundary_intersections(raref1, raref2, t_current=10.0)
 
@@ -899,13 +899,13 @@ class TestRarefactionRarefactionIntersections:
             assert np.isclose(v_tail_front, v_int, rtol=1e-14)
 
         else:
-            pytest.skip("This test is only defined for n!=1.")  # type: ignore[too-many-positional-arguments]
+            pytest.skip("This test is only defined for n!=1.")
 
     def test_tail_boundary_intersects_other_rarefaction_for_n_greater_than_one(self, freundlich_sorption):
         """Explicit n>1 case where raref1's tail is the intersecting boundary."""
         flow = 100.0
         if freundlich_sorption.n < 1.0:
-            pytest.skip("This test is only defined for n>1.")  # type: ignore[too-many-positional-arguments]
+            pytest.skip("This test is only defined for n>1.")
         elif freundlich_sorption.n > 1.0:
             # For n>1: higher concentration => faster characteristics.
             # Construct raref1 so that its tail is slower than its head, and

@@ -35,6 +35,8 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+from typing import Any
+
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -257,7 +259,7 @@ def generate_example_data(
     return df, tedges
 
 
-def generate_temperature_example_data(**kwargs: object) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
+def generate_temperature_example_data(**kwargs: Any) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
     """
     Generate synthetic temperature and flow data for groundwater transport examples.
 
@@ -307,10 +309,10 @@ def generate_temperature_example_data(**kwargs: object) -> tuple[pd.DataFrame, p
     }
     for key, value in defaults.items():
         kwargs.setdefault(key, value)
-    return generate_example_data(**kwargs)  # pyright: ignore[reportArgumentType]
+    return generate_example_data(**kwargs)
 
 
-def generate_ec_example_data(**kwargs: object) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
+def generate_ec_example_data(**kwargs: Any) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
     """
     Generate synthetic electrical conductivity and flow data for groundwater transport examples.
 
@@ -370,7 +372,7 @@ def generate_ec_example_data(**kwargs: object) -> tuple[pd.DataFrame, pd.Datetim
     }
     for key, value in defaults.items():
         kwargs.setdefault(key, value)
-    return generate_example_data(**kwargs)  # pyright: ignore[reportArgumentType]
+    return generate_example_data(**kwargs)
 
 
 def generate_example_deposition_timeseries(

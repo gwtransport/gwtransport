@@ -856,7 +856,7 @@ def get_soil_temperature(*, station_number: int = 260, interpolate_missing_value
     with requests.get(url, params={"download": "zip"}, timeout=10) as response:
         response.raise_for_status()
 
-    df = pd.read_csv(  # type: ignore[call-overload]
+    df = pd.read_csv(  # type: ignore[call-overload]  # ty: ignore[no-matching-overload]
         io.BytesIO(response.content),
         compression="zip",
         dtype=dtypes,  # pyright: ignore[reportArgumentType]
@@ -1557,6 +1557,6 @@ def _get_nullspace_objective_function(
     if nullspace_objective == "summed_differences":
         return _summed_differences_objective
     if callable(nullspace_objective):
-        return nullspace_objective  # type: ignore[return-value]
+        return nullspace_objective  # type: ignore[return-value]  # ty: ignore[invalid-return-type]
     msg = f"Unknown nullspace objective: {nullspace_objective}"
     raise ValueError(msg)

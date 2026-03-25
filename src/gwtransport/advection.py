@@ -1118,12 +1118,12 @@ def _validate_front_tracking_inputs(
         raise ValueError(msg)
 
     # Create sorption object
-    if has_retardation:
-        if retardation_factor < 1.0:  # type: ignore[operator]
+    if retardation_factor is not None:
+        if retardation_factor < 1.0:
             msg = "retardation_factor must be >= 1.0"
             raise ValueError(msg)
 
-        sorption: SorptionModel = ConstantRetardation(retardation_factor=retardation_factor)  # type: ignore[arg-type]
+        sorption: SorptionModel = ConstantRetardation(retardation_factor=retardation_factor)
     elif has_freundlich:
         if freundlich_k is None or freundlich_n is None or bulk_density is None or porosity is None:
             msg = "All Freundlich parameters required (freundlich_k, freundlich_n, bulk_density, porosity)"
