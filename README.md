@@ -53,7 +53,7 @@ cout = infiltration_to_extraction(
 # Note: Initial output values are NaN until the first cin value has fully passed the aquifer
 ```
 
-This efficiently computes `cout` with 1D transport for every aquifer pore volume and then averages over the aquifer pore volumes. Diffusion is demonstrated in [example notebook 5](https://gwtransport.github.io/gwtransport/examples/05_Diffusion_Implementation.html).
+This efficiently computes `cout` with 1D transport for every aquifer pore volume and then averages over the aquifer pore volumes. Diffusion is demonstrated in [example notebook 5](https://gwtransport.github.io/gwtransport/examples/05_Diffusion_Dispersion.html).
 
 ### 2. Temperature/Electrical conductivity Tracer Test
 
