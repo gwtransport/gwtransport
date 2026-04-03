@@ -175,7 +175,7 @@ class TestSimplifyBinsMassConservation:
         new_volumes = np.add.reduceat(flow * widths, s)
         mass_after = np.sum(new_volumes * new_values)
         # Summation order differs after merging, so allow machine-precision tolerance
-        assert_allclose(mass_after, mass_before, atol=0.0, rtol=np.finfo(float).eps)
+        assert_allclose(mass_after, mass_before, atol=0.0, rtol=float(np.finfo(float).eps))
 
 
 class TestSimplifyBinsEdgeCases:
