@@ -31,6 +31,10 @@ Available functions:
   ranges. Similar to partial_isin but for time-based bin overlaps with list of (start, end)
   tuples.
 
+- :func:`simplify_bins` - Simplify a piecewise-constant time series by merging adjacent bins
+  whose values are within a tolerance. Uses volume-weighted (flow x width) averaging when
+  flow is provided, otherwise width-weighted. Direction-independent via recursive splitting.
+
 - :func:`combine_bin_series` - Combine two binned series onto common set of unique edges. Maps
   values from original bins to new combined structure with configurable extrapolation ('nearest'
   or float value).
@@ -564,6 +568,61 @@ def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.N
     return np.divide(
         overlap_widths, bin_width_bc, out=np.zeros_like(overlap_widths, dtype=float), where=bin_width_bc != 0.0
     )
+
+
+def simplify_bins(
+    *,
+    edges: npt.ArrayLike,
+    values: npt.ArrayLike,
+    flow: npt.ArrayLike | None = None,
+    tol: float = 0.0,
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+    """Simplify a piecewise-constant time series by merging adjacent bins.
+
+    Recursively splits at the largest value jump until the peak-to-peak
+    range within every group does not exceed `tol`. The result is
+    independent of scan direction.
+
+    Parameters
+    ----------
+    edges : array_like, shape (n+1,)
+        Bin edges. May be numeric or pandas Timestamps.
+    values : array_like, shape (n,)
+        Bin-averaged values (e.g., concentrations).
+    flow : array_like, shape (n,), optional
+        Flow rate per bin (e.g., m³/day). When provided, merged-bin
+        values are weighted by volume (flow x bin width) instead of
+        bin width alone.
+    tol : float, optional
+        Maximum peak-to-peak range within a merged group.
+        Default is 0.0, which merges only runs of identical values.
+
+    Returns
+    -------
+    new_edges : ndarray, shape (m+1,)
+        Simplified bin edges, preserving the dtype of `edges`.
+    new_values : ndarray of float, shape (m,)
+        Volume-weighted (or width-weighted) average values per
+        simplified bin.
+    """
+    values = np.asarray(values, dtype=float)
+    edges = np.asarray(edges)
+
+    widths = np.asarray(np.diff(edges), dtype=float)
+    weights = widths if flow is None else widths * np.asarray(flow, dtype=float)
+
+    def _splits(lo: int, hi: int) -> list[int]:
+        if np.ptp(values[lo:hi]) <= tol:
+            return []
+        i = lo + int(np.argmax(np.abs(np.diff(values[lo:hi])))) + 1
+        return [*_splits(lo, i), i, *_splits(i, hi)]
+
+    s = np.array([0, *_splits(0, len(values))])
+    idx = np.append(s, len(values))
+    new_edges = edges[idx]
+    new_values = np.add.reduceat(weights * values, s) / np.add.reduceat(weights, s)
+
+    return new_edges, new_values
 
 
 def _generate_failed_coverage_badge() -> None:
