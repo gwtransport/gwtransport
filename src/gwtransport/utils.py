@@ -607,6 +607,8 @@ def simplify_bins(
     """
     values = np.asarray(values, dtype=float)
     edges = np.asarray(edges)
+    if len(values) == 0:
+        return edges, values
 
     widths = np.asarray(np.diff(edges), dtype=float)
     weights = widths if flow is None else widths * np.asarray(flow, dtype=float)
