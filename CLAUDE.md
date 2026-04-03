@@ -2,7 +2,7 @@
 
 Scientific Python package for timeseries analysis of groundwater transport of solutes and heat.
 
-## Quick Reference
+## Commands
 
 ```bash
 # Setup
@@ -14,43 +14,48 @@ uv run pytest tests/examples -n auto              # Example notebooks
 uv run pytest tests/docs -n auto                  # Documentation code snippets
 
 # Linting (run before committing)
-uv run ruff format .                       # Format code
-uv run ruff check --fix .                  # Lint and auto-fix
-npx prettier --check "**/*.{yaml,yml,md}"  # Format markdown
+uv run ruff format .                              # Format code
+uv run ruff check --fix .                         # Lint and auto-fix
+npx prettier --check "**/*.{yaml,yml,md}"         # Format markdown/yaml
 
-# Type checking
+# Type checking (run before committing)
 uv tool update ty
 uv tool run ty check .
 
-# Build documentation
-uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck # Check links in documentation
-rm -rf docs/build && uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j 1 -b html docs/source docs/build/html # Build HTML documentation
+# Documentation
+uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck
+rm -rf docs/build && uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j 1 -b html docs/source docs/build/html
 ```
 
-## CI/CD Pipeline
+## CI/CD
 
-All checks must pass before merging. The pipeline tests on Python 3.11 (minimum deps) and 3.14 (latest deps).
+All checks must pass before merging. Pipeline tests on Python 3.11 (minimum deps) and 3.14 (latest deps). See `.github/workflows/` for details.
 
-| Check          | Command                                     | Workflow               |
-| -------------- | ------------------------------------------- | ---------------------- |
-| Formatting     | `uv run ruff format --diff .`               | linting.yml            |
-| Linting        | `uv run ruff check .`                       | linting.yml            |
-| Type checking  | `uv run ty check .`                         | linting.yml            |
-| pyproject.toml | `uv run validate-pyproject pyproject.toml`  | linting.yml            |
-| YAML/Markdown  | `npx prettier --check "**/*.{yaml,yml,md}"` | linting.yml            |
-| Unit tests     | `uv run pytest tests/src`                   | functional_testing.yml |
-| Example tests  | `uv run pytest tests/examples`              | examples_testing.yml   |
-| Doc tests      | `uv run pytest tests/docs`                  | docs.yml               |
-| Link check     | `sphinx-build -b linkcheck docs/source ...` | docs.yml               |
+## Project Layout
+
+- `src/gwtransport/` -- Package source code
+- `tests/src/` -- Unit tests (one test file per module)
+- `tests/examples/` -- Jupyter notebook execution tests
+- `tests/docs/` -- Documentation code snippet tests
+- `examples/` -- Example Jupyter notebooks
+- `docs/source/` -- Sphinx documentation source
+
+## Philosophy
+
+You are a quality gatekeeper, not just an implementer. Before writing code:
+
+- **Understand the physics.** This is a scientific package -- correctness of physical equations, units, and boundary conditions matters more than code elegance. If unsure about the physics, ask.
+- **Check for dead code.** After every change, verify no unused imports, functions, or variables remain. Remove them.
+- **Keep API and docs consistent.** When changing a public function signature, update its docstring, any cross-references (see `docs/CROSS_REFERENCES.md`), and affected example notebooks.
+- **Re-read the request.** Before finishing, re-read the original question to verify you actually answered it.
 
 ## Code Style
 
-- **Docstrings**: NumPy style (enforced via ruff)
-- **Line length**: 120 characters
-- **Type hints**: Required for all public functions
-- **Formatting**: `ruff format` with preview mode enabled
-
-Example docstring (use `npt.ArrayLike` for array inputs, `pd.DatetimeIndex` for time edges):
+- **Docstrings**: NumPy style. See example below.
+- **Line length**: 120 characters.
+- **Type hints**: Required for all public functions. Use `npt.ArrayLike` for array inputs, `npt.NDArray[np.floating]` for array outputs, `pd.DatetimeIndex` for time edges. Use built-in Python generics (`list`, `tuple`, `dict`, `X | None`) -- NEVER import from `typing`.
+- **Vectorization**: ALWAYS prefer vectorized NumPy/SciPy/pandas operations over Python for-loops. If you find yourself writing a loop over array elements, stop and find the vectorized equivalent.
+- **Formatting**: Enforced by linting with ruff and prettier. Do not fight the formatter.
 
 ```python
 def function_name(*, flow: npt.ArrayLike, tedges: pd.DatetimeIndex) -> npt.NDArray[np.floating]:
@@ -72,134 +77,33 @@ def function_name(*, flow: npt.ArrayLike, tedges: pd.DatetimeIndex) -> npt.NDArr
     --------
     related_function : Brief description.
     :ref:`concept-residence-time` : Background on the concept.
-    :ref:`assumption-linear-retardation` : When this assumption applies.
     """
 ```
 
-## Architecture
+## Domain Conventions
 
-```
-src/gwtransport/
-├── advection.py          # Main advection transport with pore volume distributions
-├── diffusion.py          # 1D advection-dispersion analytical solutions (slow, physically rigorous)
-├── diffusion_fast.py     # Diffusive corrections via Gaussian smoothing (fast, approximate)
-├── residence_time.py     # Residence time calculations with retardation
-├── deposition.py         # Deposition process analysis
-├── deposition_utils.py   # Geometric utilities for the deposition module
-├── logremoval.py         # Log removal efficiency calculations
-├── gamma.py              # Gamma distribution utilities for pore volumes
-├── utils.py              # General utilities (interpolation, bin operations)
-└── fronttracking/        # Event-driven solver for nonlinear sorption
-    ├── solver.py         # Main simulation engine
-    ├── output.py         # Result extraction and formatting
-    ├── handlers.py       # Event handlers
-    ├── math.py           # Shock/rarefaction wave calculations
-    ├── waves.py          # Wave structure definitions
-    ├── events.py         # Event type definitions
-    ├── plot.py           # Visualization tools
-    └── validation.py     # Physics validation
-```
+**IMPORTANT**: These conventions are load-bearing for correctness.
 
-**Key patterns**:
-
-- **Paired operations**: Forward (infiltration→extraction) and reverse (extraction→infiltration)
-- **Multiple parameterizations**: Support both (alpha, beta) and (mean, std) for distributions
-- **Retardation support**: All transport functions account for sorption
+- **Bin-edge pattern**: Time is represented as `tedges` (`pd.DatetimeIndex`, n+1 edges) with n values constant over each interval `[tedges[i], tedges[i+1])`. Same pattern for spatial dimension (`xedges`).
+- **Input/output semantics**: Input values (`flow`, `cin` for infiltration-to-extraction; `flow`, `cout` for extraction-to-infiltration) are constant per bin. Output concentration/temperature is a flow-weighted bin average.
+- **Paired operations**: Functions come in forward (infiltration-to-extraction) and reverse (extraction-to-infiltration) variants.
+- **Multiple parameterizations**: Gamma distributions support both (alpha, beta) and (mean, std).
+- **Retardation**: All transport functions account for sorption via retardation factors.
+- **Units**: Must be consistent within a calculation. The package does not enforce units -- the user is responsible.
 
 ## Testing
 
-Tests are organized in `tests/`:
-
-- `tests/src/` - Unit tests for each module
-- `tests/examples/` - Jupyter notebook execution tests
-- `tests/docs/` - Documentation code snippet tests
-
-**Running specific tests**:
-
-```bash
-uv run pytest tests/src/test_diffusion.py -v    # Single module
-uv run pytest tests/src -k "advection" -v        # By keyword
-uv run pytest tests/src --cov=src                # With coverage
-```
-
-**Writing tests**:
-
-- Use fixtures from `tests/src/conftest.py` for common test data
-- Tests should be exact to machine precision. Use `np.testing.assert_allclose(actual, expected)` for numerical comparisons.
-- Validate physical correctness (conservation, bounds, limiting cases)
-- Tests and comparisons should be meaningful and not trivial
-- Use analytical solutions for validation when possible
+- Use fixtures from `tests/src/conftest.py` for common test data.
+- Tests MUST be exact to machine precision. Use `np.testing.assert_allclose(actual, expected)`.
+- Validate physical correctness: conservation laws, boundary conditions, limiting cases.
+- Tests MUST be meaningful -- not trivial identity checks. Use analytical solutions for validation when possible.
+- Run specific tests with: `uv run pytest tests/src/test_diffusion.py -v` or `uv run pytest tests/src -k "advection" -v`
 
 ## Git
 
-- Do not include Claude-related signatures in commit messages
-- Run `ruff format .`, `ruff check --fix .`, `uv tool update ty` and `uv tool run ty check .` before committing
+- Do NOT include Claude-related signatures in commit messages or PR descriptions.
+- Run formatting, linting, and type checking before committing.
 
-## Conventions and Customs
+## Cross-References
 
-```python
-tedges = pd.DatetimeIndex([...])  # n+1 edges
-values = np.array([...])           # n values
-```
-
-- Concentration (`cin`, `cout`) and flow (`flow`) values are assumed **constant within each time interval** `[tedges[i], tedges[i+1])`
-- Provide time-averaged values per bin (for flow: total volume / duration; for concentration: any representative average)
-- Same holds for the spatial dimension: xedges
-
-Units must be consistent within calculation
-
-## Documentation Cross-References
-
-Enrich function docstrings with references to concepts and assumptions when they meaningfully aid understanding. Use Sphinx cross-references that render as clickable links.
-
-**Syntax by context**:
-
-| Context                | Syntax                                                                                        |
-| ---------------------- | --------------------------------------------------------------------------------------------- |
-| Python docstrings      | `:ref:`concept-dispersion-scales``                                                            |
-| Jupyter notebooks / md | `[Dispersion scales](https://gwtransport.github.io/gwtransport/user_guide/concepts.html#...)` |
-| API links (notebooks)  | `[module](https://gwtransport.github.io/gwtransport/api/modules.html#module-gwtransport.xxx)` |
-
-Base URL: `https://gwtransport.github.io/gwtransport/`
-
-**Available labels** (in `docs/source/user_guide/`):
-
-_Concepts_ (`concepts.rst` → `concepts.html`):
-
-| Label                              | Topic                                           |
-| ---------------------------------- | ----------------------------------------------- |
-| `concept-pore-volume-distribution` | Central concept: aquifer heterogeneity          |
-| `concept-residence-time`           | Time in aquifer (V·R/Q)                         |
-| `concept-retardation-factor`       | Slower movement due to sorption                 |
-| `concept-transport-equation`       | Flow-weighted averaging                         |
-| `concept-dispersion`               | Macrodispersion and microdispersion             |
-| `concept-dispersion-scales`        | Scale-dependent: macro vs microdispersion       |
-| `concept-gamma-distribution`       | Two-parameter pore volume model                 |
-| `concept-nonlinear-sorption`       | Freundlich & Langmuir isotherms, front-tracking |
-
-_Assumptions_ (`assumptions.rst` → `assumptions.html`):
-
-| Label                             | Topic                        |
-| --------------------------------- | ---------------------------- |
-| `assumption-advection-dominated`  | When diffusion is negligible |
-| `assumption-steady-streamlines`   | Fixed flow path geometry     |
-| `assumption-gamma-distribution`   | Gamma distribution adequacy  |
-| `assumption-linear-retardation`   | Constant retardation factor  |
-| `assumption-no-reactions`         | Conservative transport       |
-| `assumption-no-transverse-mixing` | Independent streamtubes      |
-| `assumptions`                     | Full assumptions page        |
-
-_Examples_ (`../examples/` → `examples.html`):
-
-| Path                                               | Topic                               |
-| -------------------------------------------------- | ----------------------------------- |
-| `examples/01_Aquifer_Characterization_Temperature` | Temperature tracer calibration      |
-| `examples/02_Residence_Time_Analysis`              | Residence time calculations         |
-| `examples/03_Pathogen_Removal_Bank_Filtration`     | Log removal efficiency              |
-| `examples/04_Deposition_Analysis_Bank_Filtration`  | Deposition analysis                 |
-| `examples/05_Diffusion_Dispersion`                 | Dispersion vs APVD, equivalent std  |
-| `examples/10_Advection_with_non_linear_sorption`   | Freundlich sorption, front-tracking |
-
-**When to add references**: Function assumes something non-obvious, user needs context to choose between functions, or physical limitations affect interpretation.
-
-**Keep it minimal** - only add references that genuinely help users understand when/how to use a function
+See `docs/CROSS_REFERENCES.md` for available Sphinx labels (concepts, assumptions, examples) and syntax for linking from docstrings vs notebooks.
