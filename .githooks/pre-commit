@@ -1,0 +1,5 @@
+#!/bin/sh
+# Sync CLAUDE.md to .github/copilot-instructions.md so both Claude Code and
+# GitHub Copilot use the same project instructions.
+cp CLAUDE.md .github/copilot-instructions.md
+git add .github/copilot-instructions.md
