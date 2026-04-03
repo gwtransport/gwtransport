@@ -7,7 +7,7 @@ Scientific Python package for timeseries analysis of groundwater transport of so
 ```bash
 # Setup
 uv sync --all-extras
-git config core.hooksPath .githooks                # Enable pre-commit hook
+git config core.hooksPath .githooks               # Enable pre-commit hook
 
 # Testing (run before committing)
 uv run pytest tests/src -n auto                   # Unit tests
