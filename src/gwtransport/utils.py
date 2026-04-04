@@ -8,6 +8,10 @@ underdetermined system solvers, and external data retrieval.
 
 Available functions:
 
+- :func:`step_plot_coords` - Compute step-plot coordinates from bin edges and
+  bin-averaged values. Returns paired x/y arrays for plotting piecewise-constant
+  functions with ``ax.plot(x, y)``.
+
 - :func:`linear_interpolate` - Linear interpolation using numpy's optimized interp function.
   Automatically handles unsorted data with configurable extrapolation (None for clamping,
   float for constant values). Handles multi-dimensional query arrays.
@@ -85,6 +89,44 @@ from scipy.linalg import null_space
 from scipy.optimize import minimize
 
 cache_dir = Path(__file__).parent.parent.parent / "cache"
+
+
+def step_plot_coords(edges: npt.ArrayLike, values: npt.ArrayLike) -> tuple[npt.NDArray, npt.NDArray]:
+    """Compute step-plot coordinates from bin edges and bin-averaged values.
+
+    Converts bin edges (n+1) and bin values (n) into paired x/y arrays
+    suitable for plotting piecewise-constant (step) functions with
+    ``ax.plot(x, y)``.
+
+    Parameters
+    ----------
+    edges : array-like
+        Bin edges (n+1 elements for n bins). Can be numeric, datetime, or
+        any type accepted by :func:`numpy.repeat`.
+    values : array-like
+        Bin-averaged values (n elements), one per bin.
+
+    Returns
+    -------
+    x : ndarray
+        Step x-coordinates (2n elements). Same dtype as *edges*.
+    y : ndarray
+        Step y-coordinates (2n elements). Same dtype as *values*.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> edges = np.array([0.0, 1.0, 3.0, 6.0])
+    >>> values = np.array([2.0, 5.0, 1.0])
+    >>> x, y = step_plot_coords(edges, values)
+    >>> x
+    array([0., 1., 1., 3., 3., 6.])
+    >>> y
+    array([2., 2., 5., 5., 1., 1.])
+    """
+    x = np.repeat(edges, 2)[1:-1]
+    y = np.repeat(values, 2)
+    return x, y
 
 
 def linear_interpolate(

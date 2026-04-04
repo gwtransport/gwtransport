@@ -162,18 +162,14 @@ def infiltration_to_extraction_series(
     Plotting the input and output concentrations:
 
     >>> import matplotlib.pyplot as plt
-    >>> # Prepare data for step plot (repeat values for visualization)
-    >>> xplot_in = np.repeat(tedges, 2)[1:-1]
-    >>> yplot_in = np.repeat(cin, 2)
+    >>> from gwtransport.utils import step_plot_coords
     >>> plt.plot(
-    ...     xplot_in, yplot_in, label="Concentration of infiltrated water"
+    ...     *step_plot_coords(tedges, cin), label="Concentration of infiltrated water"
     ... )  # doctest: +SKIP
     >>>
     >>> # cout equals cin, just with shifted time edges
-    >>> xplot_out = np.repeat(tedges_out, 2)[1:-1]
-    >>> yplot_out = np.repeat(cin, 2)
     >>> plt.plot(
-    ...     xplot_out, yplot_out, label="Concentration of extracted water"
+    ...     *step_plot_coords(tedges_out, cin), label="Concentration of extracted water"
     ... )  # doctest: +SKIP
     >>> plt.xlabel("Time")  # doctest: +SKIP
     >>> plt.ylabel("Concentration")  # doctest: +SKIP
@@ -278,18 +274,15 @@ def extraction_to_infiltration_series(
     Plotting the input and output concentrations:
 
     >>> import matplotlib.pyplot as plt
-    >>> # Prepare data for step plot (repeat values for visualization)
-    >>> xplot_in = np.repeat(tedges, 2)[1:-1]
-    >>> yplot_in = np.repeat(cout, 2)
+    >>> from gwtransport.utils import step_plot_coords
     >>> plt.plot(
-    ...     xplot_in, yplot_in, label="Concentration of extracted water"
+    ...     *step_plot_coords(tedges, cout), label="Concentration of extracted water"
     ... )  # doctest: +SKIP
     >>>
     >>> # cin equals cout, just with shifted time edges
-    >>> xplot_out = np.repeat(tedges_out, 2)[1:-1]
-    >>> yplot_out = np.repeat(cout, 2)
     >>> plt.plot(
-    ...     xplot_out, yplot_out, label="Concentration of infiltrated water"
+    ...     *step_plot_coords(tedges_out, cout),
+    ...     label="Concentration of infiltrated water",
     ... )  # doctest: +SKIP
     >>> plt.xlabel("Time")  # doctest: +SKIP
     >>> plt.ylabel("Concentration")  # doctest: +SKIP

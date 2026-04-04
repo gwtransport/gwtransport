@@ -16,6 +16,7 @@ import pandas as pd
 from gwtransport.fronttracking.output import concentration_at_point, identify_outlet_segments
 from gwtransport.fronttracking.solver import FrontTrackerState
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
+from gwtransport.utils import step_plot_coords
 
 
 def plot_vt_diagram(
@@ -624,8 +625,8 @@ def plot_inlet_concentration(
 
     t_days = (tedges_array - tedges_array[0]) / pd.Timedelta(days=1)
 
-    # Plot inlet concentration using repeat pattern for step function
-    x_plot, y_plot = np.repeat(t_days, 2)[1:-1], np.repeat(cin, 2)
+    # Plot inlet concentration using step function
+    x_plot, y_plot = step_plot_coords(t_days, cin)
     ax.plot(x_plot, y_plot, linewidth=2, color=color, label="Inlet", **step_kwargs)
 
     # Add first arrival marker if provided
@@ -806,7 +807,7 @@ def plot_front_tracking_summary(
     # Bin-averaged outlet
     if show_bin_averaged:
         t_edges_days = ((cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)).values
-        xstep_cout, ystep_cout = np.repeat(t_edges_days, 2)[1:-1], np.repeat(cout, 2)
+        xstep_cout, ystep_cout = step_plot_coords(t_edges_days, cout)
         ax_outlet.plot(
             xstep_cout,
             ystep_cout,
@@ -925,7 +926,7 @@ def plot_sorption_comparison(
 
     # Column 1: Pulse inlet
     ax_pulse_inlet = axes[0, 0]
-    x_pulse, y_pulse = np.repeat(t_days_pulse, 2)[1:-1], np.repeat(pulse_cin, 2)
+    x_pulse, y_pulse = step_plot_coords(t_days_pulse, pulse_cin)
     ax_pulse_inlet.plot(x_pulse, y_pulse, linewidth=2.5, color="black")
     ax_pulse_inlet.set_xlabel("Time [days]", fontsize=10)
     ax_pulse_inlet.set_ylabel("Concentration", fontsize=10)
@@ -994,7 +995,7 @@ def plot_sorption_comparison(
 
     # Column 1: Dip inlet
     ax_dip_inlet = axes[1, 0]
-    x_dip, y_dip = np.repeat(t_days_dip, 2)[1:-1], np.repeat(dip_cin, 2)
+    x_dip, y_dip = step_plot_coords(t_days_dip, dip_cin)
     ax_dip_inlet.plot(x_dip, y_dip, linewidth=2.5, color="black")
     ax_dip_inlet.set_xlabel("Time [days]", fontsize=10)
     ax_dip_inlet.set_ylabel("Concentration", fontsize=10)

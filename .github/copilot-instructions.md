@@ -5,18 +5,19 @@ Scientific Python package for timeseries analysis of groundwater transport of so
 ## Commands
 
 ```bash
-# Setup
-uv sync --all-extras
+# Setup (fresh environment, separate from user's .venv)
+rm -rf .venv-claude
+env UV_PROJECT_ENVIRONMENT=.venv-claude uv sync --all-extras
 git config core.hooksPath .githooks               # Enable pre-commit hook
 
 # Testing (run before committing)
-uv run pytest tests/src -n auto                   # Unit tests
-uv run pytest tests/examples -n auto              # Example notebooks
-uv run pytest tests/docs -n auto                  # Documentation code snippets
+env UV_PROJECT_ENVIRONMENT=.venv-claude uv run pytest tests/src -n auto                   # Unit tests
+env UV_PROJECT_ENVIRONMENT=.venv-claude uv run pytest tests/examples -n auto              # Example notebooks
+env UV_PROJECT_ENVIRONMENT=.venv-claude uv run pytest tests/docs -n auto                  # Documentation code snippets
 
 # Linting (run before committing)
-uv run ruff format .                              # Format code
-uv run ruff check --fix .                         # Lint and auto-fix
+env UV_PROJECT_ENVIRONMENT=.venv-claude uv run ruff format .                              # Format code
+env UV_PROJECT_ENVIRONMENT=.venv-claude uv run ruff check --fix .                         # Lint and auto-fix
 npx prettier --check "**/*.{yaml,yml,md}"         # Format markdown/yaml
 
 # Type checking (run before committing)
