@@ -5,26 +5,28 @@ Scientific Python package for timeseries analysis of groundwater transport of so
 ## Commands
 
 ```bash
-# Setup
-uv sync --all-extras
+# Setup (fresh environment, separate from user's .venv)
+# Windows: replace `env VAR=val cmd` with `set "VAR=val" && cmd`
+rm -rf .venv-claude
+env UV_PROJECT_ENVIRONMENT=.venv-claude uv sync --all-extras -q
 git config core.hooksPath .githooks               # Enable pre-commit hook
 
 # Testing (run before committing)
-uv run pytest tests/src -n auto                   # Unit tests
-uv run pytest tests/examples -n auto              # Example notebooks
-uv run pytest tests/docs -n auto                  # Documentation code snippets
+env UV_PROJECT_ENVIRONMENT=.venv-claude uv run -q pytest tests/src -n auto                   # Unit tests
+env UV_PROJECT_ENVIRONMENT=.venv-claude uv run -q pytest tests/examples -n auto              # Example notebooks
+env UV_PROJECT_ENVIRONMENT=.venv-claude uv run -q pytest tests/docs -n auto                  # Documentation code snippets
 
 # Linting (run before committing)
-uv run ruff format .                              # Format code
-uv run ruff check --fix .                         # Lint and auto-fix
+env UV_PROJECT_ENVIRONMENT=.venv-claude uv run -q ruff format .                              # Format code
+env UV_PROJECT_ENVIRONMENT=.venv-claude uv run -q ruff check --fix .                         # Lint and auto-fix
 npx prettier --check "**/*.{yaml,yml,md}"         # Format markdown/yaml
 
 # Type checking (run before committing)
-uv tool update ty & uv tool run ty check .
+uv tool update -q ty & uv tool run -q ty check .
 
 # Documentation
-uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck
-rm -rf docs/build && uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j 1 -b html docs/source docs/build/html
+uv tool run -q --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck
+rm -rf docs/build && uv tool run -q --from sphinx --with-editable ".[docs]" sphinx-build -j 1 -b html docs/source docs/build/html
 ```
 
 ## CI/CD

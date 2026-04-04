@@ -6,6 +6,7 @@ Scientific Python package for timeseries analysis of groundwater transport of so
 
 ```bash
 # Setup (fresh environment, separate from user's .venv)
+# Windows: replace `env VAR=val cmd` with `set "VAR=val" && cmd`
 rm -rf .venv-claude
 env UV_PROJECT_ENVIRONMENT=.venv-claude uv sync --all-extras -q
 git config core.hooksPath .githooks               # Enable pre-commit hook
@@ -24,8 +25,8 @@ npx prettier --check "**/*.{yaml,yml,md}"         # Format markdown/yaml
 uv tool update -q ty & uv tool run -q ty check .
 
 # Documentation
-uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck
-rm -rf docs/build && uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j 1 -b html docs/source docs/build/html
+uv tool run -q --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck
+rm -rf docs/build && uv tool run -q --from sphinx --with-editable ".[docs]" sphinx-build -j 1 -b html docs/source docs/build/html
 ```
 
 ## CI/CD
