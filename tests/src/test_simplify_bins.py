@@ -202,10 +202,18 @@ class TestSimplifyBinsEdgeCases:
         edges = pd.date_range("2020-01-01", periods=5, freq="D")
         values = np.array([1.0, 1.0, 5.0, 5.0])
         new_edges, new_values = simplify_bins(edges=edges, values=values)
+        assert isinstance(new_edges, pd.DatetimeIndex)
         assert len(new_edges) == 3
         assert new_edges[0] == edges[0]
         assert new_edges[-1] == edges[-1]
         assert_array_equal(new_values, [1.0, 5.0])
+
+    def test_ndarray_edges_preserved(self):
+        """Numeric ndarray edges should return ndarray."""
+        edges = np.array([0.0, 1.0, 2.0, 3.0])
+        values = np.array([1.0, 1.0, 1.0])
+        new_edges, _ = simplify_bins(edges=edges, values=values)
+        assert isinstance(new_edges, np.ndarray)
 
     def test_direction_independence(self):
         """Result should be the same regardless of which side has more bins.

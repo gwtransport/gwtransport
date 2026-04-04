@@ -576,7 +576,7 @@ def simplify_bins(
     values: npt.ArrayLike,
     flow: npt.ArrayLike | None = None,
     tol: float = 0.0,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+) -> tuple[npt.NDArray[np.floating] | pd.DatetimeIndex, npt.NDArray[np.floating]]:
     """Simplify a piecewise-constant time series by merging adjacent bins.
 
     Recursively splits at the largest value jump until the peak-to-peak
@@ -605,8 +605,8 @@ def simplify_bins(
         Volume-weighted (or width-weighted) average values per
         simplified bin.
     """
+    edges = np.asarray(edges) if not isinstance(edges, pd.DatetimeIndex) else edges
     values = np.asarray(values, dtype=float)
-    edges = np.asarray(edges)
     if len(values) == 0:
         return edges, values
 

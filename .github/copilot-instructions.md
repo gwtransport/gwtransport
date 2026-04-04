@@ -20,8 +20,7 @@ uv run ruff check --fix .                         # Lint and auto-fix
 npx prettier --check "**/*.{yaml,yml,md}"         # Format markdown/yaml
 
 # Type checking (run before committing)
-uv tool update ty
-uv tool run ty check .
+uv tool update ty & uv tool run ty check .
 
 # Documentation
 uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck
