@@ -618,7 +618,11 @@ def simplify_bins(
     values: npt.ArrayLike,
     flow: npt.ArrayLike | None = None,
     tol: float = 0.0,
-) -> tuple[npt.NDArray[np.floating] | pd.DatetimeIndex, npt.NDArray[np.floating]]:
+) -> tuple[
+    npt.NDArray[np.floating] | pd.DatetimeIndex,
+    npt.NDArray[np.floating],
+    npt.NDArray[np.floating] | None,
+]:
     """Simplify a piecewise-constant time series by merging adjacent bins.
 
     Recursively splits at the largest value jump until the peak-to-peak
@@ -641,19 +645,26 @@ def simplify_bins(
 
     Returns
     -------
-    new_edges : ndarray, shape (m+1,)
-        Simplified bin edges, preserving the dtype of `edges`.
+    new_edges : ndarray or DatetimeIndex, shape (m+1,)
+        Simplified bin edges, preserving the type of `edges`.
     new_values : ndarray of float, shape (m,)
         Volume-weighted (or width-weighted) average values per
         simplified bin.
+    new_flow : ndarray of float, shape (m,), or None
+        Time-weighted (width-weighted) average flow per simplified
+        bin. None when `flow` is not provided.
     """
     edges = np.asarray(edges) if not isinstance(edges, pd.DatetimeIndex) else edges
     values = np.asarray(values, dtype=float)
     if len(values) == 0:
-        return edges, values
+        return edges, values, None
 
     widths = np.asarray(np.diff(edges), dtype=float)
-    weights = widths if flow is None else widths * np.asarray(flow, dtype=float)
+    if flow is not None:
+        flow = np.asarray(flow, dtype=float)
+        weights = widths * flow
+    else:
+        weights = widths
 
     def _splits(lo: int, hi: int) -> list[int]:
         if np.ptp(values[lo:hi]) <= tol:
@@ -664,9 +675,11 @@ def simplify_bins(
     s = np.array([0, *_splits(0, len(values))])
     idx = np.append(s, len(values))
     new_edges = edges[idx]
+    new_widths = np.add.reduceat(widths, s)
     new_values = np.add.reduceat(weights * values, s) / np.add.reduceat(weights, s)
+    new_flow = np.add.reduceat(flow * widths, s) / new_widths if flow is not None else None
 
-    return new_edges, new_values
+    return new_edges, new_values, new_flow
 
 
 def _generate_failed_coverage_badge() -> None:
