@@ -60,4 +60,5 @@ Base URL: `https://gwtransport.github.io/gwtransport/`
 | `examples/03_Pathogen_Removal_Bank_Filtration`     | Log removal efficiency         |
 | `examples/04_Deposition_Analysis_Bank_Filtration`  | Deposition analysis            |
 | `examples/05_Diffusion_Dispersion`                 | Dispersion vs APVD             |
+| `examples/07_Radial_PushPull_Well`                 | Radial push-pull well model    |
 | `examples/10_Advection_with_non_linear_sorption`   | Freundlich sorption            |

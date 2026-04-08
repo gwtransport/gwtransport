@@ -110,6 +110,14 @@ fronttracking.waves
    :undoc-members:
    :show-inheritance:
 
+radial
+======
+
+.. automodule:: gwtransport.radial
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 gamma
 =====
 
