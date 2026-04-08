@@ -47,6 +47,7 @@ class TestPushPullAdvection:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([2.0, 3.0, 5.0]),
             porosity=0.3,
         )
@@ -66,6 +67,7 @@ class TestPushPullAdvection:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([5.0]),
             porosity=0.3,
         )
@@ -84,6 +86,7 @@ class TestPushPullAdvection:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([2.0, 3.0]),
             porosity=0.3,
         )
@@ -106,6 +109,7 @@ class TestPushPullAdvection:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([5.0]),
             porosity=0.3,
         )
@@ -115,6 +119,7 @@ class TestPushPullAdvection:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([1.0, 3.0, 5.0, 10.0]),
             porosity=0.3,
         )
@@ -132,6 +137,7 @@ class TestPushPullAdvection:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([5.0]),
             porosity=0.3,
         )
@@ -150,6 +156,7 @@ class TestPushPullAdvection:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([5.0]),
             porosity=0.3,
         )
@@ -171,6 +178,7 @@ class TestPushPullAdvection:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([5.0]),
             porosity=0.3,
         )
@@ -242,6 +250,7 @@ class TestPushPullDiffusion:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
         )
@@ -250,6 +259,7 @@ class TestPushPullDiffusion:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
             molecular_diffusivity=0.0,
@@ -274,6 +284,7 @@ class TestPushPullDiffusion:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
             molecular_diffusivity=0.01,
@@ -293,6 +304,7 @@ class TestPushPullDiffusion:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
             molecular_diffusivity=0.001,
@@ -302,6 +314,7 @@ class TestPushPullDiffusion:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
             molecular_diffusivity=0.1,
@@ -322,6 +335,7 @@ class TestPushPullDiffusion:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([5.0, 5.0, 5.0]),
             porosity=0.3,
             molecular_diffusivity=0.01,
@@ -332,6 +346,7 @@ class TestPushPullDiffusion:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([1.0, 5.0, 20.0]),
             porosity=0.3,
             molecular_diffusivity=0.01,
@@ -355,6 +370,7 @@ class TestRetardation:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([5.0]),
             porosity=0.3,
             retardation_factor=1.0,
@@ -364,6 +380,7 @@ class TestRetardation:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([5.0]),
             porosity=0.3,
         )
@@ -380,6 +397,7 @@ class TestRetardation:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([5.0]),
             porosity=0.3,
             retardation_factor=3.0,
@@ -404,6 +422,7 @@ class TestRetardation:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
             retardation_factor=1.0,
@@ -414,6 +433,7 @@ class TestRetardation:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
             retardation_factor=3.0,
@@ -474,6 +494,7 @@ class TestPushPullInverse:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
         )
@@ -482,6 +503,7 @@ class TestPushPullInverse:
             flow=flow,
             cout=cout,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
         )
@@ -500,6 +522,7 @@ class TestPushPullInverse:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
             molecular_diffusivity=0.001,
@@ -509,6 +532,7 @@ class TestPushPullInverse:
             flow=flow,
             cout=cout,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
             molecular_diffusivity=0.001,
@@ -534,6 +558,7 @@ class TestGammaConvenience:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=gamma_bins["expected_values"],
             porosity=0.3,
         )
@@ -542,6 +567,7 @@ class TestGammaConvenience:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             mean=5.0,
             std=1.5,
             n_bins=50,
@@ -561,6 +587,7 @@ class TestGammaConvenience:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             alpha=11.11,
             beta=0.45,
             porosity=0.3,
@@ -584,6 +611,7 @@ class TestBackgroundConcentration:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
             molecular_diffusivity=0.01,
@@ -592,6 +620,7 @@ class TestBackgroundConcentration:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
             molecular_diffusivity=0.01,
@@ -610,6 +639,7 @@ class TestBackgroundConcentration:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
             molecular_diffusivity=0.05,
@@ -629,6 +659,7 @@ class TestBackgroundConcentration:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([5.0]),
             porosity=0.3,
             c_background=2.0,
@@ -657,6 +688,7 @@ class TestBackgroundConcentration:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             mean=5.0,
             std=2.0,
             n_bins=30,
@@ -672,22 +704,14 @@ class TestBackgroundConcentration:
 class TestCoutTedges:
     """Tests for cout_tedges (flow-weighted resampling) feature."""
 
-    def test_same_grid_matches_default(self):
-        """Passing cout_tedges=tedges gives same result as default (extraction bins)."""
+    def test_same_grid_gives_lifo(self):
+        """Using cout_tedges=tedges reproduces the LIFO extraction result."""
         flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
         tedges = pd.date_range("2020-01-01", periods=7, freq="D")
         cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([5.0])
 
-        cout_default = push_pull_well(
-            flow=flow,
-            cin=cin,
-            tedges=tedges,
-            layer_heights=layer_heights,
-            porosity=0.3,
-        )
-
-        cout_explicit = push_pull_well(
+        cout = push_pull_well(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -696,11 +720,11 @@ class TestCoutTedges:
             porosity=0.3,
         )
 
-        # When cout_tedges=tedges, extraction bins should match
+        # LIFO: last injected (5.0) extracted first
         extraction_mask = flow < 0
-        assert_allclose(cout_explicit[extraction_mask], cout_default[extraction_mask])
-        # Injection/rest bins should be NaN
-        assert np.all(np.isnan(cout_explicit[~extraction_mask]))
+        assert_allclose(cout[extraction_mask], [5.0, 3.0, 1.0])
+        # Injection bins should be NaN
+        assert np.all(np.isnan(cout[~extraction_mask]))
 
     def test_coarser_grid_mass_conservation(self):
         """Flow-weighted resampling to coarser grid conserves mass."""
@@ -714,6 +738,7 @@ class TestCoutTedges:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
         )
@@ -751,6 +776,7 @@ class TestCoutTedges:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
         )
@@ -801,6 +827,7 @@ class TestCoutTedges:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
             molecular_diffusivity=0.001,
@@ -836,6 +863,7 @@ class TestCoutTedges:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([5.0]),
             porosity=0.3,
             c_background=2.0,
@@ -904,6 +932,7 @@ class TestCoutTedges:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
         )
@@ -940,6 +969,7 @@ class TestCoutTedges:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             mean=5.0,
             std=1.0,
             n_bins=10,
@@ -1083,6 +1113,7 @@ class TestIncompleteGammaSeries:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
             molecular_diffusivity=0.01,
@@ -1104,6 +1135,7 @@ class TestIncompleteGammaSeries:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
         )
@@ -1112,6 +1144,7 @@ class TestIncompleteGammaSeries:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=layer_heights,
             porosity=0.3,
             longitudinal_dispersivity=0.5,
@@ -1131,6 +1164,7 @@ class TestIncompleteGammaSeries:
             flow=flow,
             cin=cin,
             tedges=tedges,
+            cout_tedges=tedges,
             layer_heights=np.array([3.0, 7.0]),
             porosity=0.3,
             molecular_diffusivity=0.01,
