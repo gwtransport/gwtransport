@@ -46,7 +46,7 @@ import pandas as pd
 from scipy import special
 
 from gwtransport import gamma
-from gwtransport.utils import solve_inverse_transport
+from gwtransport.utils import partial_isin, solve_inverse_transport
 
 
 def _push_pull_advection_matrix(
@@ -717,11 +717,58 @@ def _push_pull_diffusion_matrix(
     return np.maximum(coeff, 0.0)
 
 
+def _build_resample_matrix(
+    *,
+    flow: npt.NDArray[np.floating],
+    tedges_days: npt.NDArray[np.floating],
+    cout_tedges_days: npt.NDArray[np.floating],
+) -> npt.NDArray[np.floating]:
+    """Build flow-weighted resampling matrix from fine to coarse time bins.
+
+    Maps extraction concentration on the fine ``tedges`` grid to
+    flow-weighted bin-averaged concentration on the ``cout_tedges`` grid.
+    Only extraction bins (flow < 0) contribute.
+
+    Parameters
+    ----------
+    flow : ndarray, shape (n,)
+        Flow rate per bin [m³/day].
+    tedges_days : ndarray, shape (n+1,)
+        Fine time edges in days.
+    cout_tedges_days : ndarray, shape (n_cout+1,)
+        Output time edges in days.
+
+    Returns
+    -------
+    ndarray, shape (n_cout, n)
+        Resampling matrix R such that ``cout_coarse = R @ cout_fine``.
+    """
+    dt = np.diff(tedges_days)
+
+    # Fraction of each fine bin overlapping with each cout bin: (n, n_cout)
+    overlap = partial_isin(bin_edges_in=tedges_days, bin_edges_out=cout_tedges_days)
+
+    # Extraction volume per (fine bin, cout bin) overlap
+    is_extraction = flow < 0
+    extraction_volume = np.abs(flow) * dt * is_extraction  # (n,)
+    weighted = extraction_volume[:, np.newaxis] * overlap  # (n, n_cout)
+
+    # Normalize: each cout bin row sums to 1
+    col_sums = weighted.sum(axis=0)  # (n_cout,)
+    n_cout = len(cout_tedges_days) - 1
+    r = np.zeros((n_cout, len(flow)))
+    valid = col_sums > 0
+    r[valid, :] = weighted[:, valid].T / col_sums[valid, np.newaxis]
+
+    return r
+
+
 def push_pull_well(
     *,
     flow: npt.ArrayLike,
     cin: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex | None = None,
     layer_heights: npt.ArrayLike,
     porosity: float,
     retardation_factor: float = 1.0,
@@ -749,6 +796,11 @@ def push_pull_well(
         Values during extraction/rest bins are ignored.
     tedges : DatetimeIndex
         Time bin edges (n+1 edges for n bins).
+    cout_tedges : DatetimeIndex, optional
+        Output time bin edges (n_cout+1 edges for n_cout bins). If provided,
+        the extraction concentration is flow-weighted averaged onto this grid.
+        If None (default), the output uses the same ``tedges`` grid and
+        returns NaN for non-extraction bins.
     layer_heights : array-like, shape (N,)
         Height of each horizontal streamtube flowing to the well screen [m].
         The well screen is divided into N streamtubes of equal flow but
@@ -770,8 +822,10 @@ def push_pull_well(
 
     Returns
     -------
-    ndarray, shape (n,)
-        Extraction concentration. NaN for injection and rest bins.
+    ndarray, shape (n,) or shape (n_cout,)
+        Extraction concentration. When ``cout_tedges`` is None, returns shape
+        (n,) with NaN for injection and rest bins. When ``cout_tedges`` is
+        provided, returns shape (n_cout,) with NaN for bins without extraction.
 
     Raises
     ------
@@ -845,12 +899,27 @@ def push_pull_well(
         w /= n_layers
 
     # Compute output concentration
-    cout = w @ cin
-    is_extraction = flow < 0
-    cout[~is_extraction] = np.nan
+    if cout_tedges is not None:
+        tedges_days_full = ((tedges - tedges[0]) / pd.Timedelta("1D")).values.astype(float)
+        cout_tedges_days = ((cout_tedges - tedges[0]) / pd.Timedelta("1D")).values.astype(float)
 
-    if prepended:
-        cout = cout[1:]
+        r = _build_resample_matrix(
+            flow=flow,
+            tedges_days=tedges_days_full,
+            cout_tedges_days=cout_tedges_days,
+        )
+        cout = r @ w @ cin
+
+        # NaN where no extraction volume contributes
+        total_weight = r.sum(axis=1)
+        cout[total_weight == 0] = np.nan
+    else:
+        cout = w @ cin
+        is_extraction = flow < 0
+        cout[~is_extraction] = np.nan
+
+        if prepended:
+            cout = cout[1:]
 
     return cout
 
@@ -860,6 +929,7 @@ def push_pull_well_inverse(
     flow: npt.ArrayLike,
     cout: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex | None = None,
     layer_heights: npt.ArrayLike,
     porosity: float,
     retardation_factor: float = 1.0,
@@ -878,11 +948,18 @@ def push_pull_well_inverse(
     flow : array-like, shape (n,)
         Flow rate per time bin [m³/day]. Positive = injection,
         negative = extraction, zero = rest.
-    cout : array-like, shape (n,)
+    cout : array-like, shape (n,) or shape (n_cout,)
         Measured extraction concentration [concentration units].
-        Values during injection/rest bins are ignored.
+        When ``cout_tedges`` is None, has shape (n,) and values during
+        injection/rest bins are ignored. When ``cout_tedges`` is provided,
+        has shape (n_cout,) matching the ``cout_tedges`` grid.
     tedges : DatetimeIndex
         Time bin edges (n+1 edges for n bins).
+    cout_tedges : DatetimeIndex, optional
+        Output time bin edges (n_cout+1 edges for n_cout bins). If provided,
+        ``cout`` is assumed to live on this grid and the inverse problem
+        accounts for the flow-weighted resampling. If None (default),
+        ``cout`` lives on the ``tedges`` grid.
     layer_heights : array-like, shape (N,)
         Height of each horizontal streamtube flowing to the well screen [m].
         The well screen is divided into N streamtubes of equal flow but
@@ -927,10 +1004,12 @@ def push_pull_well_inverse(
         max_abs_v = max(np.max(np.abs(np.concatenate(([0.0], v_cum_test)))), 1.0)
         prepend_volume = 1000.0 * max_abs_v
         flow = np.concatenate(([prepend_volume], flow))
-        cout = np.concatenate(([np.nan], cout))
         dt = np.concatenate(([1.0], dt))
         tedges = tedges.insert(0, tedges[0] - pd.Timedelta("1D"))  # type: ignore[assignment]
         n += 1
+
+        if cout_tedges is None:
+            cout = np.concatenate(([np.nan], cout))
 
     n_layers = len(layer_heights)
     has_diffusion = molecular_diffusivity > 0 or longitudinal_dispersivity > 0
@@ -966,7 +1045,51 @@ def push_pull_well_inverse(
     is_extraction = flow < 0
     is_injection = flow > 0
 
-    if prepended:
+    if cout_tedges is not None:
+        # Build resampling matrix and combine with forward matrix
+        tedges_days_full = ((tedges - tedges[0]) / pd.Timedelta("1D")).values.astype(float)
+        cout_tedges_days = ((cout_tedges - tedges[0]) / pd.Timedelta("1D")).values.astype(float)
+
+        r = _build_resample_matrix(
+            flow=flow,
+            tedges_days=tedges_days_full,
+            cout_tedges_days=cout_tedges_days,
+        )
+
+        total_weight = r.sum(axis=1)
+        valid_cout = total_weight > 0
+
+        if prepended:
+            bg_contribution = r @ (w[:, 0] * c_background)
+            observed = np.where(valid_cout, cout - bg_contribution, 0.0)
+            w_combined = r @ w[:, 1:]
+
+            cin_recovered = solve_inverse_transport(
+                w_forward=w_combined,
+                observed=observed,
+                n_output=n - 1,
+                regularization_strength=regularization_strength,
+                valid_rows=valid_cout,
+            )
+
+            out = np.full(n - 1, np.nan)
+            idx = np.flatnonzero(is_injection[1:])
+            out[idx] = cin_recovered[idx]
+        else:
+            w_combined = r @ w
+
+            cin_recovered = solve_inverse_transport(
+                w_forward=w_combined,
+                observed=np.where(valid_cout, cout, 0.0),
+                n_output=n,
+                regularization_strength=regularization_strength,
+                valid_rows=valid_cout,
+            )
+
+            out = np.full(n, np.nan)
+            idx = np.flatnonzero(is_injection)
+            out[idx] = cin_recovered[idx]
+    elif prepended:
         # Subtract known background column, solve reduced system
         bg_contribution = w[1:, 0] * c_background
         observed = np.where(is_extraction[1:], cout[1:] - bg_contribution, 0.0)
@@ -1004,6 +1127,7 @@ def gamma_push_pull_well(
     flow: npt.ArrayLike,
     cin: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex | None = None,
     alpha: float | None = None,
     beta: float | None = None,
     mean: float | None = None,
@@ -1029,6 +1153,10 @@ def gamma_push_pull_well(
         Injection concentration per time bin [concentration units].
     tedges : DatetimeIndex
         Time bin edges (n+1 edges for n bins).
+    cout_tedges : DatetimeIndex, optional
+        Output time bin edges (n_cout+1 edges for n_cout bins). If provided,
+        the extraction concentration is flow-weighted averaged onto this grid.
+        If None (default), the output uses the same ``tedges`` grid.
     alpha : float, optional
         Shape parameter of gamma distribution for layer heights.
     beta : float, optional
@@ -1053,8 +1181,10 @@ def gamma_push_pull_well(
 
     Returns
     -------
-    ndarray, shape (n,)
-        Extraction concentration. NaN for injection and rest bins.
+    ndarray, shape (n,) or shape (n_cout,)
+        Extraction concentration. When ``cout_tedges`` is None, returns shape
+        (n,) with NaN for injection and rest bins. When ``cout_tedges`` is
+        provided, returns shape (n_cout,) with NaN for bins without extraction.
 
     See Also
     --------
@@ -1068,6 +1198,7 @@ def gamma_push_pull_well(
         flow=flow,
         cin=cin,
         tedges=tedges,
+        cout_tedges=cout_tedges,
         layer_heights=layer_heights,
         porosity=porosity,
         retardation_factor=retardation_factor,
@@ -1082,6 +1213,7 @@ def gamma_push_pull_well_inverse(
     flow: npt.ArrayLike,
     cout: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex | None = None,
     alpha: float | None = None,
     beta: float | None = None,
     mean: float | None = None,
@@ -1104,10 +1236,16 @@ def gamma_push_pull_well_inverse(
     flow : array-like, shape (n,)
         Flow rate per time bin [m³/day]. Positive = injection,
         negative = extraction, zero = rest.
-    cout : array-like, shape (n,)
+    cout : array-like, shape (n,) or shape (n_cout,)
         Measured extraction concentration [concentration units].
+        When ``cout_tedges`` is None, has shape (n,). When ``cout_tedges``
+        is provided, has shape (n_cout,).
     tedges : DatetimeIndex
         Time bin edges (n+1 edges for n bins).
+    cout_tedges : DatetimeIndex, optional
+        Output time bin edges (n_cout+1 edges for n_cout bins). If provided,
+        ``cout`` is assumed to live on this grid. If None (default),
+        ``cout`` lives on the ``tedges`` grid.
     alpha : float, optional
         Shape parameter of gamma distribution for layer heights.
     beta : float, optional
@@ -1149,6 +1287,7 @@ def gamma_push_pull_well_inverse(
         flow=flow,
         cout=cout,
         tedges=tedges,
+        cout_tedges=cout_tedges,
         layer_heights=layer_heights,
         porosity=porosity,
         retardation_factor=retardation_factor,

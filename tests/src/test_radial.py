@@ -669,6 +669,301 @@ class TestBackgroundConcentration:
         assert_allclose(cout[extraction_mask], 4.0, rtol=1e-5)
 
 
+class TestCoutTedges:
+    """Tests for cout_tedges (flow-weighted resampling) feature."""
+
+    def test_same_grid_matches_default(self):
+        """Passing cout_tedges=tedges gives same result as default (extraction bins)."""
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=7, freq="D")
+        cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
+        layer_heights = np.array([5.0])
+
+        cout_default = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+        )
+
+        cout_explicit = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+        )
+
+        # When cout_tedges=tedges, extraction bins should match
+        extraction_mask = flow < 0
+        assert_allclose(cout_explicit[extraction_mask], cout_default[extraction_mask])
+        # Injection/rest bins should be NaN
+        assert np.all(np.isnan(cout_explicit[~extraction_mask]))
+
+    def test_coarser_grid_mass_conservation(self):
+        """Flow-weighted resampling to coarser grid conserves mass."""
+        flow = np.array([100.0, 100.0, 100.0, 100.0, -100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=9, freq="D")
+        cin = np.array([1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0])
+        layer_heights = np.array([5.0])
+
+        # Fine resolution cout
+        cout_fine = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+        )
+
+        # Coarse: extraction period in 2 bins (2 days each)
+        cout_tedges = pd.date_range("2020-01-05", periods=3, freq="2D")
+        cout_coarse = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+        )
+
+        # Mass conservation: total extracted mass should be equal
+        dt_fine = np.diff(tedges) / pd.Timedelta("1D")
+        extraction_mask = flow < 0
+        mass_fine = np.nansum(cout_fine[extraction_mask] * np.abs(flow[extraction_mask]) * dt_fine[extraction_mask])
+
+        dt_coarse = np.diff(cout_tedges) / pd.Timedelta("1D")
+        # Flow is constant in this scenario
+        mass_coarse = np.nansum(cout_coarse * 100.0 * dt_coarse)
+
+        assert_allclose(mass_coarse, mass_fine, rtol=1e-12)
+
+    def test_coarser_grid_flow_weighted_average(self):
+        """Coarser cout_tedges bins are the flow-weighted average of fine bins."""
+        flow = np.array([100.0, 100.0, 100.0, 100.0, -100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=9, freq="D")
+        cin = np.array([1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0])
+        layer_heights = np.array([5.0])
+
+        cout_fine = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+        )
+
+        # Coarse: combine extraction into one bin
+        cout_tedges = pd.DatetimeIndex([tedges[4], tedges[8]])
+        cout_coarse = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+        )
+
+        # With constant flow, the coarse bin is the simple average of fine bins
+        expected = np.nanmean(cout_fine[4:8])
+        assert_allclose(cout_coarse[0], expected)
+
+    def test_non_overlapping_bins_are_nan(self):
+        """Cout_tedges bins outside extraction period are NaN."""
+        flow = np.array([100.0, 100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=5, freq="D")
+        cin = np.array([1.0, 2.0, 0.0, 0.0])
+        layer_heights = np.array([5.0])
+
+        # cout_tedges covers injection period only
+        cout_tedges = pd.DatetimeIndex([tedges[0], tedges[2]])
+        cout = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+        )
+
+        assert np.all(np.isnan(cout))
+
+    def test_with_diffusion(self):
+        """Cout_tedges works with diffusion enabled."""
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=7, freq="D")
+        cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
+        layer_heights = np.array([3.0, 5.0, 8.0])
+
+        cout_fine = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            molecular_diffusivity=0.001,
+        )
+
+        # Coarse: single extraction bin
+        cout_tedges = pd.DatetimeIndex([tedges[3], tedges[6]])
+        cout_coarse = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            molecular_diffusivity=0.001,
+        )
+
+        expected = np.nanmean(cout_fine[3:6])
+        assert_allclose(cout_coarse[0], expected)
+
+    def test_with_background(self):
+        """Cout_tedges works with c_background."""
+        n_inject = 5
+        n_extract = 10
+        n = n_inject + n_extract
+        flow = np.zeros(n)
+        flow[:n_inject] = 100.0
+        flow[n_inject:] = -100.0
+        tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+        cin = np.ones(n) * 5.0
+
+        cout_fine = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            layer_heights=np.array([5.0]),
+            porosity=0.3,
+            c_background=2.0,
+        )
+
+        # Coarse: combine all extraction into two bins
+        cout_tedges = pd.date_range(tedges[n_inject], periods=3, freq=f"{n_extract // 2}D")
+        cout_coarse = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            layer_heights=np.array([5.0]),
+            porosity=0.3,
+            c_background=2.0,
+        )
+
+        # Check mass conservation
+        dt_fine = np.diff(tedges) / pd.Timedelta("1D")
+        extraction_mask = flow < 0
+        mass_fine = np.nansum(cout_fine[extraction_mask] * np.abs(flow[extraction_mask]) * dt_fine[extraction_mask])
+
+        dt_coarse = np.diff(cout_tedges) / pd.Timedelta("1D")
+        mass_coarse = np.nansum(cout_coarse * 100.0 * dt_coarse)
+
+        assert_allclose(mass_coarse, mass_fine, rtol=1e-12)
+
+    def test_inverse_roundtrip_advection(self):
+        """Forward with cout_tedges then inverse recovers cin."""
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=7, freq="D")
+        cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
+        layer_heights = np.array([5.0])
+
+        cout_tedges = pd.DatetimeIndex([tedges[3], tedges[4], tedges[5], tedges[6]])
+
+        cout = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+        )
+
+        cin_recovered = push_pull_well_inverse(
+            flow=flow,
+            cout=cout,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+        )
+
+        injection_mask = flow > 0
+        assert_allclose(cin_recovered[injection_mask], cin[injection_mask], atol=1e-6)
+
+    def test_variable_flow_mass_conservation(self):
+        """Mass conservation with variable extraction flow rates."""
+        flow = np.array([100.0, 200.0, 150.0, -50.0, -200.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=8, freq="D")
+        cin = np.array([3.0, 7.0, 2.0, 0.0, 0.0, 0.0, 0.0])
+        layer_heights = np.array([5.0])
+
+        cout_fine = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+        )
+
+        # Coarse: two bins covering the extraction period
+        cout_tedges = pd.DatetimeIndex([tedges[3], tedges[5], tedges[7]])
+        cout_coarse = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+        )
+
+        dt = np.diff(tedges) / pd.Timedelta("1D")
+        extraction_mask = flow < 0
+        mass_fine = np.nansum(cout_fine[extraction_mask] * np.abs(flow[extraction_mask]) * dt[extraction_mask])
+
+        # For coarse bins, compute mass using flow-weighted volume per bin
+        # First coarse bin covers flow[3:5] = [-50, -200], second covers flow[5:7] = [-100, -100]
+        vol_coarse = np.array([50.0 * 1 + 200.0 * 1, 100.0 * 1 + 100.0 * 1])
+        mass_coarse = np.nansum(cout_coarse * vol_coarse)
+
+        assert_allclose(mass_coarse, mass_fine, rtol=1e-12)
+
+    def test_gamma_forward_with_cout_tedges(self):
+        """Gamma convenience wrapper passes through cout_tedges."""
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=7, freq="D")
+        cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
+
+        cout_fine = gamma_push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            mean=5.0,
+            std=1.0,
+            n_bins=10,
+            porosity=0.3,
+            molecular_diffusivity=0.001,
+        )
+
+        cout_tedges = pd.DatetimeIndex([tedges[3], tedges[6]])
+        cout_coarse = gamma_push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            mean=5.0,
+            std=1.0,
+            n_bins=10,
+            porosity=0.3,
+            molecular_diffusivity=0.001,
+        )
+
+        expected = np.nanmean(cout_fine[3:6])
+        assert_allclose(cout_coarse[0], expected)
+
+
 class TestIncompleteGammaSeries:
     """Precision tests for _jk_incomplete_gamma and antiderivatives."""
 
