@@ -16,57 +16,6 @@ from scipy import special
 from gwtransport.utils import partial_isin
 
 
-def _resample_weight_matrix(
-    *,
-    w_fine: npt.NDArray[np.floating],
-    flow: npt.NDArray[np.floating],
-    tedges_days: npt.NDArray[np.floating],
-    cout_tedges_days: npt.NDArray[np.floating],
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool]]:
-    """Apply flow-weighted resampling to a fine-grid weight matrix.
-
-    Combines ``w_fine`` (shape ``(n, n)``) with flow-weighted temporal overlap
-    to produce a weight matrix on the ``cout_tedges`` grid. Only extraction
-    bins (flow < 0) contribute.
-
-    Parameters
-    ----------
-    w_fine : ndarray, shape (n, n)
-        Fine-grid weight matrix mapping cin to cout on the tedges grid.
-    flow : ndarray, shape (n,)
-        Flow rate per bin [m³/day].
-    tedges_days : ndarray, shape (n+1,)
-        Fine time edges in days.
-    cout_tedges_days : ndarray, shape (n_cout+1,)
-        Output time edges in days.
-
-    Returns
-    -------
-    weights : ndarray, shape (n_cout, n)
-        Normalized weight matrix on the cout_tedges grid.
-    has_extraction : ndarray, shape (n_cout,)
-        Boolean mask indicating which output bins have extraction volume.
-    """
-    dt = np.diff(tedges_days)
-
-    # Fraction of each fine bin overlapping with each cout bin: (n, n_cout)
-    overlap = partial_isin(bin_edges_in=tedges_days, bin_edges_out=cout_tedges_days)
-
-    # Extraction volume per (fine bin, cout bin) overlap
-    is_extraction = flow < 0
-    extraction_volume = np.abs(flow) * dt * is_extraction  # (n,)
-    weighted = extraction_volume[:, np.newaxis] * overlap  # (n, n_cout)
-
-    # Normalize: each cout bin row sums to 1
-    col_sums = weighted.sum(axis=0)  # (n_cout,)
-    n_cout = len(cout_tedges_days) - 1
-    has_extraction = col_sums > 0
-    r = np.zeros((n_cout, len(flow)))
-    r[has_extraction, :] = weighted[:, has_extraction].T / col_sums[has_extraction, np.newaxis]
-
-    return r @ w_fine, has_extraction
-
-
 def _push_pull_advection_matrix(
     *,
     flow: npt.NDArray[np.floating],
@@ -101,36 +50,47 @@ def _push_pull_advection_matrix(
         Boolean mask indicating which output bins have extraction volume.
     """
     n = len(flow)
-    w_fine = np.zeros((n, n))
-    # Stack entries: [bin_index, remaining_volume]
+    n_cout = len(cout_tedges_days) - 1
+
+    # Temporal overlap fractions: overlap[i, k] = fraction of fine bin i
+    # that falls in cout bin k. Since flow is constant within a fine bin,
+    # temporal fraction = volume fraction.
+    overlap = partial_isin(bin_edges_in=tedges_days, bin_edges_out=cout_tedges_days)  # (n, n_cout)
+
+    # Total extraction volume per cout bin (for normalization)
+    is_extraction = flow < 0
+    extraction_volume = np.abs(flow) * dt * is_extraction  # (n,)
+    total_ext = (extraction_volume[:, np.newaxis] * overlap).sum(axis=0)  # (n_cout,)
+    has_extraction = total_ext > 0
+
+    # Accumulate raw consumed volumes directly into (n_cout, n) matrix.
+    # For each consumed volume from the LIFO stack, distribute it across
+    # cout bins proportional to how much of the fine extraction bin
+    # overlaps with each cout bin.
+    w_raw = np.zeros((n_cout, n))
     stack: list[list[float]] = []
 
     for i in range(n):
         vol = flow[i] * dt[i]
         if vol > 0:
-            # Injection: push onto stack
             stack.append([float(i), vol])
         elif vol < 0:
-            # Extraction: pop from stack (LIFO)
             vol_needed = -vol
-            extract_vol = vol_needed  # total extraction volume for normalization
+            overlap_i = overlap[i, :]  # (n_cout,)
             while vol_needed > 0 and stack:
                 j_idx, vol_avail = stack[-1]
                 consumed = min(vol_avail, vol_needed)
-                w_fine[i, int(j_idx)] += consumed / extract_vol
+                w_raw[:, int(j_idx)] += consumed * overlap_i
                 vol_needed -= consumed
                 stack[-1][1] -= consumed
                 if stack[-1][1] <= 0:
                     stack.pop()
-        # vol == 0: rest period, no action
 
-    # Flow-weighted resampling onto cout_tedges grid
-    return _resample_weight_matrix(
-        w_fine=w_fine,
-        flow=flow,
-        tedges_days=tedges_days,
-        cout_tedges_days=cout_tedges_days,
-    )
+    # Normalize per cout bin
+    w = np.zeros((n_cout, n))
+    w[has_extraction] = w_raw[has_extraction] / total_ext[has_extraction, np.newaxis]
+
+    return w, has_extraction
 
 
 def _signed_radial_distance(
@@ -409,6 +369,8 @@ def _push_pull_diffusion_matrix(
     has_extraction : ndarray, shape (n_cout,)
         Boolean mask indicating which output bins have extraction volume.
     """
+    n = len(flow)
+    dt = np.diff(tedges_days)
     is_injection = flow > 0
 
     response = _erf_mean_volume_radial(
@@ -448,12 +410,17 @@ def _push_pull_diffusion_matrix(
     coeff = frac_filled[:, 1:] - frac_filled[:, :-1]
     coeff[:, ~is_injection] = 0.0
 
-    w_fine = coeff
-
     # Flow-weighted resampling onto cout_tedges grid
-    return _resample_weight_matrix(
-        w_fine=w_fine,
-        flow=flow,
-        tedges_days=tedges_days,
-        cout_tedges_days=cout_tedges_days,
-    )
+    overlap = partial_isin(bin_edges_in=tedges_days, bin_edges_out=cout_tedges_days)  # (n, n_cout)
+    is_extraction = flow < 0
+    extraction_volume = np.abs(flow) * dt * is_extraction  # (n,)
+    ext_vol_overlap = extraction_volume[:, np.newaxis] * overlap  # (n, n_cout)
+    total_ext = ext_vol_overlap.sum(axis=0)  # (n_cout,)
+    has_extraction = total_ext > 0
+
+    n_cout = len(cout_tedges_days) - 1
+    w = np.zeros((n_cout, n))
+    # w[k,j] = Σ_i ext_vol_overlap[i,k] * coeff[i,j] / total_ext[k]
+    w[has_extraction] = (ext_vol_overlap[:, has_extraction].T @ coeff) / total_ext[has_extraction, np.newaxis]
+
+    return w, has_extraction
