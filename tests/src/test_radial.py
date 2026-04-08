@@ -4,19 +4,15 @@ import numpy as np
 import pandas as pd
 import pytest
 from numpy.testing import assert_allclose
-from scipy import integrate, special
 
 from gwtransport.gamma import bins as gamma_bins_func
 from gwtransport.radial import (
-    _erf_antideriv_approaching,
-    _erf_antideriv_past,
-    _jk_incomplete_gamma,
-    _push_pull_advection_matrix,
-    _signed_radial_distance,
     gamma_push_pull_well,
+    gamma_push_pull_well_inverse,
     push_pull_well,
     push_pull_well_inverse,
 )
+from gwtransport.radial_utils import _push_pull_advection_matrix, _signed_radial_distance
 
 
 @pytest.fixture
@@ -406,12 +402,13 @@ class TestRetardation:
         assert_allclose(cout[2], 5.0)
         assert_allclose(cout[3], 1.0)
 
-    def test_retardation_changes_diffusion_spreading(self):
-        """R>1 with molecular diffusion produces more relative spreading.
+    def test_retardation_invisible_with_molecular_diffusion(self):
+        """R>1 with molecular diffusion only does not change spreading.
 
-        Retardation reduces the radial front distance (r proportional to 1/sqrt(R))
-        but molecular diffusion magnitude is unchanged. This increases the
-        ratio of diffusion to advection, causing more spreading and a lower peak.
+        In a push-pull test, retardation reduces both the radial front distance
+        (r proportional to 1/sqrt(R)) and the effective diffusivity (D_eff = D_m/R)
+        by the same factor, so the erf argument x/(2*sqrt(D_m*tau/R)) is
+        R-independent. This is a well-known property of push-pull tests.
         """
         flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
         tedges = pd.date_range("2020-01-01", periods=7, freq="D")
@@ -441,7 +438,44 @@ class TestRetardation:
         )
 
         extraction_mask = flow < 0
-        # R>1 reduces radial distance but D_m*tau unchanged → more relative spreading
+        assert_allclose(cout_r3[extraction_mask], cout_r1[extraction_mask])
+
+    def test_retardation_changes_dispersivity_spreading(self):
+        """R>1 with longitudinal dispersivity produces more relative spreading.
+
+        Retardation reduces the radial front distance (r proportional to 1/sqrt(R))
+        and path length L proportional to 1/sqrt(R), so alpha_L*L shrinks faster
+        than x^2, increasing the ratio of dispersion to advection.
+        """
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=7, freq="D")
+        cin = np.array([0.0, 10.0, 0.0, 0.0, 0.0, 0.0])
+        layer_heights = np.array([3.0, 5.0, 8.0])
+
+        cout_r1 = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            retardation_factor=1.0,
+            longitudinal_dispersivity=0.5,
+        )
+
+        cout_r3 = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            retardation_factor=3.0,
+            longitudinal_dispersivity=0.5,
+        )
+
+        extraction_mask = flow < 0
+        # R>1 reduces path length, increasing relative dispersion → lower peak
         assert np.max(cout_r3[extraction_mask]) < np.max(cout_r1[extraction_mask])
 
 
@@ -452,7 +486,8 @@ class TestAdvectionMatrix:
         """Single inject then single extract: W is identity-like."""
         flow = np.array([100.0, -100.0])
         dt = np.array([1.0, 1.0])
-        w = _push_pull_advection_matrix(flow=flow, dt=dt)
+        tedges_days = np.array([0.0, 1.0, 2.0])
+        w, _ = _push_pull_advection_matrix(flow=flow, dt=dt, tedges_days=tedges_days, cout_tedges_days=tedges_days)
 
         assert_allclose(w[1, 0], 1.0)
         assert_allclose(w[0, :], 0.0)
@@ -461,7 +496,8 @@ class TestAdvectionMatrix:
         """Extraction rows sum to 1 when enough volume was injected."""
         flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
         dt = np.ones(6)
-        w = _push_pull_advection_matrix(flow=flow, dt=dt)
+        tedges_days = np.arange(7, dtype=float)
+        w, _ = _push_pull_advection_matrix(flow=flow, dt=dt, tedges_days=tedges_days, cout_tedges_days=tedges_days)
 
         # Extraction rows should sum to 1
         for i in [3, 4, 5]:
@@ -475,7 +511,8 @@ class TestAdvectionMatrix:
         """Rest bins (flow=0) have zero rows."""
         flow = np.array([100.0, 0.0, -100.0])
         dt = np.ones(3)
-        w = _push_pull_advection_matrix(flow=flow, dt=dt)
+        tedges_days = np.arange(4, dtype=float)
+        w, _ = _push_pull_advection_matrix(flow=flow, dt=dt, tedges_days=tedges_days, cout_tedges_days=tedges_days)
 
         assert_allclose(w[1, :], 0.0)
 
@@ -994,112 +1031,8 @@ class TestCoutTedges:
         assert_allclose(cout_coarse[0], expected)
 
 
-class TestIncompleteGammaSeries:
-    """Precision tests for _jk_incomplete_gamma and antiderivatives."""
-
-    @pytest.mark.parametrize("p", [0.1, 1.0, 8.42, 50.0, 500.0, 1000.0])
-    @pytest.mark.parametrize("a", [0.01, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0])
-    def test_j_against_quad(self, p, a):
-        """Test J(p, a) = ∫₀ᵃ exp(-p·t²)/(1+t²) dt against quadrature."""
-        expected, _ = integrate.quad(
-            lambda t: np.exp(-p * t**2) / (1 + t**2),
-            0,
-            a,
-            epsabs=1e-14,
-            epsrel=1e-14,
-            limit=200,
-        )
-        j_val, _ = _jk_incomplete_gamma(np.array([p]), np.array([a]))
-        assert_allclose(j_val[0], expected, rtol=1e-10)
-
-    @pytest.mark.parametrize("p", [0.1, 1.0, 10.0, 100.0, 1000.0])
-    @pytest.mark.parametrize("a", [0.01, 0.1, 0.5, 0.8])
-    def test_k_against_quad(self, p, a):
-        """Test K(p, a) = ∫₀ᵃ exp(-p·t²)/(1-t²) dt against quadrature."""
-        expected, _ = integrate.quad(
-            lambda t: np.exp(-p * t**2) / (1 - t**2),
-            0,
-            a,
-            epsabs=1e-14,
-            epsrel=1e-14,
-            limit=200,
-        )
-        _, k_val = _jk_incomplete_gamma(np.array([p]), np.array([a]))
-        assert_allclose(k_val[0], expected, rtol=1e-10)
-
-    @pytest.mark.parametrize(
-        ("p", "q"),
-        [
-            (0.5, 10.0),
-            (5.0, 100.0),
-            (50.0, 1000.0),
-            (500.0, 5000.0),
-            (8.42, 1500.0),
-            (8.42, 200500.0),
-        ],
-    )
-    def test_antideriv_approaching_against_quad(self, p, q):
-        """Test F(u) = ∫ erf(√(pu/(q-u))) du against numerical quadrature.
-
-        The last two cases (large q) triggered catastrophic cancellation in the
-        alternating-sign incomplete gamma series before the Owen's T / erfcx fix.
-        """
-
-        def integrand(u):
-            if u <= 0 or u >= q:
-                return 0.0
-            return special.erf(np.sqrt(p * u / (q - u)))
-
-        # Test at u = 0.8·q (far from zero, stresses the J function)
-        u_test = 0.8 * q
-        expected, _ = integrate.quad(integrand, 0, u_test, epsabs=1e-14, epsrel=1e-14, limit=200)
-        actual = _erf_antideriv_approaching(np.array([u_test]), np.array([p]), np.array([q]))[0]
-
-        # rtol=1e-11: limited by quad's achievable precision, not our implementation
-        assert_allclose(actual, expected, rtol=1e-11)
-
-    @pytest.mark.parametrize(
-        ("p", "q"),
-        [
-            (0.5, 10.0),
-            (5.0, 100.0),
-            (50.0, 1000.0),
-            (500.0, 5000.0),
-        ],
-    )
-    def test_antideriv_past_against_quad(self, p, q):
-        """Test G(u) = ∫ erf(√(pu/(q+u))) du against numerical quadrature."""
-
-        def integrand(u):
-            if u <= 0:
-                return 0.0
-            return special.erf(np.sqrt(p * u / (q + u)))
-
-        # Test at u = q (moderate range)
-        u_test = q
-        expected, _ = integrate.quad(integrand, 0, u_test, epsabs=1e-14, epsrel=1e-14, limit=200)
-        actual = _erf_antideriv_past(np.array([u_test]), np.array([p]), np.array([q]))[0]
-
-        # rtol=1e-11: limited by quad's achievable precision, not our implementation
-        assert_allclose(actual, expected, rtol=1e-11)
-
-    def test_antideriv_past_q_zero(self):
-        """G(u) with q=0 gives u * erf(√p)."""
-        p = 10.0
-        u_test = 50.0
-        expected = u_test * special.erf(np.sqrt(p))
-        actual = _erf_antideriv_past(np.array([u_test]), np.array([p]), np.array([0.0]))[0]
-
-        assert_allclose(actual, expected, rtol=1e-12)
-
-    def test_antideriv_at_zero(self):
-        """F(0) = G(0) = 0."""
-        p, q = 10.0, 100.0
-        f_val = _erf_antideriv_approaching(np.array([0.0]), np.array([p]), np.array([q]))[0]
-        g_val = _erf_antideriv_past(np.array([0.0]), np.array([p]), np.array([q]))[0]
-
-        assert_allclose(f_val, 0.0, atol=1e-15)
-        assert_allclose(g_val, 0.0, atol=1e-15)
+class TestDiffusionCoefficients:
+    """Tests for diffusion coefficient matrix properties."""
 
     def test_coefficient_row_sums(self):
         """Coefficient rows for extraction bins sum to <= 1."""
@@ -1173,3 +1106,605 @@ class TestIncompleteGammaSeries:
         extraction_mask = flow < 0
         # Constant input should give near-constant output
         assert_allclose(cout[extraction_mask], 5.0, atol=0.1)
+
+
+class TestInputValidation:
+    """Tests for input validation and error handling."""
+
+    def test_flow_cin_length_mismatch(self):
+        """Mismatched flow and cin lengths raise ValueError."""
+        flow = np.array([100.0, 100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=4, freq="D")
+        cin = np.array([1.0, 2.0])  # wrong length
+
+        with pytest.raises(ValueError, match="flow and cin must have the same length"):
+            push_pull_well(
+                flow=flow,
+                cin=cin,
+                tedges=tedges,
+                cout_tedges=tedges,
+                layer_heights=np.array([5.0]),
+                porosity=0.3,
+            )
+
+    def test_tedges_length_mismatch(self):
+        """Wrong tedges length raises ValueError."""
+        flow = np.array([100.0, 100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=3, freq="D")  # should be 4
+        cin = np.array([1.0, 2.0, 0.0])
+
+        with pytest.raises(ValueError, match="tedges must have length"):
+            push_pull_well(
+                flow=flow,
+                cin=cin,
+                tedges=tedges,
+                cout_tedges=tedges,
+                layer_heights=np.array([5.0]),
+                porosity=0.3,
+            )
+
+
+class TestSignedRadialDistanceExtended:
+    """Extended tests for _signed_radial_distance."""
+
+    def test_retardation_factor(self):
+        """Retardation factor R>1 reduces radial distance by sqrt(R)."""
+        dv = np.array([1000.0])
+        h, n_por, n_lay = 5.0, 0.3, 1
+
+        x_r1 = _signed_radial_distance(
+            delta_volume=dv, layer_height=h, porosity=n_por, retardation_factor=1.0, n_layers=n_lay
+        )
+        x_r4 = _signed_radial_distance(
+            delta_volume=dv, layer_height=h, porosity=n_por, retardation_factor=4.0, n_layers=n_lay
+        )
+
+        # r scales as 1/sqrt(R), so R=4 gives half the distance
+        assert_allclose(x_r4[0], x_r1[0] / 2.0)
+
+    def test_n_layers_scaling(self):
+        """More layers reduce radial distance by sqrt(N)."""
+        dv = np.array([1000.0])
+        h, n_por, r_factor = 5.0, 0.3, 1.0
+
+        x_1 = _signed_radial_distance(
+            delta_volume=dv, layer_height=h, porosity=n_por, retardation_factor=r_factor, n_layers=1
+        )
+        x_9 = _signed_radial_distance(
+            delta_volume=dv, layer_height=h, porosity=n_por, retardation_factor=r_factor, n_layers=9
+        )
+
+        assert_allclose(x_9[0], x_1[0] / 3.0)
+
+    def test_porosity_scaling(self):
+        """Larger porosity reduces radial distance by sqrt(n)."""
+        dv = np.array([1000.0])
+        h, r_factor, n_lay = 5.0, 1.0, 1
+
+        x_n1 = _signed_radial_distance(
+            delta_volume=dv, layer_height=h, porosity=0.1, retardation_factor=r_factor, n_layers=n_lay
+        )
+        x_n4 = _signed_radial_distance(
+            delta_volume=dv, layer_height=h, porosity=0.4, retardation_factor=r_factor, n_layers=n_lay
+        )
+
+        assert_allclose(x_n4[0], x_n1[0] / 2.0)
+
+
+class TestMassConservationWithDiffusion:
+    """Mass conservation tests for the diffusion model."""
+
+    def test_single_layer_balanced_volumes(self):
+        """Single uniform layer with balanced inject/extract conserves mass.
+
+        The reflecting boundary at the well screen (r=0) ensures no tracer
+        diffuses to r<0, so all injected mass is recovered during extraction.
+        """
+        flow = np.array([100.0, 100.0, 100.0, 100.0, -100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=9, freq="D")
+        cin = np.array([2.0, 4.0, 6.0, 8.0, 0.0, 0.0, 0.0, 0.0])
+
+        cout = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=np.array([5.0]),
+            porosity=0.3,
+            molecular_diffusivity=0.001,
+        )
+
+        dt = np.diff(tedges) / pd.Timedelta("1D")
+        mass_in = np.sum(cin * flow * dt)
+        cout_clean = np.where(np.isnan(cout), 0.0, cout)
+        mass_out = np.sum(cout_clean * np.abs(flow) * dt)
+
+        assert_allclose(mass_out, mass_in, rtol=1e-10)
+
+    def test_mass_conservation_dispersivity(self):
+        """Single uniform layer with dispersivity conserves mass."""
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=7, freq="D")
+        cin = np.array([1.0, 5.0, 3.0, 0.0, 0.0, 0.0])
+
+        cout = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=np.array([5.0]),
+            porosity=0.3,
+            longitudinal_dispersivity=0.1,
+        )
+
+        dt = np.diff(tedges) / pd.Timedelta("1D")
+        mass_in = np.sum(cin * flow * dt)
+        cout_clean = np.where(np.isnan(cout), 0.0, cout)
+        mass_out = np.sum(cout_clean * np.abs(flow) * dt)
+
+        assert_allclose(mass_out, mass_in, rtol=1e-10)
+
+
+class TestNonNegativeOutput:
+    """Output concentration must be non-negative for non-negative input."""
+
+    def test_non_negative_with_diffusion(self):
+        """All extraction concentrations are >= 0 when cin >= 0."""
+        flow = np.array([100.0, 100.0, 100.0, 100.0, -100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=9, freq="D")
+        cin = np.array([0.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        layer_heights = np.array([1.0, 3.0, 10.0])
+
+        cout = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            molecular_diffusivity=0.05,
+        )
+
+        extraction_mask = flow < 0
+        assert np.all(cout[extraction_mask] >= 0)
+
+    def test_non_negative_with_dispersivity(self):
+        """All extraction concentrations are >= 0 with dispersivity."""
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=7, freq="D")
+        cin = np.array([0.0, 10.0, 0.0, 0.0, 0.0, 0.0])
+        layer_heights = np.array([2.0, 5.0, 15.0])
+
+        cout = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            longitudinal_dispersivity=1.0,
+        )
+
+        extraction_mask = flow < 0
+        assert np.all(cout[extraction_mask] >= 0)
+
+
+class TestRestPeriodEffect:
+    """Rest period between injection and extraction allows more diffusion."""
+
+    def test_longer_rest_more_spreading(self):
+        """Longer rest period gives more diffusion spreading (lower peak)."""
+        layer_heights = np.array([3.0, 5.0, 8.0])
+
+        # No rest: inject 2, extract 2 immediately
+        flow_short = np.array([100.0, 100.0, -100.0, -100.0])
+        tedges_short = pd.date_range("2020-01-01", periods=5, freq="D")
+        cin_short = np.array([0.0, 10.0, 0.0, 0.0])
+        cout_short = push_pull_well(
+            flow=flow_short,
+            cin=cin_short,
+            tedges=tedges_short,
+            cout_tedges=tedges_short,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            molecular_diffusivity=0.1,
+        )
+
+        # Long rest: 50 days between inject and extract
+        n_rest = 50
+        flow_long = np.concatenate(([100.0, 100.0], np.zeros(n_rest), [-100.0, -100.0]))
+        tedges_long = pd.date_range("2020-01-01", periods=len(flow_long) + 1, freq="D")
+        cin_long = np.zeros(len(flow_long))
+        cin_long[1] = 10.0
+        cout_long = push_pull_well(
+            flow=flow_long,
+            cin=cin_long,
+            tedges=tedges_long,
+            cout_tedges=tedges_long,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            molecular_diffusivity=0.1,
+        )
+
+        extraction_short = flow_short < 0
+        extraction_long = flow_long < 0
+        # Longer rest → more molecular diffusion → lower peak
+        assert np.max(cout_long[extraction_long]) < np.max(cout_short[extraction_short])
+
+
+class TestVariableTimeSteps:
+    """Tests with non-uniform time step sizes."""
+
+    def test_variable_dt_mass_conservation(self):
+        """Mass is conserved with variable time step sizes (advection)."""
+        tedges = pd.DatetimeIndex(["2020-01-01", "2020-01-02", "2020-01-05", "2020-01-06", "2020-01-08", "2020-01-15"])
+        flow = np.array([100.0, 50.0, 200.0, -100.0, -80.0])
+        cin = np.array([3.0, 7.0, 2.0, 0.0, 0.0])
+
+        cout = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=np.array([5.0]),
+            porosity=0.3,
+        )
+
+        dt = np.diff(tedges) / pd.Timedelta("1D")
+        mass_in = np.sum(cin * flow * dt)
+        cout_clean = np.where(np.isnan(cout), 0.0, cout)
+        mass_out = np.sum(cout_clean * np.abs(flow) * dt)
+
+        assert_allclose(mass_out, mass_in, rtol=1e-12)
+
+    def test_variable_dt_lifo_ordering(self):
+        """LIFO ordering is correct with variable time steps."""
+        tedges = pd.DatetimeIndex(["2020-01-01", "2020-01-02", "2020-01-05", "2020-01-06", "2020-01-09"])
+        # Bin 0: 1 day, 100 m³/day → 100 m³
+        # Bin 1: 3 days, 100 m³/day → 300 m³
+        # Bin 2: 1 day, -400 m³/day → -400 m³ (extracts all of bin 1, then none of bin 0)
+        # Bin 3: 3 days → no extraction left? Actually let's make it simpler
+        flow = np.array([100.0, 100.0, -100.0, -100.0])
+        cin = np.array([1.0, 5.0, 0.0, 0.0])
+
+        cout = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=np.array([5.0]),
+            porosity=0.3,
+        )
+
+        dt = np.diff(tedges) / pd.Timedelta("1D")
+        # Inject: bin 0 = 100 m³ at c=1, bin 1 = 300 m³ at c=5
+        # Extract bin 2: 100 m³ → LIFO pops from bin 1 (100 of 300 m³) → c=5
+        # Extract bin 3: 300 m³ → LIFO pops remaining 200 m³ from bin 1 and 100 m³ from bin 0
+        #   → c = (200*5 + 100*1)/300 = 1100/300 = 11/3
+        assert_allclose(cout[2], 5.0)
+        assert_allclose(cout[3], (200.0 * 5.0 + 100.0 * 1.0) / 300.0)
+
+        # Mass conservation
+        mass_in = np.sum(cin * flow * dt)
+        cout_clean = np.where(np.isnan(cout), 0.0, cout)
+        mass_out = np.sum(cout_clean * np.abs(flow) * dt)
+        assert_allclose(mass_out, mass_in, rtol=1e-12)
+
+
+class TestPorosityEffect:
+    """Tests for porosity effect on diffusion spreading."""
+
+    def test_higher_porosity_more_relative_spreading_with_dispersivity(self):
+        """Higher porosity gives more relative spreading with dispersivity.
+
+        With dispersivity (alpha_L), spreading sigma ~ sqrt(alpha_L * L) where
+        L ~ 1/sqrt(n), and radial distance x ~ 1/sqrt(n). The ratio sigma/x
+        scales as sqrt(n), so higher porosity gives more relative spreading
+        and a lower peak.
+        """
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=7, freq="D")
+        cin = np.array([0.0, 10.0, 0.0, 0.0, 0.0, 0.0])
+        layer_heights = np.array([3.0, 5.0, 8.0])
+
+        cout_high_n = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.4,
+            longitudinal_dispersivity=0.5,
+        )
+
+        cout_low_n = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.1,
+            longitudinal_dispersivity=0.5,
+        )
+
+        extraction_mask = flow < 0
+        # Higher porosity → more relative dispersion (sigma/x ~ sqrt(n)) → lower peak
+        assert np.max(cout_high_n[extraction_mask]) < np.max(cout_low_n[extraction_mask])
+
+
+class TestCombinedDiffusionMechanisms:
+    """Tests for combined molecular diffusion and dispersivity."""
+
+    def test_combined_more_spreading_than_either(self):
+        """Combined D_m and alpha_L gives more spreading than either alone."""
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=7, freq="D")
+        cin = np.array([0.0, 10.0, 0.0, 0.0, 0.0, 0.0])
+        layer_heights = np.array([3.0, 5.0, 8.0])
+
+        cout_dm_only = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            molecular_diffusivity=0.01,
+        )
+
+        cout_al_only = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            longitudinal_dispersivity=0.5,
+        )
+
+        cout_both = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            molecular_diffusivity=0.01,
+            longitudinal_dispersivity=0.5,
+        )
+
+        extraction_mask = flow < 0
+        peak_dm = np.max(cout_dm_only[extraction_mask])
+        peak_al = np.max(cout_al_only[extraction_mask])
+        peak_both = np.max(cout_both[extraction_mask])
+
+        # Combined spreading exceeds either individual mechanism
+        assert peak_both < peak_dm
+        assert peak_both < peak_al
+
+
+class TestOverExtractionWithDiffusion:
+    """Tests for over-extraction behavior with diffusion and background."""
+
+    def test_over_extraction_with_background_and_diffusion(self):
+        """Over-extraction with diffusion and c_background smoothly transitions."""
+        flow = np.array([100.0, 100.0, -100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=7, freq="D")
+        cin = np.array([10.0, 10.0, 0.0, 0.0, 0.0, 0.0])
+        layer_heights = np.array([3.0, 5.0, 8.0])
+
+        cout = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            molecular_diffusivity=0.01,
+            c_background=2.0,
+        )
+
+        extraction_mask = flow < 0
+        # All extraction values should be finite and non-negative
+        assert np.all(np.isfinite(cout[extraction_mask]))
+        assert np.all(cout[extraction_mask] >= 0)
+        # First extraction bin should be closer to cin than background
+        assert cout[2] > 2.0
+        # Last extraction bin (over-extraction) should be closer to background
+        assert cout[5] < cout[2]
+
+
+class TestGammaInverse:
+    """Tests for gamma_push_pull_well_inverse."""
+
+    def test_roundtrip_advection(self):
+        """Gamma inverse recovers cin for pure advection."""
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=7, freq="D")
+        cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
+
+        cout = gamma_push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            mean=5.0,
+            std=1.0,
+            n_bins=20,
+            porosity=0.3,
+        )
+
+        cin_recovered = gamma_push_pull_well_inverse(
+            flow=flow,
+            cout=cout,
+            tedges=tedges,
+            cout_tedges=tedges,
+            mean=5.0,
+            std=1.0,
+            n_bins=20,
+            porosity=0.3,
+        )
+
+        injection_mask = flow > 0
+        assert_allclose(cin_recovered[injection_mask], cin[injection_mask], atol=1e-6)
+
+    def test_roundtrip_with_diffusion(self):
+        """Gamma inverse approximately recovers cin with diffusion."""
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=7, freq="D")
+        cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
+
+        cout = gamma_push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            mean=5.0,
+            std=1.0,
+            n_bins=20,
+            porosity=0.3,
+            molecular_diffusivity=0.001,
+        )
+
+        cin_recovered = gamma_push_pull_well_inverse(
+            flow=flow,
+            cout=cout,
+            tedges=tedges,
+            cout_tedges=tedges,
+            mean=5.0,
+            std=1.0,
+            n_bins=20,
+            porosity=0.3,
+            molecular_diffusivity=0.001,
+        )
+
+        injection_mask = flow > 0
+        assert_allclose(cin_recovered[injection_mask], cin[injection_mask], atol=0.5)
+
+    def test_nan_for_non_injection_bins(self):
+        """Inverse returns NaN for extraction and rest bins."""
+        flow = np.array([100.0, 100.0, 0.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=6, freq="D")
+        cin = np.array([3.0, 5.0, 0.0, 0.0, 0.0])
+
+        cout = gamma_push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            mean=5.0,
+            std=1.0,
+            n_bins=20,
+            porosity=0.3,
+        )
+
+        cin_recovered = gamma_push_pull_well_inverse(
+            flow=flow,
+            cout=cout,
+            tedges=tedges,
+            cout_tedges=tedges,
+            mean=5.0,
+            std=1.0,
+            n_bins=20,
+            porosity=0.3,
+        )
+
+        # Rest bin (index 2) and extraction bins should be NaN
+        assert np.isnan(cin_recovered[2])
+        assert np.all(np.isnan(cin_recovered[3:]))
+
+    def test_with_background(self):
+        """Gamma inverse roundtrip with c_background."""
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=8, freq="D")
+        cin = np.array([5.0, 8.0, 3.0, 0.0, 0.0, 0.0, 0.0])
+
+        cout = gamma_push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            mean=5.0,
+            std=1.0,
+            n_bins=20,
+            porosity=0.3,
+            c_background=2.0,
+        )
+
+        cin_recovered = gamma_push_pull_well_inverse(
+            flow=flow,
+            cout=cout,
+            tedges=tedges,
+            cout_tedges=tedges,
+            mean=5.0,
+            std=1.0,
+            n_bins=20,
+            porosity=0.3,
+            c_background=2.0,
+        )
+
+        injection_mask = flow > 0
+        assert_allclose(cin_recovered[injection_mask], cin[injection_mask], atol=1e-4)
+
+
+class TestInverseWithBackground:
+    """Inverse model tests with c_background."""
+
+    def test_roundtrip_advection_with_background(self):
+        """Forward then inverse recovers cin with c_background (advection)."""
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=8, freq="D")
+        cin = np.array([5.0, 8.0, 3.0, 0.0, 0.0, 0.0, 0.0])
+        layer_heights = np.array([5.0])
+
+        cout = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            c_background=2.0,
+        )
+
+        cin_recovered = push_pull_well_inverse(
+            flow=flow,
+            cout=cout,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            c_background=2.0,
+        )
+
+        injection_mask = flow > 0
+        assert_allclose(cin_recovered[injection_mask], cin[injection_mask], atol=1e-4)
+
+    def test_inverse_nan_for_non_injection(self):
+        """Inverse returns NaN for extraction and rest bins."""
+        flow = np.array([100.0, 100.0, 0.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=6, freq="D")
+        cin = np.array([3.0, 5.0, 0.0, 0.0, 0.0])
+        layer_heights = np.array([5.0])
+
+        cout = push_pull_well(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+        )
+
+        cin_recovered = push_pull_well_inverse(
+            flow=flow,
+            cout=cout,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+        )
+
+        # Rest bin (index 2) and extraction bins should be NaN
+        assert np.isnan(cin_recovered[2])
+        assert np.all(np.isnan(cin_recovered[3:]))
