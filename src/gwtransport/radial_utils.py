@@ -11,9 +11,158 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 
 import numpy as np
 import numpy.typing as npt
-from scipy import special
+from scipy.special import ive
 
 from gwtransport.utils import partial_isin
+
+# Argument above which ``scipy.special.ive(0, z)`` overflows to NaN.
+# For ``z`` above this threshold we switch to the leading asymptotic
+# term ``ive(0, z) ~ 1/sqrt(2*pi*z)``, which is accurate to better than
+# ``1/(8z)`` (i.e. < 1e-8 relative for z > 1e7).
+_IVE0_ASYMPTOTIC_THRESHOLD = 1.0e7
+
+
+def _ive0_safe(z: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+    r"""Exponentially-scaled ``I_0`` with asymptotic continuation.
+
+    Computes :math:`I_0(z)\,\mathrm{e}^{-z}` via
+    :func:`scipy.special.ive`, falling back to the leading asymptotic
+    :math:`1/\sqrt{2\pi z}` for arguments above the numerical overflow
+    threshold of SciPy's implementation.
+
+    Parameters
+    ----------
+    z : ndarray
+        Non-negative Bessel argument.
+
+    Returns
+    -------
+    ndarray
+        :math:`I_0(z)\,\mathrm{e}^{-z}`, same shape as ``z``.
+    """
+    z = np.asarray(z, dtype=float)
+    out = np.empty_like(z)
+    small = z <= _IVE0_ASYMPTOTIC_THRESHOLD
+    out[small] = ive(0, z[small])
+    large = ~small
+    out[large] = 1.0 / np.sqrt(2.0 * np.pi * z[large])
+    return out
+
+
+def _lifo_input_matrix(
+    *,
+    flow: npt.NDArray[np.floating],
+    dt: npt.NDArray[np.floating],
+) -> npt.NDArray[np.floating]:
+    """Build exact LIFO stack matrix on the input tedges grid.
+
+    Processes bins chronologically: injection bins push volume onto a stack,
+    extraction bins pop from the stack top. Returns a per-extraction-bin
+    weight matrix whose row ``i`` gives the normalized fraction of
+    extraction bin ``i``'s volume attributed to each injection bin ``j``.
+
+    This function has no knowledge of ``cout_tedges`` — it is pure physics
+    on the input tedges grid.
+
+    Parameters
+    ----------
+    flow : ndarray, shape (n,)
+        Flow rate per input bin [m³/day]. Positive = injection,
+        negative = extraction, zero = rest.
+    dt : ndarray, shape (n,)
+        Time bin widths [days].
+
+    Returns
+    -------
+    w_input : ndarray, shape (n, n)
+        LIFO weight matrix on the input tedges grid. ``w_input[i, j]`` is
+        the fraction of the volume extracted in tedges bin ``i`` that comes
+        from injection tedges bin ``j``. Row sums = 1 for extraction bins
+        that fully recover injected volume, < 1 for over-extraction, and
+        0 for non-extraction bins.
+    """
+    n = len(flow)
+    extraction_volume = np.where(flow < 0, -flow * dt, 0.0)  # (n,) >= 0
+
+    w_raw = np.zeros((n, n))
+    stack: list[list[float]] = []
+
+    for i in range(n):
+        vol = flow[i] * dt[i]
+        if vol > 0:
+            stack.append([float(i), vol])
+        elif vol < 0:
+            vol_needed = -vol
+            while vol_needed > 0 and stack:
+                j_idx, vol_avail = stack[-1]
+                consumed = min(vol_avail, vol_needed)
+                w_raw[i, int(j_idx)] += consumed
+                vol_needed -= consumed
+                stack[-1][1] -= consumed
+                if stack[-1][1] <= 0:
+                    stack.pop()
+
+    w_input = np.zeros((n, n))
+    has_volume = extraction_volume > 0
+    w_input[has_volume] = w_raw[has_volume] / extraction_volume[has_volume, np.newaxis]
+    return w_input
+
+
+def _resample_to_cout(
+    *,
+    w_input: npt.NDArray[np.floating],
+    flow: npt.NDArray[np.floating],
+    dt: npt.NDArray[np.floating],
+    tedges_days: npt.NDArray[np.floating],
+    cout_tedges_days: npt.NDArray[np.floating],
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool]]:
+    """Flow-weighted resample from the input tedges grid to the cout grid.
+
+    Projects an ``(n, n)`` weight matrix defined on the input tedges grid
+    onto an ``(n_cout, n)`` weight matrix on the output ``cout_tedges``
+    grid using a flow-weighted average. Uses
+    :func:`gwtransport.utils.partial_isin` to compute the time-overlap
+    fractions, so arbitrary alignment between ``tedges`` and
+    ``cout_tedges`` is handled correctly.
+
+    Parameters
+    ----------
+    w_input : ndarray, shape (n, n)
+        Input-grid weight matrix (row-stochastic for extraction rows).
+    flow : ndarray, shape (n,)
+        Flow rate per input bin [m³/day].
+    dt : ndarray, shape (n,)
+        Time bin widths [days].
+    tedges_days : ndarray, shape (n+1,)
+        Input time edges in days from reference.
+    cout_tedges_days : ndarray, shape (n_cout+1,)
+        Output time edges in days from reference.
+
+    Returns
+    -------
+    w : ndarray, shape (n_cout, n)
+        Weight matrix on the ``cout_tedges`` grid. Row ``k`` equals the
+        flow-weighted mean of ``w_input`` rows overlapping cout bin ``k``.
+    has_extraction : ndarray, shape (n_cout,)
+        Boolean mask indicating which output bins have extraction volume.
+    """
+    n = len(flow)
+    n_cout = len(cout_tedges_days) - 1
+
+    # Temporal overlap: overlap[i, k] = fraction of input bin i in cout bin k.
+    overlap = partial_isin(bin_edges_in=tedges_days, bin_edges_out=cout_tedges_days)  # (n, n_cout)
+
+    is_extraction = flow < 0
+    extraction_volume = np.abs(flow) * dt * is_extraction  # (n,)
+    ext_vol_overlap = extraction_volume[:, np.newaxis] * overlap  # (n, n_cout)
+    total_ext = ext_vol_overlap.sum(axis=0)  # (n_cout,)
+    has_extraction = total_ext > 0
+
+    w = np.zeros((n_cout, n))
+    # w[k, j] = Σ_i (ext_vol_overlap[i, k] * w_input[i, j]) / total_ext[k]
+    w[has_extraction] = (ext_vol_overlap[:, has_extraction].T @ w_input) / total_ext[has_extraction, np.newaxis]
+
+    return w, has_extraction
 
 
 def _push_pull_advection_matrix(
@@ -25,9 +174,9 @@ def _push_pull_advection_matrix(
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool]]:
     """Build LIFO stack coefficient matrix for pure advection.
 
-    Processes bins chronologically: injection bins push volume onto a stack,
-    extraction bins pop from the stack top. The resulting weight matrix
-    includes flow-weighted resampling onto the ``cout_tedges`` grid.
+    Thin wrapper: builds the LIFO matrix on the input tedges grid via
+    :func:`_lifo_input_matrix`, then flow-weighted resamples onto the
+    ``cout_tedges`` grid via :func:`_resample_to_cout`.
 
     Parameters
     ----------
@@ -49,266 +198,294 @@ def _push_pull_advection_matrix(
     has_extraction : ndarray, shape (n_cout,)
         Boolean mask indicating which output bins have extraction volume.
     """
-    n = len(flow)
-    n_cout = len(cout_tedges_days) - 1
-
-    # Temporal overlap fractions: overlap[i, k] = fraction of fine bin i
-    # that falls in cout bin k. Since flow is constant within a fine bin,
-    # temporal fraction = volume fraction.
-    overlap = partial_isin(bin_edges_in=tedges_days, bin_edges_out=cout_tedges_days)  # (n, n_cout)
-
-    # Total extraction volume per cout bin (for normalization)
-    is_extraction = flow < 0
-    extraction_volume = np.abs(flow) * dt * is_extraction  # (n,)
-    total_ext = (extraction_volume[:, np.newaxis] * overlap).sum(axis=0)  # (n_cout,)
-    has_extraction = total_ext > 0
-
-    # Accumulate raw consumed volumes directly into (n_cout, n) matrix.
-    # For each consumed volume from the LIFO stack, distribute it across
-    # cout bins proportional to how much of the fine extraction bin
-    # overlaps with each cout bin.
-    w_raw = np.zeros((n_cout, n))
-    stack: list[list[float]] = []
-
-    for i in range(n):
-        vol = flow[i] * dt[i]
-        if vol > 0:
-            stack.append([float(i), vol])
-        elif vol < 0:
-            vol_needed = -vol
-            overlap_i = overlap[i, :]  # (n_cout,)
-            while vol_needed > 0 and stack:
-                j_idx, vol_avail = stack[-1]
-                consumed = min(vol_avail, vol_needed)
-                w_raw[:, int(j_idx)] += consumed * overlap_i
-                vol_needed -= consumed
-                stack[-1][1] -= consumed
-                if stack[-1][1] <= 0:
-                    stack.pop()
-
-    # Normalize per cout bin
-    w = np.zeros((n_cout, n))
-    w[has_extraction] = w_raw[has_extraction] / total_ext[has_extraction, np.newaxis]
-
-    return w, has_extraction
+    w_input = _lifo_input_matrix(flow=flow, dt=dt)
+    return _resample_to_cout(
+        w_input=w_input,
+        flow=flow,
+        dt=dt,
+        tedges_days=tedges_days,
+        cout_tedges_days=cout_tedges_days,
+    )
 
 
-def _signed_radial_distance(
+def _push_pull_diffusion_kernel(
     *,
-    delta_volume: npt.NDArray[np.floating],
-    layer_height: float,
-    porosity: float,
-    retardation_factor: float,
-    n_layers: int,
-) -> npt.NDArray[np.floating]:
-    r"""Compute signed radial distance from volume difference.
-
-    .. math::
-
-        x = \text{sign}(\Delta V) \cdot
-            \sqrt{\frac{|\Delta V|}{N \cdot \pi \cdot h \cdot n \cdot R}}
-
-    Parameters
-    ----------
-    delta_volume : ndarray
-        Volume difference [m³]. Positive means front has been extracted past
-        the well screen.
-    layer_height : float
-        Height of a single horizontal streamtube flowing to the well
-        screen [m].
-    porosity : float
-        Porosity n [-].
-    retardation_factor : float
-        Retardation factor R [-].
-    n_layers : int
-        Number of layers N.
-
-    Returns
-    -------
-    ndarray
-        Signed radial distance [m]. Same shape as delta_volume.
-    """
-    dv = np.asarray(delta_volume, dtype=float)
-    scale = n_layers * np.pi * layer_height * porosity * retardation_factor
-    return np.sign(dv) * np.sqrt(np.abs(dv) / scale)
-
-
-# Gauss-Legendre quadrature nodes and weights for volume-space integration
-_GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(16)
-
-
-def _erf_mean_volume_radial(
-    *,
-    v_cum: npt.NDArray[np.floating],
-    tedges_days: npt.NDArray[np.floating],
+    w_lifo: npt.NDArray[np.floating],
     flow: npt.NDArray[np.floating],
-    layer_height: float,
-    porosity: float,
-    retardation_factor: float,
-    n_layers: int,
+    dt: npt.NDArray[np.floating],
+    tedges_days: npt.NDArray[np.floating],
+    v_cum: npt.NDArray[np.floating],
+    v_max_after: npt.NDArray[np.floating],
+    scale: float,
     molecular_diffusivity: float,
     longitudinal_dispersivity: float,
-    v_max_after: npt.NDArray[np.floating],
+    retardation_factor: float,
 ) -> npt.NDArray[np.floating]:
-    r"""Compute mean erf in volume space for radial geometry.
+    r"""Build a doubly-stochastic push-pull smear kernel on real injection bins.
 
-    For each (extraction bin *i*, injection edge *j*), computes:
+    Given the exact LIFO attribution matrix ``w_lifo``, return a
+    transition kernel ``K[a, b]`` over real injection bins (excluding
+    the prepended background bin at index 0) that redistributes
+    LIFO-attributed mass into neighbouring injection bins via radial
+    diffusion. The kernel is designed so that the composed matrix
+    ``w_smear[:, real] = w_lifo[:, real] @ K`` automatically satisfies
+    **both** marginal constraints:
+
+    * Row sums: ``Σ_j w_smear[i, j] = Σ_j w_lifo[i, j]`` for every row
+      ``i``, so a constant injection concentration extracts unchanged.
+    * Column mass: ``Σ_i ext_vol[i] * w_smear[i, j] = inj_vol[j]`` for
+      every real injection bin ``j``, so mass is conserved exactly for
+      arbitrary ``cin``.
+
+    These two properties hold **by construction** — there is no
+    iterative projection, no rescaling, and no band-aid normalization.
+    The mechanism is detailed balance against the ``inj_vol`` measure:
+
+    1. Pick a symmetric base density ``B[a, b] = B[b, a]``, derived
+       from the axial 2D radial heat kernel expressed in the true
+       radial coordinate ``r = √(V / scale)``:
+
+       .. math::
+
+           B(r_a, r_b; \sigma) = \exp\!\left(
+               -\tfrac{r_a^2 + r_b^2}{2\sigma^2}
+           \right)\,I_0\!\left(\tfrac{r_a\,r_b}{\sigma^2}\right)
+
+       This is the density **per unit V** of axially symmetric 2D
+       Brownian motion: the ``2 pi r`` Jacobian from the cylindrical
+       area element is absorbed into ``dV/dr ∝ r``, leaving a density
+       in V that is symmetric in ``(V_a, V_b)``. Symmetry is
+       automatic because ``I_0`` is symmetric in its argument and
+       ``r_a^2 + r_b^2`` is symmetric in ``a, b``. No method-of-images
+       term is needed: the Bessel kernel is the fundamental solution
+       of the radial diffusion equation with an implicit reflecting
+       boundary at ``r = 0`` (the regular-at-the-origin Green's
+       function for the radial Laplacian).
+
+    2. Form a transition-probability matrix by multiplying with the
+       target bin's V-measure ``dV[b] = inj_vol[b]``:
+
+       .. math::
+
+           q[a, b] = B[a, b]\,\mathrm{d}V[b]/Z
+
+       where ``Z`` is chosen so that ``Σ_b q[a, b] ≤ 1`` for every
+       ``a`` (``Z = max_a Σ_b B[a, b] dV[b]``).
+
+    3. Absorb the sub-stochastic slack into the diagonal self-loop:
+
+       .. math::
+
+           K[a, b] = q[a, b] \quad (a \neq b)
+
+           K[a, a] = 1 - \sum_{b \neq a} q[a, b]
+
+       This gives ``Σ_b K[a, b] = 1`` exactly (row-stochastic) and,
+       because ``B`` is symmetric, also satisfies detailed balance:
+       ``K[a, b] \mathrm{d}V[a] = K[b, a] \mathrm{d}V[b]``. Summing
+       over ``a`` gives the stationarity identity
+       ``Σ_a \mathrm{d}V[a] K[a, b] = \mathrm{d}V[b]``, i.e. the
+       ``inj_vol`` marginal is preserved by ``K``.
+
+    The per-source variance ``sigma_sq[j]`` entering ``B`` is computed
+    from the standard radial diffusion relation
 
     .. math::
 
-        \text{mean\_erf}_{i,j} = \frac{1}{|\Delta V_i|}
-        \int_{V_i}^{V_{i+1}} \text{erf}\!\left(
-            \frac{x(V)}{2\sqrt{\sigma^2/2}}
-        \right) dV
+        \sigma^2 = 2 (D_m/R)\,\tau_{\mathrm{eff}}(j)
+                 + 2\,\alpha_L\,L_{\mathrm{path}}(j)
 
-    where *x(V)* is the signed radial distance from edge *j*'s front
-    (positive = front already extracted past well, negative = front still
-    in aquifer), and the cumulative dispersion variance is:
-
-    .. math::
-
-        \sigma^2/2 = D_m \, \tau(V) / R + \alpha_L \, L(V, j)
-
-    - *D_m · τ / R* — molecular diffusion, proportional to time, divided
-      by retardation (effective diffusivity = D_m / R in retarded ADE).
-    - *alpha_L * L* -- mechanical dispersion, proportional to the total path
-      length of the retarded front (out to r_max and partially back).
-
-    The integral is evaluated by 16-point Gauss-Legendre quadrature.
+    using ``tau_eff(j)``, the column-mass-weighted elapsed time between
+    injection at source ``j`` and its subsequent extraction, and
+    ``L_path(j) = 2 r_max(j) - r_front(j)``, the retarded path length
+    of the front reaching its maximum radius after the source injection
+    and partially returning to the average extraction radius. The pair
+    variance used in ``B[a, b]`` is
+    ``sigma_sq[a, b] = 0.5 (sigma_sq[a] + sigma_sq[b])``, which is
+    symmetric in ``(a, b)`` as required.
 
     Parameters
     ----------
-    v_cum : ndarray, shape (n+1,)
-        Cumulative volume at time edges [m³].
+    w_lifo : ndarray, shape (n, n)
+        Exact LIFO attribution matrix on the input tedges grid.
+    flow : ndarray, shape (n,)
+        Flow rate per input bin [m³/day]. Index 0 is the prepended
+        background bin; indices ≥ 1 are real tedges bins.
+    dt : ndarray, shape (n,)
+        Time bin widths [days].
     tedges_days : ndarray, shape (n+1,)
         Time edges in days from reference.
-    flow : ndarray, shape (n,)
-        Flow rate per bin [m³/day].
-    layer_height : float
-        Height of a single horizontal streamtube flowing to the well
-        screen [m].
-    porosity : float
-        Porosity n [-].
-    retardation_factor : float
-        Retardation factor R [-].
-    n_layers : int
-        Number of layers N.
+    v_cum : ndarray, shape (n+1,)
+        Cumulative volume at time edges [m³].
+    v_max_after : ndarray, shape (n+1,)
+        Maximum cumulative volume reached from each edge onward
+        [m³]. Used to compute the retarded path length.
+    scale : float
+        ``n_layers * pi * h * n * R`` [m^3/m] so that ``r = sqrt(V / scale)``.
     molecular_diffusivity : float
         Molecular diffusivity D_m [m²/day].
     longitudinal_dispersivity : float
         Longitudinal dispersivity alpha_L [m].
-    v_max_after : ndarray, shape (n+1,)
-        Maximum cumulative volume from each edge onward.
+    retardation_factor : float
+        Retardation factor R [-].
 
     Returns
     -------
-    ndarray, shape (n, n_edges)
-        Mean erf value for each (extraction bin, injection edge) pair.
-        NaN for inactive or injection bins.
+    K_full : ndarray, shape (n, n)
+        Full transition kernel. Rows and columns corresponding to
+        non-injection bins (and the prepend bin at index 0) are the
+        identity, so applying ``K_full`` leaves non-injection LIFO
+        columns untouched. The real-injection sub-block satisfies
+        row-stochasticity and ``inj_vol``-stationarity by construction.
     """
-    n = len(flow)
-    n_edges = n + 1
-    scale = n_layers * np.pi * layer_height * porosity * retardation_factor
+    n = flow.shape[0]
+    inj_vol = np.where(flow > 0, flow * dt, 0.0)
+    ext_vol = np.where(flow < 0, -flow * dt, 0.0)
+    t_mid = 0.5 * (tedges_days[:-1] + tedges_days[1:])
 
-    is_extraction = flow < 0
-    mean_erf = np.full((n, n_edges), np.nan)
+    # Radial coordinates are measured **relative** to the end of the
+    # prepended bin at index 0, so that the well screen at r = 0
+    # coincides with the start of real injection. Without this
+    # relative coordinate, the massive prepend volume would shift all
+    # real bins to enormous absolute radii where the reflecting
+    # boundary at r = 0 would become numerically invisible.
+    v_rel = v_cum - v_cum[1]  # (n+1,), v_rel[1] = 0 at the well screen
+    v_rel_mid = 0.5 * (v_rel[:-1] + v_rel[1:])
+    v_rel_max_after = v_max_after - v_cum[1]
 
-    if not np.any(is_extraction):
-        return mean_erf
+    # Kernel acts on real injection bins only (exclude prepend bin 0).
+    real_mask = inj_vol > 0
+    real_mask[0] = False
+    real_idx = np.flatnonzero(real_mask)
+    n_real = real_idx.size
 
-    v_lo = v_cum[:-1]  # shape (n,)
-    v_hi = v_cum[1:]  # shape (n,)
-    dv_bin = v_lo - v_hi  # positive for extraction
-    active = is_extraction & (dv_bin > 0)
+    k_full = np.eye(n)
+    if n_real == 0:
+        return k_full
 
-    if not np.any(active):
-        return mean_erf
+    # Per-source effective variance. Weight by the LIFO-assigned column
+    # mass so that sources with short residence times contribute small
+    # sigma and sources with long residence times contribute large
+    # sigma, matching the physics.
+    col_mass = ext_vol[:, np.newaxis] * w_lifo[:, real_idx]  # (n, n_real)
+    col_total = col_mass.sum(axis=0)  # (n_real,)
 
-    no_diffusion = (molecular_diffusivity == 0.0) and (longitudinal_dispersivity == 0.0)
-
-    if no_diffusion:
-        v_lo_2d = v_lo[:, np.newaxis]
-        v_hi_2d = v_hi[:, np.newaxis]
-        v_j_2d = v_cum[np.newaxis, :]
-        dv_2d = dv_bin[:, np.newaxis]
-
-        with np.errstate(divide="ignore", invalid="ignore"):
-            frac_pos = (v_lo_2d - v_j_2d) / dv_2d
-        result = 1.0 - 2.0 * frac_pos
-        result = np.where(v_j_2d <= v_hi_2d, -1.0, result)
-        result = np.where(v_j_2d >= v_lo_2d, 1.0, result)
-        mean_erf[active] = result[active]
-        return mean_erf
-
-    # --- With diffusion: Gauss-Legendre quadrature with position-dependent D_L ---
-
-    # Maximum radial distance for each injection edge j
-    dv_max_j = np.maximum(v_max_after - v_cum, 0.0)  # (n_edges,)
-    r_max_j = np.sqrt(dv_max_j / scale)  # (n_edges,)
-
-    # Active extraction bin indices
-    idx_active = np.flatnonzero(active)
-
-    # Map GL nodes from [-1, 1] to [V_hi, V_lo] for each active extraction bin.
-    # ξ = -1 → V_hi, ξ = +1 → V_lo.
-    v_lo_a = v_lo[idx_active]  # (n_active,)
-    v_hi_a = v_hi[idx_active]  # (n_active,)
-    dv_a = dv_bin[idx_active]  # (n_active,)
-
-    v_mid = 0.5 * (v_lo_a + v_hi_a)
-    v_half = 0.5 * dv_a
-    v_gl = v_mid[:, np.newaxis] + v_half[:, np.newaxis] * _GL_NODES[np.newaxis, :]  # (n_active, n_gl)
-
-    # --- Signed radial distance x(V, j) ---
-    # Convention: x > 0 when front has been extracted past the well (V < V_j),
-    # x < 0 when front is still in the aquifer (V > V_j).
-    # This gives erf > 0 for extracted water → frac > 0.5.
-    # Shape: (n_active, n_gl, n_edges)
-    vj_minus_v = v_cum[np.newaxis, np.newaxis, :] - v_gl[:, :, np.newaxis]
-    x_gl = np.sign(vj_minus_v) * np.sqrt(np.abs(vj_minus_v) / scale)
-
-    # --- Elapsed time since injection at edge j: τ(V) = t(V) - t_j ---
-    # t(V) = t_i + (V - V_i) / Q_i  within extraction bin i
-    t_i = tedges_days[idx_active]  # (n_active,)
-    q_i = flow[idx_active]  # (n_active,), negative for extraction
-    t_gl = t_i[:, np.newaxis] + (v_gl - v_lo_a[:, np.newaxis]) / q_i[:, np.newaxis]  # (n_active, n_gl)
-    tau_gl = t_gl[:, :, np.newaxis] - tedges_days[np.newaxis, np.newaxis, :]  # (n_active, n_gl, n_edges)
-
-    # --- Path length of retarded front for edge j at quadrature point V ---
-    # The front goes from r=0 to r_max_j during injection, then returns.
-    # r_front(V) = sqrt(max(V - V_j, 0) / scale) is the current radial position.
-    # L_path = r_max_j + (r_max_j - r_front) = 2·r_max_j - r_front
-    v_minus_vj = v_gl[:, :, np.newaxis] - v_cum[np.newaxis, np.newaxis, :]  # (n_active, n_gl, n_edges)
-    r_front = np.sqrt(np.maximum(v_minus_vj, 0.0) / scale)
-    l_path = 2.0 * r_max_j[np.newaxis, np.newaxis, :] - r_front
-
-    # --- Cumulative dispersion: sigma^2/2 = D_m*tau/R + alpha_L*L_path ---
-    # From the retarded ADE (R*dC/dt + v*dC/dx = D_L*d2C/dx2):
-    #   D_eff = D_L/R, and sigma^2 = 2*int(D_eff dt).
-    # Molecular part: D_m*tau/R (constant D_m, integrates over time).
-    # Mechanical part: alpha_L*L_path (int(alpha_L*v_pore/R dt)
-    #   = alpha_L*int(|v_s|dt) = alpha_L*L_path,
-    #   because int(v_pore dt) = R*L_path and dividing by R cancels).
-    half_sigma_sq = molecular_diffusivity * tau_gl / retardation_factor + longitudinal_dispersivity * l_path
-
-    # --- Evaluate erf(x / (2·√(σ²/2))) ---
+    # Guard against zero-mass columns (over-extraction edge cases):
+    # treat them as having tiny effective sigma so K becomes identity
+    # on those bins.
     with np.errstate(divide="ignore", invalid="ignore"):
-        safe_denom = np.where(half_sigma_sq > 0, half_sigma_sq, np.inf)
-        arg = x_gl / (2.0 * np.sqrt(safe_denom))
+        weight = np.where(col_total > 0, col_mass / col_total, 0.0)  # (n, n_real)
 
-    # Edge cases:
-    # - τ ≤ 0: injection edge j is in the future → no contribution (erf = -1, frac = 0)
-    # - half_sigma_sq = 0 with τ > 0: no diffusion for this edge → step function
-    erf_val = np.where(
-        tau_gl <= 0,
-        -1.0,
-        np.where(half_sigma_sq > 0, special.erf(arg), np.sign(x_gl)),
-    )
+    tau_per_source = t_mid[:, np.newaxis] - t_mid[real_idx][np.newaxis, :]  # (n, n_real)
+    tau_eff = np.sum(weight * np.maximum(tau_per_source, 0.0), axis=0)  # (n_real,)
 
-    # GL quadrature: mean = Σ w_k · f(ξ_k) / 2
-    mean_erf[idx_active] = np.einsum("ijk,j->ik", erf_val, _GL_WEIGHTS) / 2.0
+    v_rel_row_eff = np.sum(weight * v_rel_mid[:, np.newaxis], axis=0)  # (n_real,)
+    v_source_lower = v_rel[real_idx]  # (n_real,)
+    r_max_source = np.sqrt(np.maximum(v_rel_max_after[real_idx] - v_source_lower, 0.0) / scale)
+    r_front_eff = np.sqrt(np.maximum(v_rel_row_eff - v_source_lower, 0.0) / scale)
+    l_path = np.maximum(2.0 * r_max_source - r_front_eff, 0.0)
 
-    return mean_erf
+    sigma_sq_source = (2.0 * molecular_diffusivity / retardation_factor) * tau_eff + (
+        2.0 * longitudinal_dispersivity
+    ) * l_path  # (n_real,)
+
+    # Sources with zero LIFO mass or zero elapsed time get the delta
+    # (self) kernel; leave K_full as identity for those rows/columns.
+    active = (col_total > 0) & (sigma_sq_source > 0)
+    if not np.any(active):
+        return k_full
+
+    src_idx = real_idx[active]  # global indices
+    dv_active = inj_vol[src_idx]  # (n_active,)
+    r_source = np.sqrt(np.maximum(v_rel_mid[src_idx], 0.0) / scale)  # (n_active,)
+    sigma_sq_active = sigma_sq_source[active]  # (n_active,)
+
+    # Pair variance: s_pair(a, b) = 0.5 (s(a) + s(b)),  s := sigma^2,
+    # which is symmetric in a, b. The pair variance enters the Bessel
+    # heat kernel below; any pair-dependent prefactor (such as the 2D
+    # Gaussian normalization ``1/(2 pi s)``) cancels in the
+    # row-normalized transition kernel, so we omit it and rely on the
+    # per-row ``Z_max`` normalization to bring the proposal into the
+    # unit simplex.
+    sigma_sq_pair = 0.5 * (sigma_sq_active[:, np.newaxis] + sigma_sq_active[np.newaxis, :])
+
+    # Axial 2D radial heat kernel in V-coordinate, expressed through
+    # the standard radial variable ``r = sqrt(V/scale)``:
+    #
+    #     f(V_a | V_b) ~ exp(-(r_a**2 + r_b**2)/(2 s)) * I_0(r_a r_b / s)
+    #
+    # with ``s = sigma_sq_pair``. This is the density **per unit V** of
+    # axially symmetric 2D Brownian motion (the ``2 pi r`` Jacobian from
+    # the cylindrical area element is absorbed into
+    # ``dV/dr = 2 pi r * scale/(N*R)``, leaving the Bessel form above as
+    # the V-space density up to a V-independent prefactor). The density
+    # is symmetric in ``(V_a, V_b)`` because ``I_0`` is symmetric and
+    # ``r_a**2 + r_b**2`` is symmetric, so it automatically enforces
+    # detailed balance with respect to the Lebesgue measure in V (i.e.
+    # the ``inj_vol`` measure when discretized).
+    #
+    # For numerical stability we use the identity
+    #
+    #     exp(-(r_a**2 + r_b**2)/(2 s)) * I_0(r_a r_b / s)
+    #         = exp(-(r_a - r_b)**2/(2 s)) * ive(0, r_a r_b / s),
+    #
+    # where ``ive(0, z) = I_0(z)*exp(-z)`` is the exponentially-scaled
+    # modified Bessel function of order zero (``scipy.special.ive``),
+    # which stays finite for large arguments whereas ``I_0`` overflows.
+    r_a = r_source[:, np.newaxis]
+    r_b = r_source[np.newaxis, :]
+    arg = r_a * r_b / sigma_sq_pair  # (n_active, n_active)
+    exponent = -((r_a - r_b) ** 2) / (2.0 * sigma_sq_pair)
+    # Symmetric in (a, b) because both factors are symmetric in a, b.
+    b_mat = np.exp(exponent) * _ive0_safe(arg)
+
+    # Build the kernel from the symmetric base density by a single
+    # global normalization:
+    #
+    #     K[a, b] = B[a, b] · dV[b] / Z_max         (a ≠ b)
+    #     K[a, a] = 1 - Σ_{b ≠ a} K[a, b]
+    #
+    # where ``Z_max = max_a (Σ_b B[a, b] · dV[b])`` is the largest
+    # unnormalized row sum. The global ``Z_max`` guarantees that
+    # every row has total mass ``≤ 1`` before the self-loop, so the
+    # slack goes into a non-negative diagonal.
+    #
+    # Because ``B[a, b]`` is symmetric in ``(a, b)``, the off-diagonal
+    # kernel satisfies
+    #
+    #     K[a, b] · dV[a] = B[a, b] · dV[a] · dV[b] / Z_max
+    #                    = K[b, a] · dV[b],
+    #
+    # which is detailed balance with respect to the ``inj_vol``
+    # measure. Summing over ``a`` gives the stationarity identity
+    # ``Σ_a dV[a] · K[a, b] = dV[b]``, so ``inj_vol`` is the
+    # stationary distribution and column mass is preserved exactly.
+    #
+    # The global ``Z_max`` scaling (i) is smooth and (ii) reaches the
+    # fully-mixed limit ``K[a, a] = dV[a] / V_total`` when the pair
+    # variance is large enough to saturate the kernel, so the
+    # breakthrough peak is monotone in the diffusion coefficients
+    # throughout the relevant parameter range.
+    dv_row = dv_active[np.newaxis, :]
+    row_norm = (b_mat * dv_row).sum(axis=1)  # (n_active,)
+    z_max = row_norm.max()
+    k_sub = (b_mat * dv_row) / z_max
+
+    # Overwrite the diagonal with the self-loop probability. The
+    # diagonal entries computed above from ``B·dV / Z_max`` are
+    # non-zero and must be cleared first.
+    np.fill_diagonal(k_sub, 0.0)
+    off_diag_sum = k_sub.sum(axis=1)
+    np.fill_diagonal(k_sub, 1.0 - off_diag_sum)
+
+    # Insert back into the full-size kernel at the active indices.
+    # Clear the identity diagonal at those positions before writing.
+    k_full[src_idx, src_idx] = 0.0
+    k_full[np.ix_(src_idx, src_idx)] = k_sub
+
+    # Inactive real bins (zero sigma or zero LIFO mass): keep identity
+    # diagonal so ``w_lifo @ k_full`` leaves them in place.
+    return k_full
 
 
 def _push_pull_diffusion_matrix(
@@ -327,14 +504,19 @@ def _push_pull_diffusion_matrix(
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool]]:
     """Build coefficient matrix with radial diffusion for one layer.
 
-    For each (cout_bin, cin_edge), computes flow-weighted mean erf via
-    :func:`_erf_mean_volume_radial`. Converts to coefficients and applies
-    flow-weighted resampling onto the ``cout_tedges`` grid.
+    Assembles the weight matrix as the composition:
 
-    In the push-pull model, frac increases with edge index j (later injection
-    = front closer to well = extracted sooner), so the coefficient is
-    ``frac_end - frac_start`` (reversed from the linear model). Only injection
-    bin columns are populated; extraction/rest columns remain zero.
+    1. Exact LIFO attribution on the input tedges grid via
+       :func:`_lifo_input_matrix`.
+    2. Radial diffusion smear via :func:`_push_pull_diffusion_kernel`.
+       The smear is a doubly-stochastic transition kernel on real
+       injection bins built from the axial 2D radial heat kernel
+       (Bessel form) expressed in the true radial coordinate; by
+       construction it preserves both row sums (so constant ``cin``
+       extracts unchanged) and the ``ext_vol``-weighted column mass
+       (so total mass is conserved for arbitrary ``cin``).
+    3. Flow-weighted resample onto ``cout_tedges`` via
+       :func:`_resample_to_cout`, which handles arbitrary grid alignment.
 
     Parameters
     ----------
@@ -369,58 +551,44 @@ def _push_pull_diffusion_matrix(
     has_extraction : ndarray, shape (n_cout,)
         Boolean mask indicating which output bins have extraction volume.
     """
-    n = len(flow)
     dt = np.diff(tedges_days)
-    is_injection = flow > 0
+    scale = n_layers * np.pi * layer_height * porosity * retardation_factor
 
-    response = _erf_mean_volume_radial(
-        v_cum=v_cum,
-        tedges_days=tedges_days,
+    # Step 1: LIFO on the input tedges grid
+    w_lifo = _lifo_input_matrix(flow=flow, dt=dt)  # (n, n)
+
+    # Pure advection fast path: skip the smear entirely.
+    if molecular_diffusivity == 0.0 and longitudinal_dispersivity == 0.0:
+        return _resample_to_cout(
+            w_input=w_lifo,
+            flow=flow,
+            dt=dt,
+            tedges_days=tedges_days,
+            cout_tedges_days=cout_tedges_days,
+        )
+
+    # Step 2: build the doubly-stochastic radial smear kernel and
+    # compose it with LIFO. Both row sums and column mass are preserved
+    # by the kernel's construction (see :func:`_push_pull_diffusion_kernel`).
+    k = _push_pull_diffusion_kernel(
+        w_lifo=w_lifo,
         flow=flow,
-        layer_height=layer_height,
-        porosity=porosity,
-        retardation_factor=retardation_factor,
-        n_layers=n_layers,
+        dt=dt,
+        tedges_days=tedges_days,
+        v_cum=v_cum,
+        v_max_after=v_max_after,
+        scale=scale,
         molecular_diffusivity=molecular_diffusivity,
         longitudinal_dispersivity=longitudinal_dispersivity,
-        v_max_after=v_max_after,
+        retardation_factor=retardation_factor,
     )
+    w_smear = w_lifo @ k
 
-    # Convert mean_erf (n, n+1) -> coefficients (n, n)
-    # frac[i,j] = probability that water injected before edge j has been
-    # extracted in bin i. In the push-pull LIFO model, frac increases with j
-    # (later injection edges = closer to well = extracted sooner).
-    frac = 0.5 * (1.0 + response)
-    frac_filled = np.nan_to_num(frac, nan=0.0)
-
-    # Reflecting boundary at the well screen (r = 0, V_cum = 0 at
-    # edge 0): the erf model allows diffusion to r < 0, which is
-    # unphysical.  Clamping frac at edge 0 to zero enforces the
-    # reflecting boundary so that all tracer mass remains in the
-    # domain and is attributed to injection bins.
-    frac_filled[:, 0] = 0.0
-
-    # Enforce monotonicity: frac must be non-decreasing along the
-    # edge axis because later injection edges are closer to the well
-    # and are extracted sooner.  Strong diffusion can cause local
-    # non-monotonicity in the mean-erf values; the cumulative maximum
-    # corrects this without introducing artificial mass.
-    frac_filled = np.maximum.accumulate(frac_filled, axis=1)
-
-    coeff = frac_filled[:, 1:] - frac_filled[:, :-1]
-    coeff[:, ~is_injection] = 0.0
-
-    # Flow-weighted resampling onto cout_tedges grid
-    overlap = partial_isin(bin_edges_in=tedges_days, bin_edges_out=cout_tedges_days)  # (n, n_cout)
-    is_extraction = flow < 0
-    extraction_volume = np.abs(flow) * dt * is_extraction  # (n,)
-    ext_vol_overlap = extraction_volume[:, np.newaxis] * overlap  # (n, n_cout)
-    total_ext = ext_vol_overlap.sum(axis=0)  # (n_cout,)
-    has_extraction = total_ext > 0
-
-    n_cout = len(cout_tedges_days) - 1
-    w = np.zeros((n_cout, n))
-    # w[k,j] = Σ_i ext_vol_overlap[i,k] * coeff[i,j] / total_ext[k]
-    w[has_extraction] = (ext_vol_overlap[:, has_extraction].T @ coeff) / total_ext[has_extraction, np.newaxis]
-
-    return w, has_extraction
+    # Step 3: flow-weighted resample onto the cout grid
+    return _resample_to_cout(
+        w_input=w_smear,
+        flow=flow,
+        dt=dt,
+        tedges_days=tedges_days,
+        cout_tedges_days=cout_tedges_days,
+    )

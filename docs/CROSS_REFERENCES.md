@@ -62,3 +62,9 @@ Base URL: `https://gwtransport.github.io/gwtransport/`
 | `examples/05_Diffusion_Dispersion`                 | Dispersion vs APVD             |
 | `examples/07_Radial_PushPull_Well`                 | Radial push-pull well model    |
 | `examples/10_Advection_with_non_linear_sorption`   | Freundlich sorption            |
+
+### Derivations (`docs/source/user_guide/`)
+
+| Label                       | Topic                                                |
+| --------------------------- | ---------------------------------------------------- |
+| `radial-kernel-derivation`  | First-principles derivation of radial push-pull kernel |

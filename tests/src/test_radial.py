@@ -7,12 +7,15 @@ from numpy.testing import assert_allclose
 
 from gwtransport.gamma import bins as gamma_bins_func
 from gwtransport.radial import (
-    gamma_push_pull_well,
-    gamma_push_pull_well_inverse,
-    push_pull_well,
-    push_pull_well_inverse,
+    gamma_push_pull,
+    gamma_push_pull_inverse,
+    push_pull,
+    push_pull_inverse,
 )
-from gwtransport.radial_utils import _push_pull_advection_matrix, _signed_radial_distance
+from gwtransport.radial_utils import (
+    _push_pull_advection_matrix,
+    _push_pull_diffusion_matrix,
+)
 
 
 @pytest.fixture
@@ -39,7 +42,7 @@ class TestPushPullAdvection:
         flow, tedges = push_pull_scenario
         cin = np.ones(len(flow)) * 5.0
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -59,7 +62,7 @@ class TestPushPullAdvection:
         tedges = pd.date_range("2020-01-01", periods=9, freq="D")
         cin = np.array([1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -78,7 +81,7 @@ class TestPushPullAdvection:
         cin = np.zeros(len(flow))
         cin[injection_mask] = np.linspace(1, 10, injection_mask.sum())
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -101,7 +104,7 @@ class TestPushPullAdvection:
         cin = np.array([1.0, 5.0, 0.0, 0.0])
 
         # Single uniform layer
-        cout_uniform = push_pull_well(
+        cout_uniform = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -111,7 +114,7 @@ class TestPushPullAdvection:
         )
 
         # Multiple heterogeneous layers
-        cout_hetero = push_pull_well(
+        cout_hetero = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -129,7 +132,7 @@ class TestPushPullAdvection:
         tedges = pd.date_range("2020-01-01", periods=7, freq="D")
         cin = np.array([1.0, 2.0, 3.0, 4.0, 0.0, 0.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -148,7 +151,7 @@ class TestPushPullAdvection:
         tedges = pd.date_range("2020-01-01", periods=7, freq="D")
         cin = np.array([3.0, 5.0, 0.0, 0.0, 0.0, 0.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -170,7 +173,7 @@ class TestPushPullAdvection:
         tedges = pd.date_range("2020-01-01", periods=9, freq="D")
         cin = np.array([1.0, 2.0, 0.0, 0.0, 10.0, 20.0, 0.0, 0.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -187,51 +190,6 @@ class TestPushPullAdvection:
         assert_allclose(cout[7], 10.0)
 
 
-class TestSignedRadialDistance:
-    """Tests for _signed_radial_distance."""
-
-    def test_zero_volume(self):
-        """Zero volume difference gives zero distance."""
-        x = _signed_radial_distance(
-            delta_volume=np.array([0.0]),
-            layer_height=5.0,
-            porosity=0.3,
-            retardation_factor=1.0,
-            n_layers=1,
-        )
-        assert_allclose(x, 0.0)
-
-    def test_sign_convention(self):
-        """Positive volume gives positive distance, negative gives negative."""
-        dv = np.array([100.0, -100.0])
-        x = _signed_radial_distance(
-            delta_volume=dv,
-            layer_height=5.0,
-            porosity=0.3,
-            retardation_factor=1.0,
-            n_layers=1,
-        )
-        assert x[0] > 0
-        assert x[1] < 0
-        assert_allclose(np.abs(x[0]), np.abs(x[1]))
-
-    def test_formula(self):
-        """Verify against manual calculation."""
-        dv = np.array([1000.0])
-        h, n_por, r_factor, n_lay = 5.0, 0.3, 1.0, 3
-        scale = n_lay * np.pi * h * n_por * r_factor
-        expected = np.sqrt(1000.0 / scale)
-
-        x = _signed_radial_distance(
-            delta_volume=dv,
-            layer_height=h,
-            porosity=n_por,
-            retardation_factor=r_factor,
-            n_layers=n_lay,
-        )
-        assert_allclose(x[0], expected)
-
-
 class TestPushPullDiffusion:
     """Radial diffusion tests."""
 
@@ -242,7 +200,7 @@ class TestPushPullDiffusion:
         cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([2.0, 5.0, 8.0])
 
-        cout_adv = push_pull_well(
+        cout_adv = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -251,7 +209,7 @@ class TestPushPullDiffusion:
             porosity=0.3,
         )
 
-        cout_diff = push_pull_well(
+        cout_diff = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -268,15 +226,18 @@ class TestPushPullDiffusion:
     def test_constant_cin_with_diffusion(self):
         """Constant injection concentration gives near-constant extraction with diffusion.
 
-        Small deviations at the edges are physical: the coefficient row sum can be
-        slightly < 1 because diffusion allows some ambient water to mix in.
+        When the prepended background matches the injection concentration, the
+        radial diffusion model must return ``cin`` exactly on every extraction
+        bin regardless of layer heights or diffusion coefficients. With
+        ``c_background = cin`` the entire mass matrix contributes ``cin`` so
+        any finite row-sum deviation cancels at machine precision.
         """
         flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
         tedges = pd.date_range("2020-01-01", periods=7, freq="D")
         cin = np.ones(6) * 7.0
         layer_heights = np.array([2.0, 5.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -284,10 +245,11 @@ class TestPushPullDiffusion:
             layer_heights=layer_heights,
             porosity=0.3,
             molecular_diffusivity=0.01,
+            c_background=7.0,
         )
 
         extraction_mask = flow < 0
-        assert_allclose(cout[extraction_mask], 7.0, atol=0.05)
+        assert_allclose(cout[extraction_mask], 7.0, atol=1e-10)
 
     def test_higher_diffusivity_more_spreading(self):
         """Higher molecular diffusivity produces more spreading (less peaked)."""
@@ -296,7 +258,7 @@ class TestPushPullDiffusion:
         cin = np.array([0.0, 10.0, 0.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([3.0, 5.0, 8.0])
 
-        cout_low_d = push_pull_well(
+        cout_low_d = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -306,7 +268,7 @@ class TestPushPullDiffusion:
             molecular_diffusivity=0.001,
         )
 
-        cout_high_d = push_pull_well(
+        cout_high_d = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -327,7 +289,7 @@ class TestPushPullDiffusion:
         cin = np.array([0.0, 10.0, 0.0, 0.0, 0.0, 0.0])
 
         # Narrow distribution: all layers same height
-        cout_narrow = push_pull_well(
+        cout_narrow = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -338,7 +300,7 @@ class TestPushPullDiffusion:
         )
 
         # Wide distribution: very different layer heights
-        cout_wide = push_pull_well(
+        cout_wide = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -362,7 +324,7 @@ class TestRetardation:
         tedges = pd.date_range("2020-01-01", periods=5, freq="D")
         cin = np.array([1.0, 5.0, 0.0, 0.0])
 
-        cout_r1 = push_pull_well(
+        cout_r1 = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -372,7 +334,7 @@ class TestRetardation:
             retardation_factor=1.0,
         )
 
-        cout_default = push_pull_well(
+        cout_default = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -389,7 +351,7 @@ class TestRetardation:
         tedges = pd.date_range("2020-01-01", periods=5, freq="D")
         cin = np.array([1.0, 5.0, 0.0, 0.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -415,7 +377,7 @@ class TestRetardation:
         cin = np.array([0.0, 10.0, 0.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([3.0, 5.0, 8.0])
 
-        cout_r1 = push_pull_well(
+        cout_r1 = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -426,7 +388,7 @@ class TestRetardation:
             molecular_diffusivity=0.01,
         )
 
-        cout_r3 = push_pull_well(
+        cout_r3 = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -452,7 +414,7 @@ class TestRetardation:
         cin = np.array([0.0, 10.0, 0.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([3.0, 5.0, 8.0])
 
-        cout_r1 = push_pull_well(
+        cout_r1 = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -463,7 +425,7 @@ class TestRetardation:
             longitudinal_dispersivity=0.5,
         )
 
-        cout_r3 = push_pull_well(
+        cout_r3 = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -527,7 +489,7 @@ class TestPushPullInverse:
         cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([5.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -536,7 +498,7 @@ class TestPushPullInverse:
             porosity=0.3,
         )
 
-        cin_recovered = push_pull_well_inverse(
+        cin_recovered = push_pull_inverse(
             flow=flow,
             cout=cout,
             tedges=tedges,
@@ -555,7 +517,7 @@ class TestPushPullInverse:
         cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([3.0, 5.0, 8.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -565,7 +527,7 @@ class TestPushPullInverse:
             molecular_diffusivity=0.001,
         )
 
-        cin_recovered = push_pull_well_inverse(
+        cin_recovered = push_pull_inverse(
             flow=flow,
             cout=cout,
             tedges=tedges,
@@ -591,7 +553,7 @@ class TestGammaConvenience:
         cin = np.array([1.0, 5.0, 0.0, 0.0])
 
         gamma_bins = gamma_bins_func(mean=5.0, std=1.5, n_bins=50)
-        cout_manual = push_pull_well(
+        cout_manual = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -600,7 +562,7 @@ class TestGammaConvenience:
             porosity=0.3,
         )
 
-        cout_gamma = gamma_push_pull_well(
+        cout_gamma = gamma_push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -620,7 +582,7 @@ class TestGammaConvenience:
         cin = np.array([1.0, 5.0, 0.0, 0.0])
 
         # Should not raise
-        cout = gamma_push_pull_well(
+        cout = gamma_push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -644,7 +606,7 @@ class TestBackgroundConcentration:
         cin = np.array([5.0, 5.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([3.0, 8.0])
 
-        cout_default = push_pull_well(
+        cout_default = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -653,7 +615,7 @@ class TestBackgroundConcentration:
             porosity=0.3,
             molecular_diffusivity=0.01,
         )
-        cout_bg0 = push_pull_well(
+        cout_bg0 = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -672,7 +634,7 @@ class TestBackgroundConcentration:
         cin = np.ones(8) * 7.0
         layer_heights = np.array([2.0, 5.0, 10.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -692,7 +654,7 @@ class TestBackgroundConcentration:
         tedges = pd.date_range("2020-01-01", periods=7, freq="D")
         cin = np.array([3.0, 5.0, 0.0, 0.0, 0.0, 0.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -710,7 +672,7 @@ class TestBackgroundConcentration:
         assert_allclose(cout[5], 2.0)
 
     def test_gamma_wrapper_passes_background(self):
-        """gamma_push_pull_well passes c_background through.
+        """gamma_push_pull passes c_background through.
 
         When cin == c_background, the extraction concentration should be close
         to the constant value. Small deviations (~1e-6) arise because the
@@ -721,7 +683,7 @@ class TestBackgroundConcentration:
         tedges = pd.date_range("2020-01-01", periods=6, freq="D")
         cin = np.ones(5) * 4.0
 
-        cout = gamma_push_pull_well(
+        cout = gamma_push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -748,7 +710,7 @@ class TestCoutTedges:
         cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([5.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -771,7 +733,7 @@ class TestCoutTedges:
         layer_heights = np.array([5.0])
 
         # Fine resolution cout
-        cout_fine = push_pull_well(
+        cout_fine = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -782,7 +744,7 @@ class TestCoutTedges:
 
         # Coarse: extraction period in 2 bins (2 days each)
         cout_tedges = pd.date_range("2020-01-05", periods=3, freq="2D")
-        cout_coarse = push_pull_well(
+        cout_coarse = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -809,7 +771,7 @@ class TestCoutTedges:
         cin = np.array([1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([5.0])
 
-        cout_fine = push_pull_well(
+        cout_fine = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -820,7 +782,7 @@ class TestCoutTedges:
 
         # Coarse: combine extraction into one bin
         cout_tedges = pd.DatetimeIndex([tedges[4], tedges[8]])
-        cout_coarse = push_pull_well(
+        cout_coarse = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -842,7 +804,7 @@ class TestCoutTedges:
 
         # cout_tedges covers injection period only
         cout_tedges = pd.DatetimeIndex([tedges[0], tedges[2]])
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -860,7 +822,7 @@ class TestCoutTedges:
         cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([3.0, 5.0, 8.0])
 
-        cout_fine = push_pull_well(
+        cout_fine = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -872,7 +834,7 @@ class TestCoutTedges:
 
         # Coarse: single extraction bin
         cout_tedges = pd.DatetimeIndex([tedges[3], tedges[6]])
-        cout_coarse = push_pull_well(
+        cout_coarse = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -896,7 +858,7 @@ class TestCoutTedges:
         tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
         cin = np.ones(n) * 5.0
 
-        cout_fine = push_pull_well(
+        cout_fine = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -908,7 +870,7 @@ class TestCoutTedges:
 
         # Coarse: combine all extraction into two bins
         cout_tedges = pd.date_range(tedges[n_inject], periods=3, freq=f"{n_extract // 2}D")
-        cout_coarse = push_pull_well(
+        cout_coarse = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -937,7 +899,7 @@ class TestCoutTedges:
 
         cout_tedges = pd.DatetimeIndex([tedges[3], tedges[4], tedges[5], tedges[6]])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -946,7 +908,7 @@ class TestCoutTedges:
             porosity=0.3,
         )
 
-        cin_recovered = push_pull_well_inverse(
+        cin_recovered = push_pull_inverse(
             flow=flow,
             cout=cout,
             tedges=tedges,
@@ -965,7 +927,7 @@ class TestCoutTedges:
         cin = np.array([3.0, 7.0, 2.0, 0.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([5.0])
 
-        cout_fine = push_pull_well(
+        cout_fine = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -976,7 +938,7 @@ class TestCoutTedges:
 
         # Coarse: two bins covering the extraction period
         cout_tedges = pd.DatetimeIndex([tedges[3], tedges[5], tedges[7]])
-        cout_coarse = push_pull_well(
+        cout_coarse = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1002,7 +964,7 @@ class TestCoutTedges:
         tedges = pd.date_range("2020-01-01", periods=7, freq="D")
         cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
 
-        cout_fine = gamma_push_pull_well(
+        cout_fine = gamma_push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1015,7 +977,7 @@ class TestCoutTedges:
         )
 
         cout_tedges = pd.DatetimeIndex([tedges[3], tedges[6]])
-        cout_coarse = gamma_push_pull_well(
+        cout_coarse = gamma_push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1042,7 +1004,7 @@ class TestDiffusionCoefficients:
         layer_heights = np.array([2.0, 5.0, 8.0])
 
         # Build coefficient matrix via forward model with known input
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1064,7 +1026,7 @@ class TestDiffusionCoefficients:
         cin = np.array([0.0, 10.0, 0.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([3.0, 5.0, 8.0])
 
-        cout_adv = push_pull_well(
+        cout_adv = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1073,7 +1035,7 @@ class TestDiffusionCoefficients:
             porosity=0.3,
         )
 
-        cout_disp = push_pull_well(
+        cout_disp = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1093,7 +1055,7 @@ class TestDiffusionCoefficients:
         tedges = pd.date_range("2020-01-01", periods=7, freq="D")
         cin = np.ones(6) * 5.0
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1118,7 +1080,7 @@ class TestInputValidation:
         cin = np.array([1.0, 2.0])  # wrong length
 
         with pytest.raises(ValueError, match="flow and cin must have the same length"):
-            push_pull_well(
+            push_pull(
                 flow=flow,
                 cin=cin,
                 tedges=tedges,
@@ -1134,7 +1096,7 @@ class TestInputValidation:
         cin = np.array([1.0, 2.0, 0.0])
 
         with pytest.raises(ValueError, match="tedges must have length"):
-            push_pull_well(
+            push_pull(
                 flow=flow,
                 cin=cin,
                 tedges=tedges,
@@ -1142,53 +1104,6 @@ class TestInputValidation:
                 layer_heights=np.array([5.0]),
                 porosity=0.3,
             )
-
-
-class TestSignedRadialDistanceExtended:
-    """Extended tests for _signed_radial_distance."""
-
-    def test_retardation_factor(self):
-        """Retardation factor R>1 reduces radial distance by sqrt(R)."""
-        dv = np.array([1000.0])
-        h, n_por, n_lay = 5.0, 0.3, 1
-
-        x_r1 = _signed_radial_distance(
-            delta_volume=dv, layer_height=h, porosity=n_por, retardation_factor=1.0, n_layers=n_lay
-        )
-        x_r4 = _signed_radial_distance(
-            delta_volume=dv, layer_height=h, porosity=n_por, retardation_factor=4.0, n_layers=n_lay
-        )
-
-        # r scales as 1/sqrt(R), so R=4 gives half the distance
-        assert_allclose(x_r4[0], x_r1[0] / 2.0)
-
-    def test_n_layers_scaling(self):
-        """More layers reduce radial distance by sqrt(N)."""
-        dv = np.array([1000.0])
-        h, n_por, r_factor = 5.0, 0.3, 1.0
-
-        x_1 = _signed_radial_distance(
-            delta_volume=dv, layer_height=h, porosity=n_por, retardation_factor=r_factor, n_layers=1
-        )
-        x_9 = _signed_radial_distance(
-            delta_volume=dv, layer_height=h, porosity=n_por, retardation_factor=r_factor, n_layers=9
-        )
-
-        assert_allclose(x_9[0], x_1[0] / 3.0)
-
-    def test_porosity_scaling(self):
-        """Larger porosity reduces radial distance by sqrt(n)."""
-        dv = np.array([1000.0])
-        h, r_factor, n_lay = 5.0, 1.0, 1
-
-        x_n1 = _signed_radial_distance(
-            delta_volume=dv, layer_height=h, porosity=0.1, retardation_factor=r_factor, n_layers=n_lay
-        )
-        x_n4 = _signed_radial_distance(
-            delta_volume=dv, layer_height=h, porosity=0.4, retardation_factor=r_factor, n_layers=n_lay
-        )
-
-        assert_allclose(x_n4[0], x_n1[0] / 2.0)
 
 
 class TestMassConservationWithDiffusion:
@@ -1204,7 +1119,7 @@ class TestMassConservationWithDiffusion:
         tedges = pd.date_range("2020-01-01", periods=9, freq="D")
         cin = np.array([2.0, 4.0, 6.0, 8.0, 0.0, 0.0, 0.0, 0.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1227,7 +1142,7 @@ class TestMassConservationWithDiffusion:
         tedges = pd.date_range("2020-01-01", periods=7, freq="D")
         cin = np.array([1.0, 5.0, 3.0, 0.0, 0.0, 0.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1245,6 +1160,257 @@ class TestMassConservationWithDiffusion:
         assert_allclose(mass_out, mass_in, rtol=1e-10)
 
 
+class TestPushPullStructuralInvariants:
+    """Tests guarding the radial diffusion structural invariants.
+
+    These tests enforce the structural properties that the push-pull
+    attribution plus radial smear composition must satisfy: the
+    ``D_m = 0`` diffusion branch must reduce to pure advection
+    bit-for-bit, push-pull ordering must be preserved under
+    alternating flow, the internal weight matrix must be
+    row-stochastic regardless of the diffusion coefficients, and mass
+    must be conserved through inject-rest-extract cycles.
+    """
+
+    def test_diffusion_equals_advection_in_limit(self):
+        """At ``D_m → 0`` the diffusion branch reduces to pure advection.
+
+        Both the advection branch (``molecular_diffusivity=0``) and the
+        diffusion branch at a numerically negligible ``D_m`` must produce
+        identical weight matrices and output concentrations on every
+        extraction bin.
+        """
+        flow = np.array([100.0, -60.0, 80.0, -40.0])
+        tedges = pd.date_range("2020-01-01", periods=5, freq="D")
+        cin = np.array([1.0, 0.0, 2.0, 0.0])
+        layer_heights = np.array([2.0, 5.0])
+
+        cout_adv = push_pull(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+        )
+        cout_diff = push_pull(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=layer_heights,
+            porosity=0.3,
+            molecular_diffusivity=1e-15,
+        )
+
+        extraction_mask = flow < 0
+        assert_allclose(cout_diff[extraction_mask], cout_adv[extraction_mask], rtol=1e-12, atol=1e-12)
+
+    def test_alternating_flow_push_pull_preservation(self):
+        """Alternating push-pull cycles recover each injection at negligible diffusion.
+
+        Each push-pull sub-cycle must return its own injected value in
+        strict last-in-first-out order. The canonical pattern
+        ``flow=[+100, -60, +80, -40], cin=[1, 0, 2, 0]`` has extraction
+        bin 1 popping part of injection 0 (value 1) and extraction bin 3
+        popping injection 2 (value 2).
+        """
+        flow = np.array([100.0, -60.0, 80.0, -40.0])
+        tedges = pd.date_range("2020-01-01", periods=5, freq="D")
+        cin = np.array([1.0, 0.0, 2.0, 0.0])
+
+        cout = push_pull(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=np.array([5.0]),
+            porosity=0.3,
+            molecular_diffusivity=1e-6,
+        )
+
+        # Extraction bin 1 pops part of injection bin 0
+        assert_allclose(cout[1], 1.0, atol=1e-3)
+        # Extraction bin 3 pops injection bin 2 — must see cin[2]=2.0
+        assert_allclose(cout[3], 2.0, atol=1e-3)
+
+    def test_mass_conservation_with_rest_period(self):
+        """Inject-rest-extract pattern conserves mass exactly.
+
+        A rest period between injection and extraction introduces
+        degenerate ``V_cum`` edges: consecutive tedges share the same
+        cumulative volume. The push-pull attribution handles these
+        rest bins by not populating their columns at all, so there is
+        no leakage of mass onto degenerate rest columns.
+        """
+        flow = np.concatenate([[100.0] * 4, [0.0] * 3, [-100.0] * 4])
+        tedges = pd.date_range("2020-01-01", periods=12, freq="D")
+        cin = np.concatenate([[1.0] * 4, [0.0] * 7])
+
+        cout = push_pull(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=np.array([5.0]),
+            porosity=0.3,
+            molecular_diffusivity=0.01,
+        )
+
+        dt = np.diff(tedges) / pd.Timedelta("1D")
+        mass_in = np.sum(cin * flow * dt)
+        cout_clean = np.where(np.isnan(cout), 0.0, cout)
+        mass_out = np.sum(cout_clean * np.abs(flow) * dt)
+        assert_allclose(mass_out, mass_in, rtol=1e-10)
+
+    def test_row_sums_with_diffusion(self):
+        """Internal weight matrix rows must sum to 1 at machine precision.
+
+        The push-pull attribution composed with the doubly-stochastic
+        radial smear kernel built by
+        :func:`_push_pull_diffusion_kernel` is row-stochastic by
+        construction: the kernel inserts a self-loop diagonal that
+        absorbs any sub-stochastic slack, and the LIFO factor is
+        row-stochastic for every extraction bin that fully recovers
+        its injected volume.
+        """
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=7, freq="D")
+        dt = np.asarray(np.diff(tedges) / pd.Timedelta("1D"), dtype=float)
+
+        # Replicate the prepend-bin setup used by push_pull
+        v_cum_test = np.cumsum(flow * dt)
+        max_abs_v = max(np.max(np.abs(np.concatenate(([0.0], v_cum_test)))), 1.0)
+        prepend_volume = 1000.0 * max_abs_v
+        flow_prep = np.concatenate(([prepend_volume], flow))
+        dt_prep = np.concatenate(([1.0], dt))
+        tedges_days = np.concatenate(([0.0], np.cumsum(dt_prep)))
+        v_cum = np.concatenate(([0.0], np.cumsum(flow_prep * dt_prep)))
+        v_max_after = np.maximum.accumulate(v_cum[::-1])[::-1]
+
+        for h in [2.0, 5.0, 10.0]:
+            w, has_ext = _push_pull_diffusion_matrix(
+                flow=flow_prep,
+                tedges_days=tedges_days,
+                cout_tedges_days=tedges_days,
+                v_cum=v_cum,
+                layer_height=h,
+                porosity=0.3,
+                retardation_factor=1.0,
+                n_layers=1,
+                molecular_diffusivity=0.01,
+                longitudinal_dispersivity=0.0,
+                v_max_after=v_max_after,
+            )
+            row_sums = w[has_ext].sum(axis=1)
+            assert_allclose(row_sums, 1.0, atol=1e-12)
+
+
+class TestArbitraryCoutTedges:
+    """Input/output grid independence tests.
+
+    ``tedges`` (physics) and ``cout_tedges`` (reporting) are independent
+    grids. These tests exercise the ``_resample_to_cout`` projection
+    across coarser, finer, and misaligned ``cout_tedges`` grids with
+    both pure advection and radial diffusion.
+    """
+
+    def test_cout_coarser_than_tedges_advection(self):
+        """Coarse ``cout_tedges`` equals the flow-weighted fine-grid average."""
+        flow = np.array([100.0, 100.0, 100.0, 100.0, -100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=9, freq="D")
+        cin = np.array([1.0, 3.0, 5.0, 7.0, 0.0, 0.0, 0.0, 0.0])
+
+        cout_fine = push_pull(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=np.array([5.0]),
+            porosity=0.3,
+        )
+
+        # Aggregate extraction bins 4-5 and 6-7 into two coarse bins
+        cout_tedges_coarse = pd.DatetimeIndex([tedges[0], tedges[4], tedges[6], tedges[8]])
+        cout_coarse = push_pull(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=cout_tedges_coarse,
+            layer_heights=np.array([5.0]),
+            porosity=0.3,
+        )
+
+        expected_0 = 0.5 * (cout_fine[4] + cout_fine[5])
+        expected_1 = 0.5 * (cout_fine[6] + cout_fine[7])
+        assert_allclose(cout_coarse[1], expected_0, rtol=1e-12)
+        assert_allclose(cout_coarse[2], expected_1, rtol=1e-12)
+
+    def test_cout_finer_than_tedges_advection(self):
+        """Fine ``cout_tedges`` is constant within each coarse tedges bin."""
+        flow = np.array([100.0, 100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=5, freq="2D")
+        cin = np.array([1.0, 5.0, 0.0, 0.0])
+
+        cout_coarse = push_pull(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=tedges,
+            layer_heights=np.array([5.0]),
+            porosity=0.3,
+        )
+
+        # Refine cout_tedges to daily (matching tedges) to verify constancy
+        cout_tedges_fine = pd.date_range("2020-01-01", periods=9, freq="D")
+        cout_fine = push_pull(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=cout_tedges_fine,
+            layer_heights=np.array([5.0]),
+            porosity=0.3,
+        )
+
+        # cout_fine[4:6] are inside tedges bin 2 (extraction 1)
+        assert_allclose(cout_fine[4], cout_coarse[2], rtol=1e-12)
+        assert_allclose(cout_fine[5], cout_coarse[2], rtol=1e-12)
+        # cout_fine[6:8] are inside tedges bin 3 (extraction 2)
+        assert_allclose(cout_fine[6], cout_coarse[3], rtol=1e-12)
+        assert_allclose(cout_fine[7], cout_coarse[3], rtol=1e-12)
+
+    def test_cout_diffusion_matches_advection_in_d_zero_limit(self):
+        """Arbitrary ``cout_tedges`` matches advection at ``D_m → 0``."""
+        flow = np.array([100.0, 100.0, 100.0, -100.0, -100.0, -100.0])
+        tedges = pd.date_range("2020-01-01", periods=7, freq="D")
+        cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
+
+        # Misaligned cout_tedges: noon boundaries instead of midnight
+        cout_tedges = tedges + pd.Timedelta("12h")
+
+        cout_adv = push_pull(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            layer_heights=np.array([5.0]),
+            porosity=0.3,
+        )
+        cout_diff = push_pull(
+            flow=flow,
+            cin=cin,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            layer_heights=np.array([5.0]),
+            porosity=0.3,
+            molecular_diffusivity=1e-15,
+        )
+
+        # NaN for bins with no extraction, exact match elsewhere
+        mask = ~np.isnan(cout_adv) & ~np.isnan(cout_diff)
+        assert_allclose(cout_diff[mask], cout_adv[mask], rtol=1e-12, atol=1e-12)
+
+
 class TestNonNegativeOutput:
     """Output concentration must be non-negative for non-negative input."""
 
@@ -1255,7 +1421,7 @@ class TestNonNegativeOutput:
         cin = np.array([0.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([1.0, 3.0, 10.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1275,7 +1441,7 @@ class TestNonNegativeOutput:
         cin = np.array([0.0, 10.0, 0.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([2.0, 5.0, 15.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1300,7 +1466,7 @@ class TestRestPeriodEffect:
         flow_short = np.array([100.0, 100.0, -100.0, -100.0])
         tedges_short = pd.date_range("2020-01-01", periods=5, freq="D")
         cin_short = np.array([0.0, 10.0, 0.0, 0.0])
-        cout_short = push_pull_well(
+        cout_short = push_pull(
             flow=flow_short,
             cin=cin_short,
             tedges=tedges_short,
@@ -1316,7 +1482,7 @@ class TestRestPeriodEffect:
         tedges_long = pd.date_range("2020-01-01", periods=len(flow_long) + 1, freq="D")
         cin_long = np.zeros(len(flow_long))
         cin_long[1] = 10.0
-        cout_long = push_pull_well(
+        cout_long = push_pull(
             flow=flow_long,
             cin=cin_long,
             tedges=tedges_long,
@@ -1341,7 +1507,7 @@ class TestVariableTimeSteps:
         flow = np.array([100.0, 50.0, 200.0, -100.0, -80.0])
         cin = np.array([3.0, 7.0, 2.0, 0.0, 0.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1367,7 +1533,7 @@ class TestVariableTimeSteps:
         flow = np.array([100.0, 100.0, -100.0, -100.0])
         cin = np.array([1.0, 5.0, 0.0, 0.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1407,7 +1573,7 @@ class TestPorosityEffect:
         cin = np.array([0.0, 10.0, 0.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([3.0, 5.0, 8.0])
 
-        cout_high_n = push_pull_well(
+        cout_high_n = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1417,7 +1583,7 @@ class TestPorosityEffect:
             longitudinal_dispersivity=0.5,
         )
 
-        cout_low_n = push_pull_well(
+        cout_low_n = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1442,7 +1608,7 @@ class TestCombinedDiffusionMechanisms:
         cin = np.array([0.0, 10.0, 0.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([3.0, 5.0, 8.0])
 
-        cout_dm_only = push_pull_well(
+        cout_dm_only = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1452,7 +1618,7 @@ class TestCombinedDiffusionMechanisms:
             molecular_diffusivity=0.01,
         )
 
-        cout_al_only = push_pull_well(
+        cout_al_only = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1462,7 +1628,7 @@ class TestCombinedDiffusionMechanisms:
             longitudinal_dispersivity=0.5,
         )
 
-        cout_both = push_pull_well(
+        cout_both = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1493,7 +1659,7 @@ class TestOverExtractionWithDiffusion:
         cin = np.array([10.0, 10.0, 0.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([3.0, 5.0, 8.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1515,7 +1681,7 @@ class TestOverExtractionWithDiffusion:
 
 
 class TestGammaInverse:
-    """Tests for gamma_push_pull_well_inverse."""
+    """Tests for gamma_push_pull_inverse."""
 
     def test_roundtrip_advection(self):
         """Gamma inverse recovers cin for pure advection."""
@@ -1523,7 +1689,7 @@ class TestGammaInverse:
         tedges = pd.date_range("2020-01-01", periods=7, freq="D")
         cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
 
-        cout = gamma_push_pull_well(
+        cout = gamma_push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1534,7 +1700,7 @@ class TestGammaInverse:
             porosity=0.3,
         )
 
-        cin_recovered = gamma_push_pull_well_inverse(
+        cin_recovered = gamma_push_pull_inverse(
             flow=flow,
             cout=cout,
             tedges=tedges,
@@ -1554,7 +1720,7 @@ class TestGammaInverse:
         tedges = pd.date_range("2020-01-01", periods=7, freq="D")
         cin = np.array([1.0, 3.0, 5.0, 0.0, 0.0, 0.0])
 
-        cout = gamma_push_pull_well(
+        cout = gamma_push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1566,7 +1732,7 @@ class TestGammaInverse:
             molecular_diffusivity=0.001,
         )
 
-        cin_recovered = gamma_push_pull_well_inverse(
+        cin_recovered = gamma_push_pull_inverse(
             flow=flow,
             cout=cout,
             tedges=tedges,
@@ -1587,7 +1753,7 @@ class TestGammaInverse:
         tedges = pd.date_range("2020-01-01", periods=6, freq="D")
         cin = np.array([3.0, 5.0, 0.0, 0.0, 0.0])
 
-        cout = gamma_push_pull_well(
+        cout = gamma_push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1598,7 +1764,7 @@ class TestGammaInverse:
             porosity=0.3,
         )
 
-        cin_recovered = gamma_push_pull_well_inverse(
+        cin_recovered = gamma_push_pull_inverse(
             flow=flow,
             cout=cout,
             tedges=tedges,
@@ -1619,7 +1785,7 @@ class TestGammaInverse:
         tedges = pd.date_range("2020-01-01", periods=8, freq="D")
         cin = np.array([5.0, 8.0, 3.0, 0.0, 0.0, 0.0, 0.0])
 
-        cout = gamma_push_pull_well(
+        cout = gamma_push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1631,7 +1797,7 @@ class TestGammaInverse:
             c_background=2.0,
         )
 
-        cin_recovered = gamma_push_pull_well_inverse(
+        cin_recovered = gamma_push_pull_inverse(
             flow=flow,
             cout=cout,
             tedges=tedges,
@@ -1657,7 +1823,7 @@ class TestInverseWithBackground:
         cin = np.array([5.0, 8.0, 3.0, 0.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([5.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1667,7 +1833,7 @@ class TestInverseWithBackground:
             c_background=2.0,
         )
 
-        cin_recovered = push_pull_well_inverse(
+        cin_recovered = push_pull_inverse(
             flow=flow,
             cout=cout,
             tedges=tedges,
@@ -1687,7 +1853,7 @@ class TestInverseWithBackground:
         cin = np.array([3.0, 5.0, 0.0, 0.0, 0.0])
         layer_heights = np.array([5.0])
 
-        cout = push_pull_well(
+        cout = push_pull(
             flow=flow,
             cin=cin,
             tedges=tedges,
@@ -1696,7 +1862,7 @@ class TestInverseWithBackground:
             porosity=0.3,
         )
 
-        cin_recovered = push_pull_well_inverse(
+        cin_recovered = push_pull_inverse(
             flow=flow,
             cout=cout,
             tedges=tedges,

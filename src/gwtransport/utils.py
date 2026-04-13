@@ -1561,14 +1561,20 @@ def solve_inverse_transport(
         When ``warn_rank_deficient=True`` and the matrix is rank-deficient.
     """
     row_sums = w_forward.sum(axis=1)
-    col_active: npt.NDArray[np.bool_] = w_forward.sum(axis=0) > 0
+    valid: npt.NDArray[np.bool_] = row_sums > _EPSILON_COEFF_SUM if valid_rows is None else valid_rows
+
+    # A column is only "active" for the solve if it has non-zero support
+    # in at least one VALID row. Columns whose only weights fall in
+    # masked-out rows are unconstrained and must surface as NaN in the
+    # output, not as whatever the regularization target happened to be.
+    col_active: npt.NDArray[np.bool_] = w_forward[valid].sum(axis=0) > 0
 
     if not np.any(col_active):
         return np.full(n_output, np.nan)
 
     if warn_rank_deficient:
         n_active = int(col_active.sum())
-        rank = np.linalg.matrix_rank(w_forward[:, col_active])
+        rank = np.linalg.matrix_rank(w_forward[np.ix_(valid, col_active)])
         if rank < n_active:
             warnings.warn(
                 f"Forward matrix is rank-deficient (rank {rank} < {n_active} active "
@@ -1580,13 +1586,18 @@ def solve_inverse_transport(
                 stacklevel=2,
             )
 
-    valid: npt.NDArray[np.bool_] = row_sums > _EPSILON_COEFF_SUM if valid_rows is None else valid_rows
+    # Sanitize ``observed`` at invalid rows before computing the
+    # regularization target: ``compute_reverse_target`` calls
+    # ``w_reverse @ observed`` where ``0 * NaN = NaN`` would otherwise
+    # contaminate every active column even though the zero weight means
+    # the invalid row contributes nothing to the target.
+    observed_clean = np.where(valid, observed, 0.0)
 
-    rhs = np.where(valid, row_sums * observed, np.nan)
+    rhs = np.where(valid, row_sums * observed_clean, np.nan)
     w_solve = w_forward.copy()
     w_solve[~valid, :] = np.nan
 
-    x_target = compute_reverse_target(coeff_matrix=w_forward, rhs_vector=observed)
+    x_target = compute_reverse_target(coeff_matrix=w_forward, rhs_vector=observed_clean)
 
     x_solved = solve_tikhonov(
         coefficient_matrix=w_solve,
