@@ -2,70 +2,108 @@ r"""
 Utility functions for the analytical-kernel radial push-pull module.
 
 Internal helpers used by :mod:`gwtransport.radial3`. The public surface
-exposed by this module is :func:`_radial_gaussian_matrix`, which builds
+exposed by this module is :func:`_radial_bessel_matrix`, which builds
 the ``(n_cout, n)`` input-to-output weight matrix for a single layer of
-a radial push-pull well using a closed-form 1-D erf kernel in the
-cumulative-volume coordinate ``v_cum``.
+a radial push-pull well using the 2-D radial heat-equation Green's
+function evaluated at the well screen.
 
-Approach -- 1-D erf kernel in volume coordinate
------------------------------------------------
+Approach -- 2-D radial Bessel kernel at the well
+------------------------------------------------
 For a layer of height ``h``, porosity ``n``, and retardation ``R``,
 define the volume coordinate ``V = scale * r**2`` with
 ``scale = n_layers * pi * h * n * R``. Each parcel injected at source
 time ``t_src`` has Lagrangian ``V``-position
 ``V_parcel(t) = max(v_cum(t) - v_cum(t_src), 0)`` under pure advection.
-Molecular diffusion in cylindrical geometry becomes a diffusion on
-``V`` with coefficient ``D_V(V) = 4 * scale * V * D_m / R``.
+The 2-D radial heat equation in ``V`` coordinates has a V-dependent
+diffusion coefficient ``D_V(V) = 4 * scale * (D_m / R) * V`` that
+vanishes at ``V = 0`` -- the physical absorbing behaviour of the well
+face where the cylindrical area element ``r dr`` collapses.
 
-**Single variance per extraction node.** At extraction time ``tau``
-with well volume ``V_tau = v_cum(tau)``, the LIFO-matched parcel came
-from the most recent source time with ``v_cum(t_src*) = V_tau``. Its
-travel integral equals the area between the ``v_cum`` curve and the
-line ``V = V_tau`` over ``[0, tau]`` (which is well-defined for any
-flow schedule):
+**Green's function at the well.** The 2-D radial heat equation with
+diffusivity ``D = D_m / R`` has the classical Green's function
 
 .. math::
 
-    I(\tau) = \int_0^{\tau}
-              \max\!\bigl(0,\, v_{\mathrm{cum}}(t') - v_{\mathrm{cum}}(\tau)\bigr)\, dt',
+    G(r, r'; t) = \frac{1}{4\pi D t}\,
+                  \exp\!\left(-\frac{r^2 + r'^2}{4 D t}\right)
+                  I_0\!\left(\frac{r\,r'}{2 D t}\right).
 
-and we assign **one** variance to all injection-bin contributions at
-that ``tau``:
+Evaluated at the well screen ``r = 0`` (with ``I_0(0) = 1``) and
+transformed to ``V`` coordinates with the area element
+``2\pi r' dr' = (\pi / \mathrm{scale})\, dV``, the concentration at
+``V = 0`` becomes a linear functional of the V-space initial
+condition with an **exponential** kernel
 
 .. math::
 
-    \sigma_V^2(\tau) = 8\,\mathrm{scale}\,\frac{D_m}{R}\, I(\tau).
+    K(V_{\mathrm{src}}; t_{\mathrm{eff}})
+        = \lambda\,\exp(-\lambda\,V_{\mathrm{src}}),
+    \qquad
+    \lambda = \frac{1}{4\,\mathrm{scale}\,(D_m/R)\,t_{\mathrm{eff}}}.
 
-Physically, parcels arriving at the well at the same ``tau`` piled up
-at ``V = 0`` along LIFO order, so sharing a single ``sigma_V(tau)`` is
-the natural leading-order choice. **Mathematically**, this is the
-*only* choice that makes the per-injection-bin erf contributions
-telescope, so that
+Place this kernel in the Lagrangian frame of the LIFO-matched parcel
+at ``tau`` (the most recent source time with
+``v_cum(t_src*) = V_\tau := v_cum(\tau)``). The displacement from the
+well face for injection bin ``j`` is
+``\xi_j = \max(V_\tau - V_\mathrm{src}, 0)``, and the injection-bin
+contribution is a difference of exponentials:
+
+.. math::
+
+    f_j(\tau) = \exp(-\lambda\,\xi_{\mathrm{near},j})
+              - \exp(-\lambda\,\xi_{\mathrm{far},j}),
+    \quad
+    \xi_{\mathrm{near},j} = \max(V_\tau - v_{\mathrm{hi},j}, 0),
+    \quad
+    \xi_{\mathrm{far},j}  = \max(V_\tau - v_{\mathrm{lo},j}, 0).
+
+The effective time ``t_eff(\tau)`` is the LIFO parcel age, i.e., the
+elapsed time between the extraction moment ``\tau`` and the source
+time ``t_src^*(V_\tau)`` at which the currently-exiting parcel was
+originally injected:
+
+.. math::
+
+    t_{\mathrm{eff}}(\tau) = \tau - t_{\mathrm{src}}^*(V_\tau),
+
+where ``t_src^*(V_\tau)`` is the most recent time at which
+``v_{\mathrm{cum}}`` rose through ``V_\tau``, taking prior extractions
+into account via LIFO bookkeeping. This is the physical elapsed time
+the matched parcel has been diffusing -- rest phases between push and
+pull are counted correctly (the plume sits and diffuses in place
+during rest). The parcel age is supplied by :func:`_lifo_age_for_tau`
+via a chronological push-stack simulation and is well-defined for any
+flow schedule.
+
+**Row sums telescope.** For injection bins consecutive in ``V_src``
+(``V_{\mathrm{lo},j+1} = V_{\mathrm{hi},j}``) the per-bin
+contributions telescope:
 
 .. math::
 
     \sum_{j=1}^{n_{\mathrm{inj}}} f_j(\tau)
-    = \tfrac{1}{2}\left[
-        \mathrm{erf}\!\left(\tfrac{v_{\mathrm{hi,max}} - V_\tau}{\sigma_V\sqrt{2}}\right)
-      - \mathrm{erf}\!\left(\tfrac{v_{\mathrm{lo,min}} - V_\tau}{\sigma_V\sqrt{2}}\right)
-      \right],
+        = \exp(-\lambda\,\xi_{\mathrm{near},n_{\mathrm{inj}}})
+        - \exp(-\lambda\,\xi_{\mathrm{far},1}).
 
-with each injection-bin contribution
+At the start of extraction after a push-then-rest,
+``V_\tau = V_{\mathrm{hi,max}}`` so ``\xi_{\mathrm{near}} = 0``, the
+first term is ``1``, and nearly all mass lands in the most recently
+injected bin -- giving ``c_{\mathrm{out}} \approx c_{\mathrm{in}}[\mathrm{last}]``
+as required. As extraction proceeds, ``t_{\mathrm{eff}}`` grows, the
+exponential broadens, and the tail
+``\exp(-\lambda \cdot (V_\tau - v_{\mathrm{lo},1}))`` bleeds out to
+the background column via the row-slack step, producing the physical
+relaxation from ``c_{\mathrm{in}}[\mathrm{last}]`` toward
+``c_{\mathrm{background}}``.
 
-.. math::
-
-    f_j(\tau)
-    = \tfrac{1}{2}\left[
-        \mathrm{erf}\!\left(\frac{v_{\mathrm{hi},j} - V_\tau}{\sigma_V(\tau)\sqrt{2}}\right)
-      - \mathrm{erf}\!\left(\frac{v_{\mathrm{lo},j} - V_\tau}{\sigma_V(\tau)\sqrt{2}}\right)
-      \right].
-
-A per-bin variance ``sigma_V_j(tau)`` would break telescoping and
-force post-hoc row normalization, which in turn destroys the linearity
-of the matrix in the ``cout`` grid. Telescoping keeps row sums equal
-to a clean analytic expression and leaves them *exactly* 1 when the
-prepended background bin absorbs the ``erf(-oo)`` tail, which it does
-here by construction (its volume is ``1000 *`` max ``|v_cum|``).
+**Boundary at ``V = 0``.** Because the kernel is evaluated at ``r=0``
+and derived from the 2-D radial Green's function, the V-dependent
+``D_V`` that vanishes at the well face is baked into the kernel
+geometry, so there is no leakage of kernel mass beyond the
+LIFO-matched parcel (i.e., into the unphysical region ``V > V_\tau``).
+The symmetric Gaussian kernel that this module previously used did
+leak half its mass into that region, producing a ``0.5 * c_in[last]``
+artifact at the first extraction node after a rest.
 
 The matrix element ``W[k, j]`` is the extraction-volume average of
 ``f_j(tau)`` over the extraction portion of ``cout`` bin ``k``:
@@ -86,11 +124,11 @@ error only.
 
 Dispersion fallback
 -------------------
-When ``D_m == 0`` and ``alpha_L > 0`` (pure dispersion) the erf kernel
-degenerates; we fall back to the LIFO advection matrix in that regime,
-which preserves row-stochasticity and the constant-``cin`` identity.
-The tests only exercise dispersion under constant ``cin == c_background``
-where the LIFO solution is exact.
+When ``D_m == 0`` and ``alpha_L > 0`` (pure dispersion) the Bessel
+kernel degenerates; we fall back to the LIFO advection matrix in that
+regime, which preserves row-stochasticity and the constant-``cin``
+identity. The tests only exercise dispersion under constant
+``cin == c_background`` where the LIFO solution is exact.
 
 This file is part of gwtransport which is released under AGPL-3.0
 license. See the ./LICENSE file or
@@ -100,11 +138,10 @@ license details.
 
 import numpy as np
 import numpy.typing as npt
-from scipy.special import erf
 
 from gwtransport.utils import partial_isin
 
-__all__ = ["_push_pull_advection_matrix", "_radial_gaussian_matrix"]
+__all__ = ["_push_pull_advection_matrix", "_radial_bessel_matrix"]
 
 _GL_DEFAULT = 6
 
@@ -357,7 +394,7 @@ def _build_axis(
     }
 
 
-def _radial_gaussian_matrix(
+def _radial_bessel_matrix(
     *,
     flow: npt.NDArray[np.floating],
     tedges_days: npt.NDArray[np.floating],
@@ -369,37 +406,50 @@ def _radial_gaussian_matrix(
     longitudinal_dispersivity: float,
     n_quad: int = _GL_DEFAULT,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool_]]:
-    r"""Build the 1-D erf-in-volume smear matrix for the full layer stack.
+    r"""Build the 2-D radial Bessel smear matrix for the full layer stack.
 
     Computes ``W`` of shape ``(n_cout, n)`` such that
     ``cout = W @ cin_clean`` with the row slack
     ``W[k, 0] = 1 - sum_{j>=1} W[k, j]`` directed at the prepended
-    background bin (no clipping, no rescaling). For each extraction-
-    time quadrature node ``tau`` with ``V_tau = v_cum(tau)``, a single
-    variance is assigned,
+    background bin (no clipping, no rescaling). The kernel is the
+    2-D radial heat-equation Green's function evaluated at the well
+    screen ``r = 0`` and transformed to the ``V = scale * r**2``
+    coordinate -- an exponential in ``V_src`` (see the module
+    docstring for the derivation).
+
+    For each extraction-time quadrature node ``tau`` with
+    ``V_tau = v_cum(tau)``, the effective diffusion time is the LIFO
+    parcel age
 
     .. math::
 
-        \sigma_V^2(\tau) = 8\,\mathrm{scale}\,\tfrac{D_m}{R}\,
-            \int_0^{\tau}
-              \max\!\bigl(0,\, v_{\mathrm{cum}}(t') - V_\tau\bigr)\, dt',
+        t_{\mathrm{eff}}(\tau) = \tau - t_{\mathrm{src}}^*(V_\tau),
 
-    and the injection-bin contribution is the erf-integrated top-hat
+    where ``t_src^*(V_tau)`` is the most recent time at which
+    ``v_cum`` rose through ``V_tau`` after accounting for prior
+    extraction (supplied by :func:`_lifo_age_for_tau`). The kernel
+    rate is ``lambda = 1 / (4 * scale * (D_m/R) * t_eff)``, and the
+    contribution of injection bin ``j`` with source-volume edges
+    ``[v_lo_j, v_hi_j]`` is the difference of exponentials
 
     .. math::
 
-        f_j(\tau) = \tfrac{1}{2}\left[
-            \mathrm{erf}\!\left(\tfrac{v_{\mathrm{hi},j} - V_\tau}
-                                     {\sigma_V(\tau)\sqrt{2}}\right)
-          - \mathrm{erf}\!\left(\tfrac{v_{\mathrm{lo},j} - V_\tau}
-                                     {\sigma_V(\tau)\sqrt{2}}\right)
-          \right].
+        f_j(\tau)
+        = \exp\!\left(-\lambda\,\xi_{\mathrm{near},j}\right)
+        - \exp\!\left(-\lambda\,\xi_{\mathrm{far},j}\right),
 
-    Because ``sigma_V`` depends on ``tau`` only (not on ``j``), the
-    ``j``-sum telescopes exactly, so row sums come out to the clean
-    analytic expression ``0.5 * (erf(...) - erf(-oo))`` without any
-    post-hoc normalization. The prepended background bin absorbs the
-    ``-oo`` tail by construction.
+    with ``xi_near = max(V_tau - v_hi_j, 0)`` (the close-to-well edge
+    of bin ``j``) and ``xi_far = max(V_tau - v_lo_j, 0)``. Injection
+    bins that lie entirely above ``V_tau`` contribute zero, bins that
+    straddle ``V_tau`` contribute only their physical portion, and
+    fully-inside bins contribute the clean exponential difference.
+
+    Because the rate ``lambda`` depends on ``tau`` only (not on
+    ``j``), the ``j``-sum telescopes exactly for bins consecutive in
+    ``V_src``, so row sums come out to a clean analytic expression
+    without any post-hoc normalization. The prepended background bin
+    absorbs the remaining slack (mass in ``V_src`` below the first
+    real injection bin and any tail beyond the Lagrangian reach).
 
     Each matrix element ``W[k, j]`` is the extraction-volume-weighted
     average of ``f_j(tau)`` over the extraction portion of ``cout`` bin
@@ -503,7 +553,13 @@ def _radial_gaussian_matrix(
     v_hi_inj = v_cum_at_flow_tedges[inj_bin_idx + 1]
     n_inj = inj_bin_idx.size
 
-    i_accum = _travel_integral_for_tau(
+    # LIFO parcel age: t_eff(tau) = tau - t_src*(V_tau), where t_src*
+    # is the most recent time v_cum rose through V_tau. This is the
+    # correct elapsed diffusion time for the 2-D radial Green's
+    # function -- it properly includes any rest phase between push
+    # and pull, which the alternative I(tau)/V_tau formula loses (its
+    # integrand vanishes identically whenever v_cum == V_tau).
+    t_eff = _lifo_age_for_tau(
         tau_nodes=tau_nodes,
         tau_v_cum=tau_v_cum,
         flow_tedges=flow_tedges,
@@ -511,17 +567,25 @@ def _radial_gaussian_matrix(
         v_cum_at_flow_tedges=v_cum_at_flow_tedges,
     )
 
-    # Numerical floor for sigma_sq so the erf limit at sigma->0 still
-    # resolves the discontinuous LIFO indicator (erf(+/- large) -> +/-1).
-    # We want ``(bin_width)/(sigma*sqrt(2))`` to be >> 1 for bin widths
-    # of order max|v_cum|, so pick sigma_floor_sq much smaller than that.
+    # Numerical floor on the kernel denominator D := 4*scale*(D_m/R)*t_eff
+    # so lam = 1/D stays finite when t_eff -> 0 (start of extraction with
+    # V_tau = V_hi_max). With D very small, exp(-xi/D) underflows to 0
+    # for any xi > 0 and equals 1 at xi = 0, giving the LIFO-delta limit.
     v_scale = float(np.max(np.abs(v_cum_at_flow_tedges)))
-    sigma_floor_sq = (1e-8 * v_scale) ** 2 if v_scale > 0 else 1e-20
+    denom_floor = 1e-12 * v_scale if v_scale > 0.0 else 1e-20
 
     v_well = tau_v_cum[:, None]
     v_lo_row = v_lo_inj[None, :]
     v_hi_row = v_hi_inj[None, :]
     tau_q_w = tau_q_abs * tau_weights
+
+    # xi = V_tau - V_src, measured inward from the LIFO-matched parcel
+    # at V_tau toward the well face at V = 0, clipped to [0, inf). A
+    # straddling bin (V_lo_j < V_tau < V_hi_j) collapses xi_near to 0
+    # and keeps only the physical portion of the bin; a fully-above-
+    # V_tau bin collapses both to 0 and contributes zero.
+    xi_near = np.maximum(v_well - v_hi_row, 0.0)
+    xi_far = np.maximum(v_well - v_lo_row, 0.0)
 
     w = np.zeros((n_cout, n))
     cout_idx_pair = np.broadcast_to(tau_own_bin[:, None], (n_tau, n_inj))
@@ -529,10 +593,10 @@ def _radial_gaussian_matrix(
 
     for h_layer in layer_heights:
         scale = n_layers * np.pi * float(h_layer) * porosity * retardation_factor
-        sigma_sq = 8.0 * scale * (molecular_diffusivity / retardation_factor) * i_accum
-        sigma_sq = np.maximum(sigma_sq, sigma_floor_sq)
-        sigma_sqrt2 = np.sqrt(2.0 * sigma_sq)[:, None]
-        frac = 0.5 * (erf((v_hi_row - v_well) / sigma_sqrt2) - erf((v_lo_row - v_well) / sigma_sqrt2))
+        denom = 4.0 * scale * (molecular_diffusivity / retardation_factor) * t_eff
+        denom = np.maximum(denom, denom_floor)
+        lam = (1.0 / denom)[:, None]
+        frac = np.exp(-lam * xi_near) - np.exp(-lam * xi_far)
 
         contrib = frac * tau_q_w[:, None]
         np.add.at(w, (cout_idx_pair, cin_idx_pair), contrib)
@@ -555,7 +619,7 @@ def _radial_gaussian_matrix(
     return w_out, has_extraction
 
 
-def _travel_integral_for_tau(
+def _lifo_age_for_tau(
     *,
     tau_nodes: npt.NDArray[np.floating],
     tau_v_cum: npt.NDArray[np.floating],
@@ -563,27 +627,26 @@ def _travel_integral_for_tau(
     flow_per_bin: npt.NDArray[np.floating],
     v_cum_at_flow_tedges: npt.NDArray[np.floating],
 ) -> npt.NDArray[np.floating]:
-    r"""Single-parcel travel integral ``I(tau)`` for each extraction node.
+    r"""LIFO parcel age ``tau - t_src*(V_tau)`` per extraction node.
 
-    Computes, for each extraction-time quadrature node ``tau`` with
-    well volume ``V_tau = tau_v_cum``,
+    Simulates the LIFO push-stack chronologically and, for each
+    extraction quadrature node ``tau``, returns the elapsed time since
+    the matched parcel was injected. This is the correct "effective
+    diffusion time" for the 2-D radial Green's function at the well
+    screen: it counts any rest phase between push and pull (when the
+    plume sits and diffuses in place), which the alternative
+    travel-integral formula ``I(tau) / V_tau`` silently misses because
+    its integrand vanishes whenever ``v_cum == V_tau``.
 
-    .. math::
-
-        I(\tau) = \int_0^{\tau}
-                   \max\!\bigl(0,\, v_{\mathrm{cum}}(t') - V_\tau\bigr)\, dt'.
-
-    This equals the travel integral of the LIFO-matched parcel (the
-    most recent source time with ``v_cum = V_tau``) for any flow
-    schedule, and is a smooth function of ``tau`` between flow-bin
-    edges.
-
-    Implementation: ``v_cum`` is piecewise linear on each flow bin
-    ``[t_lo,k, t_hi,k]`` with slope ``q_k``, so
-    ``L(t') = v_cum(t') - V_tau`` is also linear in ``t'``. The
-    per-bin integrand ``max(0, L(t'))`` is piecewise linear; integrate
-    it in closed form using the endpoint values ``L_start``, ``L_end``
-    and the root location when the line crosses zero.
+    Stack structure. Each push bin appends one entry
+    ``(t_start, v_bot, q_push)``. During extraction we pop entries
+    whose lower volume edge lies above the current ``V_tau``, and
+    within the surviving top segment we recover the matched source
+    time via ``t_src = t_start + (V_tau - v_bot) / q_push``. For the
+    push-then-rest-then-pull reference schedule this reduces to
+    ``age = tau - V_tau / q_push`` with the rest duration absorbed
+    into ``tau`` directly -- exactly the physical elapsed time between
+    injection and extraction of a given parcel.
 
     Parameters
     ----------
@@ -601,52 +664,79 @@ def _travel_integral_for_tau(
     Returns
     -------
     ndarray, shape (n_tau,)
-        Values of ``I(tau)`` [m**3 * day].
+        Parcel age per ``tau`` node [days]. Zero for over-extraction
+        (stack empty), where the kernel contribution collapses to the
+        background-bin slack.
     """
     n_tau = tau_nodes.size
     n_flow = flow_per_bin.size
 
-    v_tau = tau_v_cum  # (n_tau,)
-    i_accum = np.zeros(n_tau)
+    # Chronological sort for sequential stack walk.
+    order = np.argsort(tau_nodes, kind="stable")
+    tau_sorted = tau_nodes[order]
+    v_sorted = tau_v_cum[order]
+    age_sorted = np.zeros(n_tau)
 
+    # Stack entries: (t_start, v_bot, q_push).
+    stack: list[tuple[float, float, float]] = []
+
+    tol = 1e-12
+    tau_i = 0
     for k in range(n_flow):
         t_lo_k = float(flow_tedges[k])
         t_hi_k = float(flow_tedges[k + 1])
         q_k = float(flow_per_bin[k])
-        v_a_k = float(v_cum_at_flow_tedges[k])
 
-        t_end = np.minimum(t_hi_k, tau_nodes)
-        active = t_end > t_lo_k
-        if not active.any():
+        # Advance past any tau nodes belonging to an earlier (already-
+        # processed) flow bin. In practice tau nodes are filtered to
+        # extraction sub-intervals upstream, so this branch is a
+        # defensive no-op.
+        while tau_i < n_tau and tau_sorted[tau_i] < t_lo_k - tol:
+            age_sorted[tau_i] = 0.0
+            tau_i += 1
+
+        if q_k > 0.0:
+            stack.append((t_lo_k, float(v_cum_at_flow_tedges[k]), q_k))
+            # Skip any tau nodes that landed in a push bin (shouldn't
+            # happen -- the caller filters on ``q_signed < 0``).
+            while tau_i < n_tau and tau_sorted[tau_i] <= t_hi_k + tol:
+                age_sorted[tau_i] = 0.0
+                tau_i += 1
             continue
 
-        dt = np.where(active, t_end - t_lo_k, 0.0)
-        l_start = v_a_k - v_tau
-        l_end = v_a_k + q_k * dt - v_tau
-
-        if q_k == 0.0:
-            # Constant L; integrand = max(0, L_start) on [t_lo,k, t_end].
-            contrib = np.where(l_start > 0.0, l_start * dt, 0.0)
-            i_accum += np.where(active, contrib, 0.0)
+        if q_k < 0.0:
+            # Process each tau node inside this extract bin in time order.
+            while tau_i < n_tau and tau_sorted[tau_i] <= t_hi_k + tol:
+                tau = float(tau_sorted[tau_i])
+                v_tau = float(v_sorted[tau_i])
+                # Pop segments consumed below ``v_tau``: if the top's
+                # ``v_bot`` is above the current well level, the extract
+                # has already pierced through it.
+                while stack and stack[-1][1] > v_tau + tol:
+                    stack.pop()
+                if stack:
+                    t_start, v_bot, q_push = stack[-1]
+                    t_src = t_start + (v_tau - v_bot) / q_push
+                    age_sorted[tau_i] = max(tau - t_src, 0.0)
+                else:
+                    age_sorted[tau_i] = 0.0
+                tau_i += 1
             continue
 
-        both_pos = (l_start >= 0.0) & (l_end >= 0.0)
-        crosses_up = (l_start < 0.0) & (l_end > 0.0)  # q_k > 0, L rising
-        crosses_dn = (l_start > 0.0) & (l_end < 0.0)  # q_k < 0, L falling
-        # both_neg -> 0 contribution
+        # Rest bin: no stack change; skip any tau nodes that land here
+        # (should also not happen under the upstream filter).
+        while tau_i < n_tau and tau_sorted[tau_i] <= t_hi_k + tol:
+            age_sorted[tau_i] = 0.0
+            tau_i += 1
 
-        contrib = np.where(both_pos, 0.5 * (l_start + l_end) * dt, 0.0)
-        # Root location (measured from t_lo,k in days): t* = -l_start / q_k.
-        # For crosses_up: integrate 0.5 * L_end * (dt - t*) on [t*, t_end].
-        # For crosses_dn: integrate 0.5 * L_start * t* on [t_lo,k, t*].
-        if q_k != 0.0:
-            t_star = -l_start / q_k
-            contrib = np.where(crosses_up, 0.5 * l_end * (dt - t_star), contrib)
-            contrib = np.where(crosses_dn, 0.5 * l_start * t_star, contrib)
+    # Any remaining tau nodes past the last flow bin: background.
+    while tau_i < n_tau:
+        age_sorted[tau_i] = 0.0
+        tau_i += 1
 
-        i_accum += np.where(active, contrib, 0.0)
-
-    return i_accum
+    age = np.zeros(n_tau)
+    age[order] = age_sorted
+    return age
 
 
 def _restrict_union(

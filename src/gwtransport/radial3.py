@@ -1,10 +1,11 @@
 """
-Radial Push-Pull Well Transport Model -- analytical Gaussian kernel.
+Radial Push-Pull Well Transport Model -- analytical Bessel kernel.
 
-Evaluates an analytical 1-D ``erf``-in-volume-coordinate
-advection-diffusion kernel on a Gauss-Legendre partition of the union
-of all bin edges. The heavy lifting lives in
-:func:`gwtransport.radial3_utils._radial_gaussian_matrix`, whose module
+Evaluates an analytical kernel derived from the 2-D radial heat
+equation Green's function at the well screen, transformed to the
+``V = scale * r**2`` coordinate, on a Gauss-Legendre partition of the
+union of all bin edges. The heavy lifting lives in
+:func:`gwtransport.radial3_utils._radial_bessel_matrix`, whose module
 docstring explains the physics and quadrature scheme in detail.
 
 Characteristics:
@@ -12,11 +13,15 @@ Characteristics:
 1. **No FV grid, no CFL sub-stepping.** Cost scales with
    ``n_quad * n_sub_intervals * n_layers`` and is independent of any
    discretization parameter other than the GL order.
-2. **Row sums come out analytically.** A single variance is assigned
-   per extraction-time node so the per-injection-bin erf contributions
-   telescope, giving exactly ``erf``-based row sums without any
-   post-hoc clipping or normalization.
-3. **Exact LIFO fallback.** With ``molecular_diffusivity == 0`` and
+2. **Row sums come out analytically.** A single rate ``lambda`` is
+   assigned per extraction-time node so the per-injection-bin
+   exponential contributions telescope, giving analytic row sums
+   without any post-hoc clipping or normalization.
+3. **Physical well-face boundary.** The kernel is an exponential in
+   ``V_src`` supported on ``[0, V_tau]``, so no mass leaks to the
+   unphysical region ``V > V_tau`` above the LIFO-matched parcel -- a
+   key correction over a symmetric Gaussian-in-V kernel.
+4. **Exact LIFO fallback.** With ``molecular_diffusivity == 0`` and
    ``longitudinal_dispersivity == 0`` the path delegates to the LIFO
    matrix used elsewhere in the package.
 
@@ -34,7 +39,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from gwtransport import gamma
-from gwtransport.radial3_utils import _push_pull_advection_matrix, _radial_gaussian_matrix
+from gwtransport.radial3_utils import _push_pull_advection_matrix, _radial_bessel_matrix
 from gwtransport.utils import solve_inverse_transport
 
 # Default molecular diffusivity for solute transport in water at room
@@ -61,10 +66,10 @@ def push_pull(
 ) -> npt.NDArray[np.floating]:
     """Compute extraction concentration for a radial push-pull well.
 
-    Evaluates the closed-form 1-D erf-in-volume-coordinate advection-
-    diffusion kernel via Gauss-Legendre quadrature on the partition
-    obtained from the union of all bin edges; see
-    :func:`gwtransport.radial3_utils._radial_gaussian_matrix` for the
+    Evaluates the 2-D radial Bessel kernel at the well screen via
+    Gauss-Legendre quadrature on the partition obtained from the
+    union of all bin edges; see
+    :func:`gwtransport.radial3_utils._radial_bessel_matrix` for the
     derivation.
 
     Parameters
@@ -140,7 +145,7 @@ def push_pull(
             flow=flow, dt=dt, tedges_days=tedges_days, cout_tedges_days=cout_tedges_days
         )
     else:
-        w, has_extraction = _radial_gaussian_matrix(
+        w, has_extraction = _radial_bessel_matrix(
             flow=flow,
             tedges_days=tedges_days,
             cout_tedges_days=cout_tedges_days,
@@ -239,7 +244,7 @@ def push_pull_inverse(
             flow=flow, dt=dt, tedges_days=tedges_days, cout_tedges_days=cout_tedges_days
         )
     else:
-        w, has_extraction = _radial_gaussian_matrix(
+        w, has_extraction = _radial_bessel_matrix(
             flow=flow,
             tedges_days=tedges_days,
             cout_tedges_days=cout_tedges_days,
