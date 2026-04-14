@@ -112,7 +112,6 @@ For an in-depth discussion of the core modeling approach, see :doc:`user_guide/c
 
    user_guide/concepts
    user_guide/assumptions
-   user_guide/radial_kernel_derivation
 
 .. toctree::
    :maxdepth: 1
