@@ -4,7 +4,10 @@
 cache
 min_dependencies.json
 article
-.claude
+.claude/*
+!.claude/agents/
+.claude/agents/*
+!.claude/agents/gwtransport-reviewer.md
 
 # =============================================================================
 # Python
