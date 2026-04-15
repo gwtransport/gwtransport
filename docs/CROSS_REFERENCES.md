@@ -29,6 +29,7 @@ Base URL: `https://gwtransport.github.io/gwtransport/`
 | `concept-dispersion-scales`        | Scale-dependent: macro vs microdispersion       |
 | `concept-variance-components`      | Variance decomposition of transport             |
 | `concept-gamma-distribution`       | Two-parameter pore volume model                 |
+| `concept-gamma-loc`                | Shifted gamma with minimum pore volume (loc)    |
 | `concept-nonlinear-sorption`       | Freundlich & Langmuir isotherms, front-tracking |
 
 ### Assumptions (`docs/source/user_guide/assumptions.rst`)

@@ -319,10 +319,11 @@ def gamma_infiltration_to_extraction(
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
     cout_tedges: pd.DatetimeIndex,
-    alpha: float | None = None,
-    beta: float | None = None,
     mean: float | None = None,
     std: float | None = None,
+    loc: float = 0.0,
+    alpha: float | None = None,
+    beta: float | None = None,
     n_bins: int = 100,
     retardation_factor: float = 1.0,
 ) -> npt.NDArray[np.floating]:
@@ -331,12 +332,12 @@ def gamma_infiltration_to_extraction(
 
     The compound is retarded in the aquifer with a retardation factor. The residence
     time is computed based on the flow rate of the water in the aquifer and the pore volume
-    of the aquifer. The aquifer pore volume is approximated by a gamma distribution, with
-    parameters alpha and beta.
+    of the aquifer. The aquifer pore volume is approximated by a (shifted) gamma distribution
+    parameterized by either (mean, std, loc) or (alpha, beta, loc).
 
     This function represents infiltration to extraction modeling (equivalent to convolution).
 
-    Provide either alpha and beta or mean and std.
+    Provide either (mean, std) or (alpha, beta); ``loc`` is optional and defaults to 0.
 
     Parameters
     ----------
@@ -353,14 +354,19 @@ def gamma_infiltration_to_extraction(
     cout_tedges : pandas.DatetimeIndex
         Time edges for the output data. Used to compute the cumulative concentration.
         Has a length of one more than the desired output length.
-    alpha : float, optional
-        Shape parameter of gamma distribution of the aquifer pore volume (must be > 0)
-    beta : float, optional
-        Scale parameter of gamma distribution of the aquifer pore volume (must be > 0)
     mean : float, optional
-        Mean of the gamma distribution.
+        Mean of the gamma distribution of the aquifer pore volume. Must be strictly
+        greater than ``loc``.
     std : float, optional
-        Standard deviation of the gamma distribution.
+        Standard deviation of the gamma distribution of the aquifer pore volume
+        (invariant under the ``loc`` shift).
+    loc : float, optional
+        Location (minimum pore volume) of the gamma distribution. Must satisfy
+        ``0 <= loc < mean``. Default is ``0.0``.
+    alpha : float, optional
+        Shape parameter of gamma distribution of the aquifer pore volume (must be > 0).
+    beta : float, optional
+        Scale parameter of gamma distribution of the aquifer pore volume (must be > 0).
     n_bins : int
         Number of bins to discretize the gamma distribution.
     retardation_factor : float
@@ -463,7 +469,7 @@ def gamma_infiltration_to_extraction(
     ...     retardation_factor=2.0,  # Doubles residence time
     ... )
     """
-    bins = gamma.bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
+    bins = gamma.bins(mean=mean, std=std, loc=loc, alpha=alpha, beta=beta, n_bins=n_bins)
     return infiltration_to_extraction(
         cin=cin,
         flow=flow,
@@ -480,10 +486,11 @@ def gamma_extraction_to_infiltration(
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
     cout_tedges: pd.DatetimeIndex,
-    alpha: float | None = None,
-    beta: float | None = None,
     mean: float | None = None,
     std: float | None = None,
+    loc: float = 0.0,
+    alpha: float | None = None,
+    beta: float | None = None,
     n_bins: int = 100,
     retardation_factor: float = 1.0,
     regularization_strength: float = 1e-10,
@@ -493,13 +500,13 @@ def gamma_extraction_to_infiltration(
 
     The compound is retarded in the aquifer with a retardation factor. The residence
     time is computed based on the flow rate of the water in the aquifer and the pore volume
-    of the aquifer. The aquifer pore volume is approximated by a gamma distribution, with
-    parameters alpha and beta.
+    of the aquifer. The aquifer pore volume is approximated by a (shifted) gamma distribution
+    parameterized by either (mean, std, loc) or (alpha, beta, loc).
 
     This function represents extraction to infiltration modeling (equivalent to deconvolution).
     It is symmetric to gamma_infiltration_to_extraction.
 
-    Provide either alpha and beta or mean and std.
+    Provide either (mean, std) or (alpha, beta); ``loc`` is optional and defaults to 0.
 
     Parameters
     ----------
@@ -516,14 +523,19 @@ def gamma_extraction_to_infiltration(
     cout_tedges : pandas.DatetimeIndex
         Time edges for the cout data.
         Has a length of one more than `cout`.
-    alpha : float, optional
-        Shape parameter of gamma distribution of the aquifer pore volume (must be > 0)
-    beta : float, optional
-        Scale parameter of gamma distribution of the aquifer pore volume (must be > 0)
     mean : float, optional
-        Mean of the gamma distribution.
+        Mean of the gamma distribution of the aquifer pore volume. Must be strictly
+        greater than ``loc``.
     std : float, optional
-        Standard deviation of the gamma distribution.
+        Standard deviation of the gamma distribution of the aquifer pore volume
+        (invariant under the ``loc`` shift).
+    loc : float, optional
+        Location (minimum pore volume) of the gamma distribution. Must satisfy
+        ``0 <= loc < mean``. Default is ``0.0``.
+    alpha : float, optional
+        Shape parameter of gamma distribution of the aquifer pore volume (must be > 0).
+    beta : float, optional
+        Scale parameter of gamma distribution of the aquifer pore volume (must be > 0).
     n_bins : int
         Number of bins to discretize the gamma distribution.
     retardation_factor : float, optional
@@ -629,7 +641,7 @@ def gamma_extraction_to_infiltration(
     ...     retardation_factor=2.0,  # Doubles residence time
     ... )
     """
-    bins = gamma.bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
+    bins = gamma.bins(mean=mean, std=std, loc=loc, alpha=alpha, beta=beta, n_bins=n_bins)
     return extraction_to_infiltration(
         cout=cout,
         flow=flow,

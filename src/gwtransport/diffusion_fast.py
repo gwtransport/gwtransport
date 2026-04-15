@@ -433,10 +433,11 @@ def gamma_infiltration_to_extraction(
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
     cout_tedges: pd.DatetimeIndex,
-    alpha: float | None = None,
-    beta: float | None = None,
     mean: float | None = None,
     std: float | None = None,
+    loc: float = 0.0,
+    alpha: float | None = None,
+    beta: float | None = None,
     n_bins: int = 100,
     mean_streamline_length: float,
     mean_molecular_diffusivity: float,
@@ -453,9 +454,9 @@ def gamma_infiltration_to_extraction(
     Combines advective transport (based on gamma-distributed pore volumes) with
     fast Gaussian diffusion. This is a convenience wrapper around
     :func:`infiltration_to_extraction` that parameterizes the aquifer pore volume
-    distribution as a gamma distribution.
+    distribution as a (shifted) gamma distribution.
 
-    Provide either (alpha, beta) or (mean, std) for the gamma distribution.
+    Provide either (mean, std) or (alpha, beta); ``loc`` is optional and defaults to 0.
 
     Parameters
     ----------
@@ -467,14 +468,19 @@ def gamma_infiltration_to_extraction(
         Time edges for cin and flow data. Has length len(cin) + 1.
     cout_tedges : pandas.DatetimeIndex
         Time edges for output data bins. Has length of desired output + 1.
+    mean : float, optional
+        Mean of the gamma distribution of the aquifer pore volume. Must be strictly
+        greater than ``loc``.
+    std : float, optional
+        Standard deviation of the gamma distribution of the aquifer pore volume
+        (invariant under the ``loc`` shift).
+    loc : float, optional
+        Location (minimum pore volume) of the gamma distribution. Must satisfy
+        ``0 <= loc < mean``. Default is ``0.0``.
     alpha : float, optional
         Shape parameter of gamma distribution of the aquifer pore volume (must be > 0).
     beta : float, optional
         Scale parameter of gamma distribution of the aquifer pore volume (must be > 0).
-    mean : float, optional
-        Mean of the gamma distribution.
-    std : float, optional
-        Standard deviation of the gamma distribution.
     n_bins : int, optional
         Number of bins to discretize the gamma distribution. Default is 100.
     mean_streamline_length : float
@@ -562,7 +568,7 @@ def gamma_infiltration_to_extraction(
     ...     mean_longitudinal_dispersivity=1.0,
     ... )
     """
-    bins = gamma.bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
+    bins = gamma.bins(mean=mean, std=std, loc=loc, alpha=alpha, beta=beta, n_bins=n_bins)
     return infiltration_to_extraction(
         cin=cin,
         flow=flow,
@@ -586,10 +592,11 @@ def gamma_extraction_to_infiltration(
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
     cout_tedges: pd.DatetimeIndex,
-    alpha: float | None = None,
-    beta: float | None = None,
     mean: float | None = None,
     std: float | None = None,
+    loc: float = 0.0,
+    alpha: float | None = None,
+    beta: float | None = None,
     n_bins: int = 100,
     mean_streamline_length: float,
     mean_molecular_diffusivity: float,
@@ -607,9 +614,9 @@ def gamma_extraction_to_infiltration(
     Inverts the forward transport model (fast Gaussian diffusion + advection with
     gamma-distributed pore volumes) via Tikhonov regularization. This is a convenience
     wrapper around :func:`extraction_to_infiltration` that parameterizes the aquifer
-    pore volume distribution as a gamma distribution.
+    pore volume distribution as a (shifted) gamma distribution.
 
-    Provide either (alpha, beta) or (mean, std) for the gamma distribution.
+    Provide either (mean, std) or (alpha, beta); ``loc`` is optional and defaults to 0.
 
     Parameters
     ----------
@@ -621,14 +628,19 @@ def gamma_extraction_to_infiltration(
         Time edges for cin (output) and flow data. Has length of len(flow) + 1.
     cout_tedges : pandas.DatetimeIndex
         Time edges for cout data bins. Has length of len(cout) + 1.
+    mean : float, optional
+        Mean of the gamma distribution of the aquifer pore volume. Must be strictly
+        greater than ``loc``.
+    std : float, optional
+        Standard deviation of the gamma distribution of the aquifer pore volume
+        (invariant under the ``loc`` shift).
+    loc : float, optional
+        Location (minimum pore volume) of the gamma distribution. Must satisfy
+        ``0 <= loc < mean``. Default is ``0.0``.
     alpha : float, optional
         Shape parameter of gamma distribution of the aquifer pore volume (must be > 0).
     beta : float, optional
         Scale parameter of gamma distribution of the aquifer pore volume (must be > 0).
-    mean : float, optional
-        Mean of the gamma distribution.
-    std : float, optional
-        Standard deviation of the gamma distribution.
     n_bins : int, optional
         Number of bins to discretize the gamma distribution. Default is 100.
     mean_streamline_length : float
@@ -718,7 +730,7 @@ def gamma_extraction_to_infiltration(
     ...     mean_longitudinal_dispersivity=1.0,
     ... )
     """
-    bins = gamma.bins(alpha=alpha, beta=beta, mean=mean, std=std, n_bins=n_bins)
+    bins = gamma.bins(mean=mean, std=std, loc=loc, alpha=alpha, beta=beta, n_bins=n_bins)
     return extraction_to_infiltration(
         cout=cout,
         flow=flow,

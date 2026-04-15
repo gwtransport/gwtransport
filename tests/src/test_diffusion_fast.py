@@ -1825,6 +1825,73 @@ class TestGammaExtractionToInfiltrationFast:
         assert np.sum(valid) > 50
         assert_allclose(cin_gamma[valid], cin_explicit[valid], atol=0.0)
 
+    def test_loc_zero_matches_legacy(self, gamma_setup):
+        """With loc=0 the gamma wrapper must exactly match the legacy (mean, std) call."""
+        n_cout = len(gamma_setup["cout_tedges"]) - 1
+        cout = np.full(n_cout, 5.0)
+        cout[20:40] = 8.0
+
+        common_kwargs = {
+            "cout": cout,
+            "flow": gamma_setup["flow"],
+            "tedges": gamma_setup["tedges"],
+            "cout_tedges": gamma_setup["cout_tedges"],
+            "mean": gamma_setup["mean"],
+            "std": gamma_setup["std"],
+            "n_bins": gamma_setup["n_bins"],
+            "mean_streamline_length": gamma_setup["mean_streamline_length"],
+            "mean_molecular_diffusivity": gamma_setup["mean_molecular_diffusivity"],
+            "mean_longitudinal_dispersivity": gamma_setup["mean_longitudinal_dispersivity"],
+        }
+
+        cin_default = gamma_extraction_to_infiltration(**common_kwargs)
+        cin_loc_zero = gamma_extraction_to_infiltration(loc=0.0, **common_kwargs)
+        np.testing.assert_array_equal(cin_default, cin_loc_zero)
+
+    def test_roundtrip_with_loc(self):
+        """Forward->reverse roundtrip with loc > 0 recovers signal in interior."""
+        n_days = 500
+        tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+        cout_tedges = tedges.copy()
+        cin = np.sin(np.linspace(0, 2 * np.pi, n_days)) + 5.0
+        flow = np.full(n_days, 100.0)
+
+        # loc shifts the entire gamma by 200 m³. Keep the excess (mean - loc)
+        # comparable to the legacy roundtrip test: excess mean ~ 300.
+        diffusion_kwargs = {
+            "mean": 501.3,
+            "std": 100.0,
+            "loc": 200.0,
+            "n_bins": 20,
+            "mean_streamline_length": 80.0,
+            "mean_molecular_diffusivity": 0.03,
+            "mean_longitudinal_dispersivity": 0.0,
+        }
+
+        cout = gamma_infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **diffusion_kwargs,
+        )
+        cout_clean = np.where(np.isnan(cout), np.nanmean(cout), cout)
+
+        cin_recovered = gamma_extraction_to_infiltration(
+            cout=cout_clean,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **diffusion_kwargs,
+        )
+
+        margin = 50
+        valid = ~np.isnan(cin_recovered) & ~np.isnan(cout)
+        valid[:margin] = False
+        valid[-margin:] = False
+        assert np.sum(valid) > 300
+        assert_allclose(cin_recovered[valid], cin[valid], atol=1e-10)
+
     def test_roundtrip_with_dispersivity(self):
         """Roundtrip with non-zero dispersivity recovers signal.
 

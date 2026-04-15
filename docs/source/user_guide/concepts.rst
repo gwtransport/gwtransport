@@ -276,6 +276,31 @@ In practice, ``gwtransport`` parameterizes using mean and standard deviation dir
 
 For assumptions about the gamma distribution, see :ref:`assumption-gamma-distribution`.
 
+.. _concept-gamma-loc:
+
+Shifted Gamma Distribution (Minimum Pore Volume)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When every flow path has a guaranteed minimum pore volume (for example, a fixed sand-bed or gravel-pack region through which all water must travel before entering the heterogeneous aquifer), the two-parameter gamma in :ref:`concept-gamma-distribution` cannot represent this floor. ``gwtransport`` supports a three-parameter *shifted* gamma distribution with an optional location parameter ``loc`` that horizontally shifts the entire distribution by a fixed amount:
+
+.. math::
+
+   f(V; k, \theta, V_0) = \frac{1}{\Gamma(k)\theta^k} (V - V_0)^{k-1} e^{-(V - V_0)/\theta}, \qquad V \geq V_0
+
+where :math:`V_0 = \text{loc}` is the minimum pore volume (m³). Mathematical properties:
+
+- Mean pore volume: :math:`\mu = k \cdot \theta + V_0` (shifted up by ``loc``)
+- Standard deviation: :math:`\sigma = \sqrt{k} \cdot \theta` (invariant under the shift)
+- Support: :math:`V \in [V_0, \infty)` (the minimum pore volume is ``loc``, not zero)
+
+In gwtransport, the constraint ``0 <= loc < mean`` is enforced. Setting ``loc = 0`` recovers the standard two-parameter gamma distribution exactly. When calibrating the three parameters, :math:`\sigma` is held fixed and the "excess" mean :math:`\mu - V_0` is re-scaled into :math:`(k, \theta)` via
+
+.. math::
+
+   k = \left(\frac{\mu - V_0}{\sigma}\right)^2, \qquad \theta = \frac{\sigma^2}{\mu - V_0}
+
+For log removal analytics with a shifted residence-time distribution, the shift adds a constant :math:`\mu_\lambda \cdot (V_0/Q)` to the effective mean log removal, where :math:`\mu_\lambda` is the log10 decay rate and :math:`Q` is the flow rate. See :py:func:`gwtransport.logremoval.gamma_mean` and :py:func:`gwtransport.logremoval.gamma_find_flow_for_target_mean`.
+
 .. _concept-nonlinear-sorption:
 
 Non-Linear Sorption: Exact Solutions

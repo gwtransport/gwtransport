@@ -1990,6 +1990,70 @@ class TestGammaExtractionToInfiltrationDiffusion:
                 suppress_dispersion_warning=True,
             )
 
+    def test_loc_zero_matches_legacy(self, gamma_setup):
+        """With loc=0 the gamma wrapper must exactly match the legacy (mean, std) call."""
+        n_cout = len(gamma_setup["cout_tedges"]) - 1
+        cout = np.full(n_cout, 5.0)
+        cout[20:40] = 8.0
+
+        common_kwargs = {
+            "cout": cout,
+            "flow": gamma_setup["flow"],
+            "tedges": gamma_setup["tedges"],
+            "cout_tedges": gamma_setup["cout_tedges"],
+            "mean": gamma_setup["mean"],
+            "std": gamma_setup["std"],
+            "n_bins": gamma_setup["n_bins"],
+            "streamline_length": gamma_setup["streamline_length"],
+            "molecular_diffusivity": 1e-4,
+            "longitudinal_dispersivity": 0.5,
+        }
+
+        cin_default = gamma_extraction_to_infiltration(**common_kwargs)
+        cin_loc_zero = gamma_extraction_to_infiltration(loc=0.0, **common_kwargs)
+        np.testing.assert_array_equal(cin_default, cin_loc_zero)
+
+    def test_roundtrip_with_loc(self, gamma_setup):
+        """Forward->reverse roundtrip with loc > 0 recovers cin in the interior."""
+        diffusion_kwargs = {
+            "mean": gamma_setup["mean"] + 200.0,  # mean shifted to keep excess mean reasonable
+            "std": 1.0,  # near-delta
+            "loc": 200.0,
+            "n_bins": 5,
+            "streamline_length": gamma_setup["streamline_length"],
+            "molecular_diffusivity": 1e-4,
+            "longitudinal_dispersivity": 0.0,
+        }
+
+        cout = diffusion_gamma_i2e(
+            cin=gamma_setup["cin"],
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            **diffusion_kwargs,
+        )
+        cin_recovered = gamma_extraction_to_infiltration(
+            cout=cout,
+            flow=gamma_setup["flow"],
+            tedges=gamma_setup["tedges"],
+            cout_tedges=gamma_setup["cout_tedges"],
+            **diffusion_kwargs,
+        )
+
+        valid = ~np.isnan(cin_recovered)
+        valid_indices = np.where(valid)[0]
+        interior = np.zeros(len(cin_recovered), dtype=bool)
+        if len(valid_indices) > 100:
+            interior[valid_indices[50:-50]] = True
+
+        assert np.sum(interior) > 20
+        np.testing.assert_allclose(
+            cin_recovered[interior],
+            gamma_setup["cin"][interior],
+            rtol=1e-9,
+            atol=1e-9,
+        )
+
     def test_roundtrip_with_dispersivity(self, gamma_setup):
         """Roundtrip with non-zero dispersivity recovers cin."""
         diffusion_kwargs = {
