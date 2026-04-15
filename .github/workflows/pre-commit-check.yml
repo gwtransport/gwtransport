@@ -1,0 +1,27 @@
+name: Pre-commit hook check
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+concurrency:
+  group: "pre-commit-check-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  hook:
+    name: pre-commit hook is up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run pre-commit hook
+        run: .githooks/pre-commit
+      - name: Verify hook produced no changes
+        run: |
+          if ! git diff --quiet HEAD; then
+            echo "::error::Pre-commit hook produced changes not present in the commit. Run '.githooks/pre-commit' locally and commit the result."
+            git diff HEAD
+            exit 1
+          fi
