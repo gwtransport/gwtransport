@@ -3,3 +3,78 @@
 # GitHub Copilot use the same project instructions.
 cp CLAUDE.md .github/copilot-instructions.md
 git add .github/copilot-instructions.md
+
+# Regenerate Copilot CLI agents from Claude Code agents so both tools share
+# one source of truth. Each .claude/agents/<name>.md produces
+# .github/agents/<name>.agent.md with converted frontmatter and verbatim body.
+mkdir -p .github/agents
+rm -f .github/agents/*.agent.md
+python3 - <<'PY'
+import pathlib
+import re
+import sys
+
+TOOL_MAP = {
+    "read": "read",
+    "notebookread": "read",
+    "edit": "edit",
+    "multiedit": "edit",
+    "write": "edit",
+    "notebookedit": "edit",
+    "grep": "search",
+    "glob": "search",
+    "bash": "execute",
+    "shell": "execute",
+    "powershell": "execute",
+    "task": "agent",
+    "websearch": "web",
+    "webfetch": "web",
+    "todowrite": "todo",
+}
+
+src_dir = pathlib.Path(".claude/agents")
+dst_dir = pathlib.Path(".github/agents")
+frontmatter_re = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.DOTALL)
+
+for src in sorted(src_dir.glob("*.md")):
+    text = src.read_text()
+    m = frontmatter_re.match(text)
+    if not m:
+        sys.exit(f"{src}: missing frontmatter")
+    fm_raw, body = m.group(1), m.group(2)
+
+    fm = {}
+    key = None
+    for line in fm_raw.splitlines():
+        if re.match(r"^[A-Za-z_][\w-]*:", line):
+            key, _, val = line.partition(":")
+            key = key.strip()
+            fm[key] = val.strip()
+        elif key is not None:
+            fm[key] = (fm[key] + " " + line.strip()).strip()
+
+    description = fm.get("description", "").strip()
+    tools_raw = fm.get("tools", "").strip()
+
+    aliases = []
+    for name in re.split(r"[,\s]+", tools_raw):
+        if not name:
+            continue
+        alias = TOOL_MAP.get(name.lower())
+        if alias and alias not in aliases:
+            aliases.append(alias)
+
+    header = ["---"]
+    if description:
+        header.append("description: |")
+        for bl in description.splitlines() or [description]:
+            header.append("  " + bl)
+    if aliases:
+        header.append("tools: [" + ", ".join(f'"{a}"' for a in aliases) + "]")
+    header.append("---")
+
+    dst = dst_dir / f"{src.stem}.agent.md"
+    dst.write_text("\n".join(header) + "\n" + body)
+PY
+
+git add .github/agents/
