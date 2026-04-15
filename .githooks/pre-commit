@@ -9,7 +9,7 @@ git add .github/copilot-instructions.md
 # .github/agents/<name>.agent.md with converted frontmatter and verbatim body.
 mkdir -p .github/agents
 rm -f .github/agents/*.agent.md
-python3 - <<'PY'
+python - <<'PY'
 import pathlib
 import re
 import sys
