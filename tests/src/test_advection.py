@@ -1753,6 +1753,142 @@ def test_gamma_extraction_to_infiltration_roundtrip():
     )
 
 
+def test_gamma_infiltration_to_extraction_loc_zero_matches_legacy():
+    """With loc=0 the loc-aware call must match the legacy (mean, std) call bit-for-bit."""
+    dates = pd.date_range(start="2020-01-01", end="2020-06-30", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cout_dates = pd.date_range(start="2020-02-01", end="2020-06-01", freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    cin = pd.Series(5.0 + 2.0 * np.sin(np.linspace(0, 4 * np.pi, len(dates))), index=dates)
+    flow = pd.Series(np.full(len(dates), 100.0), index=dates)
+
+    common = {
+        "cin": cin,
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "mean": 500.0,
+        "std": 150.0,
+        "n_bins": 20,
+    }
+    cout_default = gamma_infiltration_to_extraction(**common)
+    cout_loc_zero = gamma_infiltration_to_extraction(loc=0.0, **common)
+    np.testing.assert_array_equal(cout_default, cout_loc_zero)
+
+
+def test_gamma_infiltration_to_extraction_loc_shifts_arrival_time():
+    """A positive loc shifts the step arrival by loc/flow days.
+
+    Comparing (mean_excess, std) fixed: case A is (mean=300, std=10, loc=0) and
+    case B is (mean=500, std=10, loc=200). The underlying gamma over
+    ``T - loc`` is identical in both cases, so case B is a pure time-shift of
+    case A by loc/flow = 2 days.
+    """
+    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    cout_dates = pd.date_range(start="2020-01-15", end="2020-10-31", freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    # Step function: jump from 0 to 1 on day 60 (March 1)
+    cin_values = np.zeros(len(dates))
+    cin_values[60:] = 1.0
+    cin = pd.Series(cin_values, index=dates)
+    flow_rate = 100.0
+    flow = pd.Series(np.full(len(dates), flow_rate), index=dates)
+
+    std_pv = 10.0
+
+    # Case A: loc=0, mean=300 -> mean rt = 3 days
+    cout_loc0 = gamma_infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        mean=300.0,
+        std=std_pv,
+        loc=0.0,
+        n_bins=50,
+    )
+
+    # Case B: loc=200, mean=500 -> same excess gamma, mean rt = 5 days
+    loc_pv = 200.0
+    cout_loc = gamma_infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        mean=300.0 + loc_pv,
+        std=std_pv,
+        loc=loc_pv,
+        n_bins=50,
+    )
+
+    # Find the day where cout first exceeds 0.5 (step midpoint)
+    valid0 = ~np.isnan(cout_loc0)
+    valid_loc = ~np.isnan(cout_loc)
+    common = valid0 & valid_loc
+    idx0 = np.argmax((cout_loc0 > 0.5) & common)
+    idx_loc = np.argmax((cout_loc > 0.5) & common)
+    delay = idx_loc - idx0
+    expected_delay_days = round(loc_pv / flow_rate)
+    assert delay == expected_delay_days, f"Expected {expected_delay_days}-day delay for loc>0, got {delay}"
+
+
+def test_gamma_roundtrip_with_loc():
+    """Forward->reverse roundtrip with loc>0 must recover the input in the stable region."""
+    cin_dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
+
+    cout_dates = pd.date_range(start="2020-03-01", end="2020-10-31", freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    cin_values = 5.0 + 2.0 * np.sin(2 * np.pi * np.arange(len(cin_dates)) / 30.0)
+    cin_original = pd.Series(cin_values, index=cin_dates)
+    flow = pd.Series(np.full(len(cin_dates), 100.0), index=cin_dates)
+
+    mean_pv = 800.0
+    std_pv = 100.0
+    loc_pv = 300.0
+
+    cout = gamma_infiltration_to_extraction(
+        cin=cin_original,
+        tedges=cin_tedges,
+        cout_tedges=cout_tedges,
+        flow=flow,
+        mean=mean_pv,
+        std=std_pv,
+        loc=loc_pv,
+        n_bins=20,
+    )
+
+    cout_series = pd.Series(cout, index=cout_dates)
+    cin_reconstructed = gamma_extraction_to_infiltration(
+        cout=cout_series,
+        tedges=cin_tedges,
+        cout_tedges=cout_tedges,
+        flow=flow,
+        mean=mean_pv,
+        std=std_pv,
+        loc=loc_pv,
+        n_bins=20,
+    )
+
+    valid_mask = ~np.isnan(cin_reconstructed)
+    valid_indices = np.where(valid_mask)[0]
+    assert len(valid_indices) >= 200, f"Need at least 200 valid bins, got {len(valid_indices)}"
+
+    middle_indices = valid_indices[50:-50]
+    middle_region = slice(middle_indices[0], middle_indices[-1] + 1)
+    np.testing.assert_allclose(
+        cin_reconstructed[middle_region],
+        cin_original.to_numpy()[middle_region],
+        rtol=1e-6,
+    )
+
+
 def test_gamma_extraction_to_infiltration_retardation_factor():
     """Test gamma_extraction_to_infiltration with different retardation factors."""
     dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
