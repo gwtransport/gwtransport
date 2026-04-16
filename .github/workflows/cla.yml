@@ -1,0 +1,24 @@
+name: CLA check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  cla:
+    name: Contributor License Agreement
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify CLA checkbox is ticked
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if printf '%s' "$PR_BODY" | grep -qiE '^[[:space:]]*-[[:space:]]*\[x\][[:space:]]*I have read the \[CLA\]'; then
+            echo "CLA checkbox is ticked."
+          else
+            echo "::error title=CLA not accepted::Tick the CLA checkbox in the pull request description. See CLA.md for the agreement; the checkbox is in .github/PULL_REQUEST_TEMPLATE.md."
+            exit 1
+          fi
