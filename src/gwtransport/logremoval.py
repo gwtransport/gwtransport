@@ -565,7 +565,10 @@ def gamma_find_flow_for_target_mean(
     Raises
     ------
     ValueError
-        If ``apv_loc`` is negative or if ``target_mean`` is not positive.
+        If ``apv_loc`` is negative, if ``target_mean`` is not positive, if
+        ``log10_decay_rate`` is not positive (no decay can never produce a
+        positive target log removal), or if ``apv_alpha`` or ``apv_beta`` are
+        not positive.
 
     See Also
     --------
@@ -576,6 +579,17 @@ def gamma_find_flow_for_target_mean(
         raise ValueError(msg)
     if target_mean <= 0:
         msg = "target_mean must be positive"
+        raise ValueError(msg)
+    if apv_alpha <= 0:
+        msg = "apv_alpha must be positive"
+        raise ValueError(msg)
+    if apv_beta <= 0:
+        msg = "apv_beta must be positive"
+        raise ValueError(msg)
+    if log10_decay_rate <= 0:
+        # Without decay, the effective mean log removal is identically zero
+        # regardless of flow, so no finite flow can attain a positive target.
+        msg = "log10_decay_rate must be positive to attain a positive target_mean"
         raise ValueError(msg)
 
     ln10 = np.log(10)
@@ -589,6 +603,16 @@ def gamma_find_flow_for_target_mean(
     # unique positive root. Bracket: at u = 1/flow_closed_form the alpha/beta term alone
     # equals target_mean, so the full f overshoots by exactly mu*apv_loc*u_upper > 0.
     u_upper = 1.0 / flow_closed_form
+    if not np.isfinite(u_upper) or u_upper <= 0:
+        # Defensive: with the validated inputs above, flow_closed_form is finite and
+        # strictly positive, so u_upper should be a finite positive bracket. If a
+        # pathological input slips through, surface it instead of calling brentq on
+        # an invalid interval.
+        msg = (
+            "Cannot bracket the root for the given parameters; check that "
+            "target_mean, apv_alpha, apv_beta, and log10_decay_rate are finite and positive."
+        )
+        raise ValueError(msg)
 
     def residual(u: float) -> float:
         return float(

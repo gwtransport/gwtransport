@@ -78,7 +78,6 @@ import warnings
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 import numpy.typing as npt
@@ -391,18 +390,14 @@ def linear_average(
     # Ensure it's an array for type checker
     all_unique_y: npt.NDArray[np.float64] = np.asarray(all_unique_y_result, dtype=np.float64)
 
-    # Compute cumulative integrals once using trapezoidal rule
+    # Compute cumulative integrals once using trapezoidal rule.
+    # Segments outside the data range carry NaN (from np.interp with left/right=NaN);
+    # those NaNs will be masked out later via the bin-range check, so we suppress
+    # them here only to keep the cumulative sum finite for in-range bins.
     dx = np.diff(all_unique_x)
     y_avg = (all_unique_y[:-1] + all_unique_y[1:]) / 2
-    segment_integrals = dx * y_avg
-    # Replace NaN values with 0 to avoid breaking cumulative sum.
-    # NaN occurs for segments outside the data range (extrapolation='nan').
-    # Setting NaN to 0 means boundary bins with partial data coverage have their
-    # average biased low: the integral covers only the valid portion but the
-    # width denominator below uses the full bin width. A proper fix would track
-    # the covered fraction per bin.
-    segment_integrals = np.nan_to_num(segment_integrals, nan=0.0)
-    cumulative_integral = np.concatenate([[0], np.cumsum(segment_integrals)])
+    segment_integrals = np.where(np.isnan(y_avg), 0.0, dx * y_avg)
+    cumulative_integral = np.concatenate([[0.0], np.cumsum(segment_integrals)])
 
     # Vectorized computation for all series
     # Find indices of all edges in the combined grid
@@ -429,9 +424,12 @@ def linear_average(
         zero_width_positions = edges_processed[:, :-1][zero_width_mask]
         result[zero_width_mask] = np.interp(zero_width_positions, x_data_clean, y_data_clean)
 
-    # Handle extrapolation when 'nan' method is used (vectorized)
+    # Handle extrapolation when 'nan' method is used (vectorized).
+    # Bins must lie entirely within the data range; bins partially outside
+    # (straddling) are also set to NaN, since the integral over the missing
+    # portion is undefined and dividing by the full bin width would bias the
+    # average low. Bins fully outside are likewise NaN.
     if extrapolate_method == "nan":
-        # Set out-of-range bins to NaN
         bins_within_range = (x_edges[:, :-1] >= x_data_clean[0]) & (x_edges[:, 1:] <= x_data_clean[-1])
         result[~bins_within_range] = np.nan
 
@@ -862,6 +860,12 @@ def compute_time_edges(
       the final edge based on the spacing between the last two start times.
     - When using tend, the function assumes uniform spacing and extrapolates
       the first edge based on the spacing between the first two end times.
+    - When ``tstart`` or ``tend`` are provided with non-uniformly-spaced bins,
+      the extrapolated edge uses only the very first or very last interval and
+      may be physically incorrect: the missing edge is implicitly assigned a
+      bin width equal to that single neighbouring interval, which is unrelated
+      to any other interval in the series. In such cases, supply ``tedges``
+      directly so that all bin widths are explicit.
     - All input time data is converted to pandas.DatetimeIndex for consistency.
     """
     if tedges is not None:
@@ -946,7 +950,9 @@ def get_soil_temperature(*, station_number: int = 260, interpolate_missing_value
 
     # Check if cached file exists and is from today
     if cache_path.exists():
-        return cast("pd.DataFrame", pd.read_pickle(cache_path))  # noqa: S301
+        cached = pd.read_pickle(cache_path)  # noqa: S301
+        assert isinstance(cached, pd.DataFrame)  # noqa: S101 -- the cache only ever stores DataFrames
+        return cached
 
     # Clean up old cache files to prevent disk bloat
     for old_file in cache_dir.glob(f"soil_temp_{station_number}_{interpolate_missing_values}_*.pkl"):

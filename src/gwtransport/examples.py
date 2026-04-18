@@ -35,8 +35,6 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
-from typing import Any
-
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -74,6 +72,7 @@ def generate_example_data(
     molecular_diffusivity: float | None = None,
     longitudinal_dispersivity: float | None = None,
     streamline_length: float | None = None,
+    rng: np.random.Generator | int | None = None,
 ) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
     """
     Generate synthetic concentration/temperature and flow data for groundwater transport.
@@ -147,6 +146,12 @@ def generate_example_data(
     streamline_length : float or None, default None
         Travel distance along the streamline [m]. Must be provided together
         with ``molecular_diffusivity`` and ``longitudinal_dispersivity``.
+    rng : numpy.random.Generator, int, or None, default None
+        Source of randomness for the synthetic flow noise, spill events, and
+        measurement noise. Accepted in any form supported by
+        :func:`numpy.random.default_rng`. Pass an integer (or
+        :class:`numpy.random.Generator`) for reproducible output; ``None``
+        draws fresh entropy each call.
 
     Returns
     -------
@@ -169,22 +174,24 @@ def generate_example_data(
     --------
     generate_temperature_example_data : Wrapper with thermal transport defaults.
     """
+    rng = np.random.default_rng(rng)
+
     # Create date range
     dates = pd.date_range(start=date_start, end=date_end, freq=date_freq).tz_localize("UTC")
     days = (dates - dates[0]).days.values
 
     # Generate flow data with seasonal pattern (higher in winter)
     seasonal_flow = flow_mean + flow_amplitude * np.sin(2 * np.pi * days / 365 + np.pi)
-    flow = seasonal_flow + np.random.normal(0, flow_noise, len(dates))
+    flow = seasonal_flow + rng.normal(0, flow_noise, len(dates))
     flow = np.maximum(flow, 5.0)  # Ensure flow is not too small or negative
 
     min_days_for_spills = 60
     if len(dates) > min_days_for_spills:  # Only add spills for longer time series
-        n_spills = np.random.randint(6, 16)
+        n_spills = int(rng.integers(6, 16))
         for _ in range(n_spills):
-            spill_start = np.random.randint(0, len(dates) - 30)
-            spill_duration = np.random.randint(15, 45)
-            spill_magnitude = np.random.uniform(2.0, 5.0)
+            spill_start = int(rng.integers(0, len(dates) - 30))
+            spill_duration = int(rng.integers(15, 45))
+            spill_magnitude = float(rng.uniform(2.0, 5.0))
 
             flow[spill_start : spill_start + spill_duration] /= spill_magnitude
 
@@ -192,11 +199,11 @@ def generate_example_data(
     if cin_method == "synthetic":
         # Seasonal pattern with noise
         cin_nonoise = cin_mean + cin_amplitude * np.sin(2 * np.pi * days / 365)
-        cin_values = cin_nonoise + np.random.normal(0, measurement_noise, len(dates))
+        cin_values = cin_nonoise + rng.normal(0, measurement_noise, len(dates))
     elif cin_method == "constant":
         # Constant value
         cin_nonoise = np.full(len(dates), cin_mean)
-        cin_values = cin_nonoise + np.random.normal(0, measurement_noise, len(dates))
+        cin_values = cin_nonoise + rng.normal(0, measurement_noise, len(dates))
     elif cin_method == "soil_temperature":
         # Use soil temperature data (already includes measurement noise)
         cin_nonoise = cin_values = (
@@ -309,7 +316,7 @@ def generate_example_data(
         )
 
     # Add some noise to represent measurement errors
-    cout_values += np.random.normal(0, measurement_noise, len(dates))
+    cout_values += rng.normal(0, measurement_noise, len(dates))
 
     # Create data frame
     df = pd.DataFrame(
@@ -352,7 +359,7 @@ def generate_example_data(
     return df, tedges
 
 
-def generate_temperature_example_data(**kwargs: Any) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
+def generate_temperature_example_data(**kwargs) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
     """
     Generate synthetic temperature and flow data for groundwater transport examples.
 
@@ -405,7 +412,7 @@ def generate_temperature_example_data(**kwargs: Any) -> tuple[pd.DataFrame, pd.D
     return generate_example_data(**kwargs)
 
 
-def generate_ec_example_data(**kwargs: Any) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
+def generate_ec_example_data(**kwargs) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
     """
     Generate synthetic electrical conductivity and flow data for groundwater transport examples.
 
