@@ -67,27 +67,11 @@ def test_multiple_pore_volumes_gradual_increase(constant_flow_setup, multiple_po
         direction="extraction_to_infiltration",
     )
 
-    # Should be 1D array with same length as flow values
-    assert result.shape == (len(flow_values),)
-
-    # Values should be between 0.0 and 1.0
-    assert np.all((result >= 0.0) & (result <= 1.0))
-
-    # Should have increasing fractions over time (monotonic increase)
-    # Allow for some plateau regions where fraction doesn't change
-    assert np.all(np.diff(result) >= 0)
-
-    # Should start at 0.0 and eventually reach 1.0
-    assert result[0] == 0.0
-    assert result[-1] == 1.0
-
-    # Check expected fraction values (0.2, 0.4, 0.6, 0.8, 1.0)
-    expected_fractions = np.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
-    unique_fractions = np.unique(result)
-
-    # All unique fractions should be in expected set
-    for frac in unique_fractions:
-        assert np.any(np.isclose(frac, expected_fractions, atol=1e-10))
+    # 10 daily bins, residence times 1..5 days for pore volumes 100..500 m3 at
+    # 100 m3/d flow. The fraction at each output bin equals (count of valid
+    # residence times) / 5; with constant flow this is a clean staircase.
+    expected = np.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0])
+    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-15)
 
 
 def test_zero_flow_all_invalid():
@@ -253,8 +237,10 @@ def test_mixed_valid_invalid_residence_times():
     flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-08", freq="D")
     flow_values = np.full(len(flow_tedges) - 1, 100.0)
 
-    # Mix of small (valid) and large (invalid) pore volumes
-    pore_volumes = np.array([100.0, 1e6, 200.0, 2e6, 300.0])  # 3 valid, 2 invalid
+    # Mix of small (valid) and large (invalid) pore volumes.
+    # Sorted residence times at flow=100 m3/d: [1, 2, 3, 1e4, 2e4] days; only the
+    # first three become valid within the 7-day window, capping the fraction at 3/5.
+    pore_volumes = np.array([100.0, 1e6, 200.0, 2e6, 300.0])
 
     result = fraction_explained(
         flow=flow_values,
@@ -263,15 +249,8 @@ def test_mixed_valid_invalid_residence_times():
         direction="extraction_to_infiltration",
     )
 
-    # Maximum fraction should be 3/5 = 0.6 (only 3 out of 5 pore volumes can be valid)
-    assert np.max(result) <= 0.6 + 1e-10  # Small tolerance for floating point
-
-    # Should have fractions that are multiples of 1/5 = 0.2
-    unique_fractions = np.unique(result)
-    expected_multiples = np.array([0.0, 0.2, 0.4, 0.6])
-
-    for frac in unique_fractions:
-        assert np.any(np.isclose(frac, expected_multiples, atol=1e-10))
+    expected = np.array([0.0, 0.2, 0.4, 0.6, 0.6, 0.6, 0.6])
+    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-15)
 
 
 def test_input_validation_missing_parameters():
@@ -339,9 +318,12 @@ def test_numerical_precision():
     flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-11", freq="D")
     flow_values = np.full(len(flow_tedges) - 1, 100.0)
 
-    # Use 7 pore volumes for non-trivial fraction arithmetic
+    # 7 pore volumes spaced 50, 100, 150, 200, 250, 300, 350 m3 give residence
+    # times 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5 days at constant flow=100 m3/d.
+    # Within the 10-day window the fraction grows by 1/7 per day until all are
+    # valid (after 3 days), then stays at 1.
     n_volumes = 7
-    pore_volumes = np.linspace(50, 350, n_volumes)  # Range to get mix of valid/invalid
+    pore_volumes = np.linspace(50, 350, n_volumes)
 
     result = fraction_explained(
         flow=flow_values,
@@ -350,14 +332,8 @@ def test_numerical_precision():
         direction="extraction_to_infiltration",
     )
 
-    # All fractions should be exact multiples of 1/n_volumes
-    expected_increment = 1.0 / n_volumes
-
-    for frac in np.unique(result):
-        # Check if frac is close to k/n_volumes for some integer k
-        k = np.round(frac / expected_increment)
-        expected_frac = k * expected_increment
-        assert np.isclose(frac, expected_frac, atol=1e-14)
+    expected = np.array([1, 3, 5, 7, 7, 7, 7, 7, 7, 7], dtype=float) / n_volumes
+    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-15)
 
 
 def test_monotonic_behavior_across_pore_volumes():
@@ -370,7 +346,9 @@ def test_monotonic_behavior_across_pore_volumes():
     flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-15", freq="D")
     flow_values = np.full(len(flow_tedges) - 1, 100.0)
 
-    # Well-separated pore volumes to ensure clear ordering
+    # Well-separated pore volumes give residence times 1, 3, 5, 7, 9 days at
+    # constant flow=100 m3/d. Over 14 daily output bins this produces a clean
+    # staircase whose every step is exactly 1/5.
     pore_volumes = np.array([100, 300, 500, 700, 900])
 
     result = fraction_explained(
@@ -380,12 +358,8 @@ def test_monotonic_behavior_across_pore_volumes():
         direction="extraction_to_infiltration",
     )
 
-    # Fraction should be non-decreasing over time
-    assert np.all(np.diff(result) >= -1e-10)  # Allow tiny numerical errors
-
-    # Should start at 0.0 and increase
-    assert result[0] == 0.0
-    assert result[-1] > result[0]
+    expected = np.array([0.0, 0.2, 0.2, 0.4, 0.4, 0.6, 0.6, 0.8, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0])
+    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-15)
 
 
 def test_fraction_explained_rejects_1d_input():

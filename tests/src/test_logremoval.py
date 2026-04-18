@@ -39,8 +39,8 @@ def test_different_flows_equal_distribution():
     # Test case: Two flows with log removals 3 and 5
     result = parallel_mean(log_removals=[3, 4, 5])
     expected = -np.log10((10 ** (-3.0) + 10 ** (-4.0) + 10 ** (-5.0)) / 3)
-    assert_allclose(result, expected, rtol=1e-10)
-    assert_allclose(result, 3.431798275933005, rtol=1e-3)  # example in docstring
+    assert_allclose(result, expected, rtol=1e-15)
+    assert_allclose(result, 3.431798275933005, rtol=1e-15)  # example in docstring
 
 
 def test_array_inputs_equal_distribution():
@@ -48,7 +48,7 @@ def test_array_inputs_equal_distribution():
     # NumPy arrays as input
     result = parallel_mean(log_removals=np.array([3.0, 4.0, 5.0]))
     expected = -np.log10((10 ** (-3.0) + 10 ** (-4.0) + 10 ** (-5.0)) / 3)
-    assert_allclose(result, expected, rtol=1e-10)
+    assert_allclose(result, expected, rtol=1e-15)
 
 
 def test_empty_input_behavior():
@@ -63,14 +63,14 @@ def test_special_values_equal_distribution():
     # With log removal of 0 (no removal)
     result = parallel_mean(log_removals=[0.0, 4.0])
     expected = -np.log10((1.0 + 10 ** (-4.0)) / 2)
-    assert_allclose(result, expected, rtol=1e-10)
+    assert_allclose(result, expected, rtol=1e-15)
 
     # With very large log removal (effectively complete removal)
     # Using a large number instead of infinity to avoid numerical issues
     result = parallel_mean(log_removals=[20.0, 3.0])
     # The 10^-20 term is effectively zero
     expected = -np.log10((10 ** (-20.0) + 10 ** (-3.0)) / 2)
-    assert_allclose(result, expected, rtol=1e-10)
+    assert_allclose(result, expected, rtol=1e-15)
 
 
 def test_float_precision_equal_distribution():
@@ -78,7 +78,7 @@ def test_float_precision_equal_distribution():
     # Testing with values that require good floating point handling
     result = parallel_mean(log_removals=[9.999, 9.998])
     expected = -np.log10((10 ** (-9.999) + 10 ** (-9.998)) / 2)
-    assert_allclose(result, expected, rtol=1e-10)
+    assert_allclose(result, expected, rtol=1e-15)
 
 
 def test_equal_weights_explicit():
@@ -89,7 +89,7 @@ def test_equal_weights_explicit():
     weighted_result = parallel_mean(log_removals=log_removals, flow_fractions=weights)
     unweighted_result = parallel_mean(log_removals=log_removals)
 
-    assert_allclose(weighted_result, unweighted_result, rtol=1e-10)
+    assert_allclose(weighted_result, unweighted_result, rtol=1e-15)
 
 
 def test_weighted_flows():
@@ -100,8 +100,8 @@ def test_weighted_flows():
 
     result = parallel_mean(log_removals=log_removals, flow_fractions=weights)
     expected = -np.log10(0.7 * 10 ** (-3.0) + 0.3 * 10 ** (-5.0))
-    assert_allclose(result, expected, rtol=1e-10)
-    assert_allclose(result, 3.153044674980176, rtol=1e-7)  # example in docstring
+    assert_allclose(result, expected, rtol=1e-15)
+    assert_allclose(result, 3.153044674980176, rtol=1e-15)  # example in docstring
 
     # Test case: Three flows with different weights
     log_removals = [2.0, 4.0, 6.0]
@@ -109,7 +109,7 @@ def test_weighted_flows():
 
     result = parallel_mean(log_removals=log_removals, flow_fractions=weights)
     expected = -np.log10(0.5 * 10 ** (-2.0) + 0.3 * 10 ** (-4.0) + 0.2 * 10 ** (-6.0))
-    assert_allclose(result, expected, rtol=1e-10)
+    assert_allclose(result, expected, rtol=1e-15)
 
 
 def test_weight_sum_behavior():
@@ -148,7 +148,7 @@ def test_weighted_array_inputs():
 
     result = parallel_mean(log_removals=log_removals, flow_fractions=weights)
     expected = -np.log10(0.6 * 10 ** (-3.0) + 0.4 * 10 ** (-5.0))
-    assert_allclose(result, expected, rtol=1e-10)
+    assert_allclose(result, expected, rtol=1e-15)
 
 
 def test_extreme_weights():
@@ -158,8 +158,9 @@ def test_extreme_weights():
     weights = [0.999, 0.0005, 0.0005]
 
     result = parallel_mean(log_removals=log_removals, flow_fractions=weights)
-    # Result should be very close to the first log removal
-    assert_allclose(result, 3.0, rtol=1e-2)
+    # Compare to the analytical value rather than just "close to 3.0".
+    expected = -np.log10(0.999 * 10 ** (-3.0) + 0.0005 * 10 ** (-5.0) + 0.0005 * 10 ** (-6.0))
+    assert_allclose(result, expected, rtol=1e-15)
 
     # One weight is exactly 1.0, others are exactly 0.0
     log_removals = [4.0, 5.0, 6.0]
@@ -185,11 +186,12 @@ def test_gamma_find_flow_for_target_mean(apv_alpha, apv_beta, log10_decay_rate, 
         target_mean=target_mean, apv_alpha=apv_alpha, apv_beta=apv_beta, log10_decay_rate=log10_decay_rate
     )
 
-    # Verify the round-trip: flow -> residence time params -> gamma_mean == target
+    # Verify the round-trip: flow -> residence time params -> gamma_mean == target.
+    # apv_loc=0 takes the closed-form branch, so the round-trip is bit-exact.
     rt_alpha = apv_alpha
     rt_beta = apv_beta / required_flow
     verification_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
-    assert_allclose(verification_mean, target_mean, rtol=1e-10)
+    assert_allclose(verification_mean, target_mean, rtol=1e-15)
 
 
 def test_axis_parameter_2d_arrays():
@@ -205,7 +207,7 @@ def test_axis_parameter_2d_arrays():
     expected_row1 = parallel_mean(log_removals=[2.0, 3.0, 4.0])
     expected_axis1 = np.array([expected_row0, expected_row1])
 
-    assert_allclose(result_axis1, expected_axis1, rtol=1e-10)
+    assert_allclose(result_axis1, expected_axis1, rtol=1e-15)
 
     # Test axis=0 (along rows)
     result_axis0 = parallel_mean(log_removals=log_removals_2d, axis=0)
@@ -216,7 +218,7 @@ def test_axis_parameter_2d_arrays():
     expected_col2 = parallel_mean(log_removals=[5.0, 4.0])
     expected_axis0 = np.array([expected_col0, expected_col1, expected_col2])
 
-    assert_allclose(result_axis0, expected_axis0, rtol=1e-10)
+    assert_allclose(result_axis0, expected_axis0, rtol=1e-15)
 
 
 def test_axis_parameter_3d_arrays():
@@ -234,7 +236,7 @@ def test_axis_parameter_3d_arrays():
     expected_11 = parallel_mean(log_removals=[2.0, 3.0])
     expected_axis2 = np.array([[expected_00, expected_01], [expected_10, expected_11]])
 
-    assert_allclose(result_axis2, expected_axis2, rtol=1e-10)
+    assert_allclose(result_axis2, expected_axis2, rtol=1e-15)
 
 
 def test_axis_parameter_with_flow_fractions():
@@ -250,7 +252,7 @@ def test_axis_parameter_with_flow_fractions():
     expected_row1 = parallel_mean(log_removals=[2.0, 3.0, 4.0], flow_fractions=[0.6, 0.2, 0.2])
     expected = np.array([expected_row0, expected_row1])
 
-    assert_allclose(result, expected, rtol=1e-10)
+    assert_allclose(result, expected, rtol=1e-15)
 
 
 def test_axis_parameter_behavior():
@@ -280,13 +282,13 @@ def test_negative_axis():
     result_neg1 = parallel_mean(log_removals=log_removals_2d, axis=-1)
     result_pos1 = parallel_mean(log_removals=log_removals_2d, axis=1)
 
-    assert_allclose(result_neg1, result_pos1, rtol=1e-10)
+    assert_allclose(result_neg1, result_pos1, rtol=1e-15)
 
     # axis=-2 should be equivalent to axis=0 for 2D array
     result_neg2 = parallel_mean(log_removals=log_removals_2d, axis=-2)
     result_pos0 = parallel_mean(log_removals=log_removals_2d, axis=0)
 
-    assert_allclose(result_neg2, result_pos0, rtol=1e-10)
+    assert_allclose(result_neg2, result_pos0, rtol=1e-15)
 
 
 def test_empty_array_with_axis():
@@ -486,7 +488,9 @@ def test_gamma_pdf_integrates_to_one():
         0,
         np.inf,
     )
-    assert_allclose(result, 1.0, rtol=1e-8)
+    # scipy.integrate.quad's adaptive Gauss-Kronrod quadrature only achieves
+    # finite accuracy on an infinite interval; tighter than ~1e-10 is unreliable.
+    assert_allclose(result, 1.0, rtol=1e-10)  # quad-limited, do not tighten
 
 
 def test_gamma_cdf_approaches_one():
@@ -518,7 +522,10 @@ def test_gamma_mean_matches_numerical_integration(rt_alpha, rt_beta, log10_decay
     """Test that gamma_mean matches -log10(E[10^(-R)]) via numerical integration."""
     analytical_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
 
-    # Integrate E[10^(-R)] = integral of 10^(-r) * pdf(r) dr
+    # Integrate E[10^(-R)] = integral of 10^(-r) * pdf(r) dr.
+    # scipy.integrate.quad on a half-infinite interval reports relative error
+    # around 1e-8 for these integrands; the log10 step amplifies that, so an
+    # atol of 1e-8 is an honest reflection of quad's accuracy here.
     expected_decimal_reduction, _ = integrate.quad(
         lambda r: 10 ** (-r) * gamma_pdf(r=r, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate),
         0,
@@ -526,7 +533,7 @@ def test_gamma_mean_matches_numerical_integration(rt_alpha, rt_beta, log10_decay
     )
     numerical_mean = -np.log10(expected_decimal_reduction)
 
-    assert_allclose(analytical_mean, numerical_mean, atol=1e-4)
+    assert_allclose(analytical_mean, numerical_mean, atol=1e-8)
 
 
 @pytest.mark.parametrize(
@@ -584,6 +591,10 @@ def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow,
     # Step 4: Compute parallel mean
     discretized = parallel_mean(log_removals=log_removals, flow_fractions=flow_fractions)
 
+    # Discretizing a gamma distribution into 10000 expected-value bins and combining
+    # via parallel_mean is an O(1/n_bins) approximation of the exact MGF integral.
+    # The empirical error across the parameter sweep is up to ~4e-4, with the worst
+    # case at high alpha (narrow distribution), so atol=1e-3 is a tight bound.
     assert_allclose(analytical, discretized, atol=1e-3)
 
 
@@ -752,7 +763,9 @@ def test_gamma_mean_loc_matches_numerical_integration(rt_alpha, rt_beta, rt_loc,
         np.inf,
     )
     numerical_mean = -np.log10(expected_decimal_reduction)
-    assert_allclose(analytical_mean, numerical_mean, atol=1e-4)
+    # scipy.integrate.quad on a half-infinite interval; same accuracy ceiling as
+    # test_gamma_mean_matches_numerical_integration above.
+    assert_allclose(analytical_mean, numerical_mean, atol=1e-8)
 
 
 @pytest.mark.parametrize(
@@ -784,6 +797,7 @@ def test_gamma_find_flow_for_target_mean_with_loc(apv_alpha, apv_beta, apv_loc, 
         rt_loc=rt_loc,
         log10_decay_rate=log10_decay_rate,
     )
+    # apv_loc>0 requires brentq, whose default tolerance limits the round-trip.
     assert_allclose(verification_mean, target_mean, rtol=1e-10)
 
 
@@ -839,6 +853,59 @@ def test_gamma_find_flow_for_target_mean_negative_loc_raises():
         )
 
 
+def test_gamma_find_flow_for_target_mean_zero_decay_raises():
+    """log10_decay_rate=0 with apv_loc>0 used to call brentq on [0, inf]; now raises.
+
+    Without decay the effective mean log removal is identically zero regardless of flow,
+    so no finite flow can reach a strictly positive target_mean; ``flow_closed_form``
+    becomes 0, ``u_upper`` becomes ``inf``, and brentq would receive an invalid bracket.
+    The guard converts that into an informative ValueError.
+    """
+    with pytest.raises(ValueError, match="log10_decay_rate must be positive"):
+        gamma_find_flow_for_target_mean(
+            target_mean=1.0,
+            apv_alpha=3.0,
+            apv_beta=10.0,
+            apv_loc=5.0,
+            log10_decay_rate=0.0,
+        )
+    # Same guard fires when apv_loc=0, since the closed-form would otherwise
+    # divide by 10**(target_mean/apv_alpha) - 1 with a zero numerator.
+    with pytest.raises(ValueError, match="log10_decay_rate must be positive"):
+        gamma_find_flow_for_target_mean(
+            target_mean=1.0,
+            apv_alpha=3.0,
+            apv_beta=10.0,
+            apv_loc=0.0,
+            log10_decay_rate=0.0,
+        )
+
+
+def test_gamma_find_flow_for_target_mean_negative_decay_raises():
+    """Negative decay rates are physically meaningless and must raise."""
+    with pytest.raises(ValueError, match="log10_decay_rate must be positive"):
+        gamma_find_flow_for_target_mean(
+            target_mean=1.0,
+            apv_alpha=3.0,
+            apv_beta=10.0,
+            apv_loc=5.0,
+            log10_decay_rate=-0.1,
+        )
+
+
+@pytest.mark.parametrize(("apv_alpha", "apv_beta"), [(0.0, 10.0), (-1.0, 10.0), (3.0, 0.0), (3.0, -5.0)])
+def test_gamma_find_flow_for_target_mean_invalid_alpha_beta_raises(apv_alpha, apv_beta):
+    """apv_alpha and apv_beta must be strictly positive."""
+    with pytest.raises(ValueError, match="must be positive"):
+        gamma_find_flow_for_target_mean(
+            target_mean=1.0,
+            apv_alpha=apv_alpha,
+            apv_beta=apv_beta,
+            apv_loc=5.0,
+            log10_decay_rate=0.1,
+        )
+
+
 def test_gamma_mean_matches_parallel_mean_discretized():
     """Test that gamma_mean matches parallel_mean computed from discretized bins."""
     alpha = 5.0
@@ -857,4 +924,6 @@ def test_gamma_mean_matches_parallel_mean_discretized():
     )
     result_discretized = parallel_mean(log_removals=log_removals)
 
-    assert_allclose(result_analytical, result_discretized, rtol=0.01)
+    # 500 equiprobable bins discretizing the gamma distribution have empirical
+    # relative error of ~1e-4 here; rtol=1e-3 is a tight bound.
+    assert_allclose(result_analytical, result_discretized, rtol=1e-3)
