@@ -43,7 +43,7 @@ import pandas as pd
 
 from gwtransport.advection import gamma_infiltration_to_extraction
 from gwtransport.diffusion_fast import gamma_infiltration_to_extraction as diffusion_gamma_infiltration_to_extraction
-from gwtransport.gamma import mean_std_to_alpha_beta
+from gwtransport.gamma import mean_std_loc_to_alpha_beta
 from gwtransport.utils import compute_time_edges, get_soil_temperature
 
 
@@ -196,7 +196,7 @@ def generate_example_data(
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     # Compute alpha, beta for gamma distribution (used only for attrs metadata)
-    alpha, beta = mean_std_to_alpha_beta(
+    alpha, beta = mean_std_loc_to_alpha_beta(
         mean=aquifer_pore_volume_gamma_mean,
         std=aquifer_pore_volume_gamma_std,
         loc=aquifer_pore_volume_gamma_loc,

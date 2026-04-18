@@ -4,9 +4,9 @@ import pytest
 from scipy.stats import gamma as gamma_dist
 
 from gwtransport.gamma import (
-    alpha_beta_to_mean_std,
+    alpha_beta_loc_to_mean_std,
     bin_masses,
-    mean_std_to_alpha_beta,
+    mean_std_loc_to_alpha_beta,
     parse_parameters,
 )
 from gwtransport.gamma import (
@@ -123,68 +123,68 @@ def test_numerical_stability():
     assert not np.any(np.isnan(result_large["expected_values"]))
 
 
-def test_gamma_mean_std_to_alpha_beta_basic():
-    """Test gamma_mean_std_to_alpha_beta with typical input values."""
+def test_gamma_mean_std_loc_to_alpha_beta_basic():
+    """Test gamma_mean_std_loc_to_alpha_beta with typical input values."""
     mean, std = 10.0, 2.0
-    alpha, beta = mean_std_to_alpha_beta(mean=mean, std=std)
+    alpha, beta = mean_std_loc_to_alpha_beta(mean=mean, std=std)
     assert alpha > 0
     assert beta > 0
 
     # Convert back and check if we get approximately the same mean/std
-    mean_back, std_back = alpha_beta_to_mean_std(alpha=alpha, beta=beta)
+    mean_back, std_back = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta)
     assert np.isclose(mean, mean_back, rtol=1e-7), f"Expected mean ~ {mean}, got {mean_back}"
     assert np.isclose(std, std_back, rtol=1e-7), f"Expected std ~ {std}, got {std_back}"
 
 
-def test_gamma_mean_std_to_alpha_beta_with_loc():
+def test_gamma_mean_std_loc_to_alpha_beta_with_loc():
     """Round-trip with a positive location parameter."""
     mean, std, loc = 10.0, 2.0, 3.0
-    alpha, beta = mean_std_to_alpha_beta(mean=mean, std=std, loc=loc)
+    alpha, beta = mean_std_loc_to_alpha_beta(mean=mean, std=std, loc=loc)
 
     # Excess-over-loc moments: mean_excess = 7.0, std = 2.0
     np.testing.assert_allclose(alpha, (7.0 / 2.0) ** 2, rtol=1e-15)
     np.testing.assert_allclose(beta, 2.0**2 / 7.0, rtol=1e-15)
 
-    mean_back, std_back = alpha_beta_to_mean_std(alpha=alpha, beta=beta, loc=loc)
+    mean_back, std_back = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta, loc=loc)
     np.testing.assert_allclose(mean, mean_back, rtol=1e-15)
     np.testing.assert_allclose(std, std_back, rtol=1e-15)
 
 
-def test_gamma_mean_std_to_alpha_beta_zero_std():
-    """Test gamma_mean_std_to_alpha_beta when std is zero."""
+def test_gamma_mean_std_loc_to_alpha_beta_zero_std():
+    """Test gamma_mean_std_loc_to_alpha_beta when std is zero."""
     mean, std = 10.0, 0.0
     with pytest.raises(ValueError, match="std must be positive"):
-        mean_std_to_alpha_beta(mean=mean, std=std)
+        mean_std_loc_to_alpha_beta(mean=mean, std=std)
 
 
-def test_gamma_mean_std_to_alpha_beta_loc_too_large():
+def test_gamma_mean_std_loc_to_alpha_beta_loc_too_large():
     """loc must be strictly less than mean when using (mean, std)."""
     with pytest.raises(ValueError, match="mean must be strictly greater than loc"):
-        mean_std_to_alpha_beta(mean=5.0, std=1.0, loc=5.0)
+        mean_std_loc_to_alpha_beta(mean=5.0, std=1.0, loc=5.0)
 
     with pytest.raises(ValueError, match="mean must be strictly greater than loc"):
-        mean_std_to_alpha_beta(mean=5.0, std=1.0, loc=6.0)
+        mean_std_loc_to_alpha_beta(mean=5.0, std=1.0, loc=6.0)
 
 
-def test_gamma_mean_std_to_alpha_beta_negative_loc():
+def test_gamma_mean_std_loc_to_alpha_beta_negative_loc():
     """loc must be non-negative."""
     with pytest.raises(ValueError, match="loc must be non-negative"):
-        mean_std_to_alpha_beta(mean=5.0, std=1.0, loc=-0.1)
+        mean_std_loc_to_alpha_beta(mean=5.0, std=1.0, loc=-0.1)
 
 
-def test_gamma_alpha_beta_to_mean_std_basic():
-    """Test gamma_alpha_beta_to_mean_std with typical alpha/beta."""
+def test_gamma_alpha_beta_loc_to_mean_std_basic():
+    """Test gamma_alpha_beta_loc_to_mean_std with typical alpha/beta."""
     alpha, beta = 4.0, 2.0
     mean_expected = alpha * beta
-    mean, std = alpha_beta_to_mean_std(alpha=alpha, beta=beta)
+    mean, std = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta)
     assert mean == mean_expected, f"Expected mean = {mean_expected}, got {mean}"
     assert np.isclose(std, 4.0, rtol=1e-7), f"Expected std ~ 4.0, got {std}"
 
 
-def test_gamma_alpha_beta_to_mean_std_with_loc():
+def test_gamma_alpha_beta_loc_to_mean_std_with_loc():
     """mean shifts by loc; std is invariant under the shift."""
     alpha, beta, loc = 4.0, 2.0, 3.5
-    mean, std = alpha_beta_to_mean_std(alpha=alpha, beta=beta, loc=loc)
+    mean, std = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta, loc=loc)
     np.testing.assert_allclose(mean, alpha * beta + loc, rtol=1e-15)
     np.testing.assert_allclose(std, np.sqrt(alpha) * beta, rtol=1e-15)
 
@@ -379,7 +379,7 @@ def test_parse_parameters_with_mean_std():
     assert loc == 0.0
 
     # Verify conversion back gives same mean/std
-    mean_back, std_back = alpha_beta_to_mean_std(alpha=alpha, beta=beta, loc=loc)
+    mean_back, std_back = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta, loc=loc)
     assert np.isclose(mean, mean_back)
     assert np.isclose(std, std_back)
 
