@@ -36,10 +36,10 @@ Available functions:
   (mean, std, loc) or (alpha, beta, loc). Ensures exactly one parameter pair is provided
   and validates positivity and ordering constraints.
 
-- :func:`mean_std_to_alpha_beta` - Convert physically intuitive (mean, std, loc) parameters
+- :func:`mean_std_loc_to_alpha_beta` - Convert physically intuitive (mean, std, loc) parameters
   to gamma shape/scale parameters.
 
-- :func:`alpha_beta_to_mean_std` - Convert gamma (alpha, beta, loc) parameters back to
+- :func:`alpha_beta_loc_to_mean_std` - Convert gamma (alpha, beta, loc) parameters back to
   (mean, std) for physical interpretation.
 
 - :func:`bins` - Primary function for transport modeling. Creates discrete probability bins
@@ -120,7 +120,7 @@ def parse_parameters(
             msg = "Either (alpha, beta) or (mean, std) must be provided."
             raise ValueError(msg)
 
-        alpha, beta = mean_std_to_alpha_beta(mean=mean, std=std, loc=loc)
+        alpha, beta = mean_std_loc_to_alpha_beta(mean=mean, std=std, loc=loc)
 
     if alpha <= 0 or beta <= 0:
         msg = "Alpha and beta must be positive"
@@ -129,7 +129,7 @@ def parse_parameters(
     return alpha, beta, loc
 
 
-def mean_std_to_alpha_beta(*, mean: float, std: float, loc: float = 0.0) -> tuple[float, float]:
+def mean_std_loc_to_alpha_beta(*, mean: float, std: float, loc: float = 0.0) -> tuple[float, float]:
     """
     Convert mean, standard deviation, and location of gamma distribution to shape/scale.
 
@@ -162,15 +162,17 @@ def mean_std_to_alpha_beta(*, mean: float, std: float, loc: float = 0.0) -> tupl
 
     See Also
     --------
-    alpha_beta_to_mean_std : Convert shape/scale/loc parameters to mean and std.
+    alpha_beta_loc_to_mean_std : Convert shape/scale/loc parameters to mean and std.
     parse_parameters : Parse and validate gamma distribution parameters.
 
     Examples
     --------
-    >>> from gwtransport.gamma import mean_std_to_alpha_beta
+    >>> from gwtransport.gamma import mean_std_loc_to_alpha_beta
     >>> mean_pore_volume = 30000.0  # m³
     >>> std_pore_volume = 8100.0  # m³
-    >>> alpha, beta = mean_std_to_alpha_beta(mean=mean_pore_volume, std=std_pore_volume)
+    >>> alpha, beta = mean_std_loc_to_alpha_beta(
+    ...     mean=mean_pore_volume, std=std_pore_volume
+    ... )
     >>> print(f"Shape parameter (alpha): {alpha:.2f}")
     Shape parameter (alpha): 13.72
     >>> print(f"Scale parameter (beta): {beta:.2f}")
@@ -178,7 +180,7 @@ def mean_std_to_alpha_beta(*, mean: float, std: float, loc: float = 0.0) -> tupl
 
     With a 5000 m³ minimum pore volume:
 
-    >>> alpha, beta = mean_std_to_alpha_beta(mean=30000.0, std=8100.0, loc=5000.0)
+    >>> alpha, beta = mean_std_loc_to_alpha_beta(mean=30000.0, std=8100.0, loc=5000.0)
     >>> print(f"Shape parameter (alpha): {alpha:.2f}")
     Shape parameter (alpha): 9.45
     >>> print(f"Scale parameter (beta): {beta:.2f}")
@@ -200,7 +202,7 @@ def mean_std_to_alpha_beta(*, mean: float, std: float, loc: float = 0.0) -> tupl
     return alpha, beta
 
 
-def alpha_beta_to_mean_std(*, alpha: float, beta: float, loc: float = 0.0) -> tuple[float, float]:
+def alpha_beta_loc_to_mean_std(*, alpha: float, beta: float, loc: float = 0.0) -> tuple[float, float]:
     """
     Convert shape, scale, and location of gamma distribution to mean and standard deviation.
 
@@ -229,15 +231,15 @@ def alpha_beta_to_mean_std(*, alpha: float, beta: float, loc: float = 0.0) -> tu
 
     See Also
     --------
-    mean_std_to_alpha_beta : Convert mean/std/loc to shape and scale parameters.
+    mean_std_loc_to_alpha_beta : Convert mean/std/loc to shape and scale parameters.
     parse_parameters : Parse and validate gamma distribution parameters.
 
     Examples
     --------
-    >>> from gwtransport.gamma import alpha_beta_to_mean_std
+    >>> from gwtransport.gamma import alpha_beta_loc_to_mean_std
     >>> alpha = 13.72  # shape parameter
     >>> beta = 2187.0  # scale parameter
-    >>> mean, std = alpha_beta_to_mean_std(alpha=alpha, beta=beta)
+    >>> mean, std = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta)
     >>> print(f"Mean pore volume: {mean:.0f} m³")  # doctest: +ELLIPSIS
     Mean pore volume: 3000... m³
     >>> print(f"Std pore volume: {std:.0f} m³")  # doctest: +ELLIPSIS
@@ -312,7 +314,7 @@ def bins(
     See Also
     --------
     bin_masses : Calculate probability mass for bins.
-    mean_std_to_alpha_beta : Convert mean/std/loc to alpha/beta parameters.
+    mean_std_loc_to_alpha_beta : Convert mean/std/loc to alpha/beta parameters.
     gwtransport.advection.gamma_infiltration_to_extraction : Use bins for transport modeling.
     :ref:`concept-gamma-distribution` : Two-parameter pore volume model.
     :ref:`concept-gamma-loc` : Shifted gamma with minimum pore volume.

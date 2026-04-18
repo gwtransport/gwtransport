@@ -41,10 +41,16 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from gwtransport.advection import gamma_infiltration_to_extraction
+from gwtransport.advection import gamma_infiltration_to_extraction, infiltration_to_extraction
 from gwtransport.diffusion_fast import gamma_infiltration_to_extraction as diffusion_gamma_infiltration_to_extraction
-from gwtransport.gamma import mean_std_to_alpha_beta
+from gwtransport.diffusion_fast import infiltration_to_extraction as diffusion_infiltration_to_extraction
+from gwtransport.gamma import mean_std_loc_to_alpha_beta
 from gwtransport.utils import compute_time_edges, get_soil_temperature
+
+_DEFAULT_GAMMA_MEAN = 1000.0  # m3
+_DEFAULT_GAMMA_STD = 200.0  # m3
+_DEFAULT_GAMMA_LOC = 0.0  # m3, minimum pore volume
+_DEFAULT_GAMMA_NBINS = 250
 
 
 def generate_example_data(
@@ -59,10 +65,11 @@ def generate_example_data(
     cin_mean: float = 12.0,
     cin_amplitude: float = 8.0,
     measurement_noise: float = 1.0,
-    aquifer_pore_volume_gamma_mean: float = 1000.0,  # m3
-    aquifer_pore_volume_gamma_std: float = 200.0,  # m3
-    aquifer_pore_volume_gamma_loc: float = 0.0,  # m3, minimum pore volume
-    aquifer_pore_volume_gamma_nbins: int = 250,
+    aquifer_pore_volumes: npt.ArrayLike | None = None,
+    aquifer_pore_volume_gamma_mean: float | None = None,
+    aquifer_pore_volume_gamma_std: float | None = None,
+    aquifer_pore_volume_gamma_loc: float | None = None,
+    aquifer_pore_volume_gamma_nbins: int | None = None,
     retardation_factor: float = 1.0,
     molecular_diffusivity: float | None = None,
     longitudinal_dispersivity: float | None = None,
@@ -104,17 +111,29 @@ def generate_example_data(
     measurement_noise : float, default 1.0
         Random noise level applied to both cin and cout to represent
         measurement errors.
-    aquifer_pore_volume_gamma_mean : float, default 1000.0
-        Mean pore volume of the aquifer gamma distribution [m3]. Must be strictly
-        greater than ``aquifer_pore_volume_gamma_loc``.
-    aquifer_pore_volume_gamma_std : float, default 200.0
+    aquifer_pore_volumes : array-like or None, default None
+        Discrete aquifer pore volumes [m3] representing the distribution of
+        residence times. When provided, the gamma distribution is bypassed and
+        none of the ``aquifer_pore_volume_gamma_*`` parameters may be passed.
+        When ``None``, the pore volume distribution is built from the gamma
+        parameters below.
+    aquifer_pore_volume_gamma_mean : float or None, default None
+        Mean pore volume of the aquifer gamma distribution [m3] (default 1000.0
+        when unset). Must be strictly greater than
+        ``aquifer_pore_volume_gamma_loc``. Mutually exclusive with
+        ``aquifer_pore_volumes``.
+    aquifer_pore_volume_gamma_std : float or None, default None
         Standard deviation of aquifer pore volume gamma distribution [m3]
-        (invariant under the ``loc`` shift).
-    aquifer_pore_volume_gamma_loc : float, default 0.0
-        Location (minimum pore volume) of the aquifer gamma distribution [m3].
-        Must satisfy ``0 <= loc < mean``.
-    aquifer_pore_volume_gamma_nbins : int, default 250
-        Number of bins to discretize the aquifer pore volume gamma distribution.
+        (default 200.0 when unset; invariant under the ``loc`` shift).
+        Mutually exclusive with ``aquifer_pore_volumes``.
+    aquifer_pore_volume_gamma_loc : float or None, default None
+        Location (minimum pore volume) of the aquifer gamma distribution [m3]
+        (default 0.0 when unset). Must satisfy ``0 <= loc < mean``. Mutually
+        exclusive with ``aquifer_pore_volumes``.
+    aquifer_pore_volume_gamma_nbins : int or None, default None
+        Number of bins to discretize the aquifer pore volume gamma distribution
+        (default 250 when unset). Mutually exclusive with
+        ``aquifer_pore_volumes``.
     retardation_factor : float, default 1.0
         Retardation factor for transport.
     molecular_diffusivity : float or None, default None
@@ -142,8 +161,9 @@ def generate_example_data(
     Raises
     ------
     ValueError
-        If ``cin_method`` is not one of the supported methods, or if only
-        some of the diffusion parameters are provided.
+        If ``cin_method`` is not one of the supported methods, if only some
+        of the diffusion parameters are provided, or if ``aquifer_pore_volumes``
+        is passed together with any ``aquifer_pore_volume_gamma_*`` parameter.
 
     See Also
     --------
@@ -195,43 +215,96 @@ def generate_example_data(
     # Compute tedges for the flow series
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    # Compute alpha, beta for gamma distribution (used only for attrs metadata)
-    alpha, beta = mean_std_to_alpha_beta(
-        mean=aquifer_pore_volume_gamma_mean,
-        std=aquifer_pore_volume_gamma_std,
-        loc=aquifer_pore_volume_gamma_loc,
-    )
+    # Validate pore volume parameterization: either discrete volumes or gamma parameters, not both.
+    gamma_set_by_user = [
+        name
+        for name, value in {
+            "aquifer_pore_volume_gamma_mean": aquifer_pore_volume_gamma_mean,
+            "aquifer_pore_volume_gamma_std": aquifer_pore_volume_gamma_std,
+            "aquifer_pore_volume_gamma_loc": aquifer_pore_volume_gamma_loc,
+            "aquifer_pore_volume_gamma_nbins": aquifer_pore_volume_gamma_nbins,
+        }.items()
+        if value is not None
+    ]
+    if aquifer_pore_volumes is not None and gamma_set_by_user:
+        msg = (
+            "aquifer_pore_volumes is mutually exclusive with the aquifer_pore_volume_gamma_* "
+            f"parameters; got both aquifer_pore_volumes and {gamma_set_by_user}."
+        )
+        raise ValueError(msg)
 
-    # Compute cout using diffusion or advection
-    if molecular_diffusivity is not None and longitudinal_dispersivity is not None and streamline_length is not None:
+    # Validate diffusion parameterization: all three parameters provided or none.
+    diffusion_provided = (molecular_diffusivity, longitudinal_dispersivity, streamline_length)
+    n_diffusion = sum(1 for p in diffusion_provided if p is not None)
+    if 0 < n_diffusion < len(diffusion_provided):
+        msg = "molecular_diffusivity, longitudinal_dispersivity, and streamline_length must all be provided together."
+        raise ValueError(msg)
+
+    # Fill in gamma defaults so downstream callers see concrete values (not used when
+    # aquifer_pore_volumes is supplied, but kept in scope for the attrs block below).
+    gamma_mean = aquifer_pore_volume_gamma_mean if aquifer_pore_volume_gamma_mean is not None else _DEFAULT_GAMMA_MEAN
+    gamma_std = aquifer_pore_volume_gamma_std if aquifer_pore_volume_gamma_std is not None else _DEFAULT_GAMMA_STD
+    gamma_loc = aquifer_pore_volume_gamma_loc if aquifer_pore_volume_gamma_loc is not None else _DEFAULT_GAMMA_LOC
+    gamma_nbins = (
+        aquifer_pore_volume_gamma_nbins if aquifer_pore_volume_gamma_nbins is not None else _DEFAULT_GAMMA_NBINS
+    )
+    alpha, beta = mean_std_loc_to_alpha_beta(mean=gamma_mean, std=gamma_std, loc=gamma_loc)
+
+    # Compute cout. Branch on pore volume parameterization, then on diffusion.
+    if aquifer_pore_volumes is not None:
+        aquifer_pore_volumes_array = np.asarray(aquifer_pore_volumes, dtype=float)
+        if (
+            molecular_diffusivity is not None
+            and longitudinal_dispersivity is not None
+            and streamline_length is not None
+        ):
+            cout_values = diffusion_infiltration_to_extraction(
+                cin=cin_nonoise,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=tedges,
+                aquifer_pore_volumes=aquifer_pore_volumes_array,
+                mean_streamline_length=streamline_length,
+                mean_molecular_diffusivity=molecular_diffusivity,
+                mean_longitudinal_dispersivity=longitudinal_dispersivity,
+                retardation_factor=retardation_factor,
+                suppress_dispersion_warning=True,
+            )
+        else:
+            cout_values = infiltration_to_extraction(
+                cin=cin_nonoise,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=tedges,
+                aquifer_pore_volumes=aquifer_pore_volumes_array,
+                retardation_factor=retardation_factor,
+            )
+    elif molecular_diffusivity is not None and longitudinal_dispersivity is not None and streamline_length is not None:
         cout_values = diffusion_gamma_infiltration_to_extraction(
             cin=cin_nonoise,
             flow=flow,
             tedges=tedges,
             cout_tedges=tedges,
-            mean=aquifer_pore_volume_gamma_mean,
-            std=aquifer_pore_volume_gamma_std,
-            loc=aquifer_pore_volume_gamma_loc,
-            n_bins=aquifer_pore_volume_gamma_nbins,
+            mean=gamma_mean,
+            std=gamma_std,
+            loc=gamma_loc,
+            n_bins=gamma_nbins,
             mean_streamline_length=streamline_length,
             mean_molecular_diffusivity=molecular_diffusivity,
             mean_longitudinal_dispersivity=longitudinal_dispersivity,
             retardation_factor=retardation_factor,
             suppress_dispersion_warning=True,
         )
-    elif molecular_diffusivity is not None or longitudinal_dispersivity is not None or streamline_length is not None:
-        msg = "molecular_diffusivity, longitudinal_dispersivity, and streamline_length must all be provided together."
-        raise ValueError(msg)
     else:
         cout_values = gamma_infiltration_to_extraction(
             cin=cin_nonoise,
             flow=flow,
             tedges=tedges,
             cout_tedges=tedges,
-            mean=aquifer_pore_volume_gamma_mean,
-            std=aquifer_pore_volume_gamma_std,
-            loc=aquifer_pore_volume_gamma_loc,
-            n_bins=aquifer_pore_volume_gamma_nbins,
+            mean=gamma_mean,
+            std=gamma_std,
+            loc=gamma_loc,
+            n_bins=gamma_nbins,
             retardation_factor=retardation_factor,
         )
 
@@ -246,12 +319,6 @@ def generate_example_data(
     df.attrs.update({
         "description": "Example data for groundwater transport modeling",
         "source": "Synthetic data generated by gwtransport.examples.generate_example_data",
-        "aquifer_pore_volume_gamma_mean": aquifer_pore_volume_gamma_mean,
-        "aquifer_pore_volume_gamma_std": aquifer_pore_volume_gamma_std,
-        "aquifer_pore_volume_gamma_loc": aquifer_pore_volume_gamma_loc,
-        "aquifer_pore_volume_gamma_alpha": alpha,
-        "aquifer_pore_volume_gamma_beta": beta,
-        "aquifer_pore_volume_gamma_nbins": aquifer_pore_volume_gamma_nbins,
         "retardation_factor": retardation_factor,
         "date_start": date_start,
         "date_end": date_end,
@@ -264,6 +331,19 @@ def generate_example_data(
         "cin_amplitude": cin_amplitude,
         "measurement_noise": measurement_noise,
     })
+    if aquifer_pore_volumes is not None:
+        df.attrs["aquifer_pore_volume_parameterization"] = "discrete"
+        df.attrs["aquifer_pore_volumes"] = np.asarray(aquifer_pore_volumes, dtype=float)
+    else:
+        df.attrs.update({
+            "aquifer_pore_volume_parameterization": "gamma",
+            "aquifer_pore_volume_gamma_mean": gamma_mean,
+            "aquifer_pore_volume_gamma_std": gamma_std,
+            "aquifer_pore_volume_gamma_loc": gamma_loc,
+            "aquifer_pore_volume_gamma_alpha": alpha,
+            "aquifer_pore_volume_gamma_beta": beta,
+            "aquifer_pore_volume_gamma_nbins": gamma_nbins,
+        })
     if molecular_diffusivity is not None:
         df.attrs["molecular_diffusivity"] = molecular_diffusivity
         df.attrs["longitudinal_dispersivity"] = longitudinal_dispersivity

@@ -26,7 +26,7 @@ from gwtransport.diffusion import (
 from gwtransport.diffusion import (
     gamma_infiltration_to_extraction as diffusion_gamma_i2e,
 )
-from gwtransport.gamma import mean_std_to_alpha_beta
+from gwtransport.gamma import mean_std_loc_to_alpha_beta
 
 
 class TestInfiltrationToExtractionDiffusion:
@@ -1879,7 +1879,7 @@ class TestGammaExtractionToInfiltrationDiffusion:
 
     def test_alpha_beta_matches_mean_std(self, gamma_setup):
         """Alpha/beta parameterization gives identical result to mean/std."""
-        alpha, beta = mean_std_to_alpha_beta(mean=gamma_setup["mean"], std=gamma_setup["std"])
+        alpha, beta = mean_std_loc_to_alpha_beta(mean=gamma_setup["mean"], std=gamma_setup["std"])
         n_cout = len(gamma_setup["cout_tedges"]) - 1
         cout = np.full(n_cout, 5.0)
         cout[30:50] = 10.0

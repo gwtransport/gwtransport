@@ -29,7 +29,7 @@ Module Reference
    * - ``diffusion_fast``
      - :py:func:`~gwtransport.diffusion_fast.infiltration_to_extraction`
    * - ``gamma``
-     - :py:func:`~gwtransport.gamma.bins`, :py:func:`~gwtransport.gamma.mean_std_to_alpha_beta`
+     - :py:func:`~gwtransport.gamma.bins`, :py:func:`~gwtransport.gamma.mean_std_loc_to_alpha_beta`
 
 Physical/Hydrogeological Assumptions
 ------------------------------------
