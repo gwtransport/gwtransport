@@ -1,5 +1,4 @@
 import numpy as np
-from numpy.testing import assert_almost_equal, assert_array_almost_equal
 
 from gwtransport.deposition_utils import compute_average_heights
 
@@ -14,7 +13,7 @@ def test_rectangle_no_clipping():
     avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=-1, y_upper=4)
 
     # Analytical: area = width * height = 2 * 3 = 6, avg_height = area/width = 3
-    assert_almost_equal(avg_heights[0, 0], 3.0)
+    np.testing.assert_allclose(avg_heights[0, 0], 3.0, rtol=0, atol=1e-12)
 
 
 def test_rectangle_full_clipping():
@@ -24,11 +23,11 @@ def test_rectangle_full_clipping():
 
     # Clip completely above
     avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=4, y_upper=5)
-    assert_almost_equal(avg_heights[0, 0], 0.0)
+    np.testing.assert_allclose(avg_heights[0, 0], 0.0, rtol=0, atol=1e-12)
 
     # Clip completely below
     avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=-2, y_upper=-1)
-    assert_almost_equal(avg_heights[0, 0], 0.0)
+    np.testing.assert_allclose(avg_heights[0, 0], 0.0, rtol=0, atol=1e-12)
 
 
 def test_rectangle_partial_clipping():
@@ -42,11 +41,11 @@ def test_rectangle_partial_clipping():
 
     # Analytical: clipped area = width * clipped_height = 2 * 2 = 4
     # avg_height = area/width = 4/2 = 2
-    assert_almost_equal(avg_heights[0, 0], 2.0)
+    np.testing.assert_allclose(avg_heights[0, 0], 2.0, rtol=0, atol=1e-12)
 
     # Clip top half: keep y from 0 to 2
     avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=-1, y_upper=2)
-    assert_almost_equal(avg_heights[0, 0], 2.0)
+    np.testing.assert_allclose(avg_heights[0, 0], 2.0, rtol=0, atol=1e-12)
 
 
 def test_trapezoid_no_clipping():
@@ -59,7 +58,7 @@ def test_trapezoid_no_clipping():
 
     # Analytical: trapezoid area = 0.5 * (left + right) * width = 0.5 * (4 + 2) * 3 = 9
     # avg_height = area/width = 9/3 = 3
-    assert_almost_equal(avg_heights[0, 0], 3.0)
+    np.testing.assert_allclose(avg_heights[0, 0], 3.0, rtol=0, atol=1e-12)
 
 
 def test_trapezoid_with_clipping():
@@ -74,7 +73,7 @@ def test_trapezoid_with_clipping():
     # Analytical: The original trapezoid has a sloped top edge from (0,6) to (2,4)
     # When clipped at y=5, this creates a pentagonal region with area = 7.5
     # Average height = 7.5 / 2 = 3.75
-    assert_almost_equal(avg_heights[0, 0], 3.75)
+    np.testing.assert_allclose(avg_heights[0, 0], 3.75, rtol=0, atol=1e-12)
 
 
 def test_triangle_cases():
@@ -102,7 +101,7 @@ def test_multiple_quads():
     # Top row: quads from y=1 to y=2, clipped to y=1 to y=1.5 (height=0.5)
     # Bottom row: quads from y=0 to y=1, clipped to y=0.5 to y=1 (height=0.5)
     expected = 0.5 * np.ones((2, 2))
-    assert_array_almost_equal(avg_heights, expected)
+    np.testing.assert_allclose(avg_heights, expected, rtol=0, atol=1e-12)
 
 
 def test_zero_width_handling():
@@ -115,7 +114,7 @@ def test_zero_width_handling():
     # First column: zero width produces NaN (area/0), check if properly handled
     assert np.isnan(avg_heights[0, 0]) or avg_heights[0, 0] == 0
     # Second column: normal rectangle
-    assert_almost_equal(avg_heights[0, 1], 2.0)
+    np.testing.assert_allclose(avg_heights[0, 1], 2.0, rtol=0, atol=1e-12)
 
 
 def test_edge_case_bounds():
@@ -125,15 +124,15 @@ def test_edge_case_bounds():
 
     # Bounds exactly match quad
     avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=2)
-    assert_almost_equal(avg_heights[0, 0], 2.0)
+    np.testing.assert_allclose(avg_heights[0, 0], 2.0, rtol=0, atol=1e-12)
 
     # Lower bound exactly at bottom
     avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=3)
-    assert_almost_equal(avg_heights[0, 0], 2.0)
+    np.testing.assert_allclose(avg_heights[0, 0], 2.0, rtol=0, atol=1e-12)
 
     # Upper bound exactly at top
     avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=-1, y_upper=2)
-    assert_almost_equal(avg_heights[0, 0], 2.0)
+    np.testing.assert_allclose(avg_heights[0, 0], 2.0, rtol=0, atol=1e-12)
 
 
 def test_sloped_quad():
@@ -149,7 +148,7 @@ def test_sloped_quad():
     # With corners: (0,1), (2,2), (2,4), (0,3)
     # area = 0.5 * |0*(2-3) + 2*(4-1) + 2*(3-2) + 0*(1-4)| = 0.5 * |0 + 6 + 2 + 0| = 4
     # avg_height = area/width = 4/2 = 2
-    assert_almost_equal(avg_heights[0, 0], 2.0)
+    np.testing.assert_allclose(avg_heights[0, 0], 2.0, rtol=0, atol=1e-12)
 
 
 def test_conservation_property():
@@ -165,7 +164,7 @@ def test_conservation_property():
     upper_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=2, y_upper=4)
 
     # Conservation: lower + upper should equal full
-    assert_almost_equal(lower_heights[0, 0] + upper_heights[0, 0], full_heights[0, 0])
+    np.testing.assert_allclose(lower_heights[0, 0] + upper_heights[0, 0], full_heights[0, 0], rtol=0, atol=1e-12)
 
 
 def test_upper_clip_left_to_right_crossing():
@@ -180,7 +179,7 @@ def test_upper_clip_left_to_right_crossing():
 
     avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=5)
 
-    assert_almost_equal(avg_heights[0, 0], 4.5)
+    np.testing.assert_allclose(avg_heights[0, 0], 4.5, rtol=0, atol=1e-12)
 
 
 def test_lower_clip_crossing():
@@ -205,7 +204,7 @@ def test_lower_clip_crossing():
 
     avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=10)
 
-    assert_almost_equal(avg_heights[0, 0], 1.5)
+    np.testing.assert_allclose(avg_heights[0, 0], 1.5, rtol=0, atol=1e-12)
 
 
 def test_upper_clip_right_to_left_crossing():
@@ -219,4 +218,4 @@ def test_upper_clip_right_to_left_crossing():
 
     avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=5)
 
-    assert_almost_equal(avg_heights[0, 0], 4.5)
+    np.testing.assert_allclose(avg_heights[0, 0], 4.5, rtol=0, atol=1e-12)
