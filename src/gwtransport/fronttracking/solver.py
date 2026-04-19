@@ -242,6 +242,13 @@ class FrontTracker:
         # Detect flow changes for event scheduling
         self._flow_change_schedule = self._detect_flow_changes()
 
+        # Track already-handled rarefaction-rarefaction collision keys to avoid
+        # the infinite event-detection loop that occurs when the no-op handler
+        # leaves both rarefactions active and the same intersection keeps being
+        # rediscovered. Each key is a (id(raref1), id(raref2), boundary_type)
+        # tuple with sorted ids so it is order-independent.
+        self._handled_raref_raref: set[tuple[int, int, str | None]] = set()
+
         # Initialize waves from inlet boundary conditions
         self._initialize_inlet_waves()
 
@@ -408,11 +415,17 @@ class FrontTracker:
                         counter += 1
 
         # 6. Rarefaction-Rarefaction collisions
+        # Skip pairs that have already been "handled" (the handler is currently a
+        # no-op so without this guard the same intersection would be rediscovered
+        # forever). The key uses sorted Python ids so it is symmetric in the pair.
         for i, raref1 in enumerate(rarefs):
             for raref2 in rarefs[i + 1 :]:
                 intersections = find_rarefaction_boundary_intersections(raref1, raref2, self.state.t_current)
                 for t, v, boundary in intersections:
                     if 0 <= v <= self.state.v_outlet:
+                        id_a, id_b = sorted((id(raref1), id(raref2)))
+                        if (id_a, id_b, boundary) in self._handled_raref_raref:
+                            continue
                         heappush(
                             candidates,
                             (t, counter, EventType.RAREF_RAREF_COLLISION, [raref1, raref2], v, boundary),
@@ -561,6 +574,10 @@ class FrontTracker:
                 event.location,
                 boundary_type=event.boundary_type,
             )
+            # Record this pair+boundary as handled so it is not rediscovered
+            # (the handler is currently a no-op).
+            id_a, id_b = sorted((id(event.waves_involved[0]), id(event.waves_involved[1])))
+            self._handled_raref_raref.add((id_a, id_b, event.boundary_type))
 
         elif event.event_type == EventType.OUTLET_CROSSING:
             event_record = handle_outlet_crossing(event.waves_involved[0], event.time, event.location)
@@ -573,7 +590,7 @@ class FrontTracker:
             if event.flow_new is None:
                 msg = "FLOW_CHANGE event must have flow_new set"
                 raise RuntimeError(msg)
-            new_waves = handle_flow_change(event.time, event.flow_new, active_waves)
+            new_waves = handle_flow_change(event.time, event.flow_new, active_waves, self.state.v_outlet)
 
         # Add new waves to state
         self.state.waves.extend(new_waves)

@@ -19,6 +19,7 @@ from gwtransport.fronttracking.handlers import (
     recreate_shock_with_new_flow,
 )
 from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
+from gwtransport.fronttracking.output import compute_bin_averaged_concentration_exact
 from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 
@@ -185,8 +186,9 @@ class TestFlowChangeHandler:
 
         t_change = 10.0
         flow_new = 200.0
+        v_outlet = 1e6  # Far enough that no wave is past the outlet at t_change
 
-        new_waves = handle_flow_change(t_change, flow_new, waves)
+        new_waves = handle_flow_change(t_change, flow_new, waves, v_outlet)
 
         # Should create 2 new waves
         assert len(new_waves) == 2
@@ -194,8 +196,9 @@ class TestFlowChangeHandler:
         # All new waves should have new flow
         assert all(w.flow == 200.0 for w in new_waves)
 
-        # Old waves should be deactivated
+        # Old waves should be deactivated and have t_deactivated set
         assert all(not w.is_active for w in waves)
+        assert all(w.t_deactivated == t_change for w in waves)
 
         # New waves should be active
         assert all(w.is_active for w in new_waves)
@@ -230,8 +233,9 @@ class TestFlowChangeHandler:
 
         t_change = 15.0
         flow_new = 150.0
+        v_outlet = 1e6  # Far enough that no wave is past the outlet at t_change
 
-        new_waves = handle_flow_change(t_change, flow_new, waves)
+        new_waves = handle_flow_change(t_change, flow_new, waves, v_outlet)
 
         # Should create 3 new waves
         assert len(new_waves) == 3
@@ -250,9 +254,11 @@ class TestFlowChangeIntegration:
 
     def test_single_characteristic_flow_doubles(self, constant_retardation):
         """Single characteristic: flow doubles, arrival time halves."""
-        # Characteristic with c=5, flow starts at 100
-        # At t=10, flow changes to 200
-        # aquifer_pore_volume = 500
+        # Characteristic with c=5, flow starts at 100, R=2 -> velocity=50
+        # At t=10, flow changes to 200. Char position at t=10 is v=500 = outlet,
+        # so the FT1 "skip past-outlet waves" fix leaves this char untouched and
+        # does NOT create a recreated copy with new flow. We use a larger
+        # aquifer_pore_volume so the wave is still in the domain at t_change.
 
         tedges = pd.date_range("2020-01-01", periods=4, freq="10D")
         cin = np.array([5.0, 5.0, 5.0])
@@ -262,7 +268,7 @@ class TestFlowChangeIntegration:
             cin=cin,
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volume=500.0,
+            aquifer_pore_volume=2000.0,  # Outlet far enough that char is still in domain at t=10
             sorption=constant_retardation,
         )
 
@@ -274,13 +280,19 @@ class TestFlowChangeIntegration:
         assert np.isclose(flow_change_events[0]["time"], 10.0, rtol=1e-14)
 
         # Verify waves were recreated
-        # Should have: initial char, char after flow change
+        # Should have: initial char (deactivated, t_deactivated=10), recreated char with new flow
         chars = [w for w in tracker.state.waves if isinstance(w, CharacteristicWave)]
         assert len(chars) == 2
 
         # First char has flow=100, second has flow=200
         assert chars[0].flow == 100.0
         assert chars[1].flow == 200.0
+        # First char should be deactivated with t_deactivated set to flow-change time
+        assert not chars[0].is_active
+        assert chars[0].t_deactivated == 10.0
+        # Second char (recreated) should be active and start at t=10
+        assert chars[1].is_active
+        assert chars[1].t_start == 10.0
 
     def test_flow_change_before_characteristic_collision(self, freundlich_sorption):
         """Two characteristics: flow change affects collision time."""
@@ -357,7 +369,6 @@ class TestExactMassBalanceVaryingFlow:
         # Verify exact mass balance at final time
         tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-10)
 
-    @pytest.mark.skip(reason="Varying flow mass balance needs investigation - may require flow-aware integration")
     def test_exact_mass_balance_varying_flow(self, constant_retardation):
         """Exact mass balance with varying flow."""
         tedges = pd.date_range("2020-01-01", periods=4, freq="10D")
@@ -420,7 +431,6 @@ class TestExactMassBalanceVaryingFlow:
             # Mass balance should hold even after one event
             tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-10)
 
-    @pytest.mark.skip(reason="Varying flow mass balance needs investigation - may require flow-aware integration")
     def test_exact_mass_balance_multiple_flow_changes(self, constant_retardation):
         """Exact mass balance with multiple flow changes."""
         tedges = pd.date_range("2020-01-01", periods=6, freq="10D")
@@ -439,3 +449,133 @@ class TestExactMassBalanceVaryingFlow:
 
         # Exact mass balance should hold despite multiple flow changes
         tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-10)
+
+
+class TestFlowChangeRegression:
+    """Regression tests for flow-change physics (FT7).
+
+    These tests pin down the behaviour of the FT1 fix (waves crossing the
+    outlet before a flow change must remain queryable) and the FT4 fix
+    (rarefaction-rarefaction collisions must not consume the iteration limit).
+    """
+
+    def test_step_input_then_flow_change_matches_analytical_cout(self):
+        """
+        Step inlet concentration with a flow change before breakthrough.
+
+        Setup (constant retardation R=2):
+
+        - tedges = [0, 5, 15, 30] days, so flow1 covers [0, 5), flow2 covers
+          [5, 15), flow2 covers [15, 30).
+        - cin = [10, 10, 10] (constant inlet concentration at 10).
+        - flow = [100, 100, 100] then we make the flow change at t=5 by using
+          flow = [100, 200, 200].
+        - aquifer_pore_volume = 500.
+
+        Wave 1 enters at t=0 with v=0, flow=100, R=2 -> velocity 50.
+        At t=5 (flow change), wave 1 is at v = 50 * 5 = 250 (still in domain).
+        After t=5 the wave is recreated with flow=200 -> velocity 100.
+        Outlet (v=500) is reached at t = 5 + (500 - 250)/100 = 7.5 days.
+
+        Analytical cout: 0 for t in [0, 7.5), 10 for t >= 7.5.
+        """
+        # Bin edges chosen so that flow change happens at t=5 (not on a uniform grid).
+        tedges = pd.DatetimeIndex([pd.Timestamp("2020-01-01") + pd.Timedelta(days=d) for d in (0, 5, 15, 30)])
+        cin = np.array([10.0, 10.0, 10.0])
+        flow = np.array([100.0, 200.0, 200.0])  # Flow doubles at t=5
+        aquifer_pore_volume = 500.0
+        sorption = ConstantRetardation(retardation_factor=2.0)
+
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=aquifer_pore_volume,
+            sorption=sorption,
+        )
+        tracker.run(max_iterations=100, verbose=False)
+
+        # Sample cout on a fine bin grid that brackets the analytical arrival
+        # time (t = 7.5 days). Bins [7, 8) straddle arrival; later bins should
+        # see c_out = 10 exactly.
+        t_query = np.array([6.0, 7.0, 7.5, 8.0, 9.0, 12.0, 20.0])
+        c_out = np.array([
+            float(
+                compute_bin_averaged_concentration_exact(
+                    np.array([t, t + 1e-9]), aquifer_pore_volume, tracker.state.waves, sorption
+                )[0]
+            )
+            for t in t_query
+        ])
+
+        # Before arrival -> 0; at/after arrival -> 10
+        expected = np.where(t_query < 7.5, 0.0, 10.0)
+        np.testing.assert_allclose(c_out, expected, rtol=0.0, atol=1e-12)
+
+    def test_mass_balance_through_flow_change_constant_retardation(self):
+        """Flow change must conserve mass exactly (constant retardation).
+
+        Compares cumulative inlet mass and cumulative outlet+domain mass on a
+        post-spin-up window for a constant-retardation case where the analytic
+        result is exact.
+        """
+        tedges = pd.DatetimeIndex([pd.Timestamp("2020-01-01") + pd.Timedelta(days=d) for d in (0, 5, 15, 30)])
+        cin = np.array([10.0, 10.0, 10.0])
+        flow = np.array([100.0, 200.0, 200.0])  # Flow change at t=5
+        aquifer_pore_volume = 500.0
+        sorption = ConstantRetardation(retardation_factor=2.0)
+
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=aquifer_pore_volume,
+            sorption=sorption,
+        )
+        tracker.run(max_iterations=100, verbose=False)
+
+        # verify_physics performs the (mass_in_domain + mass_out == mass_in)
+        # check internally using exact analytical integration. With constant
+        # retardation we are not bound by the rarefaction approximation noted
+        # in the docstring, so we can demand a tight tolerance.
+        tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-10)
+
+    def test_two_overlapping_rarefactions_terminate_quickly(self, freundlich_sorption):
+        """Two overlapping rarefactions must NOT consume max_iterations.
+
+        Constructs an inlet sequence that produces two rarefactions whose
+        head/tail boundaries cross while they propagate (FT4: the rarefaction-
+        rarefaction handler is a no-op, so without the solver-side dedupe the
+        same intersection would be rediscovered forever).
+
+        For Freundlich n>1 a step-down in concentration creates a rarefaction.
+        We do two consecutive step-downs so two rarefactions exist
+        simultaneously, then the slower wave's head catches the faster wave's
+        tail (boundary crossing).
+        """
+        # Two consecutive concentration drops -> two rarefactions
+        # 10 -> 5 -> 1, with constant flow so the rarefactions both propagate
+        # toward the outlet and their boundaries can interact.
+        n_bins = 10
+        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="D")
+        cin = np.concatenate([[10.0], [5.0], np.full(n_bins - 2, 1.0)])
+        flow = np.full(n_bins, 100.0)
+
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=1000.0,
+            sorption=freundlich_sorption,
+        )
+
+        max_iterations = 200
+        tracker.run(max_iterations=max_iterations, verbose=False)
+
+        # Total events processed must be well below the safety cap (no infinite
+        # rediscovery loop). 50 is comfortably above the small number of real
+        # events for this scenario but well below max_iterations.
+        assert len(tracker.state.events) < 50, (
+            f"Solver consumed {len(tracker.state.events)} events for a small two-rarefaction scenario; "
+            f"this indicates the FT4 dedupe of rarefaction-rarefaction collisions has regressed."
+        )

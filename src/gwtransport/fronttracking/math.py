@@ -922,28 +922,26 @@ def compute_first_front_arrival_time(
     # Target: cumulative flow volume needed to reach outlet
     target_volume = aquifer_pore_volume * r_first
 
-    # Integrate piecewise constant flow starting from idx_first
-    # tedges is assumed to be DatetimeIndex, convert all times to days
-    cumulative_volume = 0.0
+    # Vectorized integration of piecewise-constant flow starting from idx_first.
+    # Convert all bin widths to days at once and accumulate the volume profile.
+    tedges_days = np.asarray((tedges - tedges[0]) / pd.Timedelta(days=1), dtype=float)
+    dt_days = np.diff(tedges_days[idx_first:])
+    volumes = np.asarray(flow[idx_first:], dtype=float) * dt_days
+    cumulative_volume = np.cumsum(volumes)
 
-    for i in range(idx_first, len(flow)):
-        # Convert time interval to days
-        dt_days = (tedges[i + 1] - tedges[i]) / pd.Timedelta(days=1)
-        volume_in_bin = flow[i] * dt_days
+    # Locate the first bin whose cumulative volume reaches the target.
+    bin_offset = int(np.searchsorted(cumulative_volume, target_volume, side="left"))
 
-        if cumulative_volume + volume_in_bin >= target_volume:
-            # First arrival occurs during this bin
-            remaining_volume = target_volume - cumulative_volume
-            dt_partial = remaining_volume / flow[i]
+    if bin_offset >= len(cumulative_volume):
+        # Never reaches outlet with given flow history
+        return float(np.inf)
 
-            # Return time in days from tedges[0]
-            t_bin_start_days = (tedges[i] - tedges[0]) / pd.Timedelta(days=1)
-            return t_bin_start_days + dt_partial
+    # Volume already accumulated before entering the bin where arrival occurs.
+    volume_before_bin = float(cumulative_volume[bin_offset - 1]) if bin_offset > 0 else 0.0
+    remaining_volume = target_volume - volume_before_bin
+    dt_partial = remaining_volume / float(flow[idx_first + bin_offset])
 
-        cumulative_volume += volume_in_bin
-
-    # Never reaches outlet with given flow history
-    return np.inf
+    return float(float(tedges_days[idx_first + bin_offset]) + dt_partial)
 
 
 def compute_first_fully_informed_bin_edge(

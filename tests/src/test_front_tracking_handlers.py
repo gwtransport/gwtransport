@@ -617,20 +617,18 @@ class TestRarefactionCharacteristicCollisionHandler:
     """Test handle_rarefaction_characteristic_collision function."""
 
     @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
-    def test_characteristic_absorbed_at_head(self, freundlich_sorption):
-        """Test characteristic collision with rarefaction head.
+    def test_characteristic_matching_head_concentration_absorbed(self, freundlich_sorption):
+        """Characteristic that matches the rarefaction head concentration is absorbed.
 
-        This tests the SIMPLIFIED IMPLEMENTATION where the characteristic
-        is simply deactivated and absorbed into the rarefaction structure.
+        FT2 fix: silent absorption is allowed only when the characteristic's
+        concentration matches the colliding boundary's concentration to within
+        a tight tolerance, which is the only case where deactivating the
+        characteristic does not destroy mass.
         """
-        # For n>1: head has higher C (slower), tail has lower C (faster)
-        # For n<1: head has lower C (faster), tail has higher C (slower)
         if freundlich_sorption.n > 1.0:
             c_head, c_tail = 10.0, 2.0
-            c_char = 7.0
         else:
             c_head, c_tail = 2.0, 10.0
-            c_char = 5.0
 
         raref = RarefactionWave(
             t_start=0.0,
@@ -641,15 +639,15 @@ class TestRarefactionCharacteristicCollisionHandler:
             sorption=freundlich_sorption,
         )
 
+        # Characteristic concentration matches head -> absorption is mass-conserving
         char = CharacteristicWave(
             t_start=5.0,
             v_start=0.0,
             flow=100.0,
-            concentration=c_char,
+            concentration=c_head,
             sorption=freundlich_sorption,
         )
 
-        # Both active initially
         assert raref.is_active
         assert char.is_active
 
@@ -657,17 +655,16 @@ class TestRarefactionCharacteristicCollisionHandler:
             raref, char, t_event=20.0, v_event=150.0, boundary_type="head"
         )
 
-        # Simplified implementation returns no new waves
-        assert len(new_waves) == 0, "Simplified implementation creates no new waves"
+        assert len(new_waves) == 0, "Absorption creates no new waves"
+        assert not char.is_active, "Matching characteristic must be deactivated"
+        assert raref.is_active, "Rarefaction stays active"
 
     @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
-    def test_characteristic_deactivated(self, freundlich_sorption):
-        """Test that characteristic is deactivated in the collision."""
-        # For n>1: head has higher C (slower), tail has lower C (faster)
-        # For n<1: head has lower C (faster), tail has higher C (slower)
+    def test_mass_destroying_collision_raises(self, freundlich_sorption):
+        """Mismatched characteristic concentration triggers a RuntimeError (FT2)."""
         if freundlich_sorption.n > 1.0:
             c_head, c_tail = 8.0, 3.0
-            c_char = 5.0
+            c_char = 5.0  # Strictly between head and tail -> not absorbable silently
         else:
             c_head, c_tail = 3.0, 8.0
             c_char = 5.0
@@ -689,24 +686,16 @@ class TestRarefactionCharacteristicCollisionHandler:
             sorption=freundlich_sorption,
         )
 
-        handle_rarefaction_characteristic_collision(raref, char, t_event=20.0, v_event=150.0, boundary_type="tail")
-
-        # Characteristic should be deactivated
-        assert not char.is_active, "Characteristic must be deactivated"
-        # Rarefaction remains active
-        assert raref.is_active, "Rarefaction should remain active"
+        with pytest.raises(RuntimeError, match="would silently destroy mass"):
+            handle_rarefaction_characteristic_collision(raref, char, t_event=20.0, v_event=150.0, boundary_type="tail")
 
     @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
-    def test_collision_at_tail(self, freundlich_sorption):
-        """Test characteristic collision with rarefaction tail."""
-        # For n>1: head has higher C (slower), tail has lower C (faster)
-        # For n<1: head has lower C (faster), tail has higher C (slower)
+    def test_characteristic_matching_tail_concentration_absorbed(self, freundlich_sorption):
+        """Characteristic matching the tail concentration is absorbed at the tail boundary."""
         if freundlich_sorption.n > 1.0:
             c_head, c_tail = 12.0, 4.0
-            c_char = 6.0
         else:
             c_head, c_tail = 4.0, 12.0
-            c_char = 8.0
 
         raref = RarefactionWave(
             t_start=0.0,
@@ -721,7 +710,7 @@ class TestRarefactionCharacteristicCollisionHandler:
             t_start=5.0,
             v_start=0.0,
             flow=100.0,
-            concentration=c_char,
+            concentration=c_tail,
             sorption=freundlich_sorption,
         )
 
@@ -729,11 +718,8 @@ class TestRarefactionCharacteristicCollisionHandler:
             raref, char, t_event=25.0, v_event=200.0, boundary_type="tail"
         )
 
-        # No new waves in simplified implementation
         assert len(new_waves) == 0
-        # Characteristic deactivated
         assert not char.is_active
-        # Rarefaction remains active
         assert raref.is_active
 
 
@@ -1725,7 +1711,7 @@ class TestHandleFlowChangePhysics:
         # Change flow
         new_flow = 150.0
         t_change = 10.0
-        new_waves = handle_flow_change(t_change, new_flow, active_waves)
+        new_waves = handle_flow_change(t_change, new_flow, active_waves, v_outlet=1e6)
 
         # All original waves should be deactivated
         assert not char.is_active, "Characteristic should be deactivated"
@@ -1754,7 +1740,7 @@ class TestHandleFlowChangePhysics:
         char = CharacteristicWave(t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=freundlich_sorption)
 
         old_velocity = char.velocity()
-        new_waves = handle_flow_change(t_change=10.0, flow_new=200.0, active_waves=[char])
+        new_waves = handle_flow_change(t_change=10.0, flow_new=200.0, active_waves=[char], v_outlet=1e6)
 
         new_char = new_waves[0]
         # Velocity should double
@@ -1765,7 +1751,7 @@ class TestHandleFlowChangePhysics:
         char = CharacteristicWave(t_start=0.0, v_start=0.0, flow=200.0, concentration=5.0, sorption=freundlich_sorption)
 
         old_velocity = char.velocity()
-        new_waves = handle_flow_change(t_change=10.0, flow_new=100.0, active_waves=[char])
+        new_waves = handle_flow_change(t_change=10.0, flow_new=100.0, active_waves=[char], v_outlet=1e6)
 
         new_char = new_waves[0]
         # Velocity should halve
@@ -1785,7 +1771,7 @@ class TestHandleFlowChangePhysics:
             t_start=0.0, v_start=20.0, flow=100.0, c_head=9.0, c_tail=3.0, sorption=freundlich_sorption
         )
 
-        new_waves = handle_flow_change(t_change=10.0, flow_new=150.0, active_waves=[char, shock, raref])
+        new_waves = handle_flow_change(t_change=10.0, flow_new=150.0, active_waves=[char, shock, raref], v_outlet=1e6)
 
         new_char = next(w for w in new_waves if isinstance(w, CharacteristicWave))
         new_shock = next(w for w in new_waves if isinstance(w, ShockWave))
@@ -1812,7 +1798,9 @@ class TestHandleFlowChangePhysics:
             is_active=False,
         )
 
-        new_waves = handle_flow_change(t_change=10.0, flow_new=150.0, active_waves=[active_char, inactive_char])
+        new_waves = handle_flow_change(
+            t_change=10.0, flow_new=150.0, active_waves=[active_char, inactive_char], v_outlet=1e6
+        )
 
         # Only the active wave should be recreated
         assert len(new_waves) == 1, "Only active wave should be recreated"
@@ -2344,15 +2332,20 @@ class TestHandleFlowChangeEdgeCases:
     def test_unknown_wave_type_raises_error(self):
         """Test lines 959-960: unknown wave type raises TypeError."""
 
-        # Create a mock wave that isn't a known type
+        # Create a mock wave that isn't a known type. The handler queries
+        # ``position_at_time`` to decide whether the wave is past the outlet
+        # before dispatching on type, so the mock has to expose that method.
         class UnknownWave:
             def __init__(self):
                 self.is_active = True
 
+            def position_at_time(self, t):  # noqa: ARG002
+                return 0.0  # In-domain so the dispatch path is reached.
+
         unknown = UnknownWave()
 
         with pytest.raises(TypeError, match="Unknown wave type"):
-            handle_flow_change(t_change=10.0, flow_new=150.0, active_waves=[unknown])
+            handle_flow_change(t_change=10.0, flow_new=150.0, active_waves=[unknown], v_outlet=1e6)
 
 
 class TestInletWaveCreationEdgeCases:

@@ -488,7 +488,14 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> float | Non
         if t_cross:
             print(f"Shock exits at t={t_cross:.3f} days")
     """
-    if not wave.is_active:
+    # Skip waves whose geometry is fully invalid: deactivated waves with no
+    # ``t_deactivated`` (replaced by a child wave) carry no useful crossing
+    # information. A wave with ``t_deactivated`` set is queryable for
+    # ``t <= t_deactivated``; the caller bounds the query window via
+    # ``t_current``, so callers querying past ``t_deactivated`` can ignore the
+    # result. We still return the analytical crossing time so that callers
+    # within the validity window get a correct answer.
+    if not wave.is_active and wave.t_deactivated is None:
         return None
 
     if isinstance(wave, CharacteristicWave):
@@ -510,7 +517,10 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> float | Non
 
         # Solve: v_current + vel*(t - t_eval) = v_outlet
         dt = (v_outlet - v_current) / vel
-        return t_eval + dt
+        t_cross = t_eval + dt
+        if wave.t_deactivated is not None and t_cross > wave.t_deactivated:
+            return None
+        return t_cross
 
     if isinstance(wave, ShockWave):
         if wave.velocity is None:
@@ -527,7 +537,10 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> float | Non
 
         # Solve: v_current + velocity*(t - t_eval) = v_outlet
         dt = (v_outlet - v_current) / wave.velocity
-        return t_eval + dt
+        t_cross = t_eval + dt
+        if wave.t_deactivated is not None and t_cross > wave.t_deactivated:
+            return None
+        return t_cross
 
     if isinstance(wave, RarefactionWave):
         # Head crosses first (leading edge)
@@ -543,6 +556,9 @@ def find_outlet_crossing(wave, v_outlet: float, t_current: float) -> float | Non
             return None
 
         dt = (v_outlet - v_head) / vel_head
-        return t_eval + dt
+        t_cross = t_eval + dt
+        if wave.t_deactivated is not None and t_cross > wave.t_deactivated:
+            return None
+        return t_cross
 
     return None

@@ -94,30 +94,25 @@ def handle_characteristic_collision(
             # C=0 is faster → catching C>0 from behind
             # For Freundlich n>1: concentration decrease (C>0 → C=0) forms rarefaction
             # Physical: clean water (fast) catching contaminated water (slow)
-            try:
-                raref = RarefactionWave(
-                    t_start=t_event,
-                    v_start=v_event,
-                    flow=char1.flow,
-                    c_head=char1.concentration,  # C=0 is head (faster)
-                    c_tail=char2.concentration,  # C>0 is tail (slower)
-                    sorption=char1.sorption,
-                )
-            except ValueError:
-                # Rarefaction creation failed - just keep C>0, deactivate C=0
-                char1.is_active = False
-                return []
-            else:
-                char1.is_active = False
-                char2.is_active = False
-                return [raref]
-        else:
-            # C>0 is faster → C>0 catching C=0 → C=0 is from initial condition
-            # Just deactivate the C=0 and keep C>0 active
+            # The rarefaction needs head_velocity > tail_velocity. We just verified
+            # vel1 > vel2 and vel1 is the head velocity, so the rarefaction is valid.
+            raref = RarefactionWave(
+                t_start=t_event,
+                v_start=v_event,
+                flow=char1.flow,
+                c_head=char1.concentration,  # C=0 is head (faster)
+                c_tail=char2.concentration,  # C>0 is tail (slower)
+                sorption=char1.sorption,
+            )
             char1.is_active = False
-            return []
+            char2.is_active = False
+            return [raref]
+        # C>0 is faster → C>0 catching C=0 → C=0 is from initial condition
+        # Just deactivate the C=0 and keep C>0 active
+        char1.is_active = False
+        return []
 
-    elif char2.concentration <= c_min and char1.concentration > c_min and is_n_lt_1 and c_min == 0:
+    if char2.concentration <= c_min and char1.concentration > c_min and is_n_lt_1 and c_min == 0:
         # char2 is C≈0, char1 is C>0
         vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
         vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
@@ -125,27 +120,22 @@ def handle_characteristic_collision(
         if vel2 > vel1:
             # C=0 is faster → catching C>0 from behind
             # For Freundlich n>1: concentration decrease forms rarefaction
-            try:
-                raref = RarefactionWave(
-                    t_start=t_event,
-                    v_start=v_event,
-                    flow=char1.flow,
-                    c_head=char2.concentration,  # C=0 is head (faster)
-                    c_tail=char1.concentration,  # C>0 is tail (slower)
-                    sorption=char1.sorption,
-                )
-            except ValueError:
-                # Rarefaction creation failed
-                char2.is_active = False
-                return []
-            else:
-                char1.is_active = False
-                char2.is_active = False
-                return [raref]
-        else:
-            # C>0 is faster → C=0 is from initial condition
+            # The rarefaction needs head_velocity > tail_velocity. We just verified
+            # vel2 > vel1 and vel2 is the head velocity, so the rarefaction is valid.
+            raref = RarefactionWave(
+                t_start=t_event,
+                v_start=v_event,
+                flow=char1.flow,
+                c_head=char2.concentration,  # C=0 is head (faster)
+                c_tail=char1.concentration,  # C>0 is tail (slower)
+                sorption=char1.sorption,
+            )
+            char1.is_active = False
             char2.is_active = False
-            return []
+            return [raref]
+        # C>0 is faster → C=0 is from initial condition
+        char2.is_active = False
+        return []
 
     # Normal case: analyze velocities to determine wave type
     # This now handles all cases for n>1 (higher C travels faster) and
@@ -387,33 +377,24 @@ def handle_shock_characteristic_collision(
         tail_vel = characteristic_velocity(c_tail, shock.flow, shock.sorption)
 
         if head_vel > tail_vel:
-            # Valid rarefaction - create it
-            try:
-                raref = RarefactionWave(
-                    t_start=t_event,
-                    v_start=v_event,
-                    flow=shock.flow,
-                    c_head=c_head,
-                    c_tail=c_tail,
-                    sorption=shock.sorption,
-                )
-            except ValueError:
-                # Rarefaction validation failed - edge case
-                # Deactivate waves and return empty
-                shock.is_active = False
-                char.is_active = False
-                return []
-            else:
-                # Deactivate parent waves
-                shock.is_active = False
-                char.is_active = False
-                return [raref]
-        else:
-            # Not a valid rarefaction - waves may pass through each other
-            # This is an edge case - deactivate and return empty
+            # Valid rarefaction - head_vel > tail_vel guarantees the constructor succeeds.
+            raref = RarefactionWave(
+                t_start=t_event,
+                v_start=v_event,
+                flow=shock.flow,
+                c_head=c_head,
+                c_tail=c_tail,
+                sorption=shock.sorption,
+            )
+            # Deactivate parent waves
             shock.is_active = False
             char.is_active = False
-            return []
+            return [raref]
+        # Not a valid rarefaction - waves may pass through each other.
+        # Edge case (head_vel == tail_vel within machine precision): deactivate and return empty.
+        shock.is_active = False
+        char.is_active = False
+        return []
 
     # Shock satisfies entropy - return it
     # Deactivate parent waves
@@ -535,32 +516,24 @@ def handle_shock_rarefaction_collision(
         tail_vel = characteristic_velocity(c_new_tail, raref.flow, raref.sorption)
 
         if head_vel > tail_vel:
-            # Create modified rarefaction starting from collision point
-            try:
-                modified_raref = RarefactionWave(
-                    t_start=t_event,
-                    v_start=v_event,
-                    flow=raref.flow,
-                    c_head=raref.c_head,
-                    c_tail=c_new_tail,
-                    sorption=raref.sorption,
-                )
-            except ValueError:
-                # Rarefaction validation failed
-                shock.is_active = False
-                raref.is_active = False
-                return [new_shock]
-            else:
-                # Deactivate original waves
-                shock.is_active = False
-                raref.is_active = False
-
-                return [new_shock, modified_raref]
-        else:
-            # Rarefaction completely overtaken - only shock continues
+            # Create modified rarefaction starting from collision point.
+            # head_vel > tail_vel guarantees the constructor succeeds.
+            modified_raref = RarefactionWave(
+                t_start=t_event,
+                v_start=v_event,
+                flow=raref.flow,
+                c_head=raref.c_head,
+                c_tail=c_new_tail,
+                sorption=raref.sorption,
+            )
+            # Deactivate original waves
             shock.is_active = False
             raref.is_active = False
-            return [new_shock]
+            return [new_shock, modified_raref]
+        # Rarefaction completely overtaken (head_vel <= tail_vel) - only shock continues
+        shock.is_active = False
+        raref.is_active = False
+        return [new_shock]
 
     # boundary_type == 'head'
     # Rarefaction head catching shock
@@ -599,51 +572,87 @@ def handle_shock_rarefaction_collision(
 
 
 def handle_rarefaction_characteristic_collision(
-    raref: RarefactionWave,  # noqa: ARG001
+    raref: RarefactionWave,
     char: CharacteristicWave,
-    t_event: float,  # noqa: ARG001
-    v_event: float,  # noqa: ARG001
-    boundary_type: str | None,  # noqa: ARG001
+    t_event: float,
+    v_event: float,
+    boundary_type: str | None,
 ) -> list:
     """
     Handle rarefaction boundary intersecting with characteristic.
 
-    **SIMPLIFIED IMPLEMENTATION**: Just deactivates characteristic. See
-    FRONT_TRACKING_REBUILD_PLAN.md "Known Issues and Future Improvements"
-    Medium Priority #5.
+    Implements the safe option (b) of the front tracking rebuild plan: when a
+    characteristic intersects either boundary of a rarefaction, the
+    characteristic is absorbed into the rarefaction provided that the
+    characteristic's concentration matches the boundary concentration to
+    within a tight tolerance. If the concentrations differ by more than the
+    tolerance, deactivating the characteristic would silently destroy mass,
+    so an informative ``RuntimeError`` is raised instead.
+
+    The matching tolerance is based on the rarefaction's own concentration
+    range; characteristics that are tangent to (and therefore physically
+    indistinguishable from) the rarefaction boundary pass the check, while
+    truly distinct characteristics are flagged.
 
     Parameters
     ----------
     raref : RarefactionWave
-        Rarefaction wave
+        Rarefaction wave whose boundary the characteristic crosses.
     char : CharacteristicWave
-        Characteristic wave
+        Characteristic wave that intersects the rarefaction boundary.
     t_event : float
-        Time of collision [days]
+        Time of collision [days].
     v_event : float
-        Position of collision [m³]
-    boundary_type : str
-        Which boundary collided: 'head' or 'tail'
+        Position of collision [m^3].
+    boundary_type : str or None
+        Which boundary collided: ``'head'`` or ``'tail'``.
 
     Returns
     -------
     list
-        List of new waves created (currently always empty)
+        Empty list -- the characteristic is absorbed; no new waves are
+        created.
+
+    Raises
+    ------
+    RuntimeError
+        If the characteristic's concentration does not match the colliding
+        rarefaction boundary concentration within tolerance, indicating that
+        absorption would silently violate mass balance.
 
     Notes
     -----
-    This is a simplified implementation that deactivates the characteristic
-    without modifying the rarefaction structure.
-
-    Current implementation: deactivates characteristic, leaves rarefaction
-    unchanged.
-
-    **Future enhancement**: Should modify rarefaction head/tail concentration
-    to properly represent the wave structure instead of just absorbing the
-    characteristic.
+    Future enhancement: properly split the rarefaction at the collision
+    point and create new wave(s) representing the post-interaction state.
     """
-    # Simplified: characteristic gets absorbed into rarefaction
-    # More sophisticated: modify rarefaction boundaries
+    # Tolerance for treating the characteristic as tangent to the rarefaction
+    # boundary. We use a fraction of the rarefaction's concentration jump,
+    # falling back to an absolute tolerance when the rarefaction is very
+    # narrow.
+    rel_tol = 1e-9
+    abs_tol = 1e-12
+    raref_range = abs(raref.c_head - raref.c_tail)
+    tol = max(rel_tol * raref_range, abs_tol)
+
+    if boundary_type == "head":
+        boundary_c = raref.c_head
+    elif boundary_type == "tail":
+        boundary_c = raref.c_tail
+    else:
+        msg = f"handle_rarefaction_characteristic_collision: unknown boundary_type {boundary_type!r}"
+        raise RuntimeError(msg)
+
+    if abs(char.concentration - boundary_c) > tol:
+        msg = (
+            f"Rarefaction-characteristic collision at t={t_event:.6f}, V={v_event:.6f} would silently "
+            f"destroy mass: characteristic concentration {char.concentration:.6g} differs from "
+            f"rarefaction {boundary_type} concentration {boundary_c:.6g} by "
+            f"{abs(char.concentration - boundary_c):.3g} (tolerance {tol:.3g}). "
+            f"Proper wave splitting at the rarefaction boundary is required for this case."
+        )
+        raise RuntimeError(msg)
+
+    # Characteristic is tangent to rarefaction boundary -> safe to absorb.
     char.is_active = False
     return []
 
@@ -684,7 +693,11 @@ def handle_rarefaction_rarefaction_collision(
     Notes
     -----
     - Waves remain active so that concentration queries remain valid.
-    - The FrontTracker records the event in its diagnostics history.
+    - The FrontTracker records the event in its diagnostics history and also
+      adds the (raref1, raref2, boundary_type) tuple to a "handled" set so
+      that the same intersection is not rediscovered on subsequent event
+      sweeps (which would otherwise cause an infinite event loop because
+      this handler is a no-op).
     - This is consistent with the design goal of exact analytical
       computation while deferring complex topology changes.
     """
@@ -957,6 +970,7 @@ def handle_flow_change(
     t_change: float,
     flow_new: float,
     active_waves: list,
+    v_outlet: float,
 ) -> list:
     """
     Handle flow change event by recreating all active waves with new flow.
@@ -973,6 +987,13 @@ def handle_flow_change(
         New flow rate [m³/day]
     active_waves : list
         All currently active waves
+    v_outlet : float
+        Outlet position [m³]. Waves whose position at ``t_change`` is at or past
+        the outlet are left active (and not recreated): they no longer
+        participate in in-domain dynamics, but downstream queries
+        (``concentration_at_point``, ``identify_outlet_segments``) need them to
+        remain queryable so output bins covering ``t < t_change`` still see the
+        post-crossing concentration.
 
     Returns
     -------
@@ -986,7 +1007,13 @@ def handle_flow_change(
 
     Notes
     -----
-    Parent waves are deactivated by this handler.
+    Parent waves are deactivated by this handler ONLY when they are still
+    inside the domain at ``t_change``. Waves that have already crossed the
+    outlet are deliberately preserved as read-only history; deactivating them
+    would silently zero out output bins for any time before ``t_change`` that
+    was controlled by the now-deactivated wave (the replacement wave starts at
+    ``t_change`` with ``v_start`` at the wave's geometric position, which is
+    past the outlet, so it contributes nothing to those earlier bins).
 
     Physical interpretation:
     - Characteristics: velocity changes from flow_old/R(c) to flow_new/R(c)
@@ -998,7 +1025,10 @@ def handle_flow_change(
     ::
 
         new_waves = handle_flow_change(
-            t_change=10.0, flow_new=200.0, active_waves=[char1, shock1, raref1]
+            t_change=10.0,
+            flow_new=200.0,
+            active_waves=[char1, shock1, raref1],
+            v_outlet=500.0,
         )
         assert len(new_waves) == 3
         assert all(w.flow == 200.0 for w in new_waves)
@@ -1007,6 +1037,13 @@ def handle_flow_change(
 
     for wave in active_waves:
         if not wave.is_active:
+            continue
+
+        # Skip waves that have already crossed the outlet: they are no longer
+        # in the domain, the new flow does not affect them, and deactivating
+        # them would erase the history needed for output bins at t < t_change.
+        v_at_change = wave.position_at_time(t_change)
+        if v_at_change is not None and v_at_change >= v_outlet:
             continue
 
         # Create replacement wave with new flow BEFORE deactivating parent
@@ -1023,7 +1060,11 @@ def handle_flow_change(
 
         new_waves.append(new_wave)
 
-        # Deactivate parent wave AFTER recreation
+        # Deactivate parent wave AFTER recreation, but record t_change so the
+        # wave's geometry remains queryable for t in [t_start, t_change].
+        # Output bins ending before t_change need this history; without it,
+        # ``concentration_at_point`` would return zero for those bins.
+        wave.t_deactivated = t_change
         wave.is_active = False
 
     return new_waves
@@ -1151,22 +1192,18 @@ def create_inlet_waves_at_time(
         return [shock]
 
     if vel_new < vel_prev - 1e-15:  # Expansion
-        # New water is slower - will fall behind old water - create rarefaction
-        try:
-            raref = RarefactionWave(
-                t_start=t,
-                v_start=v_inlet,
-                flow=flow,
-                c_head=c_prev,  # Head (faster) is old water
-                c_tail=c_new,  # Tail (slower) is new water
-                sorption=sorption,
-            )
-        except ValueError:
-            # Rarefaction validation failed (e.g., head not faster than tail)
-            # This shouldn't happen if velocities were properly checked, but handle it
-            return []
-        else:
-            return [raref]
+        # New water is slower - will fall behind old water - create rarefaction.
+        # vel_prev > vel_new by at least 1e-15 (head c_prev faster than tail c_new),
+        # so the rarefaction constructor's head_velocity > tail_velocity check is satisfied.
+        raref = RarefactionWave(
+            t_start=t,
+            v_start=v_inlet,
+            flow=flow,
+            c_head=c_prev,  # Head (faster) is old water
+            c_tail=c_new,  # Tail (slower) is new water
+            sorption=sorption,
+        )
+        return [raref]
 
     # Same velocity - contact discontinuity
     # This only happens if R(c_new) == R(c_prev), which is rare
