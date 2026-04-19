@@ -287,6 +287,56 @@ def test_2d_x_edges():
     np.testing.assert_allclose(result, expected, rtol=1e-12)
 
 
+def test_linear_average_2d_y_data_basic():
+    """2D y_data computes the per-row average independently and matches looping."""
+    x_data = np.array([0.0, 1.0, 2.0, 3.0])
+    y_data_2d = np.array([
+        [0.0, 1.0, 1.0, 0.0],
+        [0.0, 2.0, 2.0, 0.0],
+        [1.0, 1.0, 1.0, 1.0],
+    ])
+    x_edges = np.array([0.0, 1.5, 3.0])
+
+    result = linear_average(x_data=x_data, y_data=y_data_2d, x_edges=x_edges)
+
+    # Compare to a loop over rows -- each row averaged independently.
+    expected = np.vstack([
+        linear_average(x_data=x_data, y_data=y_data_2d[i], x_edges=x_edges)[0] for i in range(y_data_2d.shape[0])
+    ])
+    np.testing.assert_allclose(result, expected, rtol=1e-12)
+    # Sanity check: row 2 is constant 1, so its average over any interval is 1.
+    np.testing.assert_allclose(result[2], 1.0, rtol=1e-12)
+
+
+def test_linear_average_2d_y_data_per_row_nan():
+    """2D y_data: a NaN in one row only marks bins of that row, not others."""
+    x_data = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    y_data_2d = np.array([
+        [0.0, 1.0, 2.0, 3.0, 4.0],  # ramp y = x
+        [0.0, 1.0, np.nan, 3.0, 4.0],  # NaN at x=2 in row 1 only
+    ])
+    x_edges = np.array([0.0, 1.0, 3.0, 4.0])
+
+    result = linear_average(x_data=x_data, y_data=y_data_2d, x_edges=x_edges)
+
+    # Row 0: y = x clean. Means over [0,1], [1,3], [3,4] are 0.5, 2.0, 3.5.
+    np.testing.assert_allclose(result[0], [0.5, 2.0, 3.5], rtol=1e-12)
+    # Row 1: bin [0, 1] does not touch any NaN segment -> finite. Bin [1, 3] does -> NaN.
+    # Bin [3, 4] does not -> finite (the NaN segment is [1,2] U [2,3]).
+    np.testing.assert_allclose(result[1, 0], 0.5, rtol=1e-12)
+    assert np.isnan(result[1, 1])
+    np.testing.assert_allclose(result[1, 2], 3.5, rtol=1e-12)
+
+
+def test_linear_average_2d_y_data_with_2d_x_edges_raises():
+    """Combining 2D y_data with 2D x_edges is intentionally unsupported."""
+    x_data = np.array([0.0, 1.0, 2.0])
+    y_data_2d = np.array([[0.0, 1.0, 2.0], [2.0, 1.0, 0.0]])
+    x_edges_2d = np.array([[0.0, 1.0, 2.0], [0.5, 1.0, 1.5]])
+    with pytest.raises(ValueError, match="Cannot combine 2D x_edges with 2D y_data"):
+        linear_average(x_data=x_data, y_data=y_data_2d, x_edges=x_edges_2d)
+
+
 def test_linear_average_straddling_bin_is_nan():
     """Bins partially outside the data range must be NaN, not biased low.
 

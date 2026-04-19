@@ -126,9 +126,11 @@ def test_retardation_factor(constant_flow_data):
     assert np.isnan(result_with_retardation[0, 0])
     assert np.isnan(result_with_retardation[0, 1])
 
-    # Later values should be valid
-    assert np.isclose(result_with_retardation[0, 2], 2 * result_no_retardation[0, 1])
-    assert np.isclose(result_with_retardation[0, 3], 2 * result_no_retardation[0, 2])
+    # Later values should be valid. With constant flow, retardation R = 2 must scale
+    # the mean residence time by exactly 2, since the underlying linear interpolation
+    # (and the linear average over output bins) is exact for piecewise-constant flow.
+    np.testing.assert_allclose(result_with_retardation[0, 2], 2 * result_no_retardation[0, 1], rtol=1e-12)
+    np.testing.assert_allclose(result_with_retardation[0, 3], 2 * result_no_retardation[0, 2], rtol=1e-12)
 
 
 def test_multiple_pore_volumes(constant_flow_data):
@@ -221,9 +223,15 @@ def test_negative_flow(constant_flow_data):
     assert np.all(np.isnan(result))
 
 
-def test_flow_variations(sample_flow_data):
-    """Test that residence times respond appropriately to flow variations."""
-    flow_values, flow_tedges = sample_flow_data
+def test_flow_variations(constant_flow_data):
+    """Doubling constant flow exactly halves the mean residence time.
+
+    Doubling a *variable* flow does not halve the residence time exactly (the inversion
+    V_p = integral Q ds rescales differently for non-constant Q). With *constant* flow,
+    doubling Q halves both the pointwise residence time and its bin average, so the
+    ratio must be 2.0 to machine precision wherever both are valid.
+    """
+    flow_values, flow_tedges = constant_flow_data
     double_flow = flow_values * 2
     tedges_out = pd.date_range(start="2023-01-04", end="2023-01-09", freq="1D")
     pore_volume = 100.0
@@ -244,13 +252,10 @@ def test_flow_variations(sample_flow_data):
         direction="extraction_to_infiltration",
     )
 
-    # Residence times should approximately halve with double flow
-    # We need to find positions where both results have valid values
     valid_mask = ~np.isnan(result1[0]) & ~np.isnan(result2[0])
-    if np.any(valid_mask):
-        ratio = result1[0, valid_mask] / result2[0, valid_mask]
-        # Allow for some numerical imprecision
-        assert np.all(np.isclose(ratio, 2.0, rtol=0.2))
+    assert np.any(valid_mask)
+    ratio = result1[0, valid_mask] / result2[0, valid_mask]
+    np.testing.assert_allclose(ratio, 2.0, rtol=1e-12)
 
 
 def test_output_tedges_alignment():

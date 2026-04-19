@@ -424,7 +424,7 @@ def bin_masses(*, alpha: float, beta: float, bin_edges: npt.ArrayLike) -> npt.ND
         msg = "Bin edges must be increasing"
         raise ValueError(msg)
     if np.any(bin_edges < 0):
-        msg = "Bin edges must be positive"
+        msg = "Bin edges must be non-negative"
         raise ValueError(msg)
     val = gammainc(alpha, bin_edges / beta)
     return val[1:] - val[:-1]
