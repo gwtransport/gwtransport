@@ -953,8 +953,10 @@ def test_infiltration_to_extraction_analytical_mass_conservation():
     valid_mask = ~np.isnan(cout)
     output_mass = np.sum(cout[valid_mask] * cout_flow[valid_mask] * dt)
 
-    # After A1 fix: flow-weighted normalization conserves mass to machine precision.
-    # The output window is wide enough to capture the entire pulse from all pore volumes.
+    # Mass is conserved to machine precision: per-streamtube row-normalization
+    # gives the exact mass-flux/water-flux ratio per streamtube, and the simple
+    # arithmetic average over equal-flow streamtubes preserves total mass when
+    # the output window captures the entire pulse from every pore-volume path.
     assert input_mass > 0
     mass_error = abs(output_mass - input_mass) / input_mass
     assert mass_error < 1e-12, f"Mass conservation error {mass_error:.2e} >= 1e-12"

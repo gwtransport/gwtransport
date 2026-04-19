@@ -1193,14 +1193,17 @@ def _flow_weighted_front_tracking_output(
     v_outlet: float,
     waves: list,
     sorption: SorptionModel,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
-    """Compute flow-weighted numerator and denominator per output bin from front tracking.
+) -> npt.NDArray[np.floating]:
+    """Compute flow-weighted bin-averaged concentration from front-tracking output.
 
     Splits output bins at flow boundaries so that Q is constant within each
-    sub-bin, then accumulates ``Σ(Q_k · c_k · dt_k)`` (numerator) and
-    ``Σ(Q_k · dt_k)`` (denominator) per output bin. The bin-averaged
-    concentration is ``numerator / denominator``. Returning the parts
-    separately allows callers to flow-weight across multiple pore volumes.
+    sub-bin, then combines sub-bins with flow-weighting:
+    ``c_avg = Σ(Q_k · c_k · dt_k) / Σ(Q_k · dt_k)``.
+
+    This is the per-streamtube outlet concentration for one pore volume:
+    mass flux divided by water flux for the streamtube's contribution to each
+    output bin. Aggregation across streamtubes is the caller's responsibility
+    (simple arithmetic mean over streamtubes — equal flow per streamtube).
 
     Parameters
     ----------
@@ -1219,10 +1222,8 @@ def _flow_weighted_front_tracking_output(
 
     Returns
     -------
-    numerator : ndarray
-        Per-bin ``Σ(Q_k · c_k · dt_k)``. Length = len(cout_tedges_days) - 1.
-    denominator : ndarray
-        Per-bin ``Σ(Q_k · dt_k)``. Length = len(cout_tedges_days) - 1.
+    ndarray
+        Flow-weighted bin-averaged concentrations. Length = len(cout_tedges_days) - 1.
     """
     # Merge cout edges with flow edges that fall within the cout range
     inner_flow_edges = flow_tedges_days[
@@ -1249,13 +1250,17 @@ def _flow_weighted_front_tracking_output(
     cout_bin_idx = np.searchsorted(cout_tedges_days[1:], fine_mids, side="left")
     cout_bin_idx = np.clip(cout_bin_idx, 0, len(cout_tedges_days) - 2)
 
-    # Vectorized accumulation per output bin
+    # Vectorized per-bin flow-weighted average:
+    # c_out[k] = sum_i (Q_i * c_i * dt_i) / sum_i (Q_i * dt_i) for fine sub-bins i in bin k
     n_cout = len(cout_tedges_days) - 1
     qdt_product = q_fine * dt_fine
     cqdt_product = c_fine * qdt_product
     denominator = np.bincount(cout_bin_idx, weights=qdt_product, minlength=n_cout).astype(np.float64)
     numerator = np.bincount(cout_bin_idx, weights=cqdt_product, minlength=n_cout).astype(np.float64)
-    return numerator, denominator
+    c_out = np.zeros(n_cout)
+    valid = denominator > 0
+    c_out[valid] = numerator[valid] / denominator[valid]
+    return c_out
 
 
 def infiltration_to_extraction_front_tracking(
@@ -1415,15 +1420,12 @@ def infiltration_to_extraction_front_tracking(
     t_ref = tedges[0]
     flow_tedges_days = ((tedges - t_ref) / pd.Timedelta(days=1)).values
 
-    # Loop over each pore volume, accumulating flow-weighted numerator/denominator
-    # across all pore volumes. This matches the convention in
-    # _infiltration_to_extraction_weights: each pore-volume path contributes
-    # proportionally to the volume of water it carries to each output bin.
-    n_cout = len(cout_tedges) - 1
-    accumulated_numerator = np.zeros(n_cout)
-    accumulated_denominator = np.zeros(n_cout)
+    # Each pore-volume bin from the gamma distribution is an equal-mass streamtube,
+    # so all streamtubes carry equal flow at the outlet. The bundle outlet
+    # concentration is the simple arithmetic mean over streamtubes.
+    cout_all = np.zeros((len(aquifer_pore_volumes), len(cout_tedges) - 1))
 
-    for aquifer_pore_volume in aquifer_pore_volumes:
+    for i, aquifer_pore_volume in enumerate(aquifer_pore_volumes):
         tracker = FrontTracker(
             cin=cin,
             flow=flow,
@@ -1434,7 +1436,7 @@ def infiltration_to_extraction_front_tracking(
 
         tracker.run(max_iterations=max_iterations)
 
-        numerator, denominator = _flow_weighted_front_tracking_output(
+        cout_all[i, :] = _flow_weighted_front_tracking_output(
             cout_tedges_days=cout_tedges_days,
             flow_tedges_days=flow_tedges_days,
             flow=flow,
@@ -1442,13 +1444,8 @@ def infiltration_to_extraction_front_tracking(
             waves=tracker.state.waves,
             sorption=sorption,
         )
-        accumulated_numerator += numerator
-        accumulated_denominator += denominator
 
-    cout = np.zeros(n_cout)
-    valid = accumulated_denominator > 0
-    cout[valid] = accumulated_numerator[valid] / accumulated_denominator[valid]
-    return cout
+    return np.mean(cout_all, axis=0)
 
 
 def infiltration_to_extraction_front_tracking_detailed(
@@ -1585,15 +1582,13 @@ def infiltration_to_extraction_front_tracking_detailed(
     t_ref = tedges[0]
     flow_tedges_days = ((tedges - t_ref) / pd.Timedelta(days=1)).values
 
-    # Loop over each pore volume, accumulating flow-weighted numerator/denominator
-    # across all pore volumes (matches A1 convention in
-    # _infiltration_to_extraction_weights).
-    n_cout = len(cout_tedges) - 1
-    accumulated_numerator = np.zeros(n_cout)
-    accumulated_denominator = np.zeros(n_cout)
+    # Each pore-volume bin from the gamma distribution is an equal-mass streamtube,
+    # so all streamtubes carry equal flow at the outlet. The bundle outlet
+    # concentration is the simple arithmetic mean over streamtubes.
+    cout_all = np.zeros((len(aquifer_pore_volumes), len(cout_tedges) - 1))
     structures = []
 
-    for aquifer_pore_volume in aquifer_pore_volumes:
+    for i, aquifer_pore_volume in enumerate(aquifer_pore_volumes):
         tracker = FrontTracker(
             cin=cin,
             flow=flow,
@@ -1604,7 +1599,7 @@ def infiltration_to_extraction_front_tracking_detailed(
 
         tracker.run(max_iterations=max_iterations)
 
-        numerator, denominator = _flow_weighted_front_tracking_output(
+        cout_all[i, :] = _flow_weighted_front_tracking_output(
             cout_tedges_days=cout_tedges_days,
             flow_tedges_days=flow_tedges_days,
             flow=flow,
@@ -1612,8 +1607,6 @@ def infiltration_to_extraction_front_tracking_detailed(
             waves=tracker.state.waves,
             sorption=sorption,
         )
-        accumulated_numerator += numerator
-        accumulated_denominator += denominator
 
         # Build detailed structure dict for this pore volume
         structure = {
@@ -1631,7 +1624,4 @@ def infiltration_to_extraction_front_tracking_detailed(
         }
         structures.append(structure)
 
-    cout = np.zeros(n_cout)
-    valid = accumulated_denominator > 0
-    cout[valid] = accumulated_numerator[valid] / accumulated_denominator[valid]
-    return cout, structures
+    return np.mean(cout_all, axis=0), structures
