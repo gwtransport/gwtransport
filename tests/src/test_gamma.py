@@ -91,7 +91,7 @@ def test_bins_basic(gamma_params):
     # Check if the sum of the expected value of each bin is equal to the expected value of the distribution (alpha * beta)
     expected_value_bins = np.sum(result["expected_values"] * result["probability_mass"])
     expected_value_gamma = gamma_params["alpha"] * gamma_params["beta"]
-    assert expected_value_gamma == expected_value_bins
+    np.testing.assert_allclose(expected_value_gamma, expected_value_bins, rtol=1e-12)
 
 
 def test_bins_expected_values(gamma_params):
@@ -618,6 +618,64 @@ def test_bins_loc_lower_bound_equals_loc():
     r = gamma_bins(alpha=3.0, beta=1.5, loc=loc, n_bins=10)
     assert r["lower_bound"][0] == loc
     assert r["edges"][0] == loc
+
+
+def test_bins_expected_values_against_scipy_quadrature():
+    """Validate ``gamma.bins()['expected_values']`` against scipy.stats.gamma.expect to machine precision.
+
+    ``gamma.bins`` uses the closed-form identity
+        E[X * 1_{a <= X < b}] = alpha * beta * (F_{alpha+1}(b/beta) - F_{alpha+1}(a/beta))
+    so the conditional mean within a bin is
+        E[X | a <= X < b] = alpha * beta * (CDF diff of Gamma(alpha+1, beta)) / P(a <= X < b)
+
+    Compared against scipy adaptive quadrature (``gamma.expect``), which is accurate to roughly
+    1e-8 absolute error by default. A coefficient swap such as ``alpha * beta`` -> ``alpha + beta``
+    would produce errors many orders of magnitude larger than the quadrature tolerance.
+    """
+    test_cases = [
+        # (alpha, beta, loc, n_bins / quantile_edges)
+        (0.5, 2.0, 0.0, 5),  # strong curvature
+        (1.0, 1.5, 0.0, 4),  # exponential
+        (2.5, 1.5, 0.0, 6),  # moderate
+        (5.0, 0.8, 0.0, 8),  # bell-shaped
+        (3.0, 2.0, 4.5, 7),  # shifted
+        (0.7, 3.0, 1.2, 5),  # shifted strong-curvature
+    ]
+    custom_quantile_edges = np.array([0.0, 0.1, 0.35, 0.6, 0.85, 1.0])
+
+    for alpha, beta, loc, n_bins in test_cases:
+        for edges_spec in (n_bins, custom_quantile_edges):
+            kwargs: dict = {"alpha": alpha, "beta": beta, "loc": loc}
+            if isinstance(edges_spec, int):
+                kwargs["n_bins"] = edges_spec
+            else:
+                kwargs["quantile_edges"] = edges_spec
+
+            result = gamma_bins(**kwargs)
+            edges = result["edges"]
+            expected_values = result["expected_values"]
+            probability_mass = result["probability_mass"]
+
+            dist = gamma_dist(alpha, scale=beta, loc=loc)
+            n = len(expected_values)
+            expected_quad = np.empty(n)
+            for i in range(n):
+                lo = edges[i]
+                hi = edges[i + 1] if np.isfinite(edges[i + 1]) else np.inf
+                # scipy.gamma.expect returns int_{lo}^{hi} x * f(x) dx (an unconditional integral).
+                unconditional_mean = dist.expect(lambda x: x, lb=lo, ub=hi, conditional=False)
+                expected_quad[i] = unconditional_mean / probability_mass[i]
+
+            # scipy.integrate.quad default tolerance is ~1.49e-8 absolute, which scales with the
+            # magnitude of the expected values. Use a comparable absolute tolerance.
+            atol = 1e-7 * max(1.0, np.abs(expected_values).max())
+            np.testing.assert_allclose(
+                expected_values,
+                expected_quad,
+                atol=atol,
+                rtol=1e-10,
+                err_msg=f"alpha={alpha}, beta={beta}, loc={loc}, edges_spec={edges_spec}",
+            )
 
 
 def test_bins_alpha_less_than_one_large_nbins():

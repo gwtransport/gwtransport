@@ -257,27 +257,19 @@ def residence_time_mean(
         a = flow_cum[None, :] - retardation_factor * aquifer_pore_volumes[:, None]
         days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
         data_edges = flow_tedges_days - days
-        # Process each pore volume (row) separately. Although linear_average supports 2D x_edges,
-        # our use case is different: multiple time series (different y_data) with same edges,
-        # rather than same time series with multiple edge sets.
-        data_avg = np.array([
-            linear_average(x_data=flow_tedges_days, y_data=y, x_edges=tedges_out_days)[0] for y in data_edges
-        ])
     elif direction == "infiltration_to_extraction":
         # In how many days the water that is infiltrated now be extracted
         a = flow_cum[None, :] + retardation_factor * aquifer_pore_volumes[:, None]
         days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
         data_edges = days - flow_tedges_days
-        # Process each pore volume (row) separately. Although linear_average supports 2D x_edges,
-        # our use case is different: multiple time series (different y_data) with same edges,
-        # rather than same time series with multiple edge sets.
-        data_avg = np.array([
-            linear_average(x_data=flow_tedges_days, y_data=y, x_edges=tedges_out_days)[0] for y in data_edges
-        ])
     else:
         msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
         raise ValueError(msg)
-    return data_avg
+
+    # Vectorized linear average across all pore volumes in one call. ``data_edges`` is 2D
+    # with shape (n_pore_volumes, n_flow_edges); each row shares the same x_data and the
+    # same x_edges. linear_average's 2D-y_data path handles per-row NaN segments cleanly.
+    return linear_average(x_data=flow_tedges_days, y_data=data_edges, x_edges=tedges_out_days)
 
 
 def fraction_explained(
@@ -397,8 +389,9 @@ def freundlich_retardation(
     Raises
     ------
     ValueError
-        If ``porosity`` is not in ``(0, 1)``, if ``bulk_density`` is not positive, or if
-        ``freundlich_k`` is negative.
+        If ``porosity`` is not in ``(0, 1)``, if ``bulk_density`` is not positive, if
+        ``freundlich_k`` is negative, or if any ``concentration`` is non-positive while
+        ``freundlich_n < 1`` (the retardation factor diverges as ``C -> 0``).
 
     See Also
     --------
@@ -431,7 +424,12 @@ def freundlich_retardation(
         msg = f"Freundlich K must be non-negative, got {freundlich_k}"
         raise ValueError(msg)
 
-    concentration_safe = np.maximum(concentration, 1e-12)  # Avoid zero concentration issues
-    return 1.0 + (bulk_density / porosity) * freundlich_k * freundlich_n * np.power(
-        concentration_safe, freundlich_n - 1
-    )
+    # For n < 1 the Freundlich retardation factor 1 + (rho_b/theta) * k_f * n * C^(n-1)
+    # diverges as C -> 0. Silently clamping concentration would produce a very large but
+    # finite value that depends on an arbitrary regularization constant; instead, refuse
+    # the call so the user can decide how to handle non-positive concentrations.
+    if freundlich_n < 1.0 and np.any(concentration <= 0):
+        msg = "concentration must be strictly positive when freundlich_n < 1 (retardation diverges as C -> 0)"
+        raise ValueError(msg)
+
+    return 1.0 + (bulk_density / porosity) * freundlich_k * freundlich_n * np.power(concentration, freundlich_n - 1)

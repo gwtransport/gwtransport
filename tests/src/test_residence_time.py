@@ -122,11 +122,13 @@ def test_retardation_factor():
         direction="extraction_to_infiltration",
     )
 
-    # Residence time should double with retardation factor of 2
+    # With constant flow, retardation factor R must scale residence time by exactly R.
+    # The linear-interpolation step on a piecewise-linear cumulative-flow curve is exact for
+    # constant flow, so the ratio is 2.0 to machine precision wherever both are valid.
     valid_mask = ~np.isnan(result_no_retardation[0]) & ~np.isnan(result_with_retardation[0])
-    if np.any(valid_mask):
-        ratio = result_with_retardation[0, valid_mask] / result_no_retardation[0, valid_mask]
-        assert np.allclose(ratio, 2.0, rtol=0.1)
+    assert np.any(valid_mask)
+    ratio = result_with_retardation[0, valid_mask] / result_no_retardation[0, valid_mask]
+    np.testing.assert_allclose(ratio, 2.0, rtol=1e-12)
 
 
 def test_custom_index():
@@ -299,10 +301,18 @@ def test_negative_flow():
     assert not np.all(np.isfinite(result))
 
 
-def test_flow_variations(sample_flow_data):
-    """Test that residence times respond appropriately to flow variations."""
-    flow_values, flow_tedges = sample_flow_data
-    pore_volume = 500.0  # Use a larger pore volume to get valid results
+def test_flow_variations(constant_flow_data):
+    """Doubling constant flow exactly halves the residence time.
+
+    With variable flow, doubling flow does *not* halve residence time exactly: the
+    inverse-cum-flow inversion satisfies V_p = integral_{t-tau}^{t} Q(s) ds, and
+    rescaling Q -> 2Q gives V_p = integral_{t-tau'}^{t} 2 * Q(s) ds, i.e. the new tau'
+    is the time over which the *original* Q integrates to V_p / 2 -- generally not
+    tau / 2. Only for constant Q is the relationship exact. This test therefore uses a
+    constant-flow fixture to enforce the exact halving to machine precision.
+    """
+    flow_values, flow_tedges = constant_flow_data
+    pore_volume = 200.0  # m³, gives valid results across the whole window
 
     result1 = residence_time(
         flow=flow_values,
@@ -318,13 +328,10 @@ def test_flow_variations(sample_flow_data):
         direction="extraction_to_infiltration",
     )
 
-    # Find positions where both results have valid values
     valid_mask = ~np.isnan(result1[0]) & ~np.isnan(result2[0])
-
-    if np.any(valid_mask):
-        # Residence times should approximately halve with double flow
-        ratio = result1[0, valid_mask] / result2[0, valid_mask]
-        assert np.allclose(ratio, 2.0, rtol=0.3)
+    assert np.any(valid_mask)
+    ratio = result1[0, valid_mask] / result2[0, valid_mask]
+    np.testing.assert_allclose(ratio, 2.0, rtol=1e-12)
 
 
 def test_consistency_between_timing_methods():
@@ -501,38 +508,130 @@ def test_freundlich_retardation_concentration_dependence():
     assert result[0] > result[1] > result[2]
 
     # Check exact values
-    expected = 1.0 + (rho_b / theta) * k_f * n * np.power(np.maximum(concentrations, 1e-12), n - 1)
+    expected = 1.0 + (rho_b / theta) * k_f * n * np.power(concentrations, n - 1)
     np.testing.assert_allclose(result, expected, rtol=1e-10)
 
 
-def test_variable_flow_residence_time_analytical():
-    """Test residence_time with linearly increasing flow against analytical solution.
+def test_freundlich_retardation_zero_concentration_n_lt_one_raises():
+    """For n < 1 the retardation factor diverges as C -> 0; non-positive C must raise."""
+    # Zero concentration with n < 1: must raise
+    with pytest.raises(ValueError, match="concentration must be strictly positive when freundlich_n < 1"):
+        freundlich_retardation(
+            concentration=np.array([0.0, 1.0]),
+            freundlich_k=0.5,
+            freundlich_n=0.7,
+            bulk_density=1500.0,
+            porosity=0.3,
+        )
 
-    For Q(t) = q0 + a*t, cumulative volume V(t) = q0*t + a*t²/2.
-    Residence time tau satisfies V(t) - V(t-tau) = V_p.
+    # Negative concentration with n < 1: must raise
+    with pytest.raises(ValueError, match="concentration must be strictly positive when freundlich_n < 1"):
+        freundlich_retardation(
+            concentration=np.array([-0.1, 1.0]),
+            freundlich_k=0.5,
+            freundlich_n=0.7,
+            bulk_density=1500.0,
+            porosity=0.3,
+        )
+
+
+def test_freundlich_retardation_zero_concentration_n_geq_one_allowed():
+    """For n >= 1 the retardation factor is finite at C = 0 (or constant for n = 1); must not raise."""
+    # n = 1 -> retardation factor independent of C
+    result = freundlich_retardation(
+        concentration=np.array([0.0, 1.0, 2.0]),
+        freundlich_k=0.5,
+        freundlich_n=1.0,
+        bulk_density=1500.0,
+        porosity=0.3,
+    )
+    expected_constant = 1.0 + (1500.0 / 0.3) * 0.5 * 1.0
+    np.testing.assert_allclose(result, expected_constant, rtol=1e-12)
+
+    # n > 1 -> retardation factor equals 1 at C = 0
+    result = freundlich_retardation(
+        concentration=np.array([0.0, 1.0]),
+        freundlich_k=0.5,
+        freundlich_n=1.5,
+        bulk_density=1500.0,
+        porosity=0.3,
+    )
+    np.testing.assert_allclose(result[0], 1.0, rtol=1e-12)
+
+
+def test_variable_flow_residence_time_analytical():
+    """Test ``residence_time`` against an exact analytical residence time for variable flow.
+
+    For piecewise-constant flow ``flow[i]`` over time bins of width ``dt``, sample the rate
+    ``Q(t) = q0 + a * t`` at bin midpoints (``flow[i] = q0 + a * (i + 0.5) * dt``). Then the
+    function's cumulative-flow curve, evaluated at ``index = flow_tedges`` (i.e. integer
+    edge times), is exact for the piecewise-constant flow profile -- there is no bin-center
+    interpolation error. The analytical residence time ``tau`` at extraction time
+    ``t_index = N * dt`` is recovered exactly by accumulating bin volumes backward in time
+    until ``V_p`` is exhausted, then taking the partial bin contribution. This matches the
+    function's internal inversion to machine precision.
+
+    Note: comparing against the *continuous* analytical solution
+    ``V(t) - V(t - tau) = V_p`` with ``V(t) = q0 * t + a / 2 * t^2`` would only be accurate
+    to ``O(a * dt^2 / Q)`` because the function's piecewise-linear V differs from the
+    continuous quadratic V on the open intervals. Since the goal of this test is to validate
+    the function rather than the discretization, we compare to the function's exact
+    residence time given its piecewise-constant flow, computed via direct backward bin
+    accumulation.
     """
     q0 = 100.0  # m³/day
-    a = 2.0  # m³/day²  (flow increase rate)
+    a = 2.0  # m³/day²
     n_days = 200
     pore_volume = 500.0  # m³
+    dt = 1.0  # day
 
     flow_tedges = pd.date_range(start="2023-01-01", periods=n_days + 1, freq="D")
     t_days = np.arange(n_days, dtype=float)
-    flow_values = q0 + a * (t_days + 0.5)  # midpoint flow
+    flow_values = q0 + a * (t_days + 0.5) * dt  # midpoint sampling of the linear ramp
 
+    # Evaluate at flow_tedges (integer edge times) -- avoids the bin-center interpolation
+    # path and keeps the test exact w.r.t. the function's piecewise-constant flow.
     result = residence_time(
         flow=flow_values,
         flow_tedges=flow_tedges,
         aquifer_pore_volumes=pore_volume,
+        index=flow_tedges,
         direction="extraction_to_infiltration",
     )
 
-    # For constant flow q0=100, tau = V_p/Q = 500/100 = 5 days
-    # With increasing flow, tau should be slightly less than 5 days
-    # (more recent water had higher flow)
-    valid = ~np.isnan(result[0])
+    # Closed-form continuous-Q residence time, used only as a sanity check for monotonicity
+    # and ordering, not for the precision comparison.
+    t_ext = np.arange(n_days + 1, dtype=float)
+    disc = (q0 + a * t_ext) ** 2 - 2.0 * a * pore_volume
+    tau_continuous = np.full_like(t_ext, np.nan)
+    valid_disc = disc >= 0
+    tau_continuous[valid_disc] = ((q0 + a * t_ext[valid_disc]) - np.sqrt(disc[valid_disc])) / a
+
+    # Exact analytical residence time for the piecewise-constant flow profile and
+    # integer-endpoint extraction times. Walk backward bin-by-bin until V_p is exhausted.
+    cum_flow = np.concatenate(([0.0], np.cumsum(flow_values * dt)))  # V at edges 0, 1, ..., N
+
+    tau_exact = np.full(n_days + 1, np.nan)
+    for i in range(n_days + 1):
+        target = cum_flow[i] - pore_volume
+        if target < 0:
+            continue  # not enough cumulative flow yet -> NaN
+        # Find the bin index k such that cum_flow[k] <= target < cum_flow[k+1].
+        k = int(np.searchsorted(cum_flow, target, side="right") - 1)
+        # Partial position within bin k (in days from start of bin k).
+        partial = (target - cum_flow[k]) / flow_values[k]
+        s_back = k + partial  # days since simulation start
+        tau_exact[i] = i - s_back  # both in days
+
+    valid = ~np.isnan(result[0]) & ~np.isnan(tau_exact)
     assert np.any(valid)
 
-    # Residence time should be close to V_p / mean_flow but not exact
-    mean_rt = np.mean(result[0, valid])
-    assert mean_rt < pore_volume / q0  # Less than V_p/q0 since flow increases
+    # Function output must equal the bin-by-bin exact solution to machine precision.
+    np.testing.assert_allclose(result[0, valid], tau_exact[valid], rtol=1e-12)
+
+    # Sanity check: the discrete solution agrees with the continuous one to within the
+    # expected discretization error a * dt^2 / (8 * Q_min).
+    q_min = float(np.min(flow_values))
+    bias_bound = a * dt**2 / (8.0 * q_min)
+    valid_cont = valid & ~np.isnan(tau_continuous)
+    np.testing.assert_allclose(tau_exact[valid_cont], tau_continuous[valid_cont], atol=bias_bound, rtol=1e-3)

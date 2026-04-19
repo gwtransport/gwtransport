@@ -285,17 +285,24 @@ def linear_average(
     Parameters
     ----------
     x_data : array-like
-        x-coordinates of the time series data points, must be in ascending order
+        x-coordinates of the time series data points, must be in ascending order.
     y_data : array-like
-        y-coordinates of the time series data points
+        y-coordinates of the time series data points. Can be 1D or 2D.
+
+        - If 1D: shape ``(n_data,)`` -- a single series.
+        - If 2D: shape ``(n_series_y, n_data)`` -- multiple series sharing the same
+          ``x_data``. The leading axis is averaged independently per row. Cannot be
+          combined with 2D ``x_edges`` (each row of ``x_edges`` and each row of
+          ``y_data`` would otherwise have to broadcast against each other, which is
+          not supported).
     x_edges : array-like
-        x-coordinates of the integration edges. Can be 1D or 2D.
-        - If 1D: shape (n_edges,). Can be 1D or 2D.
-        - If 1D: shape (n_edges,), must be in ascending order
-        - If 2D: shape (n_series, n_edges), each row must be in ascending order
-        - If 2D: shape (n_series, n_edges), each row must be in ascending order
+        x-coordinates of the integration edges.
+
+        - If 1D: shape ``(n_edges,)``, must be in ascending order.
+        - If 2D: shape ``(n_series_x, n_edges)``, each row must be in ascending order.
     extrapolate_method : str, optional
         Method for handling extrapolation. Default is 'nan'.
+
         - 'outer': Extrapolate using the outermost data points.
         - 'nan': Extrapolate using np.nan.
         - 'raise': Raise an error for out-of-bounds values.
@@ -304,17 +311,19 @@ def linear_average(
     -------
     numpy.ndarray
         2D array of average values between consecutive pairs of x_edges.
-        Shape is (n_series, n_bins) where n_bins = n_edges - 1.
-        If x_edges is 1D, n_series = 1.
+        Shape is ``(n_series, n_bins)`` where ``n_bins = n_edges - 1`` and
+        ``n_series = max(n_series_x, n_series_y)``. Both ``x_edges`` and ``y_data``
+        being 1D yields ``n_series = 1``.
 
     Raises
     ------
     ValueError
-        If ``x_edges`` is not 1D or 2D. If ``x_data`` and ``y_data`` have different
-        lengths or are empty. If ``x_edges`` has fewer than 2 values per row. If
-        ``x_data`` is not in ascending order. If ``x_edges`` rows are not in ascending
-        order. If ``extrapolate_method`` is ``'raise'`` and any edge falls outside the
-        data range.
+        If ``x_edges`` is not 1D or 2D. If ``y_data`` is not 1D or 2D. If both
+        ``x_edges`` and ``y_data`` are 2D. If ``x_data`` and ``y_data`` have
+        incompatible shapes or are empty. If ``x_edges`` has fewer than 2 values per
+        row. If ``x_data`` is not in ascending order. If ``x_edges`` rows are not in
+        ascending order. If ``extrapolate_method`` is ``'raise'`` and any edge falls
+        outside the data range.
 
     Examples
     --------
@@ -332,6 +341,13 @@ def linear_average(
     >>> linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges_2d)
     array([[0.66666667, 0.66666667],
            [0.91666667, 0.5       ]])
+
+    Multiple y-series with shared x_data and x_edges:
+
+    >>> y_data_2d = [[0, 1, 1, 0], [0, 2, 2, 0]]
+    >>> linear_average(x_data=x_data, y_data=y_data_2d, x_edges=x_edges)
+    array([[0.66666667, 0.66666667],
+           [1.33333333, 1.33333333]])
     """
     # Convert inputs to numpy arrays
     x_data = np.asarray(x_data, dtype=float)
@@ -345,8 +361,25 @@ def linear_average(
         msg = "x_edges must be 1D or 2D array"
         raise ValueError(msg)
 
+    # Ensure y_data is always 2D internally with shape (n_series_y, n_data)
+    if y_data.ndim == 1:
+        y_data = y_data[np.newaxis, :]
+    elif y_data.ndim != 2:  # noqa: PLR2004
+        msg = "y_data must be 1D or 2D array"
+        raise ValueError(msg)
+
+    # 2D y_data requires 1D x_edges (no per-row x_edges allowed). The combination would
+    # require an outer product over (n_series_x, n_series_y), which is intentionally
+    # not supported -- callers can loop or stack instead.
+    n_series_x = x_edges.shape[0]
+    n_series_y = y_data.shape[0]
+    if n_series_x > 1 and n_series_y > 1:
+        msg = "Cannot combine 2D x_edges with 2D y_data"
+        raise ValueError(msg)
+    n_series = max(n_series_x, n_series_y)
+
     # Input validation
-    if len(x_data) != len(y_data) or len(x_data) == 0:
+    if y_data.shape[1] != x_data.shape[0] or x_data.shape[0] == 0:
         msg = "x_data and y_data must have the same length and be non-empty"
         raise ValueError(msg)
     if x_edges.shape[1] < 2:  # noqa: PLR2004
@@ -359,17 +392,24 @@ def linear_average(
         msg = "x_edges must be in ascending order along each row"
         raise ValueError(msg)
 
-    # Filter out NaN values
-    show = ~np.isnan(x_data) & ~np.isnan(y_data)
+    # Filter out NaN values. With 2D y_data, a column is dropped only when all rows
+    # have NaN there; per-row NaNs are handled via segment masking below so that one
+    # series' NaNs do not contaminate the others.
+    x_nan = np.isnan(x_data)
+    y_any_finite = np.any(~np.isnan(y_data), axis=0)
+    show = ~x_nan & y_any_finite
     if show.sum() < 2:  # noqa: PLR2004
         if show.sum() == 1 and extrapolate_method == "outer":
-            # For single data point with outer extrapolation, use constant value
-            constant_value = y_data[show][0]
-            return np.full(shape=(x_edges.shape[0], x_edges.shape[1] - 1), fill_value=constant_value)
-        return np.full(shape=(x_edges.shape[0], x_edges.shape[1] - 1), fill_value=np.nan)
+            # For a single retained data point with outer extrapolation, use the
+            # row-wise value broadcast across all output bins.
+            constant_value = y_data[:, show][:, 0]  # shape (n_series_y,)
+            return np.broadcast_to(constant_value[:, None], (n_series, x_edges.shape[1] - 1)).astype(
+                np.float64, copy=True
+            )
+        return np.full(shape=(n_series, x_edges.shape[1] - 1), fill_value=np.nan)
 
     x_data_clean = x_data[show]
-    y_data_clean = y_data[show]
+    y_data_clean = y_data[:, show]  # shape (n_series_y, n_clean)
 
     # Handle extrapolation for all series at once (vectorized)
     if extrapolate_method == "outer":
@@ -385,19 +425,44 @@ def linear_average(
     # Create a combined grid of all unique x points (data + all edges)
     all_unique_x = np.unique(np.concatenate([x_data_clean, edges_processed.ravel()]))
 
-    # Interpolate y values at all unique x points once
-    all_unique_y_result = np.interp(all_unique_x, x_data_clean, y_data_clean, left=np.nan, right=np.nan)
-    # Ensure it's an array for type checker
-    all_unique_y: npt.NDArray[np.float64] = np.asarray(all_unique_y_result, dtype=np.float64)
+    # Interpolate y values at all unique x points once. For 2D y_data we vectorize
+    # the linear interpolation manually since np.interp does not accept 2D y.
+    if n_series_y == 1:
+        all_unique_y_result = np.interp(all_unique_x, x_data_clean, y_data_clean[0], left=np.nan, right=np.nan)
+        all_unique_y: npt.NDArray[np.float64] = np.asarray(all_unique_y_result, dtype=np.float64)[np.newaxis, :]
+    else:
+        # Locate each query x in x_data_clean. For x within the data range, idx is in
+        # [1, len(x_data_clean) - 1] so left_idx = idx - 1 is the bracketing left index.
+        idx = np.searchsorted(x_data_clean, all_unique_x).clip(1, len(x_data_clean) - 1)
+        left_idx = idx - 1
+        right_idx = idx
+        x_left = x_data_clean[left_idx]
+        x_right = x_data_clean[right_idx]
+        denom = x_right - x_left
+        # Detect query points coincident with an x_data point. Handling them via a
+        # direct lookup avoids the IEEE 754 trap where NaN * 0 = NaN, which would
+        # otherwise contaminate exact-endpoint queries adjacent to a NaN sample.
+        on_left_node = denom == 0  # only happens if x_left == x_right (duplicate)
+        weights = np.where(on_left_node, 0.0, (all_unique_x - x_left) / np.where(on_left_node, 1.0, denom))
+        all_unique_y = y_data_clean[:, left_idx] * (1.0 - weights) + y_data_clean[:, right_idx] * weights
+        # Override at exact x_data positions to avoid NaN * 0 contamination.
+        is_left_match = all_unique_x == x_left
+        is_right_match = all_unique_x == x_right
+        all_unique_y[:, is_left_match] = y_data_clean[:, left_idx[is_left_match]]
+        all_unique_y[:, is_right_match] = y_data_clean[:, right_idx[is_right_match]]
+        # Mark out-of-range query points as NaN (matches np.interp(left=nan, right=nan)).
+        out_of_range = (all_unique_x < x_data_clean[0]) | (all_unique_x > x_data_clean[-1])
+        all_unique_y[:, out_of_range] = np.nan
 
     # Compute cumulative integrals once using trapezoidal rule.
-    # Segments outside the data range carry NaN (from np.interp with left/right=NaN);
+    # Segments outside the data range carry NaN (from the interp step with left/right=NaN);
     # those NaNs will be masked out later via the bin-range check, so we suppress
     # them here only to keep the cumulative sum finite for in-range bins.
     dx = np.diff(all_unique_x)
-    y_avg = (all_unique_y[:-1] + all_unique_y[1:]) / 2
-    segment_integrals = np.where(np.isnan(y_avg), 0.0, dx * y_avg)
-    cumulative_integral = np.concatenate([[0.0], np.cumsum(segment_integrals)])
+    y_avg = (all_unique_y[:, :-1] + all_unique_y[:, 1:]) / 2
+    segment_integrals = np.where(np.isnan(y_avg), 0.0, dx[np.newaxis, :] * y_avg)
+    # Cumulative integral with leading 0 along the x axis.
+    cumulative_integral = np.concatenate([np.zeros((y_avg.shape[0], 1)), np.cumsum(segment_integrals, axis=1)], axis=1)
 
     # Vectorized computation for all series
     # Find indices of all edges in the combined grid
@@ -405,24 +470,50 @@ def linear_average(
     # Ensure it's a 2D array for type checker
     edge_indices: npt.NDArray[np.intp] = np.asarray(edge_indices_result, dtype=np.intp).reshape(edges_processed.shape)
 
-    # Compute integral between consecutive edges for all series (vectorized)
-    integral_values = cumulative_integral[edge_indices[:, 1:]] - cumulative_integral[edge_indices[:, :-1]]
+    # Compute integral between consecutive edges. Broadcast over n_series via the leading axis
+    # of cumulative_integral. edge_indices is (n_series_x, n_bins+1); cumulative_integral is
+    # (n_series_y, n_unique_x). We rely on n_series_x == 1 or n_series_y == 1 (enforced above).
+    integral_values = cumulative_integral[:, edge_indices[:, 1:]] - cumulative_integral[:, edge_indices[:, :-1]]
+    # integral_values has shape (n_series_y, n_series_x, n_bins). Squeeze the singleton.
+    integral_values_2d = integral_values[0] if n_series_y == 1 else integral_values[:, 0, :]
 
     # Compute widths between consecutive edges for all series (vectorized)
-    edge_widths = np.diff(edges_processed, axis=1)
+    edge_widths = np.diff(edges_processed, axis=1)  # shape (n_series_x, n_bins)
+    # Broadcast widths to match (n_series, n_bins)
+    edge_widths_b = np.broadcast_to(edge_widths, (n_series, edge_widths.shape[1])) if n_series_y > 1 else edge_widths
 
     # Handle zero-width intervals (vectorized)
-    zero_width_mask = edge_widths == 0
-    result = np.zeros_like(edge_widths)
+    zero_width_mask = edge_widths_b == 0
+    result = np.zeros_like(edge_widths_b, dtype=np.float64)
 
     # For non-zero width intervals, compute average = integral / width (vectorized)
     non_zero_mask = ~zero_width_mask
-    result[non_zero_mask] = integral_values[non_zero_mask] / edge_widths[non_zero_mask]
+    result[non_zero_mask] = integral_values_2d[non_zero_mask] / edge_widths_b[non_zero_mask]
 
     # For zero-width intervals, interpolate y-value directly (vectorized)
     if np.any(zero_width_mask):
-        zero_width_positions = edges_processed[:, :-1][zero_width_mask]
-        result[zero_width_mask] = np.interp(zero_width_positions, x_data_clean, y_data_clean)
+        # Positions where zero width occurs; use the left edge's x position.
+        if n_series_y == 1:
+            zero_positions = edges_processed[:, :-1][zero_width_mask]  # 1D
+            result[zero_width_mask] = np.interp(zero_positions, x_data_clean, y_data_clean[0])
+        else:
+            # zero_width_mask has shape (n_series_y, n_bins); positions vary per row.
+            # edges_processed is (1, n_bins+1) here since n_series_x == 1.
+            edges_left = np.broadcast_to(edges_processed[:, :-1], (n_series, edge_widths.shape[1]))
+            zero_positions = edges_left[zero_width_mask]
+            # Interpolate per series using the same x_data_clean. Find bracketing indices
+            # for each zero-width position, then index into the appropriate y row.
+            # Get the row index for each zero-width entry.
+            row_idx_grid = np.broadcast_to(np.arange(n_series)[:, None], (n_series, edge_widths.shape[1]))
+            zero_rows = row_idx_grid[zero_width_mask]
+            idx_z = np.searchsorted(x_data_clean, zero_positions).clip(1, len(x_data_clean) - 1)
+            xl = x_data_clean[idx_z - 1]
+            xr = x_data_clean[idx_z]
+            denom_z = np.where(xr == xl, 1.0, xr - xl)
+            w_z = (zero_positions - xl) / denom_z
+            yl = y_data_clean[zero_rows, idx_z - 1]
+            yr = y_data_clean[zero_rows, idx_z]
+            result[zero_width_mask] = yl * (1.0 - w_z) + yr * w_z
 
     # Handle extrapolation when 'nan' method is used (vectorized).
     # Bins must lie entirely within the data range; bins partially outside
@@ -431,7 +522,23 @@ def linear_average(
     # average low. Bins fully outside are likewise NaN.
     if extrapolate_method == "nan":
         bins_within_range = (x_edges[:, :-1] >= x_data_clean[0]) & (x_edges[:, 1:] <= x_data_clean[-1])
+        if n_series_y > 1:
+            bins_within_range = np.broadcast_to(bins_within_range, (n_series, bins_within_range.shape[1]))
         result[~bins_within_range] = np.nan
+
+        # With 2D y_data, propagate per-row NaNs from the y series itself: any output bin
+        # that touches an x_data segment with NaN y in this row must be NaN. Per-row NaN
+        # info is preserved in all_unique_y; mark bins whose [edge_left, edge_right]
+        # contains a NaN segment for this row.
+        if n_series_y > 1:
+            # For each unique-x segment, is it NaN in this row?
+            seg_nan = np.isnan(y_avg)  # shape (n_series_y, n_unique_x - 1)
+            # A bin spans segments [edge_indices[0, b], edge_indices[0, b+1])
+            # For each row, count NaN segments per bin via cumulative sums.
+            seg_nan_cum = np.concatenate([np.zeros((n_series_y, 1)), np.cumsum(seg_nan, axis=1)], axis=1)
+            nan_count_per_bin = seg_nan_cum[:, edge_indices[0, 1:]] - seg_nan_cum[:, edge_indices[0, :-1]]
+            row_has_nan_in_bin = nan_count_per_bin > 0
+            result[row_has_nan_in_bin] = np.nan
 
     return result
 
