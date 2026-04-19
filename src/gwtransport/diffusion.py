@@ -47,7 +47,6 @@ import warnings
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from numpy.typing import NDArray
 from scipy import special
 
 from gwtransport import gamma
@@ -62,11 +61,11 @@ _GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(16)
 
 
 def _erf_integral_space(
-    x: NDArray[np.float64],
+    x: npt.NDArray[np.float64],
     diffusivity: npt.ArrayLike,
-    t: NDArray[np.float64],
+    t: npt.NDArray[np.float64],
     clip_to_inf: float = 6.0,
-) -> NDArray[np.float64]:
+) -> npt.NDArray[np.float64]:
     """Compute the integral of the error function at each (x[i], t[i], D[i]) point.
 
     This function computes the integral of erf from 0 to x[i] at time t[i],
@@ -138,17 +137,17 @@ def _erf_integral_space(
 
 def _erf_mean_volume(
     *,
-    step_widths: NDArray[np.float64],
-    raw_time: NDArray[np.float64],
-    rt_at_cin_edges: NDArray[np.float64],
-    diffusivity: NDArray[np.float64],
-    cumulative_volume_at_cout_tedges: NDArray[np.float64],
-    cumulative_volume_at_cin_tedges: NDArray[np.float64],
-    tedges_days: NDArray[np.float64],
+    step_widths: npt.NDArray[np.float64],
+    raw_time: npt.NDArray[np.float64],
+    rt_at_cin_edges: npt.NDArray[np.float64],
+    diffusivity: npt.NDArray[np.float64],
+    cumulative_volume_at_cout_tedges: npt.NDArray[np.float64],
+    cumulative_volume_at_cin_tedges: npt.NDArray[np.float64],
+    tedges_days: npt.NDArray[np.float64],
     r_vpv: float,
     streamline_len: float,
     asymptotic_cutoff_sigma: float | None,
-) -> NDArray[np.float64]:
+) -> npt.NDArray[np.float64]:
     r"""Compute mean erf along the physical trajectory in cumulative volume space.
 
     For each cell (cout_bin *i*, cin_edge *j*), computes the flow-weighted

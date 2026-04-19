@@ -102,10 +102,12 @@ class TestInfiltrationToExtractionDiffusion:
             molecular_diffusivity=0.01,
             longitudinal_dispersivity=0.0,
         )
-        # Should be close but not identical
-        # Use atol for near-zero values where rtol would be too strict
+        # With D_m=0.01 m²/day and tau=5 days, the spatial spreading is
+        # sqrt(2*D_m*tau) ≈ 0.32 m on a 100 m streamline (< 0.4% of domain).
+        # Use atol since cin contains step transitions where the diffused
+        # values cross zero — rtol is meaningless near-zero.
         valid = ~np.isnan(cout_advection) & ~np.isnan(cout_diffusion)
-        np.testing.assert_allclose(cout_advection[valid], cout_diffusion[valid], rtol=0.1, atol=0.01)
+        np.testing.assert_allclose(cout_advection[valid], cout_diffusion[valid], atol=0.01)
 
     def test_larger_diffusivity_more_spreading(self, simple_setup):
         """Test that larger diffusivity causes more spreading."""
@@ -118,7 +120,6 @@ class TestInfiltrationToExtractionDiffusion:
             streamline_length=simple_setup["streamline_length"],
             molecular_diffusivity=0.1,
             longitudinal_dispersivity=0.0,
-            retardation_factor=2.0,
         )
         cout_large_d = infiltration_to_extraction(
             cin=simple_setup["cin"],
@@ -130,12 +131,20 @@ class TestInfiltrationToExtractionDiffusion:
             molecular_diffusivity=10.0,
             longitudinal_dispersivity=0.0,
         )
-        # With larger diffusivity, the breakthrough curve should be more spread out
-        # This means the maximum should be lower and the tails should be higher
+        # With larger diffusivity, the breakthrough curve should be more spread out.
+        # Both peaks saturate at the input plateau (1.0), so compare the variance
+        # of the breakthrough — wider spreading produces larger variance about
+        # the centre of mass of the breakthrough.
         valid = ~np.isnan(cout_small_d) & ~np.isnan(cout_large_d)
-        max_small = np.max(cout_small_d[valid])
-        max_large = np.max(cout_large_d[valid])
-        assert max_large <= max_small  # More spreading = lower peak
+        idx = np.arange(len(cout_small_d))[valid]
+        small = cout_small_d[valid]
+        large = cout_large_d[valid]
+        # Centre of mass and second moment of each breakthrough
+        com_small = np.sum(idx * small) / np.sum(small)
+        com_large = np.sum(idx * large) / np.sum(large)
+        var_small = np.sum((idx - com_small) ** 2 * small) / np.sum(small)
+        var_large = np.sum((idx - com_large) ** 2 * large) / np.sum(large)
+        assert var_large > var_small  # More spreading = larger variance
 
     def test_output_bounded_by_input(self, simple_setup):
         """Test that output concentrations are bounded by input range."""
@@ -212,6 +221,53 @@ class TestInfiltrationToExtractionDiffusion:
         # Output should be bounded
         assert np.all(cout[valid] >= 0.0 - 1e-10)
         assert np.all(cout[valid] <= 1.0 + 1e-10)
+
+    def test_heterogeneous_streamline_length(self):
+        """Heterogeneous L (per-streamtube) yields distinct breakthrough vs single mean L.
+
+        Per-streamtube L allows residence time tau = V_p / Q to be paired with
+        the corresponding L for diffusion variance sigma^2 = 2*D*tau*L^2 in
+        spatial form. A single mean L applied to all streamtubes loses this
+        coupling, so the breakthrough should differ when V_p and L vary.
+        """
+        tedges = pd.date_range(start="2020-01-01", end="2020-02-01", freq="D")
+        cout_tedges = pd.date_range(start="2020-01-01", end="2020-02-15", freq="D")
+
+        cin = np.zeros(len(tedges) - 1)
+        cin[0:5] = 1.0
+        flow = np.ones(len(tedges) - 1) * 100.0
+
+        aquifer_pore_volumes = np.array([400.0, 500.0, 600.0])
+        streamline_length_hetero = np.array([80.0, 100.0, 120.0])
+        # Single mean L applied to all streamtubes
+        streamline_length_single = np.full(3, np.mean(streamline_length_hetero))
+
+        kwargs = {
+            "cin": cin,
+            "flow": flow,
+            "tedges": tedges,
+            "cout_tedges": cout_tedges,
+            "aquifer_pore_volumes": aquifer_pore_volumes,
+            "molecular_diffusivity": 1.0,
+            "longitudinal_dispersivity": 0.0,
+        }
+
+        cout_hetero = infiltration_to_extraction(streamline_length=streamline_length_hetero, **kwargs)
+        cout_single = infiltration_to_extraction(streamline_length=streamline_length_single, **kwargs)
+
+        # Both should be valid and bounded
+        valid = ~np.isnan(cout_hetero) & ~np.isnan(cout_single)
+        assert np.sum(valid) > 0
+        assert np.all(cout_hetero[valid] >= -1e-10)
+        assert np.all(cout_single[valid] >= -1e-10)
+
+        # Heterogeneous and single-L results should be physically distinct,
+        # demonstrating the per-streamtube L coupling matters.
+        assert not np.allclose(cout_hetero[valid], cout_single[valid], atol=1e-3)
+
+        # Both outputs should be bounded by the input range (convex combination).
+        assert np.all(cout_hetero[valid] <= np.max(cin) + 1e-10)
+        assert np.all(cout_single[valid] <= np.max(cin) + 1e-10)
 
     def test_input_validation(self, simple_setup):
         """Test that invalid inputs raise appropriate errors."""
@@ -344,7 +400,7 @@ class TestInfiltrationToExtractionDiffusionPhysics:
 
         # Mass is conserved: the forward matrix rows sum to 1 for fully
         # resolved bins, and the cout grid extends beyond all breakthrough.
-        assert abs(mass_out - mass_in) / mass_in < 1e-10
+        np.testing.assert_allclose(mass_out, mass_in, rtol=1e-10)
 
     def test_retardation_delays_breakthrough(self):
         """Test that retardation factor delays the breakthrough."""
@@ -578,9 +634,9 @@ class TestDiffusionMatchesApvdCombined:
             longitudinal_dispersivity=0.0,
         )
 
-        # Should conserve mass
+        # Should conserve mass exactly (forward matrix rows sum to 1)
         mass = np.nansum(cout_zero_disp)
-        np.testing.assert_allclose(mass, 100.0, rtol=0.05, err_msg="Mass should be conserved")
+        np.testing.assert_allclose(mass, 100.0, rtol=1e-10, err_msg="Mass should be conserved")
 
     def test_increased_dispersion_broadens_curve(self):
         """Test that higher dispersion causes broader, lower-peak breakthrough."""
@@ -715,9 +771,12 @@ class TestDiffusionMatchesApvdCombined:
         # levels but means mass is not conserved until all bins are informed.
         mass_diffusion = np.nansum(cout_diffusion)
         np.testing.assert_allclose(mass_diffusion, 100.0, rtol=0.01)
-        # Check that advection mass is close to 100 (within ~10% due to spin-up amplification)
+        # The advection module's gamma_i2e amplifies mass by ~9.14% due to
+        # spin-up: it normalizes by the number of contributing bins rather than
+        # by total bins, which preserves concentration levels but inflates
+        # the integrated mass during the spin-up window.
         mass_apvd = np.nansum(cout_apvd)
-        np.testing.assert_allclose(mass_apvd, 100.0, rtol=0.15)
+        np.testing.assert_allclose(mass_apvd, 100.0, rtol=0.10)
 
 
 class TestExtractionToInfiltrationDiffusion:
@@ -794,9 +853,12 @@ class TestExtractionToInfiltrationDiffusion:
             molecular_diffusivity=0.01,
             longitudinal_dispersivity=0.0,
         )
-        # Should be close but not identical
+        # With D_m=0.01 m²/day and tau=5 days, the spatial spreading is
+        # sqrt(2*D_m*tau) ≈ 0.32 m on a 100 m streamline (< 0.4% of domain).
+        # Use atol since cout contains step transitions where the diffused
+        # values cross zero — rtol is meaningless near-zero.
         valid = ~np.isnan(cin_advection) & ~np.isnan(cin_diffusion)
-        np.testing.assert_allclose(cin_advection[valid], cin_diffusion[valid], rtol=0.1, atol=0.01)
+        np.testing.assert_allclose(cin_advection[valid], cin_diffusion[valid], atol=0.01)
 
     def test_output_bounded_by_input(self, simple_setup):
         """Test that output concentrations are bounded by input range."""
