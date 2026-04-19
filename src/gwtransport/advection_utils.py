@@ -74,13 +74,15 @@ def _infiltration_to_extraction_weights(
     cin_time_min = cin_tedges_days[0]
     cin_time_max = cin_tedges_days[-1]
 
-    # Accumulate flow-weighted overlap matrices from all pore volumes
-    # Each pore volume has equal probability (equal-mass bins from gamma distribution)
+    # Accumulate flow-weighted overlap matrices from all pore volumes, then perform
+    # a single end-of-loop flow-weighted normalization. This preserves mass conservation
+    # under variable flow: each output row's contribution from cin bin j is proportional
+    # to the volume of water (flow * overlap fraction) that left bin j and arrived in
+    # the output bin via any pore volume path.
     n_cout = len(cout_tedges) - 1
     n_cin = len(tedges) - 1
-    accumulated_weights = np.zeros((n_cout, n_cin))
-    # Track how many pore volume bins contributed to each output row
-    contributing_bins = np.zeros(n_cout)
+    accumulated_flow_weighted = np.zeros((n_cout, n_cin))
+    accumulated_denominators = np.zeros(n_cout)
 
     # Loop over each pore volume
     for i in range(len(aquifer_pore_volumes)):
@@ -106,31 +108,22 @@ def _infiltration_to_extraction_weights(
             # No temporal overlap - this bin contributes nothing, skip expensive computation
             continue
 
-        # Compute overlap matrix for this pore volume
+        # Compute overlap matrix for this pore volume.
+        # partial_isin returns shape (n_in, n_out) = (n_cout, n_cin) here, because
+        # bin_edges_in has length n_cout+1 (one infiltration-time edge per cout edge)
+        # and bin_edges_out has length n_cin+1 (the cin time edges).
         overlap_matrix = partial_isin(bin_edges_in=infiltration_tedges_2d[i, :], bin_edges_out=cin_tedges_days)
 
-        # Apply flow weighting to this pore volume's overlap matrix
-        flow_weighted_overlap = overlap_matrix * flow[None, :]
-
-        # Normalize this pore volume's contribution (each row sums to 1 after flow weighting)
-        row_sums = np.sum(flow_weighted_overlap, axis=1)
-        valid_rows_pv = row_sums > 0
-        normalized_overlap = np.zeros_like(flow_weighted_overlap)
-        normalized_overlap[valid_rows_pv, :] = flow_weighted_overlap[valid_rows_pv, :] / row_sums[valid_rows_pv, None]
+        # Apply flow weighting (cin bins carry their own flow rate)
+        fw = overlap_matrix * flow[None, :]
+        row_sums = fw.sum(axis=1)
 
         # Accumulate only the valid bins from this pore volume
-        accumulated_weights[valid_bins_2d[i, :], :] += normalized_overlap[valid_bins_2d[i, :], :]
-        contributing_bins[valid_bins_2d[i, :]] += 1
+        accumulated_flow_weighted[valid_bins_2d[i], :] += fw[valid_bins_2d[i], :]
+        accumulated_denominators[valid_bins_2d[i]] += row_sums[valid_bins_2d[i]]
 
-    # Average across contributing pore volumes for each output row.
-    # During spin-up, only the shorter pore volumes have valid residence times.
-    # We normalize by the number of bins that actually contributed to each row,
-    # so the output represents the average concentration of informed flow paths
-    # rather than being biased toward zero.
-    # This is correct when aquifer_pore_volumes comes from gamma.bins() which
-    # produces equal-probability bins. For user-supplied pore volumes with
-    # unequal probability mass, a weights parameter would be needed.
-    valid_rows = contributing_bins > 0
-    result = np.zeros_like(accumulated_weights)
-    result[valid_rows, :] = accumulated_weights[valid_rows, :] / contributing_bins[valid_rows, None]
+    # Single flow-weighted normalization across all contributing pore volumes
+    valid_rows = accumulated_denominators > 0
+    result = np.zeros_like(accumulated_flow_weighted)
+    result[valid_rows] = accumulated_flow_weighted[valid_rows] / accumulated_denominators[valid_rows, None]
     return result
