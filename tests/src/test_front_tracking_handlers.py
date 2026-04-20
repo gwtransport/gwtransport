@@ -620,10 +620,10 @@ class TestRarefactionCharacteristicCollisionHandler:
     def test_characteristic_matching_head_concentration_absorbed(self, freundlich_sorption):
         """Characteristic that matches the rarefaction head concentration is absorbed.
 
-        FT2 fix: silent absorption is allowed only when the characteristic's
-        concentration matches the colliding boundary's concentration to within
-        a tight tolerance, which is the only case where deactivating the
-        characteristic does not destroy mass.
+        Silent absorption is allowed only when the characteristic's concentration
+        matches the colliding boundary's concentration to within a tight tolerance,
+        which is the only case where deactivating the characteristic does not
+        destroy mass.
         """
         if freundlich_sorption.n > 1.0:
             c_head, c_tail = 10.0, 2.0
@@ -661,7 +661,7 @@ class TestRarefactionCharacteristicCollisionHandler:
 
     @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
     def test_mass_destroying_collision_raises(self, freundlich_sorption):
-        """Mismatched characteristic concentration triggers a RuntimeError (FT2)."""
+        """Mismatched characteristic concentration triggers a RuntimeError."""
         if freundlich_sorption.n > 1.0:
             c_head, c_tail = 8.0, 3.0
             c_char = 5.0  # Strictly between head and tail -> not absorbable silently
