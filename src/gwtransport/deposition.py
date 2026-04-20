@@ -1,12 +1,16 @@
 """
 Deposition Analysis for 1D Aquifer Systems.
 
-This module analyzes compound transport by deposition in aquifer systems with tools for
-computing concentrations and deposition rates based on aquifer properties. The model assumes
-1D groundwater flow where compound deposition occurs along the flow path, enriching the water.
-Deposition processes include pathogen attachment to aquifer matrix, particle filtration, or
-chemical precipitation. The module follows advection module patterns for consistency in
-forward (deposition to extraction) and reverse (extraction to deposition) calculations.
+This module models compound *source enrichment* in 1D groundwater flow: a deposition rate
+[ng/m²/day] supplies mass from the aquifer matrix into the water along the flow path,
+increasing the extracted concentration. The model is a *source* term (positive deposition
+adds mass to the water); it does NOT model removal processes such as pathogen attachment,
+particle filtration, or chemical precipitation, which would remove mass from the water and
+require an opposite sign convention. Example physical scenarios: dissolution of a sparingly
+soluble mineral coating from the matrix, leaching of a stored solute, mass release from a
+distributed contaminant source on the matrix surface. The module follows advection module
+patterns for consistency in forward (deposition to extraction) and reverse (extraction to
+deposition) calculations.
 
 Available functions:
 
@@ -32,10 +36,12 @@ Available functions:
   extraction_to_deposition (reverse). Calculates contact area between water parcels and aquifer
   matrix based on streamline geometry and residence times.
 
-- :func:`spinup_duration` - Compute spinup duration for deposition modeling. Returns residence
-  time at first time step, representing time needed for system to become fully informed. Before
-  this duration, extracted concentration lacks complete deposition history. Useful for determining
-  valid analysis period and identifying when boundary effects are negligible.
+- :func:`spinup_duration` - Compute spinup duration for deposition modeling. Returns the
+  earliest extraction time at which the extracted water was infiltrated at the start of the
+  flow series (equivalently, the time at which cumulative flow first reaches
+  ``retardation_factor * aquifer_pore_volume``). Before this duration the extracted
+  concentration lacks complete deposition history. Useful for determining the valid analysis
+  period and identifying when boundary effects are negligible.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -101,7 +107,7 @@ def compute_deposition_weights(
 
     # Compute residence times and cumulative flow
     flow_values = np.asarray(flow)
-    rt_edges = residence_time(
+    cout_rt_at_edges = residence_time(
         flow=flow_values,
         flow_tedges=tedges,
         index=cout_tedges,
@@ -109,7 +115,9 @@ def compute_deposition_weights(
         retardation_factor=retardation_factor,
         direction="extraction_to_infiltration",
     )
-    cout_tedges_days_infiltration = cout_tedges_days - rt_edges[0]
+    # residence_time returns shape (n_pore_volumes, n_index); we pass a single
+    # pore volume so select row 0 explicitly.
+    cout_tedges_days_infiltration = cout_tedges_days - cout_rt_at_edges[0, :]
 
     flow_cum = np.concatenate(([0.0], np.cumsum(flow_values * np.diff(tedges_days))))
 
@@ -595,9 +603,13 @@ def spinup_duration(
     """
     Compute the spinup duration for deposition modeling.
 
-    The spinup duration is the residence time at the first time step, representing
-    the time needed for the system to become fully informed. Before this duration,
-    the extracted concentration lacks complete deposition history.
+    The spinup duration is the smallest extraction time ``t*`` (relative to
+    ``flow_tedges[0]``) at which the extracted water was infiltrated exactly
+    at ``flow_tedges[0]``: equivalently, the time at which the cumulative
+    flow first reaches ``retardation_factor * aquifer_pore_volume``. For
+    extraction times earlier than ``t*`` the extracted concentration lacks
+    complete deposition history. Under constant flow this equals
+    ``aquifer_pore_volume * retardation_factor / flow``.
 
     Parameters
     ----------
@@ -618,20 +630,33 @@ def spinup_duration(
     Raises
     ------
     ValueError
-        If the residence time at the first time step is NaN, indicating the
-        flow timeseries is too short to fully characterise the aquifer.
+        If the cumulative flow over the entire ``flow_tedges`` window does
+        not reach ``retardation_factor * aquifer_pore_volume``, indicating
+        the flow timeseries is too short to fully characterise the aquifer.
     """
-    rt = residence_time(
-        flow=flow,
-        flow_tedges=flow_tedges,
-        aquifer_pore_volumes=aquifer_pore_volume,
-        retardation_factor=retardation_factor,
-        direction="infiltration_to_extraction",
-    )
-    rt_value: float = float(np.asarray(rt[0, 0]))
+    # Spin-up is the residence time of water *currently being extracted*: how
+    # far back in history we must know deposition to fully characterise the
+    # extracted concentration. This uses the ``extraction_to_infiltration``
+    # direction. Under variable flow this differs from
+    # ``infiltration_to_extraction`` (which would describe how long ahead
+    # water infiltrated at the first time step will take to be extracted, a
+    # forward-in-time question that is not what spin-up means).
+    #
+    # The smallest extraction time t* at which the extracted water was
+    # infiltrated exactly at flow_tedges[0] satisfies
+    # ``flow_cum(t*) = R * V_pore``; the spin-up duration is then
+    # ``t* - 0 = t*``. Inverting the cumulative flow gives this value
+    # exactly (no quantisation to flow_tedges spacing). Under constant flow
+    # this matches V*R/Q.
+    flow_arr = np.asarray(flow)
+    flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
+    flow_cum = np.concatenate(([0.0], np.cumsum(flow_arr * np.diff(flow_tedges_days))))
+    target_cum = retardation_factor * float(aquifer_pore_volume)
+    if not flow_cum[-1] >= target_cum:
+        msg = "Residence time at the first time step is NaN. This indicates that the aquifer is not fully informed: flow timeseries too short."
+        raise ValueError(msg)
+    rt_value = float(linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=target_cum))
     if np.isnan(rt_value):
         msg = "Residence time at the first time step is NaN. This indicates that the aquifer is not fully informed: flow timeseries too short."
         raise ValueError(msg)
-
-    # Return the first residence time value
     return rt_value

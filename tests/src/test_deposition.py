@@ -82,9 +82,7 @@ def test_exact_analytical_constant_deposition():
 
     assert len(valid_result) >= 1, "Must have at least one valid result"
 
-    for actual, exp in zip(valid_result, valid_expected, strict=False):
-        rel_error = abs(actual - exp) / exp
-        assert rel_error < 1e-12, f"Expected {exp:.12f}, got {actual:.12f}, rel_error={rel_error:.2e}"
+    np.testing.assert_allclose(valid_result, valid_expected, rtol=1e-12, atol=0)
 
 
 def test_exact_analytical_varying_flow():
@@ -135,10 +133,16 @@ def test_exact_analytical_varying_flow():
     valid_expected = expected[: len(valid_result)]
 
     if len(valid_result) >= 1:
-        for actual, exp in zip(valid_result, valid_expected, strict=False):
-            rel_error = abs(actual - exp) / exp
-            # Slightly relaxed tolerance for varying flow
-            assert rel_error < 1e-6, f"Expected {exp:.6f}, got {actual:.6f}, rel_error={rel_error:.2e}"
+        # The analytical formula C = rt * D / (porosity * thickness) is exact
+        # for constant deposition: cout is the flow-weighted bin average and
+        # for constant D this reduces to D * <flow*rt>/<flow> / (porosity*
+        # thickness). In this test the cout bin lies entirely within the
+        # constant-flow tail of the series, so rt is constant within the
+        # bin and the formula collapses to rt[edge] * D / (porosity*
+        # thickness) at machine precision. There is no genuine numerical
+        # noise specific to varying flow, so a tight machine-precision
+        # tolerance is appropriate.
+        np.testing.assert_allclose(valid_result, valid_expected, rtol=1e-12, atol=0)
 
 
 def test_exact_analytical_retardation_factor():
@@ -191,9 +195,13 @@ def test_exact_analytical_retardation_factor():
         valid_expected = expected[: len(valid_result)]
 
         if len(valid_result) >= 1:
-            for actual, exp in zip(valid_result, valid_expected, strict=False):
-                rel_error = abs(actual - exp) / exp
-                assert rel_error < 1e-12, f"R={retardation_factor}: Expected {exp:.12f}, got {actual:.12f}"
+            np.testing.assert_allclose(
+                valid_result,
+                valid_expected,
+                rtol=1e-12,
+                atol=0,
+                err_msg=f"R={retardation_factor}",
+            )
 
 
 def test_perfect_roundtrip_varying_deposition_short():
@@ -374,10 +382,7 @@ def test_linearity_exact():
 
     min_len = min(len(valid_base), len(valid_double))
     if min_len >= 1:
-        for i in range(min_len):
-            expected_double = 2.0 * valid_base[i]
-            rel_error = abs(valid_double[i] - expected_double) / max(abs(expected_double), 1e-12)
-            assert rel_error < 1e-12, f"Linearity failed: 2×{valid_base[i]:.6f} ≠ {valid_double[i]:.6f}"
+        np.testing.assert_allclose(valid_double[:min_len], 2.0 * valid_base[:min_len], rtol=1e-12, atol=0)
 
 
 def test_negative_deposition_linearity():
@@ -423,10 +428,7 @@ def test_negative_deposition_linearity():
 
     min_len = min(len(valid_pos), len(valid_neg))
     if min_len >= 1:
-        for i in range(min_len):
-            expected_negative = -valid_pos[i]
-            rel_error = abs(valid_neg[i] - expected_negative) / max(abs(expected_negative), 1e-12)
-            assert rel_error < 1e-12, f"Sign reversal failed: -{valid_pos[i]:.6f} ≠ {valid_neg[i]:.6f}"
+        np.testing.assert_allclose(valid_neg[:min_len], -valid_pos[:min_len], rtol=1e-12, atol=0)
 
 
 def test_parameter_scaling_exact():
@@ -861,9 +863,10 @@ def test_extraction_to_deposition_sparse_weekly_sampling():
     # Test weekly inverse modeling - this should fail like in the notebook
     # The key is using weekly_cout_tedges for both tedges and cout_tedges
     # Should converge successfully in test environment.
-    # Rank-deficiency warning is expected for this challenging system.
+    # Rank-deficiency warning is expected for this challenging system; only
+    # that specific message is suppressed so other UserWarnings still surface.
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
+        warnings.filterwarnings("ignore", message=".*rank-deficient.*", category=UserWarning)
         _ = extraction_to_deposition(
             cout=weekly_concentrations,
             flow=weekly_flow_for_inverse,
@@ -899,8 +902,9 @@ def test_spinup_duration_constant_flow():
 
     # Spinup should equal residence time at first time point
     # RT = pore_volume * retardation / flow = 5000 * 1.0 / 100 = 50 days
+    # Under constant flow, V*R/Q is algebraically exact.
     expected_duration = pore_volume * retardation_factor / flow[0]
-    assert duration == pytest.approx(expected_duration, rel=0.01)
+    np.testing.assert_allclose(duration, expected_duration, rtol=0, atol=1e-12)
 
 
 def test_spinup_duration_with_retardation():
@@ -919,7 +923,7 @@ def test_spinup_duration_with_retardation():
     # Spinup should be longer with retardation
     # RT = 5000 * 2.0 / 100 = 100 days
     expected_duration = pore_volume * retardation_factor / flow[0]
-    assert duration == pytest.approx(expected_duration, rel=0.01)
+    np.testing.assert_allclose(duration, expected_duration, rtol=0, atol=1e-12)
     assert duration > 50.0  # Longer than without retardation
 
 
@@ -937,7 +941,7 @@ def test_spinup_duration_high_flow():
 
     # RT = 5000 * 1.0 / 500 = 10 days
     expected_duration = pore_volume * retardation_factor / flow[0]
-    assert duration == pytest.approx(expected_duration, rel=0.01)
+    np.testing.assert_allclose(duration, expected_duration, rtol=0, atol=1e-12)
     assert duration < 20.0  # Short spinup with high flow
 
 
@@ -956,7 +960,7 @@ def test_spinup_duration_low_flow():
 
     # RT = 5000 * 1.0 / 20 = 250 days
     expected_duration = pore_volume * retardation_factor / flow[0]
-    assert duration == pytest.approx(expected_duration, rel=0.01)
+    np.testing.assert_allclose(duration, expected_duration, rtol=0, atol=1e-12)
     assert duration > 200.0  # Long spinup with low flow
 
 
@@ -975,7 +979,43 @@ def test_spinup_duration_large_pore_volume():
 
     # RT = 20000 * 1.5 / 100 = 300 days
     expected_duration = pore_volume * retardation_factor / flow[0]
-    assert duration == pytest.approx(expected_duration, rel=0.01)
+    np.testing.assert_allclose(duration, expected_duration, rtol=0, atol=1e-12)
+
+
+def test_spinup_duration_variable_flow_uses_extraction_direction():
+    """Spin-up under variable flow uses extraction_to_infiltration direction.
+
+    Spin-up is the residence time of water *currently being extracted* at
+    the first valid extraction edge: the time t* such that the integrated
+    flow equals R*V_pore. The (incorrect) infiltration_to_extraction
+    direction at the first time step would describe how long water
+    infiltrated at t=0 takes to be extracted, which differs under variable
+    flow when the two endpoints span different flow regimes.
+    """
+    tedges = pd.date_range(start="2020-01-01", periods=101, freq="D")
+    pore_volume = 5000.0
+    retardation_factor = 1.0
+
+    # Slow first half (50 m³/day for 50 days -> cum=2500), fast second half
+    # (200 m³/day). Need 5000 m³ total -> 50 + (5000-2500)/200 = 62.5 days.
+    slow_then_fast = np.concatenate([np.full(50, 50.0), np.full(50, 200.0)])
+    duration = spinup_duration(
+        flow=slow_then_fast,
+        flow_tedges=tedges,
+        aquifer_pore_volume=pore_volume,
+        retardation_factor=retardation_factor,
+    )
+    np.testing.assert_allclose(duration, 62.5, rtol=0, atol=1e-12)
+
+    # Fast first half (200 m³/day) drains 5000 m³ in 25 days -> spin-up = 25.
+    fast_then_slow = np.concatenate([np.full(50, 200.0), np.full(50, 50.0)])
+    duration_asym = spinup_duration(
+        flow=fast_then_slow,
+        flow_tedges=tedges,
+        aquifer_pore_volume=pore_volume,
+        retardation_factor=retardation_factor,
+    )
+    np.testing.assert_allclose(duration_asym, 25.0, rtol=0, atol=1e-12)
 
 
 # =============================================================================

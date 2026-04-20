@@ -128,6 +128,11 @@ def infiltration_to_extraction_series(
         The concentration values in the extracted water (cout) equal cin, but are
         aligned with these shifted time edges.
 
+    Raises
+    ------
+    ValueError
+        If ``retardation_factor`` is less than 1.0.
+
     Examples
     --------
     Basic usage with constant flow:
@@ -188,6 +193,9 @@ def infiltration_to_extraction_series(
     >>> tedges_out[0] - tedges[0]
     Timedelta('10 days 00:00:00')
     """
+    if retardation_factor < 1.0:
+        msg = "retardation_factor must be >= 1.0"
+        raise ValueError(msg)
     rt_array = residence_time(
         flow=flow,
         flow_tedges=tedges,
@@ -238,6 +246,11 @@ def extraction_to_infiltration_series(
         Time edges for the infiltrating water concentration. Same length as tedges.
         The concentration values in the infiltrating water (cin) equal cout, but are
         aligned with these shifted time edges.
+
+    Raises
+    ------
+    ValueError
+        If ``retardation_factor`` is less than 1.0.
 
     Examples
     --------
@@ -302,6 +315,9 @@ def extraction_to_infiltration_series(
     >>> tedges[10] - tedges_out[10]
     Timedelta('10 days 00:00:00')
     """
+    if retardation_factor < 1.0:
+        msg = "retardation_factor must be >= 1.0"
+        raise ValueError(msg)
     rt_array = residence_time(
         flow=flow,
         flow_tedges=tedges,
@@ -1184,6 +1200,11 @@ def _flow_weighted_front_tracking_output(
     sub-bin, then combines sub-bins with flow-weighting:
     ``c_avg = Σ(Q_k · c_k · dt_k) / Σ(Q_k · dt_k)``.
 
+    This is the per-streamtube outlet concentration for one pore volume:
+    mass flux divided by water flux for the streamtube's contribution to each
+    output bin. Aggregation across streamtubes is the caller's responsibility
+    (simple arithmetic mean over streamtubes — equal flow per streamtube).
+
     Parameters
     ----------
     cout_tedges_days : ndarray
@@ -1202,7 +1223,7 @@ def _flow_weighted_front_tracking_output(
     Returns
     -------
     ndarray
-        Flow-weighted bin-averaged concentrations.
+        Flow-weighted bin-averaged concentrations. Length = len(cout_tedges_days) - 1.
     """
     # Merge cout edges with flow edges that fall within the cout range
     inner_flow_edges = flow_tedges_days[
@@ -1229,18 +1250,16 @@ def _flow_weighted_front_tracking_output(
     cout_bin_idx = np.searchsorted(cout_tedges_days[1:], fine_mids, side="left")
     cout_bin_idx = np.clip(cout_bin_idx, 0, len(cout_tedges_days) - 2)
 
-    # Flow-weighted combination per output bin
+    # Vectorized per-bin flow-weighted average:
+    # c_out[k] = sum_i (Q_i * c_i * dt_i) / sum_i (Q_i * dt_i) for fine sub-bins i in bin k
     n_cout = len(cout_tedges_days) - 1
-    c_out = np.zeros(n_cout)
     qdt_product = q_fine * dt_fine
     cqdt_product = c_fine * qdt_product
-
-    for i in range(n_cout):
-        mask = cout_bin_idx == i
-        total_qdt = np.sum(qdt_product[mask])
-        if total_qdt > 0:
-            c_out[i] = np.sum(cqdt_product[mask]) / total_qdt
-
+    denominator = np.bincount(cout_bin_idx, weights=qdt_product, minlength=n_cout).astype(np.float64)
+    numerator = np.bincount(cout_bin_idx, weights=cqdt_product, minlength=n_cout).astype(np.float64)
+    c_out = np.zeros(n_cout)
+    valid = denominator > 0
+    c_out[valid] = numerator[valid] / denominator[valid]
     return c_out
 
 
@@ -1401,11 +1420,12 @@ def infiltration_to_extraction_front_tracking(
     t_ref = tedges[0]
     flow_tedges_days = ((tedges - t_ref) / pd.Timedelta(days=1)).values
 
-    # Loop over each pore volume and compute concentration
+    # Each pore-volume bin from the gamma distribution is an equal-mass streamtube,
+    # so all streamtubes carry equal flow at the outlet. The bundle outlet
+    # concentration is the simple arithmetic mean over streamtubes.
     cout_all = np.zeros((len(aquifer_pore_volumes), len(cout_tedges) - 1))
 
     for i, aquifer_pore_volume in enumerate(aquifer_pore_volumes):
-        # Create tracker and run simulation for this pore volume
         tracker = FrontTracker(
             cin=cin,
             flow=flow,
@@ -1416,7 +1436,6 @@ def infiltration_to_extraction_front_tracking(
 
         tracker.run(max_iterations=max_iterations)
 
-        # Extract flow-weighted bin-averaged concentrations at outlet
         cout_all[i, :] = _flow_weighted_front_tracking_output(
             cout_tedges_days=cout_tedges_days,
             flow_tedges_days=flow_tedges_days,
@@ -1426,7 +1445,6 @@ def infiltration_to_extraction_front_tracking(
             sorption=sorption,
         )
 
-    # Return average across all pore volumes
     return np.mean(cout_all, axis=0)
 
 
@@ -1564,12 +1582,13 @@ def infiltration_to_extraction_front_tracking_detailed(
     t_ref = tedges[0]
     flow_tedges_days = ((tedges - t_ref) / pd.Timedelta(days=1)).values
 
-    # Loop over each pore volume and compute concentration
+    # Each pore-volume bin from the gamma distribution is an equal-mass streamtube,
+    # so all streamtubes carry equal flow at the outlet. The bundle outlet
+    # concentration is the simple arithmetic mean over streamtubes.
     cout_all = np.zeros((len(aquifer_pore_volumes), len(cout_tedges) - 1))
     structures = []
 
     for i, aquifer_pore_volume in enumerate(aquifer_pore_volumes):
-        # Create tracker and run simulation for this pore volume
         tracker = FrontTracker(
             cin=cin,
             flow=flow,
@@ -1580,7 +1599,6 @@ def infiltration_to_extraction_front_tracking_detailed(
 
         tracker.run(max_iterations=max_iterations)
 
-        # Extract flow-weighted bin-averaged concentrations for this pore volume
         cout_all[i, :] = _flow_weighted_front_tracking_output(
             cout_tedges_days=cout_tedges_days,
             flow_tedges_days=flow_tedges_days,
@@ -1606,5 +1624,4 @@ def infiltration_to_extraction_front_tracking_detailed(
         }
         structures.append(structure)
 
-    # Return average concentrations and list of structures
     return np.mean(cout_all, axis=0), structures
