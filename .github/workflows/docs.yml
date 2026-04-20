@@ -69,7 +69,7 @@ jobs:
       - name: Check links in README.md, pyproject.toml, and FUNDING.yml
         uses: lycheeverse/lychee-action@v2
         with:
-          args: README.md pyproject.toml .github/FUNDING.yml
+          args: --verbose --no-progress README.md pyproject.toml .github/FUNDING.yml
 
   deploy-documentation:
     if: ${{ github.ref == 'refs/heads/main' }}
