@@ -103,7 +103,7 @@ Examples:
 5. [Diffusion and dispersion in solute transport](https://gwtransport.github.io/gwtransport/examples/05_Diffusion_Dispersion.html)
 6. [Advection with non-linear sorption](https://gwtransport.github.io/gwtransport/examples/10_Advection_with_non_linear_sorption.html)
 
-Full documentation: [gwtransport.github.io/gwtransport](https://gwtransport.github.io/gwtransport)
+Full documentation: [gwtransport.github.io/gwtransport](https://gwtransport.github.io/gwtransport/)
 
 ## License
 
