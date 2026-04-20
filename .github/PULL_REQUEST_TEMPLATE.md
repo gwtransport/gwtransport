@@ -8,4 +8,4 @@
 
 ## Contributor License Agreement
 
-- [ ] I have read the [CLA](../CLA.md) and I agree to its terms for this and all future contributions I make to gwtransport.
+- [ ] I have read the [CLA](https://github.com/gwtransport/gwtransport/blob/main/CLA.md) and I agree to its terms for this and all future contributions I make to gwtransport.
