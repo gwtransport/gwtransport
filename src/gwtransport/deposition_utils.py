@@ -45,6 +45,10 @@ def _positive_part_integral(
     only_b_pos = (b > 0) & ~both_pos
 
     abs_diff = np.abs(a - b)
+    # Sentinel ``1.0`` avoids division by zero in the ``excess**2 / (2*safe_diff)``
+    # branch when a == b; the surrounding ``np.where`` discards this branch
+    # whenever both endpoints have the same sign (where the trapezoid formula
+    # is used instead), so the sentinel value is never observed in the output.
     safe_diff = np.where(abs_diff > 0, abs_diff, 1.0)
 
     excess = np.where(only_a_pos, a, np.where(only_b_pos, b, 0.0))
