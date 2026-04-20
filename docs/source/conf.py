@@ -1,8 +1,21 @@
 """Configuration file for the Sphinx documentation builder."""  # noqa: INP001
 
+import sys
 import tomllib
+import types
 from datetime import date
 from pathlib import Path
+
+# nbsphinx-link 1.3.1 imports SafeString/ErrorString from
+# docutils.utils.error_reporting, which was removed in docutils 0.22 (required
+# by Sphinx 9). Those were Python 2 unicode-coercion helpers; str() is a safe
+# Python 3 substitute. Remove once nbsphinx-link ships a fix for
+# https://github.com/vidartf/nbsphinx-link/issues/25.
+if "docutils.utils.error_reporting" not in sys.modules:
+    _shim = types.ModuleType("docutils.utils.error_reporting")
+    setattr(_shim, "SafeString", str)  # noqa: B010
+    setattr(_shim, "ErrorString", str)  # noqa: B010
+    sys.modules["docutils.utils.error_reporting"] = _shim
 
 # Read project information from pyproject.toml
 pyproject_path = Path(__file__).parent.parent.parent / "pyproject.toml"
