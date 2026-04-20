@@ -20,6 +20,7 @@ from gwtransport.diffusion_fast import (
     infiltration_to_extraction,
 )
 from gwtransport.gamma import mean_std_loc_to_alpha_beta
+from gwtransport.residence_time import residence_time_mean
 
 # =============================================================================
 # Machine-precision tests for convolve_diffusion (CDF-integrated kernel)
@@ -781,27 +782,62 @@ def test_compute_sigma_constant_flow():
 
 
 def test_compute_sigma_variable_flow():
-    """Variable flow produces variable sigma."""
+    """Variable flow sigma matches the bin-mean-RT analytical formula (single pv).
+
+    Exercises the `infiltration_to_extraction` direction with scalar pore volume,
+    non-trivial retardation, and mixed molecular + dispersive terms. Asserts exact
+    agreement with the analytical per-bin formula that uses bin-mean residence
+    time (the physically correct discretization under the bin-edge convention).
+    """
     n_days = 50
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
     t = np.arange(n_days)
     flow = 100.0 * (1.0 + 0.5 * np.sin(2 * np.pi * t / 20))
 
+    apv = 500.0
+    streamline_length = 80.0
+    molecular_diffusivity = 0.03
+    longitudinal_dispersivity = 1.0
+    retardation_factor = 2.0
+    direction = "infiltration_to_extraction"
+
     sigma_array = _compute_sigma(
         flow=flow,
         tedges=tedges,
-        aquifer_pore_volumes=500.0,
-        streamline_length=80.0,
-        molecular_diffusivity=0.03,
-        longitudinal_dispersivity=0.0,
-        retardation_factor=2.0,
-        direction="infiltration_to_extraction",
+        aquifer_pore_volumes=apv,
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
+        retardation_factor=retardation_factor,
+        direction=direction,
     )
 
+    apv_arr = np.atleast_1d(apv)
+    mean_pv = float(np.mean(apv_arr))
+    ev2 = float(np.mean(apv_arr**2))
+    ev3 = float(np.mean(apv_arr**3))
+    rt_mean = residence_time_mean(
+        flow=flow,
+        flow_tedges=tedges,
+        tedges_out=tedges,
+        aquifer_pore_volumes=mean_pv,
+        retardation_factor=retardation_factor,
+        direction=direction,
+    )[0]
+    valid_mask = ~np.isnan(rt_mean)
+    rt_mean = np.interp(np.arange(len(rt_mean)), np.where(valid_mask)[0], rt_mean[valid_mask])
+
+    var_numerator = (
+        2.0 * molecular_diffusivity * rt_mean / mean_pv * ev3
+        + 2.0 * longitudinal_dispersivity * streamline_length * ev2
+    )
+    timedelta = np.diff(tedges) / pd.to_timedelta(1, unit="D")
+    q_dt_l_over_r = flow * timedelta * streamline_length / retardation_factor
+    sigma_expected = np.clip(np.sqrt(var_numerator / q_dt_l_over_r**2), 0.0, 100.0)
+
     assert len(sigma_array) == n_days
-    assert np.all(np.isfinite(sigma_array))
-    assert np.all(sigma_array >= 0.0)
     assert np.std(sigma_array) > 0.0
+    assert_allclose(sigma_array, sigma_expected, rtol=0.0, atol=0.0)
 
 
 def test_compute_sigma_with_nan_in_residence_time():
@@ -1107,6 +1143,59 @@ def test_compute_sigma_correction_scales_with_cv():
 
     for i in range(len(corrections) - 1):
         assert corrections[i + 1] > corrections[i]
+
+
+def test_compute_sigma_uses_bin_mean_residence_time():
+    """Under variable flow, sigma must use bin-mean RT, not the bin-center sample.
+
+    Per the bin-edge convention, per-bin output quantities are flow-weighted bin
+    averages. The molecular variance contribution `2 * D_m * tau` per bin should
+    therefore use the mean residence time over the bin, not a point sample at the
+    bin center. With strongly varying flow, the two differ by several percent.
+    """
+    n_days = 200
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    t = np.arange(n_days)
+    flow = 100.0 + 60.0 * np.sin(2 * np.pi * t / 30.0) + 30.0 * np.sin(2 * np.pi * t / 7.0)
+    flow = np.clip(flow, 5.0, None)
+
+    apv = np.array([800.0, 1200.0, 1600.0, 2000.0])
+    streamline_length = 100.0
+    molecular_diffusivity = 1.0
+    longitudinal_dispersivity = 0.0
+    retardation_factor = 1.0
+    direction = "extraction_to_infiltration"
+
+    sigma_actual = _compute_sigma(
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volumes=apv,
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
+        retardation_factor=retardation_factor,
+        direction=direction,
+    )
+
+    mean_pv = float(np.mean(apv))
+    ev3 = float(np.mean(apv**3))
+    rt_mean = residence_time_mean(
+        flow=flow,
+        flow_tedges=tedges,
+        tedges_out=tedges,
+        aquifer_pore_volumes=mean_pv,
+        retardation_factor=retardation_factor,
+        direction=direction,
+    )[0]
+    valid_mask = ~np.isnan(rt_mean)
+    rt_mean = np.interp(np.arange(len(rt_mean)), np.where(valid_mask)[0], rt_mean[valid_mask])
+
+    var_numerator = 2.0 * molecular_diffusivity * rt_mean / mean_pv * ev3
+    timedelta = np.diff(tedges) / pd.to_timedelta(1, unit="D")
+    q_dt_l_over_r = flow * timedelta * streamline_length / retardation_factor
+    sigma_expected = np.clip(np.sqrt(var_numerator / q_dt_l_over_r**2), 0.0, 100.0)
+
+    assert_allclose(sigma_actual, sigma_expected, rtol=0.0, atol=0.0)
 
 
 # =============================================================================
