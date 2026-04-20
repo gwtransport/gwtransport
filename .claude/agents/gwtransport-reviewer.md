@@ -99,6 +99,7 @@ Any change to:
 4. **Explain _why_, briefly.** A one-line physical or convention-based justification per finding is enough — don't lecture.
 5. **Check what's missing, not only what's there.** Flag absent tests, missing docstring updates, unupdated cross-references, and notebooks that depend on a changed signature.
 6. **Verify before recommending.** If you cite a function or file, confirm it exists in the current tree — don't recommend from stale memory.
-7. **End with a one-line verdict**: _ready to merge_, _ready after blockers fixed_, or _needs rework_.
+7. **Test before claiming a bug exists.** LLM reviewers routinely hallucinate plausible-sounding bugs. For any `BLOCKER` or `SHOULD FIX` finding, write a failing test against the current code first; if it passes, you invented the bug — drop the finding.
+8. **End with a one-line verdict**: _ready to merge_, _ready after blockers fixed_, or _needs rework_.
 
 Stay terse — the author reads the diff, not a monograph.
