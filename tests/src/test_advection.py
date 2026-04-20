@@ -437,14 +437,19 @@ def test_gamma_infiltration_to_extraction_constant_input():
     valid_count = np.sum(~np.isnan(cout))
     assert valid_count >= 150, f"Expected at least 150 valid bins for 6-month extraction, got {valid_count}"
 
-    # Output should also be constant where valid (constant input preserved)
-    valid_values = cout[~np.isnan(cout)]
-    mean_cout = np.mean(valid_values)
-    assert abs(mean_cout - 1.0) < 0.1, f"Expected mean ~1.0 (preserved from constant input), got {mean_cout:.3f}"
-
-    # Low variation expected for constant input
-    std_cout = np.std(valid_values)
-    assert std_cout < 0.05, f"Expected std < 0.05 for constant input, got {std_cout:.3f}"
+    # For constant input and constant flow, the post-spin-up steady state is exact.
+    # Skip the spin-up region (first valid bins where some pore-volume paths have not
+    # yet contributed) and assert exact equality on the steady-state interior.
+    valid_indices = np.where(~np.isnan(cout))[0]
+    # Drop the first 90 valid bins as spin-up margin (mean RT ~1 day; with n_bins=20
+    # the longest gamma bin's RT is well under 90 days).
+    steady_indices = valid_indices[90:]
+    np.testing.assert_allclose(
+        cout[steady_indices],
+        1.0,
+        rtol=1e-12,
+        err_msg="Constant input with constant flow should reproduce input exactly in steady state",
+    )
 
 
 def test_gamma_infiltration_to_extraction_missing_parameters():
@@ -512,13 +517,13 @@ def test_gamma_infiltration_to_extraction_analytical_mean_residence_time():
     stable_indices = valid_indices[-30:]
     stable_region = cout[stable_indices]
 
-    # Analytical solution: for constant input, output should eventually equal input
-    mean_output = np.mean(stable_region)
-    assert abs(mean_output - 10.0) < 0.5, f"Expected mean ~10.0 in steady state, got {mean_output:.2f}"
-
-    # Variance should be small in steady state
-    std_output = np.std(stable_region)
-    assert std_output < 0.5, f"Expected std < 0.5 in steady state, got {std_output:.2f}"
+    # For constant input and constant flow, steady-state output equals input exactly.
+    np.testing.assert_allclose(
+        stable_region,
+        10.0,
+        rtol=1e-12,
+        err_msg="Constant input should reproduce input exactly in steady state",
+    )
 
 
 # ===============================================================================
@@ -941,16 +946,20 @@ def test_infiltration_to_extraction_analytical_mass_conservation():
     dt = 1.0  # 1 day time steps
     input_mass = np.sum(cin_values * flow.to_numpy() * dt)
 
-    # Output mass = concentration * flow * time (for each time step)
-    # Use average flow for output period
-    output_flow = np.mean(flow.to_numpy())
+    # Output mass = concentration * flow * time, using the actual output-period flow per bin.
+    # cin/flow/cout are aligned to daily bins of equal duration; cout_tedges starts on
+    # 2020-01-05 (index 4 of cin/flow), so the matching flow slice is flow[4:4+len(cout)].
+    cout_flow = flow.to_numpy()[4 : 4 + len(cout)]
     valid_mask = ~np.isnan(cout)
-    output_mass = np.sum(cout[valid_mask] * output_flow * dt)
+    output_mass = np.sum(cout[valid_mask] * cout_flow[valid_mask] * dt)
 
-    # Check mass conservation (within 20% due to discretization and edge effects)
-    if input_mass > 0:
-        mass_error = abs(output_mass - input_mass) / input_mass
-        assert mass_error < 0.3, f"Mass conservation error {mass_error:.2f} > 0.3"
+    # Mass is conserved to machine precision: per-streamtube row-normalization
+    # gives the exact mass-flux/water-flux ratio per streamtube, and the simple
+    # arithmetic average over equal-flow streamtubes preserves total mass when
+    # the output window captures the entire pulse from every pore-volume path.
+    assert input_mass > 0
+    mass_error = abs(output_mass - input_mass) / input_mass
+    assert mass_error < 1e-12, f"Mass conservation error {mass_error:.2e} >= 1e-12"
 
 
 def test_infiltration_to_extraction_known_constant_delay():
@@ -1111,11 +1120,26 @@ def test_infiltration_to_extraction_known_retardation_effect():
         retardation_factor=2.0,
     )
 
-    # Basic test - both should return valid arrays
+    # Basic structural checks
     assert isinstance(cout_no_retard, np.ndarray)
     assert isinstance(cout_retarded, np.ndarray)
     assert len(cout_no_retard) == len(cout_dates)
     assert len(cout_retarded) == len(cout_dates)
+
+    # Physics check: with PV=200 m3 and flow=100 m3/day, R=1 -> RT=2 d, R=2 -> RT=4 d.
+    # cin steps from 0 to 10 on cin day 10 (cin index 9). cout(day k) = cin(day k - RT),
+    # so cout reaches the step value when cout_day - RT >= 10.
+    # cout starts on cin day 5, so the first fully-retarded cout index satisfies
+    # 5 + i - RT >= 10  =>  i >= 5 + RT.
+    expected_step_idx_r1 = 5 + 2  # = 7
+    expected_step_idx_r2 = 5 + 4  # = 9
+    np.testing.assert_allclose(cout_no_retard[expected_step_idx_r1:], 10.0, rtol=1e-12)
+    np.testing.assert_allclose(cout_no_retard[: expected_step_idx_r1 - 1], 0.0, atol=1e-12)
+    np.testing.assert_allclose(cout_retarded[expected_step_idx_r2:], 10.0, rtol=1e-12)
+    np.testing.assert_allclose(cout_retarded[: expected_step_idx_r2 - 1], 0.0, atol=1e-12)
+    # Retardation by factor 2 doubles the residence time, shifting the step by exactly
+    # (R-1)*PV/flow = 2 days.
+    assert expected_step_idx_r2 - expected_step_idx_r1 == 2
 
 
 # ===============================================================================
@@ -1174,12 +1198,20 @@ def test_conservation_properties():
         n_bins=10,
     )
 
-    # For constant input and flow, output should eventually stabilize
-    # Check the latter part of the series where it should be stable
+    # For constant input and constant flow, the post-spin-up steady state equals
+    # the input value exactly. With one year of cin spin-up (2020) before the cout
+    # window (2021), every gamma pore-volume bin has had ample residence time to
+    # contribute fully.
     valid_mask = ~np.isnan(cout)
-    if np.sum(valid_mask) > 100:  # If we have enough valid values
-        stable_region = cout[valid_mask][-100:]  # Last 100 valid values
-        assert np.std(stable_region) < 0.1  # Should be relatively stable
+    valid_values = cout[valid_mask]
+    assert valid_values.size > 100, "Need a long valid steady-state region"
+    stable_region = valid_values[-100:]
+    np.testing.assert_allclose(
+        stable_region,
+        1.0,
+        rtol=1e-12,
+        err_msg="Constant input with constant flow should reproduce input exactly in steady state",
+    )
 
 
 def test_empty_series():

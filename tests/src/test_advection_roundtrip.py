@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from gwtransport.advection import extraction_to_infiltration, infiltration_to_extraction
+from gwtransport.advection_utils import _infiltration_to_extraction_weights
 from gwtransport.utils import compute_time_edges
 
 # ============================================================================
@@ -31,29 +32,28 @@ class TestRoundtripLinear:
         """
         Test roundtrip with linear retardation and sine wave input.
 
-        This tests the basic roundtrip property without nonlinear complications.
-        With constant retardation, the forward and backward operations should
-        invert perfectly (within numerical precision).
+        Uses a fully-determined setup (single PV, n_cout = n_cin, sufficient
+        spin-up) so the forward operator is a square shift matrix and the
+        roundtrip should reconstruct to near machine precision.
         """
-        # Full infiltration window - one year for ample history
-        cin_dates = pd.date_range(start="2022-01-01", end="2022-12-31", freq="D")
+        # Effective residence time = pore_volume * retardation_factor / flow
+        # = 400 * 1.5 / 100 = 6 days (integer days so the forward map is a pure
+        # bin shift and the roundtrip is exact apart from solver round-off).
+        # Pad cin grid by 6 days for spin-up.
+        cin_dates = pd.date_range(start="2021-12-26", end="2022-12-31", freq="D")
         cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
 
-        # Extraction window: overlaps with cin but starts/ends inside
-        cout_dates = pd.date_range(start="2022-03-01", end="2022-10-31", freq="D")
+        # Same daily resolution; cout starts after spin-up so the system is
+        # fully determined in the interior.
+        cout_dates = pd.date_range(start="2022-01-01", end="2022-12-31", freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        # Sine wave input for smooth variation
         cin_original = 30.0 + 20.0 * np.sin(2 * np.pi * np.arange(len(cin_dates)) / 40.0)
 
-        # Constant flow and pore volume
         flow_cin = np.full(len(cin_dates), 100.0)
-        pore_volume = np.array([500.0])
-
-        # Constant retardation (linear)
+        pore_volume = np.array([400.0])
         retardation_factor = 1.5
 
-        # Forward pass
         cout = infiltration_to_extraction(
             cin=cin_original,
             flow=flow_cin,
@@ -63,7 +63,9 @@ class TestRoundtripLinear:
             retardation_factor=retardation_factor,
         )
 
-        # Backward pass: tedges = cin/flow grid, cout_tedges = cout grid
+        # cout should be fully valid (no NaN) because cin grid starts 8 days early.
+        assert not np.any(np.isnan(cout)), "Expected no NaN in cout with sufficient spin-up"
+
         cin_reconstructed = extraction_to_infiltration(
             cout=cout,
             flow=flow_cin,
@@ -73,29 +75,17 @@ class TestRoundtripLinear:
             retardation_factor=retardation_factor,
         )
 
-        # Analysis: Compare in valid region only
         valid_mask = ~np.isnan(cin_reconstructed)
         valid_indices = np.where(valid_mask)[0]
 
-        # Require reasonable coverage
-        coverage = len(valid_indices) / len(cin_reconstructed)
-        assert coverage >= 0.50, f"Insufficient coverage: {coverage:.1%} (expected >= 50%)"
-
-        # Compare in stable middle region (skip boundaries)
-        n_skip = max(20, int(0.2 * len(valid_indices)))
+        n_skip = max(20, int(0.1 * len(valid_indices)))
         middle_indices = valid_indices[n_skip:-n_skip]
 
-        reconstructed_middle = cin_reconstructed[middle_indices]
-        original_middle = cin_original[middle_indices]
-
-        # Single PV with retardation: error limited by the 120-dimensional
-        # nullspace (n_cin=365 unknowns, n_cout=245 equations). The Tikhonov
-        # target fills the nullspace approximately. Actual error ~0.06%.
         np.testing.assert_allclose(
-            reconstructed_middle,
-            original_middle,
-            rtol=0.002,
-            err_msg="Linear roundtrip should reconstruct with < 0.2% error",
+            cin_reconstructed[middle_indices],
+            cin_original[middle_indices],
+            rtol=1e-12,
+            err_msg="Linear roundtrip should reconstruct to machine precision for fully-determined setup",
         )
 
 
@@ -166,15 +156,20 @@ class TestRoundtripSameGrid:
         """
         Roundtrip with multiple pore volumes on same-resolution grids.
 
-        With multiple pore volumes, W_forward is a square averaging of shift
-        matrices. The lstsq inversion should still give tight reconstruction
-        in the fully-constrained interior region.
+        The forward operator W has shape (n_cout, n_cin) with
+        ``n_cin - n_cout = max(rt_in_bins)`` extra unknowns from cin spin-up
+        bins that map only to early cout bins. The system is therefore
+        under-determined with a nullspace of dim = (n_cin - n_cout).
+        Reconstruction error is bounded by the projection of cin_original
+        onto null(W), which we compute explicitly below and use as the
+        pointwise tolerance. Tikhonov regularization (default 1e-10) does
+        not contribute meaningfully to the error in the well-conditioned
+        directions: ``lambda / s_min**2 ~ 1e-10 / 0.01**2 = 1e-6`` << nullspace bound.
         """
         # cin/flow grid starts earlier (max pore_volume/flow = 700/100 = 7 days)
         cin_dates = pd.date_range(start="2021-12-25", end="2022-12-31", freq="D")
         tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
 
-        # cout grid: same daily resolution, starts after spin-up
         cout_dates = pd.date_range(start="2022-01-01", end="2022-12-31", freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
@@ -200,19 +195,33 @@ class TestRoundtripSameGrid:
             aquifer_pore_volumes=pore_volumes,
         )
 
+        # Compute the pointwise nullspace projection of cin_original. The
+        # reconstruction error |cin_recovered - cin_original| at each bin is
+        # bounded by |P_null(cin_original)| at that bin, since cin_recovered
+        # and cin_original agree modulo null(W).
+        w_forward = _infiltration_to_extraction_weights(
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=pore_volumes,
+            flow=flow,
+            retardation_factor=1.0,
+        )
+        _, sing_vals, vt = np.linalg.svd(w_forward, full_matrices=True)
+        null_basis = vt[len(sing_vals) :]  # rows of Vt past the singular values
+        nullspace_proj = null_basis.T @ (null_basis @ cin_original)
+
         valid_mask = ~np.isnan(cin_reconstructed)
         valid_indices = np.where(valid_mask)[0]
-
-        assert len(valid_indices) >= 10, f"Too few valid bins: {len(valid_indices)}"
-
         n_skip = max(10, int(0.15 * len(valid_indices)))
         middle_indices = valid_indices[n_skip:-n_skip]
 
-        np.testing.assert_allclose(
-            cin_reconstructed[middle_indices],
-            cin_original[middle_indices],
-            rtol=0.006,
-            err_msg="Same-resolution multi pore volume roundtrip should reconstruct with < 0.6% relative error",
+        # Per-bin tolerance: a small numerical safety factor times the
+        # theoretical nullspace bound (plus a tiny absolute floor for bins
+        # with negligible nullspace energy where round-off dominates).
+        bound = 2.0 * np.abs(nullspace_proj[middle_indices]) + 1e-12
+        actual_err = np.abs(cin_reconstructed[middle_indices] - cin_original[middle_indices])
+        assert np.all(actual_err <= bound), (
+            f"Reconstruction error exceeds nullspace bound: max ratio = {(actual_err / bound).max():.3f}"
         )
 
 
