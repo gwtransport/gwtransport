@@ -617,20 +617,18 @@ class TestRarefactionCharacteristicCollisionHandler:
     """Test handle_rarefaction_characteristic_collision function."""
 
     @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
-    def test_characteristic_absorbed_at_head(self, freundlich_sorption):
-        """Test characteristic collision with rarefaction head.
+    def test_characteristic_matching_head_concentration_absorbed(self, freundlich_sorption):
+        """Characteristic that matches the rarefaction head concentration is absorbed.
 
-        This tests the SIMPLIFIED IMPLEMENTATION where the characteristic
-        is simply deactivated and absorbed into the rarefaction structure.
+        Silent absorption is allowed only when the characteristic's concentration
+        matches the colliding boundary's concentration to within a tight tolerance,
+        which is the only case where deactivating the characteristic does not
+        destroy mass.
         """
-        # For n>1: head has higher C (slower), tail has lower C (faster)
-        # For n<1: head has lower C (faster), tail has higher C (slower)
         if freundlich_sorption.n > 1.0:
             c_head, c_tail = 10.0, 2.0
-            c_char = 7.0
         else:
             c_head, c_tail = 2.0, 10.0
-            c_char = 5.0
 
         raref = RarefactionWave(
             t_start=0.0,
@@ -641,15 +639,15 @@ class TestRarefactionCharacteristicCollisionHandler:
             sorption=freundlich_sorption,
         )
 
+        # Characteristic concentration matches head -> absorption is mass-conserving
         char = CharacteristicWave(
             t_start=5.0,
             v_start=0.0,
             flow=100.0,
-            concentration=c_char,
+            concentration=c_head,
             sorption=freundlich_sorption,
         )
 
-        # Both active initially
         assert raref.is_active
         assert char.is_active
 
@@ -657,17 +655,16 @@ class TestRarefactionCharacteristicCollisionHandler:
             raref, char, t_event=20.0, v_event=150.0, boundary_type="head"
         )
 
-        # Simplified implementation returns no new waves
-        assert len(new_waves) == 0, "Simplified implementation creates no new waves"
+        assert len(new_waves) == 0, "Absorption creates no new waves"
+        assert not char.is_active, "Matching characteristic must be deactivated"
+        assert raref.is_active, "Rarefaction stays active"
 
     @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
-    def test_characteristic_deactivated(self, freundlich_sorption):
-        """Test that characteristic is deactivated in the collision."""
-        # For n>1: head has higher C (slower), tail has lower C (faster)
-        # For n<1: head has lower C (faster), tail has higher C (slower)
+    def test_mass_destroying_collision_raises(self, freundlich_sorption):
+        """Mismatched characteristic concentration triggers a RuntimeError."""
         if freundlich_sorption.n > 1.0:
             c_head, c_tail = 8.0, 3.0
-            c_char = 5.0
+            c_char = 5.0  # Strictly between head and tail -> not absorbable silently
         else:
             c_head, c_tail = 3.0, 8.0
             c_char = 5.0
@@ -689,24 +686,16 @@ class TestRarefactionCharacteristicCollisionHandler:
             sorption=freundlich_sorption,
         )
 
-        handle_rarefaction_characteristic_collision(raref, char, t_event=20.0, v_event=150.0, boundary_type="tail")
-
-        # Characteristic should be deactivated
-        assert not char.is_active, "Characteristic must be deactivated"
-        # Rarefaction remains active
-        assert raref.is_active, "Rarefaction should remain active"
+        with pytest.raises(RuntimeError, match="would silently destroy mass"):
+            handle_rarefaction_characteristic_collision(raref, char, t_event=20.0, v_event=150.0, boundary_type="tail")
 
     @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
-    def test_collision_at_tail(self, freundlich_sorption):
-        """Test characteristic collision with rarefaction tail."""
-        # For n>1: head has higher C (slower), tail has lower C (faster)
-        # For n<1: head has lower C (faster), tail has higher C (slower)
+    def test_characteristic_matching_tail_concentration_absorbed(self, freundlich_sorption):
+        """Characteristic matching the tail concentration is absorbed at the tail boundary."""
         if freundlich_sorption.n > 1.0:
             c_head, c_tail = 12.0, 4.0
-            c_char = 6.0
         else:
             c_head, c_tail = 4.0, 12.0
-            c_char = 8.0
 
         raref = RarefactionWave(
             t_start=0.0,
@@ -721,7 +710,7 @@ class TestRarefactionCharacteristicCollisionHandler:
             t_start=5.0,
             v_start=0.0,
             flow=100.0,
-            concentration=c_char,
+            concentration=c_tail,
             sorption=freundlich_sorption,
         )
 
@@ -729,11 +718,8 @@ class TestRarefactionCharacteristicCollisionHandler:
             raref, char, t_event=25.0, v_event=200.0, boundary_type="tail"
         )
 
-        # No new waves in simplified implementation
         assert len(new_waves) == 0
-        # Characteristic deactivated
         assert not char.is_active
-        # Rarefaction remains active
         assert raref.is_active
 
 
