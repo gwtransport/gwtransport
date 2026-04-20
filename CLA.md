@@ -2,7 +2,9 @@
 
 ## Why this exists
 
-`gwtransport` is released under AGPL-3.0 so the code stays open. Some organizations can't use AGPL — internal policy, license incompatibility, SaaS concerns — so I also offer commercial licenses to them. That revenue funds continued development of the open project.
+`gwtransport` is released under AGPL-3.0 so the code stays open. AGPL-3.0 requires anyone who modifies the code — including for internal or networked use — to release their modifications back under the same license. That share-back requirement is the point: it keeps improvements flowing into the open project.
+
+Some organizations can't meet that requirement — internal policy, license incompatibility with proprietary stacks, or SaaS deployments where exposing modifications isn't feasible. For them I offer a commercial license that lifts the share-back obligation. The fees support my open-source work, including but not limited to this project.
 
 This CLA is what makes the dual path possible: instead of chasing down every past contributor each time a commercial license is negotiated, contributors agree up front that their code can ship under both AGPL-3.0 and other terms.
 
