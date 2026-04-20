@@ -66,7 +66,6 @@ import warnings
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from numpy.typing import NDArray
 from scipy import sparse
 from scipy.special import erf
 
@@ -94,7 +93,7 @@ def infiltration_to_extraction(
     asymptotic_cutoff_sigma: float | None = 3.0,
     flow_out: npt.ArrayLike | None = None,
     suppress_uniform_tedges_check: bool = False,
-) -> NDArray[np.floating]:
+) -> npt.NDArray[np.floating]:
     """Compute diffusion during 1D transport using fast Gaussian smoothing.
 
     Combines advection (via pore volume distribution) with diffusion (via Gaussian
@@ -156,6 +155,18 @@ def infiltration_to_extraction(
         and longitudinal_dispersivity.
     extraction_to_infiltration : Inverse operation
     :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion
+
+    Notes
+    -----
+    A single ``mean_streamline_length`` is shared across all pore volumes. This
+    assumes streamline-length heterogeneity is captured solely through the
+    pore-volume distribution: the effective cross-sectional area
+    ``A_eff = V_p / L_mean`` varies with V_p while the path length L is held
+    fixed. This is appropriate for many systems but breaks down for
+    partially-penetrating wells or wedge-shaped capture zones, where path
+    length itself varies between streamtubes. In those cases, use
+    :func:`gwtransport.diffusion.infiltration_to_extraction` with a per-streamtube
+    ``streamline_length`` array instead.
     """
     # Convert inputs
     cout_tedges = pd.DatetimeIndex(cout_tedges)
@@ -268,7 +279,7 @@ def extraction_to_infiltration(
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
     suppress_uniform_tedges_check: bool = False,
-) -> NDArray[np.floating]:
+) -> npt.NDArray[np.floating]:
     """Reconstruct infiltration concentration from extracted water via Tikhonov inversion.
 
     Inverts the forward transport model (Gaussian diffusion + advection) by building
@@ -339,6 +350,18 @@ def extraction_to_infiltration(
         that supports per-pore-volume arrays for streamline_length, molecular_diffusivity,
         and longitudinal_dispersivity.
     :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion
+
+    Notes
+    -----
+    A single ``mean_streamline_length`` is shared across all pore volumes. This
+    assumes streamline-length heterogeneity is captured solely through the
+    pore-volume distribution: the effective cross-sectional area
+    ``A_eff = V_p / L_mean`` varies with V_p while the path length L is held
+    fixed. This is appropriate for many systems but breaks down for
+    partially-penetrating wells or wedge-shaped capture zones, where path
+    length itself varies between streamtubes. In those cases, use
+    :func:`gwtransport.diffusion.extraction_to_infiltration` with a per-streamtube
+    ``streamline_length`` array instead.
     """
     # Convert inputs
     tedges = pd.DatetimeIndex(tedges)
@@ -447,7 +470,7 @@ def gamma_infiltration_to_extraction(
     asymptotic_cutoff_sigma: float | None = 3.0,
     flow_out: npt.ArrayLike | None = None,
     suppress_uniform_tedges_check: bool = False,
-) -> NDArray[np.floating]:
+) -> npt.NDArray[np.floating]:
     """
     Compute extracted concentration with fast Gaussian diffusion for gamma-distributed pore volumes.
 
@@ -607,7 +630,7 @@ def gamma_extraction_to_infiltration(
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
     suppress_uniform_tedges_check: bool = False,
-) -> NDArray[np.floating]:
+) -> npt.NDArray[np.floating]:
     """
     Reconstruct infiltration concentration from extracted water for gamma-distributed pore volumes.
 
@@ -759,7 +782,7 @@ def _compute_sigma(
     longitudinal_dispersivity: float,
     retardation_factor: float,
     direction: str,
-) -> NDArray[np.floating]:
+) -> npt.NDArray[np.floating]:
     """Compute sigma in array-index units with moment-based averaging.
 
     The per-streamtube variance of the Gaussian kernel (in index units)
@@ -831,10 +854,12 @@ def _compute_sigma(
     var_numerator = mol_var_x / mean_pv * ev3 + disp_var_x * ev2
 
     timedelta = np.diff(tedges) / pd.to_timedelta(1, unit="D")
-    dx_ref = flow * timedelta * streamline_length / retardation_factor
+    # q_dt_l_over_r = Q * dt * L / R has units m^4 (it is the squared scaling
+    # factor that converts spatial variance [m^2] into index-space variance).
+    q_dt_l_over_r = flow * timedelta * streamline_length / retardation_factor
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        sigma_sq = np.where(dx_ref > 0.0, var_numerator / dx_ref**2, 0.0)
+        sigma_sq = np.where(q_dt_l_over_r > 0.0, var_numerator / q_dt_l_over_r**2, 0.0)
 
     return np.clip(np.sqrt(np.maximum(sigma_sq, 0.0)), 0.0, 100.0)
 
@@ -948,7 +973,7 @@ def _build_gaussian_matrix(
 
 def convolve_diffusion(
     *, input_signal: npt.ArrayLike, sigma_array: npt.ArrayLike, asymptotic_cutoff_sigma: float | None = 3.0
-) -> NDArray[np.floating]:
+) -> npt.NDArray[np.floating]:
     """Apply Gaussian filter with position-dependent sigma values.
 
     This function extends scipy.ndimage.gaussian_filter1d by allowing the standard
@@ -1029,7 +1054,7 @@ def create_example_data(
     domain_length: float = 10.0,
     diffusivity: float = 0.1,
     seed: int | None = None,
-) -> tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating], NDArray[np.floating]]:
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]]:
     """Create example data for demonstrating variable-sigma diffusion.
 
     Parameters
@@ -1116,6 +1141,9 @@ def _validate_inputs(
         raise ValueError(msg)
     if np.any(np.isnan(flow)):
         msg = "flow contains NaN values, which are not allowed"
+        raise ValueError(msg)
+    if np.any(flow < 0):
+        msg = "flow must be non-negative (negative flow not supported)"
         raise ValueError(msg)
     if np.any(aquifer_pore_volumes <= 0):
         msg = "aquifer_pore_volumes must be positive"
