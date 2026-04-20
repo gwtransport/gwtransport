@@ -24,7 +24,7 @@ def _infiltration_to_extraction_weights(
     aquifer_pore_volumes: npt.NDArray[np.floating],
     flow: npt.NDArray[np.floating],
     retardation_factor: float,
-) -> npt.NDArray[np.floating]:
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool_]]:
     """
     Compute normalized weights for linear infiltration to extraction transformation.
 
@@ -49,8 +49,14 @@ def _infiltration_to_extraction_weights(
 
     Returns
     -------
-    numpy.ndarray
-        Normalized weight matrix. Shape: (len(cout_tedges) - 1, len(tedges) - 1)
+    weights : numpy.ndarray
+        Normalized weight matrix. Shape: (len(cout_tedges) - 1, len(tedges) - 1).
+        Rows for spin-up and zero-flow cout bins are all zero; use ``spinup_mask``
+        to distinguish spin-up (no contributing streamtube) from zero-flow
+        (contributing streamtubes all trace back into a zero-flow cin window).
+    spinup_mask : numpy.ndarray of bool
+        Shape: (len(cout_tedges) - 1,). True for cout bins where no streamtube
+        traced back into the cin time range (signal has not broken through).
     """
     # Convert time edges to days
     cin_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
@@ -139,4 +145,5 @@ def _infiltration_to_extraction_weights(
     valid_rows = contributing_bins > 0
     result = np.zeros_like(accumulated_weights)
     result[valid_rows, :] = accumulated_weights[valid_rows, :] / contributing_bins[valid_rows, None]
-    return result
+    spinup_mask = ~valid_rows
+    return result, spinup_mask

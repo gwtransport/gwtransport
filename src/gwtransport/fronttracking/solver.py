@@ -216,8 +216,8 @@ class FrontTracker:
         if np.any(cin < 0):
             msg = "cin must be non-negative"
             raise ValueError(msg)
-        if np.any(flow <= 0):
-            msg = "flow must be positive"
+        if np.any(flow < 0):
+            msg = "flow must be non-negative (negative flow not supported)"
             raise ValueError(msg)
         if aquifer_pore_volume <= 0:
             msg = "aquifer_pore_volume must be positive"

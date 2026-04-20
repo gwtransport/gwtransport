@@ -199,7 +199,7 @@ def infiltration_to_extraction(
         _warn_dispersion()
 
     # Build advection weight matrix (needed in both branches)
-    w_adv = _infiltration_to_extraction_weights(
+    w_adv, spinup_mask = _infiltration_to_extraction_weights(
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -229,9 +229,10 @@ def infiltration_to_extraction(
         # New algorithm: advect-then-smooth (works with any tedges spacing)
         cout_unsmoothed = w_adv @ cin
 
-        # Invalid rows (no breakthrough yet) have near-zero values that would
-        # bleed into valid neighbors during smoothing. Use normalized convolution:
-        # smooth(signal * mask) / smooth(mask) to properly renormalize the kernel.
+        # Rows with zero weight sum (spin-up or zero-flow traceback) carry no
+        # signal. Flag them so the normalized convolution
+        # smooth(signal * mask) / smooth(mask) properly renormalizes the kernel
+        # instead of letting a near-zero value bleed into valid neighbors.
         total_coeff = np.sum(w_adv, axis=1)
         invalid_mask = total_coeff < _EPSILON_COEFF_SUM
         cout_unsmoothed[invalid_mask] = 0.0
@@ -256,9 +257,9 @@ def infiltration_to_extraction(
         with np.errstate(invalid="ignore"):
             cout = np.where(smoothed_validity > _EPSILON_COEFF_SUM, smoothed / smoothed_validity, np.nan)
 
-    # Mark invalid rows as NaN (where no cin has broken through)
-    total_coeff = np.sum(w_adv, axis=1)
-    cout[total_coeff < _EPSILON_COEFF_SUM] = np.nan
+    # Mark spin-up rows (signal has not broken through yet) as NaN. Zero-flow
+    # cout bins keep their 0 output from the zero weight row.
+    cout[spinup_mask] = np.nan
 
     return cout
 
@@ -397,7 +398,7 @@ def extraction_to_infiltration(
     n_cout = len(cout_tedges) - 1
 
     # Build advection weight matrix
-    w_adv = _infiltration_to_extraction_weights(
+    w_adv, _ = _infiltration_to_extraction_weights(
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1159,8 +1160,8 @@ def _validate_inputs(
         if np.any(np.isnan(flow_out)):
             msg = "flow_out contains NaN values, which are not allowed"
             raise ValueError(msg)
-        if np.any(flow_out <= 0):
-            msg = "flow_out must be positive"
+        if np.any(flow_out < 0):
+            msg = "flow_out must be non-negative (negative flow not supported)"
             raise ValueError(msg)
 
 

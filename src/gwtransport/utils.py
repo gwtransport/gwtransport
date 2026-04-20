@@ -607,17 +607,19 @@ def partial_isin(*, bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -
         msg = "Both edge arrays must have at least 2 elements"
         raise ValueError(msg)
 
-    # Check ascending order, ignoring NaN values
+    # Edges must be non-decreasing (ignoring NaN). Zero-width input bins are
+    # allowed -- they arise e.g. from cumulative flow with zero-flow intervals --
+    # and produce zero overlap fractions (no water passed through).
     diffs_in = np.diff(bin_edges_in)
     valid_diffs_in = ~np.isnan(diffs_in)
-    if np.any(valid_diffs_in) and not np.all(diffs_in[valid_diffs_in] > 0):
-        msg = "bin_edges_in must be in ascending order"
+    if np.any(valid_diffs_in) and not np.all(diffs_in[valid_diffs_in] >= 0):
+        msg = "bin_edges_in must be non-decreasing"
         raise ValueError(msg)
 
     diffs_out = np.diff(bin_edges_out)
     valid_diffs_out = ~np.isnan(diffs_out)
-    if np.any(valid_diffs_out) and not np.all(diffs_out[valid_diffs_out] > 0):
-        msg = "bin_edges_out must be in ascending order"
+    if np.any(valid_diffs_out) and not np.all(diffs_out[valid_diffs_out] >= 0):
+        msg = "bin_edges_out must be non-decreasing"
         raise ValueError(msg)
 
     # Build matrix using fully vectorized approach
@@ -636,8 +638,11 @@ def partial_isin(*, bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -
     # Calculate overlap widths (zero where no overlap)
     overlap_widths = np.maximum(0, overlap_right - overlap_left)
 
-    # Calculate fractions (NaN widths will result in NaN fractions)
-    return overlap_widths / in_width
+    # Zero-width input bins contribute no overlap (division-safe). NaN widths still
+    # propagate as NaN fractions (preserved for spin-up handling).
+    with np.errstate(divide="ignore", invalid="ignore"):
+        result = overlap_widths / in_width
+    return np.where(in_width == 0, 0.0, result)
 
 
 def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.NDArray[np.floating]:

@@ -492,13 +492,13 @@ def test_invalid_inputs():
     # Test with unsorted input edges
     bin_edges_in = np.array([30, 20, 10])  # Descending order
     bin_edges_out = np.array([5, 15, 25])
-    with pytest.raises(ValueError, match="bin_edges_in must be in ascending order"):
+    with pytest.raises(ValueError, match="bin_edges_in must be non-decreasing"):
         partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
 
     # Test with unsorted output edges
     bin_edges_in = np.array([0, 10, 20])
     bin_edges_out = np.array([25, 15, 5])  # Descending order
-    with pytest.raises(ValueError, match="bin_edges_out must be in ascending order"):
+    with pytest.raises(ValueError, match="bin_edges_out must be non-decreasing"):
         partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
 
 

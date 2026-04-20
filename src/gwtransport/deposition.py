@@ -132,7 +132,14 @@ def compute_deposition_weights(
     )
     area_array = volume_array / (porosity * thickness)
     extracted_volume = np.diff(end_vol)
-    return area_array * np.diff(tedges_days)[None, :] / extracted_volume[:, None]
+    # Zero-flow cout bins have extracted_volume == 0 (no water extracted), so
+    # the weight row collapses to 0: no extraction contributes no deposition
+    # signature to cout. Use a sentinel divisor on those rows to avoid the
+    # division-by-zero warning before np.where discards them.
+    numerator = area_array * np.diff(tedges_days)[None, :]
+    mask = extracted_volume > 0
+    safe_denom = np.where(mask, extracted_volume, 1.0)[:, None]
+    return np.where(mask[:, None], numerator / safe_denom, 0.0)
 
 
 def deposition_to_extraction(
@@ -219,6 +226,9 @@ def deposition_to_extraction(
         raise ValueError(msg)
     if np.any(np.isnan(dep_values)) or np.any(np.isnan(flow_values)):
         msg = "Input arrays cannot contain NaN values"
+        raise ValueError(msg)
+    if np.any(flow_values < 0):
+        msg = "flow must be non-negative (negative flow not supported)"
         raise ValueError(msg)
 
     # Validate physical parameters
@@ -386,6 +396,9 @@ def extraction_to_deposition(
     if np.any(np.isnan(flow_values)):
         msg = "flow array cannot contain NaN values"
         raise ValueError(msg)
+    if np.any(flow_values < 0):
+        msg = "flow must be non-negative (negative flow not supported)"
+        raise ValueError(msg)
 
     # Validate physical parameters
     if not 0 < porosity < 1:
@@ -415,8 +428,9 @@ def extraction_to_deposition(
     # W has row sums equal to residence_time/(porosity*thickness), not 1 like
     # advection. Normalizing makes each observation equally important and
     # gives compute_reverse_target the correct scale for the target.
-    # NaN rows (spin-up) and NaN values in cout are excluded by solve_tikhonov.
-    valid_rows = ~np.isnan(deposition_weights).any(axis=1)
+    # NaN rows (spin-up), all-zero rows (zero-flow cout bins; carry no info),
+    # and NaN values in cout are excluded by solve_tikhonov.
+    valid_rows = ~np.isnan(deposition_weights).any(axis=1) & (np.abs(deposition_weights).sum(axis=1) > 0)
     valid_weights = deposition_weights[valid_rows]
     row_sums = valid_weights.sum(axis=1, keepdims=True)
     col_active = np.sum(np.abs(valid_weights), axis=0) > 0
@@ -559,6 +573,9 @@ def extraction_to_deposition_full(
         raise ValueError(msg)
     if np.any(np.isnan(flow_values)):
         msg = "flow array cannot contain NaN values"
+        raise ValueError(msg)
+    if np.any(flow_values < 0):
+        msg = "flow must be non-negative (negative flow not supported)"
         raise ValueError(msg)
 
     # Validate physical parameters

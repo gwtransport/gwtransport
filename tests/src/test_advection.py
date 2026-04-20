@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -2554,3 +2556,96 @@ class TestFlowWeightedFrontTracking:
         dt_out = np.diff(((cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)).values)
         mass_out = np.sum(cout * flow[0] * dt_out)
         np.testing.assert_allclose(mass_out, mass_in, rtol=1e-13)
+
+
+# =============================================================================
+# Negative-flow rejection and zero-flow invariance
+# =============================================================================
+
+
+def _zero_flow_invariance_setup():
+    """Baseline and zero-flow-inserted scenarios sharing the same cout grid."""
+    n = 200
+    tedges_base = pd.date_range(start="2020-01-01", periods=n + 1, freq="D")
+    cin_base = 10.0 + np.sin(np.linspace(0, 4 * np.pi, n))
+    flow_base = np.full(n, 100.0)
+
+    k = 100  # insertion index
+    tedges_mod = pd.date_range(start="2020-01-01", periods=n + 2, freq="D")
+    cin_mod = np.insert(cin_base, k, cin_base[k - 1])
+    flow_mod = np.insert(flow_base, k, 0.0)
+
+    return {
+        "n": n,
+        "k": k,
+        "tedges_base": tedges_base,
+        "cin_base": cin_base,
+        "flow_base": flow_base,
+        "tedges_mod": tedges_mod,
+        "cin_mod": cin_mod,
+        "flow_mod": flow_mod,
+    }
+
+
+def test_infiltration_to_extraction_rejects_negative_flow():
+    """Negative flow must raise ValueError with the standard message."""
+    tedges = pd.date_range(start="2020-01-01", periods=11, freq="D")
+    cin = np.ones(10)
+    flow = np.full(10, 100.0)
+    flow[5] = -1.0
+
+    with pytest.raises(ValueError, match="flow must be non-negative"):
+        infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+        )
+
+
+def test_infiltration_to_extraction_accepts_zero_flow_without_warnings():
+    """flow == 0 is accepted; no division-by-zero warnings emitted."""
+    tedges = pd.date_range(start="2020-01-01", periods=201, freq="D")
+    cin = np.ones(200)
+    flow = np.full(200, 100.0)
+    flow[100] = 0.0
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+        )
+
+
+def test_infiltration_to_extraction_zero_flow_insertion_invariance():
+    """Insert a zero-flow bin mid-series: preserves spin-up NaN count and values."""
+    s = _zero_flow_invariance_setup()
+    apv = np.array([500.0])
+
+    cout_base = infiltration_to_extraction(
+        cin=s["cin_base"],
+        flow=s["flow_base"],
+        tedges=s["tedges_base"],
+        cout_tedges=s["tedges_base"],
+        aquifer_pore_volumes=apv,
+    )
+    cout_mod = infiltration_to_extraction(
+        cin=s["cin_mod"],
+        flow=s["flow_mod"],
+        tedges=s["tedges_mod"],
+        cout_tedges=s["tedges_mod"],
+        aquifer_pore_volumes=apv,
+    )
+
+    # Drop the inserted zero-flow output bin and check invariants:
+    cout_mod_stripped = np.delete(cout_mod, s["k"])
+    assert np.sum(np.isnan(cout_mod_stripped)) == np.sum(np.isnan(cout_base))
+
+    # Comparable values where both are finite
+    valid = ~np.isnan(cout_base) & ~np.isnan(cout_mod_stripped)
+    np.testing.assert_allclose(cout_mod_stripped[valid], cout_base[valid], atol=1e-10)
