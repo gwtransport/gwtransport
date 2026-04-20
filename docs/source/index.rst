@@ -144,17 +144,33 @@ Indices and tables
 
 .. |Functional Testing| image:: https://github.com/gwtransport/gwtransport/actions/workflows/functional_testing.yml/badge.svg?branch=main
    :target: https://github.com/gwtransport/gwtransport/actions/workflows/functional_testing.yml
+   :width: 178
+   :height: 20
 .. |Test Coverage| image:: https://gwtransport.github.io/gwtransport/coverage-badge.svg
    :target: https://gwtransport.github.io/gwtransport/htmlcov/
+   :width: 114
+   :height: 20
 .. |Linting| image:: https://github.com/gwtransport/gwtransport/actions/workflows/linting.yml/badge.svg?branch=main
    :target: https://github.com/gwtransport/gwtransport/actions/workflows/linting.yml
+   :width: 115
+   :height: 20
 .. |Build and release package| image:: https://github.com/gwtransport/gwtransport/actions/workflows/release.yml/badge.svg?branch=main
    :target: https://github.com/gwtransport/gwtransport/actions/workflows/release.yml
+   :width: 222
+   :height: 20
 .. |Testing of examples| image:: https://github.com/gwtransport/gwtransport/actions/workflows/examples_testing.yml/badge.svg?branch=main
    :target: https://github.com/gwtransport/gwtransport/actions/workflows/examples_testing.yml
+   :width: 189
+   :height: 20
 .. |PyPI - Python Version| image:: https://img.shields.io/pypi/pyversions/gwtransport.svg?logo=python&label=Python&logoColor=gold
    :target: https://pypi.org/project/gwtransport/
+   :width: 215
+   :height: 20
 .. |PyPI - Version| image:: https://img.shields.io/pypi/v/gwtransport.svg?logo=pypi&label=PyPI&logoColor=gold
    :target: https://pypi.org/project/gwtransport/
+   :width: 105
+   :height: 20
 .. |GitHub commits since latest release| image:: https://img.shields.io/github/commits-since/gwtransport/gwtransport/latest?logo=github&logoColor=lightgrey
    :target: https://github.com/gwtransport/gwtransport/compare/
+   :width: 163
+   :height: 20
