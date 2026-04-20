@@ -16,7 +16,7 @@ Available functions:
   Automatically handles unsorted data with configurable extrapolation (None for clamping,
   float for constant values). Handles multi-dimensional query arrays.
 
-- :func:`_interp_series` - Interpolate pandas Series to new DatetimeIndex using
+- ``_interp_series`` (private) - Interpolate pandas Series to new DatetimeIndex using
   scipy.interpolate.interp1d. Automatically filters NaN values and converts datetime to
   numerical representation.
 
@@ -24,8 +24,8 @@ Available functions:
   specified x-edges. Supports 1D or 2D edge arrays for batch processing. Handles NaN values
   and offers multiple extrapolation methods ('nan', 'outer', 'raise').
 
-- :func:`_diff` - Compute cell widths from cell coordinate arrays with configurable alignment
-  ('centered', 'left', 'right'). Returns widths matching input array length.
+- ``_diff`` (private) - Compute cell widths from cell coordinate arrays with configurable
+  alignment ('centered', 'left', 'right'). Returns widths matching input array length.
 
 - :func:`partial_isin` - Calculate fraction of each input bin overlapping with each output bin.
   Returns dense matrix where element (i,j) represents overlap fraction. Uses vectorized
@@ -64,8 +64,8 @@ Available functions:
   323 (Wilhelminadorp). Returns DataFrame with columns TB1-TB5, TNB1-TNB2, TXB1-TXB2 at various
   depths. Daily cache prevents redundant downloads.
 
-- :func:`_generate_failed_coverage_badge` - Generate SVG badge indicating failed coverage using
-  genbadge library. Used in CI/CD workflows.
+- ``_generate_failed_coverage_badge`` (private) - Generate SVG badge indicating failed coverage
+  using genbadge library. Used in CI/CD workflows.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -165,10 +165,6 @@ def linear_interpolate(
     -------
     numpy.ndarray
         Interpolated y-values with the same shape as x_query.
-
-    See Also
-    --------
-    interp_series : Interpolate pandas Series with datetime index
 
     Examples
     --------
@@ -741,13 +737,13 @@ def simplify_bins(
 
     Parameters
     ----------
-    edges : array_like, shape (n+1,)
-        Bin edges. May be numeric or pandas Timestamps.
-    values : array_like, shape (n,)
-        Bin-averaged values (e.g., concentrations).
-    flow : array_like, shape (n,), optional
-        Flow rate per bin (e.g., m³/day). When provided, merged-bin
-        values are weighted by volume (flow x bin width) instead of
+    edges : array-like
+        Bin edges with shape ``(n+1,)``. May be numeric or pandas Timestamps.
+    values : array-like
+        Bin-averaged values with shape ``(n,)`` (e.g., concentrations).
+    flow : array-like, optional
+        Flow rate per bin with shape ``(n,)`` (e.g., m³/day). When provided,
+        merged-bin values are weighted by volume (flow x bin width) instead of
         bin width alone.
     tol : float, optional
         Maximum peak-to-peak range within a merged group.
@@ -755,14 +751,15 @@ def simplify_bins(
 
     Returns
     -------
-    new_edges : ndarray or DatetimeIndex, shape (m+1,)
-        Simplified bin edges, preserving the type of `edges`.
-    new_values : ndarray of float, shape (m,)
-        Volume-weighted (or width-weighted) average values per
-        simplified bin.
-    new_flow : ndarray of float, shape (m,), or None
-        Time-weighted (width-weighted) average flow per simplified
-        bin. None when `flow` is not provided.
+    new_edges : ndarray or DatetimeIndex
+        Simplified bin edges with shape ``(m+1,)``, preserving the type of
+        `edges`.
+    new_values : ndarray of float
+        Volume-weighted (or width-weighted) average values per simplified
+        bin, with shape ``(m,)``.
+    new_flow : ndarray of float or None
+        Time-weighted (width-weighted) average flow per simplified bin, with
+        shape ``(m,)``. None when `flow` is not provided.
     """
     edges = np.asarray(edges) if not isinstance(edges, pd.DatetimeIndex) else edges
     values = np.asarray(values, dtype=float)
@@ -1653,25 +1650,27 @@ def solve_inverse_transport(
 
     Parameters
     ----------
-    w_forward : ndarray, shape (n_obs, n_output)
-        Forward coefficient matrix.
-    observed : ndarray, shape (n_obs,)
-        Observed values (e.g., extraction concentrations).
+    w_forward : ndarray
+        Forward coefficient matrix with shape ``(n_obs, n_output)``.
+    observed : ndarray
+        Observed values with shape ``(n_obs,)`` (e.g., extraction
+        concentrations).
     n_output : int
         Length of the output vector (e.g., number of cin bins).
     regularization_strength : float
         Tikhonov regularization parameter.
-    valid_rows : ndarray of bool, shape (n_obs,), optional
-        Which observation rows are valid. If None, rows with
-        ``row_sum > 1e-10`` are considered valid.
+    valid_rows : ndarray of bool, optional
+        Which observation rows are valid, with shape ``(n_obs,)``. If None,
+        rows with ``row_sum > 1e-10`` are considered valid.
     warn_rank_deficient : bool, optional
         If True, emit a warning when the forward matrix has rank
         deficiency among its active columns. Default is False.
 
     Returns
     -------
-    ndarray, shape (n_output,)
-        Recovered signal. NaN for bins with no active columns.
+    ndarray
+        Recovered signal with shape ``(n_output,)``. NaN for bins with no
+        active columns.
 
     Warns
     -----

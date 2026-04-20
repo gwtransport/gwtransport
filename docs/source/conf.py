@@ -47,7 +47,10 @@ napoleon_use_rtype = True
 napoleon_preprocess_types = True
 napoleon_type_aliases = {
     "array-like": ":py:data:`~numpy.typing.ArrayLike`",
+    "array_like": ":py:data:`~numpy.typing.ArrayLike`",
     "callable": ":py:class:`~collections.abc.Callable`",
+    "ndarray": ":py:class:`~numpy.ndarray`",
+    "DatetimeIndex": ":py:class:`~pandas.DatetimeIndex`",
     # Internal fronttracking types
     "Wave": ":py:class:`~gwtransport.fronttracking.waves.Wave`",
     "ShockWave": ":py:class:`~gwtransport.fronttracking.waves.ShockWave`",
@@ -55,6 +58,7 @@ napoleon_type_aliases = {
     "RarefactionWave": ":py:class:`~gwtransport.fronttracking.waves.RarefactionWave`",
     "FreundlichSorption": ":py:class:`~gwtransport.fronttracking.math.FreundlichSorption`",
     "ConstantRetardation": ":py:class:`~gwtransport.fronttracking.math.ConstantRetardation`",
+    "SorptionModel": ":py:data:`~gwtransport.fronttracking.math.SorptionModel`",
     "FrontTrackerState": ":py:class:`~gwtransport.fronttracking.solver.FrontTrackerState`",
     "Event": ":py:class:`~gwtransport.fronttracking.events.Event`",
 }
@@ -112,6 +116,17 @@ always_use_bars_union = True
 typehints_defaults = "comma"
 simplify_optional_unions = True
 nitpicky = True
+
+# nbsphinx sets a callable in nbsphinx_custom_formats which cannot be pickled
+# for Sphinx's configuration cache; the warning is benign.
+suppress_warnings = ["config.cache"]
+
+# numpy.float64 is emitted by autodoc when rendering the signatures of
+# functions that accept ``npt.NDArray[np.float64]`` but is not exposed as a
+# py:class in the numpy intersphinx inventory.
+nitpick_ignore = [
+    ("py:class", "numpy.float64"),
+]
 
 # -- Options for intersphinx -------------------------------------------------
 intersphinx_mapping = {
