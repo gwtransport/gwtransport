@@ -1519,14 +1519,14 @@ def test_flow_out_validation_nan():
         )
 
 
-def test_flow_out_validation_nonpositive():
-    """flow_out with non-positive values raises ValueError."""
+def test_flow_out_validation_negative():
+    """flow_out with negative values raises ValueError."""
     tedges, cout_tedges, flow = _make_transport_data(n_days=200)
     cin = np.full(200, 10.0)
     flow_out = np.full(200, 100.0)
-    flow_out[50] = 0.0
+    flow_out[50] = -1.0
 
-    with pytest.raises(ValueError, match="flow_out must be positive"):
+    with pytest.raises(ValueError, match="flow_out must be non-negative"):
         infiltration_to_extraction(
             cin=cin,
             flow=flow,
@@ -2030,3 +2030,85 @@ class TestGammaExtractionToInfiltrationFast:
                 mean_longitudinal_dispersivity=1.0,
                 suppress_dispersion_warning=True,
             )
+
+
+# =============================================================================
+# Negative-flow rejection and zero-flow invariance
+# =============================================================================
+
+
+def test_infiltration_to_extraction_rejects_negative_flow():
+    """Negative flow must raise ValueError with the standard message."""
+    tedges = pd.date_range(start="2020-01-01", periods=11, freq="D")
+    cin = np.ones(10)
+    flow = np.full(10, 100.0)
+    flow[5] = -1.0
+
+    with pytest.raises(ValueError, match="flow must be non-negative"):
+        infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            mean_streamline_length=80.0,
+            mean_molecular_diffusivity=0.03,
+            mean_longitudinal_dispersivity=0.0,
+        )
+
+
+def test_infiltration_to_extraction_accepts_zero_flow_without_warnings():
+    """flow == 0 is accepted; no runtime warnings emitted."""
+    tedges = pd.date_range(start="2020-01-01", periods=201, freq="D")
+    cin = np.ones(200)
+    flow = np.full(200, 100.0)
+    flow[100] = 0.0
+
+    with warn_module.catch_warnings():
+        warn_module.simplefilter("error", RuntimeWarning)
+        infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            mean_streamline_length=80.0,
+            mean_molecular_diffusivity=0.03,
+            mean_longitudinal_dispersivity=0.0,
+        )
+
+
+def test_infiltration_to_extraction_zero_flow_insertion_invariance():
+    """Insert a zero-flow bin mid-series: preserves NaN count and value pattern."""
+    n = 200
+    k = 100
+    tedges_base = pd.date_range(start="2020-01-01", periods=n + 1, freq="D")
+    cin_base = 10.0 + np.sin(np.linspace(0, 4 * np.pi, n))
+    flow_base = np.full(n, 100.0)
+
+    tedges_mod = pd.date_range(start="2020-01-01", periods=n + 2, freq="D")
+    cin_mod = np.insert(cin_base, k, cin_base[k - 1])
+    flow_mod = np.insert(flow_base, k, 0.0)
+
+    common_kwargs = {
+        "aquifer_pore_volumes": np.array([500.0]),
+        "mean_streamline_length": 80.0,
+        "mean_molecular_diffusivity": 0.03,
+        "mean_longitudinal_dispersivity": 5.0,
+    }
+
+    cout_base = infiltration_to_extraction(
+        cin=cin_base, flow=flow_base, tedges=tedges_base, cout_tedges=tedges_base, **common_kwargs
+    )
+    cout_mod = infiltration_to_extraction(
+        cin=cin_mod, flow=flow_mod, tedges=tedges_mod, cout_tedges=tedges_mod, **common_kwargs
+    )
+
+    cout_mod_stripped = np.delete(cout_mod, k)
+    assert np.sum(np.isnan(cout_mod_stripped)) == np.sum(np.isnan(cout_base))
+
+    valid = ~np.isnan(cout_base) & ~np.isnan(cout_mod_stripped)
+    # Near the inserted bin the diffusion kernel reaches across the gap, so
+    # values drift by up to a few percent of the input amplitude; farther out
+    # the signal converges back to the baseline.
+    assert_allclose(cout_mod_stripped[valid], cout_base[valid], atol=5e-2)

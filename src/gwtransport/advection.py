@@ -839,12 +839,15 @@ def infiltration_to_extraction(
     if np.any(np.isnan(flow)):
         msg = "flow contains NaN values, which are not allowed"
         raise ValueError(msg)
+    if np.any(flow < 0):
+        msg = "flow must be non-negative (negative flow not supported)"
+        raise ValueError(msg)
     if retardation_factor < 1.0:
         msg = "retardation_factor must be >= 1.0"
         raise ValueError(msg)
 
     # Compute normalized weights (includes all pre-computation)
-    normalized_weights = _infiltration_to_extraction_weights(
+    normalized_weights, spinup_mask = _infiltration_to_extraction_weights(
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -852,11 +855,11 @@ def infiltration_to_extraction(
         retardation_factor=retardation_factor,
     )
 
-    # Apply to concentrations and handle NaN for periods with no contributions
+    # Apply to concentrations. Spin-up rows (no streamtube traced back into
+    # the cin range) become NaN; zero-flow rows naturally produce 0 from the
+    # zero weight row.
     out = normalized_weights.dot(cin)
-    # Set NaN where no valid pore volumes contributed
-    total_weights = np.sum(normalized_weights, axis=1)
-    out[total_weights == 0] = np.nan
+    out[spinup_mask] = np.nan
 
     return out
 
@@ -1036,7 +1039,7 @@ def extraction_to_infiltration(
     n_cin = len(tedges) - 1
 
     # Build forward weight matrix: W_forward @ cin = cout
-    w_forward = _infiltration_to_extraction_weights(
+    w_forward, _ = _infiltration_to_extraction_weights(
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
@@ -1107,11 +1110,11 @@ def _validate_front_tracking_inputs(
     if np.any(cin < 0):
         msg = "cin must be non-negative"
         raise ValueError(msg)
-    if np.any(flow <= 0):
-        msg = "flow must be positive"
-        raise ValueError(msg)
     if np.any(np.isnan(cin)) or np.any(np.isnan(flow)):
         msg = "cin and flow must not contain NaN"
+        raise ValueError(msg)
+    if np.any(flow < 0):
+        msg = "flow must be non-negative (negative flow not supported)"
         raise ValueError(msg)
     if np.any(aquifer_pore_volumes <= 0):
         msg = "aquifer_pore_volumes must be positive"

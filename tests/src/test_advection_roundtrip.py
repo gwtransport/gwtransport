@@ -199,7 +199,7 @@ class TestRoundtripSameGrid:
         # reconstruction error |cin_recovered - cin_original| at each bin is
         # bounded by |P_null(cin_original)| at that bin, since cin_recovered
         # and cin_original agree modulo null(W).
-        w_forward = _infiltration_to_extraction_weights(
+        w_forward, _ = _infiltration_to_extraction_weights(
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=pore_volumes,

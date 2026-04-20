@@ -1391,3 +1391,124 @@ def test_variable_timestep_zero_deposition():
     valid = ~np.isnan(cout_result)
     assert valid.sum() >= 1
     np.testing.assert_allclose(cout_result[valid], 0.0, atol=1e-15)
+
+
+# ===============================================================================
+# FLOW SIGN VALIDATION
+# ===============================================================================
+
+
+@pytest.fixture
+def flow_sign_setup():
+    """Shared setup for flow sign validation tests."""
+    dates = pd.date_range("2020-01-01", "2020-01-10", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+    cout_dates = pd.date_range("2020-01-03", "2020-01-10", freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+    params = {
+        "aquifer_pore_volume": 200.0,
+        "porosity": 0.3,
+        "thickness": 5.0,
+        "retardation_factor": 1.0,
+    }
+    return tedges, cout_tedges, params
+
+
+def test_deposition_to_extraction_negative_flow_rejected(flow_sign_setup):
+    """Negative flow is physically invalid and must raise the standard error."""
+    tedges, cout_tedges, params = flow_sign_setup
+    n = len(tedges) - 1
+    flow = np.full(n, 100.0)
+    flow[3] = -50.0
+    with pytest.raises(ValueError, match="flow must be non-negative"):
+        deposition_to_extraction(
+            dep=np.ones(n),
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **params,
+        )
+
+
+def test_extraction_to_deposition_negative_flow_rejected(flow_sign_setup):
+    """Negative flow is physically invalid and must raise the standard error."""
+    tedges, cout_tedges, params = flow_sign_setup
+    n = len(tedges) - 1
+    flow = np.full(n, 100.0)
+    flow[3] = -50.0
+    n_cout = len(cout_tedges) - 1
+    with pytest.raises(ValueError, match="flow must be non-negative"):
+        extraction_to_deposition(
+            cout=np.ones(n_cout) * 10.0,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **params,
+        )
+
+
+def test_extraction_to_deposition_full_negative_flow_rejected(flow_sign_setup):
+    """Negative flow is physically invalid and must raise the standard error."""
+    tedges, cout_tedges, params = flow_sign_setup
+    n = len(tedges) - 1
+    flow = np.full(n, 100.0)
+    flow[3] = -50.0
+    n_cout = len(cout_tedges) - 1
+    with pytest.raises(ValueError, match="flow must be non-negative"):
+        extraction_to_deposition_full(
+            cout=np.ones(n_cout) * 10.0,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **params,
+        )
+
+
+def test_deposition_to_extraction_zero_flow_accepted(flow_sign_setup):
+    """Zero flow is mathematically valid (no transport during the bin) and must not raise.
+
+    The call must emit no RuntimeWarnings (divide-by-zero / invalid-value), and
+    non-zero-flow cout bins must still produce finite output -- only cout bins
+    whose extracted volume is zero (fully inside the zero-flow window) may be NaN.
+    """
+    tedges, cout_tedges, params = flow_sign_setup
+    n = len(tedges) - 1
+    flow = np.full(n, 100.0)
+    flow[3] = 0.0
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        cout = deposition_to_extraction(
+            dep=np.ones(n),
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **params,
+        )
+
+    assert cout.shape == (len(cout_tedges) - 1,)
+    # Zero-flow must not produce NaN. The zero-flow cout bin has no extraction
+    # so its concentration is reported as 0 (no water => no flux observed).
+    assert np.all(np.isfinite(cout))
+    assert np.all(cout >= 0.0)
+
+
+def test_extraction_to_deposition_zero_flow_accepted(flow_sign_setup):
+    """Zero flow must be accepted (no RuntimeWarnings) by the deconvolution path too."""
+    tedges, cout_tedges, params = flow_sign_setup
+    n = len(tedges) - 1
+    flow = np.full(n, 100.0)
+    flow[3] = 0.0
+    n_cout = len(cout_tedges) - 1
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        dep = extraction_to_deposition(
+            cout=np.ones(n_cout) * 10.0,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            **params,
+        )
+
+    assert dep.shape == (n,)

@@ -2157,3 +2157,49 @@ class TestGammaExtractionToInfiltrationDiffusion:
             rtol=1e-9,
             atol=1e-9,
         )
+
+
+# =============================================================================
+# Negative-flow rejection and zero-flow invariance
+# =============================================================================
+
+
+def test_infiltration_to_extraction_rejects_negative_flow():
+    """Negative flow must raise ValueError with the standard message."""
+    tedges = pd.date_range(start="2020-01-01", periods=11, freq="D")
+    cin = np.ones(10)
+    flow = np.full(10, 100.0)
+    flow[5] = -1.0
+
+    with pytest.raises(ValueError, match="flow must be non-negative"):
+        infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            streamline_length=np.array([80.0]),
+            molecular_diffusivity=np.array([0.03]),
+            longitudinal_dispersivity=np.array([0.0]),
+        )
+
+
+def test_infiltration_to_extraction_accepts_zero_flow_without_warnings():
+    """flow == 0 is accepted; no runtime warnings emitted."""
+    tedges = pd.date_range(start="2020-01-01", periods=201, freq="D")
+    cin = np.ones(200)
+    flow = np.full(200, 100.0)
+    flow[100] = 0.0
+
+    with warn_module.catch_warnings():
+        warn_module.simplefilter("error", RuntimeWarning)
+        infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            streamline_length=np.array([80.0]),
+            molecular_diffusivity=np.array([0.03]),
+            longitudinal_dispersivity=np.array([0.0]),
+        )

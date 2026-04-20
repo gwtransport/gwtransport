@@ -126,7 +126,7 @@ class TestFrontTrackerInitialization:
         flow = np.array([100.0, -100.0])  # Negative flow
         tedges = pd.to_datetime(["2020-01-01", "2020-01-11", "2020-04-11"])
 
-        with pytest.raises(ValueError, match="flow must be positive"):
+        with pytest.raises(ValueError, match="flow must be non-negative"):
             FrontTracker(
                 cin=cin,
                 flow=flow,

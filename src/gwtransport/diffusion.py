@@ -759,8 +759,8 @@ def infiltration_to_extraction(
     if np.any(np.isnan(flow)):
         msg = "flow contains NaN values, which are not allowed"
         raise ValueError(msg)
-    if np.any(flow <= 0):
-        msg = "flow must be positive"
+    if np.any(flow < 0):
+        msg = "flow must be non-negative (negative flow not supported)"
         raise ValueError(msg)
     if np.any(aquifer_pore_volumes <= 0):
         msg = "aquifer_pore_volumes must be positive"
