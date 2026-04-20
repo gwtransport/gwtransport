@@ -1711,7 +1711,7 @@ class TestHandleFlowChangePhysics:
         # Change flow
         new_flow = 150.0
         t_change = 10.0
-        new_waves = handle_flow_change(t_change, new_flow, active_waves, v_outlet=1e6)
+        new_waves = handle_flow_change(t_change, new_flow, active_waves)
 
         # All original waves should be deactivated
         assert not char.is_active, "Characteristic should be deactivated"
@@ -1740,7 +1740,7 @@ class TestHandleFlowChangePhysics:
         char = CharacteristicWave(t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=freundlich_sorption)
 
         old_velocity = char.velocity()
-        new_waves = handle_flow_change(t_change=10.0, flow_new=200.0, active_waves=[char], v_outlet=1e6)
+        new_waves = handle_flow_change(t_change=10.0, flow_new=200.0, active_waves=[char])
 
         new_char = new_waves[0]
         # Velocity should double
@@ -1751,7 +1751,7 @@ class TestHandleFlowChangePhysics:
         char = CharacteristicWave(t_start=0.0, v_start=0.0, flow=200.0, concentration=5.0, sorption=freundlich_sorption)
 
         old_velocity = char.velocity()
-        new_waves = handle_flow_change(t_change=10.0, flow_new=100.0, active_waves=[char], v_outlet=1e6)
+        new_waves = handle_flow_change(t_change=10.0, flow_new=100.0, active_waves=[char])
 
         new_char = new_waves[0]
         # Velocity should halve
@@ -1771,7 +1771,7 @@ class TestHandleFlowChangePhysics:
             t_start=0.0, v_start=20.0, flow=100.0, c_head=9.0, c_tail=3.0, sorption=freundlich_sorption
         )
 
-        new_waves = handle_flow_change(t_change=10.0, flow_new=150.0, active_waves=[char, shock, raref], v_outlet=1e6)
+        new_waves = handle_flow_change(t_change=10.0, flow_new=150.0, active_waves=[char, shock, raref])
 
         new_char = next(w for w in new_waves if isinstance(w, CharacteristicWave))
         new_shock = next(w for w in new_waves if isinstance(w, ShockWave))
@@ -1798,9 +1798,7 @@ class TestHandleFlowChangePhysics:
             is_active=False,
         )
 
-        new_waves = handle_flow_change(
-            t_change=10.0, flow_new=150.0, active_waves=[active_char, inactive_char], v_outlet=1e6
-        )
+        new_waves = handle_flow_change(t_change=10.0, flow_new=150.0, active_waves=[active_char, inactive_char])
 
         # Only the active wave should be recreated
         assert len(new_waves) == 1, "Only active wave should be recreated"
@@ -2332,20 +2330,15 @@ class TestHandleFlowChangeEdgeCases:
     def test_unknown_wave_type_raises_error(self):
         """Test lines 959-960: unknown wave type raises TypeError."""
 
-        # Create a mock wave that isn't a known type. The handler queries
-        # ``position_at_time`` to decide whether the wave is past the outlet
-        # before dispatching on type, so the mock has to expose that method.
+        # Create a mock wave that isn't a known type
         class UnknownWave:
             def __init__(self):
                 self.is_active = True
 
-            def position_at_time(self, t):  # noqa: ARG002
-                return 0.0  # In-domain so the dispatch path is reached.
-
         unknown = UnknownWave()
 
         with pytest.raises(TypeError, match="Unknown wave type"):
-            handle_flow_change(t_change=10.0, flow_new=150.0, active_waves=[unknown], v_outlet=1e6)
+            handle_flow_change(t_change=10.0, flow_new=150.0, active_waves=[unknown])
 
 
 class TestInletWaveCreationEdgeCases:

@@ -693,11 +693,7 @@ def handle_rarefaction_rarefaction_collision(
     Notes
     -----
     - Waves remain active so that concentration queries remain valid.
-    - The FrontTracker records the event in its diagnostics history and also
-      adds the (raref1, raref2, boundary_type) tuple to a "handled" set so
-      that the same intersection is not rediscovered on subsequent event
-      sweeps (which would otherwise cause an infinite event loop because
-      this handler is a no-op).
+    - The FrontTracker records the event in its diagnostics history.
     - This is consistent with the design goal of exact analytical
       computation while deferring complex topology changes.
     """
@@ -970,7 +966,6 @@ def handle_flow_change(
     t_change: float,
     flow_new: float,
     active_waves: list,
-    v_outlet: float,
 ) -> list:
     """
     Handle flow change event by recreating all active waves with new flow.
@@ -987,13 +982,6 @@ def handle_flow_change(
         New flow rate [m³/day]
     active_waves : list
         All currently active waves
-    v_outlet : float
-        Outlet position [m³]. Waves whose position at ``t_change`` is at or past
-        the outlet are left active (and not recreated): they no longer
-        participate in in-domain dynamics, but downstream queries
-        (``concentration_at_point``, ``identify_outlet_segments``) need them to
-        remain queryable so output bins covering ``t < t_change`` still see the
-        post-crossing concentration.
 
     Returns
     -------
@@ -1007,13 +995,7 @@ def handle_flow_change(
 
     Notes
     -----
-    Parent waves are deactivated by this handler ONLY when they are still
-    inside the domain at ``t_change``. Waves that have already crossed the
-    outlet are deliberately preserved as read-only history; deactivating them
-    would silently zero out output bins for any time before ``t_change`` that
-    was controlled by the now-deactivated wave (the replacement wave starts at
-    ``t_change`` with ``v_start`` at the wave's geometric position, which is
-    past the outlet, so it contributes nothing to those earlier bins).
+    Parent waves are deactivated by this handler.
 
     Physical interpretation:
     - Characteristics: velocity changes from flow_old/R(c) to flow_new/R(c)
@@ -1025,10 +1007,7 @@ def handle_flow_change(
     ::
 
         new_waves = handle_flow_change(
-            t_change=10.0,
-            flow_new=200.0,
-            active_waves=[char1, shock1, raref1],
-            v_outlet=500.0,
+            t_change=10.0, flow_new=200.0, active_waves=[char1, shock1, raref1]
         )
         assert len(new_waves) == 3
         assert all(w.flow == 200.0 for w in new_waves)
@@ -1037,13 +1016,6 @@ def handle_flow_change(
 
     for wave in active_waves:
         if not wave.is_active:
-            continue
-
-        # Skip waves that have already crossed the outlet: they are no longer
-        # in the domain, the new flow does not affect them, and deactivating
-        # them would erase the history needed for output bins at t < t_change.
-        v_at_change = wave.position_at_time(t_change)
-        if v_at_change is not None and v_at_change >= v_outlet:
             continue
 
         # Create replacement wave with new flow BEFORE deactivating parent
@@ -1060,11 +1032,7 @@ def handle_flow_change(
 
         new_waves.append(new_wave)
 
-        # Deactivate parent wave AFTER recreation, but record t_change so the
-        # wave's geometry remains queryable for t in [t_start, t_change].
-        # Output bins ending before t_change need this history; without it,
-        # ``concentration_at_point`` would return zero for those bins.
-        wave.t_deactivated = t_change
+        # Deactivate parent wave AFTER recreation
         wave.is_active = False
 
     return new_waves

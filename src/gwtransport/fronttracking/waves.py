@@ -37,14 +37,7 @@ class Wave(ABC):
     flow : float
         Flow rate at formation time [m³/day].
     is_active : bool, optional
-        Whether wave is currently active. Default True. Inactive waves are
-        skipped during future event detection but their geometry remains valid
-        for queries up to ``t_deactivated``.
-    t_deactivated : float or None, optional
-        Time at which the wave's geometry becomes stale [days]. Used when a
-        flow-change event replaces an in-domain wave: the wave's velocity is
-        only physical for ``t_start <= t <= t_deactivated``. ``None`` means the
-        wave's geometry is valid for all ``t >= t_start``. Default ``None``.
+        Whether wave is currently active. Default True.
     """
 
     t_start: float
@@ -55,38 +48,6 @@ class Wave(ABC):
     """Flow rate at formation time [m³/day]."""
     is_active: bool = field(default=True, kw_only=True)
     """Whether wave is currently active."""
-    t_deactivated: float | None = field(default=None, kw_only=True)
-    """Upper time bound for valid geometry queries [days], or None for unbounded."""
-
-    def _geometry_valid_at(self, t: float) -> bool:
-        """Return True if the wave's geometry is valid for queries at time t.
-
-        A wave's geometry is valid when:
-
-        - ``t >= t_start`` (the wave has formed), and
-        - either ``t_deactivated is None`` (no upper bound) or ``t <= t_deactivated``
-          (still within the validity window set when the wave was replaced by
-          another wave with different velocity), and
-        - either ``is_active is True`` (the wave is fully live) or
-          ``t_deactivated is not None`` (the wave is read-only history but its
-          geometry is still meaningful in its validity window).
-
-        Parameters
-        ----------
-        t : float
-            Query time [days].
-
-        Returns
-        -------
-        bool
-            True if ``position_at_time(t)`` should return a value rather than
-            ``None``.
-        """
-        if t < self.t_start:
-            return False
-        if not self.is_active and self.t_deactivated is None:
-            return False
-        return self.t_deactivated is None or t <= self.t_deactivated
 
     @abstractmethod
     def position_at_time(self, t: float) -> float | None:
@@ -213,10 +174,9 @@ class CharacteristicWave(Wave):
         Returns
         -------
         position : float or None
-            Position [m³], or ``None`` if the wave's geometry is not valid at
-            ``t`` (see :meth:`_geometry_valid_at`).
+            Position [m³], or None if t < t_start or inactive.
         """
-        if not self._geometry_valid_at(t):
+        if t < self.t_start or not self.is_active:
             return None
         return self.v_start + self.velocity() * (t - self.t_start)
 
@@ -354,15 +314,14 @@ class ShockWave(Wave):
         Returns
         -------
         position : float or None
-            Position [m³], or ``None`` if the wave's geometry is not valid at
-            ``t`` (see :meth:`Wave._geometry_valid_at`).
+            Position [m³], or None if t < t_start or inactive.
 
         Raises
         ------
         RuntimeError
             If shock velocity is None (should have been set in ``__post_init__``).
         """
-        if not self._geometry_valid_at(t):
+        if t < self.t_start or not self.is_active:
             return None
         if self.velocity is None:
             msg = "Shock velocity should be set in __post_init__"
@@ -571,10 +530,9 @@ class RarefactionWave(Wave):
         Returns
         -------
         position : float or None
-            Head position [m³], or ``None`` if the wave's geometry is not valid
-            at ``t`` (see :meth:`Wave._geometry_valid_at`).
+            Head position [m³], or None if t < t_start or inactive.
         """
-        if not self._geometry_valid_at(t):
+        if t < self.t_start or not self.is_active:
             return None
         return self.v_start + self.head_velocity() * (t - self.t_start)
 
@@ -590,10 +548,9 @@ class RarefactionWave(Wave):
         Returns
         -------
         position : float or None
-            Tail position [m³], or ``None`` if the wave's geometry is not valid
-            at ``t`` (see :meth:`Wave._geometry_valid_at`).
+            Tail position [m³], or None if t < t_start or inactive.
         """
-        if not self._geometry_valid_at(t):
+        if t < self.t_start or not self.is_active:
             return None
         return self.v_start + self.tail_velocity() * (t - self.t_start)
 
@@ -631,7 +588,7 @@ class RarefactionWave(Wave):
         contains : bool
             True if point is between tail and head.
         """
-        if t <= self.t_start or not self._geometry_valid_at(t):
+        if t <= self.t_start or not self.is_active:
             return False
 
         v_head = self.head_position_at_time(t)

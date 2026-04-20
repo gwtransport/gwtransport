@@ -117,13 +117,9 @@ def concentration_at_point(
         c = concentration_at_point(v=250.0, t=5.0, waves=all_waves, sorption=sorption)
         c >= 0.0
     """
-    # Check rarefactions first (they have spatial extent and override other waves).
-    # Wave geometry is gated by ``position_at_time`` (and friends) returning None,
-    # so we deliberately do NOT filter on ``is_active`` here: a wave deactivated
-    # by a flow-change event still has valid geometry for queries at
-    # ``t <= wave.t_deactivated``.
+    # Check rarefactions first (they have spatial extent and override other waves)
     for wave in waves:
-        if isinstance(wave, RarefactionWave):
+        if isinstance(wave, RarefactionWave) and wave.is_active:
             c = wave.concentration_at_point(v, t)
             if c is not None:
                 return c
@@ -135,7 +131,7 @@ def concentration_at_point(
 
     # Check shocks - track which shocks control this position
     for wave in waves:
-        if isinstance(wave, ShockWave):
+        if isinstance(wave, ShockWave) and wave.is_active:
             v_shock = wave.position_at_time(t)
             if v_shock is not None:
                 # Tolerance for exact shock position
@@ -166,7 +162,7 @@ def concentration_at_point(
 
     # Check rarefaction tails - they can override previous waves
     for wave in waves:
-        if isinstance(wave, RarefactionWave):
+        if isinstance(wave, RarefactionWave) and wave.is_active:
             v_tail = wave.tail_position_at_time(t)
             if v_tail is not None and v_tail > v + 1e-15:
                 # Rarefaction tail has passed position v
@@ -187,7 +183,7 @@ def concentration_at_point(
     latest_time = -np.inf
 
     for wave in waves:
-        if isinstance(wave, CharacteristicWave):
+        if isinstance(wave, CharacteristicWave) and wave.is_active:
             # Check if this characteristic has reached position v by time t
             v_char_at_t = wave.position_at_time(t)
 
@@ -313,11 +309,7 @@ def identify_outlet_segments(
 
     The segments completely partition the time interval [t_start, t_end].
     """
-    # Find all waves that cross outlet in this time range.
-    # We deliberately do NOT filter on ``is_active``: waves deactivated by
-    # flow-change events still own outlet crossings that occurred during their
-    # validity window (``t_start <= t <= t_deactivated``) and must contribute
-    # to bins covering those times.
+    # Find all waves that cross outlet in this time range
     outlet_events = []
 
     # Track rarefactions that already contain the outlet at t_start
@@ -325,13 +317,7 @@ def identify_outlet_segments(
     active_rarefactions_at_start = []
 
     for wave in waves:
-        # Skip waves with no valid geometry in the query window: an inactive
-        # wave with no ``t_deactivated`` (i.e., replaced by a child wave) has
-        # nothing meaningful to contribute, and a wave with
-        # ``t_deactivated < t_start`` is entirely in the past.
-        if not wave.is_active and wave.t_deactivated is None:
-            continue
-        if wave.t_deactivated is not None and wave.t_deactivated < t_start:
+        if not wave.is_active:
             continue
 
         # For rarefactions, detect both head and tail crossings
@@ -886,37 +872,28 @@ def compute_domain_mass(
         )
         mass >= 0.0
     """
-    # Partition spatial domain into segments based on wave structure.
-    # The spatial grid is built from ALL waves (active and inactive). Deactivated
-    # waves still mark concentration boundaries that ``concentration_at_point``
-    # uses to determine the correct value at midpoints; omitting them yields
-    # featureless regions that silently report C=0 (e.g., after a flow-change
-    # event leaves orphaned shock positions out of the grid).
+    # Partition spatial domain into segments based on wave structure
+    # We'll evaluate concentration at many points and identify constant regions
+
+    # Collect all wave positions at time t
     wave_positions = []
 
     for wave in waves:
-        if t < wave.t_start:
+        if not wave.is_active:
             continue
 
-        if isinstance(wave, CharacteristicWave):
-            v_pos = wave.v_start + wave.velocity() * (t - wave.t_start)
-            if 0 <= v_pos <= v_outlet:
-                wave_positions.append(v_pos)
-
-        elif isinstance(wave, ShockWave):
-            if wave.velocity is None:
-                continue
-            v_pos = wave.v_start + wave.velocity * (t - wave.t_start)
-            if 0 <= v_pos <= v_outlet:
+        if isinstance(wave, (CharacteristicWave, ShockWave)):
+            v_pos = wave.position_at_time(t)
+            if v_pos is not None and 0 <= v_pos <= v_outlet:
                 wave_positions.append(v_pos)
 
         elif isinstance(wave, RarefactionWave):
-            v_head = wave.v_start + wave.head_velocity() * (t - wave.t_start)
-            v_tail = wave.v_start + wave.tail_velocity() * (t - wave.t_start)
+            v_head = wave.head_position_at_time(t)
+            v_tail = wave.tail_position_at_time(t)
 
-            if 0 <= v_head <= v_outlet:
+            if v_head is not None and 0 <= v_head <= v_outlet:
                 wave_positions.append(v_head)
-            if 0 <= v_tail <= v_outlet:
+            if v_tail is not None and 0 <= v_tail <= v_outlet:
                 wave_positions.append(v_tail)
 
     # Add domain boundaries
@@ -946,7 +923,7 @@ def compute_domain_mass(
         raref_wave = None
 
         for wave in waves:
-            if isinstance(wave, RarefactionWave) and wave.contains_point(v_mid, t):
+            if isinstance(wave, RarefactionWave) and wave.is_active and wave.contains_point(v_mid, t):
                 inside_rarefaction = True
                 raref_wave = wave
                 break
@@ -1256,10 +1233,7 @@ def find_last_rarefaction_start_time(
     t_last = 0.0
 
     for wave in waves:
-        # Include waves still active OR deactivated by a flow change (geometry preserved
-        # via t_deactivated). Skip only waves that were physically destroyed (e.g. consumed
-        # by collisions) and have no t_deactivated set.
-        if not wave.is_active and wave.t_deactivated is None:
+        if not wave.is_active:
             continue
 
         if isinstance(wave, RarefactionWave):
@@ -1612,10 +1586,7 @@ def compute_total_outlet_mass(
     total_raref_mass = 0.0
 
     for wave in waves:
-        # Include waves still active OR deactivated by a flow change (geometry preserved
-        # via t_deactivated). Skip only waves that were physically destroyed (e.g. consumed
-        # by collisions) and have no t_deactivated set.
-        if not wave.is_active and wave.t_deactivated is None:
+        if not wave.is_active:
             continue
 
         if isinstance(wave, RarefactionWave):
