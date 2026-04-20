@@ -90,7 +90,7 @@ def function_name(*, flow: npt.ArrayLike, tedges: pd.DatetimeIndex) -> npt.NDArr
 - **Bin-edge pattern**: Time is represented as `tedges` (`pd.DatetimeIndex`, n+1 edges) with n values constant over each interval `[tedges[i], tedges[i+1])`. Same pattern for spatial dimension (`xedges`).
 - **Input/output semantics**: Input values (`flow`, `cin` for infiltration-to-extraction; `flow`, `cout` for extraction-to-infiltration) are constant per bin. Output concentration/temperature is a flow-weighted bin average.
 - **Paired operations**: Functions come in forward (infiltration-to-extraction) and reverse (extraction-to-infiltration) variants.
-- **Multiple parameterizations**: Gamma distributions support both (alpha, beta) and (mean, std).
+- **Multiple parameterizations**: Gamma distributions support both (alpha, beta, loc) and (mean, std, loc).
 - **Retardation**: All transport functions account for sorption via retardation factors.
 - **Units**: Must be consistent within a calculation. The package does not enforce units -- the user is responsible.
 
@@ -101,10 +101,12 @@ def function_name(*, flow: npt.ArrayLike, tedges: pd.DatetimeIndex) -> npt.NDArr
 - Validate physical correctness: conservation laws, boundary conditions, limiting cases.
 - Tests MUST be meaningful -- not trivial identity checks. Use analytical solutions for validation when possible.
 - Run specific tests with: `uv run pytest tests/src/test_diffusion.py -v` or `uv run pytest tests/src -k "advection" -v`
+- LLM reviewers (including this one) routinely flag plausible-sounding bugs that do not actually exist; before applying any non-trivial suggested change, write a regression test for the claimed bug and run it against the unchanged baseline -- only proceed if the baseline test fails.
 
 ## Git
 
 - Do NOT include Claude-related signatures in commit messages or PR descriptions.
+- Base your PR message on the template at `.github/pull_request_template.md`.
 - Run formatting, linting, and type checking before committing.
 
 ## Cross-References
