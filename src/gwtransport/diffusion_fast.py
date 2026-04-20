@@ -941,6 +941,9 @@ def _build_gaussian_matrix(
     erf_at_edges = erf(edges[np.newaxis, :] / (sigmas * sqrt2))  # (n_valid, 2*max_radius+2)
     weights = 0.5 * np.diff(erf_at_edges, axis=1)  # (n_valid, 2*max_radius+1)
 
+    # Normalize each kernel
+    weights /= np.sum(weights, axis=1)[:, np.newaxis]
+
     # Calculate absolute positions in the signal
     absolute_positions = center_positions + kernel_positions
 
@@ -965,15 +968,7 @@ def _build_gaussian_matrix(
         cols = np.concatenate([cols, zero_indices])
         data = np.concatenate([data, np.ones(len(zero_indices))])
 
-    matrix = sparse.csr_matrix((data, (rows, cols)), shape=(n, n))
-
-    # Renormalize rows AFTER boundary clipping. Clipping folds out-of-bounds
-    # kernel positions into the first/last bins, so the post-clip row sums
-    # generally exceed 1. Dividing by the row sum ensures every row sums to
-    # exactly 1, preventing artificial mass creation at the boundaries.
-    row_sums = np.asarray(matrix.sum(axis=1)).ravel()
-    inv_row_sums = np.where(row_sums > 0, 1.0 / row_sums, 0.0)
-    return sparse.diags(inv_row_sums) @ matrix
+    return sparse.csr_matrix((data, (rows, cols)), shape=(n, n))
 
 
 def convolve_diffusion(
@@ -1147,8 +1142,8 @@ def _validate_inputs(
     if np.any(np.isnan(flow)):
         msg = "flow contains NaN values, which are not allowed"
         raise ValueError(msg)
-    if np.any(flow <= 0):
-        msg = "flow must be positive"
+    if np.any(flow < 0):
+        msg = "flow must be non-negative (negative flow not supported)"
         raise ValueError(msg)
     if np.any(aquifer_pore_volumes <= 0):
         msg = "aquifer_pore_volumes must be positive"

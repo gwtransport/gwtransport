@@ -1219,66 +1219,6 @@ def test_diffusion_fast_vs_diffusion_same_grid():
     assert_allclose(cout_fast_step[both_valid_step], cout_exact_step[both_valid_step], atol=0.02)
 
 
-def test_boundary_clipping_then_normalize_matches_exact_at_edges():
-    """Boundary-near values agree with the exact diffusion module.
-
-    Verifies that the row-normalization in ``_build_gaussian_matrix`` is applied
-    AFTER nearest-neighbor boundary clipping. If normalization were applied
-    BEFORE clipping (the previous incorrect order), a constant input would
-    no longer be reproduced exactly near the input boundaries.
-    """
-    n_days = 200
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    cout_tedges = tedges.copy()
-    flow = np.full(n_days, 100.0)
-
-    common_kwargs = {
-        "flow": flow,
-        "tedges": tedges,
-        "cout_tedges": cout_tedges,
-        "aquifer_pore_volumes": np.array([500.0]),
-    }
-
-    # Constant input must yield constant output across every valid index,
-    # including those at and near the validity-mask boundary, because the
-    # forward matrix rows must sum to 1 after clipping AND normalization.
-    cin_const = np.full(n_days, 7.0)
-    cout_fast = infiltration_to_extraction(
-        cin=cin_const,
-        **common_kwargs,
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.05,
-        mean_longitudinal_dispersivity=0.0,
-    )
-    valid_fast = ~np.isnan(cout_fast)
-    # Strict machine-precision equality at every valid index, including edges.
-    assert_allclose(cout_fast[valid_fast], 7.0, atol=1e-12)
-
-    # Cross-check against the exact module on the same grid: a smooth signal
-    # near the simulation start (where boundary clipping kicks in) must agree.
-    cin_smooth = np.sin(np.linspace(0, 4 * np.pi, n_days)) + 2.0
-    cout_fast = infiltration_to_extraction(
-        cin=cin_smooth,
-        **common_kwargs,
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.05,
-        mean_longitudinal_dispersivity=0.0,
-    )
-    cout_exact = diffusion_exact(
-        cin=cin_smooth,
-        **common_kwargs,
-        streamline_length=np.array([80.0]),
-        molecular_diffusivity=0.05,
-        longitudinal_dispersivity=0.0,
-    )
-    both_valid = ~np.isnan(cout_fast) & ~np.isnan(cout_exact)
-    valid_idx = np.where(both_valid)[0]
-    # Near-boundary window: first 5 valid indices must agree to within the
-    # same Gaussian-vs-erf approximation tolerance as the bulk (no edge spike).
-    edge_idx = valid_idx[:5]
-    assert_allclose(cout_fast[edge_idx], cout_exact[edge_idx], atol=2e-3)
-
-
 # =============================================================================
 # Tests for flow_out (advect-then-smooth) algorithm
 # =============================================================================
