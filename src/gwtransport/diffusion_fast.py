@@ -71,7 +71,7 @@ from scipy.special import erf
 
 from gwtransport import gamma
 from gwtransport.advection_utils import _infiltration_to_extraction_weights
-from gwtransport.residence_time import residence_time
+from gwtransport.residence_time import residence_time_mean
 from gwtransport.utils import solve_inverse_transport
 
 # Minimum coefficient sum to consider a row valid
@@ -831,10 +831,13 @@ def _compute_sigma(
     ev2 = float(np.mean(aquifer_pore_volumes**2))
     ev3 = float(np.mean(aquifer_pore_volumes**3))
 
-    # Residence time at the mean pore volume [days]
-    rt_array = residence_time(
+    # Bin-mean residence time at the mean pore volume [days]. Using the bin-mean
+    # (rather than the bin-center point sample) is consistent with the bin-edge
+    # convention: per-bin output quantities are flow-weighted averages over the bin.
+    rt_array = residence_time_mean(
         flow=flow,
         flow_tedges=tedges,
+        tedges_out=tedges,
         aquifer_pore_volumes=mean_pv,
         retardation_factor=retardation_factor,
         direction=direction,
