@@ -101,7 +101,8 @@ Examples:
 3. [Log removal efficiency analysis](https://gwtransport.github.io/gwtransport/examples/03_Pathogen_Removal_Bank_Filtration.html)
 4. [Deposition analysis](https://gwtransport.github.io/gwtransport/examples/04_Deposition_Analysis_Bank_Filtration.html)
 5. [Diffusion and dispersion in solute transport](https://gwtransport.github.io/gwtransport/examples/05_Diffusion_Dispersion.html)
-6. [Advection with non-linear sorption](https://gwtransport.github.io/gwtransport/examples/10_Advection_with_non_linear_sorption.html)
+6. [Bank filtration with TIMFlow: streamtubes to APVD](https://gwtransport.github.io/gwtransport/examples/08_bank_filtration_timflow.html)
+7. [Advection with non-linear sorption](https://gwtransport.github.io/gwtransport/examples/10_Advection_with_non_linear_sorption.html)
 
 Full documentation: [gwtransport.github.io/gwtransport](https://gwtransport.github.io/gwtransport/)
 
