@@ -171,15 +171,15 @@ The longitudinal dispersion coefficient :math:`D_L = D_m + \alpha_L \cdot v` inc
 
 In pore volume units, :math:`\sigma_{V,disp}` is flow-independent, while :math:`\sigma_{V,diff}` decreases with higher flow (proportional to :math:`1/\sqrt{Q}`).
 
-**When calibrating APVD from measurements**, the fitted :math:`\sigma_{apv}` already absorbs all mixing present during calibration — macrodispersion, microdispersion, and an average molecular diffusion contribution. Adding :math:`\alpha_L` would double-count. When calibrating with the diffusion module, these three components are taken into account separately. Note: if calibrating with one compound (e.g., temperature, :math:`D_m \approx 0.1` m²/day) and predicting for another (e.g., a solute, :math:`D_m \approx 10^{-4}` m²/day), the baked-in diffusion contribution may need correction — see :doc:`/examples/05_Diffusion_Dispersion`.
+**When calibrating APVD from measurements**, the fitted :math:`\sigma_{apv}` is an *effective* parameter: it already lumps together macrodispersion, microdispersion, and an average molecular diffusion contribution from the calibration window, so downstream calculations treat it as the total. When calibrating with the diffusion module, these three components are tracked separately. Note: if calibrating with one compound (e.g., temperature, :math:`D_m \approx 0.1` m²/day) and predicting for another (e.g., a solute, :math:`D_m \approx 10^{-4}` m²/day), the baked-in diffusion contribution may need correction — see :doc:`/examples/05_Diffusion_Dispersion`.
 
-**Cross-compound correction (gamma-parameterised APVDs only):**
+**Re-using a calibrated** :math:`\sigma_V` **for a different compound (gamma-parameterised APVDs only):**
 
 1. Estimate :math:`\sigma_{V,\mathrm{diff}}^{\mathrm{cal}}` for the calibration compound (e.g. temperature) from its :math:`D_m` and :math:`R` using :math:`\sigma_{V,\mathrm{diff}} = (\bar V/L)\sqrt{2 D_m R \bar V / Q}`.
 2. Subtract its variance to recover the geometric APVD variance: :math:`\sigma_{V,\mathrm{geom}}^2 = \sigma_{V,\mathrm{cal}}^2 - (\sigma_{V,\mathrm{diff}}^{\mathrm{cal}})^{2}`.
 3. Add the (typically much smaller) diffusion variance for the target compound: :math:`\sigma_{V,\mathrm{tgt}}^2 = \sigma_{V,\mathrm{geom}}^2 + (\sigma_{V,\mathrm{diff}}^{\mathrm{tgt}})^{2}`.
 
-Discrete-volume APVDs cannot be corrected this way — apply :mod:`gwtransport.diffusion` on top of advection instead. See :ref:`theory-variance-derivations` for the derivation of :math:`\sigma_{V,\mathrm{diff}}`.
+Discrete-volume APVDs do not admit this transformation — apply :mod:`gwtransport.diffusion` on top of advection instead. See :ref:`theory-variance-derivations` for the derivation of :math:`\sigma_{V,\mathrm{diff}}`.
 
 **When computing APVD from streamline analysis**, only macrodispersion (aquifer-scale path length variation) is captured. Microdispersion (:math:`\alpha_L`) and molecular diffusion (:math:`D_m`) can be meaningfully added:
 

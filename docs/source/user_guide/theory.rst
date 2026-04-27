@@ -78,7 +78,7 @@ Apparent :math:`\alpha_L` famously increases with experiment scale (Gelhar et al
 5. "The APVD captures all dispersion"
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Only when calibrated from breakthrough data. A breakthrough-fitted :math:`\sigma_V` absorbs macrodispersion, microdispersion, and an average molecular-diffusion contribution; adding :math:`\alpha_L` or :math:`D_m` on top double-counts. An APVD computed from streamline analysis captures *only* macrodispersion — :math:`\alpha_L` and :math:`D_m` must be added separately. See :ref:`concept-dispersion` for the variance-addition rules.
+What :math:`\sigma_V` represents depends on how it was obtained. A breakthrough-fitted :math:`\sigma_V` is an *effective* parameter: it already lumps together macrodispersion, microdispersion, and an average molecular-diffusion contribution from the calibration window, so downstream calculations treat it as the total. A streamline-derived :math:`\sigma_V` is purely *geometric* and reflects macrodispersion only; microdispersion and molecular diffusion enter the variance sum on their own terms. See :ref:`concept-dispersion` for the rules.
 
 6. "Higher flow means more mixing"
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
