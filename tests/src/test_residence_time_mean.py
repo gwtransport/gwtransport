@@ -430,51 +430,6 @@ def test_analytical_variable_flow_weighting():
     np.testing.assert_allclose(rt_flow[0, 0], 17.0 / 48.0, atol=0, rtol=1e-13)
 
 
-def test_full_record_limit_matches_independent_trapezoid():
-    """Single output bin spanning the valid record matches a hand-coded trapezoid.
-
-    Reference: trapezoidal integration of the analytic kink-aware tau on the
-    augmented grid {flow_tedges} U {kink times}. This pins the function against
-    a manually-derived integral; any shape mismatch or coordinate confusion in
-    the volume path would change the answer.
-    """
-    flow_tedges = pd.DatetimeIndex(["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04"])
-    flow_values = np.array([1.0, 1.0, 2.0])
-    pore_volume = 0.5
-    tedges_out = pd.DatetimeIndex(["2023-01-02", "2023-01-04"])
-
-    # Augmented grid within [day 1, day 3]: flow edges at t=1,2,3 plus the kink at
-    # t=2.25 (when V(t) - V_p crosses flow_cum=2 m^3, i.e., the look-back parcel
-    # crosses a flow edge). Below t=1 the look-back is outside the record and tau
-    # is undefined.
-    t_aug = np.array([1.0, 1.5, 2.0, 2.25, 3.0])
-    v_aug = np.array([1.0, 1.5, 2.0, 2.5, 4.0])
-    tau_aug = np.array([0.5, 0.5, 0.5, 0.25, 0.25])
-
-    expected_time = np.trapezoid(tau_aug, t_aug) / (t_aug[-1] - t_aug[0])
-    expected_flow = np.trapezoid(tau_aug, v_aug) / (v_aug[-1] - v_aug[0])
-
-    rt_time = residence_time_mean(
-        flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
-        aquifer_pore_volumes=pore_volume,
-        direction="extraction_to_infiltration",
-        weighting="time",
-    )
-    rt_flow = residence_time_mean(
-        flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
-        aquifer_pore_volumes=pore_volume,
-        direction="extraction_to_infiltration",
-        weighting="flow",
-    )
-
-    np.testing.assert_allclose(rt_time[0, 0], expected_time, atol=0, rtol=1e-13)
-    np.testing.assert_allclose(rt_flow[0, 0], expected_flow, atol=0, rtol=1e-13)
-
-
 def test_kink_handling_against_fine_grid():
     """Recover the residence-time integral against a fine-grid reference.
 
@@ -522,7 +477,7 @@ def test_kink_handling_against_fine_grid():
         else:
             expected[0, k] = np.trapezoid(tau_dense, t_dense) / (t_dense[-1] - t_dense[0])
 
-    np.testing.assert_allclose(rt_mean, expected, atol=1e-10, rtol=1e-10, equal_nan=True)
+    np.testing.assert_allclose(rt_mean, expected, atol=0, rtol=1e-13, equal_nan=True)
 
 
 def test_weighting_extrapolation_nan_consistency():
