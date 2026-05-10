@@ -106,28 +106,28 @@ def test_make_strictly_monotone_no_duplicates_returns_input():
     np.testing.assert_array_equal(result, arr)
 
 
-def test_make_strictly_monotone_breaks_plateau_with_one_ulp_per_duplicate():
-    """A run of k duplicates is bumped by 1, 2, ..., k ulps of max(arr).
+def test_make_strictly_monotone_breaks_plateau_with_safety_factor_per_duplicate():
+    """A run of k duplicates is bumped by ``k * BUMP * ulp(max(arr))`` where BUMP=16.
 
-    Verifies the specific bump magnitude: each duplicate is bumped by exactly
-    ``cumcount * ulp(max(arr))``, where cumcount is the 1-based position in the
-    consecutive duplicate run. This is the smallest bump that survives downstream
-    ``(A + B) / 2`` linear interpolations under IEEE 754 round-to-nearest-even.
+    The factor of 16 is a platform-robust margin against ``np.interp``'s FMA-related
+    rounding noise. The exact value is an internal implementation detail; this test pins
+    it down so any future change is intentional.
     """
     arr = np.array([0.0, 100.0, 100.0, 100.0, 200.0])
     ulp_max = np.nextafter(200.0, np.inf) - 200.0
-    expected = np.array([0.0, 100.0, 100.0 + ulp_max, 100.0 + 2 * ulp_max, 200.0])
+    bump = 16 * ulp_max
+    expected = np.array([0.0, 100.0, 100.0 + bump, 100.0 + 2 * bump, 200.0])
     result = _make_strictly_monotone(arr)
     np.testing.assert_array_equal(result, expected)
-    # And the result is strictly monotone -- the whole point.
-    assert np.all(np.diff(result) > 0)
+    assert np.all(np.diff(result) > 0)  # strictly monotone -- the whole point
 
 
 def test_make_strictly_monotone_multiple_runs_reset_cumcount():
-    """A non-duplicate breaks the run; the next duplicate starts again at 1 ulp."""
+    """A non-duplicate breaks the run; the next duplicate starts again at 1 * bump."""
     arr = np.array([0.0, 5.0, 5.0, 5.0, 7.0, 7.0, 9.0])
     ulp_max = np.nextafter(9.0, np.inf) - 9.0
-    expected = np.array([0.0, 5.0, 5.0 + ulp_max, 5.0 + 2 * ulp_max, 7.0, 7.0 + ulp_max, 9.0])
+    bump = 16 * ulp_max
+    expected = np.array([0.0, 5.0, 5.0 + bump, 5.0 + 2 * bump, 7.0, 7.0 + bump, 9.0])
     result = _make_strictly_monotone(arr)
     np.testing.assert_array_equal(result, expected)
 

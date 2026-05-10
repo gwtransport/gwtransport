@@ -132,15 +132,23 @@ def step_plot_coords(edges: npt.ArrayLike, values: npt.ArrayLike) -> tuple[npt.N
     return x, y
 
 
+_DUP_BUMP_ULPS = 16  # safety factor in ulps; see _make_strictly_monotone docstring
+
+
 def _make_strictly_monotone(arr: npt.ArrayLike) -> npt.NDArray[np.floating]:
     """Bump consecutive duplicates so a non-decreasing array becomes strictly monotone.
 
     Returns the input unchanged if no consecutive duplicates are present. Otherwise returns a
-    new array with each duplicate bumped up by ``k * ulp(max(arr))``, where ``k`` is its
-    1-based position within the consecutive duplicate run. This is the smallest perturbation
-    that survives downstream linear interpolations of the form ``(A + B) / 2`` under IEEE 754
-    round-to-nearest-even -- those carry rounding error at the ``ulp(max(arr))`` scale, so a
-    smaller bump would be washed out.
+    new array with each duplicate bumped up by ``k * 16 * ulp(max(arr))``, where ``k`` is its
+    1-based position within the consecutive duplicate run.
+
+    The factor of 16 is a safety margin against IEEE 754 rounding noise in ``np.interp``'s
+    linear-interpolation arithmetic, which differs subtly between Linux x86_64 (with FMA)
+    and ARM macOS. A 1-ulp gap, while strictly monotone, can place a downstream query value
+    on the wrong side of a bracket boundary if the intermediate arithmetic rounds 1 ulp away
+    from the exact value. 16 ulps ensures the bracket selection is unambiguous on every
+    platform we support, while keeping the absolute perturbation at ``~1e-13`` for typical
+    cumulative-flow values -- well below physical relevance.
 
     Parameters
     ----------
@@ -169,7 +177,7 @@ def _make_strictly_monotone(arr: npt.ArrayLike) -> npt.NDArray[np.floating]:
     idx = np.arange(len(arr))
     last_nondup = np.maximum.accumulate(np.where(is_dup, -1, idx))
     cumcount = np.where(is_dup, idx - last_nondup, 0)
-    return arr + cumcount * ulp_max
+    return arr + cumcount * (_DUP_BUMP_ULPS * ulp_max)
 
 
 def linear_interpolate(
