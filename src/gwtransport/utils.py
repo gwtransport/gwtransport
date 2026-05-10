@@ -12,6 +12,10 @@ Available functions:
   bin-averaged values. Returns paired x/y arrays for plotting piecewise-constant
   functions with ``ax.plot(x, y)``.
 
+- ``_make_strictly_monotone`` (private) - Bump consecutive duplicates in a non-decreasing
+  array by ``k * ulp(max)`` so it becomes strictly monotone. Used before V → t inversions to
+  prevent ``np.interp`` from silently picking one limit at plateau levels.
+
 - :func:`linear_interpolate` - Linear interpolation using numpy's optimized interp function.
   Automatically handles unsorted data with configurable extrapolation (None for clamping,
   float for constant values). Handles multi-dimensional query arrays.
@@ -126,6 +130,46 @@ def step_plot_coords(edges: npt.ArrayLike, values: npt.ArrayLike) -> tuple[npt.N
     x = np.repeat(edges, 2)[1:-1]
     y = np.repeat(values, 2)
     return x, y
+
+
+def _make_strictly_monotone(arr: npt.ArrayLike) -> npt.NDArray[np.floating]:
+    """Bump consecutive duplicates so a non-decreasing array becomes strictly monotone.
+
+    Returns the input unchanged if no consecutive duplicates are present. Otherwise returns a
+    new array with each duplicate bumped up by ``k * ulp(max(arr))``, where ``k`` is its
+    1-based position within the consecutive duplicate run. This is the smallest perturbation
+    that survives downstream linear interpolations of the form ``(A + B) / 2`` under IEEE 754
+    round-to-nearest-even -- those carry rounding error at the ``ulp(max(arr))`` scale, so a
+    smaller bump would be washed out.
+
+    Parameters
+    ----------
+    arr : array-like
+        1D non-decreasing array (e.g., a cumulative volume sequence ``flow_cum`` that contains
+        plateaus from ``Q = 0`` bins).
+
+    Returns
+    -------
+    ndarray
+        Strictly monotone array of the same length.
+
+    Notes
+    -----
+    Use this before passing ``arr`` as ``x_ref`` to a ``V → t`` inversion via
+    :func:`linear_interpolate` or :func:`numpy.interp`. Plateaus in ``arr`` make ``arr⁻¹``
+    multi-valued, and ``np.interp`` would silently pick one of the two limits, biasing
+    integrals over output bins that span the kink.
+    """
+    arr = np.asarray(arr, dtype=float)
+    diffs = np.diff(arr)
+    if not np.any(diffs == 0):
+        return arr
+    ulp_max = np.nextafter(arr.max(), np.inf) - arr.max()
+    is_dup = np.concatenate(([False], diffs == 0))
+    idx = np.arange(len(arr))
+    last_nondup = np.maximum.accumulate(np.where(is_dup, -1, idx))
+    cumcount = np.where(is_dup, idx - last_nondup, 0)
+    return arr + cumcount * ulp_max
 
 
 def linear_interpolate(

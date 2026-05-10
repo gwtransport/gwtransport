@@ -35,7 +35,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from gwtransport.utils import linear_average, linear_interpolate
+from gwtransport.utils import _make_strictly_monotone, linear_average, linear_interpolate
 
 
 def residence_time(
@@ -115,6 +115,9 @@ def residence_time(
         [0.0],
         (flow * flow_tdelta).cumsum(),
     ))  # at flow_tedges and flow_tedges_days. First value is 0.
+    # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
+    # by the smallest representable amount so downstream np.interp resolves consistently.
+    flow_cum = _make_strictly_monotone(flow_cum)
 
     if index is None:
         # If index is not provided return the residence time that matches with the index of the flow; at the center of the flow bin.
@@ -293,22 +296,11 @@ def residence_time_mean(
 
     flow_cum = np.concatenate(([0.0], np.cumsum(flow * np.diff(flow_tedges_days))))
 
-    # Q = 0 over a bin produces a plateau (consecutive equal values) in flow_cum that
-    # np.unique collapses to a single grid point, preventing the augmented trapezoidal grid
-    # from representing tau's step discontinuity at the kink. Bumping each duplicate up by
-    # k * ulp(max(flow_cum)), where k is its position in the run, restores strict monotonicity
-    # with the smallest perturbation that survives downstream linear interpolations of the
-    # form ``(A + B) / 2``: those carry ulp at the max-flow_cum scale, so a smaller bump
-    # would be washed out by IEEE 754 round-to-nearest-even. Trapezoidal integration over
-    # the resulting steep ramp recovers the underlying step exactly.
-    flow_cum_diffs = np.diff(flow_cum)
-    if np.any(flow_cum_diffs == 0):
-        ulp_max = np.nextafter(flow_cum.max(), np.inf) - flow_cum.max()
-        is_dup = np.concatenate(([False], flow_cum_diffs == 0))
-        idx = np.arange(len(flow_cum))
-        last_nondup = np.maximum.accumulate(np.where(is_dup, -1, idx))
-        cumcount = np.where(is_dup, idx - last_nondup, 0)
-        flow_cum += cumcount * ulp_max
+    # Q = 0 produces plateaus in flow_cum that np.unique would collapse to a single grid point
+    # in the augmented trapezoidal grid, smearing tau's step discontinuity at the kink. The
+    # ulp-scale bump restores strict monotonicity; trapezoidal integration over the resulting
+    # steep ramp recovers the underlying step exactly.
+    flow_cum = _make_strictly_monotone(flow_cum)
 
     # Sign convention: with sign = -1 for extraction_to_infiltration and +1 for
     # infiltration_to_extraction, the look-back/forward target volume is

@@ -56,7 +56,13 @@ import pandas as pd
 
 from gwtransport.deposition_utils import compute_average_heights
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import compute_reverse_target, linear_interpolate, solve_tikhonov, solve_underdetermined_system
+from gwtransport.utils import (
+    _make_strictly_monotone,
+    compute_reverse_target,
+    linear_interpolate,
+    solve_tikhonov,
+    solve_underdetermined_system,
+)
 
 
 def compute_deposition_weights(
@@ -672,6 +678,9 @@ def spinup_duration(
     if not flow_cum[-1] >= target_cum:
         msg = "Residence time at the first time step is NaN. This indicates that the aquifer is not fully informed: flow timeseries too short."
         raise ValueError(msg)
+    # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
+    # by the smallest representable amount so np.interp resolves consistently at plateau levels.
+    flow_cum = _make_strictly_monotone(flow_cum)
     rt_value = float(linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=target_cum))
     if np.isnan(rt_value):
         msg = "Residence time at the first time step is NaN. This indicates that the aquifer is not fully informed: flow timeseries too short."

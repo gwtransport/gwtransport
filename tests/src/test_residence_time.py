@@ -266,6 +266,33 @@ def test_edge_cases_zero_flow():
     assert np.all(np.isnan(result) | np.isinf(result))
 
 
+def test_zero_flow_plateau_kink_consistency():
+    """At the kink time t* where the source crosses a Q = 0 plateau, residence_time returns
+    the midpoint of the two valid limits.
+
+    For ``flow = [100, 0, 0, 100]`` (1-day bins), ``V_p = 50``, ``R = 1``, ``V(t)`` is flat at
+    100 over ``t in [1, 3]``. At ``t* = 3.5`` (where ``V(t*) - 50 = 100``), the source jumps
+    from ``t_in = 1`` (left limit, ``tau = 2.5``) to ``t_in = 3`` (right limit, ``tau = 0.5``).
+    The ulp-bump regularization in :func:`residence_time` resolves the multi-valued ``V_inv``
+    deterministically to the midpoint ``t_in = 2``, giving ``tau = 1.5``. This is the
+    consistent counterpart to :func:`residence_time_mean`'s exact step-integral over the
+    same kink.
+    """
+    flow_tedges = pd.date_range(start="2023-01-01", periods=5, freq="D")
+    flow_values = np.array([100.0, 0.0, 0.0, 100.0])
+    pore_volume = 50.0
+    index = pd.DatetimeIndex(["2023-01-04 12:00:00"])  # t = 3.5 d
+
+    rt = residence_time(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        index=index,
+        aquifer_pore_volumes=pore_volume,
+        direction="extraction_to_infiltration",
+    )
+    np.testing.assert_allclose(rt[0, 0], 1.5, atol=0, rtol=1e-13)
+
+
 def test_edge_cases_very_large_pore_volume():
     """Test edge cases with very large pore volumes."""
     flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
