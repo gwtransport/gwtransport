@@ -12,16 +12,16 @@ concurrency:
 
 jobs:
   test-examples-minimum:
-    name: Python 3.11 - minimum dependencies
+    name: Python 3.12 - minimum dependencies
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Install uv
         uses: astral-sh/setup-uv@v7
       - name: Set up Python
-        run: uv python install 3.11
+        run: uv python install 3.12
       - name: Install with minimum dependencies
-        run: uv sync --extra test --resolution lowest-direct --python 3.11
+        run: uv sync --extra test --resolution lowest-direct --python 3.12
       - name: Run tests
         run: uv run pytest tests/examples
 

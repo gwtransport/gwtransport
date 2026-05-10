@@ -12,6 +12,10 @@ Available functions:
   bin-averaged values. Returns paired x/y arrays for plotting piecewise-constant
   functions with ``ax.plot(x, y)``.
 
+- ``_make_strictly_monotone`` (private) - Bump consecutive duplicates in a non-decreasing
+  array by ``k * ulp(max)`` so it becomes strictly monotone. Used before V → t inversions to
+  prevent ``np.interp`` from silently picking one limit at plateau levels.
+
 - :func:`linear_interpolate` - Linear interpolation using numpy's optimized interp function.
   Automatically handles unsorted data with configurable extrapolation (None for clamping,
   float for constant values). Handles multi-dimensional query arrays.
@@ -126,6 +130,54 @@ def step_plot_coords(edges: npt.ArrayLike, values: npt.ArrayLike) -> tuple[npt.N
     x = np.repeat(edges, 2)[1:-1]
     y = np.repeat(values, 2)
     return x, y
+
+
+_DUP_BUMP_ULPS = 16  # safety factor in ulps; see _make_strictly_monotone docstring
+
+
+def _make_strictly_monotone(arr: npt.ArrayLike) -> npt.NDArray[np.floating]:
+    """Bump consecutive duplicates so a non-decreasing array becomes strictly monotone.
+
+    Returns the input unchanged if no consecutive duplicates are present. Otherwise returns a
+    new array with each duplicate bumped up by ``k * 16 * ulp(max(arr))``, where ``k`` is its
+    1-based position within the consecutive duplicate run.
+
+    The factor of 16 is a safety margin against IEEE 754 rounding noise in ``np.interp``'s
+    linear-interpolation arithmetic, which differs subtly between Linux x86_64 (with FMA)
+    and ARM macOS. A 1-ulp gap, while strictly monotone, can place a downstream query value
+    on the wrong side of a bracket boundary if the intermediate arithmetic rounds 1 ulp away
+    from the exact value. 16 ulps ensures the bracket selection is unambiguous on every
+    platform we support, while keeping the absolute perturbation at ``~1e-13`` for typical
+    cumulative-flow values -- well below physical relevance.
+
+    Parameters
+    ----------
+    arr : array-like
+        1D non-decreasing array (e.g., a cumulative volume sequence ``flow_cum`` that contains
+        plateaus from ``Q = 0`` bins).
+
+    Returns
+    -------
+    ndarray
+        Strictly monotone array of the same length.
+
+    Notes
+    -----
+    Use this before passing ``arr`` as ``x_ref`` to a ``V → t`` inversion via
+    :func:`linear_interpolate` or :func:`numpy.interp`. Plateaus in ``arr`` make ``arr⁻¹``
+    multi-valued, and ``np.interp`` would silently pick one of the two limits, biasing
+    integrals over output bins that span the kink.
+    """
+    arr = np.asarray(arr, dtype=float)
+    diffs = np.diff(arr)
+    if not np.any(diffs == 0):
+        return arr
+    ulp_max = np.nextafter(arr.max(), np.inf) - arr.max()
+    is_dup = np.concatenate(([False], diffs == 0))
+    idx = np.arange(len(arr))
+    last_nondup = np.maximum.accumulate(np.where(is_dup, -1, idx))
+    cumcount = np.where(is_dup, idx - last_nondup, 0)
+    return arr + cumcount * (_DUP_BUMP_ULPS * ulp_max)
 
 
 def linear_interpolate(

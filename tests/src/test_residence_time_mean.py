@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport.residence_time import residence_time_mean
+from gwtransport.residence_time import residence_time, residence_time_mean
 
 
 @pytest.fixture
@@ -35,14 +35,12 @@ def test_basic_extraction(constant_flow_data):
         direction="extraction_to_infiltration",
     )
 
-    # With constant flow of 100 m³/day and pore volume of 200 m³,
-    # residence time should be approximately 2 days
-    # The first results should be NaN as not enough water has passed
+    # With constant flow of 100 m³/day and pore volume of 200 m³, residence time is
+    # exactly 2 days for piecewise-constant flow -- the underlying linear
+    # interpolation and bin average are exact under constant Q.
     assert np.isnan(result[0, 0])
     assert np.isnan(result[0, 1])
-    # Later values should be close to 2 days
-    assert np.isclose(result[0, 2], 2.0, rtol=0.1)
-    assert np.isclose(result[0, 3], 2.0, rtol=0.1)
+    np.testing.assert_allclose(result[0, 2:], 2.0, atol=0, rtol=1e-13)
 
 
 def test_basic_infiltration(constant_flow_data):
@@ -58,11 +56,9 @@ def test_basic_infiltration(constant_flow_data):
         direction="infiltration_to_extraction",
     )
 
-    # With constant flow of 100 m³/day and pore volume of 200 m³,
-    # residence time should be approximately 2 days
-    # The first values should be valid
-    assert np.isclose(result[0, 0], 2.0, rtol=0.1)
-    assert np.isclose(result[0, -3], 2.0, rtol=0.1)
+    # With constant flow of 100 m³/day and pore volume of 200 m³, residence time
+    # is exactly 2 days everywhere the parcel exits the record (machine precision).
+    np.testing.assert_allclose(result[0, :-2], 2.0, atol=0, rtol=1e-13)
     # Later values should be NaN as water hasn't been extracted yet
     assert np.isnan(result[0, -2])
     assert np.isnan(result[0, -1])
@@ -293,10 +289,10 @@ def test_output_tedges_alignment():
     valid_mask2 = ~np.isnan(result2[0])
 
     if np.any(valid_mask1):
-        assert np.allclose(result1[0, valid_mask1], result1[0, valid_mask1][0], rtol=0.01)
+        np.testing.assert_allclose(result1[0, valid_mask1], result1[0, valid_mask1][0], atol=0, rtol=1e-13)
 
     if np.any(valid_mask2):
-        assert np.allclose(result2[0, valid_mask2], result2[0, valid_mask2][0], rtol=0.01)
+        np.testing.assert_allclose(result2[0, valid_mask2], result2[0, valid_mask2][0], atol=0, rtol=1e-13)
 
 
 def test_example_from_docstring():
@@ -317,6 +313,276 @@ def test_example_from_docstring():
     assert np.isnan(mean_times[0, 0])
     assert np.isnan(mean_times[0, 1])
 
-    # Later values should be approximately 2 days
-    assert np.isclose(mean_times[0, 2], 2.0, rtol=0.1)
-    assert np.isclose(mean_times[0, 3], 2.0, rtol=0.1)
+    # Later values are exactly 2 days under constant flow.
+    np.testing.assert_allclose(mean_times[0, 2:], 2.0, atol=0, rtol=1e-13)
+
+
+# ---------------------------------------------------------------------------
+# weighting={"flow","time"} parameter (issue #160)
+# ---------------------------------------------------------------------------
+
+
+def test_constant_flow_weighting_equivalence(constant_flow_data):
+    """Flow- and time-weighting agree to machine precision when Q is constant.
+
+    Under constant flow, integrating uniformly in cumulative volume and
+    integrating uniformly in time produce the same per-bin average. Any drift
+    here would indicate that the volume-coordinate path has lost an exact
+    invariant, e.g. via off-by-one indexing of ``flow_cum_at_tedges_out``.
+    """
+    flow_values, flow_tedges = constant_flow_data
+    tedges_out = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1D")
+    pore_volumes = np.array([100.0, 200.0, 300.0])
+
+    common = {
+        "flow": flow_values,
+        "flow_tedges": flow_tedges,
+        "tedges_out": tedges_out,
+        "aquifer_pore_volumes": pore_volumes,
+        "direction": "extraction_to_infiltration",
+    }
+    rt_flow = residence_time_mean(**common, weighting="flow")
+    rt_time = residence_time_mean(**common, weighting="time")
+    np.testing.assert_array_equal(rt_flow, rt_time)  # exact, NaN-aware
+
+
+def test_default_weighting_is_flow():
+    """Calling without the ``weighting`` kwarg must behave like ``weighting='flow'``.
+
+    Uses the same Q = [1, 1, 2] scenario as ``test_analytical_variable_flow_weighting``
+    where the output bin spans a flow-step boundary -- without that, the two
+    weightings would coincide and the default-vs-explicit comparison would be
+    vacuous.
+    """
+    flow_tedges = pd.DatetimeIndex(["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04"])
+    flow_values = np.array([1.0, 1.0, 2.0])
+    pore_volume = 0.5
+    tedges_out = pd.DatetimeIndex(["2023-01-02", "2023-01-04"])
+
+    common = {
+        "flow": flow_values,
+        "flow_tedges": flow_tedges,
+        "tedges_out": tedges_out,
+        "aquifer_pore_volumes": pore_volume,
+        "direction": "extraction_to_infiltration",
+    }
+    rt_default = residence_time_mean(**common)
+    rt_flow = residence_time_mean(**common, weighting="flow")
+    rt_time = residence_time_mean(**common, weighting="time")
+    np.testing.assert_array_equal(rt_default, rt_flow)
+    # Sanity: the two weightings actually differ here, otherwise the assertion above
+    # would also be satisfied by the legacy time-weighted code path.
+    assert not np.isclose(rt_default[0, 0], rt_time[0, 0])
+
+
+def test_invalid_weighting(constant_flow_data):
+    """An unrecognised ``weighting`` value must raise ValueError."""
+    flow_values, flow_tedges = constant_flow_data
+    tedges_out = pd.date_range(start="2023-01-02", end="2023-01-09", freq="2D")
+
+    with pytest.raises(ValueError, match=r"weighting should be 'flow' or 'time'"):
+        residence_time_mean(
+            flow=flow_values,
+            flow_tedges=flow_tedges,
+            tedges_out=tedges_out,
+            aquifer_pore_volumes=200.0,
+            weighting="invalid",
+        )
+
+
+def test_analytical_variable_flow_weighting():
+    """Closed-form check on a hand-computed three-bin variable-flow case.
+
+    Setup: piecewise-constant Q = [1, 1, 2] m^3/day over three 1-day bins
+    (total 3 days), V_p = 0.5 m^3, R = 1, direction = extraction_to_infiltration.
+    The look-back parcel crosses an internal flow edge at t* = 2.25 (kink), so
+    on the output bin [day 1, day 3] the residence-time signal is
+
+        tau(t) = 0.5,                   t in [1, 2]
+        tau(t) = 2.5 - t,               t in [2, 2.25]
+        tau(t) = 0.25,                  t in [2.25, 3].
+
+    Hand calculation gives:
+
+    - time-weighted mean = (1/2) [int_1^2 0.5 dt + int_2^{2.25}(2.5 - t) dt
+                                   + int_{2.25}^3 0.25 dt]
+                         = (1/2) [0.5 + 0.09375 + 0.1875] = 25/64 day.
+    - flow-weighted mean = (1/3) [int_{V=1}^{V=2} 0.5 dV + int_{V=2}^{V=2.5} linear(0.5, 0.25) dV
+                                   + int_{V=2.5}^{V=4} 0.25 dV]
+                         = (1/3) [0.5 + 0.1875 + 0.375] = 17/48 day.
+    """
+    flow_tedges = pd.DatetimeIndex(["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04"])
+    flow_values = np.array([1.0, 1.0, 2.0])
+    pore_volume = 0.5
+    tedges_out = pd.DatetimeIndex(["2023-01-02", "2023-01-04"])
+
+    common = {
+        "flow": flow_values,
+        "flow_tedges": flow_tedges,
+        "tedges_out": tedges_out,
+        "aquifer_pore_volumes": pore_volume,
+        "direction": "extraction_to_infiltration",
+    }
+    rt_time = residence_time_mean(**common, weighting="time")
+    rt_flow = residence_time_mean(**common, weighting="flow")
+
+    np.testing.assert_allclose(rt_time[0, 0], 25.0 / 64.0, atol=0, rtol=1e-13)
+    np.testing.assert_allclose(rt_flow[0, 0], 17.0 / 48.0, atol=0, rtol=1e-13)
+
+
+def test_kink_handling_against_fine_grid():
+    """Recover the residence-time integral against a fine-grid reference.
+
+    Issue #165: ``residence_time_mean`` previously sampled tau only at
+    ``flow_tedges`` and missed kinks within a flow bin where the look-back
+    parcel crosses an internal flow edge. Under the regime change
+    ``Q = [100, 100, 100, 100, 100, 10, 200]`` from the issue body, the legacy
+    edge-sampled estimate over the last bin overshoots the truth by ~70 %.
+
+    This test pins the function against an independent fine-grid trapezoidal
+    average of ``residence_time`` (which is pointwise correct).
+    """
+    flow_tedges = pd.date_range(start="2023-01-01", periods=8, freq="D")
+    flow_values = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 10.0, 200.0])
+    pore_volume = 50.0
+    tedges_out = flow_tedges  # daily output bins, same as flow tedges
+    n_fine = 20001
+
+    rt_mean = residence_time_mean(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        tedges_out=tedges_out,
+        aquifer_pore_volumes=pore_volume,
+        direction="extraction_to_infiltration",
+        weighting="time",
+    )
+
+    # Independent reference: dense pointwise tau via residence_time, trapezoidal
+    # average per output bin.
+    flow_tedges_days_arr = (flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D")
+    tedges_days_arr = np.asarray(flow_tedges_days_arr, dtype=float)
+    expected = np.full((1, len(tedges_out) - 1), np.nan)
+    for k in range(len(tedges_out) - 1):
+        t_dense = np.linspace(tedges_days_arr[k], tedges_days_arr[k + 1], n_fine)
+        index = flow_tedges[0] + pd.to_timedelta(t_dense, unit="D")
+        tau_dense = residence_time(
+            flow=flow_values,
+            flow_tedges=flow_tedges,
+            aquifer_pore_volumes=pore_volume,
+            index=index,
+            direction="extraction_to_infiltration",
+        )[0]
+        if np.any(np.isnan(tau_dense)):
+            expected[0, k] = np.nan
+        else:
+            expected[0, k] = np.trapezoid(tau_dense, t_dense) / (t_dense[-1] - t_dense[0])
+
+    np.testing.assert_allclose(rt_mean, expected, atol=0, rtol=1e-13, equal_nan=True)
+
+
+def test_zero_flow_plateau_extraction():
+    """Q = 0 over an upstream interval gives tau a step discontinuity at the kink time.
+
+    Setup: ``flow = [100, 0, 0, 100]`` (m^3/day) over four 1-day bins, ``V_p = 50`` m^3,
+    ``R = 1``, extraction direction. Cumulative volume V(t) is flat at 100 over t in [1, 3].
+    For t in the output bin [3, 4]:
+
+        V(t)        = 100 + 100*(t - 3)
+        V(t) - 50   = 50 + 100*(t - 3)
+        t_in        = (V(t) - 50)/100  while V(t) - 50 < 100,
+                    = 3 + (V(t) - 150)/100 while V(t) - 50 > 100.
+        tau(t)      = 2.5 for t in [3, 3.5),
+                    = 0.5 for t in (3.5, 4].
+
+    The mean over [3, 4] is therefore 0.5 * 2.5 + 0.5 * 0.5 = 1.5 day for both flow- and
+    time-weighting (Q is constant on this output bin so they coincide). Without the zero-flow
+    regularization in :func:`residence_time_mean`, ``np.interp`` collapses the duplicate
+    ``flow_cum`` values and the trapezoidal grid smears the step into a linear ramp, returning
+    1.0 instead.
+    """
+    flow_tedges = pd.date_range(start="2023-01-01", periods=5, freq="D")
+    flow_values = np.array([100.0, 0.0, 0.0, 100.0])
+    pore_volume = 50.0
+    tedges_out = flow_tedges
+
+    common = {
+        "flow": flow_values,
+        "flow_tedges": flow_tedges,
+        "tedges_out": tedges_out,
+        "aquifer_pore_volumes": pore_volume,
+        "direction": "extraction_to_infiltration",
+    }
+    rt_time = residence_time_mean(**common, weighting="time")
+    rt_flow = residence_time_mean(**common, weighting="flow")
+
+    np.testing.assert_allclose(rt_time[0, 3], 1.5, atol=0, rtol=1e-13)
+    np.testing.assert_allclose(rt_flow[0, 3], 1.5, atol=0, rtol=1e-13)
+
+
+def test_zero_flow_plateau_offset_step():
+    """Q = 0 bin where the source kink does not sit at the output bin midpoint.
+
+    Setup: ``flow = [200, 0, 100]`` (m^3/day) over three 1-day bins, ``V_p = 50``, ``R = 1``.
+    The plateau in ``V(t)`` is at level 200 over t in [1, 2]; on the output bin t in [2, 3]
+    the look-back parcel crosses it at ``t* = 2.5`` (where V(t*) - 50 = 200).
+
+    For t in [2, 2.5), the source falls on the first flow bin (Q = 200): t_in =
+    (V(t) - 50)/200 = 0.75 + 0.5*(t - 2), so tau(t) = t - t_in = 0.5*t + 0.25 (range
+    [1.25, 1.5)). For t in (2.5, 3], the source falls on the third flow bin (Q = 100):
+    t_in = 2 + (V(t) - 250)/100 = t - 0.5, so tau(t) = 0.5. The jump at t* is from 1.5 down
+    to 0.5.
+
+    Time-weighted mean over [2, 3]:
+
+        (1/1) * [int_2^{2.5} (0.5*t + 0.25) dt + int_{2.5}^3 0.5 dt]
+        = (1.5625 + 0.625) - (1.0 + 0.5) + 0.25
+        = 0.9375 day.
+
+    Without regularization the legacy code returned 0.6875.
+    """
+    flow_tedges = pd.date_range(start="2023-01-01", periods=4, freq="D")
+    flow_values = np.array([200.0, 0.0, 100.0])
+    pore_volume = 50.0
+    tedges_out = flow_tedges
+
+    rt_time = residence_time_mean(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        tedges_out=tedges_out,
+        aquifer_pore_volumes=pore_volume,
+        direction="extraction_to_infiltration",
+        weighting="time",
+    )
+    np.testing.assert_allclose(rt_time[0, 2], 0.9375, atol=0, rtol=1e-13)
+
+
+def test_weighting_extrapolation_nan_consistency():
+    """Output bins extending beyond the flow record are NaN under both weightings.
+
+    The volume path computes ``flow_cum_at_tedges_out`` by clamping; without the
+    explicit bin-bounds mask in the implementation, those bins would yield a
+    finite (but meaningless) value instead of NaN.
+    """
+    flow_tedges = pd.DatetimeIndex(["2023-01-01", "2023-01-02", "2023-01-03"])
+    flow_values = np.array([1.0, 2.0])
+    # Output bin extends past the last flow edge.
+    tedges_out = pd.DatetimeIndex(["2023-01-02", "2023-01-04"])
+
+    rt_flow = residence_time_mean(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        tedges_out=tedges_out,
+        aquifer_pore_volumes=0.25,
+        direction="extraction_to_infiltration",
+        weighting="flow",
+    )
+    rt_time = residence_time_mean(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        tedges_out=tedges_out,
+        aquifer_pore_volumes=0.25,
+        direction="extraction_to_infiltration",
+        weighting="time",
+    )
+    assert np.isnan(rt_flow[0, 0])
+    assert np.isnan(rt_time[0, 0])

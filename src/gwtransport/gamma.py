@@ -182,9 +182,9 @@ def mean_std_loc_to_alpha_beta(*, mean: float, std: float, loc: float = 0.0) -> 
 
     >>> alpha, beta = mean_std_loc_to_alpha_beta(mean=30000.0, std=8100.0, loc=5000.0)
     >>> print(f"Shape parameter (alpha): {alpha:.2f}")
-    Shape parameter (alpha): 9.45
+    Shape parameter (alpha): 9.53
     >>> print(f"Scale parameter (beta): {beta:.2f}")
-    Scale parameter (beta): 2646.00
+    Scale parameter (beta): 2624.40
     """
     if std <= 0:
         msg = "std must be positive"

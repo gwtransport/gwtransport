@@ -1018,6 +1018,28 @@ def test_spinup_duration_variable_flow_uses_extraction_direction():
     np.testing.assert_allclose(duration_asym, 25.0, rtol=0, atol=1e-12)
 
 
+def test_spinup_duration_with_zero_flow_plateau():
+    """spinup_duration with a Q = 0 bin in the middle of the spinup window.
+
+    ``flow = [100, 0, 100]`` (1-day bins), ``V_p = 1.0``, ``R = 200`` -> target volume = 200
+    m^3. Cumulative flow ``flow_cum = [0, 100, 100, 200]`` is flat at 100 over ``t in [1, 2]``.
+    The smallest ``t`` such that ``V(t) >= 200`` is ``t = 3`` (when ``V`` resumes growing past
+    the plateau and reaches 200 at the right edge of the third bin). Without the ulp-bump
+    regularization in :func:`spinup_duration`, ``np.interp`` on a non-strictly-monotone
+    ``flow_cum`` would still give the correct LEFT limit here, but the bump locks the answer
+    in across np.interp implementation details.
+    """
+    flow_tedges = pd.date_range(start="2023-01-01", periods=4, freq="D")
+    flow = np.array([100.0, 0.0, 100.0])
+    duration = spinup_duration(
+        flow=flow,
+        flow_tedges=flow_tedges,
+        aquifer_pore_volume=1.0,
+        retardation_factor=200.0,
+    )
+    np.testing.assert_allclose(duration, 3.0, atol=0, rtol=1e-13)
+
+
 # =============================================================================
 # Tests for compute_deposition_weights function (MEDIUM PRIORITY)
 # =============================================================================

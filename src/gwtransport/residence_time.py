@@ -16,10 +16,11 @@ Available functions:
   Handles single or multiple pore volumes (2D output for multiple volumes). Returns residence
   times in days using cumulative flow integration for accurate time-varying flow handling.
 
-- :func:`residence_time_mean` - Compute mean residence times over time intervals. Calculates
-  average residence time between specified time edges using linear averaging to properly weight
-  time-varying residence times. Supports same directional options as residence_time. Particularly
-  useful for time-binned analysis.
+- :func:`residence_time_mean` - Compute mean residence times over time intervals. Defaults to a
+  flow-weighted average (uniform in cumulative volume), matching the bin-edge convention used
+  elsewhere in the package; pass ``weighting='time'`` for the legacy uniform-in-time average.
+  Supports same directional options as :func:`residence_time`. Particularly useful for time-binned
+  analysis.
 
 - :func:`fraction_explained` - Compute fraction of aquifer pore volumes with valid residence
   times. Indicates how many pore volumes have sufficient flow history to compute residence time.
@@ -34,7 +35,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from gwtransport.utils import linear_average, linear_interpolate
+from gwtransport.utils import _make_strictly_monotone, linear_average, linear_interpolate
 
 
 def residence_time(
@@ -114,6 +115,9 @@ def residence_time(
         [0.0],
         (flow * flow_tdelta).cumsum(),
     ))  # at flow_tedges and flow_tedges_days. First value is 0.
+    # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
+    # by the smallest representable amount so downstream np.interp resolves consistently.
+    flow_cum = _make_strictly_monotone(flow_cum)
 
     if index is None:
         # If index is not provided return the residence time that matches with the index of the flow; at the center of the flow bin.
@@ -150,8 +154,9 @@ def residence_time_mean(
     aquifer_pore_volumes: npt.ArrayLike,
     direction: str = "extraction_to_infiltration",
     retardation_factor: float = 1.0,
+    weighting: str = "flow",
 ) -> npt.NDArray[np.floating]:
-    """
+    r"""
     Compute the mean residence time of a retarded compound in the aquifer between specified time edges.
 
     This function calculates the average residence time of a retarded compound in the aquifer
@@ -185,6 +190,17 @@ def residence_time_mean(
         Retardation factor of the compound in the aquifer [dimensionless].
         A value greater than 1.0 indicates that the compound moves slower than water.
         Default is 1.0 (no retardation).
+    weighting : {'flow', 'time'}, optional
+        How the per-instant residence time is averaged over each output bin:
+
+        * ``'flow'`` (default): flow-weighted average -- uniform in cumulative
+          volume. This matches the bin-edge convention of the package, where
+          per-bin output quantities are flow-weighted averages of the underlying
+          continuous-time signal, and is what the diffusion modules consume to
+          compute a per-bin retarded velocity.
+        * ``'time'``: time-weighted average -- uniform in clock time. Coincides
+          with ``'flow'`` when flow is constant within an output bin and differs
+          by :math:`\mathcal{O}(\delta Q \cdot \delta\tau)` under variable flow.
 
     Returns
     -------
@@ -197,12 +213,14 @@ def residence_time_mean(
     ------
     ValueError
         If ``direction`` is not ``'extraction_to_infiltration'`` or
-        ``'infiltration_to_extraction'``.
+        ``'infiltration_to_extraction'``. If ``weighting`` is not ``'flow'`` or
+        ``'time'``.
 
     See Also
     --------
     residence_time : Compute residence time at specific time indices
     :ref:`concept-residence-time` : Time in aquifer between infiltration and extraction
+    :ref:`concept-transport-equation` : Flow-weighted averaging convention
 
     Notes
     -----
@@ -211,6 +229,29 @@ def residence_time_mean(
     - For infiltration_to_extraction direction, the function computes how many days until water will be extracted.
     - The function uses linear interpolation for computing residence times at specific points
       and linear averaging for computing mean values over intervals.
+    - Exact-zero flow bins produce a plateau in cumulative volume ``V(t)`` and a step
+      discontinuity in residence time at the kink time. The implementation silently bumps
+      each duplicate ``flow_cum`` value up by one float64 ulp per duplicate so the cumulative
+      volume is strictly monotone, the smallest representable perturbation. Trapezoidal
+      integration over the resulting one-ulp-wide ramp recovers the underlying step exactly
+      to machine precision (left/right average over the ramp width equals the step's
+      contribution at zero width).
+
+    The two weighting choices are
+
+    .. math::
+
+        \bar\tau^{\mathrm{time}}
+        = \frac{1}{\Delta t}\int_{t_\mathrm{lo}}^{t_\mathrm{hi}} \tau(t)\,dt,
+        \qquad
+        \bar\tau^{\mathrm{flow}}
+        = \frac{\int_{t_\mathrm{lo}}^{t_\mathrm{hi}} \tau(t)\,Q(t)\,dt}
+               {\int_{t_\mathrm{lo}}^{t_\mathrm{hi}} Q(t)\,dt}
+        = \frac{1}{\Delta V}\int_{V_\mathrm{lo}}^{V_\mathrm{hi}} \tau(V)\,dV,
+
+    where :math:`V` is cumulative throughflow volume (:math:`dV = Q\,dt`). They
+    coincide whenever :math:`Q` is constant within
+    :math:`[t_\mathrm{lo}, t_\mathrm{hi}]`.
 
     Examples
     --------
@@ -221,7 +262,6 @@ def residence_time_mean(
     >>> flow_dates = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
     >>> flow_values = np.full(len(flow_dates) - 1, 100.0)  # Constant flow of 100 m³/day
     >>> pore_volume = 200.0  # Aquifer pore volume in m³
-    >>> # Calculate mean residence times
     >>> mean_times = residence_time_mean(
     ...     flow=flow_values,
     ...     flow_tedges=flow_dates,
@@ -234,14 +274,19 @@ def residence_time_mean(
     >>> print(mean_times)  # doctest: +NORMALIZE_WHITESPACE
     [[nan nan  2.  2.  2.  2.  2.  2.  2.]]
     """
-    flow = np.asarray(flow)
+    if weighting not in {"flow", "time"}:
+        msg = "weighting should be 'flow' or 'time'"
+        raise ValueError(msg)
+    if direction not in {"extraction_to_infiltration", "infiltration_to_extraction"}:
+        msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
+        raise ValueError(msg)
+
+    flow = np.asarray(flow, dtype=float)
     flow_tedges = pd.DatetimeIndex(flow_tedges)
     tedges_out = pd.DatetimeIndex(tedges_out)
     aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
 
-    # Check for negative flow values - physically invalid
     if np.any(flow < 0):
-        # Return NaN array with correct shape
         n_pore_volumes = len(aquifer_pore_volumes)
         n_output_bins = len(tedges_out) - 1
         return np.full((n_pore_volumes, n_output_bins), np.nan)
@@ -249,27 +294,48 @@ def residence_time_mean(
     flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
     tedges_out_days = np.asarray((tedges_out - flow_tedges[0]) / np.timedelta64(1, "D"))
 
-    # compute cumulative flow at flow_tedges
     flow_cum = np.concatenate(([0.0], np.cumsum(flow * np.diff(flow_tedges_days))))
 
-    if direction == "extraction_to_infiltration":
-        # How many days ago was the extraced water infiltrated
-        a = flow_cum[None, :] - retardation_factor * aquifer_pore_volumes[:, None]
-        days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
-        data_edges = flow_tedges_days - days
-    elif direction == "infiltration_to_extraction":
-        # In how many days the water that is infiltrated now be extracted
-        a = flow_cum[None, :] + retardation_factor * aquifer_pore_volumes[:, None]
-        days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
-        data_edges = days - flow_tedges_days
-    else:
-        msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
-        raise ValueError(msg)
+    # Q = 0 produces plateaus in flow_cum that np.unique would collapse to a single grid point
+    # in the augmented trapezoidal grid, smearing tau's step discontinuity at the kink. The
+    # ulp-scale bump restores strict monotonicity; trapezoidal integration over the resulting
+    # steep ramp recovers the underlying step exactly.
+    flow_cum = _make_strictly_monotone(flow_cum)
 
-    # Vectorized linear average across all pore volumes in one call. ``data_edges`` is 2D
-    # with shape (n_pore_volumes, n_flow_edges); each row shares the same x_data and the
-    # same x_edges. linear_average's 2D-y_data path handles per-row NaN segments cleanly.
-    return linear_average(x_data=flow_tedges_days, y_data=data_edges, x_edges=tedges_out_days)
+    # Sign convention: with sign = -1 for extraction_to_infiltration and +1 for
+    # infiltration_to_extraction, the look-back/forward target volume is
+    # ``a = flow_cum + sign * R * V_p`` and the residence time is
+    # ``tau = sign * (days(a) - t)``.
+    sign = -1.0 if direction == "extraction_to_infiltration" else 1.0
+
+    # tau(t) is piecewise-linear in t (and equivalently in cumulative volume V), but
+    # the breakpoints are not only at flow_tedges: within a flow bin Q is constant,
+    # so as t advances the look-back parcel sweeps through V at constant rate and
+    # crosses each interior flow_cum edge at a definite time t*. Sampling tau only
+    # at flow_tedges and linear-interpolating between samples can miss those interior
+    # kinks and, under regime changes with widely different Q, can overestimate the
+    # bin-mean residence time substantially.  The cure is to augment the integration
+    # grid by exactly those crossing times.
+    target_volumes_at_kinks = flow_cum[None, :] - sign * retardation_factor * aquifer_pore_volumes[:, None]
+    kink_times = linear_interpolate(
+        x_ref=flow_cum, y_ref=flow_tedges_days, x_query=target_volumes_at_kinks, left=np.nan, right=np.nan
+    )
+    augmented_grid = np.unique(np.concatenate([flow_tedges_days, kink_times[np.isfinite(kink_times)]]))
+
+    flow_cum_at_grid = linear_interpolate(x_ref=flow_tedges_days, y_ref=flow_cum, x_query=augmented_grid)
+    a_grid = flow_cum_at_grid[None, :] + sign * retardation_factor * aquifer_pore_volumes[:, None]
+    days_grid = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a_grid, left=np.nan, right=np.nan)
+    data_grid = sign * (days_grid - augmented_grid[None, :])
+
+    if weighting == "time":
+        return linear_average(x_data=augmented_grid, y_data=data_grid, x_edges=tedges_out_days)
+
+    flow_cum_at_tedges_out = linear_interpolate(x_ref=flow_tedges_days, y_ref=flow_cum, x_query=tedges_out_days)
+    result = linear_average(x_data=flow_cum_at_grid, y_data=data_grid, x_edges=flow_cum_at_tedges_out)
+    bins_within = (tedges_out_days[:-1] >= flow_tedges_days[0]) & (tedges_out_days[1:] <= flow_tedges_days[-1])
+    if not np.all(bins_within):
+        result = np.where(bins_within[None, :], result, np.nan)
+    return result
 
 
 def fraction_explained(

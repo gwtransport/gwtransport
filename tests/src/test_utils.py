@@ -11,6 +11,7 @@ import requests.exceptions
 from gwtransport.examples import generate_example_data
 from gwtransport.utils import (
     _diff,
+    _make_strictly_monotone,
     combine_bin_series,
     get_soil_temperature,
     linear_average,
@@ -96,6 +97,39 @@ def test_diff_right():
     expected = np.array([1, 1, 1, 1, 1, 2])
     result = _diff(a=x, alignment="right")
     np.testing.assert_allclose(result, expected, rtol=0, atol=1e-06)
+
+
+def test_make_strictly_monotone_no_duplicates_returns_input():
+    """Already strictly monotone arrays are returned unchanged (no allocation needed)."""
+    arr = np.array([0.0, 1.0, 2.5, 7.0])
+    result = _make_strictly_monotone(arr)
+    np.testing.assert_array_equal(result, arr)
+
+
+def test_make_strictly_monotone_breaks_plateau_with_safety_factor_per_duplicate():
+    """A run of k duplicates is bumped by ``k * BUMP * ulp(max(arr))`` where BUMP=16.
+
+    The factor of 16 is a platform-robust margin against ``np.interp``'s FMA-related
+    rounding noise. The exact value is an internal implementation detail; this test pins
+    it down so any future change is intentional.
+    """
+    arr = np.array([0.0, 100.0, 100.0, 100.0, 200.0])
+    ulp_max = np.nextafter(200.0, np.inf) - 200.0
+    bump = 16 * ulp_max
+    expected = np.array([0.0, 100.0, 100.0 + bump, 100.0 + 2 * bump, 200.0])
+    result = _make_strictly_monotone(arr)
+    np.testing.assert_array_equal(result, expected)
+    assert np.all(np.diff(result) > 0)  # strictly monotone -- the whole point
+
+
+def test_make_strictly_monotone_multiple_runs_reset_cumcount():
+    """A non-duplicate breaks the run; the next duplicate starts again at 1 * bump."""
+    arr = np.array([0.0, 5.0, 5.0, 5.0, 7.0, 7.0, 9.0])
+    ulp_max = np.nextafter(9.0, np.inf) - 9.0
+    bump = 16 * ulp_max
+    expected = np.array([0.0, 5.0, 5.0 + bump, 5.0 + 2 * bump, 7.0, 7.0 + bump, 9.0])
+    result = _make_strictly_monotone(arr)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_constant_function():
