@@ -31,7 +31,7 @@ rm -rf docs/build && uv tool run -q --from sphinx --with-editable ".[docs]" sphi
 
 ## CI/CD
 
-All checks must pass before merging. Pipeline tests on Python 3.11 (minimum deps) and 3.14 (latest deps). See `.github/workflows/` for details.
+All checks must pass before merging. Pipeline tests on Python 3.12 (minimum deps) and 3.14 (latest deps). See `.github/workflows/` for details.
 
 ## Project Layout
 
