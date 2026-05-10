@@ -480,6 +480,82 @@ def test_kink_handling_against_fine_grid():
     np.testing.assert_allclose(rt_mean, expected, atol=0, rtol=1e-13, equal_nan=True)
 
 
+def test_zero_flow_plateau_extraction():
+    """Q = 0 over an upstream interval gives tau a step discontinuity at the kink time.
+
+    Setup: ``flow = [100, 0, 0, 100]`` (m^3/day) over four 1-day bins, ``V_p = 50`` m^3,
+    ``R = 1``, extraction direction. Cumulative volume V(t) is flat at 100 over t in [1, 3].
+    For t in the output bin [3, 4]:
+
+        V(t)        = 100 + 100*(t - 3)
+        V(t) - 50   = 50 + 100*(t - 3)
+        t_in        = (V(t) - 50)/100  while V(t) - 50 < 100,
+                    = 3 + (V(t) - 150)/100 while V(t) - 50 > 100.
+        tau(t)      = 2.5 for t in [3, 3.5),
+                    = 0.5 for t in (3.5, 4].
+
+    The mean over [3, 4] is therefore 0.5 * 2.5 + 0.5 * 0.5 = 1.5 day for both flow- and
+    time-weighting (Q is constant on this output bin so they coincide). Without the zero-flow
+    regularization in :func:`residence_time_mean`, ``np.interp`` collapses the duplicate
+    ``flow_cum`` values and the trapezoidal grid smears the step into a linear ramp, returning
+    1.0 instead.
+    """
+    flow_tedges = pd.date_range(start="2023-01-01", periods=5, freq="D")
+    flow_values = np.array([100.0, 0.0, 0.0, 100.0])
+    pore_volume = 50.0
+    tedges_out = flow_tedges
+
+    common = {
+        "flow": flow_values,
+        "flow_tedges": flow_tedges,
+        "tedges_out": tedges_out,
+        "aquifer_pore_volumes": pore_volume,
+        "direction": "extraction_to_infiltration",
+    }
+    rt_time = residence_time_mean(**common, weighting="time")
+    rt_flow = residence_time_mean(**common, weighting="flow")
+
+    np.testing.assert_allclose(rt_time[0, 3], 1.5, atol=0, rtol=1e-13)
+    np.testing.assert_allclose(rt_flow[0, 3], 1.5, atol=0, rtol=1e-13)
+
+
+def test_zero_flow_plateau_offset_step():
+    """Q = 0 bin where the source kink does not sit at the output bin midpoint.
+
+    Setup: ``flow = [200, 0, 100]`` (m^3/day) over three 1-day bins, ``V_p = 50``, ``R = 1``.
+    The plateau in ``V(t)`` is at level 200 over t in [1, 2]; on the output bin t in [2, 3]
+    the look-back parcel crosses it at ``t* = 2.5`` (where V(t*) - 50 = 200).
+
+    For t in [2, 2.5), the source falls on the first flow bin (Q = 200): t_in =
+    (V(t) - 50)/200 = 0.75 + 0.5*(t - 2), so tau(t) = t - t_in = 0.5*t + 0.25 (range
+    [1.25, 1.5)). For t in (2.5, 3], the source falls on the third flow bin (Q = 100):
+    t_in = 2 + (V(t) - 250)/100 = t - 0.5, so tau(t) = 0.5. The jump at t* is from 1.5 down
+    to 0.5.
+
+    Time-weighted mean over [2, 3]:
+
+        (1/1) * [int_2^{2.5} (0.5*t + 0.25) dt + int_{2.5}^3 0.5 dt]
+        = (1.5625 + 0.625) - (1.0 + 0.5) + 0.25
+        = 0.9375 day.
+
+    Without regularization the legacy code returned 0.6875.
+    """
+    flow_tedges = pd.date_range(start="2023-01-01", periods=4, freq="D")
+    flow_values = np.array([200.0, 0.0, 100.0])
+    pore_volume = 50.0
+    tedges_out = flow_tedges
+
+    rt_time = residence_time_mean(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        tedges_out=tedges_out,
+        aquifer_pore_volumes=pore_volume,
+        direction="extraction_to_infiltration",
+        weighting="time",
+    )
+    np.testing.assert_allclose(rt_time[0, 2], 0.9375, atol=0, rtol=1e-13)
+
+
 def test_weighting_extrapolation_nan_consistency():
     """Output bins extending beyond the flow record are NaN under both weightings.
 

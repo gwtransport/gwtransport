@@ -226,6 +226,13 @@ def residence_time_mean(
     - For infiltration_to_extraction direction, the function computes how many days until water will be extracted.
     - The function uses linear interpolation for computing residence times at specific points
       and linear averaging for computing mean values over intervals.
+    - Exact-zero flow bins produce a plateau in cumulative volume ``V(t)`` and a step
+      discontinuity in residence time at the kink time. The implementation silently bumps
+      each duplicate ``flow_cum`` value up by one float64 ulp per duplicate so the cumulative
+      volume is strictly monotone, the smallest representable perturbation. Trapezoidal
+      integration over the resulting one-ulp-wide ramp recovers the underlying step exactly
+      to machine precision (left/right average over the ramp width equals the step's
+      contribution at zero width).
 
     The two weighting choices are
 
@@ -271,7 +278,7 @@ def residence_time_mean(
         msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
         raise ValueError(msg)
 
-    flow = np.asarray(flow)
+    flow = np.asarray(flow, dtype=float)
     flow_tedges = pd.DatetimeIndex(flow_tedges)
     tedges_out = pd.DatetimeIndex(tedges_out)
     aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
@@ -285,6 +292,23 @@ def residence_time_mean(
     tedges_out_days = np.asarray((tedges_out - flow_tedges[0]) / np.timedelta64(1, "D"))
 
     flow_cum = np.concatenate(([0.0], np.cumsum(flow * np.diff(flow_tedges_days))))
+
+    # Q = 0 over a bin produces a plateau (consecutive equal values) in flow_cum that
+    # np.unique collapses to a single grid point, preventing the augmented trapezoidal grid
+    # from representing tau's step discontinuity at the kink. Bumping each duplicate up by
+    # k * ulp(max(flow_cum)), where k is its position in the run, restores strict monotonicity
+    # with the smallest perturbation that survives downstream linear interpolations of the
+    # form ``(A + B) / 2``: those carry ulp at the max-flow_cum scale, so a smaller bump
+    # would be washed out by IEEE 754 round-to-nearest-even. Trapezoidal integration over
+    # the resulting steep ramp recovers the underlying step exactly.
+    flow_cum_diffs = np.diff(flow_cum)
+    if np.any(flow_cum_diffs == 0):
+        ulp_max = np.nextafter(flow_cum.max(), np.inf) - flow_cum.max()
+        is_dup = np.concatenate(([False], flow_cum_diffs == 0))
+        idx = np.arange(len(flow_cum))
+        last_nondup = np.maximum.accumulate(np.where(is_dup, -1, idx))
+        cumcount = np.where(is_dup, idx - last_nondup, 0)
+        flow_cum += cumcount * ulp_max
 
     # Sign convention: with sign = -1 for extraction_to_infiltration and +1 for
     # infiltration_to_extraction, the look-back/forward target volume is
