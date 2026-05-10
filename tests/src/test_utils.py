@@ -11,6 +11,7 @@ import requests.exceptions
 from gwtransport.examples import generate_example_data
 from gwtransport.utils import (
     _diff,
+    _make_strictly_monotone,
     combine_bin_series,
     get_soil_temperature,
     linear_average,
@@ -96,6 +97,39 @@ def test_diff_right():
     expected = np.array([1, 1, 1, 1, 1, 2])
     result = _diff(a=x, alignment="right")
     np.testing.assert_allclose(result, expected, rtol=0, atol=1e-06)
+
+
+def test_make_strictly_monotone_no_duplicates_returns_input():
+    """Already strictly monotone arrays are returned unchanged (no allocation needed)."""
+    arr = np.array([0.0, 1.0, 2.5, 7.0])
+    result = _make_strictly_monotone(arr)
+    np.testing.assert_array_equal(result, arr)
+
+
+def test_make_strictly_monotone_breaks_plateau_with_one_ulp_per_duplicate():
+    """A run of k duplicates is bumped by 1, 2, ..., k ulps of max(arr).
+
+    Verifies the specific bump magnitude: each duplicate is bumped by exactly
+    ``cumcount * ulp(max(arr))``, where cumcount is the 1-based position in the
+    consecutive duplicate run. This is the smallest bump that survives downstream
+    ``(A + B) / 2`` linear interpolations under IEEE 754 round-to-nearest-even.
+    """
+    arr = np.array([0.0, 100.0, 100.0, 100.0, 200.0])
+    ulp_max = np.nextafter(200.0, np.inf) - 200.0
+    expected = np.array([0.0, 100.0, 100.0 + ulp_max, 100.0 + 2 * ulp_max, 200.0])
+    result = _make_strictly_monotone(arr)
+    np.testing.assert_array_equal(result, expected)
+    # And the result is strictly monotone -- the whole point.
+    assert np.all(np.diff(result) > 0)
+
+
+def test_make_strictly_monotone_multiple_runs_reset_cumcount():
+    """A non-duplicate breaks the run; the next duplicate starts again at 1 ulp."""
+    arr = np.array([0.0, 5.0, 5.0, 5.0, 7.0, 7.0, 9.0])
+    ulp_max = np.nextafter(9.0, np.inf) - 9.0
+    expected = np.array([0.0, 5.0, 5.0 + ulp_max, 5.0 + 2 * ulp_max, 7.0, 7.0 + ulp_max, 9.0])
+    result = _make_strictly_monotone(arr)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_constant_function():
