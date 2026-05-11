@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 import requests.exceptions
 
-from gwtransport.examples import generate_example_data
+from gwtransport.examples import generate_example_data, generate_example_deposition_timeseries
 from gwtransport.utils import (
     _diff,
     _make_strictly_monotone,
@@ -1298,3 +1298,72 @@ def test_generate_example_data_seed_changes_output():
         rng=2,
     )
     assert not np.array_equal(df_a["flow"].to_numpy(), df_b["flow"].to_numpy())
+
+
+@pytest.mark.parametrize("seed", list(range(20)))
+def test_generate_example_data_flow_floor_enforced(seed):
+    """Flow floor of 5 m3/day must hold even after the spill loop divides flow.
+
+    Regression test for issue 167: the floor was applied before spills, so
+    spill divisions could push flow well below 5 m3/day (observed min ~0.3).
+    """
+    df, _ = generate_example_data(rng=seed)
+    assert df["flow"].min() >= 5.0, f"flow min {df['flow'].min()} below 5.0 m3/day for seed={seed}"
+
+
+# =============================================================================
+# Tests for examples.generate_example_deposition_timeseries
+# =============================================================================
+
+
+def test_generate_example_deposition_timeseries_default_call():
+    """Calling with no arguments must work end-to-end.
+
+    Regression test for issue 167: the default event_dates list was tz-naive
+    while the dates index was tz-aware (UTC), causing
+    ``TypeError: Cannot compare dtypes datetime64[us, UTC] and datetime64[us]``
+    inside ``get_indexer``.
+    """
+    series, tedges = generate_example_deposition_timeseries()
+    assert len(series) == len(tedges) - 1
+    assert isinstance(series.index, pd.DatetimeIndex)
+    assert series.index.tz is not None
+    assert series.notna().all()
+
+
+def test_generate_example_deposition_timeseries_naive_event_dates():
+    """Tz-naive user event_dates must be accepted and aligned to the UTC index."""
+    series, _ = generate_example_deposition_timeseries(
+        date_start="2020-01-01",
+        date_end="2020-12-31",
+        event_dates=["2020-06-15", "2020-09-01"],
+        rng=0,
+    )
+    assert isinstance(series.index, pd.DatetimeIndex)
+    assert series.index.tz is not None
+
+
+def test_generate_example_deposition_timeseries_tz_aware_event_dates():
+    """Tz-aware event_dates in a non-UTC zone must be converted, not rejected."""
+    event_dates = pd.DatetimeIndex(["2020-06-15 02:00"]).tz_localize("Europe/Amsterdam")
+    series, _ = generate_example_deposition_timeseries(
+        date_start="2020-01-01",
+        date_end="2020-12-31",
+        event_dates=event_dates,
+        rng=0,
+    )
+    assert series.notna().all()
+
+
+def test_generate_example_deposition_timeseries_seed_reproducibility():
+    """Two calls with the same integer seed must produce identical series."""
+    s_a, _ = generate_example_deposition_timeseries(rng=12345)
+    s_b, _ = generate_example_deposition_timeseries(rng=12345)
+    np.testing.assert_array_equal(s_a.to_numpy(), s_b.to_numpy())
+
+
+def test_generate_example_deposition_timeseries_seed_changes_output():
+    """Different seeds must produce different stochastic series."""
+    s_a, _ = generate_example_deposition_timeseries(rng=1)
+    s_b, _ = generate_example_deposition_timeseries(rng=2)
+    assert not np.array_equal(s_a.to_numpy(), s_b.to_numpy())

@@ -108,8 +108,11 @@ def generate_example_data(
         Seasonal amplitude of infiltration concentration (only used for
         ``"synthetic"`` method).
     measurement_noise : float, default 1.0
-        Random noise level applied to both cin and cout to represent
-        measurement errors.
+        Standard deviation of the Gaussian measurement noise applied
+        independently to ``cin`` and ``cout``. Because the two noise draws are
+        independent, applying the forward operator to ``df['cin']`` does not
+        exactly reproduce ``df['cout']`` when ``measurement_noise > 0``; the
+        underlying noiseless signals remain consistent.
     aquifer_pore_volumes : array-like or None, default None
         Discrete aquifer pore volumes [m3] representing the distribution of
         residence times. When provided, the gamma distribution is bypassed and
@@ -183,7 +186,6 @@ def generate_example_data(
     # Generate flow data with seasonal pattern (higher in winter)
     seasonal_flow = flow_mean + flow_amplitude * np.sin(2 * np.pi * days / 365 + np.pi)
     flow = seasonal_flow + rng.normal(0, flow_noise, len(dates))
-    flow = np.maximum(flow, 5.0)  # Ensure flow is not too small or negative
 
     min_days_for_spills = 60
     if len(dates) > min_days_for_spills:  # Only add spills for longer time series
@@ -194,6 +196,9 @@ def generate_example_data(
             spill_magnitude = float(rng.uniform(2.0, 5.0))
 
             flow[spill_start : spill_start + spill_duration] /= spill_magnitude
+
+    # Enforce a positive flow floor after spills so residence times remain finite.
+    flow = np.maximum(flow, 5.0)
 
     # Generate infiltration concentration. nonoise is needed to compute cout.
     if cin_method == "synthetic":
@@ -488,6 +493,7 @@ def generate_example_deposition_timeseries(
     event_duration: int = 30,
     event_decay_scale: float = 10.0,
     ensure_non_negative: bool = True,
+    rng: np.random.Generator | int | None = None,
 ) -> tuple[pd.Series, pd.DatetimeIndex]:
     """
     Generate synthetic deposition timeseries for groundwater transport examples.
@@ -505,8 +511,9 @@ def generate_example_deposition_timeseries(
     noise_scale : float
         Standard deviation scale for Gaussian noise added to the signal.
     event_dates : list-like or None
-        Dates (strings or pandas-compatible) at which to place episodic events. If None,
-        a sensible default list is used.
+        Dates (strings or pandas-compatible) at which to place episodic events.
+        Time-zone-naive entries are interpreted as UTC to match the generated
+        ``dates`` index. If None, a sensible default list is used.
     event_magnitude : float
         Peak magnitude multiplier for events.
     event_duration : int
@@ -515,12 +522,19 @@ def generate_example_deposition_timeseries(
         Decay scale used in the exponential decay for event time series.
     ensure_non_negative : bool
         If True, negative values are clipped to zero.
+    rng : numpy.random.Generator, int, or None, default None
+        Source of randomness for the additive Gaussian noise. Accepted in any
+        form supported by :func:`numpy.random.default_rng`. Pass an integer
+        (or :class:`numpy.random.Generator`) for reproducible output; ``None``
+        draws fresh entropy each call.
 
     Returns
     -------
     pandas.Series
         Time series of deposition values indexed by daily timestamps.
     """
+    rng = np.random.default_rng(rng)
+
     # Create synthetic deposition time series - needs to match flow period
     dates = pd.date_range(date_start, date_end, freq=freq).tz_localize("UTC")
     n_dates = len(dates)
@@ -528,7 +542,7 @@ def generate_example_deposition_timeseries(
 
     # Base deposition rate with seasonal and event patterns
     seasonal_pattern = seasonal_amplitude * np.sin(2 * np.pi * np.arange(n_dates) / 365.25)
-    noise = noise_scale * np.random.normal(0, 1, n_dates)
+    noise = noise_scale * rng.normal(0, 1, n_dates)
 
     # Default event dates if not provided
     if event_dates is None:
@@ -540,6 +554,12 @@ def generate_example_deposition_timeseries(
         # Convert ArrayLike to list for pd.to_datetime
         event_dates_list = event_dates if isinstance(event_dates, list) else list(np.asarray(event_dates))
         event_dates_index = pd.DatetimeIndex(pd.to_datetime(event_dates_list))
+    # Match the timezone of `dates` so naive user input (and the string defaults)
+    # can be compared against the tz-aware index in `get_indexer`.
+    if event_dates_index.tz is None:
+        event_dates_index = event_dates_index.tz_localize(dates.tz)
+    else:
+        event_dates_index = event_dates_index.tz_convert(dates.tz)
 
     event = np.zeros(n_dates)
     for event_date in event_dates_index:
