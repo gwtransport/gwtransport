@@ -812,13 +812,20 @@ class TestExtractionToInfiltrationDiffusion:
         }
 
     def test_zero_diffusivity_matches_advection(self, simple_setup):
-        """Test that zero diffusivity gives same result as pure advection."""
+        """Test that zero diffusivity gives same result as pure advection.
+
+        Both modules use comparable strict-validity boundary handling here
+        (advection: ``spinup=None``; diffusion: ``spinup=None`` disables
+        the 100-year tedge extension), so the comparison restricts to bins
+        valid in both modules and the algebra matches exactly.
+        """
         cin_advection = advection_e2i(
             cout=simple_setup["cout"],
             flow=simple_setup["flow_cin"],
             tedges=simple_setup["cin_tedges"],
             cout_tedges=simple_setup["cout_tedges"],
             aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
+            spinup=None,
         )
         cin_diffusion = extraction_to_infiltration(
             cout=simple_setup["cout"],
@@ -829,6 +836,7 @@ class TestExtractionToInfiltrationDiffusion:
             streamline_length=simple_setup["streamline_length"],
             molecular_diffusivity=0.0,
             longitudinal_dispersivity=0.0,
+            spinup=None,
         )
         # Only compare values where advection is not NaN
         valid_mask = ~np.isnan(cin_advection)
@@ -2202,4 +2210,65 @@ def test_infiltration_to_extraction_accepts_zero_flow_without_warnings():
             streamline_length=np.array([80.0]),
             molecular_diffusivity=np.array([0.03]),
             longitudinal_dispersivity=np.array([0.0]),
+        )
+
+
+def test_diffusion_spinup_none_disables_tedge_extension():
+    """spinup=None disables the 100-year warm-start extension.
+
+    Under the default (spinup='constant') the diffusion module extends
+    tedges by +/-100 years and produces no left-edge NaN. Under spinup=None
+    the extension is skipped, so cout bins whose source windows fall
+    outside the user-supplied tedges become NaN -- matching the strict-
+    validity behavior of the advection module.
+    """
+    n = 20
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cin = np.full(n, 5.0)
+    flow = np.full(n, 100.0)
+    aquifer_pore_volumes = np.array([500.0])
+    streamline_length = np.array([100.0])
+
+    cout_default = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        streamline_length=streamline_length,
+        molecular_diffusivity=np.array([0.0]),
+        longitudinal_dispersivity=np.array([0.0]),
+    )
+    cout_strict = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        streamline_length=streamline_length,
+        molecular_diffusivity=np.array([0.0]),
+        longitudinal_dispersivity=np.array([0.0]),
+        spinup=None,
+    )
+
+    n_nan_default = int(np.sum(np.isnan(cout_default)))
+    n_nan_strict = int(np.sum(np.isnan(cout_strict)))
+    assert n_nan_strict > n_nan_default, "spinup=None should produce more NaN than constant warm-start"
+
+
+def test_diffusion_spinup_float_raises():
+    """Diffusion module does not implement the float-threshold mode."""
+    n = 10
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    with pytest.raises(NotImplementedError, match="spinup"):
+        infiltration_to_extraction(
+            cin=np.ones(n),
+            flow=np.full(n, 100.0),
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            streamline_length=np.array([100.0]),
+            molecular_diffusivity=np.array([0.0]),
+            longitudinal_dispersivity=np.array([0.0]),
+            spinup=0.5,
         )
