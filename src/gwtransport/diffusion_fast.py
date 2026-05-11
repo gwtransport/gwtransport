@@ -18,13 +18,26 @@ and exactly zero when ``sigma_V`` is V-independent, i.e. when only
 longitudinal dispersivity acts).
 
 The reported outlet concentration is an approximation of Bear's *resident*
-concentration ``C_R``. The Kreft-Zuber (1978) flux concentration
-``C_F = C_R + (D_L/v) * N_x`` adds a Gaussian-density correction local to
-the breakthrough; the slow :mod:`gwtransport.diffusion` module integrates
-``C_F`` cell-wise via 16-point Gauss-Legendre quadrature and remains
-strictly non-negative. Use that module when the Kreft-Zuber flux semantic
-matters; this fast module trades that ``O(1/Pe)`` shape correction for a
-simpler sparse-matrix operator that respects the convex-combination bound.
+concentration ``C_R`` (Bear 1972). The Kreft-Zuber (1978) flux concentration
+``C_F = C_R + (D_L/v) * N_x`` adds a localised Gaussian-density correction
+at the breakthrough front with amplitude ~ ``1/sqrt(4 pi Pe)``. The slow
+:mod:`gwtransport.diffusion` module integrates ``C_F`` per cell via
+16-point Gauss-Legendre quadrature and remains strictly non-negative under
+arbitrary variable Q; this fast module trades that ``O(1/Pe)`` shape
+correction for a simpler sparse-matrix operator that respects the
+convex-combination bound ``min(cin) <= cout <= max(cin)`` (the difference
+of the K-Z bin-density-difference matrix and the V-smoothing C_R
+approximation introduces ~1e-8 negative excursions at sharp pulse fronts
+when K-Z is included, which downstream log-transform / Poisson-likelihood
+fits do not tolerate).
+
+**When to choose which module.** For typical groundwater Peclet numbers
+(``Pe = L*v/D_L``) above ~50 — basin- and aquifer-scale problems where
+APVD calibration uncertainty dominates — the C_R/C_F discrepancy is
+swamped by larger error sources and ``diffusion_fast`` is the correct
+choice. For column-scale experiments (``Pe < ~50``) or when reporting
+fluxes for mass-balance accounting to better than ~1%, use
+:mod:`gwtransport.diffusion`.
 
 Both ``diffusion_fast`` and :mod:`gwtransport.diffusion` add microdispersion
 and molecular diffusion on top of macrodispersion captured by the aquifer
@@ -135,15 +148,18 @@ def infiltration_to_extraction(
     Returns
     -------
     numpy.ndarray
-        Bin-averaged concentration in extracted water. Length equals
-        len(cout_tedges) - 1. NaN values indicate time periods with no valid
-        contributions from the infiltration data.
+        Bin-averaged resident concentration ``C_R`` (Bear 1972) in the
+        extracted water. Length equals ``len(cout_tedges) - 1``. NaN
+        values indicate time periods with no valid contributions from the
+        infiltration data. Use :func:`gwtransport.diffusion.infiltration_to_extraction`
+        for the Kreft-Zuber flux concentration ``C_F`` when column-mass
+        conservation tighter than ~1% matters.
 
     See Also
     --------
     gwtransport.diffusion.infiltration_to_extraction : Physically rigorous analytical solution
-        that supports per-pore-volume arrays for streamline_length, molecular_diffusivity,
-        and longitudinal_dispersivity.
+        reporting the Kreft-Zuber flux concentration ``C_F``. Supports per-pore-volume
+        arrays for streamline_length, molecular_diffusivity, and longitudinal_dispersivity.
     extraction_to_infiltration : Inverse operation
     :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion
 
@@ -376,9 +392,15 @@ def extraction_to_infiltration(
     Returns
     -------
     numpy.ndarray
-        Bin-averaged concentration in infiltrating water. Length equals
-        len(tedges) - 1. NaN values indicate time periods with no valid
-        contributions from the extraction data.
+        Bin-averaged resident concentration ``C_R`` (Bear 1972) in the
+        infiltrating water, recovered from the Tikhonov-regularised inverse
+        of the same C_R-approximating forward operator used by
+        :func:`infiltration_to_extraction`. Length equals
+        ``len(tedges) - 1``. NaN values indicate time periods with no
+        valid contributions from the extraction data. Use
+        :func:`gwtransport.diffusion.extraction_to_infiltration` for the
+        Kreft-Zuber flux-concentration inverse when column-mass
+        conservation tighter than ~1% matters.
 
     Warns
     -----
@@ -613,9 +635,13 @@ def gamma_infiltration_to_extraction(
     Returns
     -------
     numpy.ndarray
-        Bin-averaged concentration in extracted water. Length equals
-        len(cout_tedges) - 1. NaN values indicate time periods with no valid
-        contributions from the infiltration data.
+        Bin-averaged resident concentration ``C_R`` (Bear 1972) in the
+        extracted water. Length equals ``len(cout_tedges) - 1``. NaN
+        values indicate time periods with no valid contributions from the
+        infiltration data. Use
+        :func:`gwtransport.diffusion.gamma_infiltration_to_extraction` for
+        the Kreft-Zuber flux concentration ``C_F`` when column-mass
+        conservation tighter than ~1% matters.
 
     See Also
     --------
@@ -772,9 +798,13 @@ def gamma_extraction_to_infiltration(
     Returns
     -------
     numpy.ndarray
-        Bin-averaged concentration in infiltrating water. Length equals
-        len(tedges) - 1. NaN values indicate time periods with no valid
-        contributions from the extraction data.
+        Bin-averaged resident concentration ``C_R`` (Bear 1972) in the
+        infiltrating water. Length equals ``len(tedges) - 1``. NaN values
+        indicate time periods with no valid contributions from the
+        extraction data. Use
+        :func:`gwtransport.diffusion.gamma_extraction_to_infiltration` for
+        the Kreft-Zuber flux-concentration inverse when column-mass
+        conservation tighter than ~1% matters.
 
     See Also
     --------

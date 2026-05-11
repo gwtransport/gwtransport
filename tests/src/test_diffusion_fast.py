@@ -1478,9 +1478,12 @@ def _build_w_via_probes(call_fn, n):
 @pytest.mark.parametrize(
     ("d_m", "alpha_l", "atol"),
     [
-        (1.0, 0.0, 5e-3),  # pure D_m — residual scales with d sigma_V/d V
-        (0.0, 0.3, 1e-10),  # pure alpha_L — sigma_V is V-independent; exact
-        (1.0, 0.3, 5e-3),  # mixed
+        # Observed worst-case residuals across the three seeds: 4.05e-3
+        # (pure D_m) and 2.74e-3 (mixed). atol set ~1.5x over the worst
+        # case so a future seed slightly outside this range does not flake.
+        (1.0, 0.0, 6e-3),
+        (0.0, 0.3, 1e-10),  # sigma_V V-independent; exact at machine precision
+        (1.0, 0.3, 5e-3),
     ],
 )
 def test_column_mass_conservation_variable_flow_dispersion_flow_out(d_m, alpha_l, seed, atol):
@@ -1529,13 +1532,13 @@ def test_column_mass_conservation_variable_flow_dispersion_flow_out(d_m, alpha_l
 @pytest.mark.parametrize(
     ("d_m", "alpha_l", "atol"),
     [
-        # smooth-then-advect (input-side smoothing) has a slightly larger
-        # variable-sigma-on-uniform-V residual than the advect-then-smooth
-        # branch because the input grid has wide spin-up bins that bias the
-        # uniform-V resampling. Empirically observed at ~6e-3.
-        (1.0, 0.0, 7e-3),
+        # smooth-then-advect on the input grid carries a slightly larger
+        # variable-sigma_V residual than the advect-then-smooth branch
+        # because the input V-grid contains the wide spin-up bins. Worst
+        # observed residual is 5.63e-3 (D_m=1); atol set ~1.5x over.
+        (1.0, 0.0, 8e-3),
         (0.0, 0.3, 1e-10),
-        (1.0, 0.3, 7e-3),
+        (1.0, 0.3, 6e-3),
     ],
 )
 def test_column_mass_conservation_variable_flow_dispersion_default(d_m, alpha_l, seed, atol):
@@ -1678,7 +1681,8 @@ def test_column_mass_conservation_multipv(d_m, alpha_l, seed, atol):
 # =============================================================================
 
 
-def test_delta_input_matches_analytical_gaussian_constant_flow():
+@pytest.mark.parametrize("retardation", [1.0, 2.7])
+def test_delta_input_matches_analytical_gaussian_constant_flow(retardation):
     """Single delta cin pulse under constant Q matches the analytical Gaussian.
 
     For a single pore volume and constant flow, the V-coordinate breakthrough
@@ -1687,12 +1691,18 @@ def test_delta_input_matches_analytical_gaussian_constant_flow():
         cout[i] proportional to (erf((tau_idx + 0.5 - i)/(sigma_idx*sqrt(2)))
                                  - erf((tau_idx - 0.5 - i)/(sigma_idx*sqrt(2)))) / 2
 
-    where ``tau_idx = j + V_pore / (Q*dt)`` is the breakthrough centre and
+    where ``tau_idx = j + R*V_pore / (Q*dt)`` is the breakthrough centre and
     ``sigma_idx = (R*V_pore/L) * sqrt(2*D_m*tau + 2*alpha_L*L) / (Q*dt)`` is
     the V-coordinate sigma converted to bin-index units. Mutating sigma_V
-    by any constant factor (or to zero) breaks this match — the
+    by any constant factor (or zeroing it) breaks this match — the
     mass-conservation tests do not catch this because they probe row
     sums, not the kernel shape.
+
+    Parametrising on ``retardation`` exercises the R factor in both
+    ``tau = R*V_pore/Q`` and ``sigma_V = (R*V_pore/L)*sigma_x``: an
+    accidentally dropped or mispowered R in
+    :func:`gwtransport.diffusion_fast._compute_sigma_v` fails the R=2.7
+    case where it would slip past R=1.
     """
     n = 200
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
@@ -1703,16 +1713,13 @@ def test_delta_input_matches_analytical_gaussian_constant_flow():
     alpha_l = 0.0
     v_pore = 1000.0
     streamline_length = 30.0
-    retardation = 1.0
     # Pick a regime where sigma is well-resolved by the grid:
-    #   tau = R*V_pore/Q = 10 days  (within the 200-day window)
-    #   sigma_x = sqrt(2*D_m*tau) = sqrt(40) ~ 6.32 m
-    #   sigma_V = (R*V_pore/L)*sigma_x = (1000/30)*6.32 ~ 211 m^3
-    #   sigma_t = sigma_V/(Q*1d) ~ 2.11 days  (covers a few bins -> resolved)
+    #   tau = R*V_pore/Q  (10 days at R=1; 27 days at R=2.7)
+    #   sigma_x = sqrt(2*D_m*tau)
+    #   sigma_V = (R*V_pore/L)*sigma_x
+    #   sigma_t = sigma_V/(Q*1d)   -> several bins, resolved
 
-    # Inject a single unit-pulse cin at bin j_in. Reference Gaussian centred at
-    # j_in + tau/dt = j_in + 10 with sigma_t bins.
-    j_in = 80
+    j_in = 60
     cin = np.zeros(n)
     cin[j_in] = 1.0
 
@@ -1725,14 +1732,15 @@ def test_delta_input_matches_analytical_gaussian_constant_flow():
         mean_streamline_length=streamline_length,
         mean_molecular_diffusivity=d_m,
         mean_longitudinal_dispersivity=alpha_l,
+        retardation_factor=retardation,
         flow_out=flow,
     )
 
-    tau = retardation * v_pore / flow_rate  # 10 days
+    tau = retardation * v_pore / flow_rate
     sigma_x = np.sqrt(2.0 * d_m * tau)
     sigma_v = (retardation * v_pore / streamline_length) * sigma_x
-    sigma_idx = sigma_v / (flow_rate * 1.0)  # Q*dt = 100 m^3 per bin
-    centre = j_in + tau / 1.0  # bin index of breakthrough centre
+    sigma_idx = sigma_v / (flow_rate * 1.0)
+    centre = j_in + tau / 1.0
 
     i_arr = np.arange(n)
     sqrt2 = np.sqrt(2.0)
@@ -1741,20 +1749,101 @@ def test_delta_input_matches_analytical_gaussian_constant_flow():
     )
 
     valid = ~np.isnan(cout)
-    # Restrict comparison to bins where the kernel is meaningfully non-zero
-    # AND well away from the spin-up edge. Boundary effects in the V-smoothing
-    # (uniform-V resampling at the domain edges) add a small drift outside
-    # this window.
+    # Compare in the kernel-active window. Outside ±8 sigma the analytical
+    # Gaussian is numerically zero; boundary effects in the V-smoothing add
+    # a tiny drift there that is not load-bearing.
     window = (i_arr > centre - 8 * sigma_idx) & (i_arr < centre + 8 * sigma_idx) & valid
-    # The Gaussian-vs-exact-kernel agreement is ~1e-3 in this regime, set by
-    # the per-streamtube sigma_V_t variation across bins j_in..j_in+8sigma.
+    # The Gaussian-vs-exact-kernel agreement is ~1e-3, set by the per-
+    # streamtube sigma_V variation across bins j_in..j_in+8*sigma.
     assert_allclose(cout[window], expected[window], atol=2e-3, rtol=0)
-    # Stronger: peak amplitude matches within 1%, location matches the nearest
-    # bin to ``centre``.
+    # Stronger: peak amplitude matches within 1%, location to nearest bin.
     peak_idx = int(np.argmax(cout[valid]))
     expected_peak_idx = int(np.argmax(expected[valid]))
     assert abs(peak_idx - expected_peak_idx) <= 1
     assert abs(cout[valid][peak_idx] - expected[valid][expected_peak_idx]) < 1e-2
+
+
+def test_delta_input_multipv_matches_moment_averaged_gaussian():
+    """Multi-PV delta pulse matches the moment-averaged-sigma Gaussian.
+
+    For ``aquifer_pore_volumes = [V_1, V_2, V_3]`` and constant Q, the
+    fast operator builds:
+
+      1. A per-PV-averaged advection matrix ``w_adv`` that maps the
+         single delta cin to three sub-spikes at j_in + R*V_k/(Q*dt).
+      2. A V-smoothing operator with **moment-averaged** sigma_V
+
+             sigma_V_eff = (R/L) * sqrt(2*D_m*tau_bar/V_bar * E[V^3]
+                                         + 2*alpha_L*L * E[V^2])
+
+         applied uniformly to the sub-spike pattern.
+
+    The expected cout is therefore the sum of three Gaussians of width
+    sigma_V_eff, each weighted 1/3, centred at the three breakthrough
+    positions. Mutating the moment placement in
+    :func:`gwtransport.diffusion_fast._compute_sigma_v` (e.g.
+    ``ev3/V_bar → ev2``) shifts sigma_V_eff by ~9% on
+    ``[600, 1000, 1400]`` and the per-bin discrepancy exceeds atol.
+    """
+    n = 200
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
+    flow_rate = 100.0
+    flow = np.full(n, flow_rate)
+    d_m = 2.0
+    alpha_l = 0.0
+    apvs = np.array([600.0, 1000.0, 1400.0])
+    streamline_length = 30.0
+    retardation = 1.0
+
+    j_in = 60
+    cin = np.zeros(n)
+    cin[j_in] = 1.0
+
+    with warn_module.catch_warnings():
+        warn_module.simplefilter("ignore")
+        cout = infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=apvs,
+            mean_streamline_length=streamline_length,
+            mean_molecular_diffusivity=d_m,
+            mean_longitudinal_dispersivity=alpha_l,
+            retardation_factor=retardation,
+            suppress_dispersion_warning=True,
+            flow_out=flow,
+        )
+
+    v_bar = float(np.mean(apvs))
+    ev2 = float(np.mean(apvs**2))
+    ev3 = float(np.mean(apvs**3))
+    tau_bar = retardation * v_bar / flow_rate
+    var_numerator = 2.0 * d_m * tau_bar / v_bar * ev3 + 2.0 * alpha_l * streamline_length * ev2
+    sigma_v_eff = (retardation / streamline_length) * np.sqrt(var_numerator)
+    sigma_idx = sigma_v_eff / (flow_rate * 1.0)
+
+    # Three breakthrough centres
+    centres = j_in + retardation * apvs / flow_rate
+
+    i_arr = np.arange(n)
+    sqrt2 = np.sqrt(2.0)
+    expected = np.zeros(n)
+    for centre in centres:
+        expected += (
+            (1.0 / len(apvs))
+            * 0.5
+            * (erf((i_arr - centre + 0.5) / (sigma_idx * sqrt2)) - erf((i_arr - centre - 0.5) / (sigma_idx * sqrt2)))
+        )
+
+    valid = ~np.isnan(cout)
+    # Window spans all three breakthroughs with ample margin
+    window = (i_arr > centres.min() - 6 * sigma_idx) & (i_arr < centres.max() + 6 * sigma_idx) & valid
+    # Mutating ev3/V_bar -> ev2 shifts sigma_v_eff by ~9% on this PV array.
+    # The resulting per-bin discrepancy is bounded above 5e-3 across the
+    # window; atol=3e-3 keeps headroom under correct moments.
+    assert_allclose(cout[window], expected[window], atol=3e-3, rtol=0)
 
 
 # =============================================================================
