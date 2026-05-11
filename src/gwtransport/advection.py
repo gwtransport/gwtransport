@@ -74,7 +74,11 @@ import numpy.typing as npt
 import pandas as pd
 
 from gwtransport import gamma
-from gwtransport.advection_utils import _infiltration_to_extraction_weights
+from gwtransport.advection_utils import (
+    _infiltration_to_extraction_weights,
+    _resolve_spinup_inputs,
+    _resolve_spinup_mask,
+)
 from gwtransport.fronttracking.math import (
     EPSILON_FREUNDLICH_N,
     ConstantRetardation,
@@ -342,6 +346,7 @@ def gamma_infiltration_to_extraction(
     beta: float | None = None,
     n_bins: int = 100,
     retardation_factor: float = 1.0,
+    spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.
@@ -387,6 +392,9 @@ def gamma_infiltration_to_extraction(
         Number of bins to discretize the gamma distribution.
     retardation_factor : float
         Retardation factor of the compound in the aquifer.
+    spinup : {"constant"} | float in [0, 1] | None, optional
+        Forwarded to :func:`infiltration_to_extraction`. Default
+        ``"constant"`` warm-starts the system before ``tedges[0]``.
 
     Returns
     -------
@@ -493,6 +501,7 @@ def gamma_infiltration_to_extraction(
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=bins["expected_values"],
         retardation_factor=retardation_factor,
+        spinup=spinup,
     )
 
 
@@ -510,6 +519,7 @@ def gamma_extraction_to_infiltration(
     n_bins: int = 100,
     retardation_factor: float = 1.0,
     regularization_strength: float = 1e-10,
+    spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
@@ -560,6 +570,9 @@ def gamma_extraction_to_infiltration(
     regularization_strength : float, optional
         Tikhonov regularization parameter λ. See
         :func:`extraction_to_infiltration` for details. Default is 1e-10.
+    spinup : {"constant"} | float in [0, 1] | None, optional
+        Forwarded to :func:`extraction_to_infiltration`. Default
+        ``"constant"`` warm-starts the system before ``tedges[0]``.
 
     Returns
     -------
@@ -666,6 +679,7 @@ def gamma_extraction_to_infiltration(
         aquifer_pore_volumes=bins["expected_values"],
         retardation_factor=retardation_factor,
         regularization_strength=regularization_strength,
+        spinup=spinup,
     )
 
 
@@ -677,6 +691,7 @@ def infiltration_to_extraction(
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
     retardation_factor: float = 1.0,
+    spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the extracted water using flow-weighted advection.
@@ -714,13 +729,37 @@ def infiltration_to_extraction(
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
         Values > 1.0 indicate slower transport due to sorption/interaction.
+    spinup : {"constant"} | float in [0, 1] | None, optional
+        How to treat cout bins where one or more streamtube source windows
+        fall outside the cin time range. Default is ``"constant"``.
+
+        - ``"constant"`` — warm-start: shift ``tedges[0]`` backward by
+          ``retardation_factor * max(aquifer_pore_volumes) / flow[0]`` and
+          treat cin and flow as constant at their first value over the
+          extended window. The forward strict-validity logic then has no
+          NaN cout bins from spin-up; right-edge spin-up (cout extending
+          past the cin range) is unchanged.
+        - ``None`` — strict mass-conservation: NaN whenever any streamtube
+          has not fully broken through into the cin range, or extraction
+          flow during the bin is zero. Bundle row sums to 1 across cin.
+        - float in [0, 1] — fraction threshold: emit cout when at least
+          ``spinup * n_pv`` streamtubes have contributed; the bundle is
+          then a count-mean over the contributing subset. *Warning:* this
+          conserves mass per row but NOT cin → cout mass; with a delta
+          cin pulse and ``spinup=0.0`` you reproduce the issue #161
+          over-attribution (Σ cout > Σ cin).
 
     Returns
     -------
     numpy.ndarray
-        Flow-weighted concentration in the extracted water. Same units as cin.
-        Length equals len(cout_tedges) - 1. NaN values indicate time periods
-        with no valid contributions from the infiltration data.
+        Flow-weighted concentration in the extracted water. Same units
+        as cin. Length equals ``len(cout_tedges) - 1``. NaN values mark
+        cout bins where the chosen ``spinup`` policy is not satisfied:
+        the default ``"constant"`` only leaves NaN when cout extends
+        past the right edge of cin by more than the shortest residence
+        time; ``spinup=None`` additionally NaNs left-edge spin-up bins;
+        a float threshold relaxes either case in exchange for
+        non-mass-conserving count-mean output.
 
     Raises
     ------
@@ -846,20 +885,35 @@ def infiltration_to_extraction(
         msg = "retardation_factor must be >= 1.0"
         raise ValueError(msg)
 
-    # Compute normalized weights (includes all pre-computation)
-    normalized_weights, spinup_mask = _infiltration_to_extraction_weights(
+    weight_tedges, weight_flow, weight_cin, threshold, _ = _resolve_spinup_inputs(
+        spinup,
         tedges=tedges,
+        flow=flow,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=retardation_factor,
+        cin=cin,
+    )
+    # weight_cin is non-None because cin was passed into _resolve_spinup_inputs.
+    weight_cin = np.asarray(weight_cin)
+    accumulated_weights, contributing_bins, zero_flow_cout = _infiltration_to_extraction_weights(
+        tedges=weight_tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
-        flow=flow,
+        flow=weight_flow,
         retardation_factor=retardation_factor,
     )
+    normalized_weights, invalid_mask = _resolve_spinup_mask(
+        accumulated_weights=accumulated_weights,
+        contributing_bins=contributing_bins,
+        zero_flow_cout=zero_flow_cout,
+        n_pv=len(aquifer_pore_volumes),
+        spinup=threshold,
+    )
 
-    # Apply to concentrations. Spin-up rows (no streamtube traced back into
-    # the cin range) become NaN; zero-flow rows naturally produce 0 from the
-    # zero weight row.
-    out = normalized_weights.dot(cin)
-    out[spinup_mask] = np.nan
+    # Invalid rows (cout bins where the spin-up policy is not satisfied or
+    # where extraction flow was zero) become NaN.
+    out = normalized_weights.dot(weight_cin)
+    out[invalid_mask] = np.nan
 
     return out
 
@@ -873,6 +927,7 @@ def extraction_to_infiltration(
     aquifer_pore_volumes: npt.ArrayLike,
     retardation_factor: float = 1.0,
     regularization_strength: float = 1e-10,
+    spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
@@ -928,13 +983,29 @@ def extraction_to_infiltration(
         a factor of 2-10 for additional smoothing. For noiseless synthetic
         data (e.g., roundtrip tests), the default 1e-10 preserves machine
         precision.
+    spinup : {"constant"} | float in [0, 1] | None, optional
+        Spin-up policy applied when building the forward weight matrix
+        used to set up the inverse problem. Same semantics as in
+        :func:`infiltration_to_extraction`; default ``"constant"`` shifts
+        ``tedges[0]`` backward by ``retardation_factor *
+        max(aquifer_pore_volumes) / flow[0]`` so the inverse problem has
+        no spin-up zero-rows for cout bins inside the original tedges
+        range. The output cin is returned aligned with the *padded*
+        tedges (length ``len(tedges)``); the first cin bin therefore
+        corresponds to the warm-start interval. Passing ``None`` keeps
+        the strict-validity behavior (zero-rows in W from incomplete
+        breakthrough).
 
     Returns
     -------
     numpy.ndarray
         Concentration in the infiltrating water. Same units as cout.
-        Length equals len(tedges) - 1. NaN values indicate time periods
-        with no temporal overlap with the extraction data.
+        Length equals len(tedges) - 1 (unchanged whether or not
+        ``spinup="constant"`` shifted ``tedges[0]``). NaN values indicate
+        cin bins with no temporal overlap with the extraction data. The
+        forward weight matrix used to set up the inverse problem treats
+        spin-up and zero-flow cout bins as zero-rows according to the
+        ``spinup`` policy.
 
     Raises
     ------
@@ -991,22 +1062,33 @@ def extraction_to_infiltration(
     >>> cin.shape
     (22,)
 
-    Round-trip reconstruction (symmetric with infiltration_to_extraction):
+    Round-trip reconstruction (symmetric with infiltration_to_extraction).
+    The default ``spinup="constant"`` warm-starts the left edge; the cout
+    window must therefore stay inside the cin window with margin matching
+    the longest residence time on the right (forward NaN at the right
+    edge would otherwise be rejected by ``extraction_to_infiltration``):
 
     >>> from gwtransport.advection import infiltration_to_extraction
+    >>> rt_cout_dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
+    >>> rt_cout_tedges = compute_time_edges(
+    ...     tedges=None,
+    ...     tstart=None,
+    ...     tend=rt_cout_dates,
+    ...     number_of_bins=len(rt_cout_dates),
+    ... )
     >>> cin_original = np.sin(np.linspace(0, 2 * np.pi, len(cin_dates))) + 2
-    >>> cout = infiltration_to_extraction(
+    >>> cout_rt = infiltration_to_extraction(
     ...     cin=cin_original,
     ...     flow=flow,
     ...     tedges=tedges,
-    ...     cout_tedges=cout_tedges,
+    ...     cout_tedges=rt_cout_tedges,
     ...     aquifer_pore_volumes=aquifer_pore_volumes,
     ... )
     >>> cin_recovered = extraction_to_infiltration(
-    ...     cout=cout,
+    ...     cout=cout_rt,
     ...     flow=flow,
     ...     tedges=tedges,
-    ...     cout_tedges=cout_tedges,
+    ...     cout_tedges=rt_cout_tedges,
     ...     aquifer_pore_volumes=aquifer_pore_volumes,
     ... )
     """
@@ -1036,23 +1118,39 @@ def extraction_to_infiltration(
         raise ValueError(msg)
 
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
-    n_cin = len(tedges) - 1
 
-    # Build forward weight matrix: W_forward @ cin = cout
-    w_forward, _ = _infiltration_to_extraction_weights(
+    weight_tedges, weight_flow, _, threshold, n_pad = _resolve_spinup_inputs(
+        spinup,
         tedges=tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
         flow=flow,
+        aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=retardation_factor,
     )
+    n_cin_padded = len(weight_tedges) - 1
 
-    return solve_inverse_transport(
+    accumulated_weights, contributing_bins, zero_flow_cout = _infiltration_to_extraction_weights(
+        tedges=weight_tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        flow=weight_flow,
+        retardation_factor=retardation_factor,
+    )
+    w_forward, _ = _resolve_spinup_mask(
+        accumulated_weights=accumulated_weights,
+        contributing_bins=contributing_bins,
+        zero_flow_cout=zero_flow_cout,
+        n_pv=len(aquifer_pore_volumes),
+        spinup=threshold,
+    )
+
+    cin_padded = solve_inverse_transport(
         w_forward=w_forward,
         observed=cout,
-        n_output=n_cin,
+        n_output=n_cin_padded,
         regularization_strength=regularization_strength,
     )
+    # Drop warm-start prefix so the output aligns with the user-provided tedges.
+    return cin_padded[n_pad:]
 
 
 def _validate_front_tracking_inputs(

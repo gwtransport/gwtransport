@@ -54,6 +54,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from gwtransport.advection_utils import _resolve_spinup_inputs
 from gwtransport.deposition_utils import compute_average_heights
 from gwtransport.residence_time import residence_time
 from gwtransport.utils import (
@@ -158,6 +159,7 @@ def deposition_to_extraction(
     porosity: float,
     thickness: float,
     retardation_factor: float = 1.0,
+    spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """Compute concentrations from deposition rates (convolution).
 
@@ -180,6 +182,15 @@ def deposition_to_extraction(
         Aquifer thickness [m].
     retardation_factor : float, optional
         Compound retardation factor, by default 1.0.
+    spinup : {"constant"} | float in [0, 1] | None, optional
+        Spin-up policy applied before computing deposition weights.
+        Default ``"constant"`` shifts ``tedges[0]`` backward by
+        ``retardation_factor * aquifer_pore_volume / flow[0]`` and treats
+        ``dep`` and ``flow`` as constant at their first observed values
+        over the prepended interval. ``None`` keeps the existing
+        strict-validity behavior (NaN cout rows during spin-up). A float
+        threshold has no effect with a single pore volume and behaves
+        like ``None``.
 
     Returns
     -------
@@ -248,10 +259,21 @@ def deposition_to_extraction(
         msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
         raise ValueError(msg)
 
+    # Apply spinup policy: optionally prepend warm-start bins to tedges/flow/dep.
+    weight_tedges, weight_flow, weight_dep, _, _ = _resolve_spinup_inputs(
+        spinup,
+        tedges=tedges,
+        flow=flow_values,
+        aquifer_pore_volumes=np.array([aquifer_pore_volume]),
+        retardation_factor=retardation_factor,
+        cin=dep_values,
+    )
+    weight_dep = np.asarray(weight_dep)
+
     # Compute deposition weights
     deposition_weights = compute_deposition_weights(
-        flow=flow_values,
-        tedges=tedges,
+        flow=weight_flow,
+        tedges=weight_tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         porosity=porosity,
@@ -259,7 +281,7 @@ def deposition_to_extraction(
         retardation_factor=retardation_factor,
     )
 
-    return deposition_weights.dot(dep_values)
+    return deposition_weights.dot(weight_dep)
 
 
 def extraction_to_deposition(
@@ -273,6 +295,7 @@ def extraction_to_deposition(
     thickness: float,
     retardation_factor: float = 1.0,
     regularization_strength: float = 1e-10,
+    spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """Compute deposition rates from concentration changes (deconvolution).
 
@@ -320,6 +343,15 @@ def extraction_to_deposition(
 
         Larger values trust the target more (smoother, more biased); smaller
         values trust the data more (noisier, less biased). Default is 1e-10.
+    spinup : {"constant"} | float in [0, 1] | None, optional
+        Spin-up policy applied before building the forward weight matrix.
+        Default ``"constant"`` shifts ``tedges[0]`` backward by
+        ``retardation_factor * aquifer_pore_volume / flow[0]`` and treats
+        flow as constant at its first value over the prepended interval;
+        the recovered deposition vector is sliced back to the original
+        ``tedges`` length so the public output shape is unchanged.
+        ``None`` keeps strict-validity behavior. A float threshold has no
+        effect with a single pore volume and behaves like ``None``.
 
     Returns
     -------
@@ -417,10 +449,19 @@ def extraction_to_deposition(
         msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
         raise ValueError(msg)
 
+    # Apply spinup policy: optionally prepend warm-start bins to tedges/flow.
+    weight_tedges, weight_flow, _, _, n_pad = _resolve_spinup_inputs(
+        spinup,
+        tedges=tedges,
+        flow=flow_values,
+        aquifer_pore_volumes=np.array([aquifer_pore_volume]),
+        retardation_factor=retardation_factor,
+    )
+
     # Compute deposition weights
     deposition_weights = compute_deposition_weights(
-        flow=flow_values,
-        tedges=tedges,
+        flow=weight_flow,
+        tedges=weight_tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         porosity=porosity,
@@ -428,7 +469,7 @@ def extraction_to_deposition(
         retardation_factor=retardation_factor,
     )
 
-    n_dep = len(tedges) - 1
+    n_dep_padded = len(weight_tedges) - 1
 
     # Normalize weight matrix rows to sum to 1. The deposition weight matrix
     # W has row sums equal to residence_time/(porosity*thickness), not 1 like
@@ -442,7 +483,7 @@ def extraction_to_deposition(
     col_active = np.sum(np.abs(valid_weights), axis=0) > 0
 
     if not np.any(col_active):
-        return np.full(n_dep, np.nan)
+        return np.full(n_dep_padded - n_pad, np.nan)
 
     # Build normalized system: W_norm @ dep = cout_norm
     w_norm = valid_weights / row_sums
@@ -480,9 +521,10 @@ def extraction_to_deposition(
         regularization_strength=regularization_strength,
     )
 
-    out = np.full(n_dep, np.nan)
+    out = np.full(n_dep_padded, np.nan)
     out[col_active] = dep_solved[col_active]
-    return out
+    # Drop warm-start prefix so output aligns with the user-provided tedges.
+    return out[n_pad:]
 
 
 def extraction_to_deposition_full(
@@ -499,6 +541,7 @@ def extraction_to_deposition_full(
     optimization_method: str = "BFGS",
     rcond: float | None = None,
     x_target: npt.NDArray[np.floating] | None = None,
+    spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """Compute deposition rates from concentration changes using nullspace solver.
 
@@ -547,6 +590,12 @@ def extraction_to_deposition_full(
     x_target : numpy.ndarray or None, optional
         Optional target solution for the nullspace optimization.
         Default is None.
+    spinup : {"constant"} | float in [0, 1] | None, optional
+        Spin-up policy applied before building the forward weight matrix.
+        Default ``"constant"`` shifts ``tedges[0]`` backward by
+        ``retardation_factor * aquifer_pore_volume / flow[0]``; the
+        recovered deposition is sliced back to the original ``tedges``
+        length. See :func:`extraction_to_deposition` for full semantics.
 
     Returns
     -------
@@ -595,10 +644,19 @@ def extraction_to_deposition_full(
         msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
         raise ValueError(msg)
 
+    # Apply spinup policy: optionally prepend warm-start bins to tedges/flow.
+    weight_tedges, weight_flow, _, _, n_pad = _resolve_spinup_inputs(
+        spinup,
+        tedges=tedges,
+        flow=flow_values,
+        aquifer_pore_volumes=np.array([aquifer_pore_volume]),
+        retardation_factor=retardation_factor,
+    )
+
     # Compute deposition weights
     deposition_weights = compute_deposition_weights(
-        flow=flow_values,
-        tedges=tedges,
+        flow=weight_flow,
+        tedges=weight_tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         porosity=porosity,
@@ -606,7 +664,7 @@ def extraction_to_deposition_full(
         retardation_factor=retardation_factor,
     )
 
-    return solve_underdetermined_system(
+    dep_padded = solve_underdetermined_system(
         coefficient_matrix=deposition_weights,
         rhs_vector=cout_values,
         nullspace_objective=nullspace_objective,
@@ -614,6 +672,8 @@ def extraction_to_deposition_full(
         rcond=rcond,
         x_target=x_target,
     )
+    # Drop warm-start prefix so output aligns with the user-provided tedges.
+    return dep_padded[n_pad:]
 
 
 def spinup_duration(

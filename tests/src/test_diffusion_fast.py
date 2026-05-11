@@ -1796,6 +1796,11 @@ class TestGammaExtractionToInfiltrationFast:
         proportional to regularization_strength / s_i^2 for each mode,
         which is O(1e-7) for the ill-conditioned modes with the default
         regularization_strength=1e-10.
+
+        The strict-validity advection (NaN until every streamtube has broken
+        through, NaN on zero-flow cout bins) makes the boundary spin-up region
+        slightly wider than the longest single-streamtube residence time, so
+        the margin must skip this region for a clean inverse comparison.
         """
         retardation = 2.7
 
@@ -1834,11 +1839,14 @@ class TestGammaExtractionToInfiltrationFast:
             **diffusion_kwargs,
         )
 
-        margin = 100
+        # Skip the inverse-boundary regions where the regularization bias bleeds
+        # in from the mean-filled cout cells; the well-conditioned interior
+        # recovers within atol=1e-3.
+        margin = 150
         valid = ~np.isnan(cin_recovered) & ~np.isnan(cout)
         valid[:margin] = False
         valid[-margin:] = False
-        assert np.sum(valid) > 500
+        assert np.sum(valid) > 400
         assert_allclose(cin_recovered[valid], cin[valid], atol=1e-3)
 
     def test_alpha_beta_matches_mean_std(self, gamma_setup):

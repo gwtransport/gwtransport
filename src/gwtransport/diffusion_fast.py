@@ -70,7 +70,11 @@ from scipy import sparse
 from scipy.special import erf
 
 from gwtransport import gamma
-from gwtransport.advection_utils import _infiltration_to_extraction_weights
+from gwtransport.advection_utils import (
+    _infiltration_to_extraction_weights,
+    _resolve_spinup_inputs,
+    _resolve_spinup_mask,
+)
 from gwtransport.residence_time import residence_time_mean
 from gwtransport.utils import solve_inverse_transport
 
@@ -93,6 +97,7 @@ def infiltration_to_extraction(
     asymptotic_cutoff_sigma: float | None = 3.0,
     flow_out: npt.ArrayLike | None = None,
     suppress_uniform_tedges_check: bool = False,
+    spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """Compute diffusion during 1D transport using fast Gaussian smoothing.
 
@@ -140,6 +145,12 @@ def infiltration_to_extraction(
     suppress_uniform_tedges_check : bool, optional
         Skip the constant-dt check on ``tedges`` when ``flow_out`` is None.
         Default is False.
+    spinup : {"constant"} | float in [0, 1] | None, optional
+        Forwarded to the underlying advection weight computation. Default
+        ``"constant"`` prepends warm-start bins (each of width
+        ``tedges[1] - tedges[0]``) so that left-edge spin-up does not
+        produce NaN cout. The first observed cin and flow are used as
+        the constant warm-start values.
 
     Returns
     -------
@@ -198,22 +209,43 @@ def infiltration_to_extraction(
     if n_pore_volumes > 1 and mean_longitudinal_dispersivity > 0 and not suppress_dispersion_warning:
         _warn_dispersion()
 
-    # Build advection weight matrix (needed in both branches)
-    w_adv, spinup_mask = _infiltration_to_extraction_weights(
+    # Apply spinup policy to inputs (pad warm-start bins for "constant" mode).
+    weight_tedges, weight_flow, weight_cin, threshold, _ = _resolve_spinup_inputs(
+        spinup,
         tedges=tedges,
+        flow=flow,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=retardation_factor,
+        cin=cin,
+    )
+    # weight_cin is non-None because cin was passed into _resolve_spinup_inputs.
+    weight_cin = np.asarray(weight_cin)
+
+    # Build advection weight matrix (needed in both branches)
+    accumulated_weights, contributing_bins, zero_flow_cout = _infiltration_to_extraction_weights(
+        tedges=weight_tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
-        flow=flow,
+        flow=weight_flow,
         retardation_factor=retardation_factor,
+    )
+    w_adv, adv_invalid_mask = _resolve_spinup_mask(
+        accumulated_weights=accumulated_weights,
+        contributing_bins=contributing_bins,
+        zero_flow_cout=zero_flow_cout,
+        n_pv=len(aquifer_pore_volumes),
+        spinup=threshold,
     )
 
     if flow_out is None:
-        # Original algorithm: smooth-then-advect (requires uniform tedges)
-        _check_uniform_tedges(tedges=tedges, suppress=suppress_uniform_tedges_check)
+        # Original algorithm: smooth-then-advect (requires uniform tedges).
+        # The padded ``weight_tedges`` keep the original first-bin width, so a
+        # uniform input remains uniform after warm-start padding.
+        _check_uniform_tedges(tedges=weight_tedges, suppress=suppress_uniform_tedges_check)
 
         sigma_array = _compute_sigma(
-            flow=flow,
-            tedges=tedges,
+            flow=weight_flow,
+            tedges=weight_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=mean_streamline_length,
             molecular_diffusivity=mean_molecular_diffusivity,
@@ -222,21 +254,21 @@ def infiltration_to_extraction(
             direction="infiltration_to_extraction",
         )
         cin_diffused = convolve_diffusion(
-            input_signal=cin, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
+            input_signal=weight_cin, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
         )
         cout = w_adv @ cin_diffused
     else:
         # New algorithm: advect-then-smooth (works with any tedges spacing)
-        cout_unsmoothed = w_adv @ cin
+        cout_unsmoothed = w_adv @ weight_cin
 
-        # Rows with zero weight sum (spin-up or zero-flow traceback) carry no
+        # Rows with zero weight sum (spin-up or zero-flow cout bin) carry no
         # signal. Flag them so the normalized convolution
         # smooth(signal * mask) / smooth(mask) properly renormalizes the kernel
         # instead of letting a near-zero value bleed into valid neighbors.
         total_coeff = np.sum(w_adv, axis=1)
-        invalid_mask = total_coeff < _EPSILON_COEFF_SUM
-        cout_unsmoothed[invalid_mask] = 0.0
-        validity = np.where(invalid_mask, 0.0, 1.0)
+        zero_row_mask = total_coeff < _EPSILON_COEFF_SUM
+        cout_unsmoothed[zero_row_mask] = 0.0
+        validity = np.where(zero_row_mask, 0.0, 1.0)
 
         sigma_out = _compute_sigma(
             flow=flow_out,
@@ -257,9 +289,9 @@ def infiltration_to_extraction(
         with np.errstate(invalid="ignore"):
             cout = np.where(smoothed_validity > _EPSILON_COEFF_SUM, smoothed / smoothed_validity, np.nan)
 
-    # Mark spin-up rows (signal has not broken through yet) as NaN. Zero-flow
-    # cout bins keep their 0 output from the zero weight row.
-    cout[spinup_mask] = np.nan
+    # Mark invalid rows as NaN: incomplete streamtube breakthrough (spin-up) or
+    # zero flow during the cout bin.
+    cout[adv_invalid_mask] = np.nan
 
     return cout
 
@@ -280,6 +312,7 @@ def extraction_to_infiltration(
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
     suppress_uniform_tedges_check: bool = False,
+    spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """Reconstruct infiltration concentration from extracted water via Tikhonov inversion.
 
@@ -328,6 +361,11 @@ def extraction_to_infiltration(
     suppress_uniform_tedges_check : bool, optional
         Skip the constant-dt check on ``tedges`` when ``flow_out`` is None.
         Default is False.
+    spinup : {"constant"} | float in [0, 1] | None, optional
+        Forwarded to the underlying advection weight computation. Default
+        ``"constant"`` warm-starts the inverse problem by extending
+        ``tedges`` backward; the recovered cin is sliced back to the
+        original tedges length so the public output shape is unchanged.
 
     Returns
     -------
@@ -394,25 +432,40 @@ def extraction_to_infiltration(
     if n_pore_volumes > 1 and mean_longitudinal_dispersivity > 0 and not suppress_dispersion_warning:
         _warn_dispersion()
 
-    n_cin = len(tedges) - 1
+    # Apply spinup policy: pad tedges and flow with warm-start prefix.
+    weight_tedges, weight_flow, _, threshold, n_pad = _resolve_spinup_inputs(
+        spinup,
+        tedges=tedges,
+        flow=flow,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=retardation_factor,
+    )
+    n_cin_padded = len(weight_tedges) - 1
     n_cout = len(cout_tedges) - 1
 
-    # Build advection weight matrix
-    w_adv, _ = _infiltration_to_extraction_weights(
-        tedges=tedges,
+    # Build advection weight matrix on the (possibly padded) inputs.
+    accumulated_weights, contributing_bins, zero_flow_cout = _infiltration_to_extraction_weights(
+        tedges=weight_tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
-        flow=flow,
+        flow=weight_flow,
         retardation_factor=retardation_factor,
+    )
+    w_adv, _ = _resolve_spinup_mask(
+        accumulated_weights=accumulated_weights,
+        contributing_bins=contributing_bins,
+        zero_flow_cout=zero_flow_cout,
+        n_pv=len(aquifer_pore_volumes),
+        spinup=threshold,
     )
 
     if flow_out is None:
         # Original algorithm: G on input grid, W_forward = W_adv @ G
-        _check_uniform_tedges(tedges=tedges, suppress=suppress_uniform_tedges_check)
+        _check_uniform_tedges(tedges=weight_tedges, suppress=suppress_uniform_tedges_check)
 
         sigma_array = _compute_sigma(
-            flow=flow,
-            tedges=tedges,
+            flow=weight_flow,
+            tedges=weight_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=mean_streamline_length,
             molecular_diffusivity=mean_molecular_diffusivity,
@@ -421,7 +474,7 @@ def extraction_to_infiltration(
             direction="infiltration_to_extraction",
         )
         g_matrix = _build_gaussian_matrix(
-            n=n_cin, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
+            n=n_cin_padded, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
         )
         # Combined forward matrix: W_adv @ G via sparse @ dense (avoids dense G allocation)
         w_forward = (g_matrix.T @ w_adv.T).T
@@ -442,13 +495,15 @@ def extraction_to_infiltration(
         )
         w_forward = g_matrix @ w_adv  # sparse @ dense
 
-    return solve_inverse_transport(
+    cin_padded = solve_inverse_transport(
         w_forward=w_forward,
         observed=cout,
-        n_output=n_cin,
+        n_output=n_cin_padded,
         regularization_strength=regularization_strength,
         warn_rank_deficient=True,
     )
+    # Drop the warm-start prefix so the output aligns with the user-provided tedges.
+    return cin_padded[n_pad:]
 
 
 def gamma_infiltration_to_extraction(
@@ -471,6 +526,7 @@ def gamma_infiltration_to_extraction(
     asymptotic_cutoff_sigma: float | None = 3.0,
     flow_out: npt.ArrayLike | None = None,
     suppress_uniform_tedges_check: bool = False,
+    spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
     Compute extracted concentration with fast Gaussian diffusion for gamma-distributed pore volumes.
@@ -607,6 +663,7 @@ def gamma_infiltration_to_extraction(
         asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
         flow_out=flow_out,
         suppress_uniform_tedges_check=suppress_uniform_tedges_check,
+        spinup=spinup,
     )
 
 
@@ -631,6 +688,7 @@ def gamma_extraction_to_infiltration(
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
     suppress_uniform_tedges_check: bool = False,
+    spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
     Reconstruct infiltration concentration from extracted water for gamma-distributed pore volumes.
@@ -770,6 +828,7 @@ def gamma_extraction_to_infiltration(
         regularization_strength=regularization_strength,
         flow_out=flow_out,
         suppress_uniform_tedges_check=suppress_uniform_tedges_check,
+        spinup=spinup,
     )
 
 

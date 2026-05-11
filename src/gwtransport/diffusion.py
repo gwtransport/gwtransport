@@ -345,6 +345,43 @@ def _erf_mean_volume(
     return response
 
 
+def _diffusion_extend_tedges_flag(spinup: object) -> bool:
+    """Translate the public ``spinup`` parameter to the internal extend flag.
+
+    The diffusion module's existing warm-start behavior is to extend
+    ``tedges`` by 100 years on each side. The public ``spinup`` parameter
+    maps onto this binary toggle: ``"constant"`` enables the extension
+    (default; preserves legacy behavior), ``None`` disables it (cout in
+    spin-up region becomes NaN). The float fraction-threshold mode of
+    other modules is not implemented here.
+
+    Returns
+    -------
+    bool
+        True if tedges should be extended (warm-start), False if not.
+
+    Raises
+    ------
+    ValueError
+        If ``spinup`` is a string other than ``"constant"``.
+    NotImplementedError
+        If ``spinup`` is a float (fraction-threshold mode is not
+        implemented for the diffusion module).
+    """
+    if spinup is None:
+        return False
+    if isinstance(spinup, str):
+        if spinup != "constant":
+            msg = f"spinup string must be 'constant'; got {spinup!r}"
+            raise ValueError(msg)
+        return True
+    msg = (
+        "diffusion's spinup parameter only supports None or 'constant'; "
+        f"float thresholds are not yet implemented (got {spinup!r})"
+    )
+    raise NotImplementedError(msg)
+
+
 def _infiltration_to_extraction_coeff_matrix(
     *,
     flow: npt.NDArray[np.floating],
@@ -356,6 +393,7 @@ def _infiltration_to_extraction_coeff_matrix(
     longitudinal_dispersivity: npt.NDArray[np.floating],
     retardation_factor: float,
     asymptotic_cutoff_sigma: float | None,
+    extend_tedges: bool = True,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool_]]:
     """Build the forward coefficient matrix for diffusion transport.
 
@@ -393,12 +431,15 @@ def _infiltration_to_extraction_coeff_matrix(
     valid_cout_bins : ndarray
         Boolean mask of shape (n_cout,) indicating valid output bins.
     """
-    # Extend tedges for spin up
-    tedges = pd.DatetimeIndex([
-        tedges[0] - pd.Timedelta("36500D"),
-        *list(tedges[1:-1]),
-        tedges[-1] + pd.Timedelta("36500D"),
-    ])
+    if extend_tedges:
+        # Extend tedges by 100 years on each side to provide warm-start cin
+        # and post-data flow for cout bins near the boundaries. Equivalent to
+        # the public ``spinup="constant"`` policy in other modules.
+        tedges = pd.DatetimeIndex([
+            tedges[0] - pd.Timedelta("36500D"),
+            *list(tedges[1:-1]),
+            tedges[-1] + pd.Timedelta("36500D"),
+        ])
 
     # Compute the cumulative flow at tedges
     infiltration_volume = flow * (np.diff(tedges) / pd.Timedelta("1D"))  # m3
@@ -522,6 +563,7 @@ def infiltration_to_extraction(
     retardation_factor: float = 1.0,
     suppress_dispersion_warning: bool = False,
     asymptotic_cutoff_sigma: float | None = 3.0,
+    spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
     Compute extracted concentration with advection and longitudinal dispersion.
@@ -789,6 +831,7 @@ def infiltration_to_extraction(
         )
         warnings.warn(msg, UserWarning, stacklevel=2)
 
+    extend_tedges = _diffusion_extend_tedges_flag(spinup)
     coeff_matrix, valid_cout_bins = _infiltration_to_extraction_coeff_matrix(
         flow=flow,
         tedges=tedges,
@@ -799,6 +842,7 @@ def infiltration_to_extraction(
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
         asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
+        extend_tedges=extend_tedges,
     )
 
     # Matrix multiply: cout = W @ cin
@@ -828,6 +872,7 @@ def extraction_to_infiltration(
     suppress_dispersion_warning: bool = False,
     asymptotic_cutoff_sigma: float | None = 3.0,
     regularization_strength: float = 1e-10,
+    spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
     Compute infiltration concentration from extracted water (deconvolution with dispersion).
@@ -1027,6 +1072,7 @@ def extraction_to_infiltration(
     n_cin = len(tedges) - 1
 
     # Build forward weight matrix: W_forward @ cin = cout
+    extend_tedges = _diffusion_extend_tedges_flag(spinup)
     w_forward, valid_cout_bins = _infiltration_to_extraction_coeff_matrix(
         flow=flow,
         tedges=tedges,
@@ -1037,6 +1083,7 @@ def extraction_to_infiltration(
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
         asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
+        extend_tedges=extend_tedges,
     )
 
     return solve_inverse_transport(
@@ -1066,6 +1113,7 @@ def gamma_infiltration_to_extraction(
     retardation_factor: float = 1.0,
     suppress_dispersion_warning: bool = False,
     asymptotic_cutoff_sigma: float | None = 3.0,
+    spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
     Compute extracted concentration with advection-dispersion for gamma-distributed pore volumes.
@@ -1187,6 +1235,7 @@ def gamma_infiltration_to_extraction(
         retardation_factor=retardation_factor,
         suppress_dispersion_warning=suppress_dispersion_warning,
         asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
+        spinup=spinup,
     )
 
 
@@ -1209,6 +1258,7 @@ def gamma_extraction_to_infiltration(
     suppress_dispersion_warning: bool = False,
     asymptotic_cutoff_sigma: float | None = 3.0,
     regularization_strength: float = 1e-10,
+    spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
     Compute infiltration concentration from extracted water for gamma-distributed pore volumes.
@@ -1333,4 +1383,5 @@ def gamma_extraction_to_infiltration(
         suppress_dispersion_warning=suppress_dispersion_warning,
         asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
         regularization_strength=regularization_strength,
+        spinup=spinup,
     )

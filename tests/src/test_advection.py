@@ -629,40 +629,53 @@ def test_infiltration_to_extraction_single_pore_volume():
 
 
 def test_infiltration_to_extraction_retardation_factor():
-    """Test infiltration_to_extraction with different retardation factors."""
-    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
+    """Retardation factor delays the step arrival in cout by (R-1)*PV/flow bins.
+
+    With a single pore volume and a step input, residence time = PV*R/flow. The
+    output reaches the post-step value at cout index ``offset + R*PV/flow``,
+    where ``offset = cout_tedges[0] - tedges[0]`` in days. Comparing R=1 and
+    R=2 gives a deterministic shift of ``PV/flow`` bins. This replaces a
+    structurally-only test that passed even when retardation was ignored.
+    """
+    dates = pd.date_range(start="2020-01-01", end="2020-01-30", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    cout_dates = pd.date_range(start="2020-06-01", end="2020-11-30", freq="D")
+    cout_dates = pd.date_range(start="2020-01-05", end="2020-01-25", freq="D")
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-    cin = pd.Series(np.ones(len(dates)), index=dates)
-    flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
-    aquifer_pore_volumes = np.array([1000.0, 2000.0])
+    cin_values = np.zeros(len(dates))
+    cin_values[9:] = 10.0  # step on cin day 10 (cin index 9)
+    flow = np.full(len(dates), 100.0)
+    pore_volume = 200.0  # residence time R*PV/flow = 2 d (R=1) vs 4 d (R=2)
+    aquifer_pore_volumes = np.array([pore_volume])
 
-    # Test different retardation factors
-    cout1 = infiltration_to_extraction(
-        cin=cin.to_numpy(),
-        flow=flow.to_numpy(),
+    cout_r1 = infiltration_to_extraction(
+        cin=cin_values,
+        flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=1.0,
     )
-
-    cout2 = infiltration_to_extraction(
-        cin=cin.to_numpy(),
-        flow=flow.to_numpy(),
+    cout_r2 = infiltration_to_extraction(
+        cin=cin_values,
+        flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=2.0,
     )
 
-    # Results should be different for different retardation factors
-    assert isinstance(cout1, np.ndarray)
-    assert isinstance(cout2, np.ndarray)
-    assert len(cout1) == len(cout2)
+    # cout starts on cin day 5; first fully-stepped cout index satisfies 5 + i - RT >= 10.
+    expected_step_idx_r1 = 5 + 2  # 7
+    expected_step_idx_r2 = 5 + 4  # 9
+    np.testing.assert_allclose(cout_r1[expected_step_idx_r1:], 10.0, rtol=1e-12)
+    np.testing.assert_allclose(cout_r2[expected_step_idx_r2:], 10.0, rtol=1e-12)
+    # Pre-step bins are zero (single PV → row weight on a zero cin bin)
+    assert cout_r1[expected_step_idx_r1 - 3] == 0.0
+    assert cout_r2[expected_step_idx_r2 - 3] == 0.0
+    # The R=2 step lags by exactly PV/flow = 2 bins
+    assert expected_step_idx_r2 - expected_step_idx_r1 == int(pore_volume / 100.0)
 
 
 def test_infiltration_to_extraction_error_conditions():
@@ -868,23 +881,54 @@ def test_infiltration_to_extraction_zero_flow():
     assert np.all(np.isnan(cout))
 
 
-def test_infiltration_to_extraction_mixed_pore_volumes():
-    """Test infiltration_to_extraction handles mixed pore volumes with varying overlaps."""
-    # Longer time series for cin/flow
+def test_infiltration_to_extraction_mixed_pore_volumes_all_nan_when_any_unresolved():
+    """Mixed pore volumes with one residence time exceeding cin window → all cout bins NaN.
+
+    Strict-validity semantics: a cout bin is valid only when *every* streamtube has
+    a fully resolved source window inside the cin range. With pore volumes spanning
+    1 day and 1000+ days residence times against a 365-day cin window, the longest
+    streamtube never breaks through, so the bundle output is NaN everywhere.
+    Returning a value (averaged over the contributing subset only) would
+    over-attribute mass to the cin bins seen by the short-PV streamtubes.
+    """
     dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    # Short cout period - only some pore volumes will have overlap
     cout_dates = pd.date_range(start="2020-01-05", end="2020-01-10", freq="D")
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
     cin = pd.Series(np.ones(len(dates)), index=dates)
     flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
-
-    # Mix of small and large pore volumes - large ones create minimal overlap
     aquifer_pore_volumes = np.array([10.0, 100.0, 50000.0, 100000.0])
 
-    # Should handle mixed pore volumes gracefully
+    cout = infiltration_to_extraction(
+        cin=cin.to_numpy(),
+        flow=flow.to_numpy(),
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+        spinup=None,  # strict-validity: this is the property under test
+    )
+
+    assert isinstance(cout, np.ndarray)
+    assert len(cout) == len(cout_dates)
+    assert np.all(np.isnan(cout)), "Expected all NaN: longest pore volume's streamtube has not broken through"
+
+
+def test_infiltration_to_extraction_mixed_pore_volumes_valid_post_breakthrough():
+    """Mixed pore volumes produce valid output once the longest streamtube has broken through."""
+    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+
+    # cout window starts well past max residence time (300 m3 / 100 m3/day = 3 days)
+    cout_dates = pd.date_range(start="2020-01-15", end="2020-12-15", freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+
+    cin = pd.Series(np.ones(len(dates)), index=dates)
+    flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
+    aquifer_pore_volumes = np.array([10.0, 100.0, 200.0, 300.0])
+
     cout = infiltration_to_extraction(
         cin=cin.to_numpy(),
         flow=flow.to_numpy(),
@@ -894,17 +938,8 @@ def test_infiltration_to_extraction_mixed_pore_volumes():
         retardation_factor=1.0,
     )
 
-    # Explicit validation
-    assert isinstance(cout, np.ndarray)
-    assert len(cout) == len(cout_dates), f"Expected {len(cout_dates)} output bins, got {len(cout)}"
-
-    # Some values should be valid (from small pore volumes with quick transport)
-    valid_count = np.sum(~np.isnan(cout))
-    assert valid_count >= 3, f"Expected at least 3 valid bins from small pore volumes, got {valid_count}"
-
-    # Check all valid values are non-negative
-    valid_values = cout[~np.isnan(cout)]
-    assert np.all(valid_values >= 0), "All valid concentrations should be non-negative"
+    assert not np.any(np.isnan(cout)), "All cout bins should be valid (cout window past max residence time)"
+    np.testing.assert_allclose(cout, 1.0, atol=1e-13, err_msg="Constant cin must yield constant cout")
 
 
 # ===============================================================================
@@ -1355,40 +1390,72 @@ def test_extraction_to_infiltration_single_pore_volume():
 
 
 def test_extraction_to_infiltration_retardation_factor():
-    """Test extraction_to_infiltration with different retardation factors."""
-    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+    """Reverse step arrival shifts back by (R-1)*PV/flow bins under deconvolution.
 
-    cint_dates = pd.date_range(start="2019-06-01", end="2019-11-30", freq="D")
-    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cint_dates, number_of_bins=len(cint_dates))
+    Forward: cin step at day k_in produces cout step at day k_in + R*PV/flow.
+    Reverse: cout step at day k_out implies cin step at day k_out - R*PV/flow.
+    Use a cout window that lies fully past the spin-up region so the forward
+    output is NaN-free, then deconvolve and compare to the original cin.
+    This replaces a structurally-only test that passed even when retardation
+    was ignored.
+    """
+    n_cin = 80
+    cin_dates = pd.date_range(start="2020-01-01", periods=n_cin, freq="D")
+    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=n_cin)
 
-    cout = pd.Series(np.ones(len(dates)), index=dates)
-    flow = pd.Series(np.ones(len(cint_dates)) * 100, index=cint_dates)
-    aquifer_pore_volumes = np.array([1000.0, 2000.0])
+    # cout window starts at day 10 (past R*PV/flow = 4 d for R=2, PV=200, flow=100).
+    n_cout = 60
+    cout_dates = pd.date_range(start="2020-01-11", periods=n_cout, freq="D")
+    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=n_cout)
 
-    # Test different retardation factors
-    cin1 = extraction_to_infiltration(
-        cout=cout.to_numpy(),
-        flow=flow.to_numpy(),
+    flow = np.full(n_cin, 100.0)
+    pore_volume = 200.0
+    cin_values = np.zeros(n_cin)
+    cin_values[30:] = 7.0  # step on cin day 30
+
+    cout_r1 = infiltration_to_extraction(
+        cin=cin_values,
+        flow=flow,
         tedges=cin_tedges,
-        cout_tedges=tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([pore_volume]),
         retardation_factor=1.0,
     )
-
-    cin2 = extraction_to_infiltration(
-        cout=cout.to_numpy(),
-        flow=flow.to_numpy(),
+    cout_r2 = infiltration_to_extraction(
+        cin=cin_values,
+        flow=flow,
         tedges=cin_tedges,
-        cout_tedges=tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([pore_volume]),
+        retardation_factor=2.0,
+    )
+    assert not np.any(np.isnan(cout_r1)), "cout_r1 should be free of NaN in chosen window"
+    assert not np.any(np.isnan(cout_r2)), "cout_r2 should be free of NaN in chosen window"
+
+    cin_back_r1 = extraction_to_infiltration(
+        cout=cout_r1,
+        flow=flow,
+        tedges=cin_tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([pore_volume]),
+        retardation_factor=1.0,
+    )
+    cin_back_r2 = extraction_to_infiltration(
+        cout=cout_r2,
+        flow=flow,
+        tedges=cin_tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([pore_volume]),
         retardation_factor=2.0,
     )
 
-    # Results should be different for different retardation factors
-    assert isinstance(cin1, np.ndarray)
-    assert isinstance(cin2, np.ndarray)
-    assert len(cin1) == len(cin2)
+    # Both reverse passes must recover the cin signal to machine precision in the
+    # well-determined interior. Tikhonov bias on edges is below 1e-9 for this
+    # well-conditioned single-PV problem.
+    valid = ~np.isnan(cin_back_r1) & ~np.isnan(cin_back_r2)
+    assert np.sum(valid) > 30
+    np.testing.assert_allclose(cin_back_r1[valid], cin_values[valid], atol=1e-9)
+    np.testing.assert_allclose(cin_back_r2[valid], cin_values[valid], atol=1e-9)
 
 
 def test_extraction_to_infiltration_error_conditions():
@@ -2331,8 +2398,13 @@ def test_gamma_extraction_to_infiltration_parameter_sensitivity(mean, std):
 
 
 def test_extraction_to_infiltration_with_retardation():
-    """Test extraction_to_infiltration with retardation factor."""
-    # Setup - need longer input to support output window after residence time
+    """Constant cin survives forward-then-reverse with retardation to machine precision.
+
+    Forward and reverse use the same forward weight matrix (Tikhonov inversion targets
+    the transpose-and-normalize of the forward). For constant cin and constant flow,
+    the well-determined modes are dominated by the data and the small regularization
+    bias is below 1e-10 relative.
+    """
     dates = pd.date_range(start="2020-01-01", periods=200, freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
@@ -2341,13 +2413,9 @@ def test_extraction_to_infiltration_with_retardation():
     pore_volumes = np.array([5000.0])
     retardation_factor = 2.0
 
-    # Define cout_tedges for forward operation
-    # Residence time = 5000 * 2 / 100 = 100 days
-    # Start output after 110 days to avoid NaN values
     cout_dates = pd.date_range(start="2020-04-21", periods=40, freq="D")
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-    # Forward
     cout = infiltration_to_extraction(
         cin=cin_original,
         tedges=tedges,
@@ -2357,11 +2425,8 @@ def test_extraction_to_infiltration_with_retardation():
         retardation_factor=retardation_factor,
     )
 
-    # Backward with same retardation
     cin_dates = pd.date_range(start="2019-11-01", periods=220, freq="D")
     cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
-
-    # Create flow array matching tedges (cin_tedges) length
     flow_backward = np.ones(len(cin_dates)) * 100.0
 
     cin_recovered = extraction_to_infiltration(
@@ -2373,18 +2438,19 @@ def test_extraction_to_infiltration_with_retardation():
         retardation_factor=retardation_factor,
     )
 
-    # Verify roundtrip
+    # Constant cout uniquely determines constant cin in the post-spinup window.
+    # Restrict to indices where the source window is fully inside the cin range.
     valid_mask = ~np.isnan(cin_recovered)
-    if not np.any(valid_mask):
-        pytest.skip("No valid recovered values")
-    valid_recovered = cin_recovered[valid_mask]
-
-    assert np.mean(valid_recovered) == pytest.approx(10.0, rel=0.3)
+    np.testing.assert_allclose(cin_recovered[valid_mask], 10.0, atol=1e-10)
 
 
 def test_extraction_to_infiltration_variable_flow():
-    """Test extraction_to_infiltration with variable flow pattern."""
-    # Setup - need longer input to support output window
+    """Constant cin survives a forward-then-reverse roundtrip under variable flow.
+
+    The previous version used ``rel=0.4`` for a deterministic roundtrip, which lets
+    a 40 % systematic bias slip through unnoticed. Tighten to ``atol=1e-10`` in the
+    valid (post-spinup) region.
+    """
     dates = pd.date_range(start="2020-01-01", periods=150, freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
@@ -2393,13 +2459,9 @@ def test_extraction_to_infiltration_variable_flow():
     flow = 100.0 * (1.0 + 0.3 * np.sin(2 * np.pi * t / 40))
     pore_volumes = np.array([5000.0])
 
-    # Define cout_tedges for forward operation
-    # Variable flow: max residence time = 5000 / 70 = 71.4 days
-    # Start output after 80 days to avoid NaN values
     cout_dates = pd.date_range(start="2020-03-22", periods=40, freq="D")
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-    # Forward
     cout = infiltration_to_extraction(
         cin=cin_original,
         tedges=tedges,
@@ -2409,11 +2471,8 @@ def test_extraction_to_infiltration_variable_flow():
         retardation_factor=1.0,
     )
 
-    # Backward
     cin_dates = pd.date_range(start="2019-11-15", periods=180, freq="D")
     cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
-
-    # Create flow array matching tedges (cin_tedges) length
     t_backward = np.arange(len(cin_dates))
     flow_backward = 100.0 * (1.0 + 0.3 * np.sin(2 * np.pi * t_backward / 40))
 
@@ -2426,25 +2485,23 @@ def test_extraction_to_infiltration_variable_flow():
         retardation_factor=1.0,
     )
 
-    # Verify outputs
     valid_mask = ~np.isnan(cin_recovered)
-    if not np.any(valid_mask):
-        pytest.skip("No valid recovered values")
-    valid_recovered = cin_recovered[valid_mask]
-
-    assert len(valid_recovered) > 0
-    assert np.mean(valid_recovered) == pytest.approx(10.0, rel=0.4)
+    np.testing.assert_allclose(cin_recovered[valid_mask], 10.0, atol=1e-10)
 
 
 def test_gamma_extraction_to_infiltration_mean_preservation():
-    """Test that gamma_extraction_to_infiltration approximately preserves mean concentration."""
-    # Setup
+    """Constant cout uniquely recovers constant cin under gamma APVD deconvolution.
+
+    A constant signal is in the well-determined null-space-orthogonal subspace of
+    the forward operator: every streamtube returns the same value. The recovered
+    cin in the valid region must therefore equal the input constant to machine
+    precision (after the very small Tikhonov regularization bias).
+    """
     dates = pd.date_range(start="2020-01-01", periods=200, freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     cout = np.ones(len(dates)) * 25.0
 
-    # Backward
     cin_dates = pd.date_range(start="2019-11-01", periods=250, freq="D")
     cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
     flow = np.ones(len(cin_dates)) * 100.0
@@ -2459,11 +2516,8 @@ def test_gamma_extraction_to_infiltration_mean_preservation():
         retardation_factor=1.0,
     )
 
-    # Verify mean preservation
     valid_mask = ~np.isnan(cin_recovered)
-    valid_recovered = cin_recovered[valid_mask]
-
-    assert np.mean(valid_recovered) == pytest.approx(25.0, rel=0.15)
+    np.testing.assert_allclose(cin_recovered[valid_mask], 25.0, atol=1e-9)
 
 
 # ===============================================================================
@@ -2501,9 +2555,10 @@ class TestFlowWeightedFrontTracking:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             retardation_factor=1.0,
+            spinup=None,  # match front-tracking's spin-up handling for the comparison
         )
 
-        valid = ~np.isnan(cout_adv)
+        valid = ~np.isnan(cout_adv) & ~np.isnan(cout_ft)
         np.testing.assert_allclose(cout_ft[valid], cout_adv[valid])
 
     def test_constant_cin_varying_flow_gives_constant_cout(self):
@@ -2623,7 +2678,13 @@ def test_infiltration_to_extraction_accepts_zero_flow_without_warnings():
 
 
 def test_infiltration_to_extraction_zero_flow_insertion_invariance():
-    """Insert a zero-flow bin mid-series: preserves spin-up NaN count and values."""
+    """Insert a zero-flow bin: cout at that bin is NaN; other bins are unchanged.
+
+    The pre-fix version masked the zero-flow output cell with ``np.delete`` before
+    asserting, hiding bug #161 (zero-flow cout bins returning fabricated values).
+    Under strict-validity, a zero-flow cout bin must be NaN; after stripping it,
+    the remaining cout matches the baseline to machine precision.
+    """
     s = _zero_flow_invariance_setup()
     apv = np.array([500.0])
 
@@ -2642,10 +2703,514 @@ def test_infiltration_to_extraction_zero_flow_insertion_invariance():
         aquifer_pore_volumes=apv,
     )
 
-    # Drop the inserted zero-flow output bin and check invariants:
+    # The inserted zero-flow cout bin MUST be NaN, not a fabricated mean of nearby bins.
+    assert np.isnan(cout_mod[s["k"]])
+
+    # After stripping the inserted zero-flow position, cout_mod matches cout_base.
     cout_mod_stripped = np.delete(cout_mod, s["k"])
     assert np.sum(np.isnan(cout_mod_stripped)) == np.sum(np.isnan(cout_base))
-
-    # Comparable values where both are finite
     valid = ~np.isnan(cout_base) & ~np.isnan(cout_mod_stripped)
     np.testing.assert_allclose(cout_mod_stripped[valid], cout_base[valid], atol=1e-10)
+
+
+# =============================================================================
+# Regression tests for issue #161 (strict-validity / zero-flow NaN)
+# and issue #169 (variable-flow correctness, linearity, time-translation, mass)
+# =============================================================================
+
+
+def test_infiltration_to_extraction_strict_validity_left_boundary_nan():
+    """All cout bins are NaN until every streamtube has broken through.
+
+    Regression test for issue #161 (mass over-attribution at the cin left-time
+    boundary). With ``apv = [100, 500, 1500]`` and constant flow=100 m³/d,
+    residence times are 1, 5, and 15 days. The cout window starts at the same
+    instant as cin (day 0), so the longest-residence streamtube cannot have a
+    valid source window until day 15. Pre-fix the function returned a partial
+    count-mean over the contributing subset and over-attributed mass to the
+    earliest cin bins (Σcout = 1.833 vs cin pulse mass 1.0); under strict
+    validity the spin-up region is NaN.
+    """
+    n = 50
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    apv = np.array([100.0, 500.0, 1500.0])
+
+    cin = np.zeros(n)
+    cin[0] = 1.0  # left-edge pulse
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=apv,
+        retardation_factor=1.0,
+        spinup=None,  # strict-validity: this is the property under test
+    )
+
+    # First valid cout bin is at index 15 (longest residence time = 15 d).
+    assert np.all(np.isnan(cout[:15]))
+    assert not np.isnan(cout[15])
+    # cout[15] captures cin[0]'s mass via the longest streamtube only: 1/N = 1/3.
+    # The bundle row sums to N/N = 1 to ULP, so cout[15] = 1/3 to a few eps.
+    np.testing.assert_allclose(cout[15], 1.0 / 3.0, atol=1e-15)
+
+
+def test_infiltration_to_extraction_mass_conservation_full_breakthrough():
+    """Mid-domain pulse: full mass conserved when cout window covers all break-through times.
+
+    With cin in [0, 100) and a pulse at days [40, 41), all streamtubes
+    (PVs 100, 500, 1500 → RTs 1, 5, 15 days) deliver their share of the
+    pulse mass to bins inside [41, 56], well before the right edge of cout.
+    Mass conservation must hold to machine precision.
+    """
+    n = 100
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    apv = np.array([100.0, 500.0, 1500.0])
+
+    cin = np.zeros(n)
+    cin[40:42] = 5.0
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=apv,
+        retardation_factor=1.0,
+    )
+
+    cin_mass = np.sum(cin * flow)
+    cout_mass = np.nansum(cout * flow)
+    np.testing.assert_allclose(cout_mass, cin_mass, atol=1e-10)
+
+
+def test_infiltration_to_extraction_zero_flow_bin_returns_nan_single_pv():
+    """A zero-flow cout bin must be NaN, not a fabricated value.
+
+    With one streamtube the source window for the zero-flow bin collapses to a
+    near-zero width; floating-point jitter of the residence-time computation
+    produces a spurious "valid" weight of ~1.0 on whichever cin bin contains
+    the collapse point. Pre-fix this gave a value resembling a real measurement
+    (e.g., ~10 for a sin-around-10 cin signal). Under strict validity, the
+    integrated flow during the cout bin is exactly zero, so the bin is NaN.
+    """
+    n = 200
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    flow[100] = 0.0
+    cin = 10.0 + np.sin(np.linspace(0.0, 4.0 * np.pi, n))
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=np.array([500.0]),
+        retardation_factor=1.0,
+    )
+
+    assert np.isnan(cout[100]), "zero-flow cout bin must be NaN"
+
+
+def test_infiltration_to_extraction_zero_flow_bin_returns_nan_multi_pv():
+    """Zero-flow cout bin is NaN even with multiple streamtubes (no count-mean fabrication)."""
+    n = 200
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    flow[100] = 0.0
+    cin = 10.0 + np.sin(np.linspace(0.0, 4.0 * np.pi, n))
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=np.array([100.0, 500.0, 1500.0]),
+        retardation_factor=1.0,
+    )
+
+    assert np.isnan(cout[100])
+
+
+def test_infiltration_to_extraction_variable_flow_constant_cin_post_spinup():
+    """Constant cin x variable flow x multi-PV -> constant cout post-spinup (issue #169 group 1).
+
+    The pre-fix mass over-attribution combined with variable flow could mask
+    incorrect flow weighting. Under strict-validity the flow-weighted bundle row
+    sums to 1, so a constant cin must produce constant cout to machine precision.
+    """
+    n = 600
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = 100.0 + 50.0 * np.sin(np.arange(n) * 2 * np.pi / 30.0)
+    cin = np.full(n, 7.5)
+    apv = np.array([100.0, 500.0, 1500.0])
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=apv,
+        retardation_factor=1.0,
+    )
+
+    valid = ~np.isnan(cout)
+    assert np.sum(valid) > 500
+    np.testing.assert_allclose(cout[valid], 7.5, atol=1e-13)
+
+
+def test_infiltration_to_extraction_variable_flow_mass_conservation():
+    """Mass conservation holds under variable flow with full breakthrough (issue #169 group 9).
+
+    Mutation testing flagged that flow-weighting could be silently dropped
+    (replacing ``flow[None, :]`` with ``np.ones_like(flow)[None, :]``) without
+    any existing test failing. A pulse propagated under variable flow with all
+    streamtubes inside the cin range must conserve total mass.
+    """
+    n = 200
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    rng = np.random.default_rng(42)
+    flow = 100.0 + 30.0 * rng.uniform(-1.0, 1.0, n)
+    apv = np.array([200.0, 600.0])
+
+    cin = np.zeros(n)
+    cin[80:85] = 3.0  # mid-domain pulse
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=apv,
+        retardation_factor=1.0,
+    )
+
+    cin_mass = np.sum(cin * flow)
+    cout_mass = np.nansum(cout * flow)
+    np.testing.assert_allclose(cout_mass, cin_mass, atol=1e-10)
+
+
+def test_infiltration_to_extraction_linearity():
+    """Forward operator is linear: ``f(alpha*a + beta*b) == alpha*f(a) + beta*f(b)`` (issue #169 group 2)."""
+    n = 200
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = 100.0 + 20.0 * np.sin(np.arange(n) * 2 * np.pi / 23.0)
+    apv = np.array([200.0, 700.0])
+
+    rng = np.random.default_rng(0)
+    a = rng.uniform(0.0, 5.0, n)
+    b = rng.uniform(0.0, 5.0, n)
+    alpha, beta = 2.5, -1.3
+
+    fa = infiltration_to_extraction(
+        cin=a,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=apv,
+        retardation_factor=1.0,
+    )
+    fb = infiltration_to_extraction(
+        cin=b,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=apv,
+        retardation_factor=1.0,
+    )
+    f_combined = infiltration_to_extraction(
+        cin=alpha * a + beta * b,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=apv,
+        retardation_factor=1.0,
+    )
+
+    expected = alpha * fa + beta * fb
+    valid = ~np.isnan(f_combined) & ~np.isnan(expected)
+    assert np.sum(valid) > 100
+    np.testing.assert_allclose(f_combined[valid], expected[valid], atol=1e-13)
+
+
+def test_infiltration_to_extraction_time_translation_invariance():
+    """Shifting all time edges by Δt shifts cout by Δt (issue #169 group 5).
+
+    An indexing bug that referenced absolute time would survive the existing
+    suite. Shifting tedges, cout_tedges, cin, and flow together must produce
+    bit-identical outputs (the algorithm only uses time differences).
+    """
+    n = 150
+    tedges_a = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    tedges_b = pd.date_range("2025-08-15", periods=n + 1, freq="D")
+    flow = 100.0 + 25.0 * np.sin(np.arange(n) * 2 * np.pi / 17.0)
+    apv = np.array([300.0, 800.0])
+
+    rng = np.random.default_rng(1)
+    cin = rng.uniform(0.0, 4.0, n)
+
+    cout_a = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges_a,
+        cout_tedges=tedges_a,
+        aquifer_pore_volumes=apv,
+        retardation_factor=1.0,
+    )
+    cout_b = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges_b,
+        cout_tedges=tedges_b,
+        aquifer_pore_volumes=apv,
+        retardation_factor=1.0,
+    )
+
+    # NaN positions must coincide
+    np.testing.assert_array_equal(np.isnan(cout_a), np.isnan(cout_b))
+    valid = ~np.isnan(cout_a)
+    np.testing.assert_array_equal(cout_a[valid], cout_b[valid])
+
+
+def test_infiltration_to_extraction_integer_residence_time_exact_shift():
+    """Single PV with integer residence time: cout[k] == cin[k - n] exactly (issue #169 group 3)."""
+    n = 80
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    pv = 300.0  # PV / flow = 3 days exactly
+    rng = np.random.default_rng(2)
+    cin = rng.uniform(0.0, 5.0, n)
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=np.array([pv]),
+        retardation_factor=1.0,
+        spinup=None,  # strict-validity: tests the exact-shift property where cout has NaN spin-up
+    )
+
+    shift = int(pv / 100.0)
+    valid = ~np.isnan(cout)
+    expected = np.full(n, np.nan)
+    expected[shift:] = cin[: n - shift]
+    np.testing.assert_array_equal(cout[valid], expected[valid])
+
+
+# ---------------------------------------------------------------------------
+# Tests for the public ``spinup`` parameter
+# ---------------------------------------------------------------------------
+
+
+def test_spinup_constant_eliminates_left_edge_nan():
+    """spinup='constant' warm-starts the system so left-edge cout has no NaN.
+
+    With ``apv = [100, 500, 1500]``, flow=100, the strict-validity left-edge
+    spin-up extends to day 15 (longest RT). Under ``spinup="constant"``
+    the warm-start prepends bins so every cout bin at or after tedges[0]
+    is valid. On the bins where the strict computation IS valid, both
+    modes must agree exactly.
+    """
+    n = 50
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    apv = np.array([100.0, 500.0, 1500.0])
+    cin = 1.0 + 0.5 * np.sin(2 * np.pi * np.arange(n) / 10.0)
+
+    cout_strict = infiltration_to_extraction(
+        cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=None
+    )
+    cout_warm = infiltration_to_extraction(
+        cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup="constant"
+    )
+
+    assert np.all(np.isnan(cout_strict[:15]))
+    assert not np.any(np.isnan(cout_warm)), "constant warm-start should leave no left-edge NaN"
+    valid = ~np.isnan(cout_strict)
+    np.testing.assert_array_equal(cout_warm[valid], cout_strict[valid])
+
+
+def test_spinup_constant_uses_first_cin_value():
+    """The warm-start pads cin with cin[0], not zero or cin[-1].
+
+    With a single PV giving integer residence time of 3 days and
+    ``cin[0]=7, cin[1:]=0``, the warm-start interpretation says cin was 7
+    for all time before tedges[0]. The first 4 cout bins therefore see
+    cin=7 in their source windows (the warm-start plus cin[0]); from
+    cout[4] onward the source windows fall on cin[1:]=0.
+    """
+    n = 50
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    cin = np.zeros(n)
+    cin[0] = 7.0
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=np.array([300.0]),  # RT = 3 days
+        spinup="constant",
+    )
+
+    np.testing.assert_array_equal(cout[:4], 7.0)
+    np.testing.assert_array_equal(cout[4:], 0.0)
+
+
+def test_spinup_constant_does_not_pad_right_edge():
+    """cout extending past tedges[-1] is still NaN under spinup='constant'.
+
+    Warm-start only handles the left edge. Right-edge cout bins whose
+    source windows extend past tedges[-1] remain NaN regardless of mode.
+    """
+    cin_dates = pd.date_range("2020-01-01", end="2020-01-15", freq="D")
+    cout_dates = pd.date_range("2020-01-01", end="2020-01-20", freq="D")
+    tedges = pd.DatetimeIndex([*cin_dates, cin_dates[-1] + pd.Timedelta(days=1)])
+    cout_tedges = pd.DatetimeIndex([*cout_dates, cout_dates[-1] + pd.Timedelta(days=1)])
+
+    cin = np.full(len(cin_dates), 5.0)
+    flow = np.full(len(cin_dates), 100.0)
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([500.0]),  # RT = 5 days
+        spinup="constant",
+    )
+
+    # cin ends at index 15 of cout_tedges (2020-01-16). cout bins past
+    # 2020-01-15 with RT=5 source windows extending past tedges[-1] are NaN.
+    assert np.any(np.isnan(cout)), "right-edge bins should be NaN under constant warm-start"
+    # Left-edge bins are populated (cin[0]=5 warm-started)
+    assert not np.isnan(cout[0])
+
+
+def test_spinup_zero_threshold_reproduces_issue_161_overattribution():
+    """spinup=0.0 reproduces the count-mean issue #161 over-attribution.
+
+    With a left-edge cin pulse cin[0]=1.0, apv=[100, 500, 1500], flow=100,
+    the count-mean over contributing streamtubes gives:
+    - cout[1] (only 1d streamtube contributes): cin[0]/1 = 1.0
+    - cout[5] (1d + 5d contribute): cin[0]/2 = 0.5
+    - cout[15] (all 3 contribute): cin[0]/3 ≈ 0.333
+
+    Sum = 1 + 0.5 + 1/3 = 11/6 ≈ 1.833 — the documented pre-fix
+    over-attribution. This is the deliberately opt-in behavior of the
+    fraction-threshold mode at ``spinup=0.0``.
+    """
+    n = 50
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    apv = np.array([100.0, 500.0, 1500.0])
+    cin = np.zeros(n)
+    cin[0] = 1.0
+
+    cout = infiltration_to_extraction(
+        cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=0.0
+    )
+
+    np.testing.assert_allclose(cout[1], 1.0, atol=1e-15)
+    np.testing.assert_allclose(cout[5], 0.5, atol=1e-15)
+    np.testing.assert_allclose(cout[15], 1.0 / 3.0, atol=1e-15)
+    np.testing.assert_allclose(np.nansum(cout), 11.0 / 6.0, atol=1e-13)
+
+
+def test_spinup_constant_round_trip_recovers_cin():
+    """Forward+reverse with spinup='constant' on both ends recovers cin.
+
+    The warm-start padding extends both directions identically, so the
+    forward output has no spin-up NaN to feed into the reverse problem.
+    With a single pore volume (well-conditioned inverse) recovery is
+    tight to machine precision in the interior.
+    """
+    n = 200
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cin = 5.0 + 2.0 * np.sin(2 * np.pi * np.arange(n) / 30.0)
+    flow = np.full(n, 100.0)
+    apv = np.array([301.0])  # avoid integer-RT rank deficiency
+
+    cout = infiltration_to_extraction(cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv)
+    assert not np.any(np.isnan(cout))
+    cin_rec = extraction_to_infiltration(
+        cout=cout, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv
+    )
+
+    # Interior recovery should be tight; boundary bins absorb Tikhonov bias.
+    interior = slice(int(0.15 * n), int(0.85 * n))
+    np.testing.assert_allclose(cin_rec[interior], cin[interior], atol=1e-7)
+
+
+def test_spinup_constant_falls_back_when_flow_zero():
+    """spinup='constant' silently falls back to strict when flow[0]=0.
+
+    The warm-start needs flow[0] > 0 to derive a finite warm-start
+    residence time. When the first flow bin is zero, the helper falls
+    back to strict-validity (left-edge NaN), so the output matches
+    spinup=None.
+    """
+    n = 20
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    flow[0] = 0.0
+    cin = np.ones(n)
+    cout_warm = infiltration_to_extraction(
+        cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=np.array([500.0]), spinup="constant"
+    )
+    cout_strict = infiltration_to_extraction(
+        cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=np.array([500.0]), spinup=None
+    )
+    np.testing.assert_array_equal(np.isnan(cout_warm), np.isnan(cout_strict))
+
+
+@pytest.mark.parametrize("bad", ["constants", "none", "", "default"])
+def test_spinup_invalid_string_raises(bad):
+    """spinup must be 'constant', None, or a float in [0, 1]."""
+    n = 10
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    with pytest.raises(ValueError, match="spinup"):
+        infiltration_to_extraction(
+            cin=np.ones(n),
+            flow=np.full(n, 100.0),
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([100.0]),
+            spinup=bad,
+        )
+
+
+@pytest.mark.parametrize("bad", [True, False])
+def test_spinup_bool_raises_type_error(bad):
+    """Booleans are rejected (Python bool is a numeric subtype, easy to mis-pass)."""
+    n = 10
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    with pytest.raises(TypeError, match="spinup"):
+        infiltration_to_extraction(
+            cin=np.ones(n),
+            flow=np.full(n, 100.0),
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([100.0]),
+            spinup=bad,
+        )
+
+
+@pytest.mark.parametrize("bad", [-0.1, 1.5, 2.0, -1.0])
+def test_spinup_float_out_of_range_raises(bad):
+    """Float spinup must be in [0, 1]."""
+    n = 10
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    with pytest.raises(ValueError, match="spinup"):
+        infiltration_to_extraction(
+            cin=np.ones(n),
+            flow=np.full(n, 100.0),
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([100.0]),
+            spinup=bad,
+        )

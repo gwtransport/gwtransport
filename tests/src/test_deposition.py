@@ -1534,3 +1534,88 @@ def test_extraction_to_deposition_zero_flow_accepted(flow_sign_setup):
         )
 
     assert dep.shape == (n,)
+
+
+def test_deposition_to_extraction_spinup_constant_eliminates_left_edge_nan():
+    """deposition_to_extraction with spinup='constant' warm-starts the system.
+
+    Under spinup=None, cout bins where the deposition history is not fully
+    resolved (residence time < cout time) become NaN. Under
+    spinup='constant', the warm-start prepends bins with dep[0]/flow[0],
+    so cout in the original cout_tedges window is non-NaN where
+    physically meaningful.
+    """
+    n = 30
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
+    dep = np.full(n, 2.0)
+    flow = np.full(n, 100.0)
+
+    cout_warm = deposition_to_extraction(
+        dep=dep,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=1000.0,  # RT = 10 days
+        porosity=0.3,
+        thickness=10.0,
+        spinup="constant",
+    )
+    cout_strict = deposition_to_extraction(
+        dep=dep,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=1000.0,
+        porosity=0.3,
+        thickness=10.0,
+        spinup=None,
+    )
+
+    # Warm-start populates left-edge bins; strict has NaN there.
+    n_finite_warm = int(np.sum(np.isfinite(cout_warm)))
+    n_finite_strict = int(np.sum(np.isfinite(cout_strict)))
+    assert n_finite_warm > n_finite_strict, "constant should produce more finite cout than strict"
+
+    # Where strict is finite, both modes must agree (warm-start is a
+    # superset of strict on the original window).
+    valid = np.isfinite(cout_strict)
+    np.testing.assert_allclose(cout_warm[valid], cout_strict[valid])
+
+
+def test_extraction_to_deposition_spinup_constant_recovers_full_window():
+    """extraction_to_deposition with spinup='constant' recovers the full deposition window.
+
+    Round-trip with a step deposition signal: forward emits warm-started
+    cout, reverse recovers the deposition (sliced back to the original
+    tedges length).
+    """
+    n = 50
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
+    dep_true = np.zeros(n)
+    dep_true[10:30] = 3.0  # box-shaped deposition
+    flow = np.full(n, 100.0)
+
+    cout = deposition_to_extraction(
+        dep=dep_true,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=500.0,  # RT = 5 days, * 1.001 for full-rank avoidance
+        porosity=0.3,
+        thickness=10.0,
+    )
+    dep_rec = extraction_to_deposition(
+        cout=cout,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=500.0,
+        porosity=0.3,
+        thickness=10.0,
+    )
+
+    assert dep_rec.shape == (n,), "output must align with original tedges length"
+    # Recovery in the interior of the box; boundaries see Tikhonov bias.
+    np.testing.assert_allclose(dep_rec[14:26], 3.0, atol=0.1)
