@@ -11,122 +11,14 @@ from gwtransport.advection import infiltration_to_extraction as advection_i2e
 from gwtransport.diffusion import infiltration_to_extraction as diffusion_exact
 from gwtransport.diffusion_fast import (
     _build_gaussian_matrix,
-    _compute_sigma,
-    convolve_diffusion,
-    create_example_data,
+    _build_rebin_matrix,
+    _build_v_smooth_matrix,
     extraction_to_infiltration,
     gamma_extraction_to_infiltration,
     gamma_infiltration_to_extraction,
     infiltration_to_extraction,
 )
 from gwtransport.gamma import mean_std_loc_to_alpha_beta
-from gwtransport.residence_time import residence_time_mean
-
-# =============================================================================
-# Machine-precision tests for convolve_diffusion (CDF-integrated kernel)
-#
-# The CDF-integrated kernel computes the exact bin-averaged convolution of
-# piecewise-constant input with a Gaussian. This means:
-# - Step function + CDF kernel = analytical erf (machine precision)
-# - Linear signal + CDF kernel = same linear signal (machine precision)
-# - Constant signal + CDF kernel = same constant (machine precision)
-# =============================================================================
-
-
-def test_convolve_constant_signal_preservation():
-    """Constant input must be preserved exactly (row sums = 1)."""
-    n = 200
-    signal = np.full(n, 42.0)
-    rng = np.random.default_rng(0)
-    sigma_array = rng.uniform(0.5, 10.0, n)
-
-    result = convolve_diffusion(input_signal=signal, sigma_array=sigma_array, asymptotic_cutoff_sigma=10.0)
-    assert_allclose(result, 42.0, atol=1e-13)
-
-
-def test_convolve_linear_signal_preservation():
-    """Symmetric kernel preserves linear signals exactly (interior points).
-
-    For a symmetric Gaussian kernel centered at position i, the weighted average
-    of a linear function f(j) = a*j + b is exactly f(i), because:
-    sum_j G[i,j] * (a*j + b) = a * sum_j G[i,j] * j + b * sum_j G[i,j]
-    = a * i + b (by symmetry of G and normalization).
-    """
-    n = 200
-    signal = 3.0 * np.arange(n, dtype=float) + 7.0
-    sigma = 5.0
-    sigma_array = np.full(n, sigma)
-
-    result = convolve_diffusion(input_signal=signal, sigma_array=sigma_array, asymptotic_cutoff_sigma=10.0)
-
-    # Interior points (avoid boundary clipping effects)
-    margin = int(10 * sigma)
-    interior = slice(margin, n - margin)
-    assert_allclose(result[interior], signal[interior], atol=1e-12)
-
-
-def test_convolve_step_function_matches_erf():
-    """CDF kernel applied to step function gives erf at machine precision.
-
-    For input[j] = 1 if j >= j0 else 0, the CDF kernel output telescopes to:
-        out[i] = 0.5 * (1 + erf((i - j0 + 0.5) / (sqrt(2) * sigma)))
-    The +0.5 arises because the step edge is at the LEFT boundary of bin j0.
-    """
-    n = 500
-    j0 = n // 2
-    x = np.arange(n, dtype=float)
-    initial = np.where(x >= j0, 1.0, 0.0)
-
-    for sigma in [0.5, 1.0, 2.0, 5.0, 10.0]:
-        sigma_array = np.full(n, sigma)
-        result = convolve_diffusion(input_signal=initial, sigma_array=sigma_array, asymptotic_cutoff_sigma=10.0)
-
-        # Analytical CDF result (step edge at j0 - 0.5)
-        expected = 0.5 * (1 + erf((x - j0 + 0.5) / (np.sqrt(2) * sigma)))
-
-        # Test interior (avoid boundary clipping effects)
-        margin = max(1, int(10 * sigma))
-        interior = slice(margin, n - margin)
-        assert_allclose(
-            result[interior],
-            expected[interior],
-            atol=1e-14,
-            err_msg=f"Failed for sigma={sigma}",
-        )
-
-
-def test_convolve_zero_sigma_identity():
-    """Zero sigma returns input unchanged."""
-    x = np.linspace(0, 1, 100)
-    signal = np.sin(2 * np.pi * x)
-    sigma_array = np.zeros_like(x)
-
-    result = convolve_diffusion(input_signal=signal, sigma_array=sigma_array)
-    assert_allclose(result, signal, atol=0.0)
-
-
-def test_convolve_mixed_zero_and_nonzero_sigma():
-    """Points with sigma=0 are unchanged; others are smoothed."""
-    signal = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.0])
-    sigma_array = np.array([0.0, 0.5, 0.5, 0.0, 0.5, 0.5, 0.0, 0.5, 0.5, 0.0])
-
-    result = convolve_diffusion(input_signal=signal, sigma_array=sigma_array)
-
-    # Zero-sigma positions must be exactly preserved
-    zero_mask = sigma_array == 0
-    assert_allclose(result[zero_mask], signal[zero_mask], atol=0.0)
-
-    # All values must be finite
-    assert np.all(np.isfinite(result))
-
-
-def test_convolve_input_validation():
-    """Mismatched input lengths raise ValueError."""
-    signal = np.linspace(0, 1, 100)
-    sigma_array = np.zeros(101)
-    with pytest.raises(ValueError, match="same length"):
-        convolve_diffusion(input_signal=signal, sigma_array=sigma_array)
-
 
 # =============================================================================
 # Tests for _build_gaussian_matrix
@@ -178,73 +70,6 @@ def test_build_gaussian_matrix_symmetry():
 # solutions. The error is O(dx^2) from discretizing the initial condition,
 # NOT from the kernel. The CDF kernel is exact for piecewise-constant input.
 # =============================================================================
-
-
-@pytest.mark.parametrize("nx", [500, 2000, 5000])
-def test_gaussian_pulse_convergence(nx):
-    """CDF kernel of discretized Gaussian converges to analytical solution.
-
-    The error is O(dx^2) from bin-averaging the smooth initial condition,
-    not from the kernel itself.
-    """
-    domain_length = 10.0
-    x = np.linspace(-domain_length / 2, domain_length / 2, nx)
-    dx = x[1] - x[0]
-
-    diffusivity = 0.1
-    dt = 0.01
-    sigma = np.sqrt(2 * diffusivity * dt) / dx
-
-    x0, amplitude, width = 0.0, 1.0, 0.5
-    initial = amplitude * np.exp(-((x - x0) ** 2) / (2 * width**2))
-    sigma_array = np.full_like(x, sigma)
-
-    numerical = convolve_diffusion(input_signal=initial, sigma_array=sigma_array, asymptotic_cutoff_sigma=10.0)
-
-    new_width = np.sqrt(width**2 + 2 * diffusivity * dt)
-    analytical = amplitude * width / new_width * np.exp(-((x - x0) ** 2) / (2 * new_width**2))
-
-    # Error should scale as O(dx^2)
-    interior = slice(nx // 10, 9 * nx // 10)
-    max_err = np.max(np.abs(numerical[interior] - analytical[interior]))
-
-    # Tolerance scales with dx^2: at nx=500, dx=0.02, tol≈7e-5
-    expected_tol = 2.0 * dx**2
-    assert max_err < expected_tol, f"nx={nx}: max_err={max_err:.2e} > tol={expected_tol:.2e}"
-
-
-@pytest.mark.parametrize("nx", [500, 2000, 5000])
-def test_delta_function_convergence(nx):
-    """CDF kernel of discretized delta converges to analytical solution.
-
-    Delta function is poorly resolved at any finite resolution.
-    Error is O(dx) because the delta input is a single bin.
-    """
-    domain_length = 10.0
-    x = np.linspace(-domain_length / 2, domain_length / 2, nx)
-    dx = x[1] - x[0]
-
-    diffusivity = 0.2
-    dt = 0.01
-    sigma = np.sqrt(2 * diffusivity * dt) / dx
-
-    x0 = dx / 2
-    initial = np.zeros_like(x)
-    center_idx = np.argmin(np.abs(x - x0))
-    initial[center_idx] = 1.0 / dx
-
-    sigma_array = np.full_like(x, sigma)
-    numerical = convolve_diffusion(input_signal=initial, sigma_array=sigma_array, asymptotic_cutoff_sigma=10.0)
-    analytical = 1.0 / np.sqrt(4 * np.pi * diffusivity * dt) * np.exp(-((x - x0) ** 2) / (4 * diffusivity * dt))
-
-    interior = slice(nx // 10, 9 * nx // 10)
-    max_err = np.max(np.abs(numerical[interior] - analytical[interior]))
-
-    # Tolerance scales with dx: at nx=500, dx=0.02, tol≈0.5
-    expected_tol = 25.0 * dx
-    assert max_err < expected_tol, f"nx={nx}: max_err={max_err:.2e} > tol={expected_tol:.2e}"
-
-
 # =============================================================================
 # Helper: create common test data for transport functions
 # =============================================================================
@@ -537,54 +362,6 @@ def test_retardation_zero_diffusion_matches_advection(retardation_factor):
 
 
 @pytest.mark.parametrize("retardation_factor", [1.0, 2.7])
-def test_retardation_sigma_analytical(retardation_factor):
-    """Sigma from _compute_sigma matches analytical formula (exact).
-
-    For constant flow Q, single PV V, retardation R, streamline length L:
-        rt = V * R / Q
-        v_s = L / rt
-        D_l = D_m + alpha_L * v_s
-        l_diff = sqrt(2 * D_l * rt)
-        dx = Q * dt / (V * R) * L
-        sigma = l_diff / dx
-    """
-    n_days = 50
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    flow_rate = 100.0
-    flow = np.full(n_days, flow_rate)
-    pore_volume = 500.0
-    length = 80.0
-    mol_diff = 0.03
-    dispersivity = 1.0
-    dt = 1.0
-
-    sigma_array = _compute_sigma(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volumes=pore_volume,
-        streamline_length=length,
-        molecular_diffusivity=mol_diff,
-        longitudinal_dispersivity=dispersivity,
-        retardation_factor=retardation_factor,
-        direction="infiltration_to_extraction",
-    )
-
-    # Analytical sigma for interior bins (away from residence-time boundary effects)
-    rt = pore_volume * retardation_factor / flow_rate
-    v_s = length / rt
-    d_l = mol_diff + dispersivity * v_s
-    l_diff = np.sqrt(2 * d_l * rt)
-    dx = flow_rate * dt / (pore_volume * retardation_factor) * length
-    sigma_expected = l_diff / dx
-
-    # Interior bins should match the analytical value exactly
-    # (edge bins may differ due to residence time interpolation)
-    margin = int(np.ceil(pore_volume * retardation_factor / flow_rate)) + 2
-    interior = slice(margin, n_days - margin)
-    assert_allclose(sigma_array[interior], sigma_expected, atol=1e-14)
-
-
-@pytest.mark.parametrize("retardation_factor", [1.0, 2.7])
 def test_retardation_output_bounded_by_input(retardation_factor):
     """Output bounded by input range with retardation (convex combination)."""
     tedges, cout_tedges, flow = _make_transport_data(n_days=400)
@@ -753,498 +530,6 @@ def test_round_trip():
 
 
 # =============================================================================
-# Tests for _compute_sigma
-# =============================================================================
-
-
-def test_compute_sigma_constant_flow():
-    """With constant flow, sigma should be uniform."""
-    n_days = 50
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    flow = np.full(n_days, 100.0)
-
-    sigma_array = _compute_sigma(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volumes=1000.0,
-        streamline_length=80.0,
-        molecular_diffusivity=0.03,
-        longitudinal_dispersivity=0.0,
-        retardation_factor=1.0,
-        direction="infiltration_to_extraction",
-    )
-
-    assert len(sigma_array) == n_days
-    assert np.all(np.isfinite(sigma_array))
-    assert np.all(sigma_array >= 0.0)
-    # Constant flow → uniform sigma (slight variation from residence time edge effects)
-    assert np.std(sigma_array) < np.mean(sigma_array) * 0.1
-
-
-def test_compute_sigma_variable_flow():
-    """Variable flow sigma matches the bin-mean-RT analytical formula (single pv).
-
-    Exercises the `infiltration_to_extraction` direction with scalar pore volume,
-    non-trivial retardation, and mixed molecular + dispersive terms. Asserts exact
-    agreement with the analytical per-bin formula that uses bin-mean residence
-    time (the physically correct discretization under the bin-edge convention).
-    """
-    n_days = 50
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    t = np.arange(n_days)
-    flow = 100.0 * (1.0 + 0.5 * np.sin(2 * np.pi * t / 20))
-
-    apv = 500.0
-    streamline_length = 80.0
-    molecular_diffusivity = 0.03
-    longitudinal_dispersivity = 1.0
-    retardation_factor = 2.0
-    direction = "infiltration_to_extraction"
-
-    sigma_array = _compute_sigma(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volumes=apv,
-        streamline_length=streamline_length,
-        molecular_diffusivity=molecular_diffusivity,
-        longitudinal_dispersivity=longitudinal_dispersivity,
-        retardation_factor=retardation_factor,
-        direction=direction,
-    )
-
-    apv_arr = np.atleast_1d(apv)
-    mean_pv = float(np.mean(apv_arr))
-    ev2 = float(np.mean(apv_arr**2))
-    ev3 = float(np.mean(apv_arr**3))
-    rt_mean = residence_time_mean(
-        flow=flow,
-        flow_tedges=tedges,
-        tedges_out=tedges,
-        aquifer_pore_volumes=mean_pv,
-        retardation_factor=retardation_factor,
-        direction=direction,
-    )[0]
-    valid_mask = ~np.isnan(rt_mean)
-    rt_mean = np.interp(np.arange(len(rt_mean)), np.where(valid_mask)[0], rt_mean[valid_mask])
-
-    var_numerator = (
-        2.0 * molecular_diffusivity * rt_mean / mean_pv * ev3
-        + 2.0 * longitudinal_dispersivity * streamline_length * ev2
-    )
-    timedelta = np.diff(tedges) / pd.to_timedelta(1, unit="D")
-    q_dt_l_over_r = flow * timedelta * streamline_length / retardation_factor
-    sigma_expected = np.clip(np.sqrt(var_numerator / q_dt_l_over_r**2), 0.0, 100.0)
-
-    assert len(sigma_array) == n_days
-    assert np.std(sigma_array) > 0.0
-    assert_allclose(sigma_array, sigma_expected, rtol=0.0, atol=0.0)
-
-
-def test_compute_sigma_with_nan_in_residence_time():
-    """NaN residence times are interpolated, producing finite sigma."""
-    n_days = 50
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    flow = np.full(n_days, 100.0)
-    flow[10:15] = 1e-10
-
-    sigma_array = _compute_sigma(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volumes=1000.0,
-        streamline_length=80.0,
-        molecular_diffusivity=0.03,
-        longitudinal_dispersivity=0.0,
-        retardation_factor=1.0,
-        direction="infiltration_to_extraction",
-    )
-
-    assert len(sigma_array) == n_days
-    assert np.all(np.isfinite(sigma_array))
-    assert np.all(sigma_array >= 0.0)
-
-
-def test_compute_sigma_clipping():
-    """Extreme sigma values are clipped to [0, 100]."""
-    n_days = 100
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    flow = np.full(n_days, 10.0)
-
-    sigma_array = _compute_sigma(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volumes=100.0,
-        streamline_length=80.0,
-        molecular_diffusivity=10.0,
-        longitudinal_dispersivity=0.0,
-        retardation_factor=5.0,
-        direction="infiltration_to_extraction",
-    )
-
-    assert np.all(sigma_array <= 100.0)
-    assert np.all(sigma_array >= 0.0)
-
-
-@pytest.mark.parametrize(
-    ("molecular_diffusivity", "retardation"),
-    [(0.01, 1.0), (0.05, 2.0), (0.10, 1.5)],
-)
-def test_compute_sigma_parametrized(molecular_diffusivity, retardation):
-    """Various parameter combinations produce positive finite sigma."""
-    n_days = 50
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    flow = np.full(n_days, 100.0)
-
-    sigma_array = _compute_sigma(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volumes=1000.0,
-        streamline_length=100.0,
-        molecular_diffusivity=molecular_diffusivity,
-        longitudinal_dispersivity=0.0,
-        retardation_factor=retardation,
-        direction="infiltration_to_extraction",
-    )
-
-    assert len(sigma_array) == n_days
-    assert np.all(np.isfinite(sigma_array))
-    assert np.mean(sigma_array) > 0.0
-
-
-def test_compute_sigma_dispersivity_increases_sigma():
-    """Adding longitudinal dispersivity increases sigma."""
-    n_days = 50
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    flow = np.full(n_days, 100.0)
-
-    kwargs = {
-        "flow": flow,
-        "tedges": tedges,
-        "aquifer_pore_volumes": 1000.0,
-        "streamline_length": 80.0,
-        "molecular_diffusivity": 0.03,
-        "retardation_factor": 1.0,
-        "direction": "infiltration_to_extraction",
-    }
-
-    sigma_no_disp = _compute_sigma(**kwargs, longitudinal_dispersivity=0.0)
-    sigma_with_disp = _compute_sigma(**kwargs, longitudinal_dispersivity=1.0)
-
-    assert np.all(sigma_with_disp >= sigma_no_disp - 1e-14)
-    assert np.mean(sigma_with_disp) > np.mean(sigma_no_disp)
-
-
-# =============================================================================
-# Tests for moment-based sigma correction
-# =============================================================================
-
-
-def test_compute_sigma_single_pv_equals_scalar():
-    """A single pore volume gives E[V^2]=V^2, E[V^3]=V^3, so no correction."""
-    n_days = 50
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    flow = np.full(n_days, 100.0)
-    pv = 1000.0
-
-    sigma_scalar = _compute_sigma(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volumes=pv,
-        streamline_length=80.0,
-        molecular_diffusivity=0.03,
-        longitudinal_dispersivity=1.0,
-        retardation_factor=1.0,
-        direction="infiltration_to_extraction",
-    )
-    sigma_array = _compute_sigma(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volumes=np.array([pv]),
-        streamline_length=80.0,
-        molecular_diffusivity=0.03,
-        longitudinal_dispersivity=1.0,
-        retardation_factor=1.0,
-        direction="infiltration_to_extraction",
-    )
-
-    assert_allclose(sigma_array, sigma_scalar)
-
-
-def test_compute_sigma_identical_pvs_equals_scalar():
-    """N identical pore volumes give the same result as a single scalar."""
-    n_days = 50
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    flow = np.full(n_days, 100.0)
-    pv = 1000.0
-
-    sigma_scalar = _compute_sigma(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volumes=pv,
-        streamline_length=80.0,
-        molecular_diffusivity=0.03,
-        longitudinal_dispersivity=1.0,
-        retardation_factor=1.0,
-        direction="infiltration_to_extraction",
-    )
-    sigma_many = _compute_sigma(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volumes=np.full(50, pv),
-        streamline_length=80.0,
-        molecular_diffusivity=0.03,
-        longitudinal_dispersivity=1.0,
-        retardation_factor=1.0,
-        direction="infiltration_to_extraction",
-    )
-
-    assert_allclose(sigma_many, sigma_scalar)
-
-
-def test_compute_sigma_distributed_pvs_larger_than_mean():
-    """Distributed PVs give larger sigma than using mean alone (Jensen's inequality).
-
-    Since sigma_idx^2(V) is convex in V (quadratic + cubic terms), E[sigma^2] > sigma^2(mean).
-    """
-    n_days = 50
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    flow = np.full(n_days, 100.0)
-    mean_pv = 1000.0
-    pvs = np.array([700.0, 800.0, 900.0, 1000.0, 1100.0, 1200.0, 1300.0])
-
-    common = {
-        "flow": flow,
-        "tedges": tedges,
-        "streamline_length": 80.0,
-        "molecular_diffusivity": 0.03,
-        "longitudinal_dispersivity": 1.0,
-        "retardation_factor": 1.0,
-        "direction": "infiltration_to_extraction",
-    }
-
-    sigma_mean = _compute_sigma(aquifer_pore_volumes=mean_pv, **common)
-    sigma_dist = _compute_sigma(aquifer_pore_volumes=pvs, **common)
-
-    assert np.all(sigma_dist >= sigma_mean - 1e-14)
-
-
-def test_compute_sigma_molecular_diffusion_only_correction():
-    """Moment correction for molecular diffusion only (alpha_L=0).
-
-    For constant flow, interior bins:
-        sigma_idx^2 = 2*D_m*tau_bar/V_bar * E[V^3] / dx_ref^2
-    Correction factor on sigma: sqrt(E[V^3] / V_bar^3).
-    """
-    n_days = 100
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    flow_rate = 100.0
-    flow = np.full(n_days, flow_rate)
-    mean_pv = 1000.0
-    cv = 0.3
-    std_pv = cv * mean_pv
-
-    rng = np.random.default_rng(42)
-    alpha = (mean_pv / std_pv) ** 2
-    beta = std_pv**2 / mean_pv
-    pvs = rng.gamma(alpha, beta, size=10000)
-
-    common = {
-        "flow": flow,
-        "tedges": tedges,
-        "streamline_length": 80.0,
-        "molecular_diffusivity": 0.03,
-        "longitudinal_dispersivity": 0.0,
-        "retardation_factor": 1.0,
-        "direction": "infiltration_to_extraction",
-    }
-
-    sigma_mean = _compute_sigma(aquifer_pore_volumes=mean_pv, **common)
-    sigma_dist = _compute_sigma(aquifer_pore_volumes=pvs, **common)
-
-    margin = int(np.ceil(mean_pv / flow_rate)) + 2
-    interior = slice(margin, n_days - margin)
-
-    ev3_empirical = np.mean(pvs**3)
-    expected_ratio = np.sqrt(ev3_empirical / mean_pv**3)
-    actual_ratio = np.mean(sigma_dist[interior]) / np.mean(sigma_mean[interior])
-    assert_allclose(actual_ratio, expected_ratio, rtol=1e-3)
-
-
-def test_compute_sigma_dispersivity_only_correction():
-    """Moment correction for dispersivity only (D_m=0).
-
-    For constant flow, interior bins:
-        sigma_idx^2 = 2*alpha_L*L * E[V^2] / dx_ref^2
-    Correction factor on sigma: sqrt(E[V^2] / V_bar^2) = sqrt(1 + CV^2).
-    """
-    n_days = 100
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    flow_rate = 100.0
-    flow = np.full(n_days, flow_rate)
-    mean_pv = 1000.0
-    cv = 0.3
-    std_pv = cv * mean_pv
-
-    rng = np.random.default_rng(42)
-    alpha = (mean_pv / std_pv) ** 2
-    beta = std_pv**2 / mean_pv
-    pvs = rng.gamma(alpha, beta, size=10000)
-
-    common = {
-        "flow": flow,
-        "tedges": tedges,
-        "streamline_length": 80.0,
-        "molecular_diffusivity": 0.0,
-        "longitudinal_dispersivity": 1.0,
-        "retardation_factor": 1.0,
-        "direction": "infiltration_to_extraction",
-    }
-
-    sigma_mean = _compute_sigma(aquifer_pore_volumes=mean_pv, **common)
-    sigma_dist = _compute_sigma(aquifer_pore_volumes=pvs, **common)
-
-    margin = int(np.ceil(mean_pv / flow_rate)) + 2
-    interior = slice(margin, n_days - margin)
-
-    ev2_empirical = np.mean(pvs**2)
-    expected_ratio = np.sqrt(ev2_empirical / mean_pv**2)
-    actual_ratio = np.mean(sigma_dist[interior]) / np.mean(sigma_mean[interior])
-    assert_allclose(actual_ratio, expected_ratio, rtol=1e-3)
-
-
-def test_compute_sigma_correction_scales_with_cv():
-    """Correction magnitude increases with coefficient of variation."""
-    n_days = 100
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    flow = np.full(n_days, 100.0)
-    mean_pv = 1000.0
-
-    common = {
-        "flow": flow,
-        "tedges": tedges,
-        "streamline_length": 80.0,
-        "molecular_diffusivity": 0.03,
-        "longitudinal_dispersivity": 1.0,
-        "retardation_factor": 1.0,
-        "direction": "infiltration_to_extraction",
-    }
-
-    sigma_ref = _compute_sigma(aquifer_pore_volumes=mean_pv, **common)
-
-    corrections = []
-    for cv in [0.1, 0.2, 0.3, 0.5]:
-        std_pv = cv * mean_pv
-        rng = np.random.default_rng(42)
-        alpha = (mean_pv / std_pv) ** 2
-        beta = std_pv**2 / mean_pv
-        pvs = rng.gamma(alpha, beta, size=10000)
-
-        sigma_dist = _compute_sigma(aquifer_pore_volumes=pvs, **common)
-        corrections.append(np.mean(sigma_dist) / np.mean(sigma_ref))
-
-    for i in range(len(corrections) - 1):
-        assert corrections[i + 1] > corrections[i]
-
-
-def test_compute_sigma_uses_bin_mean_residence_time():
-    """Under variable flow, sigma must use bin-mean RT, not the bin-center sample.
-
-    Per the bin-edge convention, per-bin output quantities are flow-weighted bin
-    averages. The molecular variance contribution `2 * D_m * tau` per bin should
-    therefore use the mean residence time over the bin, not a point sample at the
-    bin center. With strongly varying flow, the two differ by several percent.
-    """
-    n_days = 200
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    t = np.arange(n_days)
-    flow = 100.0 + 60.0 * np.sin(2 * np.pi * t / 30.0) + 30.0 * np.sin(2 * np.pi * t / 7.0)
-    flow = np.clip(flow, 5.0, None)
-
-    apv = np.array([800.0, 1200.0, 1600.0, 2000.0])
-    streamline_length = 100.0
-    molecular_diffusivity = 1.0
-    longitudinal_dispersivity = 0.0
-    retardation_factor = 1.0
-    direction = "extraction_to_infiltration"
-
-    sigma_actual = _compute_sigma(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volumes=apv,
-        streamline_length=streamline_length,
-        molecular_diffusivity=molecular_diffusivity,
-        longitudinal_dispersivity=longitudinal_dispersivity,
-        retardation_factor=retardation_factor,
-        direction=direction,
-    )
-
-    mean_pv = float(np.mean(apv))
-    ev3 = float(np.mean(apv**3))
-    rt_mean = residence_time_mean(
-        flow=flow,
-        flow_tedges=tedges,
-        tedges_out=tedges,
-        aquifer_pore_volumes=mean_pv,
-        retardation_factor=retardation_factor,
-        direction=direction,
-    )[0]
-    valid_mask = ~np.isnan(rt_mean)
-    rt_mean = np.interp(np.arange(len(rt_mean)), np.where(valid_mask)[0], rt_mean[valid_mask])
-
-    var_numerator = 2.0 * molecular_diffusivity * rt_mean / mean_pv * ev3
-    timedelta = np.diff(tedges) / pd.to_timedelta(1, unit="D")
-    q_dt_l_over_r = flow * timedelta * streamline_length / retardation_factor
-    sigma_expected = np.clip(np.sqrt(var_numerator / q_dt_l_over_r**2), 0.0, 100.0)
-
-    assert_allclose(sigma_actual, sigma_expected, rtol=0.0, atol=0.0)
-
-
-# =============================================================================
-# Tests for create_example_data
-# =============================================================================
-
-
-def test_create_example_data_basic():
-    """Output shapes and value ranges are correct."""
-    x, signal, sigma_array, dt = create_example_data(seed=42)
-
-    assert len(x) == 1000
-    assert len(signal) == 1000
-    assert len(sigma_array) == 1000
-    assert len(dt) == 1000
-
-    assert np.all(np.isfinite(x))
-    assert np.all(np.isfinite(signal))
-    assert np.all(np.isfinite(sigma_array))
-    assert np.all(sigma_array >= 0.0)
-    assert np.all(dt > 0.0)
-
-
-def test_create_example_data_reproducible():
-    """Same seed gives identical output."""
-    _, signal1, _, _ = create_example_data(seed=42)
-    _, signal2, _, _ = create_example_data(seed=42)
-    assert_allclose(signal1, signal2, atol=0.0)
-
-
-def test_create_example_data_custom_parameters():
-    """Custom parameters are respected."""
-    nx = 500
-    domain_length = 20.0
-    x, _, _, _ = create_example_data(nx=nx, domain_length=domain_length, diffusivity=0.5, seed=0)
-
-    assert len(x) == nx
-    assert_allclose(x[0], 0.0, atol=0.0)
-    assert_allclose(x[-1], domain_length, rtol=1e-14)
-
-
-def test_create_example_data_different_sizes():
-    """Works for various grid sizes."""
-    for nx in [100, 500, 2000]:
-        x, _signal, _sigma_array, _dt = create_example_data(nx=nx, seed=0)
-        assert len(x) == nx
-
-
-# =============================================================================
 # Integration test: diffusion_fast vs diffusion on same extraction grid
 # =============================================================================
 
@@ -1311,62 +596,6 @@ def test_diffusion_fast_vs_diffusion_same_grid():
 # =============================================================================
 # Tests for flow_out (advect-then-smooth) algorithm
 # =============================================================================
-
-
-def test_nonuniform_tedges_raises_without_flow_out():
-    """Non-uniform tedges with flow_out=None raises ValueError."""
-    n_days = 200
-    # Create non-uniform tedges (3 bins: 50 days, 1 day, 149 days)
-    tedges = pd.DatetimeIndex([
-        pd.Timestamp("2020-01-01"),
-        pd.Timestamp("2020-02-20"),
-        pd.Timestamp("2020-02-21"),
-        pd.Timestamp("2020-07-19"),
-    ])
-    cin = np.array([1.0, 2.0, 3.0])
-    flow = np.array([100.0, 100.0, 100.0])
-    cout_tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-
-    with pytest.raises(ValueError, match="tedges must have constant time steps"):
-        infiltration_to_extraction(
-            cin=cin,
-            flow=flow,
-            tedges=tedges,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volumes=np.array([500.0]),
-            mean_streamline_length=80.0,
-            mean_molecular_diffusivity=0.03,
-            mean_longitudinal_dispersivity=0.0,
-        )
-
-
-def test_nonuniform_tedges_suppressed():
-    """Non-uniform tedges with suppress_uniform_tedges_check=True does not raise."""
-    tedges = pd.DatetimeIndex([
-        pd.Timestamp("2020-01-01"),
-        pd.Timestamp("2020-02-20"),
-        pd.Timestamp("2020-02-21"),
-        pd.Timestamp("2020-07-19"),
-    ])
-    cin = np.array([1.0, 2.0, 3.0])
-    flow = np.array([100.0, 100.0, 100.0])
-    cout_tedges = pd.date_range("2020-01-01", periods=201, freq="D")
-
-    # Should not raise
-    cout = infiltration_to_extraction(
-        cin=cin,
-        flow=flow,
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=np.array([500.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.03,
-        mean_longitudinal_dispersivity=0.0,
-        suppress_uniform_tedges_check=True,
-    )
-    assert len(cout) == 200
-
-
 def test_flow_out_constant_input():
     """Constant cin with non-uniform bins + flow_out produces constant output (exact)."""
     tedges = pd.DatetimeIndex([
@@ -2209,3 +1438,409 @@ def test_infiltration_to_extraction_zero_flow_insertion_invariance():
     # values drift by up to a few percent of the input amplitude; farther out
     # the signal converges back to the baseline.
     assert_allclose(cout_mod_stripped[valid], cout_base[valid], atol=5e-2)
+
+
+# =============================================================================
+# Column mass conservation under variable flow + dispersion
+#
+# The forward operator reports an approximate Bear resident concentration
+# (no Kreft-Zuber boundary-flux correction); see the module docstring for
+# the trade-off. After the V-coordinate smoothing rewrite, the column-sum
+# invariant
+#
+#     sum_i W[i, j] * Q_out[i] * dt_out[i] = Q_in[j] * dt_in[j]
+#
+# holds at machine precision when the breakthrough sigma is V-independent
+# (pure alpha_L), and to O(sigma_V slope) when sigma_V varies with V
+# (pure D_m or mixed). The remaining residual is the discretisation error
+# of the variable-sigma row-normalised Gaussian on the uniform-V grid; it
+# matches the asymptotic bound predicted by Sinkhorn-Knopp theory for a
+# non-doubly-stochastic operator. Adding a Kreft-Zuber additive correction
+# does NOT close this residual — see ``audit_pe_residual.py`` in the
+# Step-1/2 prototypes for the diagnostics.
+# =============================================================================
+
+
+def _build_w_via_probes(call_fn, n):
+    """Build the (n_out, n) coefficient matrix by feeding canonical basis vectors."""
+    cout0 = call_fn(np.zeros(n))
+    n_out = len(cout0)
+    w = np.zeros((n_out, n))
+    for j in range(n):
+        ej = np.zeros(n)
+        ej[j] = 1.0
+        cout = call_fn(ej)
+        w[:, j] = np.where(np.isnan(cout), 0.0, cout)
+    return w
+
+
+@pytest.mark.parametrize("seed", [1, 3, 42])
+@pytest.mark.parametrize(
+    ("d_m", "alpha_l", "atol"),
+    [
+        (1.0, 0.0, 5e-3),  # pure D_m — residual scales with d sigma_V/d V
+        (0.0, 0.3, 1e-10),  # pure alpha_L — sigma_V is V-independent; exact
+        (1.0, 0.3, 5e-3),  # mixed
+    ],
+)
+def test_column_mass_conservation_variable_flow_dispersion_flow_out(d_m, alpha_l, seed, atol):
+    """Volume-weighted column sums of W approximately match infiltrated volume
+    under variable Q for the advect-then-smooth (``flow_out`` provided) branch.
+
+    Slow ``gwtransport.diffusion`` holds this invariant at ``atol=1e-10``
+    (issue #180). The fast V-coordinate smoothing path here is an
+    approximation; the residual is dominated by the variable-sigma_V
+    discretisation on the uniform-V grid and stays below ~1e-2 for typical
+    aquifer parameters.
+    """
+    n = 60
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
+    rng = np.random.default_rng(seed)
+    flow = 100.0 * np.exp(rng.normal(0.0, 0.3, n))
+    flow_out = flow.copy()
+
+    def call(cin_arr):
+        with warn_module.catch_warnings():
+            warn_module.simplefilter("ignore")
+            return infiltration_to_extraction(
+                cin=cin_arr,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=cout_tedges,
+                aquifer_pore_volumes=np.array([1000.0]),
+                mean_streamline_length=100.0,
+                mean_molecular_diffusivity=d_m,
+                mean_longitudinal_dispersivity=alpha_l,
+                flow_out=flow_out,
+            )
+
+    w = _build_w_via_probes(call, n=n)
+
+    dt = (np.diff(tedges) / pd.Timedelta("1D")).astype(float)
+    v_out = flow_out * dt
+    v_in_interior = (flow * dt)[15:40]
+    mass_out_per_cin = (v_out[:, None] * w).sum(axis=0)
+    ratios = mass_out_per_cin[15:40] / v_in_interior
+    assert_allclose(ratios, 1.0, atol=atol, rtol=0)
+
+
+@pytest.mark.parametrize("seed", [1, 3, 42])
+@pytest.mark.parametrize(
+    ("d_m", "alpha_l", "atol"),
+    [
+        # smooth-then-advect (input-side smoothing) has a slightly larger
+        # variable-sigma-on-uniform-V residual than the advect-then-smooth
+        # branch because the input grid has wide spin-up bins that bias the
+        # uniform-V resampling. Empirically observed at ~6e-3.
+        (1.0, 0.0, 7e-3),
+        (0.0, 0.3, 1e-10),
+        (1.0, 0.3, 7e-3),
+    ],
+)
+def test_column_mass_conservation_variable_flow_dispersion_default(d_m, alpha_l, seed, atol):
+    """Same invariant as the ``flow_out`` variant, but for the smooth-then-advect
+    (``flow_out is None``) branch.
+
+    Bounded by ~1e-2 for the same physical reason. Original ``diffusion_fast``
+    (pre-V-coord rewrite) had ~1e-1 here; the V-coord smoothing reduces it
+    by 30-100x depending on the dispersion mix.
+    """
+    n = 60
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
+    rng = np.random.default_rng(seed)
+    flow = 100.0 * np.exp(rng.normal(0.0, 0.3, n))
+
+    def call(cin_arr):
+        with warn_module.catch_warnings():
+            warn_module.simplefilter("ignore")
+            return infiltration_to_extraction(
+                cin=cin_arr,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=cout_tedges,
+                aquifer_pore_volumes=np.array([1000.0]),
+                mean_streamline_length=100.0,
+                mean_molecular_diffusivity=d_m,
+                mean_longitudinal_dispersivity=alpha_l,
+            )
+
+    w = _build_w_via_probes(call, n=n)
+
+    dt = (np.diff(tedges) / pd.Timedelta("1D")).astype(float)
+    # For matched cout/tedges and no flow_out, cout flow == flow.
+    v_out = flow * dt
+    v_in_interior = (flow * dt)[15:40]
+    mass_out_per_cin = (v_out[:, None] * w).sum(axis=0)
+    ratios = mass_out_per_cin[15:40] / v_in_interior
+    assert_allclose(ratios, 1.0, atol=atol, rtol=0)
+
+
+@pytest.mark.parametrize(
+    ("d_m", "alpha_l"),
+    [(1.0, 0.0), (0.0, 0.3), (1.0, 0.3)],
+)
+def test_column_mass_conservation_constant_flow_control(d_m, alpha_l):
+    """Constant Q is the machine-precision control for column mass conservation.
+
+    With ``flow`` constant, ``v_edges`` is uniform and the V-smoothing
+    operator's row-stochastic-plus-mass-preserving rebins compose exactly
+    (no variable-sigma-on-uniform-grid drift). Any residual above ~1e-12
+    is a structural bug in the operator stack.
+    """
+    n = 60
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
+    flow = np.full(n, 100.0)
+
+    def call(cin_arr):
+        with warn_module.catch_warnings():
+            warn_module.simplefilter("ignore")
+            return infiltration_to_extraction(
+                cin=cin_arr,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=cout_tedges,
+                aquifer_pore_volumes=np.array([1000.0]),
+                mean_streamline_length=100.0,
+                mean_molecular_diffusivity=d_m,
+                mean_longitudinal_dispersivity=alpha_l,
+                flow_out=flow,
+            )
+
+    w = _build_w_via_probes(call, n=n)
+    dt = (np.diff(tedges) / pd.Timedelta("1D")).astype(float)
+    v_out = flow * dt
+    v_in_interior = (flow * dt)[15:40]
+    ratios = (v_out[:, None] * w).sum(axis=0)[15:40] / v_in_interior
+    assert_allclose(ratios, 1.0, atol=1e-12, rtol=0)
+
+
+@pytest.mark.parametrize("seed", [3, 42])
+@pytest.mark.parametrize(
+    ("d_m", "alpha_l", "atol"),
+    [
+        (1.0, 0.0, 5e-3),
+        (0.0, 0.3, 1e-10),
+        (1.0, 0.3, 5e-3),
+    ],
+)
+def test_column_mass_conservation_multipv(d_m, alpha_l, seed, atol):
+    """Mass conservation under variable Q for a multi-pore-volume APVD.
+
+    With a single pore volume the moment formula
+    ``var_numerator = (2*D_m*tau_bar/V_bar)*E[V^3] + 2*alpha_L*L*E[V^2]``
+    collapses to a scalar because ``E[V^2] = V^2`` and ``E[V^3]/V_bar = V^2``.
+    Using ``aquifer_pore_volumes = [600, 1000, 1400]`` makes
+    ``E[V^2]`` and ``E[V^3]/V_bar`` differ by ~19%, which exercises the
+    moment placement in :func:`gwtransport.diffusion_fast._compute_sigma_v`.
+    The mass-conservation invariant is V-bin-local and remains valid
+    independent of the moment formula.
+    """
+    n = 60
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
+    rng = np.random.default_rng(seed)
+    flow = 100.0 * np.exp(rng.normal(0.0, 0.3, n))
+
+    def call(cin_arr):
+        with warn_module.catch_warnings():
+            warn_module.simplefilter("ignore")
+            return infiltration_to_extraction(
+                cin=cin_arr,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=cout_tedges,
+                aquifer_pore_volumes=np.array([600.0, 1000.0, 1400.0]),
+                mean_streamline_length=100.0,
+                mean_molecular_diffusivity=d_m,
+                mean_longitudinal_dispersivity=alpha_l,
+                suppress_dispersion_warning=True,
+                flow_out=flow,
+            )
+
+    w = _build_w_via_probes(call, n=n)
+    dt = (np.diff(tedges) / pd.Timedelta("1D")).astype(float)
+    v_out = flow * dt
+    v_in_interior = (flow * dt)[20:40]
+    ratios = (v_out[:, None] * w).sum(axis=0)[20:40] / v_in_interior
+    assert_allclose(ratios, 1.0, atol=atol, rtol=0)
+
+
+# =============================================================================
+# Sigma-sensitivity: tests that fail if sigma_V is wrong by a constant factor
+#
+# The mass-conservation and round-trip tests above are blind to sigma magnitude
+# (the former tests row-stochasticity, the latter cancels sigma in forward and
+# inverse). The tests below probe sigma directly by comparing the discrete
+# Gaussian breakthrough to its analytical limit.
+# =============================================================================
+
+
+def test_delta_input_matches_analytical_gaussian_constant_flow():
+    """Single delta cin pulse under constant Q matches the analytical Gaussian.
+
+    For a single pore volume and constant flow, the V-coordinate breakthrough
+    kernel for a delta input at bin j is approximately
+
+        cout[i] proportional to (erf((tau_idx + 0.5 - i)/(sigma_idx*sqrt(2)))
+                                 - erf((tau_idx - 0.5 - i)/(sigma_idx*sqrt(2)))) / 2
+
+    where ``tau_idx = j + V_pore / (Q*dt)`` is the breakthrough centre and
+    ``sigma_idx = (R*V_pore/L) * sqrt(2*D_m*tau + 2*alpha_L*L) / (Q*dt)`` is
+    the V-coordinate sigma converted to bin-index units. Mutating sigma_V
+    by any constant factor (or to zero) breaks this match — the
+    mass-conservation tests do not catch this because they probe row
+    sums, not the kernel shape.
+    """
+    n = 200
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
+    flow_rate = 100.0
+    flow = np.full(n, flow_rate)
+    d_m = 2.0
+    alpha_l = 0.0
+    v_pore = 1000.0
+    streamline_length = 30.0
+    retardation = 1.0
+    # Pick a regime where sigma is well-resolved by the grid:
+    #   tau = R*V_pore/Q = 10 days  (within the 200-day window)
+    #   sigma_x = sqrt(2*D_m*tau) = sqrt(40) ~ 6.32 m
+    #   sigma_V = (R*V_pore/L)*sigma_x = (1000/30)*6.32 ~ 211 m^3
+    #   sigma_t = sigma_V/(Q*1d) ~ 2.11 days  (covers a few bins -> resolved)
+
+    # Inject a single unit-pulse cin at bin j_in. Reference Gaussian centred at
+    # j_in + tau/dt = j_in + 10 with sigma_t bins.
+    j_in = 80
+    cin = np.zeros(n)
+    cin[j_in] = 1.0
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([v_pore]),
+        mean_streamline_length=streamline_length,
+        mean_molecular_diffusivity=d_m,
+        mean_longitudinal_dispersivity=alpha_l,
+        flow_out=flow,
+    )
+
+    tau = retardation * v_pore / flow_rate  # 10 days
+    sigma_x = np.sqrt(2.0 * d_m * tau)
+    sigma_v = (retardation * v_pore / streamline_length) * sigma_x
+    sigma_idx = sigma_v / (flow_rate * 1.0)  # Q*dt = 100 m^3 per bin
+    centre = j_in + tau / 1.0  # bin index of breakthrough centre
+
+    i_arr = np.arange(n)
+    sqrt2 = np.sqrt(2.0)
+    expected = 0.5 * (
+        erf((i_arr - centre + 0.5) / (sigma_idx * sqrt2)) - erf((i_arr - centre - 0.5) / (sigma_idx * sqrt2))
+    )
+
+    valid = ~np.isnan(cout)
+    # Restrict comparison to bins where the kernel is meaningfully non-zero
+    # AND well away from the spin-up edge. Boundary effects in the V-smoothing
+    # (uniform-V resampling at the domain edges) add a small drift outside
+    # this window.
+    window = (i_arr > centre - 8 * sigma_idx) & (i_arr < centre + 8 * sigma_idx) & valid
+    # The Gaussian-vs-exact-kernel agreement is ~1e-3 in this regime, set by
+    # the per-streamtube sigma_V_t variation across bins j_in..j_in+8sigma.
+    assert_allclose(cout[window], expected[window], atol=2e-3, rtol=0)
+    # Stronger: peak amplitude matches within 1%, location matches the nearest
+    # bin to ``centre``.
+    peak_idx = int(np.argmax(cout[valid]))
+    expected_peak_idx = int(np.argmax(expected[valid]))
+    assert abs(peak_idx - expected_peak_idx) <= 1
+    assert abs(cout[valid][peak_idx] - expected[valid][expected_peak_idx]) < 1e-2
+
+
+# =============================================================================
+# Direct unit tests for V-coordinate smoothing helpers
+# =============================================================================
+
+
+def test_build_rebin_matrix_v_mass_preserving():
+    """``sum_i dV_dst[i] * R[i, k] == dV_src[k]`` to machine precision.
+
+    This is the rebin-matrix V-mass-preservation invariant documented in
+    :func:`gwtransport.diffusion_fast._build_rebin_matrix`. Without this,
+    the V-coordinate smoothing operator drifts mass at every resampling step.
+    """
+    rng = np.random.default_rng(7)
+    # Non-uniform source: 30 bins of varying width
+    dv_src = rng.uniform(0.5, 3.0, 30)
+    v_src = np.concatenate(([0.0], np.cumsum(dv_src)))
+    # Destination: different non-uniform spacing covering same range
+    dv_dst = rng.uniform(0.5, 3.0, 50)
+    v_dst = np.concatenate(([0.0], np.cumsum(dv_dst)))
+    v_dst *= v_src[-1] / v_dst[-1]
+    dv_dst = np.diff(v_dst)
+
+    r = _build_rebin_matrix(v_src_edges=v_src, v_dst_edges=v_dst).toarray()
+    # V-weighted column sum should equal dV_src
+    col_v_sums = (dv_dst[:, None] * r).sum(axis=0)
+    assert_allclose(col_v_sums, np.diff(v_src), atol=1e-14)
+    # Row sums should be exactly 1 (every dst bin fully covered)
+    assert_allclose(r.sum(axis=1), 1.0, atol=1e-14)
+
+
+def test_build_v_smooth_matrix_row_sums_to_one_for_random_grid():
+    """``M @ ones == ones`` for a random non-uniform V-grid with random sigma_V.
+
+    The V-smoothing matrix ``M = R_from @ G_uniform @ R_to`` should be
+    row-stochastic by construction: every operator in the composition has
+    row sums = 1, so a constant signal in is a constant signal out.
+    """
+    rng = np.random.default_rng(11)
+    n = 80
+    # Non-uniform V-edges: small base spacing perturbed by 30%
+    dv = rng.uniform(0.8, 1.4, n)
+    v_edges = np.concatenate(([0.0], np.cumsum(dv)))
+    # Random per-bin sigma_V comparable to the bin width
+    sigma_v = rng.uniform(0.3, 1.5, n) * np.mean(dv)
+
+    m = _build_v_smooth_matrix(
+        v_edges=v_edges,
+        sigma_v_per_bin=sigma_v,
+        refinement=4,
+        asymptotic_cutoff_sigma=4.0,
+    ).toarray()
+    row_sums = m.sum(axis=1)
+    assert_allclose(row_sums, 1.0, atol=1e-12)
+
+
+def test_build_v_smooth_matrix_identity_for_zero_sigma():
+    """All-zero sigma -> identity matrix to machine precision."""
+    n = 25
+    v_edges = np.linspace(0.0, 100.0, n + 1)
+    sigma_v = np.zeros(n)
+    m = _build_v_smooth_matrix(v_edges=v_edges, sigma_v_per_bin=sigma_v).toarray()
+    assert_allclose(m, np.eye(n), atol=0.0)
+
+
+def test_build_v_smooth_matrix_v_weighted_col_sums_alpha_l():
+    """For sigma_V independent of V (pure alpha_L regime), the V-smoothing
+    matrix is V-weighted-column-stochastic to machine precision.
+
+    This is the structural invariant that makes the pure-alpha_L
+    mass-conservation test land at ~1e-12 in the i2e function.
+    """
+    n = 60
+    rng = np.random.default_rng(13)
+    dv = rng.uniform(0.8, 1.2, n)
+    v_edges = np.concatenate(([0.0], np.cumsum(dv)))
+    # Constant sigma_V (alpha_L only contribution)
+    sigma_v = np.full(n, 0.5 * np.mean(dv))
+
+    m = _build_v_smooth_matrix(v_edges=v_edges, sigma_v_per_bin=sigma_v, refinement=4).toarray()
+    dv_arr = np.diff(v_edges)
+    # V-weighted column sum
+    col_v_sums = (dv_arr[:, None] * m).sum(axis=0)
+    # The interior is exact; the boundary picks up edge truncation when the
+    # uniform-V grid spans the original v_edges range tightly. Restrict to
+    # interior columns where the kernel is fully contained.
+    interior = slice(10, n - 10)
+    assert_allclose(col_v_sums[interior], dv_arr[interior], atol=1e-12)
