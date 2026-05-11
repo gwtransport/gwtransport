@@ -2,8 +2,7 @@
 Analytical solutions for 1D advection-dispersion transport.
 
 This module implements analytical solutions for solute transport in 1D aquifer
-systems, combining advection with longitudinal dispersion. The solutions are
-based on the error function (erf) and its integrals.
+systems, combining advection with longitudinal dispersion.
 
 Key functions:
 
@@ -19,35 +18,48 @@ Key functions:
 - :func:`gamma_extraction_to_infiltration` - Gamma-distributed pore volumes, deconvolution
   with dispersion. Symmetric inverse of gamma_infiltration_to_extraction.
 
-The breakthrough kernel implemented here is the variable-flow Ogata-Banks
-solution from Bear (1972), Dynamics of Fluids in Porous Media, eq. 10.6.4:
+Reported outlet concentration: Kreft-Zuber (1978) flux concentration
+---------------------------------------------------------------------
 
-    epsilon(x, t) = (C(x, t) - C0) / (C1 - C0)
-                  = 0.5 * erfc{ -[x - integral_0^t (q(t)/n) dt]
-                                / (2 * sqrt[integral_0^t (alpha_I |q|/n + D_d T*) dt]) }
+The outlet concentration reported by this module is the **flux concentration**
+
+    C_F(L, t) = C_R(L, t) - (D_L(t) / v(t)) * dC_R/dx |_{x=L}
+
+— the solute mass flux at the outlet divided by the volumetric fluid flux. This
+is what is measured when sampling the extracted fluid. The resident
+concentration ``C_R`` is Bear (1972) eq. 10.6.4, the variable-flow moving-frame
+Ogata-Banks solution
+
+    C_R(L, V; t_j) = 0.5 * erfc((L - xi_j(V)) / (2 * sqrt(D_t(V))))
 
 with the dispersion variance accumulated in the moving (Lagrangian) frame:
 
-    sigma^2(V) = 2 * D_m * tau(V) + 2 * alpha_L * xi(V)
+    D_t(V) = sigma^2(V) / 2 = D_m * tau(V) + alpha_L * xi(V)
 
 where:
 
-- D_m is the molecular (or thermal) effective diffusivity D_d * T* [m^2/day]
-- alpha_L is the longitudinal dispersivity alpha_I [m]
+- D_m is the effective molecular (or thermal) diffusivity [m^2/day]
+- alpha_L is the longitudinal dispersivity [m]
 - tau(V) is the elapsed time since infiltration [day], with V the cumulative
-  extracted volume; equivalent to t in Bear's notation
-- xi(V) is the distance the parcel has actually travelled [m], equivalent to
-  ``integral_0^t q/n dt`` in Bear's notation
+  extracted volume
+- xi(V) = L (V - V_j) / (R V_pore) is the distance the parcel has actually
+  travelled [m]
 
-This formulation ensures that:
+The K-Z flux-correction term is what makes the column-sum invariant
+``integral Q c_out dt = integral Q c_in dt`` hold to machine precision under
+arbitrary variable Q. Without it, the leading-order C_R loses O(1/Pe) per
+column under variable Q + pure D_m (issue #180).
 
-- Molecular diffusion spreading scales with residence time: sqrt(D_m * tau)
-- Mechanical dispersion spreading scales with travel distance: sqrt(alpha_L * xi)
+Implementation: the bin-averaged C_F is computed by 16-point Gauss-Legendre
+quadrature in volume space, split at flow-bin boundaries so each sub-interval
+sees a linear t(V) and a smooth integrand. The variance is evaluated at each
+quadrature node from the parcel's own tau and xi histories — never capped at
+the residence time. The K-Z identity requires Bear's formula to satisfy the
+variable-coefficient ADE exactly, which holds only when D_t is allowed to
+keep growing past breakthrough.
 
-Evaluating sigma^2 directly at each volume node — rather than via a per-bin
-scalar D_L = D_m + alpha_L * v_s built from a mean velocity — keeps the
-breakthrough kernel a function only of V (and the infiltration edge), which
-is what mass conservation requires when Q varies in time.
+Macrodispersion vs microdispersion
+----------------------------------
 
 This module adds microdispersion (alpha_L) and molecular diffusion (D_m) on top of
 macrodispersion captured by the pore volume distribution (APVD). Both represent velocity
@@ -58,7 +70,14 @@ for guidance on when to use each approach and how to avoid double-counting sprea
 References
 ----------
 Bear, J. (1972). Dynamics of Fluids in Porous Media. American Elsevier
-Publishing Company. Equation 10.6.4 (variable-flow Ogata-Banks form).
+Publishing Company. Equation 10.6.4 (variable-flow Ogata-Banks form). Provides
+the resident concentration ``C_R``.
+
+Kreft, A., & Zuber, A. (1978). On the physical meaning of the dispersion
+equation and its solutions for different initial and boundary conditions.
+Chemical Engineering Science, 33(11), 1471-1480. Eq. 2 gives the resident-to-
+flux concentration transformation; Eq. 1 is the mass-balance identity that
+makes the column-sum invariant exact.
 """
 
 import warnings
@@ -568,24 +587,27 @@ def infiltration_to_extraction(
     -----
     The algorithm constructs a coefficient matrix W where cout = W @ cin:
 
-    1. For each pore volume, compute the breakthrough curve contribution:
-       - delta_volume: volume between infiltration event and extraction point
-       - step_widths: convert volume to spatial distance x (erf coordinate)
-       - time_active: diffusion time, limited by residence time
+    1. For each pore volume, build a cell grid in cumulative volume space:
+       - cells span ``(V_cout[i], V_cout[i+1]) x V_cin[j]`` for each
+         (cout-bin i, cin-edge j)
+       - delta_volume = V_cout - V_cin - r_vpv encodes the parcel's offset
+         from the outlet at each (cout-edge, cin-edge)
 
-    2. For each infiltration time edge, compute the erf response at all
-       extraction time edges using analytical space-time averaging.
+    2. For each cell, compute the bin-averaged Kreft-Zuber flux concentration
+       ``frac[i, j] = (1/dV_i) * integral C_F(L, V; t_j) dV`` by 16-point
+       Gauss-Legendre quadrature in volume space, split at flow-bin
+       boundaries so that ``t(V)`` is linear within each sub-interval. The
+       moving-frame variance ``D_t = D_m*tau + alpha_L*xi`` is evaluated at
+       each quadrature node (never capped at the residence time).
 
-    3. Convert erf response to breakthrough fraction: frac = 0.5 * (1 + erf)
+    3. Coefficient for bin: ``coeff[i,j] = frac[i, j] - frac[i, j+1]``. This
+       is the contribution of cin[j] to cout[i] in the W matrix.
 
-    4. Coefficient for bin: coeff[i,j] = frac_start - frac_end
-       This represents the fraction of cin[j] that arrives in cout[i].
+    4. Average coefficients across all pore volumes.
 
-    5. Average coefficients across all pore volumes.
-
-    The error function solution assumes an initial step function that diffuses
-    over time. The position coordinate x represents the distance from the
-    concentration front to the observation point.
+    The K-Z flux-correction term in C_F = C_R - (D_L/v) * dC_R/dx is what
+    makes the column-sum invariant exact under variable Q; see the module
+    docstring for the derivation.
 
     Examples
     --------
