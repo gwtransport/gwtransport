@@ -72,7 +72,7 @@ from scipy.special import erf
 from gwtransport import gamma
 from gwtransport.advection_utils import (
     _infiltration_to_extraction_weights,
-    _resolve_spinup_inputs,
+    _resolve_spinup_inputs_wide_edges,
     _resolve_spinup_mask,
 )
 from gwtransport.residence_time import residence_time_mean
@@ -209,24 +209,18 @@ def infiltration_to_extraction(
     if n_pore_volumes > 1 and mean_longitudinal_dispersivity > 0 and not suppress_dispersion_warning:
         _warn_dispersion()
 
-    # Apply spinup policy to inputs (pad warm-start bins for "constant" mode).
-    weight_tedges, weight_flow, weight_cin, threshold, _ = _resolve_spinup_inputs(
-        spinup,
-        tedges=tedges,
-        flow=flow,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=retardation_factor,
-        cin=cin,
-    )
-    # weight_cin is non-None because cin was passed into _resolve_spinup_inputs.
-    weight_cin = np.asarray(weight_cin)
+    # Apply spinup policy to inputs (extend boundary tedges for "constant").
+    # diffusion_fast uses diffusion-style wide-edge padding rather than
+    # advection's physics-precise n_pad bins, because the Gaussian smoothing
+    # kernel adds a tail that R*V_max/Q alone does not capture.
+    weight_tedges, threshold = _resolve_spinup_inputs_wide_edges(spinup, tedges=tedges)
 
     # Build advection weight matrix (needed in both branches)
     accumulated_weights, contributing_bins, zero_flow_cout = _infiltration_to_extraction_weights(
         tedges=weight_tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
-        flow=weight_flow,
+        flow=flow,
         retardation_factor=retardation_factor,
     )
     w_adv, adv_invalid_mask = _resolve_spinup_mask(
@@ -239,12 +233,14 @@ def infiltration_to_extraction(
 
     if flow_out is None:
         # Original algorithm: smooth-then-advect (requires uniform tedges).
-        # The padded ``weight_tedges`` keep the original first-bin width, so a
-        # uniform input remains uniform after warm-start padding.
-        _check_uniform_tedges(tedges=weight_tedges, suppress=suppress_uniform_tedges_check)
+        # Check uniformity against the user-supplied tedges; the wide first
+        # and last bins added by ``spinup="constant"`` are intentionally
+        # non-uniform and do not need to match the interior bin width
+        # (their sigma is automatically tiny because dt is huge).
+        _check_uniform_tedges(tedges=tedges, suppress=suppress_uniform_tedges_check)
 
         sigma_array = _compute_sigma(
-            flow=weight_flow,
+            flow=flow,
             tedges=weight_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=mean_streamline_length,
@@ -254,12 +250,12 @@ def infiltration_to_extraction(
             direction="infiltration_to_extraction",
         )
         cin_diffused = convolve_diffusion(
-            input_signal=weight_cin, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
+            input_signal=cin, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
         )
         cout = w_adv @ cin_diffused
     else:
         # New algorithm: advect-then-smooth (works with any tedges spacing)
-        cout_unsmoothed = w_adv @ weight_cin
+        cout_unsmoothed = w_adv @ cin
 
         # Rows with zero weight sum (spin-up or zero-flow cout bin) carry no
         # signal. Flag them so the normalized convolution
@@ -432,15 +428,11 @@ def extraction_to_infiltration(
     if n_pore_volumes > 1 and mean_longitudinal_dispersivity > 0 and not suppress_dispersion_warning:
         _warn_dispersion()
 
-    # Apply spinup policy: pad tedges and flow with warm-start prefix.
-    weight_tedges, weight_flow, _, threshold, n_pad = _resolve_spinup_inputs(
-        spinup,
-        tedges=tedges,
-        flow=flow,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=retardation_factor,
-    )
-    n_cin_padded = len(weight_tedges) - 1
+    # Apply spinup policy: extend boundary tedges by 100 years on each side
+    # for "constant" mode (diffusion-style wide-edge padding). Lengths are
+    # preserved, so no slicing is needed on the recovered cin.
+    weight_tedges, threshold = _resolve_spinup_inputs_wide_edges(spinup, tedges=tedges)
+    n_cin = len(weight_tedges) - 1
     n_cout = len(cout_tedges) - 1
 
     # Build advection weight matrix on the (possibly padded) inputs.
@@ -448,7 +440,7 @@ def extraction_to_infiltration(
         tedges=weight_tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
-        flow=weight_flow,
+        flow=flow,
         retardation_factor=retardation_factor,
     )
     w_adv, _ = _resolve_spinup_mask(
@@ -460,11 +452,12 @@ def extraction_to_infiltration(
     )
 
     if flow_out is None:
-        # Original algorithm: G on input grid, W_forward = W_adv @ G
-        _check_uniform_tedges(tedges=weight_tedges, suppress=suppress_uniform_tedges_check)
+        # Original algorithm: G on input grid, W_forward = W_adv @ G.
+        # Check uniformity against user tedges only; wide boundary bins are OK.
+        _check_uniform_tedges(tedges=tedges, suppress=suppress_uniform_tedges_check)
 
         sigma_array = _compute_sigma(
-            flow=weight_flow,
+            flow=flow,
             tedges=weight_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=mean_streamline_length,
@@ -474,7 +467,7 @@ def extraction_to_infiltration(
             direction="infiltration_to_extraction",
         )
         g_matrix = _build_gaussian_matrix(
-            n=n_cin_padded, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
+            n=n_cin, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
         )
         # Combined forward matrix: W_adv @ G via sparse @ dense (avoids dense G allocation)
         w_forward = (g_matrix.T @ w_adv.T).T
@@ -495,15 +488,13 @@ def extraction_to_infiltration(
         )
         w_forward = g_matrix @ w_adv  # sparse @ dense
 
-    cin_padded = solve_inverse_transport(
+    return solve_inverse_transport(
         w_forward=w_forward,
         observed=cout,
-        n_output=n_cin_padded,
+        n_output=n_cin,
         regularization_strength=regularization_strength,
         warn_rank_deficient=True,
     )
-    # Drop the warm-start prefix so the output aligns with the user-provided tedges.
-    return cin_padded[n_pad:]
 
 
 def gamma_infiltration_to_extraction(
