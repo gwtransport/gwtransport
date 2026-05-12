@@ -1103,10 +1103,16 @@ def _build_v_smooth_matrix(
     if span <= 0.0:
         return sparse.csr_matrix(sparse.eye(n_orig, dtype=float))
 
-    # Cap n_uniform to avoid pathological refinement when wide spin-up
-    # bins are present. For typical use cases this cap is not reached.
+    # Cap n_uniform to ``refinement * n_orig``. The intent of ``refinement``
+    # is "uniform bins per input bin"; under non-uniform input
+    # ``min(dv) << mean(dv)`` lets the naive ``span / dv_uniform_target``
+    # explode to many multiples of ``refinement * n_orig`` for no
+    # additional accuracy on the bulk of the grid, while the dense
+    # ``(n_uniform x kernel_radius)`` intermediates inside
+    # ``_build_gaussian_matrix`` blow up RAM (e.g. ~660 MB peak per call
+    # at n_uniform=12k on the 01_Aquifer notebook before this cap).
     n_uniform = int(np.ceil(span / dv_uniform_target))
-    n_uniform_cap = 50 * max(n_orig, 1)
+    n_uniform_cap = max(int(refinement), 1) * max(n_orig, 1)
     n_uniform = max(1, min(n_uniform, n_uniform_cap))
     v_uniform_edges = np.linspace(v_min, v_max, n_uniform + 1)
     dv_uniform_actual = span / n_uniform
