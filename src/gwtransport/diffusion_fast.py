@@ -1,61 +1,56 @@
 """
-Fast Diffusive Transport Corrections via Gaussian Smoothing.
+Fast diffusive transport via V-coordinate Gaussian smoothing.
 
-This module provides a computationally efficient approximation of diffusion/dispersion
-using Gaussian smoothing. It is much faster than :mod:`gwtransport.diffusion` but
-less physically accurate, especially under variable flow conditions.
+This module computes 1D solute (or thermal) transport with longitudinal
+dispersion using moment-averaged Gaussian smoothing applied in
+cumulative-volume (V) coordinates, then composed with the exact-advection
+streamtube weight matrix. Two branches are exposed:
 
-Both ``diffusion_fast`` and :mod:`gwtransport.diffusion` add microdispersion and
-molecular diffusion on top of macrodispersion captured by the APVD.
+- ``flow_out is None`` — smooth-then-advect on the natural input V-grid.
+- ``flow_out is not None`` — advect-then-smooth on the natural output V-grid.
 
-**When to use diffusion_fast vs diffusion:**
+In both cases the smoothing operator is built by resampling onto a uniform
+V-grid, applying a row-normalised Gaussian (sigma in V-units), and rebinning
+back; both the resampling and the on-uniform Gaussian preserve constants
+exactly, and the V-weighted column sum residual is bounded by the variable-
+sigma_V slope (typically below ``1e-2`` for realistic aquifer parameters,
+and exactly zero when ``sigma_V`` is V-independent, i.e. when only
+longitudinal dispersivity acts).
 
-- Use ``diffusion_fast`` when: Speed is critical, flow and time steps are relatively
-  constant, or you need real-time processing
-- Use ``diffusion`` when: Physical accuracy is critical, flow varies significantly,
-  or you're analyzing periods with changing conditions
+The reported outlet concentration is an approximation of Bear's *resident*
+concentration ``C_R`` (Bear 1972). The Kreft-Zuber (1978) flux concentration
+``C_F = C_R + (D_L/v) * N_x`` adds a localised Gaussian-density correction
+at the breakthrough front with amplitude ~ ``1/sqrt(4 pi Pe)``. The slow
+:mod:`gwtransport.diffusion` module integrates ``C_F`` per cell via
+16-point Gauss-Legendre quadrature and remains strictly non-negative under
+arbitrary variable Q; this fast module trades that ``O(1/Pe)`` shape
+correction for a simpler sparse-matrix operator that respects the
+convex-combination bound ``min(cin) <= cout <= max(cin)`` (the difference
+of the K-Z bin-density-difference matrix and the V-smoothing C_R
+approximation introduces ~1e-8 negative excursions at sharp pulse fronts
+when K-Z is included, which downstream log-transform / Poisson-likelihood
+fits do not tolerate).
 
-See :ref:`concept-dispersion` for background on macrodispersion and microdispersion.
+**When to choose which module.** For typical groundwater Peclet numbers
+(``Pe = L*v/D_L``) above ~50 — basin- and aquifer-scale problems where
+APVD calibration uncertainty dominates — the C_R/C_F discrepancy is
+swamped by larger error sources and ``diffusion_fast`` is the correct
+choice. For column-scale experiments (``Pe < ~50``) or when reporting
+fluxes for mass-balance accounting to better than ~1%, use
+:mod:`gwtransport.diffusion`.
 
-This module implements diffusion/dispersion processes that modify advective transport
-in aquifer systems. Diffusion causes spreading and smoothing of concentration or
-temperature fronts as they travel through the aquifer. While advection moves compounds
-with water flow, diffusion causes spreading due to molecular diffusion, mechanical
-dispersion, and thermal diffusion (for temperature).
-
-Limitation: When ``flow_out`` is not provided, this fast approximation works best when
-flow and tedges are relatively constant. The underlying assumption is that dx (spatial
-step between cells) remains approximately constant, which holds for steady flow but
-breaks down under highly variable conditions. When input time bins are non-uniform
-(e.g., from signal compression), provide ``flow_out`` to apply Gaussian smoothing on
-the (typically uniform) output grid instead. For scenarios with significant flow
-variability, consider using :mod:`gwtransport.diffusion` instead.
+Both ``diffusion_fast`` and :mod:`gwtransport.diffusion` add microdispersion
+and molecular diffusion on top of macrodispersion captured by the aquifer
+pore-volume distribution (APVD). See :ref:`concept-dispersion` for
+background.
 
 Available functions:
 
-- :func:`infiltration_to_extraction` - Apply diffusion during infiltration to extraction
-  transport. Combines advection (via residence time) with diffusion (via Gaussian smoothing).
-  Computes position-dependent diffusion based on local residence time and returns concentration
-  or temperature in extracted water on the extraction time grid.
-
-- :func:`extraction_to_infiltration` - Inverse diffusion via Tikhonov regularization. Builds
-  the combined forward matrix (advection + Gaussian diffusion) and solves the inverse problem
-  to reconstruct infiltration concentrations from extraction data.
-
-- :func:`gamma_infiltration_to_extraction` - Gamma-distributed pore volumes with fast
-  Gaussian diffusion. Convenience wrapper that parameterizes the pore volume distribution
-  as a gamma distribution.
-
-- :func:`gamma_extraction_to_infiltration` - Gamma-distributed pore volumes, inverse
-  fast Gaussian diffusion. Symmetric inverse of gamma_infiltration_to_extraction.
-
-- :func:`convolve_diffusion` - Apply variable-sigma Gaussian filtering. Extends
-  scipy.ndimage.gaussian_filter1d to position-dependent sigma using sparse matrix representation
-  for efficiency. Handles boundary conditions via nearest-neighbor extrapolation.
-
-- :func:`create_example_data` - Generate test data for demonstrating diffusion effects with
-  signals having varying time steps and corresponding sigma arrays. Useful for testing and
-  validation.
+- :func:`infiltration_to_extraction` — forward transport.
+- :func:`extraction_to_infiltration` — inverse via Tikhonov regularisation.
+- :func:`gamma_infiltration_to_extraction` — convenience wrapper for a
+  gamma-distributed APVD (forward).
+- :func:`gamma_extraction_to_infiltration` — same, inverse.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -96,7 +91,6 @@ def infiltration_to_extraction(
     suppress_dispersion_warning: bool = False,
     asymptotic_cutoff_sigma: float | None = 3.0,
     flow_out: npt.ArrayLike | None = None,
-    suppress_uniform_tedges_check: bool = False,
     spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """Compute diffusion during 1D transport using fast Gaussian smoothing.
@@ -107,9 +101,11 @@ def infiltration_to_extraction(
     :func:`gwtransport.diffusion.infiltration_to_extraction`.
 
     When ``flow_out`` is provided, diffusion is applied on the output grid
-    (advect-then-smooth), which correctly handles non-uniform ``tedges``
-    (e.g., from signal compression). Without ``flow_out``, diffusion is applied
-    on the input grid and ``tedges`` must have constant time steps.
+    (advect-then-smooth); otherwise it is applied on the input grid
+    (smooth-then-advect). Both branches operate in cumulative-volume (V)
+    coordinates via uniform-V resampling, so non-uniform ``tedges`` and
+    non-uniform ``cout_tedges`` are handled without an explicit uniformity
+    check.
 
     Parameters
     ----------
@@ -142,9 +138,6 @@ def infiltration_to_extraction(
         Flow rate [m3/day] on the output grid (aligned to ``cout_tedges``).
         Required when ``tedges`` has non-uniform time steps. Length must
         equal ``len(cout_tedges) - 1``. Default is None.
-    suppress_uniform_tedges_check : bool, optional
-        Skip the constant-dt check on ``tedges`` when ``flow_out`` is None.
-        Default is False.
     spinup : {"constant"} | float in [0, 1] | None, optional
         Forwarded to the underlying advection weight computation. Default
         ``"constant"`` prepends warm-start bins (each of width
@@ -155,15 +148,18 @@ def infiltration_to_extraction(
     Returns
     -------
     numpy.ndarray
-        Bin-averaged concentration in extracted water. Length equals
-        len(cout_tedges) - 1. NaN values indicate time periods with no valid
-        contributions from the infiltration data.
+        Bin-averaged resident concentration ``C_R`` (Bear 1972) in the
+        extracted water. Length equals ``len(cout_tedges) - 1``. NaN
+        values indicate time periods with no valid contributions from the
+        infiltration data. Use :func:`gwtransport.diffusion.infiltration_to_extraction`
+        for the Kreft-Zuber flux concentration ``C_F`` when column-mass
+        conservation tighter than ~1% matters.
 
     See Also
     --------
     gwtransport.diffusion.infiltration_to_extraction : Physically rigorous analytical solution
-        that supports per-pore-volume arrays for streamline_length, molecular_diffusivity,
-        and longitudinal_dispersivity.
+        reporting the Kreft-Zuber flux concentration ``C_F``. Supports per-pore-volume
+        arrays for streamline_length, molecular_diffusivity, and longitudinal_dispersivity.
     extraction_to_infiltration : Inverse operation
     :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion
 
@@ -231,17 +227,49 @@ def infiltration_to_extraction(
         spinup=threshold,
     )
 
-    if flow_out is None:
-        # Original algorithm: smooth-then-advect (requires uniform tedges).
-        # Check uniformity against the user-supplied tedges; the wide first
-        # and last bins added by ``spinup="constant"`` are intentionally
-        # non-uniform and do not need to match the interior bin width
-        # (their sigma is automatically tiny because dt is huge).
-        _check_uniform_tedges(tedges=tedges, suppress=suppress_uniform_tedges_check)
+    # Cumulative-volume edges on the user's natural ``tedges`` (no wide
+    # spin-up). The smoothing operator runs on this grid so the uniform-V
+    # resampling does not have to span a 100-year warm-start interval.
+    weight_dt_days = (np.diff(weight_tedges) / pd.Timedelta("1D")).astype(float)
+    v_in_widedge_edges = np.concatenate(([0.0], np.cumsum(flow * weight_dt_days)))
+    natural_dt_days = (np.diff(tedges) / pd.Timedelta("1D")).astype(float)
+    v_in_natural_edges = np.concatenate(([0.0], np.cumsum(flow * natural_dt_days)))
 
-        sigma_array = _compute_sigma(
+    # Output-side V-edges expressed in the SAME cumulative-volume reference
+    # frame as ``v_in_widedge_edges`` (anchored at ``weight_tedges[0]``).
+    # ``flow_out`` is used only for sigma_V; the V-grid is set by the
+    # underlying flow so it is consistent with ``w_adv``.
+    cout_dt_days = (np.diff(cout_tedges) / pd.Timedelta("1D")).astype(float)
+    tedges_days = ((weight_tedges - weight_tedges[0]) / pd.Timedelta("1D")).to_numpy(dtype=float)
+    cout_tedges_days = ((cout_tedges - weight_tedges[0]) / pd.Timedelta("1D")).to_numpy(dtype=float)
+    v_out_edges = np.interp(cout_tedges_days, tedges_days, v_in_widedge_edges)
+    if flow_out is None:
+        # Per-cout-bin flux inferred from the V-edge increments. Matches
+        # the slow ``diffusion`` module's ``flow_during_cout``.
+        flow_out_arr = np.where(cout_dt_days > 0.0, np.diff(v_out_edges) / cout_dt_days, 0.0)
+    else:
+        flow_out_arr = np.asarray(flow_out, dtype=float)
+
+    # Moment-averaged sigma_V in V-coordinate units [m^3] on the output
+    # grid: used by both the K-Z correction and (when applicable) the
+    # output-side smoothing matrix.
+    sigma_v_out = _compute_sigma_v(
+        flow=flow_out_arr,
+        tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        streamline_length=mean_streamline_length,
+        molecular_diffusivity=mean_molecular_diffusivity,
+        longitudinal_dispersivity=mean_longitudinal_dispersivity,
+        retardation_factor=retardation_factor,
+        direction="extraction_to_infiltration",
+    )
+
+    if flow_out is None:
+        # Smooth-then-advect: V-coord smoothing on the natural input grid,
+        # then exact advection (with wide-edge spin-up) maps to the output.
+        sigma_v_in = _compute_sigma_v(
             flow=flow,
-            tedges=weight_tedges,
+            tedges=tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=mean_streamline_length,
             molecular_diffusivity=mean_molecular_diffusivity,
@@ -249,41 +277,44 @@ def infiltration_to_extraction(
             retardation_factor=retardation_factor,
             direction="infiltration_to_extraction",
         )
-        cin_diffused = convolve_diffusion(
-            input_signal=cin, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
+        m_v_in = _build_v_smooth_matrix(
+            v_edges=v_in_natural_edges,
+            sigma_v_per_bin=sigma_v_in,
+            asymptotic_cutoff_sigma=asymptotic_cutoff_sigma if asymptotic_cutoff_sigma is not None else 4.0,
         )
+        cin_diffused = m_v_in @ np.asarray(cin, dtype=float)
         cout = w_adv @ cin_diffused
     else:
-        # New algorithm: advect-then-smooth (works with any tedges spacing)
-        cout_unsmoothed = w_adv @ cin
-
-        # Rows with zero weight sum (spin-up or zero-flow cout bin) carry no
-        # signal. Flag them so the normalized convolution
-        # smooth(signal * mask) / smooth(mask) properly renormalizes the kernel
-        # instead of letting a near-zero value bleed into valid neighbors.
+        # Advect-then-smooth: pure advection produces ``cout_unsmoothed`` on
+        # the output grid, then V-coord smoothing applies the dispersive
+        # spread. Validity normalisation handles cout bins that pre-date
+        # streamtube breakthrough or fall in zero-flow windows.
+        cout_unsmoothed = w_adv @ np.asarray(cin, dtype=float)
         total_coeff = np.sum(w_adv, axis=1)
         zero_row_mask = total_coeff < _EPSILON_COEFF_SUM
         cout_unsmoothed[zero_row_mask] = 0.0
         validity = np.where(zero_row_mask, 0.0, 1.0)
 
-        sigma_out = _compute_sigma(
-            flow=flow_out,
-            tedges=cout_tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-            streamline_length=mean_streamline_length,
-            molecular_diffusivity=mean_molecular_diffusivity,
-            longitudinal_dispersivity=mean_longitudinal_dispersivity,
-            retardation_factor=retardation_factor,
-            direction="extraction_to_infiltration",
+        m_v_out = _build_v_smooth_matrix(
+            v_edges=v_out_edges,
+            sigma_v_per_bin=sigma_v_out,
+            asymptotic_cutoff_sigma=asymptotic_cutoff_sigma if asymptotic_cutoff_sigma is not None else 4.0,
         )
-        smoothed = convolve_diffusion(
-            input_signal=cout_unsmoothed, sigma_array=sigma_out, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
-        )
-        smoothed_validity = convolve_diffusion(
-            input_signal=validity, sigma_array=sigma_out, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
-        )
+        smoothed = m_v_out @ cout_unsmoothed
+        smoothed_validity = m_v_out @ validity
         with np.errstate(invalid="ignore"):
             cout = np.where(smoothed_validity > _EPSILON_COEFF_SUM, smoothed / smoothed_validity, np.nan)
+
+    # NOTE: This module reports an approximation of Bear's resident
+    # concentration C_R. The full Kreft-Zuber flux concentration
+    # C_F = C_R + (D_L/v) * N_x adds a Gaussian-density correction
+    # localised near the breakthrough; including it via step-differences
+    # would shift the reported concentration by O(1/Pe) and break the
+    # convex-combination bound for sharp pulse inputs (cf. slow
+    # ``gwtransport.diffusion``, which integrates C_F per cell via
+    # 16-point Gauss-Legendre and stays strictly non-negative). Use the
+    # slow module when the Kreft-Zuber flux semantic matters; this fast
+    # variant prioritises monotone-friendly C_R smoothing.
 
     # Mark invalid rows as NaN: incomplete streamtube breakthrough (spin-up) or
     # zero flow during the cout bin.
@@ -307,7 +338,6 @@ def extraction_to_infiltration(
     asymptotic_cutoff_sigma: float | None = 3.0,
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
-    suppress_uniform_tedges_check: bool = False,
     spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """Reconstruct infiltration concentration from extracted water via Tikhonov inversion.
@@ -317,10 +347,9 @@ def extraction_to_infiltration(
     fast approximate counterpart of
     :func:`gwtransport.diffusion.extraction_to_infiltration`.
 
-    When ``flow_out`` is provided, diffusion is applied on the output grid,
-    which correctly handles non-uniform ``tedges``. Without ``flow_out``,
-    diffusion is applied on the input grid and ``tedges`` must have constant
-    time steps.
+    When ``flow_out`` is provided, smoothing is applied on the output V-grid;
+    otherwise on the input V-grid. Both paths handle non-uniform ``tedges``
+    and ``cout_tedges`` without an explicit uniformity check.
 
     Parameters
     ----------
@@ -354,9 +383,6 @@ def extraction_to_infiltration(
         Flow rate [m3/day] on the output grid (aligned to ``cout_tedges``).
         Required when ``tedges`` has non-uniform time steps. Length must
         equal ``len(cout_tedges) - 1``. Default is None.
-    suppress_uniform_tedges_check : bool, optional
-        Skip the constant-dt check on ``tedges`` when ``flow_out`` is None.
-        Default is False.
     spinup : {"constant"} | float in [0, 1] | None, optional
         Forwarded to the underlying advection weight computation. Default
         ``"constant"`` warm-starts the inverse problem by extending
@@ -366,9 +392,15 @@ def extraction_to_infiltration(
     Returns
     -------
     numpy.ndarray
-        Bin-averaged concentration in infiltrating water. Length equals
-        len(tedges) - 1. NaN values indicate time periods with no valid
-        contributions from the extraction data.
+        Bin-averaged resident concentration ``C_R`` (Bear 1972) in the
+        infiltrating water, recovered from the Tikhonov-regularised inverse
+        of the same C_R-approximating forward operator used by
+        :func:`infiltration_to_extraction`. Length equals
+        ``len(tedges) - 1``. NaN values indicate time periods with no
+        valid contributions from the extraction data. Use
+        :func:`gwtransport.diffusion.extraction_to_infiltration` for the
+        Kreft-Zuber flux-concentration inverse when column-mass
+        conservation tighter than ~1% matters.
 
     Warns
     -----
@@ -433,7 +465,6 @@ def extraction_to_infiltration(
     # preserved, so no slicing is needed on the recovered cin.
     weight_tedges, threshold = _resolve_spinup_inputs_wide_edges(spinup, tedges=tedges)
     n_cin = len(weight_tedges) - 1
-    n_cout = len(cout_tedges) - 1
 
     # Build advection weight matrix on the (possibly padded) inputs.
     accumulated_weights, contributing_bins, zero_flow_cout = _infiltration_to_extraction_weights(
@@ -451,14 +482,39 @@ def extraction_to_infiltration(
         spinup=threshold,
     )
 
-    if flow_out is None:
-        # Original algorithm: G on input grid, W_forward = W_adv @ G.
-        # Check uniformity against user tedges only; wide boundary bins are OK.
-        _check_uniform_tedges(tedges=tedges, suppress=suppress_uniform_tedges_check)
+    # Cumulative-volume edges shared between the smoothing matrices on the
+    # input and output sides; see the comment block in
+    # ``infiltration_to_extraction`` for the reference-frame rationale.
+    weight_dt_days = (np.diff(weight_tedges) / pd.Timedelta("1D")).astype(float)
+    v_in_widedge_edges = np.concatenate(([0.0], np.cumsum(flow * weight_dt_days)))
+    natural_dt_days = (np.diff(tedges) / pd.Timedelta("1D")).astype(float)
+    v_in_natural_edges = np.concatenate(([0.0], np.cumsum(flow * natural_dt_days)))
 
-        sigma_array = _compute_sigma(
+    cout_dt_days = (np.diff(cout_tedges) / pd.Timedelta("1D")).astype(float)
+    tedges_days = ((weight_tedges - weight_tedges[0]) / pd.Timedelta("1D")).to_numpy(dtype=float)
+    cout_tedges_days = ((cout_tedges - weight_tedges[0]) / pd.Timedelta("1D")).to_numpy(dtype=float)
+    v_out_edges = np.interp(cout_tedges_days, tedges_days, v_in_widedge_edges)
+    if flow_out is None:
+        flow_out_arr = np.where(cout_dt_days > 0.0, np.diff(v_out_edges) / cout_dt_days, 0.0)
+    else:
+        flow_out_arr = np.asarray(flow_out, dtype=float)
+
+    sigma_v_out = _compute_sigma_v(
+        flow=flow_out_arr,
+        tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        streamline_length=mean_streamline_length,
+        molecular_diffusivity=mean_molecular_diffusivity,
+        longitudinal_dispersivity=mean_longitudinal_dispersivity,
+        retardation_factor=retardation_factor,
+        direction="extraction_to_infiltration",
+    )
+
+    if flow_out is None:
+        # Smooth-then-advect: W_forward = w_adv @ M_v_in
+        sigma_v_in = _compute_sigma_v(
             flow=flow,
-            tedges=weight_tedges,
+            tedges=tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=mean_streamline_length,
             molecular_diffusivity=mean_molecular_diffusivity,
@@ -466,27 +522,25 @@ def extraction_to_infiltration(
             retardation_factor=retardation_factor,
             direction="infiltration_to_extraction",
         )
-        g_matrix = _build_gaussian_matrix(
-            n=n_cin, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
+        m_v_in = _build_v_smooth_matrix(
+            v_edges=v_in_natural_edges,
+            sigma_v_per_bin=sigma_v_in,
+            asymptotic_cutoff_sigma=asymptotic_cutoff_sigma if asymptotic_cutoff_sigma is not None else 4.0,
         )
-        # Combined forward matrix: W_adv @ G via sparse @ dense (avoids dense G allocation)
-        w_forward = (g_matrix.T @ w_adv.T).T
+        # Force dense ndarray (avoid scipy's np.matrix from sparse @ dense).
+        w_forward = np.asarray(w_adv @ m_v_in)
     else:
-        # New algorithm: G on output grid, W_forward = G @ W_adv
-        sigma_out = _compute_sigma(
-            flow=flow_out,
-            tedges=cout_tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-            streamline_length=mean_streamline_length,
-            molecular_diffusivity=mean_molecular_diffusivity,
-            longitudinal_dispersivity=mean_longitudinal_dispersivity,
-            retardation_factor=retardation_factor,
-            direction="extraction_to_infiltration",
+        # Advect-then-smooth: W_forward = M_v_out @ w_adv
+        m_v_out = _build_v_smooth_matrix(
+            v_edges=v_out_edges,
+            sigma_v_per_bin=sigma_v_out,
+            asymptotic_cutoff_sigma=asymptotic_cutoff_sigma if asymptotic_cutoff_sigma is not None else 4.0,
         )
-        g_matrix = _build_gaussian_matrix(
-            n=n_cout, sigma_array=sigma_out, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma
-        )
-        w_forward = g_matrix @ w_adv  # sparse @ dense
+        w_forward = np.asarray(m_v_out @ w_adv)
+
+    # No K-Z correction is applied (see note in ``infiltration_to_extraction``):
+    # the forward matrix here is the same C_R-approximating operator used by
+    # the forward, ensuring round-trip consistency.
 
     return solve_inverse_transport(
         w_forward=w_forward,
@@ -516,7 +570,6 @@ def gamma_infiltration_to_extraction(
     suppress_dispersion_warning: bool = False,
     asymptotic_cutoff_sigma: float | None = 3.0,
     flow_out: npt.ArrayLike | None = None,
-    suppress_uniform_tedges_check: bool = False,
     spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
@@ -578,16 +631,17 @@ def gamma_infiltration_to_extraction(
         Flow rate [m3/day] on the output grid (aligned to ``cout_tedges``).
         Required when ``tedges`` has non-uniform time steps. Length must
         equal ``len(cout_tedges) - 1``. Default is None.
-    suppress_uniform_tedges_check : bool, optional
-        Skip the constant-dt check on ``tedges`` when ``flow_out`` is None.
-        Default is False.
 
     Returns
     -------
     numpy.ndarray
-        Bin-averaged concentration in extracted water. Length equals
-        len(cout_tedges) - 1. NaN values indicate time periods with no valid
-        contributions from the infiltration data.
+        Bin-averaged resident concentration ``C_R`` (Bear 1972) in the
+        extracted water. Length equals ``len(cout_tedges) - 1``. NaN
+        values indicate time periods with no valid contributions from the
+        infiltration data. Use
+        :func:`gwtransport.diffusion.gamma_infiltration_to_extraction` for
+        the Kreft-Zuber flux concentration ``C_F`` when column-mass
+        conservation tighter than ~1% matters.
 
     See Also
     --------
@@ -653,7 +707,6 @@ def gamma_infiltration_to_extraction(
         suppress_dispersion_warning=suppress_dispersion_warning,
         asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
         flow_out=flow_out,
-        suppress_uniform_tedges_check=suppress_uniform_tedges_check,
         spinup=spinup,
     )
 
@@ -678,7 +731,6 @@ def gamma_extraction_to_infiltration(
     asymptotic_cutoff_sigma: float | None = 3.0,
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
-    suppress_uniform_tedges_check: bool = False,
     spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
@@ -742,16 +794,17 @@ def gamma_extraction_to_infiltration(
         Flow rate [m3/day] aligned to ``cout_tedges``. When provided, the
         Gaussian matrix operates on the output grid. Length must equal
         ``len(cout_tedges) - 1``. Default is None.
-    suppress_uniform_tedges_check : bool, optional
-        When True, skip the check that ``tedges`` has constant time steps
-        (only relevant when ``flow_out`` is None). Default is False.
 
     Returns
     -------
     numpy.ndarray
-        Bin-averaged concentration in infiltrating water. Length equals
-        len(tedges) - 1. NaN values indicate time periods with no valid
-        contributions from the extraction data.
+        Bin-averaged resident concentration ``C_R`` (Bear 1972) in the
+        infiltrating water. Length equals ``len(tedges) - 1``. NaN values
+        indicate time periods with no valid contributions from the
+        extraction data. Use
+        :func:`gwtransport.diffusion.gamma_extraction_to_infiltration` for
+        the Kreft-Zuber flux-concentration inverse when column-mass
+        conservation tighter than ~1% matters.
 
     See Also
     --------
@@ -818,12 +871,11 @@ def gamma_extraction_to_infiltration(
         asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
         regularization_strength=regularization_strength,
         flow_out=flow_out,
-        suppress_uniform_tedges_check=suppress_uniform_tedges_check,
         spinup=spinup,
     )
 
 
-def _compute_sigma(
+def _compute_sigma_v(
     *,
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
@@ -834,20 +886,19 @@ def _compute_sigma(
     retardation_factor: float,
     direction: str,
 ) -> npt.NDArray[np.floating]:
-    """Compute sigma in array-index units with moment-based averaging.
+    """Compute Gaussian sigma in cumulative-volume (V) coordinate units [m3].
 
-    The per-streamtube variance of the Gaussian kernel (in index units)
-    is sigma_idx^2(V) = L_diff^2(V) * V^2 * R^2 / (Q * dt * L)^2.
-    L_diff^2 = 2*D_m*tau + 2*alpha_L*L is linear in V (via tau ~ V),
-    so sigma_idx^2 is cubic + quadratic in V.  The averaged variance
-    over the pore volume distribution is (law of total variance):
+    The per-streamtube V-coord variance for pore volume V is
 
-        E[sigma_idx^2] = R^2 / (Q*dt*L)^2
-            * (2*D_m*tau_bar/Vbar * E[V^3] + 2*alpha_L*L * E[V^2])
+        sigma_V^2(V) = (R*V/L)^2 * (2*D_m*tau(V) + 2*alpha_L*L).
 
-    When a single pore volume is given this reduces to the classical formula.
+    Moment-averaged over the pore-volume distribution by the law of total
+    variance,
 
-    See :ref:`concept-variance-components` for the derivation.
+        E[sigma_V^2] = (R/L)^2 * (2*D_m*tau_bar/V_bar * E[V^3] + 2*alpha_L*L * E[V^2]).
+
+    The result is in V-coordinate units (cubic meters), which is what the
+    V-coordinate smoothing operator expects.
 
     Parameters
     ----------
@@ -856,23 +907,31 @@ def _compute_sigma(
     tedges : DatetimeIndex
         Time edges for flow data.
     aquifer_pore_volumes : array-like
-        Pore volumes [m3]. Moments E[V^2] and E[V^3] are computed
-        from this array.
+        Pore volumes [m3]. Moments E[V^2] and E[V^3] are computed from this
+        array.
     streamline_length : float
-        Streamline length [m].
+        Streamline length L [m].
     molecular_diffusivity : float
-        Effective molecular diffusivity [m2/day].
+        Effective molecular diffusivity D_m [m2/day].
     longitudinal_dispersivity : float
-        Longitudinal dispersivity [m].
+        Longitudinal dispersivity alpha_L [m].
     retardation_factor : float
         Retardation factor [-].
     direction : {'infiltration_to_extraction', 'extraction_to_infiltration'}
-        Direction for residence time computation.
+        Direction for residence time computation. ``"infiltration_to_extraction"``
+        gives tau at the infiltration bin (parcel's full journey to outlet);
+        ``"extraction_to_infiltration"`` gives tau at the extraction bin
+        (parcel arriving here).
 
     Returns
     -------
     ndarray
-        Sigma values in array-index units, clipped to [0, 100].
+        sigma_V per bin in V-coordinate units [m3].
+
+    See Also
+    --------
+    _build_v_smooth_matrix : Builds the V-coordinate smoothing operator
+        using these sigma_V values.
     """
     flow = np.asarray(flow, dtype=float)
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
@@ -881,9 +940,6 @@ def _compute_sigma(
     ev2 = float(np.mean(aquifer_pore_volumes**2))
     ev3 = float(np.mean(aquifer_pore_volumes**3))
 
-    # Bin-mean residence time at the mean pore volume [days]. Using the bin-mean
-    # (rather than the bin-center point sample) is consistent with the bin-edge
-    # convention: per-bin output quantities are flow-weighted averages over the bin.
     rt_array = residence_time_mean(
         flow=flow,
         flow_tedges=tedges,
@@ -893,48 +949,192 @@ def _compute_sigma(
         direction=direction,
     )[0]
 
-    # Interpolate NaN values
     valid_mask = ~np.isnan(rt_array)
     if np.any(valid_mask):
         rt_array = np.interp(np.arange(len(rt_array)), np.where(valid_mask)[0], rt_array[valid_mask])
 
-    # Two independent spatial variance components [m^2]:
-    #   molecular:    2 * D_m * tau          (linear in V via tau)
-    #   dispersive:   2 * alpha_L * L        (constant in V)
     mol_var_x = 2.0 * molecular_diffusivity * rt_array
     disp_var_x = 2.0 * longitudinal_dispersivity * streamline_length
 
-    # Averaged variance in index units (see docstring):
     var_numerator = mol_var_x / mean_pv * ev3 + disp_var_x * ev2
 
-    timedelta = np.diff(tedges) / pd.to_timedelta(1, unit="D")
-    # q_dt_l_over_r = Q * dt * L / R has units m^4 (it is the squared scaling
-    # factor that converts spatial variance [m^2] into index-space variance).
-    q_dt_l_over_r = flow * timedelta * streamline_length / retardation_factor
-
-    with np.errstate(invalid="ignore", divide="ignore"):
-        sigma_sq = np.where(q_dt_l_over_r > 0.0, var_numerator / q_dt_l_over_r**2, 0.0)
-
-    return np.clip(np.sqrt(np.maximum(sigma_sq, 0.0)), 0.0, 100.0)
+    sigma_v_sq = (retardation_factor / streamline_length) ** 2 * var_numerator
+    return np.sqrt(np.maximum(sigma_v_sq, 0.0))
 
 
-def _check_uniform_tedges(*, tedges: pd.DatetimeIndex, suppress: bool) -> None:
-    """Raise ValueError if tedges has non-constant time steps.
+def _build_rebin_matrix(
+    *,
+    v_src_edges: npt.NDArray[np.floating],
+    v_dst_edges: npt.NDArray[np.floating],
+) -> sparse.csr_matrix:
+    """Build a V-mass-preserving rebinning matrix between two V-grids.
 
-    Raises
-    ------
-    ValueError
-        If tedges has non-constant time steps and suppress is False.
+    For piecewise-constant concentration c_src on V-bins defined by
+    ``v_src_edges``, the rebinned concentration c_dst on bins defined by
+    ``v_dst_edges`` is ``c_dst = R @ c_src``, where
+
+        R[i, k] = (V-overlap of src bin k with dst bin i) / dV_dst[i].
+
+    Properties (assuming dst bins are fully covered by src bins):
+
+    - ``sum_k R[i, k] = 1`` for every i (constant concentration preserved).
+    - ``sum_i dV_dst[i] * R[i, k] = dV_src[k]`` for every k (V-mass preserved
+      to machine precision).
+
+    Parameters
+    ----------
+    v_src_edges : ndarray, shape (n_src + 1,)
+        Source V-grid edges (monotonically increasing).
+    v_dst_edges : ndarray, shape (n_dst + 1,)
+        Destination V-grid edges (monotonically increasing).
+
+    Returns
+    -------
+    scipy.sparse.csr_matrix, shape (n_dst, n_src)
+        Sparse rebinning matrix.
     """
-    if suppress:
-        return
-    dt = np.diff(tedges)
-    if not np.all(dt == dt[0]):
-        msg = (
-            "tedges must have constant time steps when flow_out is not provided. "
-            "Either provide flow_out or set suppress_uniform_tedges_check=True."
-        )
-        raise ValueError(msg)
+    v_src = np.asarray(v_src_edges, dtype=float)
+    v_dst = np.asarray(v_dst_edges, dtype=float)
+    n_src = len(v_src) - 1
+    n_dst = len(v_dst) - 1
+    dv_dst = np.diff(v_dst)
+
+    # Locate each src bin's destination overlap range via searchsorted on
+    # the sorted dst edges, then accumulate only the active dst bins for
+    # each src — avoids the dense (n_src x n_dst) overlap matrix that a
+    # full broadcast would build.
+    src_lo = v_src[:-1]
+    src_hi = v_src[1:]
+    # dst bin i covers [v_dst[i], v_dst[i+1]]. For src bin k, the dst bins
+    # overlapping [src_lo[k], src_hi[k]] satisfy v_dst[i+1] > src_lo[k] AND
+    # v_dst[i] < src_hi[k], i.e. i in [first_i_k, last_i_k).
+    first_i = np.searchsorted(v_dst[1:], src_lo, side="right")
+    last_i = np.searchsorted(v_dst[:-1], src_hi, side="left")
+    counts = np.maximum(0, last_i - first_i)
+    total = int(counts.sum())
+    if total == 0:
+        return sparse.csr_matrix(np.zeros((n_dst, n_src), dtype=float))
+
+    # Build flat (rows, cols) by repeating src indices and concatenating
+    # the corresponding dst-index ranges in one shot.
+    cols_arr = np.repeat(np.arange(n_src), counts)
+    # rows = [first_i[k] + offset for each k and each offset in 0..counts[k])
+    offsets = np.arange(total) - np.repeat(np.cumsum(counts) - counts, counts)
+    rows_arr = np.repeat(first_i, counts) + offsets
+
+    lo = np.maximum(src_lo[cols_arr], v_dst[rows_arr])
+    hi = np.minimum(src_hi[cols_arr], v_dst[rows_arr + 1])
+    overlap = np.maximum(0.0, hi - lo)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        data_arr = np.where(dv_dst[rows_arr] > 0.0, overlap / dv_dst[rows_arr], 0.0)
+
+    # Strip exact-zero entries (boundary searchsorted slack)
+    keep = data_arr != 0.0
+    return sparse.csr_matrix(
+        (data_arr[keep], (rows_arr[keep], cols_arr[keep])),
+        shape=(n_dst, n_src),
+    )
+
+
+def _build_v_smooth_matrix(
+    *,
+    v_edges: npt.NDArray[np.floating],
+    sigma_v_per_bin: npt.NDArray[np.floating],
+    refinement: int = 4,
+    asymptotic_cutoff_sigma: float | None = 4.0,
+) -> sparse.csr_matrix:
+    """Build the V-coordinate Gaussian smoothing matrix via uniform-V resampling.
+
+    For piecewise-constant signal c on the (possibly non-uniform) V-grid given
+    by ``v_edges``, apply Gaussian smoothing with width ``sigma_v_per_bin[k]``
+    [m^3] at each V-bin. Implemented as ``M = R_from @ G @ R_to`` where:
+
+    1. ``R_to`` rebins the input V-grid to a uniform V-grid (mass-preserving).
+    2. ``G`` is the standard row-normalized Gaussian on the uniform V-grid,
+       with sigma in uniform-bin-index units.
+    3. ``R_from`` rebins back to the input V-grid (mass-preserving).
+
+    Properties of M:
+
+    - **Constant preservation**: ``M @ ones = ones`` to machine precision,
+      because every operator in the composition has row sums = 1.
+    - **Mass conservation**: ``sum_i dV[i] * M[i, k] = dV[k]`` to O(d sigma_V/dV)
+      precision, dominated by the variable-sigma discretization error of the
+      uniform-V Gaussian step.
+
+    Parameters
+    ----------
+    v_edges : ndarray, shape (n + 1,)
+        Cumulative-volume edges of the input grid.
+    sigma_v_per_bin : ndarray, shape (n,)
+        Gaussian width in V-coordinate units [m^3] for each bin.
+    refinement : int, optional
+        Number of uniform-V bins per minimum input bin width. Higher
+        refinement reduces V-grid discretization error in the rebinning
+        step at increased cost. Default is 4.
+    asymptotic_cutoff_sigma : float or None, optional
+        Truncate the Gaussian kernel at this many standard deviations on
+        the uniform-V grid. Default is 4.0.
+
+    Returns
+    -------
+    scipy.sparse.csr_matrix, shape (n, n)
+        Sparse V-coordinate smoothing matrix.
+    """
+    v_edges = np.asarray(v_edges, dtype=float)
+    sigma = np.asarray(sigma_v_per_bin, dtype=float)
+    n_orig = len(sigma)
+    dv_orig = np.diff(v_edges)
+
+    # Identity when there is no smoothing to do.
+    if not np.any(sigma > 0.0):
+        return sparse.csr_matrix(sparse.eye(n_orig, dtype=float))
+
+    # Uniform-V grid spacing: min interior bin width / refinement, capped
+    # to keep n_uniform tractable when the input grid contains huge
+    # warm-start bins from spin-up padding.
+    finite_dv = dv_orig[dv_orig > 0.0]
+    if finite_dv.size == 0:
+        return sparse.csr_matrix(sparse.eye(n_orig, dtype=float))
+    dv_uniform_target = float(np.min(finite_dv)) / max(int(refinement), 1)
+
+    v_min, v_max = float(v_edges[0]), float(v_edges[-1])
+    span = v_max - v_min
+    if span <= 0.0:
+        return sparse.csr_matrix(sparse.eye(n_orig, dtype=float))
+
+    # Cap n_uniform to ``refinement * n_orig``. The intent of ``refinement``
+    # is "uniform bins per input bin"; under non-uniform input
+    # ``min(dv) << mean(dv)`` lets the naive ``span / dv_uniform_target``
+    # explode to many multiples of ``refinement * n_orig`` for no
+    # additional accuracy on the bulk of the grid, while the dense
+    # ``(n_uniform x kernel_radius)`` intermediates inside
+    # ``_build_gaussian_matrix`` blow up RAM (e.g. ~660 MB peak per call
+    # at n_uniform=12k on the 01_Aquifer notebook before this cap).
+    n_uniform = int(np.ceil(span / dv_uniform_target))
+    n_uniform_cap = max(int(refinement), 1) * max(n_orig, 1)
+    n_uniform = max(1, min(n_uniform, n_uniform_cap))
+    v_uniform_edges = np.linspace(v_min, v_max, n_uniform + 1)
+    dv_uniform_actual = span / n_uniform
+
+    # Interpolate sigma_V onto uniform-grid centers.
+    v_orig_centers = 0.5 * (v_edges[:-1] + v_edges[1:])
+    v_uniform_centers = 0.5 * (v_uniform_edges[:-1] + v_uniform_edges[1:])
+    sigma_uniform_v = np.interp(v_uniform_centers, v_orig_centers, sigma)
+
+    # Convert V-space sigma to uniform-bin-index units for the standard
+    # Gaussian convolution matrix builder.
+    sigma_uniform_idx = sigma_uniform_v / dv_uniform_actual
+
+    r_to = _build_rebin_matrix(v_src_edges=v_edges, v_dst_edges=v_uniform_edges)
+    g_uniform = _build_gaussian_matrix(
+        n=n_uniform,
+        sigma_array=sigma_uniform_idx,
+        asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
+    )
+    r_from = _build_rebin_matrix(v_src_edges=v_uniform_edges, v_dst_edges=v_edges)
+
+    return (r_from @ g_uniform @ r_to).tocsr()
 
 
 def _build_gaussian_matrix(
@@ -967,7 +1167,7 @@ def _build_gaussian_matrix(
     # Handle zero sigma values
     zero_mask = sigma_array == 0
     if np.all(zero_mask):
-        return sparse.eye(n, format="csr", dtype=float)  # pyright: ignore[reportReturnType]
+        return sparse.csr_matrix(sparse.eye(n, dtype=float))  # type: ignore[reportReturnType]
 
     # Get maximum kernel size and create position arrays
     max_sigma = np.max(sigma_array)
@@ -1023,132 +1223,6 @@ def _build_gaussian_matrix(
         data = np.concatenate([data, np.ones(len(zero_indices))])
 
     return sparse.csr_matrix((data, (rows, cols)), shape=(n, n))
-
-
-def convolve_diffusion(
-    *, input_signal: npt.ArrayLike, sigma_array: npt.ArrayLike, asymptotic_cutoff_sigma: float | None = 3.0
-) -> npt.NDArray[np.floating]:
-    """Apply Gaussian filter with position-dependent sigma values.
-
-    This function extends scipy.ndimage.gaussian_filter1d by allowing the standard
-    deviation (sigma) of the Gaussian kernel to vary at each point in the signal.
-    It implements the filter using a sparse convolution matrix where each row
-    represents a Gaussian kernel with a locally-appropriate standard deviation.
-
-    Kernel weights are computed by integrating the Gaussian CDF over each bin,
-    which is more accurate than point-sampling the PDF for small sigma values.
-
-    Parameters
-    ----------
-    input_signal : array-like
-        One-dimensional input array to be filtered.
-    sigma_array : array-like
-        One-dimensional array of standard deviation values, must have same length
-        as input_signal.
-    asymptotic_cutoff_sigma : float or None, optional
-        Truncate the filter at this many standard deviations. Set to None to
-        disable truncation. Default is 3.0.
-
-    Returns
-    -------
-    numpy.ndarray
-        The filtered input signal. Has the same shape as input_signal.
-
-    Raises
-    ------
-    ValueError
-        If input_signal and sigma_array do not have the same length.
-
-    See Also
-    --------
-    scipy.ndimage.gaussian_filter1d : Fixed-sigma Gaussian filtering
-
-    Notes
-    -----
-    At the boundaries, the outer values are repeated to avoid edge effects
-    (equivalent to mode='nearest' in `scipy.ndimage.gaussian_filter1d`).
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> from gwtransport.diffusion_fast import convolve_diffusion
-    >>> # Create a sample signal
-    >>> x = np.linspace(0, 10, 1000)
-    >>> signal = np.exp(-((x - 3) ** 2)) + 0.5 * np.exp(-((x - 7) ** 2) / 0.5)
-
-    >>> # Create position-dependent sigma values
-    >>> diffusivity = 0.1
-    >>> dt = 0.001 * (1 + np.sin(2 * np.pi * x / 10))
-    >>> dx = x[1] - x[0]
-    >>> sigma_array = np.sqrt(2 * diffusivity * dt) / dx
-
-    >>> # Apply the filter
-    >>> filtered = convolve_diffusion(input_signal=signal, sigma_array=sigma_array)
-    """
-    input_signal = np.asarray(input_signal)
-    sigma_array = np.asarray(sigma_array)
-
-    if len(input_signal) != len(sigma_array):
-        msg = "Input signal and sigma array must have the same length"
-        raise ValueError(msg)
-
-    n = len(input_signal)
-
-    # Handle zero sigma values
-    if np.all(sigma_array == 0):
-        return input_signal.copy()
-
-    g_matrix = _build_gaussian_matrix(n=n, sigma_array=sigma_array, asymptotic_cutoff_sigma=asymptotic_cutoff_sigma)
-    return g_matrix.dot(input_signal)
-
-
-def create_example_data(
-    *,
-    nx: int = 1000,
-    domain_length: float = 10.0,
-    diffusivity: float = 0.1,
-    seed: int | None = None,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]]:
-    """Create example data for demonstrating variable-sigma diffusion.
-
-    Parameters
-    ----------
-    nx : int, optional
-        Number of spatial points. Default is 1000.
-    domain_length : float, optional
-        Domain length. Default is 10.0.
-    diffusivity : float, optional
-        Diffusivity. Default is 0.1.
-    seed : int or None, optional
-        Random seed for reproducibility. Default is None.
-
-    Returns
-    -------
-    x : numpy.ndarray
-        Spatial coordinates.
-    signal : numpy.ndarray
-        Initial signal (sum of two Gaussians with noise).
-    sigma_array : numpy.ndarray
-        Array of sigma values varying in space.
-    dt : numpy.ndarray
-        Array of time steps varying in space.
-    """
-    rng = np.random.default_rng(seed)
-
-    # Create spatial grid
-    x = np.linspace(0, domain_length, nx)
-    dx = x[1] - x[0]
-
-    # Create initial signal (two Gaussians)
-    signal = np.exp(-((x - 3) ** 2)) + 0.5 * np.exp(-((x - 7) ** 2) / 0.5) + 0.1 * rng.standard_normal(nx)
-
-    # Create varying time steps
-    dt = 0.001 * (1 + np.sin(2 * np.pi * x / domain_length))
-
-    # Calculate corresponding sigma values
-    sigma_array = np.sqrt(2 * diffusivity * dt) / dx
-
-    return x, signal, sigma_array, dt
 
 
 def _validate_inputs(
