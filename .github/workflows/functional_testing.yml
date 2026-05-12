@@ -23,7 +23,7 @@ jobs:
       - name: Install with minimum dependencies
         run: uv sync --extra test --resolution lowest-direct --python 3.12
       - name: Run tests
-        run: uv run pytest tests/src
+        run: uv run pytest tests/src -n0
 
   test-latest:
     name: Python 3.14 - latest dependencies
@@ -37,7 +37,7 @@ jobs:
       - name: Install with latest dependencies
         run: uv sync --extra test --python 3.14
       - name: Run tests with coverage
-        run: uv run pytest tests/src --cov=src --cov-report=xml:coverage/coverage.xml --cov-report=html:coverage/htmlcov --cov-append
+        run: uv run pytest tests/src -n0 --cov=src --cov-report=xml:coverage/coverage.xml --cov-report=html:coverage/htmlcov --cov-append
       - name: Create coverage badge
         run: |
           uv tool install "genbadge[coverage]"
