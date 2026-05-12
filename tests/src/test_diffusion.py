@@ -16,8 +16,7 @@ from gwtransport.advection import (
     infiltration_to_extraction as advection_i2e,
 )
 from gwtransport.diffusion import (
-    _erf_integral_space,
-    _erf_mean_volume,
+    _cfrac_mean_volume,
     _infiltration_to_extraction_coeff_matrix,
     extraction_to_infiltration,
     gamma_extraction_to_infiltration,
@@ -647,13 +646,20 @@ class TestDiffusionMatchesApvdCombined:
         std_apv = 500.0
         mean_flow = 100.0
 
-        n_days = 200
-        tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-        cout_tedges = tedges.copy()
+        # cin window: 60 days is enough for the pulse, but cout extends much
+        # further so that even the longest pore volume in the gamma tail (with
+        # D_m=10 dispersion) has its breakthrough fully captured. Without
+        # capturing the full tail, the high-dispersion case loses mass at the
+        # finite-window boundary and mass-conservation across the two cases
+        # would not hold at the 1e-10 level we are testing for.
+        n_days_cin = 60
+        n_days_cout = 4000
+        tedges = pd.date_range("2020-01-01", periods=n_days_cin + 1, freq="D")
+        cout_tedges = pd.date_range("2020-01-01", periods=n_days_cout + 1, freq="D")
 
-        cin = np.zeros(n_days)
+        cin = np.zeros(n_days_cin)
         cin[20] = 100.0  # Pulse input
-        flow = np.full(n_days, mean_flow)
+        flow = np.full(n_days_cin, mean_flow)
 
         nbins = 1000
         gbins = gamma_utils.bins(mean=mean_apv, std=std_apv, n_bins=nbins)
@@ -1531,37 +1537,36 @@ class TestFlowWeightedDiffusion:
             molecular_diffusivity=np.array([1.0]),
             longitudinal_dispersivity=np.array([0.0]),
             retardation_factor=1.0,
-            asymptotic_cutoff_sigma=3.0,
         )
 
         row_sums = coeff[valid].sum(axis=1)
         np.testing.assert_allclose(row_sums, 1.0, atol=1e-12)
 
     @pytest.mark.parametrize("seed", [1, 3, 7, 42, 999])
-    @pytest.mark.parametrize("alpha_l", [0.1, 0.3])
-    def test_column_mass_conservation_variable_flow_dispersion(self, alpha_l, seed):
+    @pytest.mark.parametrize(
+        ("d_m", "alpha_l"),
+        [
+            (0.0, 0.1),  # pure alpha_L (issue #162)
+            (0.0, 0.3),  # pure alpha_L
+            (1.0, 0.0),  # pure D_m (issue #180)
+            (1.0, 0.3),  # mixed
+        ],
+    )
+    def test_column_mass_conservation_variable_flow_dispersion(self, d_m, alpha_l, seed):
         """Volume-weighted column sums must equal infiltrated volume under
-        variable flow with non-zero microdispersion.
+        variable flow with dispersion (any combination of D_m and alpha_L).
 
-        Regression for issue #162: the per-cout-bin scalar ``D_L`` proxy made
-        the breakthrough kernel discontinuous at cout-bin boundaries under
-        variable Q, breaking the telescoping that underlies mass conservation.
-        With the moving-frame variance ``sigma^2(V) = 2 D_m tau(V) + 2 alpha_L xi(V)``
-        the kernel depends only on V (and the cin edge), restoring conservation
-        to machine precision when ``alpha_L`` is the only contributor to
-        spreading (``alpha_L * xi(V)`` is linear in ``V - V_cin[j]``, so
-        each cin edge's kernel is a pure shift of the others).
+        Regression for issues #162 and #180. The forward kernel reports the
+        Kreft-Zuber (1978) flux concentration at the outlet,
 
-        Tolerance: ``atol=1e-10, rtol=0`` — the previous formulation gave
-        O(1e-2) deviations on this setup; here ``alpha_L > 0`` and
-        ``D_m = 0`` so the residual is at the machine-precision floor.
+            C_F = C_R - (D_L / v) * dC_R/dx,
 
-        The pure-``D_m`` case is intentionally excluded: ``D_L = D_m`` did
-        not vary per cout bin in the old code either, so the bug under
-        review did not apply. A separate small mass-conservation defect
-        exists for pure ``D_m`` under variable ``Q`` because the residence
-        time itself varies across infiltration times; that is unrelated
-        to this fix and not addressed here.
+        which converts Bear's resident concentration into a flux concentration.
+        The invariant ``sum_i W[i,j] * Q_out[i] * dt_out[i] == Q_in[j] * dt_in[j]``
+        then holds at machine precision under arbitrary variable Q and for any
+        combination of molecular diffusion D_m and longitudinal dispersivity
+        alpha_L. Without the flux correction, Bear's leading-order kernel misses
+        the dispersive boundary flux and the column sum drifts by O(1/Pe).
         """
         n = 60
         tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
@@ -1580,23 +1585,23 @@ class TestFlowWeightedDiffusion:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=streamline_length,
-            molecular_diffusivity=np.array([0.0]),
+            molecular_diffusivity=np.array([d_m]),
             longitudinal_dispersivity=np.array([alpha_l]),
             retardation_factor=1.0,
-            asymptotic_cutoff_sigma=3.0,
         )
 
         # Conservation under variable flow:
         #   sum_i W[i,j] * Q_out[i] * dt_out[i] == Q_in[j] * dt_in[j]
         # Restrict to interior cin bins whose parcels fully transit within
-        # the cout window — RT ~ V/Q ~ 10 days plus a few sigma of dispersion
-        # spread, so bins 10..43 are safely fully captured at n=60.
+        # the cout window. RT ~ V/Q ~ 10 days, plus dispersion-induced tail
+        # spread, leaves bins 10..41 fully captured even for the largest
+        # combined-dispersion case at n=60.
         dt = np.diff(tedges) / pd.Timedelta("1D")
         v_out = flow * dt  # cout flow == flow for matched edges
-        v_in_interior = flow[10:44] * 1.0
+        v_in_interior = flow[10:42] * 1.0
 
         mass_out_per_cin = (v_out[:, None] * coeff).sum(axis=0)
-        ratios = mass_out_per_cin[10:44] / v_in_interior
+        ratios = mass_out_per_cin[10:42] / v_in_interior
         np.testing.assert_allclose(ratios, 1.0, atol=1e-10, rtol=0)
 
     def test_constant_cin_varying_flow_gives_constant_cout(self):
@@ -1621,216 +1626,97 @@ class TestFlowWeightedDiffusion:
         valid = ~np.isnan(cout)
         np.testing.assert_allclose(cout[valid], 7.0, atol=1e-12)
 
-    def test_volume_mean_capped_matches_space_integral(self):
-        """For fully capped cells, _erf_mean_volume must match _erf_integral_space."""
-        n_cout_edges = 6
-        n_cin_edges = 4
-        rng = np.random.default_rng(42)
-
-        # Build monotonically increasing cumulative volumes
-        cum_cout = np.cumsum(rng.uniform(80, 120, n_cout_edges))
-        cum_cin = np.cumsum(rng.uniform(80, 120, n_cin_edges))
-        tedges_days = np.cumsum(np.concatenate([[0], rng.uniform(0.8, 1.2, n_cin_edges - 1)]))
-
-        r_vpv = 500.0
-        sl = 100.0
-
-        # Build step_widths: (n_cout_edges, n_cin_edges)
-        delta_vol = cum_cout[:, None] - cum_cin[None, :] - r_vpv
-        step_widths = delta_vol / r_vpv * sl
-
-        # Use very small RT so all cells are fully capped
-        rt_at_cin_edges = np.full(n_cin_edges, 0.1)
-        raw_time = np.full((n_cout_edges, n_cin_edges), 1000.0)
-
-        d_m = 1.2
-        alpha_l = 0.5
-
-        result = _erf_mean_volume(
-            step_widths=step_widths,
-            raw_time=raw_time,
-            rt_at_cin_edges=rt_at_cin_edges,
-            molecular_diffusivity=d_m,
-            longitudinal_dispersivity=alpha_l,
-            cumulative_volume_at_cout_tedges=cum_cout,
-            cumulative_volume_at_cin_tedges=cum_cin,
-            tedges_days=tedges_days,
-            r_vpv=r_vpv,
-            streamline_len=sl,
-            asymptotic_cutoff_sigma=3.0,
-        )
-
-        # Reference: _erf_integral_space at fixed dispersion product
-        # Dt = D_m*RT_j + alpha_L*L for fully capped cells
-        x_lo = step_widths[:-1]
-        x_hi = step_widths[1:]
-        dx = x_hi - x_lo
-        n_cout_bins = n_cout_edges - 1
-
-        for i in range(n_cout_bins):
-            for j in range(n_cin_edges):
-                rt = rt_at_cin_edges[j]
-                dt_val = d_m * rt + alpha_l * sl
-                h_hi = _erf_integral_space(np.array([x_hi[i, j]]), dispersion=np.array([dt_val]))[0]
-                h_lo = _erf_integral_space(np.array([x_lo[i, j]]), dispersion=np.array([dt_val]))[0]
-                expected = (h_hi - h_lo) / dx[i, j]
-                np.testing.assert_allclose(result[i, j], expected, atol=1e-14)
-
     @pytest.mark.parametrize(
         ("d_m", "alpha_l"),
         [
-            (1.5, 0.0),  # pure molecular: Dt(V) = D_m * tau(V)
-            (0.0, 0.3),  # pure microdispersion: Dt(V) = alpha_L * (x(V) + L)
+            (1.5, 0.0),  # pure molecular: D_t = D_m * tau
+            (0.0, 0.3),  # pure microdispersion: D_t = alpha_L * xi
             (1.5, 0.3),  # mixed: both terms active
         ],
     )
-    def test_volume_mean_uncapped_vs_quad(self, d_m, alpha_l):
-        """Uncapped GL quadrature must match scipy.integrate.quad reference.
+    def test_cfrac_mean_volume_vs_quad(self, d_m, alpha_l):
+        """`_cfrac_mean_volume` must match scipy.integrate.quad for C_F = C_R + flux correction.
 
-        The fix introduces ``xi_nodes = x_nodes + streamline_len`` and
-        ``Dt = D_m * tau + alpha_L * xi`` inside the GL loop. With
-        ``alpha_l > 0`` this test exercises the V-dependent dispersivity
-        term and catches any sign / scaling regression in ``xi`` or in the
-        combination of the two variance contributions.
+        The Kreft-Zuber flux concentration at the outlet is
+        ``C_F(L, V; t_j) = C_R(L, V; t_j) + (D_L(t(V))/v(t(V))) * Gaussian density``,
+        where ``C_R = 0.5 * erfc((L-xi)/(2*sqrt(D_t)))`` is Bear's resident
+        concentration, ``D_t = D_m * tau + alpha_L * xi``, and the flux
+        correction uses the instantaneous local dispersion coefficient
+        ``D_L = D_m + alpha_L * v(t)``.
+
+        Tests several narrow cout cells covering pre-breakthrough, the
+        breakthrough front, and post-breakthrough. Cells are chosen narrow
+        enough that 16-point GL quadrature in V-space is precise to ~1e-12.
         """
-        n_cin_edges = 3  # 3 flow bins
-        cum_cin = np.array([0.0, 100.0, 250.0])
-        tedges_days = np.array([0.0, 1.0, 2.5])  # varying flow: Q=100, Q=100
+        cum_cin = np.array([0.0, 50.0, 130.0, 220.0, 330.0, 500.0])
+        tedges_days = np.array([0.0, 0.5, 1.4, 2.3, 3.4, 5.0])  # variable Q
 
         r_vpv = 200.0
         sl = 50.0
-        # cout edges straddle the boundary: V ∈ [50, 180]
-        cum_cout = np.array([50.0, 180.0])
+        v_pore = 200.0  # = r_vpv when R = 1 (no retardation in this test)
 
-        # RT large enough that the cell is fully uncapped
-        rt_at_cin_edges = np.array([100.0, 100.0, 100.0])
+        # Several narrow cout cells: pre, around, and post breakthrough for j=0
+        cum_cout = np.array([60.0, 130.0, 200.0, 260.0, 330.0, 420.0, 480.0])
 
         delta_vol = cum_cout[:, None] - cum_cin[None, :] - r_vpv
         step_widths = delta_vol / r_vpv * sl
 
-        raw_time = np.full((len(cum_cout), n_cin_edges), 0.5)  # << RT → uncapped
-
-        result = _erf_mean_volume(
+        result = _cfrac_mean_volume(
             step_widths=step_widths,
-            raw_time=raw_time,
-            rt_at_cin_edges=rt_at_cin_edges,
-            molecular_diffusivity=d_m,
-            longitudinal_dispersivity=alpha_l,
             cumulative_volume_at_cout_tedges=cum_cout,
             cumulative_volume_at_cin_tedges=cum_cin,
             tedges_days=tedges_days,
-            r_vpv=r_vpv,
-            streamline_len=sl,
-            asymptotic_cutoff_sigma=None,
-        )
-
-        # Reference via scipy.integrate.quad — Dt(V) = D_m * tau + alpha_L * xi
-        v_lo, v_hi = cum_cout[0], cum_cout[1]
-
-        for j in range(n_cin_edges):
-            v_j = cum_cin[j]
-            t_j = tedges_days[j]
-            rt_j = rt_at_cin_edges[j]
-
-            def _make_integrand(v_j_, t_j_, rt_j_):
-                def integrand(v):
-                    x = (v - v_j_ - r_vpv) * sl / r_vpv
-                    xi = x + sl  # distance the parcel has actually travelled
-                    t_v = np.interp(v, cum_cin, tedges_days)
-                    tau = min(max(t_v - t_j_, 0.0), rt_j_)
-                    dt_val = d_m * tau + alpha_l * xi
-                    if dt_val <= 0:
-                        return np.sign(x)
-                    return special.erf(x / (2.0 * np.sqrt(dt_val)))
-
-                return integrand
-
-            ref, _ = integrate.quad(_make_integrand(v_j, t_j, rt_j), v_lo, v_hi, limit=200)
-            ref_mean = ref / (v_hi - v_lo)
-            np.testing.assert_allclose(result[0, j], ref_mean, atol=1e-13)
-
-    @pytest.mark.parametrize(
-        ("d_m", "alpha_l"),
-        [
-            (1.5, 0.0),  # pure molecular
-            (0.0, 0.3),  # pure microdispersion: verifies the kink continuity at V_kink
-            (1.5, 0.3),  # mixed
-        ],
-    )
-    def test_volume_mean_partially_capped_vs_quad(self, d_m, alpha_l):
-        """Partially capped cell (uncapped→capped mid-cell) must match quad.
-
-        Stresses the kink continuity: at ``V = V_kink`` the uncapped GL branch
-        uses ``Dt = D_m * tau(V) + alpha_L * xi(V)`` while the analytic capped
-        branch uses ``Dt = D_m * RT_j + alpha_L * L``. These must agree at
-        ``V_kink`` (where ``tau = RT_j``, ``xi = L``) for the result to be
-        smooth across the transition. With ``alpha_l > 0`` this test catches
-        any asymmetry in how the two branches assemble ``Dt``.
-        """
-        n_cin_edges = 3  # 3 flow bins
-        cum_cin = np.array([0.0, 100.0, 250.0])
-        tedges_days = np.array([0.0, 1.0, 2.5])
-
-        r_vpv = 200.0
-        sl = 50.0
-        # cout bin spans V ∈ [50, 180]
-        cum_cout = np.array([50.0, 180.0])
-
-        # RT chosen so that raw_time[lo] < RT < raw_time[hi] for the cell,
-        # creating a partially capped cell that transitions mid-bin.
-        rt_at_cin_edges = np.array([0.8, 0.8, 0.8])
-
-        delta_vol = cum_cout[:, None] - cum_cin[None, :] - r_vpv
-        step_widths = delta_vol / r_vpv * sl
-
-        # raw_time: lo edge uncapped (0.3 < 0.8), hi edge capped (1.2 > 0.8)
-        raw_time = np.array([[0.3, 0.3, 0.3], [1.2, 1.2, 1.2]])
-
-        result = _erf_mean_volume(
-            step_widths=step_widths,
-            raw_time=raw_time,
-            rt_at_cin_edges=rt_at_cin_edges,
             molecular_diffusivity=d_m,
             longitudinal_dispersivity=alpha_l,
-            cumulative_volume_at_cout_tedges=cum_cout,
-            cumulative_volume_at_cin_tedges=cum_cin,
-            tedges_days=tedges_days,
             r_vpv=r_vpv,
             streamline_len=sl,
-            asymptotic_cutoff_sigma=None,
+            aquifer_pore_volume=v_pore,
         )
 
-        # Reference via scipy.integrate.quad — Dt(V) = D_m * tau + alpha_L * xi,
-        # with both tau and xi frozen once the parcel has exited the aquifer.
-        v_lo, v_hi = cum_cout[0], cum_cout[1]
+        # Fluid velocity per flow bin
+        q_per_bin = np.diff(cum_cin) / np.diff(tedges_days)
+        v_per_bin = q_per_bin * sl / v_pore
 
-        for j in range(n_cin_edges):
-            v_j = cum_cin[j]
-            t_j = tedges_days[j]
-            rt_j = rt_at_cin_edges[j]
+        def _make_integrand(v_j_, t_j_):
+            def integrand(v):
+                x = (v - v_j_ - r_vpv) * sl / r_vpv
+                xi = x + sl
+                t_v = float(np.interp(v, cum_cin, tedges_days))
+                tau = max(t_v - t_j_, 0.0)
+                dt_val = d_m * tau + alpha_l * xi
+                if dt_val <= 0:
+                    return 0.0
+                # Identify which flow bin t_v falls in (left-closed convention)
+                k = min(int(np.searchsorted(tedges_days, t_v, side="right") - 1), len(v_per_bin) - 1)
+                v_obs = v_per_bin[max(k, 0)]
+                cr = 0.5 * special.erfc((sl - xi) / (2.0 * np.sqrt(dt_val)))
+                fc = (
+                    (d_m + alpha_l * v_obs)
+                    / v_obs
+                    * np.exp(-((sl - xi) ** 2) / (4.0 * dt_val))
+                    / np.sqrt(4.0 * np.pi * dt_val)
+                )
+                return cr + fc
 
-            def _make_integrand_partial(v_j_, t_j_, rt_j_):
-                def integrand(v):
-                    x = (v - v_j_ - r_vpv) * sl / r_vpv
-                    t_v = np.interp(v, cum_cin, tedges_days)
-                    tau_raw = max(t_v - t_j_, 0.0)
-                    if tau_raw >= rt_j_:
-                        # Parcel has exited: variance frozen at exit values.
-                        tau = rt_j_
-                        xi = sl
-                    else:
-                        tau = tau_raw
-                        xi = x + sl  # distance the parcel has actually travelled
-                    dt_val = d_m * tau + alpha_l * xi
-                    if dt_val <= 0:
-                        return np.sign(x)
-                    return special.erf(x / (2.0 * np.sqrt(dt_val)))
+            return integrand
 
-                return integrand
-
-            ref, _ = integrate.quad(_make_integrand_partial(v_j, t_j, rt_j), v_lo, v_hi, limit=200)
-            ref_mean = ref / (v_hi - v_lo)
-            np.testing.assert_allclose(result[0, j], ref_mean, atol=1e-13)
+        # The function only integrates within the flow-data range [V_cin[0], V_cin[-1]];
+        # beyond that, t(V) is undefined and there is no flow bin to integrate over,
+        # so the reference quad must clip the upper limit to V_cin[-1] as well.
+        n_cout_bins = len(cum_cout) - 1
+        for i in range(n_cout_bins):
+            v_lo, v_hi = cum_cout[i], cum_cout[i + 1]
+            for j in range(len(cum_cin)):
+                v_j = cum_cin[j]
+                t_j = tedges_days[j]
+                lower = max(v_lo, v_j, cum_cin[0])
+                upper = min(v_hi, cum_cin[-1])
+                if lower >= upper:
+                    np.testing.assert_allclose(result[i, j], 0.0, atol=1e-13)
+                    continue
+                ref, _ = integrate.quad(_make_integrand(v_j, t_j), lower, upper, limit=500, epsabs=1e-13)
+                ref_mean = ref / (v_hi - v_lo)
+                np.testing.assert_allclose(result[i, j], ref_mean, atol=1e-12)
 
 
 class TestGammaExtractionToInfiltrationDiffusion:

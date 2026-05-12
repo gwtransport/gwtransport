@@ -2,8 +2,7 @@
 Analytical solutions for 1D advection-dispersion transport.
 
 This module implements analytical solutions for solute transport in 1D aquifer
-systems, combining advection with longitudinal dispersion. The solutions are
-based on the error function (erf) and its integrals.
+systems, combining advection with longitudinal dispersion.
 
 Key functions:
 
@@ -19,35 +18,48 @@ Key functions:
 - :func:`gamma_extraction_to_infiltration` - Gamma-distributed pore volumes, deconvolution
   with dispersion. Symmetric inverse of gamma_infiltration_to_extraction.
 
-The breakthrough kernel implemented here is the variable-flow Ogata-Banks
-solution from Bear (1972), Dynamics of Fluids in Porous Media, eq. 10.6.4:
+Reported outlet concentration: Kreft-Zuber (1978) flux concentration
+---------------------------------------------------------------------
 
-    epsilon(x, t) = (C(x, t) - C0) / (C1 - C0)
-                  = 0.5 * erfc{ -[x - integral_0^t (q(t)/n) dt]
-                                / (2 * sqrt[integral_0^t (alpha_I |q|/n + D_d T*) dt]) }
+The outlet concentration reported by this module is the **flux concentration**
+
+    C_F(L, t) = C_R(L, t) - (D_L(t) / v(t)) * dC_R/dx |_{x=L}
+
+— the solute mass flux at the outlet divided by the volumetric fluid flux. This
+is what is measured when sampling the extracted fluid. The resident
+concentration ``C_R`` is Bear (1972) eq. 10.6.4, the variable-flow moving-frame
+Ogata-Banks solution
+
+    C_R(L, V; t_j) = 0.5 * erfc((L - xi_j(V)) / (2 * sqrt(D_t(V))))
 
 with the dispersion variance accumulated in the moving (Lagrangian) frame:
 
-    sigma^2(V) = 2 * D_m * tau(V) + 2 * alpha_L * xi(V)
+    D_t(V) = sigma^2(V) / 2 = D_m * tau(V) + alpha_L * xi(V)
 
 where:
 
-- D_m is the molecular (or thermal) effective diffusivity D_d * T* [m^2/day]
-- alpha_L is the longitudinal dispersivity alpha_I [m]
+- D_m is the effective molecular (or thermal) diffusivity [m^2/day]
+- alpha_L is the longitudinal dispersivity [m]
 - tau(V) is the elapsed time since infiltration [day], with V the cumulative
-  extracted volume; equivalent to t in Bear's notation
-- xi(V) is the distance the parcel has actually travelled [m], equivalent to
-  ``integral_0^t q/n dt`` in Bear's notation
+  extracted volume
+- xi(V) = L (V - V_j) / (R V_pore) is the distance the parcel has actually
+  travelled [m]
 
-This formulation ensures that:
+The K-Z flux-correction term is what makes the column-sum invariant
+``integral Q c_out dt = integral Q c_in dt`` hold to machine precision under
+arbitrary variable Q. Without it, the leading-order C_R loses O(1/Pe) per
+column under variable Q + pure D_m (issue #180).
 
-- Molecular diffusion spreading scales with residence time: sqrt(D_m * tau)
-- Mechanical dispersion spreading scales with travel distance: sqrt(alpha_L * xi)
+Implementation: the bin-averaged C_F is computed by 16-point Gauss-Legendre
+quadrature in volume space, split at flow-bin boundaries so each sub-interval
+sees a linear t(V) and a smooth integrand. The variance is evaluated at each
+quadrature node from the parcel's own tau and xi histories — never capped at
+the residence time. The K-Z identity requires Bear's formula to satisfy the
+variable-coefficient ADE exactly, which holds only when D_t is allowed to
+keep growing past breakthrough.
 
-Evaluating sigma^2 directly at each volume node — rather than via a per-bin
-scalar D_L = D_m + alpha_L * v_s built from a mean velocity — keeps the
-breakthrough kernel a function only of V (and the infiltration edge), which
-is what mass conservation requires when Q varies in time.
+Macrodispersion vs microdispersion
+----------------------------------
 
 This module adds microdispersion (alpha_L) and molecular diffusion (D_m) on top of
 macrodispersion captured by the pore volume distribution (APVD). Both represent velocity
@@ -58,7 +70,14 @@ for guidance on when to use each approach and how to avoid double-counting sprea
 References
 ----------
 Bear, J. (1972). Dynamics of Fluids in Porous Media. American Elsevier
-Publishing Company. Equation 10.6.4 (variable-flow Ogata-Banks form).
+Publishing Company. Equation 10.6.4 (variable-flow Ogata-Banks form). Provides
+the resident concentration ``C_R``.
+
+Kreft, A., & Zuber, A. (1978). On the physical meaning of the dispersion
+equation and its solutions for different initial and boundary conditions.
+Chemical Engineering Science, 33(11), 1471-1480. Eq. 2 gives the resident-to-
+flux concentration transformation; Eq. 1 is the mass-balance identity that
+makes the column-sum invariant exact.
 """
 
 import warnings
@@ -79,168 +98,99 @@ EPSILON_COEFF_SUM = 1e-10
 _GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(16)
 
 
-def _erf_integral_space(
-    x: npt.NDArray[np.float64],
-    *,
-    dispersion: npt.ArrayLike,
-    clip_to_inf: float = 6.0,
-) -> npt.NDArray[np.float64]:
-    r"""Compute the integral of the error function in space at each (x[i], dispersion[i]) point.
-
-    Evaluates
-
-    .. math:: \int_0^{x_i} \text{erf}\!\left(\frac{s}{2\sqrt{K_i}}\right) ds
-
-    where ``K = dispersion = D \cdot t = \sigma^2 / 2`` collapses the time
-    and diffusivity dependence into a single dispersion product. This form
-    lets the caller assemble the variance from arbitrary contributions
-    (e.g. ``D_m \cdot \tau + \alpha_L \cdot \xi``) without forcing the
-    kernel to expose separate ``D`` and ``t`` parameters.
-
-    Parameters
-    ----------
-    x : ndarray
-        Upper limits of integration. Broadcastable with ``dispersion``.
-    dispersion : float or ndarray
-        Dispersion product ``D * t`` [m²], equivalently ``sigma^2 / 2``.
-        Must be non-negative. Broadcastable with ``x``.
-    clip_to_inf : float, optional
-        Clip ``x / (2*sqrt(K))`` values beyond this magnitude to the
-        asymptotic form. Default is 6.
-
-    Returns
-    -------
-    ndarray
-        Integral values. Shape is the broadcast of inputs.
-    """
-    x = np.asarray(x)
-    dispersion = np.asarray(dispersion)
-
-    x, dispersion = np.broadcast_arrays(x, dispersion)
-    out = np.zeros_like(x, dtype=float)
-
-    # a = 1 / (2*sqrt(K)) — equivalent to a = 1/(sqrt(2)*sigma)
-    # K = 0 → a = inf (step function limit)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        a = np.where(dispersion == 0.0, np.inf, 1.0 / (2.0 * np.sqrt(dispersion)))
-
-    # K = 0: integral of sign(s) from 0 to x equals |x|
-    mask_a_inf = np.isinf(a)
-    if np.any(mask_a_inf):
-        out[mask_a_inf] = np.abs(x[mask_a_inf])
-
-    mask_valid = ~mask_a_inf
-    if np.any(mask_valid):
-        x_v = x[mask_valid]
-        a_v = a[mask_valid]
-        ax = a_v * x_v
-
-        result = np.zeros_like(x_v)
-
-        maskl = ax <= -clip_to_inf
-        masku = ax >= clip_to_inf
-        mask_mid = ~maskl & ~masku
-
-        result[maskl] = -x_v[maskl] - 1 / (a_v[maskl] * np.sqrt(np.pi))
-        result[masku] = x_v[masku] - 1 / (a_v[masku] * np.sqrt(np.pi))
-        result[mask_mid] = x_v[mask_mid] * special.erf(ax[mask_mid]) + (np.exp(-(ax[mask_mid] ** 2)) - 1) / (
-            a_v[mask_mid] * np.sqrt(np.pi)
-        )
-
-        out[mask_valid] = result
-
-    return out
-
-
-def _erf_mean_volume(
+def _cfrac_mean_volume(
     *,
     step_widths: npt.NDArray[np.float64],
-    raw_time: npt.NDArray[np.float64],
-    rt_at_cin_edges: npt.NDArray[np.float64],
-    molecular_diffusivity: float,
-    longitudinal_dispersivity: float,
     cumulative_volume_at_cout_tedges: npt.NDArray[np.float64],
     cumulative_volume_at_cin_tedges: npt.NDArray[np.float64],
     tedges_days: npt.NDArray[np.float64],
+    molecular_diffusivity: float,
+    longitudinal_dispersivity: float,
     r_vpv: float,
     streamline_len: float,
-    asymptotic_cutoff_sigma: float | None,
+    aquifer_pore_volume: float,
 ) -> npt.NDArray[np.float64]:
-    r"""Compute mean erf along the physical trajectory in cumulative volume space.
+    r"""Compute bin-averaged flux concentration at the outlet for each cell.
 
-    For each cell (cout_bin *i*, cin_edge *j*), computes the flow-weighted
-    average of the error function along the 1D extraction trajectory:
-
-    .. math::
-
-        \text{mean\_erf}_{i,j} = \frac{1}{\Delta V_i}
-        \int_{V_i}^{V_{i+1}} \text{erf}\!\left(
-            \frac{x(V)}{\sqrt{2\,\sigma^2(V)}}
-        \right) dV
-
-    where *x(V)* is the normalized distance (linear in *V*), *τ(V)* is the
-    elapsed time since infiltration (capped at the residence time *RT*),
-    *ξ(V) = x(V) + L* is the distance the parcel has actually travelled,
-    and the dispersion variance is
+    For each cell (cout-bin *i*, cin-edge *j*), computes the flow-weighted
+    average of the Kreft-Zuber (1978) **flux concentration** at the outlet:
 
     .. math::
 
-        \sigma^2(V) = 2\,D_m\,\tau(V) + 2\,\alpha_L\,\xi(V).
+        \text{frac}_{i,j} = \frac{1}{\Delta V_i}
+        \int_{V_i}^{V_{i+1}} C_F\!\left(L,\,V;\,t_j\right) dV
 
-    Averaging over cumulative volume gives a flow-weighted average because
-    dV = Q(t) dt. Evaluating ``sigma^2(V)`` directly at each quadrature node —
-    rather than via a per-cell scalar ``D_L = D_m + alpha_L * L / (R tau_mean)``
-    — keeps the kernel a function only of *V* and the infiltration edge *j*,
-    which is what mass conservation requires when ``Q`` varies.
+    where :math:`C_F = C_R - (D_L / v) \, \partial_x C_R\big|_{x=L}` and
+    :math:`C_R` is Bear's (1972) moving-frame solution:
 
-    **Fully capped cells** (both cout edges have elapsed time ≥ RT):
-    tau = RT and xi = L, so sigma^2 is constant and the integral reduces to
-    ``_erf_integral_space`` at fixed dispersion product
-    ``Dt = D_m * RT + alpha_L * L``. This path gives machine precision.
+    .. math::
 
-    **Uncapped cells** (at least one cout edge has elapsed time < RT):
-    Vectorized 16-point Gauss-Legendre quadrature in volume space.  The
-    integration is split at flow-bin boundaries (where *Q* changes) so
-    that within each sub-interval the integrand is smooth, and at the
-    capping transition (where *τ* switches from linear growth to the
-    constant *RT*) where the exact ``_erf_integral_space`` is used for
-    the capped portion.  The outer loop runs over flow bins; within each
-    iteration all overlapping uncapped cells are evaluated simultaneously.
+        C_R(L, V; t_j) &= \tfrac{1}{2}\,
+            \mathrm{erfc}\!\left( \frac{L - \xi_j(V)}{2\sqrt{D_t(V)}} \right) \\
+        \xi_j(V) &= L \cdot (V - V_j) \,/\, (R\,V_\text{pore}) \\
+        D_t(V) &= D_m\,\tau_j(V) + \alpha_L\,\xi_j(V),
+            \quad \tau_j(V) = t(V) - t_j \\
+        D_L(t) &= D_m + \alpha_L\,v(t), \quad v(t) = Q(t)\,L\,/\,V_\text{pore}.
+
+    The added flux-correction term
+
+    .. math::
+
+        \frac{D_L(t(V))}{v(t(V))} \cdot
+        \frac{1}{\sqrt{4\pi\,D_t(V)}}\,
+        \exp\!\left( -\frac{(L - \xi_j(V))^2}{4\,D_t(V)} \right)
+
+    converts Bear's *resident* concentration to a *flux* concentration. This
+    makes the coefficient matrix conserve mass under the criterion
+    ``integral Q c_out dt = integral Q c_in dt`` — the relevant invariant for
+    tracer measurements taken in the extracted fluid (Kreft & Zuber, 1978,
+    Eq. 5 and Eq. 1). Without this correction, Bear's leading-order kernel
+    misses the dispersive boundary flux at the outlet and column-sum mass
+    conservation fails by O(1/Pe) under variable Q.
+
+    Implementation: 16-point Gauss-Legendre quadrature in volume space, split
+    at flow-bin boundaries so that within each sub-interval :math:`t(V)` is
+    linear and the integrand is smooth. No "fully capped" branch: the moving-
+    frame variance keeps growing past breakthrough, and the K-Z identity
+    requires Bear's formula to satisfy the variable-coefficient ADE exactly
+    (which it does only without capping).
 
     Parameters
     ----------
     step_widths : ndarray, shape (n_cout_edges, n_cin_edges)
-        Normalized x-position at each (cout_edge, cin_edge) point.
-        NaN for inactive cells.
-    raw_time : ndarray, shape (n_cout_edges, n_cin_edges)
-        Raw elapsed time in days (before capping at RT).
-        NaN for inactive cells.
-    rt_at_cin_edges : ndarray, shape (n_cin_edges,)
-        Residence time at each cin edge for this pore volume [days].
-    molecular_diffusivity : float
-        Molecular (or thermal) diffusivity for this pore volume [m²/day].
-        Contributes ``2 D_m τ`` to the variance.
-    longitudinal_dispersivity : float
-        Longitudinal dispersivity for this pore volume [m]. Contributes
-        ``2 * alpha_L * xi`` to the variance, where ``xi`` is the distance
-        the parcel has actually travelled.
+        x-position ``x(V_cout, V_cin) = (V_cout - V_cin - r_vpv) * L / r_vpv``
+        at each (cout-edge, cin-edge). NaN for inactive cells. Equals
+        :math:`\xi - L`.
     cumulative_volume_at_cout_tedges : ndarray, shape (n_cout_edges,)
         Cumulative extracted volume at each cout time edge [m³].
     cumulative_volume_at_cin_tedges : ndarray, shape (n_cin_edges,)
         Cumulative volume at each cin (flow) time edge [m³].
     tedges_days : ndarray, shape (n_cin_edges,)
-        Flow time edges in days (same reference as raw_time).
+        Flow time edges in days.
+    molecular_diffusivity : float
+        Effective molecular diffusivity D_m [m²/day]. Contributes
+        ``D_m * tau`` to the dispersion product ``D_t``.
+    longitudinal_dispersivity : float
+        Longitudinal dispersivity alpha_L [m]. Contributes ``alpha_L * xi``
+        to the dispersion product ``D_t``.
     r_vpv : float
-        Retardation factor times pore volume [m³].
+        Retardation factor times pore volume = R * V_pore [m³].
     streamline_len : float
-        Streamline length [m].
-    asymptotic_cutoff_sigma : float or None
-        Erf cutoff threshold for ``_erf_integral_space``.
+        Streamline length L [m].
+    aquifer_pore_volume : float
+        Pore volume V_pore [m³]. Used to compute fluid velocity
+        ``v = Q * L / V_pore`` for the K-Z flux correction.
 
     Returns
     -------
     ndarray, shape (n_cout_bins, n_cin_edges)
-        Mean erf value for each cell. NaN for inactive cells.
+        Bin-averaged flux concentration for each cell. NaN for inactive cells.
+
+    References
+    ----------
+    Kreft, A., & Zuber, A. (1978). On the physical meaning of the dispersion
+    equation and its solutions for different initial and boundary conditions.
+    Chemical Engineering Science, 33(11), 1471-1480.
     """
     n_cout_edges, n_cin_edges = step_widths.shape
     n_cout_bins = n_cout_edges - 1
@@ -254,136 +204,103 @@ def _erf_mean_volume(
 
     is_valid = ~np.isnan(x_lo) & ~np.isnan(x_hi)
 
-    # Determine capping status at each cell edge
-    with np.errstate(invalid="ignore"):
-        is_capped_lo = raw_time[:-1] >= rt_at_cin_edges[np.newaxis, :]
-        is_capped_hi = raw_time[1:] >= rt_at_cin_edges[np.newaxis, :]
-    is_fully_capped = is_capped_lo & is_capped_hi
+    frac = np.full((n_cout_bins, n_cin_edges), np.nan)
 
-    response = np.full((n_cout_bins, n_cin_edges), np.nan)
-
-    # --- No dispersion: erf = sign(x), exact for any tau, xi ---
+    # --- No dispersion: C_F = C_R = step function (no dispersive flux) ---
     if molecular_diffusivity == 0.0 and longitudinal_dispersivity == 0.0:
         with np.errstate(divide="ignore", invalid="ignore"):
-            d_zero_vals = (np.abs(x_hi) - np.abs(x_lo)) / dx
-        d_zero_vals = np.where(dx == 0.0, np.sign(x_lo), d_zero_vals)
-        return np.where(is_valid, d_zero_vals, response)
+            cr_no_disp = 0.5 + 0.5 * (np.abs(x_hi) - np.abs(x_lo)) / dx
+        cr_no_disp = np.where(dx == 0.0, 0.5 + 0.5 * np.sign(x_lo), cr_no_disp)
+        return np.where(is_valid, cr_no_disp, frac)
 
-    # --- Fully capped cells: sigma^2 = 2 D_m RT_j + 2 alpha_L L, constant over the cell ---
-    mask_capped = is_valid & is_fully_capped
-    if np.any(mask_capped):
-        rt_capped = np.broadcast_to(rt_at_cin_edges[np.newaxis, :], (n_cout_bins, n_cin_edges))[mask_capped]
-        # Dispersion product Dt = σ²/2 at the fully-transited parcel:
-        # tau = RT_j (fully capped) and xi = streamline_len.
-        dt_capped = molecular_diffusivity * rt_capped + longitudinal_dispersivity * streamline_len
+    # --- Pre-compute fluid velocity and K-Z coefficient (D_L/v) per flow bin ---
+    dv_per_bin = np.diff(cumulative_volume_at_cin_tedges)
+    dt_per_bin = np.diff(tedges_days)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        q_per_bin = np.where(dt_per_bin > 0, dv_per_bin / dt_per_bin, 0.0)
+        v_per_bin = q_per_bin * streamline_len / aquifer_pore_volume
+        # (D_L/v) = D_m/v + alpha_L. At v=0 the bin has dV=0 and is skipped below.
+        dl_over_v_per_bin = np.where(
+            v_per_bin > 0,
+            molecular_diffusivity / np.where(v_per_bin > 0, v_per_bin, 1.0) + longitudinal_dispersivity,
+            0.0,
+        )
 
-        clip_kw = {"clip_to_inf": asymptotic_cutoff_sigma} if asymptotic_cutoff_sigma is not None else {}
-        h_hi = _erf_integral_space(x_hi[mask_capped], dispersion=dt_capped, **clip_kw)
-        h_lo = _erf_integral_space(x_lo[mask_capped], dispersion=dt_capped, **clip_kw)
-        dx_c = dx[mask_capped]
+    # --- Gauss-Legendre quadrature over each cell, split by flow bins ---
+    # The integration window per (cell, flow-bin) is the intersection of
+    # [V_lo, V_hi] (cell), [ve_lo, ve_hi] (flow bin), and [V_j, infty) (parcel
+    # entered). Within each sub-interval, t(V) is linear and the integrand is
+    # smooth, so 16-point GL gives machine precision.
+    idx_i, idx_j = np.nonzero(is_valid)
+    if len(idx_i) == 0:
+        return frac
+
+    v_lo_cells = v_lo_arr[idx_i]
+    v_hi_cells = v_hi_arr[idx_i]
+    v_cin_cells = cumulative_volume_at_cin_tedges[idx_j]
+    t_j_cells = tedges_days[idx_j]
+    total_dv = v_hi_cells - v_lo_cells
+    valid_cells = total_dv > 0
+
+    integral_cf = np.zeros(len(idx_i))
+
+    vol_edges = cumulative_volume_at_cin_tedges
+    for k in range(len(vol_edges) - 1):
+        ve_lo, ve_hi = vol_edges[k], vol_edges[k + 1]
+        if v_per_bin[k] <= 0.0:
+            continue
+        dl_over_v_k = dl_over_v_per_bin[k]
+
+        # Intersection of cell, flow-bin, and post-injection range
+        sub_lo = np.maximum(np.maximum(v_lo_cells, ve_lo), v_cin_cells)
+        sub_hi = np.minimum(v_hi_cells, ve_hi)
+        overlap = (sub_hi > sub_lo) & valid_cells
+        if not np.any(overlap):
+            continue
+
+        dv_sub = sub_hi[overlap] - sub_lo[overlap]
+        v_mid_sub = (sub_hi[overlap] + sub_lo[overlap]) / 2.0
+        v_half_sub = dv_sub / 2.0
+
+        v_nodes = v_mid_sub[:, np.newaxis] + v_half_sub[:, np.newaxis] * _GL_NODES[np.newaxis, :]
+
+        # Geometry: x = xi - L = (V - V_j - r_vpv) * L / r_vpv (parcel position
+        # relative to outlet); xi = parcel travel distance.
+        x_nodes = (v_nodes - v_cin_cells[overlap, np.newaxis] - r_vpv) * streamline_len / r_vpv
+        xi_nodes = x_nodes + streamline_len
+
+        # t(V) linear within flow bin k
+        dt_sub_bin = tedges_days[k + 1] - tedges_days[k]
+        dv_sub_edge = ve_hi - ve_lo
+        t_nodes = tedges_days[k] + (v_nodes - ve_lo) * (dt_sub_bin / dv_sub_edge)
+        # tau >= 0 by construction (sub_lo >= v_cin_cells); clip for safety.
+        tau_nodes = np.maximum(t_nodes - t_j_cells[overlap, np.newaxis], 0.0)
+
+        # Bear's variance accumulator (sigma^2/2) — NO capping at RT/L
+        dt_nodes = molecular_diffusivity * tau_nodes + longitudinal_dispersivity * xi_nodes
 
         with np.errstate(divide="ignore", invalid="ignore"):
-            a_vals = np.where(dt_capped <= 0.0, np.inf, 1.0 / (2.0 * np.sqrt(dt_capped)))
-        point_val = np.where(np.isinf(a_vals), np.sign(x_lo[mask_capped]), special.erf(a_vals * x_lo[mask_capped]))
+            arg = x_nodes / (2.0 * np.sqrt(dt_nodes))
+        # C_R = 0.5 * (1 + erf(arg)) = 0.5 * erfc((L-xi)/(2*sqrt(Dt)))
+        erf_vals = np.where(np.isfinite(arg), special.erf(arg), np.sign(x_nodes))
+        cr_vals = 0.5 * (1.0 + erf_vals)
 
+        # K-Z flux correction: FC = (D_L/v) * (1/sqrt(4 pi D_t)) * exp(-arg^2)
         with np.errstate(divide="ignore", invalid="ignore"):
-            response[mask_capped] = np.where(dx_c == 0.0, point_val, (h_hi - h_lo) / dx_c)
+            gauss_vals = np.where(
+                dt_nodes > 0.0,
+                np.exp(-(arg**2)) / np.sqrt(4.0 * np.pi * dt_nodes),
+                0.0,
+            )
+        cf_vals = cr_vals + dl_over_v_k * gauss_vals
 
-    # --- Uncapped cells: vectorized Gauss-Legendre quadrature in volume space ---
-    mask_uncapped = is_valid & ~is_fully_capped
-    if np.any(mask_uncapped):
-        idx_i, idx_j = np.nonzero(mask_uncapped)
-        n_cells = len(idx_i)
+        integral_cf[overlap] += (dv_sub / 2.0) * (cf_vals @ _GL_WEIGHTS)
 
-        # Gather cell parameters (all shape (n_cells,))
-        v_lo_cells = v_lo_arr[idx_i]
-        v_hi_cells = v_hi_arr[idx_i]
-        v_cin_cells = cumulative_volume_at_cin_tedges[idx_j]
-        rt_cells = rt_at_cin_edges[idx_j]
-        t_j_cells = tedges_days[idx_j]
-        total_dv = v_hi_cells - v_lo_cells
+    with np.errstate(divide="ignore", invalid="ignore"):
+        frac_cells = np.where(valid_cells, integral_cf / total_dv, np.nan)
+    frac[idx_i, idx_j] = frac_cells
 
-        valid_cells = np.isfinite(rt_cells) & (total_dv > 0)
-
-        # Partially capped: start uncapped, end capped
-        has_capped = is_capped_hi[idx_i, idx_j] & ~is_capped_lo[idx_i, idx_j]
-        t_kink_all = t_j_cells + rt_cells
-        v_kink_all = np.interp(t_kink_all, tedges_days, cumulative_volume_at_cin_tedges)
-        v_kink_all = np.clip(v_kink_all, v_lo_cells, v_hi_cells)
-        v_end = np.where(has_capped, v_kink_all, v_hi_cells)
-
-        # --- GL quadrature over [v_lo, v_end] for all cells simultaneously ---
-        # Split at flow bin boundaries for smoothness within each sub-interval.
-        # Loop over consecutive pairs of flow-bin volume edges; vectorize
-        # across all cells whose uncapped interval overlaps that sub-interval.
-        uncapped_integral = np.zeros(n_cells)
-        vol_edges = cumulative_volume_at_cin_tedges  # monotonic volume grid
-
-        for k in range(len(vol_edges) - 1):
-            ve_lo, ve_hi = vol_edges[k], vol_edges[k + 1]
-            # Clip to each cell's uncapped interval
-            sub_lo = np.maximum(v_lo_cells, ve_lo)
-            sub_hi = np.minimum(v_end, ve_hi)
-            overlap = (sub_hi > sub_lo) & valid_cells
-            if not np.any(overlap):
-                continue
-
-            dv_sub = sub_hi[overlap] - sub_lo[overlap]  # (n_overlap,)
-            v_mid_sub = (sub_hi[overlap] + sub_lo[overlap]) / 2
-            v_half_sub = dv_sub / 2
-
-            # GL nodes: (n_overlap, n_gl)
-            v_nodes = v_mid_sub[:, np.newaxis] + v_half_sub[:, np.newaxis] * _GL_NODES[np.newaxis, :]
-
-            # x(V): (n_overlap, n_gl), position relative to the outlet
-            x_nodes = (v_nodes - v_cin_cells[overlap, np.newaxis] - r_vpv) * streamline_len / r_vpv
-
-            # ξ(V) = x(V) + L: distance the parcel has actually travelled
-            xi_nodes = x_nodes + streamline_len
-
-            # t(V): within flow sub-interval k, Q is constant so t is linear in V
-            dt_sub = tedges_days[k + 1] - tedges_days[k]
-            dv_sub_edge = ve_hi - ve_lo
-            t_nodes = tedges_days[k] + (v_nodes - ve_lo) * (dt_sub / dv_sub_edge)
-
-            # τ(V) = clip(t(V) - t_j, 0, RT_j): (n_overlap, n_gl)
-            tau_nodes = np.clip(t_nodes - t_j_cells[overlap, np.newaxis], 0.0, rt_cells[overlap, np.newaxis])
-
-            # Dispersion product Dt(V) = sigma^2(V)/2 = D_m * tau(V) + alpha_L * xi(V).
-            # Evaluating sigma^2 directly at each node — rather than via a scalar
-            # D_L = D_m + alpha_L * L / (R * tau_mean) — makes the kernel a
-            # function only of V (and the cin edge j), restoring exact mass
-            # conservation under variable Q.
-            dt_nodes = molecular_diffusivity * tau_nodes + longitudinal_dispersivity * xi_nodes
-
-            # erf(x / (2*sqrt(Dt))) = erf(x / sqrt(2 σ²)): (n_overlap, n_gl)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                arg = x_nodes / (2.0 * np.sqrt(dt_nodes))
-            erf_vals = np.where(np.isfinite(arg), special.erf(arg), np.sign(x_nodes))
-
-            # Accumulate weighted integral for overlapping cells
-            uncapped_integral[overlap] += (dv_sub / 2) * (erf_vals @ _GL_WEIGHTS)
-
-        # --- Capped sub-interval [v_kink, v_hi]: exact via _erf_integral_space.
-        # Beyond the kink the parcel has fully exited, so sigma^2 is constant at
-        # 2 * D_m * RT_j + 2 * alpha_L * L for cells in this branch.
-        capped_integral = np.zeros(n_cells)
-        mask_cap = has_capped & (v_kink_all < v_hi_cells) & valid_cells
-        if np.any(mask_cap):
-            x_at_kink = (v_kink_all[mask_cap] - v_cin_cells[mask_cap] - r_vpv) * streamline_len / r_vpv
-            x_at_hi_cap = x_hi[idx_i[mask_cap], idx_j[mask_cap]]
-            dt_cap = molecular_diffusivity * rt_cells[mask_cap] + longitudinal_dispersivity * streamline_len
-            clip_kw = {"clip_to_inf": asymptotic_cutoff_sigma} if asymptotic_cutoff_sigma is not None else {}
-            h_hi_val = _erf_integral_space(x_at_hi_cap, dispersion=dt_cap, **clip_kw)
-            h_lo_val = _erf_integral_space(x_at_kink, dispersion=dt_cap, **clip_kw)
-            capped_integral[mask_cap] = (h_hi_val - h_lo_val) * (r_vpv / streamline_len)
-
-        # Combine: mean erf = (uncapped + capped) / total_dv
-        with np.errstate(divide="ignore", invalid="ignore"):
-            response_cells = np.where(valid_cells, (uncapped_integral + capped_integral) / total_dv, np.nan)
-        response[idx_i, idx_j] = response_cells
-
-    return response
+    return frac
 
 
 def _diffusion_extend_tedges_flag(spinup: object) -> bool:
@@ -433,7 +350,6 @@ def _infiltration_to_extraction_coeff_matrix(
     molecular_diffusivity: npt.NDArray[np.floating],
     longitudinal_dispersivity: npt.NDArray[np.floating],
     retardation_factor: float,
-    asymptotic_cutoff_sigma: float | None,
     extend_tedges: bool = True,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool_]]:
     """Build the forward coefficient matrix for diffusion transport.
@@ -461,8 +377,6 @@ def _infiltration_to_extraction_coeff_matrix(
         Longitudinal dispersivities [m]. Already broadcasted.
     retardation_factor : float
         Retardation factor.
-    asymptotic_cutoff_sigma : float or None
-        Erf cutoff threshold.
 
     Returns
     -------
@@ -489,15 +403,6 @@ def _infiltration_to_extraction_coeff_matrix(
     # Compute the cumulative flow at cout_tedges
     cumulative_volume_at_cout_tedges = np.interp(cout_tedges, tedges, cumulative_volume_at_cin_tedges).astype(float)
 
-    rt_edges_2d = residence_time(
-        flow=flow,
-        flow_tedges=tedges,
-        index=tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=retardation_factor,
-        direction="infiltration_to_extraction",
-    )
-
     # Compute residence time at cout_tedges to identify valid output bins
     # RT is NaN for cout_tedges beyond the input data range
     rt_at_cout_tedges = residence_time(
@@ -519,10 +424,6 @@ def _infiltration_to_extraction_coeff_matrix(
     # Determine when infiltration has occurred: cout_tedge must be >= tedge (infiltration time)
     isactive = cout_tedges.to_numpy()[:, None] >= tedges.to_numpy()[None, :]
 
-    # Compute raw elapsed time (before capping at RT) once for all pore volumes
-    raw_time = (cout_tedges.to_numpy()[:, None] - tedges.to_numpy()[None, :]) / pd.to_timedelta(1, unit="D")
-    raw_time[~isactive] = np.nan
-
     # Convert tedges to days for volume→time interpolation
     tedges_days_arr = ((tedges - tedges[0]) / pd.Timedelta("1D")).values.astype(float)
 
@@ -535,21 +436,18 @@ def _infiltration_to_extraction_coeff_matrix(
 
         step_widths = delta_volume / r_vpv * streamline_length[i_pv]
 
-        response = _erf_mean_volume(
+        frac = _cfrac_mean_volume(
             step_widths=step_widths,
-            raw_time=raw_time,
-            rt_at_cin_edges=rt_edges_2d[i_pv],
-            molecular_diffusivity=float(molecular_diffusivity[i_pv]),
-            longitudinal_dispersivity=float(longitudinal_dispersivity[i_pv]),
             cumulative_volume_at_cout_tedges=cumulative_volume_at_cout_tedges,
             cumulative_volume_at_cin_tedges=cumulative_volume_at_cin_tedges,
             tedges_days=tedges_days_arr,
+            molecular_diffusivity=float(molecular_diffusivity[i_pv]),
+            longitudinal_dispersivity=float(longitudinal_dispersivity[i_pv]),
             r_vpv=r_vpv,
             streamline_len=streamline_length[i_pv],
-            asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
+            aquifer_pore_volume=float(aquifer_pore_volumes[i_pv]),
         )
 
-        frac = 0.5 * (1 + response)
         frac_start = frac[:, :-1]
         frac_end = frac[:, 1:]
         frac_end_filled = np.where(np.isnan(frac_end) & ~np.isnan(frac_start), 0.0, frac_end)
@@ -575,7 +473,6 @@ def infiltration_to_extraction(
     longitudinal_dispersivity: npt.ArrayLike,
     retardation_factor: float = 1.0,
     suppress_dispersion_warning: bool = False,
-    asymptotic_cutoff_sigma: float | None = 3.0,
     spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
@@ -591,17 +488,24 @@ def infiltration_to_extraction(
     3. During transport, longitudinal dispersion causes spreading
     4. At extraction, the concentration is a diffused breakthrough curve
 
+    The reported extracted concentration is the Kreft-Zuber (1978) **flux
+    concentration** at the outlet, defined as the solute mass flux divided
+    by the volumetric fluid flux. This is what is measured when sampling the
+    outflowing fluid. Compared to Bear's leading-order resident concentration,
+    it includes the dispersive boundary flux ``-D_L * dC_R/dx`` at
+    ``x = L``, which is what makes the column-sum invariant
+    ``integral Q c_out dt = integral Q c_in dt`` hold exactly under variable
+    flow.
+
     Longitudinal dispersion enters as the moving-frame variance
 
         sigma^2(V) = 2 * D_m * tau(V) + 2 * alpha_L * xi(V),
 
-    where ``tau(V)`` is the elapsed time since infiltration, ``xi(V)`` is the
-    distance the parcel has actually travelled, and V is the cumulative
-    extracted volume. The breakthrough kernel is the Gaussian CDF in V-space
-    using this variance. Evaluating sigma^2 directly at each volume node —
-    rather than via a per-cout-bin scalar D_L = D_m + alpha_L * L / (R * tau_mean)
-    — makes the kernel a function only of V (and the cin edge), restoring
-    exact mass conservation under variable flow.
+    where ``tau(V)`` is the elapsed time since infiltration and ``xi(V)`` is
+    the distance the parcel has actually travelled. Evaluating sigma^2 at each
+    quadrature node — and avoiding any artificial capping past breakthrough —
+    keeps Bear's formula an exact solution of the variable-coefficient ADE,
+    which the Kreft-Zuber identity relies on.
 
     Parameters
     ----------
@@ -651,12 +555,6 @@ def infiltration_to_extraction(
     suppress_dispersion_warning : bool, optional
         If True, suppress the warning when using multiple pore volumes with
         non-zero longitudinal_dispersivity. Default is False.
-    asymptotic_cutoff_sigma : float or None, optional
-        Performance optimization. Cells where the erf argument magnitude exceeds
-        this threshold are assigned asymptotic values (±1) instead of computing
-        the expensive integral. Since erf(3) ≈ 0.99998, the default of 3.0
-        provides excellent accuracy with significant speedup. Set to None to
-        disable the optimization. Default is 3.0.
 
     Returns
     -------
@@ -689,24 +587,27 @@ def infiltration_to_extraction(
     -----
     The algorithm constructs a coefficient matrix W where cout = W @ cin:
 
-    1. For each pore volume, compute the breakthrough curve contribution:
-       - delta_volume: volume between infiltration event and extraction point
-       - step_widths: convert volume to spatial distance x (erf coordinate)
-       - time_active: diffusion time, limited by residence time
+    1. For each pore volume, build a cell grid in cumulative volume space:
+       - cells span ``(V_cout[i], V_cout[i+1]) x V_cin[j]`` for each
+         (cout-bin i, cin-edge j)
+       - delta_volume = V_cout - V_cin - r_vpv encodes the parcel's offset
+         from the outlet at each (cout-edge, cin-edge)
 
-    2. For each infiltration time edge, compute the erf response at all
-       extraction time edges using analytical space-time averaging.
+    2. For each cell, compute the bin-averaged Kreft-Zuber flux concentration
+       ``frac[i, j] = (1/dV_i) * integral C_F(L, V; t_j) dV`` by 16-point
+       Gauss-Legendre quadrature in volume space, split at flow-bin
+       boundaries so that ``t(V)`` is linear within each sub-interval. The
+       moving-frame variance ``D_t = D_m*tau + alpha_L*xi`` is evaluated at
+       each quadrature node (never capped at the residence time).
 
-    3. Convert erf response to breakthrough fraction: frac = 0.5 * (1 + erf)
+    3. Coefficient for bin: ``coeff[i,j] = frac[i, j] - frac[i, j+1]``. This
+       is the contribution of cin[j] to cout[i] in the W matrix.
 
-    4. Coefficient for bin: coeff[i,j] = frac_start - frac_end
-       This represents the fraction of cin[j] that arrives in cout[i].
+    4. Average coefficients across all pore volumes.
 
-    5. Average coefficients across all pore volumes.
-
-    The error function solution assumes an initial step function that diffuses
-    over time. The position coordinate x represents the distance from the
-    concentration front to the observation point.
+    The K-Z flux-correction term in C_F = C_R - (D_L/v) * dC_R/dx is what
+    makes the column-sum invariant exact under variable Q; see the module
+    docstring for the derivation.
 
     Examples
     --------
@@ -851,7 +752,6 @@ def infiltration_to_extraction(
         molecular_diffusivity=molecular_diffusivity,
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
-        asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
         extend_tedges=extend_tedges,
     )
 
@@ -880,7 +780,6 @@ def extraction_to_infiltration(
     longitudinal_dispersivity: npt.ArrayLike,
     retardation_factor: float = 1.0,
     suppress_dispersion_warning: bool = False,
-    asymptotic_cutoff_sigma: float | None = 3.0,
     regularization_strength: float = 1e-10,
     spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
@@ -931,9 +830,6 @@ def extraction_to_infiltration(
     suppress_dispersion_warning : bool, optional
         If True, suppress the warning when using multiple pore volumes with
         non-zero longitudinal_dispersivity. Default is False.
-    asymptotic_cutoff_sigma : float or None, optional
-        Performance optimization for the forward matrix construction.
-        Default is 3.0.
     regularization_strength : float, optional
         Tikhonov regularization parameter λ. See
         :func:`gwtransport.advection.extraction_to_infiltration` for details.
@@ -1092,7 +988,6 @@ def extraction_to_infiltration(
         molecular_diffusivity=molecular_diffusivity,
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
-        asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
         extend_tedges=extend_tedges,
     )
 
@@ -1122,7 +1017,6 @@ def gamma_infiltration_to_extraction(
     longitudinal_dispersivity: float,
     retardation_factor: float = 1.0,
     suppress_dispersion_warning: bool = False,
-    asymptotic_cutoff_sigma: float | None = 3.0,
     spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
@@ -1174,9 +1068,6 @@ def gamma_infiltration_to_extraction(
     suppress_dispersion_warning : bool, optional
         Suppress warning about combining multiple pore volumes with dispersivity.
         Default is False.
-    asymptotic_cutoff_sigma : float or None, optional
-        Performance optimization. Cells where the erf argument magnitude exceeds
-        this threshold are assigned asymptotic values. Default is 3.0.
 
     Returns
     -------
@@ -1244,7 +1135,6 @@ def gamma_infiltration_to_extraction(
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
         suppress_dispersion_warning=suppress_dispersion_warning,
-        asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
         spinup=spinup,
     )
 
@@ -1266,7 +1156,6 @@ def gamma_extraction_to_infiltration(
     longitudinal_dispersivity: float,
     retardation_factor: float = 1.0,
     suppress_dispersion_warning: bool = False,
-    asymptotic_cutoff_sigma: float | None = 3.0,
     regularization_strength: float = 1e-10,
     spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
@@ -1319,9 +1208,6 @@ def gamma_extraction_to_infiltration(
     suppress_dispersion_warning : bool, optional
         Suppress warning about combining multiple pore volumes with dispersivity.
         Default is False.
-    asymptotic_cutoff_sigma : float or None, optional
-        Performance optimization for the forward matrix construction.
-        Default is 3.0.
     regularization_strength : float, optional
         Tikhonov regularization parameter. Default is 1e-10.
 
@@ -1391,7 +1277,6 @@ def gamma_extraction_to_infiltration(
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
         suppress_dispersion_warning=suppress_dispersion_warning,
-        asymptotic_cutoff_sigma=asymptotic_cutoff_sigma,
         regularization_strength=regularization_strength,
         spinup=spinup,
     )
