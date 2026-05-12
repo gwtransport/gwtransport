@@ -999,22 +999,41 @@ def _build_rebin_matrix(
     n_dst = len(v_dst) - 1
     dv_dst = np.diff(v_dst)
 
-    rows: list[int] = []
-    cols: list[int] = []
-    data: list[float] = []
-    for k in range(n_src):
-        lo = np.maximum(v_src[k], v_dst[:-1])
-        hi = np.minimum(v_src[k + 1], v_dst[1:])
-        overlap = np.maximum(0.0, hi - lo)
-        active = np.where(overlap > 0.0)[0]
-        if len(active) == 0:
-            continue
-        with np.errstate(divide="ignore", invalid="ignore"):
-            weights = np.where(dv_dst[active] > 0.0, overlap[active] / dv_dst[active], 0.0)
-        rows.extend(active.tolist())
-        cols.extend([k] * len(active))
-        data.extend(weights.tolist())
-    return sparse.csr_matrix((data, (rows, cols)), shape=(n_dst, n_src))
+    # Locate each src bin's destination overlap range via searchsorted on
+    # the sorted dst edges, then accumulate only the active dst bins for
+    # each src — avoids the dense (n_src x n_dst) overlap matrix that a
+    # full broadcast would build.
+    src_lo = v_src[:-1]
+    src_hi = v_src[1:]
+    # dst bin i covers [v_dst[i], v_dst[i+1]]. For src bin k, the dst bins
+    # overlapping [src_lo[k], src_hi[k]] satisfy v_dst[i+1] > src_lo[k] AND
+    # v_dst[i] < src_hi[k], i.e. i in [first_i_k, last_i_k).
+    first_i = np.searchsorted(v_dst[1:], src_lo, side="right")
+    last_i = np.searchsorted(v_dst[:-1], src_hi, side="left")
+    counts = np.maximum(0, last_i - first_i)
+    total = int(counts.sum())
+    if total == 0:
+        return sparse.csr_matrix(np.zeros((n_dst, n_src), dtype=float))
+
+    # Build flat (rows, cols) by repeating src indices and concatenating
+    # the corresponding dst-index ranges in one shot.
+    cols_arr = np.repeat(np.arange(n_src), counts)
+    # rows = [first_i[k] + offset for each k and each offset in 0..counts[k])
+    offsets = np.arange(total) - np.repeat(np.cumsum(counts) - counts, counts)
+    rows_arr = np.repeat(first_i, counts) + offsets
+
+    lo = np.maximum(src_lo[cols_arr], v_dst[rows_arr])
+    hi = np.minimum(src_hi[cols_arr], v_dst[rows_arr + 1])
+    overlap = np.maximum(0.0, hi - lo)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        data_arr = np.where(dv_dst[rows_arr] > 0.0, overlap / dv_dst[rows_arr], 0.0)
+
+    # Strip exact-zero entries (boundary searchsorted slack)
+    keep = data_arr != 0.0
+    return sparse.csr_matrix(
+        (data_arr[keep], (rows_arr[keep], cols_arr[keep])),
+        shape=(n_dst, n_src),
+    )
 
 
 def _build_v_smooth_matrix(
