@@ -93,57 +93,45 @@ def residence_time(
     """
     aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
     flow_tedges = pd.DatetimeIndex(flow_tedges)
-
-    # Convert to arrays for type safety
     flow = np.asarray(flow)
-    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
 
     if len(flow_tedges) != len(flow) + 1:
         msg = "tedges must have one more element than flow"
         raise ValueError(msg)
 
-    # Check for negative flow values - physically invalid
-    if np.any(flow < 0):
-        # Return NaN array with correct shape
+    # Negative or non-finite flow makes V(t) non-monotone or undefined; refuse to answer.
+    # The NaN gate mirrors residence_time_mean, which otherwise fails noisily inside
+    # linear_average where x_data must be strictly ascending.
+    if np.any(flow < 0) or np.any(np.isnan(flow)):
         n_output = len(flow_tedges) - 1 if index is None else len(index)
         n_pore_volumes = len(aquifer_pore_volumes)
         return np.full((n_pore_volumes, n_output), np.nan)
 
+    if direction not in {"extraction_to_infiltration", "infiltration_to_extraction"}:
+        msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
+        raise ValueError(msg)
+
     flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
-    flow_tdelta = np.diff(flow_tedges_days)
-    flow_cum = np.concatenate((
-        [0.0],
-        (flow * flow_tdelta).cumsum(),
-    ))  # at flow_tedges and flow_tedges_days. First value is 0.
+    flow_cum = np.concatenate(([0.0], np.cumsum(flow * np.diff(flow_tedges_days))))
     # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
     # by the smallest representable amount so downstream np.interp resolves consistently.
     flow_cum = _make_strictly_monotone(flow_cum)
 
     if index is None:
-        # If index is not provided return the residence time that matches with the index of the flow; at the center of the flow bin.
-        index_dates_days_extraction = (flow_tedges_days[:-1] + flow_tedges_days[1:]) / 2
-        flow_cum_at_index = (flow_cum[:-1] + flow_cum[1:]) / 2  # at the center of the flow bin
+        # Bin-center evaluation; for piecewise-linear V the midpoint of cumulative values
+        # equals V at the midpoint time.
+        index_days = (flow_tedges_days[:-1] + flow_tedges_days[1:]) / 2
+        flow_cum_at_index = (flow_cum[:-1] + flow_cum[1:]) / 2
     else:
-        index_dates_days_extraction = np.asarray((index - flow_tedges[0]) / np.timedelta64(1, "D"))
+        index_days = np.asarray((index - flow_tedges[0]) / np.timedelta64(1, "D"))
         flow_cum_at_index = linear_interpolate(
-            x_ref=flow_tedges_days, y_ref=flow_cum, x_query=index_dates_days_extraction, left=np.nan, right=np.nan
+            x_ref=flow_tedges_days, y_ref=flow_cum, x_query=index_days, left=np.nan, right=np.nan
         )
 
-    if direction == "extraction_to_infiltration":
-        # How many days ago was the extraced water infiltrated
-        a = flow_cum_at_index[None, :] - retardation_factor * aquifer_pore_volumes[:, None]
-        days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
-        data = index_dates_days_extraction - days
-    elif direction == "infiltration_to_extraction":
-        # In how many days the water that is infiltrated now be extracted
-        a = flow_cum_at_index[None, :] + retardation_factor * aquifer_pore_volumes[:, None]
-        days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
-        data = days - index_dates_days_extraction
-    else:
-        msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
-        raise ValueError(msg)
-
-    return data
+    sign = -1.0 if direction == "extraction_to_infiltration" else 1.0
+    a = flow_cum_at_index[None, :] + sign * retardation_factor * aquifer_pore_volumes[:, None]
+    days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
+    return sign * (days - index_days)
 
 
 def residence_time_mean(
@@ -286,7 +274,7 @@ def residence_time_mean(
     tedges_out = pd.DatetimeIndex(tedges_out)
     aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
 
-    if np.any(flow < 0):
+    if np.any(flow < 0) or np.any(np.isnan(flow)):
         n_pore_volumes = len(aquifer_pore_volumes)
         n_output_bins = len(tedges_out) - 1
         return np.full((n_pore_volumes, n_output_bins), np.nan)
@@ -386,7 +374,6 @@ def fraction_explained(
         ``aquifer_pore_volumes`` are missing. If ``rt`` is provided but is not 2D.
     """
     if rt is None:
-        # Validate that required parameters are provided for computing rt
         if flow is None:
             msg = "Either rt or flow must be provided"
             raise ValueError(msg)
@@ -438,7 +425,8 @@ def freundlich_retardation(
         Concentration of compound in water [mass/volume].
         Length should match flow (i.e., len(flow_tedges) - 1).
     freundlich_k : float
-        Freundlich coefficient [(m³/kg)^(1/n)].
+        Freundlich coefficient [(m³/kg)^n] (under S = k_f * C^n with S dimensionless
+        and C in [kg/m³]).
     freundlich_n : float
         Freundlich sorption exponent [dimensionless].
     bulk_density : float
@@ -498,4 +486,4 @@ def freundlich_retardation(
         msg = "concentration must be strictly positive when freundlich_n < 1 (retardation diverges as C -> 0)"
         raise ValueError(msg)
 
-    return 1.0 + (bulk_density / porosity) * freundlich_k * freundlich_n * np.power(concentration, freundlich_n - 1)
+    return 1.0 + (bulk_density / porosity) * freundlich_k * freundlich_n * concentration ** (freundlich_n - 1)
