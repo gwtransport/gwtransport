@@ -893,8 +893,7 @@ def infiltration_to_extraction(
         retardation_factor=retardation_factor,
         cin=cin,
     )
-    # weight_cin is non-None because cin was passed into _resolve_spinup_inputs.
-    weight_cin = np.asarray(weight_cin)
+    assert weight_cin is not None  # noqa: S101 -- narrowed: cin was passed in
     accumulated_weights, contributing_bins, zero_flow_cout = _infiltration_to_extraction_weights(
         tedges=weight_tedges,
         cout_tedges=cout_tedges,
@@ -1219,8 +1218,7 @@ def _validate_front_tracking_inputs(
         raise ValueError(msg)
 
     # Convert cout_tedges to days (relative to tedges[0]) for output computation
-    t_ref = tedges[0]
-    cout_tedges_days = ((cout_tedges - t_ref) / pd.Timedelta(days=1)).values
+    cout_tedges_days = ((cout_tedges - tedges[0]) / pd.Timedelta(days=1)).values
 
     # Determine which sorption model is requested
     has_retardation = retardation_factor is not None
@@ -1340,15 +1338,19 @@ def _flow_weighted_front_tracking_output(
         sorption=sorption,
     )
 
-    # Map each fine sub-bin to its flow value
+    # Map each fine sub-bin to its flow value. side="right" enforces the
+    # half-open [t_k, t_{k+1}) bin convention if a midpoint ever lands
+    # exactly on an inner flow edge (does not happen for np.unique-derived
+    # midpoints in practice, but is defensible against floating-point drift).
     fine_mids = (fine_edges[:-1] + fine_edges[1:]) / 2
-    flow_idx = np.searchsorted(flow_tedges_days[1:], fine_mids, side="left")
+    flow_idx = np.searchsorted(flow_tedges_days[1:], fine_mids, side="right")
     flow_idx = np.clip(flow_idx, 0, len(flow) - 1)
     q_fine = flow[flow_idx]
     dt_fine = np.diff(fine_edges)
 
-    # Map each fine sub-bin to its original output bin
-    cout_bin_idx = np.searchsorted(cout_tedges_days[1:], fine_mids, side="left")
+    # Map each fine sub-bin to its original output bin. Same side="right"
+    # rationale as above.
+    cout_bin_idx = np.searchsorted(cout_tedges_days[1:], fine_mids, side="right")
     cout_bin_idx = np.clip(cout_bin_idx, 0, len(cout_tedges_days) - 2)
 
     # Vectorized per-bin flow-weighted average:
@@ -1502,7 +1504,7 @@ def infiltration_to_extraction_front_tracking(
     ...     porosity=0.3,
     ... )
     """
-    cin, flow, tedges, cout_tedges, aquifer_pore_volumes, sorption, cout_tedges_days = _validate_front_tracking_inputs(
+    cout, _ = infiltration_to_extraction_front_tracking_detailed(
         cin=cin,
         flow=flow,
         tedges=tedges,
@@ -1515,38 +1517,9 @@ def infiltration_to_extraction_front_tracking(
         retardation_factor=retardation_factor,
         langmuir_s_max=langmuir_s_max,
         langmuir_k_l=langmuir_k_l,
+        max_iterations=max_iterations,
     )
-
-    # Flow time edges in days (same reference as cout_tedges_days)
-    t_ref = tedges[0]
-    flow_tedges_days = ((tedges - t_ref) / pd.Timedelta(days=1)).values
-
-    # Each pore-volume bin from the gamma distribution is an equal-mass streamtube,
-    # so all streamtubes carry equal flow at the outlet. The bundle outlet
-    # concentration is the simple arithmetic mean over streamtubes.
-    cout_all = np.zeros((len(aquifer_pore_volumes), len(cout_tedges) - 1))
-
-    for i, aquifer_pore_volume in enumerate(aquifer_pore_volumes):
-        tracker = FrontTracker(
-            cin=cin,
-            flow=flow,
-            tedges=tedges,
-            aquifer_pore_volume=aquifer_pore_volume,
-            sorption=sorption,
-        )
-
-        tracker.run(max_iterations=max_iterations)
-
-        cout_all[i, :] = _flow_weighted_front_tracking_output(
-            cout_tedges_days=cout_tedges_days,
-            flow_tedges_days=flow_tedges_days,
-            flow=flow,
-            v_outlet=aquifer_pore_volume,
-            waves=tracker.state.waves,
-            sorption=sorption,
-        )
-
-    return np.mean(cout_all, axis=0)
+    return cout
 
 
 def infiltration_to_extraction_front_tracking_detailed(
@@ -1680,8 +1653,7 @@ def infiltration_to_extraction_front_tracking_detailed(
     )
 
     # Flow time edges in days (same reference as cout_tedges_days)
-    t_ref = tedges[0]
-    flow_tedges_days = ((tedges - t_ref) / pd.Timedelta(days=1)).values
+    flow_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
 
     # Each pore-volume bin from the gamma distribution is an equal-mass streamtube,
     # so all streamtubes carry equal flow at the outlet. The bundle outlet

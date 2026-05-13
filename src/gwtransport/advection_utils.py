@@ -270,8 +270,7 @@ def _resolve_spinup_inputs_wide_edges(
         if spinup != "constant":
             msg = f"spinup string must be 'constant'; got {spinup!r}"
             raise ValueError(msg)
-        min_tedges = 2
-        if len(tedges) < min_tedges:
+        if len(tedges) < 2:  # noqa: PLR2004
             msg = "spinup='constant' requires len(tedges) >= 2"
             raise ValueError(msg)
         new_tedges = pd.DatetimeIndex([
@@ -371,9 +370,9 @@ def _resolve_spinup_inputs(
         If ``spinup`` is a string other than ``"constant"`` or a float
         outside ``[0, 1]``.
     """
-    flow_arr = np.asarray(flow, dtype=float)
     if spinup is None:
-        return tedges, flow_arr, cin, None, 0
+        return tedges, np.asarray(flow, dtype=float), cin, None, 0
+    flow_arr = np.asarray(flow, dtype=float)
     if isinstance(spinup, str):
         if spinup != "constant":
             msg = f"spinup string must be 'constant'; got {spinup!r}"
@@ -384,8 +383,7 @@ def _resolve_spinup_inputs(
         # (extreme pore volumes). This keeps the default usable for edge cases
         # while still triggering the strict-validity NaN when the warm-start
         # assumption cannot meaningfully be applied.
-        min_tedges_for_bin_width = 2
-        if len(tedges) < min_tedges_for_bin_width:
+        if len(tedges) < 2:  # noqa: PLR2004
             return tedges, flow_arr, cin, None, 0
         q0 = float(flow_arr[0])
         apvs = np.asarray(aquifer_pore_volumes, dtype=float)
@@ -410,8 +408,8 @@ def _resolve_spinup_inputs(
         if not np.isfinite(n_pad_float) or n_pad_float > max_n_pad:
             return tedges, flow_arr, cin, None, 0
         n_pad = int(n_pad_float)
-        prepend_edges = pd.DatetimeIndex([tedges[0] - bin_width * i for i in range(n_pad, 0, -1)])
-        new_tedges = pd.DatetimeIndex(list(prepend_edges) + list(tedges))
+        offsets = pd.TimedeltaIndex(bin_width * np.arange(n_pad, 0, -1))
+        new_tedges = (tedges[0] - offsets).append(tedges)
         new_flow = np.concatenate([np.full(n_pad, flow_arr[0]), flow_arr])
         new_cin = np.concatenate([np.full(n_pad, cin[0]), cin]) if cin is not None else None
         return new_tedges, new_flow, new_cin, None, n_pad
