@@ -107,10 +107,14 @@ def residence_time_to_log_removal(
     Parameters
     ----------
     residence_times : array-like
-        Array of residence times in days. Must be positive values.
+        Residence times in days. The formula evaluates ``log10_decay_rate *
+        residence_times`` for any real input; negative values produce negative
+        log removal (mathematical amplification) and the caller is responsible
+        for sign interpretation.
     log10_decay_rate : float
         Log10 decay rate coefficient (log10/day). Relates residence time
-        to log removal efficiency via first-order decay.
+        to log removal efficiency via first-order decay. Negative values
+        correspond to first-order production rather than decay.
 
     Returns
     -------
@@ -265,8 +269,9 @@ def parallel_mean(
 
     axis : int, optional
         Axis along which to compute the parallel mean for multi-dimensional
-        arrays. If None, the array is treated as 1-dimensional
-        (default is None).
+        arrays. If None, the reduction matches the way ``np.mean`` / ``np.sum``
+        treat ``axis=None``: the parallel mean is computed over the flattened
+        input (default is None).
 
     Returns
     -------
@@ -316,39 +321,15 @@ def parallel_mean(
     >>> parallel_mean(log_removals=log_removals_2d, axis=1)
     array([3.43179828, 2.43179828])
     """
-    # Convert log_removals to numpy array if it isn't already
     log_removals = np.asarray(log_removals, dtype=float)
-
-    # If flow_fractions is not provided, assume equal distribution
+    decimal_reductions = 10.0 ** (-log_removals)
     if flow_fractions is None:
-        if axis is None:
-            # 1D case: calculate the number of parallel flows
-            n = len(log_removals)
-            # Create equal flow fractions (avoid division by zero)
-            flow_fractions = np.full(n, 1.0 / n) if n > 0 else np.array([])
-        else:
-            # Multi-dimensional case: create equal flow fractions along the specified axis
-            n = log_removals.shape[axis]
-            shape = [1] * log_removals.ndim
-            shape[axis] = n
-            flow_fractions = np.full(shape, 1.0 / n)
-    else:
-        # Convert flow_fractions to numpy array
-        flow_fractions = np.asarray(flow_fractions, dtype=float)
-
-        fraction_sums = np.sum(flow_fractions, axis=axis)
-        if not np.all(np.isclose(fraction_sums, 1.0)):
-            msg = "flow_fractions must sum to 1.0 (along the specified axis)"
-            raise ValueError(msg)
-
-    # Convert log removal to decimal reduction values
-    decimal_reductions = 10 ** (-log_removals)
-
-    # Calculate weighted average decimal reduction
-    weighted_decimal_reduction = np.sum(flow_fractions * decimal_reductions, axis=axis)
-
-    # Convert back to log scale
-    return -np.log10(weighted_decimal_reduction)
+        return -np.log10(np.mean(decimal_reductions, axis=axis))
+    flow_fractions = np.asarray(flow_fractions, dtype=float)
+    if not np.all(np.isclose(np.sum(flow_fractions, axis=axis), 1.0)):
+        msg = "flow_fractions must sum to 1.0 (along the specified axis)"
+        raise ValueError(msg)
+    return -np.log10(np.sum(flow_fractions * decimal_reductions, axis=axis))
 
 
 def gamma_pdf(
@@ -603,16 +584,6 @@ def gamma_find_flow_for_target_mean(
     # unique positive root. Bracket: at u = 1/flow_closed_form the alpha/beta term alone
     # equals target_mean, so the full f overshoots by exactly mu*apv_loc*u_upper > 0.
     u_upper = 1.0 / flow_closed_form
-    if not np.isfinite(u_upper) or u_upper <= 0:
-        # Defensive: with the validated inputs above, flow_closed_form is finite and
-        # strictly positive, so u_upper should be a finite positive bracket. If a
-        # pathological input slips through, surface it instead of calling brentq on
-        # an invalid interval.
-        msg = (
-            "Cannot bracket the root for the given parameters; check that "
-            "target_mean, apv_alpha, apv_beta, and log10_decay_rate are finite and positive."
-        )
-        raise ValueError(msg)
 
     def residual(u: float) -> float:
         return float(

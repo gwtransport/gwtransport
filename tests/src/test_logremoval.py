@@ -1,4 +1,4 @@
-import contextlib
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -49,13 +49,6 @@ def test_array_inputs_equal_distribution():
     result = parallel_mean(log_removals=np.array([3.0, 4.0, 5.0]))
     expected = -np.log10((10 ** (-3.0) + 10 ** (-4.0) + 10 ** (-5.0)) / 3)
     assert_allclose(result, expected, rtol=1e-15)
-
-
-def test_empty_input_behavior():
-    """Test behavior with empty arrays (now handles naturally via numpy)."""
-    # Empty arrays will result in nan due to mathematical operations
-    result = parallel_mean(log_removals=[])
-    assert np.isnan(result) or np.isinf(result)  # numpy naturally handles this
 
 
 def test_special_values_equal_distribution():
@@ -121,24 +114,6 @@ def test_weight_sum_behavior():
 
     with pytest.raises(ValueError, match=r"flow_fractions must sum to 1\.0"):
         parallel_mean(log_removals=log_removals, flow_fractions=[0.7, 0.2])  # Sum < 1
-
-
-def test_length_mismatch_behavior():
-    """Test behavior with mismatched lengths (validation removed)."""
-    # Mismatched lengths will now be handled by numpy broadcasting or errors
-    try:
-        result1 = parallel_mean(log_removals=[3.0, 4.0], flow_fractions=[1.0])
-        # If it succeeds, check it's a valid number
-        assert isinstance(result1, (int, float))
-    except (ValueError, IndexError):
-        # NumPy may still raise errors for incompatible operations
-        pass
-
-    try:
-        result2 = parallel_mean(log_removals=[3.0], flow_fractions=[0.5, 0.5])
-        assert isinstance(result2, (int, float))
-    except (ValueError, IndexError):
-        pass
 
 
 def test_weighted_array_inputs():
@@ -255,25 +230,6 @@ def test_axis_parameter_with_flow_fractions():
     assert_allclose(result, expected, rtol=1e-15)
 
 
-def test_axis_parameter_behavior():
-    """Test natural behavior of axis parameter without explicit validation."""
-    log_removals_1d = np.array([3.0, 4.0, 5.0])
-    log_removals_2d = np.array([[3.0, 4.0], [5.0, 2.0]])
-
-    # Test axis with 1D array - numpy will handle this naturally
-    try:
-        result = parallel_mean(log_removals=log_removals_1d, axis=0)
-        # If successful, result should be a number
-        assert isinstance(result, (int, float, np.ndarray))
-    except (ValueError, IndexError):
-        # NumPy may raise axis errors naturally
-        pass
-
-    # Test potentially out of bounds axis - let numpy handle
-    with contextlib.suppress(ValueError, IndexError):
-        parallel_mean(log_removals=log_removals_2d, axis=2)
-
-
 def test_negative_axis():
     """Test negative axis indexing."""
     log_removals_2d = np.array([[3.0, 4.0, 5.0], [2.0, 3.0, 4.0]])
@@ -291,107 +247,39 @@ def test_negative_axis():
     assert_allclose(result_neg2, result_pos0, rtol=1e-15)
 
 
-def test_empty_array_with_axis():
-    """Test empty array behavior with axis parameter."""
-    empty_2d = np.array([]).reshape(0, 3)
-
-    # Empty arrays now proceed with calculation, may result in nan/inf
-    try:
-        result = parallel_mean(log_removals=empty_2d, axis=1)
-        # Result may be nan, inf, or empty array
-        assert isinstance(result, (int, float, np.ndarray))
-    except (ValueError, ZeroDivisionError):
-        # NumPy may naturally raise errors for empty operations
-        pass
-
-
-def test_compute_log_removal_basic():
-    """Test basic functionality of residence_time_to_log_removal."""
-    # Test with single values: LR = mu * t
-    assert_allclose(residence_time_to_log_removal(residence_times=0.0, log10_decay_rate=2.0), 0.0)  # 2.0 * 0 = 0
-    assert_allclose(residence_time_to_log_removal(residence_times=10.0, log10_decay_rate=0.2), 2.0)  # 0.2 * 10 = 2
-    assert_allclose(residence_time_to_log_removal(residence_times=20.0, log10_decay_rate=0.15), 3.0)  # 0.15 * 20 = 3
-
-    # Test with different log10_decay_rates
-    assert_allclose(residence_time_to_log_removal(residence_times=10.0, log10_decay_rate=0.1), 1.0)
-    assert_allclose(residence_time_to_log_removal(residence_times=10.0, log10_decay_rate=0.3), 3.0)
-
-
-def test_compute_log_removal_arrays():
-    """Test residence_time_to_log_removal with array inputs."""
-    residence_times = np.array([10.0, 20.0, 50.0])
-    log10_decay_rate = 0.2
-
+@pytest.mark.parametrize(
+    ("residence_times", "log10_decay_rate", "expected"),
+    [
+        # Scalars covering zero/positive/large t and zero/varied mu.
+        (0.0, 2.0, 0.0),
+        (10.0, 0.2, 2.0),
+        (20.0, 0.15, 3.0),
+        (10.0, 0.1, 1.0),
+        (10.0, 0.3, 3.0),
+        (5.0, 0.3, 1.5),
+        (1.0e6, 0.1, 1.0e5),
+        (100.0, 0.0, 0.0),
+        # 1D arrays (numpy and list inputs).
+        (np.array([10.0, 20.0, 50.0]), 0.2, np.array([2.0, 4.0, 10.0])),
+        ([10.0, 20.0, 50.0], 0.2, np.array([2.0, 4.0, 10.0])),
+        (np.array([5.0, 25.0, 50.0]), 0.15, np.array([0.75, 3.75, 7.5])),
+        (np.array([2.5, 7.3, 15.8, 33.2]), 0.23, 0.23 * np.array([2.5, 7.3, 15.8, 33.2])),
+        # 2D / 3D arrays.
+        (np.array([[10.0, 20.0], [30.0, 40.0]]), 0.1, np.array([[1.0, 2.0], [3.0, 4.0]])),
+        (
+            np.array([[[10.0, 20.0]], [[30.0, 40.0]]]),
+            0.1,
+            np.array([[[1.0, 2.0]], [[3.0, 4.0]]]),
+        ),
+    ],
+)
+def test_residence_time_to_log_removal_formula(residence_times, log10_decay_rate, expected):
+    """LR = mu * t across scalar / list / 1D / 2D / 3D inputs at machine precision."""
     result = residence_time_to_log_removal(residence_times=residence_times, log10_decay_rate=log10_decay_rate)
-    expected = np.array([2.0, 4.0, 10.0])
-
-    assert_allclose(result, expected)
-
-
-def test_compute_log_removal_2d_arrays():
-    """Test residence_time_to_log_removal with 2D array inputs."""
-    residence_times_2d = np.array([[10.0, 20.0], [30.0, 40.0]])
-    log10_decay_rate = 0.1
-
-    result = residence_time_to_log_removal(residence_times=residence_times_2d, log10_decay_rate=log10_decay_rate)
-    expected = np.array([[1.0, 2.0], [3.0, 4.0]])
-
-    assert_allclose(result, expected)
-
-
-def test_compute_log_removal_formula_verification():
-    """Test that the formula log10_decay_rate * residence_time is correctly implemented."""
-    residence_times = np.array([5.0, 25.0, 50.0])
-    log10_decay_rate = 0.15
-
-    result = residence_time_to_log_removal(residence_times=residence_times, log10_decay_rate=log10_decay_rate)
-    expected = log10_decay_rate * residence_times
-
     assert_allclose(result, expected, rtol=1e-15)
 
 
-def test_compute_log_removal_edge_cases():
-    """Test residence_time_to_log_removal with edge cases."""
-    # Zero residence time
-    result = residence_time_to_log_removal(residence_times=0.0, log10_decay_rate=0.2)
-    assert_allclose(result, 0.0)
-
-    # Very large residence time
-    result = residence_time_to_log_removal(residence_times=1e6, log10_decay_rate=0.1)
-    expected = 0.1 * 1e6
-    assert_allclose(result, expected)
-
-    # Zero log10_decay_rate
-    result = residence_time_to_log_removal(residence_times=100.0, log10_decay_rate=0.0)
-    assert result == 0.0
-
-
-def test_compute_log_removal_different_log_rates():
-    """Test residence_time_to_log_removal with various log10 removal rates."""
-    residence_time = 10.0
-
-    # Test different rates
-    rates = [0.05, 0.1, 0.15, 0.2, 0.3]
-    expected_results = [rate * residence_time for rate in rates]
-
-    for rate, expected in zip(rates, expected_results, strict=False):
-        result = residence_time_to_log_removal(residence_times=residence_time, log10_decay_rate=rate)
-        assert_allclose(result, expected)
-
-
-def test_compute_log_removal_list_input():
-    """Test residence_time_to_log_removal with list inputs (should be converted to numpy array)."""
-    residence_times = [10.0, 20.0, 50.0]
-    log10_decay_rate = 0.2
-
-    result = residence_time_to_log_removal(residence_times=residence_times, log10_decay_rate=log10_decay_rate)
-    expected = np.array([2.0, 4.0, 10.0])
-
-    assert_allclose(result, expected)
-    assert isinstance(result, np.ndarray)
-
-
-def test_compute_log_removal_shape_preservation():
+def test_residence_time_to_log_removal_shape_preservation():
     """Test that residence_time_to_log_removal preserves input array shape."""
     # Test 1D
     residence_times_1d = np.array([10.0, 20.0, 50.0])
@@ -409,72 +297,20 @@ def test_compute_log_removal_shape_preservation():
     assert result_3d.shape == residence_times_3d.shape
 
 
-def test_compute_log_removal_docstring_examples():
-    """Test the examples from the docstring."""
-    # Example 1: Basic array
-    residence_times = np.array([10.0, 20.0, 50.0])
-    log10_decay_rate = 0.2
-    result = residence_time_to_log_removal(residence_times=residence_times, log10_decay_rate=log10_decay_rate)
-    expected = np.array([2.0, 4.0, 10.0])
-    assert_allclose(result, expected)
-
-    # Example 2: Single residence time
-    result = residence_time_to_log_removal(residence_times=5.0, log10_decay_rate=0.3)
-    assert_allclose(result, 1.5)
-
-    # Example 3: 2D array
-    residence_times_2d = np.array([[10.0, 20.0], [30.0, 40.0]])
-    result = residence_time_to_log_removal(residence_times=residence_times_2d, log10_decay_rate=0.1)
-    expected = np.array([[1.0, 2.0], [3.0, 4.0]])
-    assert_allclose(result, expected)
-
-
-def test_compute_log_removal_consistency_with_manual_calculation():
-    """Test consistency between function result and manual calculation."""
-    residence_times = np.array([2.5, 7.3, 15.8, 33.2])
-    log10_decay_rate = 0.23
-
-    # Manual calculation
-    manual_result = log10_decay_rate * residence_times
-
-    # Function result
-    function_result = residence_time_to_log_removal(residence_times=residence_times, log10_decay_rate=log10_decay_rate)
-
-    assert_allclose(function_result, manual_result, rtol=1e-15)
-
-
-def test_decay_rate_to_log10_decay_rate():
-    """Test conversion from natural-log decay rate to log10 removal rate."""
-    # lambda = ln(10) should give mu = 1.0
-    decay_rate = np.log(10)
-    result = decay_rate_to_log10_decay_rate(decay_rate)
-    assert_allclose(result, 1.0)
-
-    # lambda = 0 should give mu = 0
-    assert_allclose(decay_rate_to_log10_decay_rate(0.0), 0.0)
-
-
-def test_log10_decay_rate_to_decay_rate():
-    """Test conversion from log10 removal rate to natural-log decay rate."""
-    # mu = 1.0 should give lambda = ln(10)
-    result = log10_decay_rate_to_decay_rate(1.0)
-    assert_allclose(result, np.log(10))
-
-    # mu = 0 should give lambda = 0
-    assert_allclose(log10_decay_rate_to_decay_rate(0.0), 0.0)
-
-
-def test_conversion_round_trip():
-    """Test that converting back and forth preserves the value."""
-    original_mu = 0.2
-    lambda_val = log10_decay_rate_to_decay_rate(original_mu)
-    recovered_mu = decay_rate_to_log10_decay_rate(lambda_val)
-    assert_allclose(recovered_mu, original_mu, rtol=1e-15)
-
-    original_lambda = 0.5
-    mu_val = decay_rate_to_log10_decay_rate(original_lambda)
-    recovered_lambda = log10_decay_rate_to_decay_rate(mu_val)
-    assert_allclose(recovered_lambda, original_lambda, rtol=1e-15)
+@pytest.mark.parametrize(
+    ("mu", "lambda_"),
+    [
+        (0.0, 0.0),
+        (1.0, np.log(10.0)),
+        (0.2, 0.2 * np.log(10.0)),
+        (0.5 / np.log(10.0), 0.5),
+    ],
+)
+def test_decay_rate_conversion_round_trip(mu, lambda_):
+    """``mu`` <-> ``lambda`` conversions match the ln(10) factor and round-trip exactly."""
+    assert_allclose(log10_decay_rate_to_decay_rate(mu), lambda_, rtol=1e-15)
+    assert_allclose(decay_rate_to_log10_decay_rate(lambda_), mu, rtol=1e-15)
+    assert_allclose(decay_rate_to_log10_decay_rate(log10_decay_rate_to_decay_rate(mu)), mu, rtol=1e-15)
 
 
 def test_gamma_pdf_integrates_to_one():
@@ -927,3 +763,135 @@ def test_gamma_mean_matches_parallel_mean_discretized():
     # 500 equiprobable bins discretizing the gamma distribution have empirical
     # relative error of ~1e-4 here; rtol=1e-3 is a tight bound.
     assert_allclose(result_analytical, result_discretized, rtol=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# New tests added for #35 (parallel_mean default-axis on multi-D) and #173
+# groups C and D (log<->linear identity, series composition, NaN/inf, sign
+# contracts).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (2, 2),  # Square 2D: returns silently wrong answer in pre-fix code (#35)
+        (2, 3),  # Non-square 2D: raises broadcast ValueError in pre-fix code (#35)
+    ],
+)
+def test_parallel_mean_2d_default_axis_flat(shape):
+    """parallel_mean(arr) with axis=None reduces over the flat array (matches np.mean)."""
+    rng = np.random.default_rng(42)
+    arr = rng.uniform(0.5, 6.0, size=shape)
+    result_2d = parallel_mean(log_removals=arr)
+    result_flat = parallel_mean(log_removals=arr.ravel())
+    assert_allclose(result_2d, result_flat, rtol=1e-15)
+
+
+def test_parallel_mean_3d_default_axis_flat():
+    """parallel_mean on a 3D array with axis=None is identical to the flattened call."""
+    arr = np.array([[[3.0, 4.0], [5.0, 2.0]], [[1.0, 6.0], [2.0, 3.0]]])
+    result_3d = parallel_mean(log_removals=arr)
+    result_flat = parallel_mean(log_removals=arr.ravel())
+    assert_allclose(result_3d, result_flat, rtol=1e-15)
+
+
+def test_parallel_mean_two_path_analytic():
+    """Equal-flow mix of LR=BIG and LR=0 has effective LR = log10(2) for BIG -> inf."""
+    result = parallel_mean(log_removals=[20.0, 0.0])
+    # 10^-20 is below double-precision relevance for the additive comparison;
+    # the analytic limit is exactly log10(2).
+    assert_allclose(result, np.log10(2.0), rtol=1e-15)
+
+
+def test_parallel_mean_zero_concentration_handling():
+    """LR=inf (perfect removal) reduces the flow contribution to zero in the mix."""
+    result = parallel_mean(log_removals=[np.inf, 3.0])
+    # ``(0 + 10^-3) / 2`` ⇒ ``-log10`` ⇒ ``3 + log10(2)``.
+    assert_allclose(result, 3.0 + np.log10(2.0), rtol=1e-15)
+
+
+def test_parallel_mean_negative_log_removal():
+    """Negative log removal (amplification) is mathematically well-defined and accepted."""
+    result = parallel_mean(log_removals=[-1.0, 3.0])
+    expected = -np.log10((10.0**1.0 + 10.0**-3.0) / 2.0)
+    assert_allclose(result, expected, rtol=1e-15)
+
+
+def test_parallel_mean_nan_input_propagates():
+    """NaN in log_removals propagates to a NaN result (no silent dropping)."""
+    result = parallel_mean(log_removals=[np.nan, 3.0])
+    assert np.isnan(result)
+
+
+def test_parallel_mean_empty_array():
+    """Empty input returns NaN; the RuntimeWarning from np.mean is suppressed."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        result = parallel_mean(log_removals=[])
+    assert np.isnan(result)
+
+
+@pytest.mark.parametrize(
+    "log_removals",
+    [
+        [3.0, 4.0, 5.0],
+        [0.0, 2.0, 4.0],
+        [-1.0, 3.0],  # amplification path
+        [1.5, 1.5, 1.5],  # uniform: parallel == both bounds
+        [9.999, 9.998],  # near-equal large LR
+    ],
+)
+def test_parallel_mean_bounded_by_min_and_max(log_removals):
+    """``min(LR) <= parallel_mean(LR) <= max(LR)`` for any input.
+
+    The weighted decimal reductions are a convex combination of ``10^{-LR_i}``,
+    so the result lies between ``10^{-max(LR)}`` and ``10^{-min(LR)}``; taking
+    ``-log10`` reverses the bounds. A strictly stronger invariant than the
+    existing ``parallel_mean <= arithmetic_mean`` Jensen check used in the
+    gamma tests.
+    """
+    arr = np.asarray(log_removals, dtype=float)
+    result = parallel_mean(log_removals=arr)
+    assert arr.min() - 1e-12 <= result <= arr.max() + 1e-12
+
+
+@pytest.mark.parametrize(
+    ("residence_time", "log10_decay_rate"),
+    [
+        (0.0, 0.2),
+        (1.0, 0.2),
+        (10.0, 0.05),
+        (1.0e3, 0.5),
+    ],
+)
+def test_residence_time_to_log_removal_concentration_ratio_round_trip(residence_time, log10_decay_rate):
+    """``10**(-LR) == exp(-mu * ln10 * t)`` to machine precision.
+
+    Pins both the sign of the exponent and the ``ln(10)`` factor in the
+    conversion between the decimal and natural-log decay-rate spellings.
+    """
+    log_removal = residence_time_to_log_removal(residence_times=residence_time, log10_decay_rate=log10_decay_rate)
+    decimal_form = 10.0 ** (-log_removal)
+    natural_form = np.exp(-log10_decay_rate * np.log(10.0) * residence_time)
+    assert_allclose(decimal_form, natural_form, rtol=1e-15)
+
+
+def test_residence_time_to_log_removal_series_composition_with_pinned_value():
+    """Series composition is additive AND lands on the expected pinned value.
+
+    Linearity alone is satisfied by any ``c * t`` formula (including the sign-
+    flipped one); pinning a specific numeric value rules those mutations out.
+    """
+    mu = 0.2
+    lr_full = residence_time_to_log_removal(residence_times=10.0, log10_decay_rate=mu)
+    lr_first = residence_time_to_log_removal(residence_times=7.0, log10_decay_rate=mu)
+    lr_second = residence_time_to_log_removal(residence_times=3.0, log10_decay_rate=mu)
+    assert_allclose(lr_full, 2.0, rtol=1e-15)
+    assert_allclose(lr_first + lr_second, lr_full, rtol=1e-15)
+
+
+def test_residence_time_to_log_removal_negative_residence_time():
+    """Negative residence time returns negative log removal; no validation is performed."""
+    result = residence_time_to_log_removal(residence_times=-5.0, log10_decay_rate=0.2)
+    assert_allclose(result, -1.0, rtol=1e-15)
