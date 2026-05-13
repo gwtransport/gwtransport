@@ -4,8 +4,8 @@ import pytest
 from scipy.stats import gamma as gamma_dist
 
 from gwtransport.gamma import (
+    _bin_masses,
     alpha_beta_loc_to_mean_std,
-    bin_masses,
     mean_std_loc_to_alpha_beta,
     parse_parameters,
 )
@@ -34,35 +34,21 @@ def gamma_params():
     }
 
 
-# Test bin_masses function
-def test_bin_masses_basic():
-    """Test basic functionality of bin_masses."""
-    edges = np.array([0, 1, 2, np.inf])
-    masses = bin_masses(alpha=2.0, beta=1.0, bin_edges=edges)
-
-    assert len(masses) == len(edges) - 1
+# Tests for the private _bin_masses helper. It has no input validation by design;
+# its preconditions are guaranteed by the only internal caller (bins()).
+def test_bin_masses_normalization_over_full_support():
+    """``_bin_masses`` over ``[0, inf)`` integrates to 1 exactly."""
+    masses = _bin_masses(alpha=2.0, beta=1.0, bin_edges=np.array([0, 1, 2, np.inf]))
+    assert len(masses) == 3
     assert np.all(masses >= 0)
-    assert np.isclose(np.sum(masses), 1.0, rtol=1e-10)
+    np.testing.assert_allclose(np.sum(masses), 1.0, rtol=1e-14)
 
 
-def test_bin_masses_invalid_params():
-    """Test bin_masses with invalid parameters."""
-    edges = np.array([0, 1, 2])
-
-    with pytest.raises(ValueError):
-        bin_masses(alpha=-1, beta=1.0, bin_edges=edges)
-
-    with pytest.raises(ValueError):
-        bin_masses(alpha=1.0, beta=-1, bin_edges=edges)
-
-
-def test_bin_masses_single_bin():
-    """Test bin_masses with a single bin."""
-    edges = np.array([0, np.inf])
-    masses = bin_masses(alpha=2.0, beta=1.0, bin_edges=edges)
-
+def test_bin_masses_single_bin_is_unit():
+    """A single bin spanning the full support carries the entire probability mass."""
+    masses = _bin_masses(alpha=2.0, beta=1.0, bin_edges=np.array([0, np.inf]))
     assert len(masses) == 1
-    assert np.isclose(masses[0], 1.0, rtol=1e-10)
+    np.testing.assert_allclose(masses[0], 1.0, rtol=1e-14)
 
 
 # Test bins function
@@ -112,15 +98,38 @@ def test_invalid_parameters():
         gamma_bins(alpha=1, beta=-1, n_bins=10)
 
 
-def test_numerical_stability():
-    """Test numerical stability with extreme parameters."""
-    # Test with very small alpha and beta
-    result_small = gamma_bins(alpha=1e-5, beta=1e-5, n_bins=10)
-    assert not np.any(np.isnan(result_small["expected_values"]))
+@pytest.mark.parametrize(
+    ("alpha", "beta"),
+    [
+        (0.05, 1.0),  # alpha << 1: PDF singularity at 0
+        (0.5, 1.0),  # alpha < 1
+        (0.5, 1e-3),  # alpha < 1, beta tiny
+        (1.0, 1.0),  # exponential
+        (10.0, 1.0),  # moderate
+        (1e4, 1.0),  # very large alpha
+        (1.0, 1e3),  # beta large
+    ],
+)
+def test_bins_extreme_regimes_finite_and_conservative(alpha, beta):
+    """Across extreme regimes, ``bins`` must produce finite, in-bin values and conserve mass + first moment.
 
-    # Test with very large alpha and beta
-    result_large = gamma_bins(alpha=1e5, beta=1e5, n_bins=10)
-    assert not np.any(np.isnan(result_large["expected_values"]))
+    Replaces the original ``test_numerical_stability`` (only asserted non-NaN).
+    """
+    n_bins = 10
+    r = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
+
+    assert np.all(np.isfinite(r["expected_values"])), f"non-finite expected_values at alpha={alpha}, beta={beta}"
+    assert np.all(r["expected_values"] > 0)
+
+    np.testing.assert_allclose(np.sum(r["probability_mass"]), 1.0, rtol=1e-14)
+
+    # sum(p_i * E[X|bin_i]) == alpha * beta to machine precision
+    total_mean = float(np.sum(r["expected_values"] * r["probability_mass"]))
+    np.testing.assert_allclose(total_mean, alpha * beta, rtol=1e-14)
+
+    # Conditional means lie strictly within their bins
+    assert np.all(r["lower_bound"] <= r["expected_values"])
+    assert np.all(r["expected_values"] <= r["upper_bound"])
 
 
 def test_gamma_mean_std_loc_to_alpha_beta_basic():
@@ -577,6 +586,88 @@ def test_bins_mean_std_loc_conservation():
     r = gamma_bins(mean=mean, std=std, loc=loc, n_bins=100)
     total_mean = float(np.sum(r["expected_values"] * r["probability_mass"]))
     np.testing.assert_allclose(total_mean, mean, rtol=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("mean", "std", "loc"),
+    [
+        (10.0, 2.0, 0.0),  # alpha=25, loc=0
+        (30000.0, 8100.0, 5000.0),  # large with shift
+        (5.0, 1.5, 1.0),  # moderate
+        (2.0, 1.5, 0.0),  # alpha=(2/1.5)**2 ~ 1.78
+        (0.5, 0.5, 0.0),  # alpha=1 (exponential)
+        (0.6, 1.0, 0.0),  # alpha < 1 (PDF singularity at 0)
+        (1e6, 1.0, 0.0),  # alpha very large (1e12)
+    ],
+)
+def test_bins_parameterization_equivalence(mean, std, loc):
+    """``bins(mean=m, std=s, loc=l)`` must equal ``bins(alpha, beta, loc=l)`` bit-for-bit.
+
+    Both arms share the same converter, so the conversion *formula* (caught by
+    ``test_bins_second_moment_matches_parameterization``) is not what this test
+    targets. What it pins is the dispatcher: ``parse_parameters`` correctly forwarding
+    ``loc`` through both branches, neither branch silently dropping a default, and the
+    downstream pipeline being deterministic in ``(alpha, beta, loc)``.
+    """
+    n_bins = 20
+    r_msl = gamma_bins(mean=mean, std=std, loc=loc, n_bins=n_bins)
+    alpha, beta = mean_std_loc_to_alpha_beta(mean=mean, std=std, loc=loc)
+    r_ab = gamma_bins(alpha=alpha, beta=beta, loc=loc, n_bins=n_bins)
+
+    np.testing.assert_array_equal(r_msl["edges"], r_ab["edges"])
+    np.testing.assert_array_equal(r_msl["expected_values"], r_ab["expected_values"])
+    np.testing.assert_array_equal(r_msl["probability_mass"], r_ab["probability_mass"])
+    np.testing.assert_array_equal(r_msl["lower_bound"], r_ab["lower_bound"])
+    np.testing.assert_array_equal(r_msl["upper_bound"], r_ab["upper_bound"])
+
+
+@pytest.mark.parametrize(
+    ("mean", "std", "loc"),
+    [
+        (10.0, 2.0, 0.0),
+        (30000.0, 8100.0, 5000.0),
+        (5.0, 1.5, 1.0),
+        (2.0, 0.5, 0.5),
+    ],
+)
+def test_bins_second_moment_matches_parameterization(mean, std, loc):
+    """``std`` is the parameter that controls the variance: ``Var(Gamma) = alpha * beta**2 == std**2`` exactly.
+
+    The (mean, std, loc) parameterization sets ``alpha = (mean-loc)**2 / std**2`` and
+    ``beta = std**2 / (mean-loc)``, so ``alpha * beta**2 == std**2`` is an algebraic
+    identity. A coefficient swap (e.g. ``alpha = (mean-loc) / std**2``) would silently
+    lose this identity at machine-precision tolerance.
+    """
+    alpha, beta, loc_out = parse_parameters(mean=mean, std=std, loc=loc)
+    np.testing.assert_allclose(alpha * beta**2, std**2, rtol=1e-15)
+    np.testing.assert_allclose(gamma_dist(alpha, loc=loc_out, scale=beta).var(), std**2, rtol=1e-12)
+    np.testing.assert_allclose(gamma_dist(alpha, loc=loc_out, scale=beta).mean(), mean, rtol=1e-12)
+
+
+def test_bin_masses_quantile_inverse():
+    """``bin_masses`` applied to ``gamma.bins`` edges recovers the input quantile diff exactly.
+
+    The construction
+        edges = gamma_dist.ppf(q, alpha, scale=beta) + loc
+        bin_masses(alpha, beta, edges - loc) = diff(gammainc(alpha, ppf(q)/beta))
+                                             = diff(q)
+    holds by the CDF-PPF round-trip identity ``F(F^{-1}(q)) == q``. Catches any
+    inconsistency between the edge-construction path and the mass-computation path.
+    """
+    quantile_edges = np.array([0.0, 0.1, 0.3, 0.55, 0.85, 1.0])
+    alpha, beta, loc = 3.0, 2.0, 1.5
+    r = gamma_bins(alpha=alpha, beta=beta, loc=loc, quantile_edges=quantile_edges)
+
+    # probability_mass is constructed directly as np.diff(q) inside bins
+    np.testing.assert_array_equal(r["probability_mass"], np.diff(quantile_edges))
+
+    # _bin_masses applied to the unshifted edges must reproduce diff(q) to machine precision
+    unshifted_edges = r["edges"] - loc
+    np.testing.assert_allclose(
+        _bin_masses(alpha=alpha, beta=beta, bin_edges=unshifted_edges),
+        np.diff(quantile_edges),
+        rtol=1e-13,
+    )
 
 
 def test_bins_loc_monte_carlo_expected_values():
