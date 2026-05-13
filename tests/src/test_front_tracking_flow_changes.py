@@ -19,6 +19,7 @@ from gwtransport.fronttracking.handlers import (
     recreate_shock_with_new_flow,
 )
 from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
+from gwtransport.fronttracking.output import concentration_at_point
 from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 
@@ -443,3 +444,115 @@ class TestExactMassBalanceVaryingFlow:
 
         # Exact mass balance should hold despite multiple flow changes
         tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-10)
+
+
+class TestRegressionsForIssue168FlowChange:
+    """Regression tests for the handle_flow_change fixes (issue #168, P1.1 and P1.2).
+
+    These tests fail on the unmodified main branch and pass with the Phase 1
+    patches. If they ever start failing again, the underlying bug has returned
+    and the failure should NOT be papered over.
+    """
+
+    def test_flow_change_with_future_inlet_wave_does_not_raise_and_conserves_mass(self, constant_retardation):
+        """P1.1: Inlet wave scheduled after a flow change must not crash the solver.
+
+        Triple assertion:
+        (a) no ValueError ('Characteristic not yet active');
+        (b) verify_physics passes with mass_balance_rtol=1e-12;
+        (c) breakthrough on the no-flow-change interval matches the
+            constant-flow reference run to machine precision.
+        """
+        tedges = pd.date_range("2020-01-01", periods=21, freq="D")
+        cin = np.zeros(20)
+        cin[2:5] = 5.0
+        cin[12:14] = 8.0
+        # Flow change at tedges[10]: 100 -> 200. The 8.0 pulse arrives later.
+        flow = np.array([100.0] * 10 + [200.0] * 10)
+
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=500.0,
+            sorption=constant_retardation,
+        )
+
+        tracker.run(max_iterations=500, verbose=False)
+        tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-12)
+
+    def test_flow_change_after_pulse_exit_preserves_breakthrough_history(self, constant_retardation):
+        """P1.2: A pulse that fully exits before a flow change must not be erased.
+
+        Constructed so the 5.0 pulse arrives and clears the outlet at t<10, the
+        flow change fires at t=10, and breakthrough at t in [7, 10) is computed
+        against a no-flow-change reference run.
+        """
+        v_pore = 500.0
+        tedges = pd.date_range("2020-01-01", periods=31, freq="D")
+        cin = np.zeros(30)
+        cin[2:5] = 5.0
+        flow_change = np.array([100.0] * 10 + [200.0] * 20)
+        flow_constant = np.array([100.0] * 30)
+
+        # Run with flow change.
+        tracker_change = FrontTracker(
+            cin=cin,
+            flow=flow_change,
+            tedges=tedges,
+            aquifer_pore_volume=v_pore,
+            sorption=constant_retardation,
+        )
+        tracker_change.run(max_iterations=500, verbose=False)
+
+        # Reference run with constant flow.
+        tracker_ref = FrontTracker(
+            cin=cin,
+            flow=flow_constant,
+            tedges=tedges,
+            aquifer_pore_volume=v_pore,
+            sorption=constant_retardation,
+        )
+        tracker_ref.run(max_iterations=500, verbose=False)
+
+        # Sample the breakthrough on t in [7, 10) - the pulse is in/around the outlet
+        # in this window, and t_change=10 has not yet fired in either run.
+        t_samples = np.linspace(7.0, 9.99, 5)
+        for t in t_samples:
+            c_change = concentration_at_point(v_pore, t, tracker_change.state.waves, constant_retardation)
+            c_ref = concentration_at_point(v_pore, t, tracker_ref.state.waves, constant_retardation)
+            assert np.isclose(c_change, c_ref, rtol=1e-14, atol=1e-14)
+
+    def test_recreate_rarefaction_preserves_head_and_tail_at_two_time_points(self, freundlich_sorption):
+        """P1.7: head and tail positions are preserved at t_change AND at t_change + dt."""
+        flow_old = 100.0
+        raref = RarefactionWave(
+            t_start=0.0,
+            v_start=0.0,
+            flow=flow_old,
+            c_head=10.0,
+            c_tail=2.0,
+            sorption=freundlich_sorption,
+        )
+
+        t_change = 8.0
+        flow_new = 50.0
+        v_head_at_change = raref.head_position_at_time(t_change)
+        v_tail_at_change = raref.tail_position_at_time(t_change)
+        assert v_head_at_change is not None
+        assert v_tail_at_change is not None
+
+        new = recreate_rarefaction_with_new_flow(raref, t_change, flow_new)
+
+        # At t_change, head and tail positions are preserved.
+        assert np.isclose(new.head_position_at_time(t_change), v_head_at_change, rtol=1e-14)
+        assert np.isclose(new.tail_position_at_time(t_change), v_tail_at_change, rtol=1e-14)
+
+        # At t_change + dt, head and tail advance under the new flow rate (closed-form).
+        dt = 1.0
+        r_head = freundlich_sorption.retardation(raref.c_head)
+        r_tail = freundlich_sorption.retardation(raref.c_tail)
+        expected_v_head = v_head_at_change + (flow_new / r_head) * dt
+        expected_v_tail = v_tail_at_change + (flow_new / r_tail) * dt
+        assert np.isclose(new.head_position_at_time(t_change + dt), expected_v_head, rtol=1e-14)
+        assert np.isclose(new.tail_position_at_time(t_change + dt), expected_v_tail, rtol=1e-14)

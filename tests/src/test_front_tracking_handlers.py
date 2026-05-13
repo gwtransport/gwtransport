@@ -7,6 +7,7 @@ All tests verify physical correctness: entropy conditions, mass conservation,
 and proper wave state transitions.
 """
 
+import numpy as np
 import pytest
 
 from gwtransport.fronttracking.handlers import (
@@ -2404,3 +2405,69 @@ class TestShockRarefactionTailEdgeCases:
         # Both parents deactivated
         assert not shock.is_active
         assert not raref.is_active
+
+
+class TestRegressionsForIssue168Collision:
+    """Regression tests for handle_characteristic_collision (issue #168, P1.6).
+
+    The old code created a backwards RarefactionWave for n<1 when C=0 catches
+    a positive concentration. The corrected handler creates a R-H shock.
+    """
+
+    def test_collision_n_lt_1_zero_catching_positive_creates_shock(self):
+        """P1.6: For n<1, C=0 catching C>0 is compression -> ShockWave (not RarefactionWave)."""
+        sorption = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
+
+        char_zero = CharacteristicWave(
+            t_start=4.0,
+            v_start=0.0,
+            flow=100.0,
+            concentration=0.0,
+            sorption=sorption,
+        )
+        char_pos = CharacteristicWave(
+            t_start=0.0,
+            v_start=0.0,
+            flow=100.0,
+            concentration=5.0,
+            sorption=sorption,
+        )
+
+        new_waves = handle_characteristic_collision(char_zero, char_pos, t_event=20.0, v_event=150.0)
+
+        assert len(new_waves) == 1
+        assert isinstance(new_waves[0], ShockWave), (
+            "Old behavior (n<1 special-case) returned RarefactionWave; P1.6 fix returns ShockWave"
+        )
+        assert new_waves[0].satisfies_entropy()
+
+    def test_collision_generated_shock_satisfies_rankine_hugoniot(self):
+        """P1.6: collision-generated shock velocity matches Rankine-Hugoniot to machine precision."""
+        sorption = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
+        flow = 100.0
+        c_low, c_high = 0.0, 5.0
+
+        char_low = CharacteristicWave(
+            t_start=4.0,
+            v_start=0.0,
+            flow=flow,
+            concentration=c_low,
+            sorption=sorption,
+        )
+        char_high = CharacteristicWave(
+            t_start=0.0,
+            v_start=0.0,
+            flow=flow,
+            concentration=c_high,
+            sorption=sorption,
+        )
+
+        new_waves = handle_characteristic_collision(char_low, char_high, t_event=20.0, v_event=150.0)
+        shock = new_waves[0]
+        assert isinstance(shock, ShockWave)
+
+        # R-H: s = flow * (c_left - c_right) / (C_tot(c_left) - C_tot(c_right)).
+        c_left, c_right = shock.c_left, shock.c_right
+        c_tot_diff = sorption.total_concentration(c_left) - sorption.total_concentration(c_right)
+        expected_vel = flow * (c_left - c_right) / c_tot_diff
+        assert np.isclose(shock.velocity, expected_vel, rtol=1e-14)

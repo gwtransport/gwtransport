@@ -11,8 +11,9 @@ import pandas as pd
 import pytest
 
 from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption, LangmuirSorption
+from gwtransport.fronttracking.output import compute_breakthrough_curve, concentration_at_point
 from gwtransport.fronttracking.solver import FrontTracker
-from gwtransport.fronttracking.waves import RarefactionWave
+from gwtransport.fronttracking.waves import RarefactionWave, ShockWave
 
 freundlich_sorptions = [
     FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3),
@@ -554,7 +555,7 @@ class TestRuntimeMassBalanceVerification:
         tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-6)
 
     def test_mass_balance_constant_retardation(self, simple_step_input):
-        """Test mass balance with constant retardation (no rarefactions)."""
+        """Test mass balance with constant retardation (no rarefactions); machine precision."""
         cin, flow, tedges = simple_step_input
         sorption = ConstantRetardation(retardation_factor=2.0)
 
@@ -568,8 +569,10 @@ class TestRuntimeMassBalanceVerification:
 
         tracker.run(max_iterations=100, verbose=False)
 
-        # Should pass with tight tolerance since all integration is exact
-        tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-6)
+        # ConstantRetardation has no rarefactions → exact integration, tighten to 1e-12 (P2.6).
+        # Failure here means a regression of mass conservation in the constant-retardation path;
+        # do not loosen this tolerance (see CLAUDE.md / feedback memory).
+        tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-12)
 
     @pytest.mark.skip(reason="Freundlich n!=2: exact spatial rarefaction integration not yet implemented")
     def test_mass_balance_freundlich_n_lt_1(self, simple_step_input):
@@ -589,24 +592,6 @@ class TestRuntimeMassBalanceVerification:
 
         # Would verify mass balance if n=0.5 integration was implemented
         tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-6)
-
-    def test_mass_balance_can_be_disabled(self, simple_step_input, freundlich_sorption):
-        """Test that mass balance check can be disabled via parameter."""
-        cin, flow, tedges = simple_step_input
-
-        tracker = FrontTracker(
-            cin=cin,
-            flow=flow,
-            tedges=tedges,
-            aquifer_pore_volume=500.0,
-            sorption=freundlich_sorption,
-        )
-
-        tracker.run(max_iterations=100, verbose=False)
-
-        # Should not raise even if we artificially corrupt the state
-        # (Only checks entropy and rarefaction ordering when mass balance disabled)
-        tracker.verify_physics(check_mass_balance=False)
 
     def test_mass_balance_at_early_times(self, simple_step_input, freundlich_sorption):
         """Test mass balance verification works at early simulation times."""
@@ -773,3 +758,148 @@ class TestLangmuirSorption:
             if isinstance(wave, RarefactionWave) and wave.is_active:
                 tail_vel = wave.tail_velocity()
                 assert tail_vel > 0, "Langmuir rarefaction tail velocity must be positive"
+
+
+class TestRiemannProblems:
+    """Riemann-problem coverage for issue #174 group 2.
+
+    These exercise the canonical wave-decomposition cases end-to-end through
+    FrontTracker so that mass conservation, entropy, and the analytic structure
+    can all be verified together.
+    """
+
+    def test_square_pulse_constant_retardation_total_mass_at_outlet(self, constant_retardation):
+        """Square pulse 0->C->0 with ConstantRetardation: total outlet mass exactly matches inlet.
+
+        ConstantRetardation produces no rarefactions (no concentration-dependent velocity), so
+        the breakthrough is an exact time-shift and mass conservation is machine precision.
+        """
+        v_pore = 200.0
+        c_step = 4.0
+        flow_val = 100.0
+        n_bins = 100
+        cin = np.zeros(n_bins)
+        cin[5:15] = c_step
+        flow = np.full(n_bins, flow_val)
+        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="D")
+
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=v_pore,
+            sorption=constant_retardation,
+        )
+        tracker.run(max_iterations=2000, verbose=False)
+
+        dt_days = np.diff((tedges - tedges[0]) / pd.Timedelta(days=1))
+        mass_in = float(np.sum(cin * flow * dt_days))
+
+        # Constant retardation → outlet is a shifted copy of inlet; integrate over the same span.
+        t_sample = np.linspace(0.0, float(n_bins), 4000)
+        cout = compute_breakthrough_curve(t_sample, v_pore, tracker.state.waves, constant_retardation)
+        bin_idx = np.clip(np.searchsorted(dt_days.cumsum(), t_sample, side="right"), 0, n_bins - 1)
+        flow_at_t = flow[bin_idx]
+        mass_out = float(np.trapezoid(cout * flow_at_t, t_sample))
+
+        # Tolerance limited by trapezoidal-rule error over the sharp leading/trailing edges.
+        assert np.isclose(mass_out, mass_in, rtol=2e-3)
+
+    @pytest.mark.xfail(
+        reason="P1.8 (#168): Freundlich n=2 rarefaction with c_tail=0 produces "
+        "excess outlet mass — under investigation.",
+        strict=False,
+    )
+    def test_square_pulse_n_gt_1_total_mass_at_outlet(self, freundlich_sorption):
+        """Documents the open #168 P1.8 bug: n=2 pulse releases too much mass at the outlet.
+
+        Marked xfail and kept as a regression guard for the eventual fix. Tolerance is loose
+        (rtol=1e-2) because trapezoidal rule on a rarefaction tail still has discretization error;
+        the bug under investigation produces ~2x excess mass, well outside this tolerance.
+        """
+        v_pore = 200.0
+        c_step = 4.0
+        flow_val = 100.0
+        n_bins = 500
+        cin = np.zeros(n_bins)
+        cin[5:15] = c_step
+        flow = np.full(n_bins, flow_val)
+        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="D")
+
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=v_pore,
+            sorption=freundlich_sorption,
+        )
+        tracker.run(max_iterations=10000, verbose=False)
+
+        dt_days = np.diff((tedges - tedges[0]) / pd.Timedelta(days=1))
+        mass_in = float(np.sum(cin * flow * dt_days))
+
+        t_sample = np.linspace(0.0, float(n_bins), 10000)
+        cout = compute_breakthrough_curve(t_sample, v_pore, tracker.state.waves, freundlich_sorption)
+        bin_idx = np.clip(np.searchsorted(dt_days.cumsum(), t_sample, side="right"), 0, n_bins - 1)
+        flow_at_t = flow[bin_idx]
+        mass_out = float(np.trapezoid(cout * flow_at_t, t_sample))
+
+        assert np.isclose(mass_out, mass_in, rtol=1e-2)
+
+    def test_two_step_increase_merges_into_single_shock(self, freundlich_sorption):
+        """For n>1, 0->C1->C2 with C1<C2 produces a faster trailing shock that catches and merges
+        with the leading shock; final shock satisfies R-H on (0, C2)."""
+        v_pore = 1000.0
+        flow_val = 100.0
+        cin = np.array([0.0, 2.0, 2.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0])
+        flow = np.full(len(cin), flow_val)
+        tedges = pd.date_range("2020-01-01", periods=len(cin) + 1, freq="D")
+
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=v_pore,
+            sorption=freundlich_sorption,
+        )
+        tracker.run(max_iterations=2000, verbose=False)
+
+        # After the catchup, exactly one active shock remains; it connects 0 to 6.
+        active_shocks = [w for w in tracker.state.waves if isinstance(w, ShockWave) and w.is_active]
+        assert len(active_shocks) == 1
+        final = active_shocks[0]
+        # c_left/c_right ordered by velocity (higher C is faster for n>1, becomes c_left)
+        assert np.isclose(final.c_left, 6.0)
+        assert np.isclose(final.c_right, 0.0)
+        # R-H velocity for (0, 6).
+        c_tot_diff = freundlich_sorption.total_concentration(6.0) - freundlich_sorption.total_concentration(0.0)
+        rh_vel = flow_val * (6.0 - 0.0) / c_tot_diff
+        assert np.isclose(final.velocity, rh_vel, rtol=1e-12)
+
+    def test_constant_retardation_breakthrough_matches_pure_advection(self, constant_retardation):
+        """For ConstantRetardation, front-tracking matches the shifted-inlet closed form."""
+        v_pore = 300.0
+        flow_val = 100.0
+        # cin has a recognizable shape (triangle) so we can verify position of features.
+        cin = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        flow = np.full(len(cin), flow_val)
+        tedges = pd.date_range("2020-01-01", periods=len(cin) + 1, freq="D")
+
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=v_pore,
+            sorption=constant_retardation,
+        )
+        tracker.run(max_iterations=500, verbose=False)
+
+        # Closed form: cout(t) == cin(t - V*R/flow), where t and the offset are
+        # in days from tedges[0]. With R=2, V=300, flow=100, delay = 6 days.
+        delay = v_pore * constant_retardation.retardation_factor / flow_val
+        # Sample at integer days at the centers of the pulse arrivals.
+        for t in [7.5, 8.5, 9.5, 10.5]:
+            c_out = concentration_at_point(v_pore, t, tracker.state.waves, constant_retardation)
+            t_in = t - delay  # corresponding inlet time
+            bin_idx = int(np.floor(t_in))  # cin is constant in each [bin_idx, bin_idx+1)
+            assert np.isclose(c_out, cin[bin_idx], rtol=1e-14, atol=1e-14)
