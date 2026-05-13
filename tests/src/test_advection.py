@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from gwtransport import advection as adv_mod
 from gwtransport.advection import (
     extraction_to_infiltration,
     extraction_to_infiltration_series,
@@ -13,6 +14,12 @@ from gwtransport.advection import (
     infiltration_to_extraction_front_tracking,
     infiltration_to_extraction_series,
 )
+from gwtransport.advection_utils import (
+    _infiltration_to_extraction_weights,
+    _resolve_spinup_inputs,
+    _resolve_spinup_mask,
+)
+from gwtransport.fronttracking.math import ConstantRetardation
 from gwtransport.utils import compute_time_edges
 
 # ===============================================================================
@@ -1497,39 +1504,55 @@ def test_extraction_to_infiltration_error_conditions():
 
 
 def test_extraction_to_infiltration_analytical_simple_delay():
-    """Test extraction_to_infiltration with known simple delay scenario."""
-    # Create a scenario where we know the exact relationship
-    dates = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+    """Forward-then-reverse round-trip on a step input recovers the step
+    to machine precision in the interior.
 
-    # Input period starts earlier to account for residence time
-    cint_dates = pd.date_range(start="2019-12-25", end="2020-01-15", freq="D")
-    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cint_dates, number_of_bins=len(cint_dates))
+    Uses a non-integer-day residence time (RT = 1.3 days) so the forward
+    operator is well-conditioned (no integer-shift rank deficiency). A
+    generous spin-up buffer (30 days on each end) and a buffer around the
+    step discontinuity (±10 bins, where Tikhonov smoothing dominates)
+    isolates the data-dominated interior where the round-trip recovers cin
+    to ~6e-14. ``atol=1e-12`` gives ample margin over that.
+    """
+    n = 400
+    tedges = pd.date_range(start="2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
 
-    # Known pore volume that gives exactly 1 day residence time
-    flow_rate = 100.0  # m3/day
-    pore_volume = 100.0  # m3 -> residence time = 100/100 = 1 day
-
-    # Step function: cout jumps from 1 to 5 on day 5
-    cout_values = [1.0, 1.0, 1.0, 1.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0]
-    cout = pd.Series(cout_values, index=dates)
-    flow = pd.Series([flow_rate] * len(cint_dates), index=cint_dates)
+    flow_rate = 100.0
+    pore_volume = 130.0  # RT = 1.3 days (non-integer to avoid rank deficiency)
     aquifer_pore_volumes = np.array([pore_volume])
 
-    cin = extraction_to_infiltration(
-        cout=cout.to_numpy(),
-        flow=flow.to_numpy(),
-        tedges=cin_tedges,
-        cout_tedges=tedges,
+    cin_original = np.where(np.arange(n) < n // 2, 1.0, 5.0).astype(float)
+    flow = np.full(n, flow_rate)
+
+    cout = infiltration_to_extraction(
+        cin=cin_original,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=1.0,
+        spinup="constant",
+    )
+    cin_recovered = extraction_to_infiltration(
+        cout=cout,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+        spinup="constant",
     )
 
-    # With 1-day residence time, the step change on day 5 should appear 1 day earlier in cin
-    valid_inputs = cin[~np.isnan(cin)]
-    if len(valid_inputs) > 0:
-        # Should recover some reasonable signal
-        assert np.all(valid_inputs >= 0), f"All inputs should be non-negative, got {valid_inputs}"
+    step_idx = int(np.argmax(np.diff(cin_original) != 0)) + 1
+    buffer = 30  # spin-up on either end (≫ residence time)
+    step_clip = 10  # bins around the step where Tikhonov bias dominates
+    mask = np.ones(n, dtype=bool)
+    mask[:buffer] = False
+    mask[-buffer:] = False
+    mask[step_idx - step_clip : step_idx + step_clip] = False
+
+    np.testing.assert_allclose(cin_recovered[mask], cin_original[mask], atol=1e-12)
 
 
 def test_extraction_to_infiltration_zero_output_gives_zero_input():
@@ -2393,8 +2416,11 @@ def test_gamma_extraction_to_infiltration_parameter_sensitivity(mean, std):
 
     assert len(valid_recovered) > 0
     assert np.all(np.isfinite(valid_recovered))
-    # Mean should be preserved approximately
-    assert np.mean(valid_recovered) == pytest.approx(8.0, abs=3.0)
+    # Mean preservation under gamma deconvolution: the recovered cin mean
+    # equals the driving cout mean (8.0) up to boundary truncation of the
+    # sinusoidal period. atol=0.1 catches any gross bias; the previous
+    # abs=3.0 was a 30x looser slop that masked the underlying invariant.
+    np.testing.assert_allclose(np.mean(valid_recovered), 8.0, atol=0.1)
 
 
 def test_extraction_to_infiltration_with_retardation():
@@ -3141,9 +3167,10 @@ def test_spinup_constant_round_trip_recovers_cin():
         cout=cout, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv
     )
 
-    # Interior recovery should be tight; boundary bins absorb Tikhonov bias.
+    # Interior recovery should be tight to machine precision once the
+    # boundary bins (which absorb Tikhonov bias) are clipped on both ends.
     interior = slice(int(0.15 * n), int(0.85 * n))
-    np.testing.assert_allclose(cin_rec[interior], cin[interior], atol=1e-7)
+    np.testing.assert_allclose(cin_rec[interior], cin[interior], atol=1e-12)
 
 
 def test_spinup_constant_falls_back_when_flow_zero():
@@ -3214,3 +3241,442 @@ def test_spinup_float_out_of_range_raises(bad):
             aquifer_pore_volumes=np.array([100.0]),
             spinup=bad,
         )
+
+
+# =============================================================================
+# Front-tracking output binning — defensive guard against off-by-one routing
+# =============================================================================
+
+
+def test_flow_weighted_front_tracking_output_edge_routing(monkeypatch):
+    """Routing of fine sub-bins to flow / cout bins must follow the half-open
+    ``[t_k, t_{k+1})`` convention.
+
+    The helper builds ``fine_edges`` via ``np.unique(...)``, so a midpoint
+    never lands exactly on an inner flow edge in practice — meaning this
+    test does NOT distinguish ``side="left"`` from ``side="right"`` on the
+    current code. It pins the routing-output invariant: any future routing
+    bug (e.g., ``+/- 1`` index shift, swap, or normalization error) is
+    caught by the explicit reference loop.
+    """
+    cout_tedges_days = np.array([0.0, 6.0, 12.0])
+    flow_tedges_days = np.array([0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0])
+    flow = np.array([10.0, 20.0, 30.0, 40.0, 50.0, 60.0])
+
+    # Patch C(t) to be linear in the fine-bin midpoint so the flow-weighted
+    # average is strictly routing-dependent.
+    def _linear_c(*, t_edges, v_outlet, waves, sorption):
+        del v_outlet, waves, sorption
+        return (t_edges[:-1] + t_edges[1:]) / 2
+
+    monkeypatch.setattr(adv_mod, "compute_bin_averaged_concentration_exact", _linear_c)
+
+    out = adv_mod._flow_weighted_front_tracking_output(  # noqa: SLF001
+        cout_tedges_days=cout_tedges_days,
+        flow_tedges_days=flow_tedges_days,
+        flow=flow,
+        v_outlet=100.0,
+        waves=[],
+        sorption=ConstantRetardation(retardation_factor=1.0),
+    )
+
+    # Reference: explicit half-open bin assignment.
+    fine_edges = np.unique(np.concatenate([cout_tedges_days, flow_tedges_days[1:-1]]))
+    fine_mids = (fine_edges[:-1] + fine_edges[1:]) / 2
+    dt_fine = np.diff(fine_edges)
+    c_fine = fine_mids.copy()
+    # For each fine_mid, find the flow bin k such that t_k <= mid < t_{k+1}.
+    flow_idx = np.array([np.searchsorted(flow_tedges_days, m, side="right") - 1 for m in fine_mids])
+    cout_idx = np.array([np.searchsorted(cout_tedges_days, m, side="right") - 1 for m in fine_mids])
+    expected = np.zeros(len(cout_tedges_days) - 1)
+    for k in range(len(expected)):
+        mask = cout_idx == k
+        q_dt = flow[flow_idx[mask]] * dt_fine[mask]
+        expected[k] = np.sum(c_fine[mask] * q_dt) / np.sum(q_dt)
+
+    np.testing.assert_allclose(out, expected, atol=1e-12)
+
+
+# =============================================================================
+# Variable-flow + sinusoidal cin: analytic-reference correctness (Group 1)
+# =============================================================================
+
+
+def _reference_single_pv_variable_flow(cin, flow, tedges_days, cout_tedges_days, pore_volume, retardation):
+    """Compute reference cout for a single streamtube under variable flow.
+
+    Uses cumulative-pumped-volume inverse-interpolation followed by
+    flow-weighted bin-overlap aggregation. Independent of the package's
+    internal ``_infiltration_to_extraction_weights`` so the comparison
+    cross-validates both code paths.
+    """
+    dt_cin = np.diff(tedges_days)
+    flow_cum = np.concatenate([[0.0], np.cumsum(flow * dt_cin)])  # at tedges
+    flow_cum_at_cout = np.interp(cout_tedges_days, tedges_days, flow_cum)
+    v_source_left = flow_cum_at_cout[:-1] - retardation * pore_volume
+    v_source_right = flow_cum_at_cout[1:] - retardation * pore_volume
+    t_source_left = np.interp(v_source_left, flow_cum, tedges_days, left=np.nan, right=np.nan)
+    t_source_right = np.interp(v_source_right, flow_cum, tedges_days, left=np.nan, right=np.nan)
+
+    n_cout = len(cout_tedges_days) - 1
+    reference = np.full(n_cout, np.nan)
+    for k in range(n_cout):
+        if np.isnan(t_source_left[k]) or np.isnan(t_source_right[k]):
+            continue
+        a, b = t_source_left[k], t_source_right[k]
+        overlap = np.maximum(0.0, np.minimum(b, tedges_days[1:]) - np.maximum(a, tedges_days[:-1]))
+        weights = flow * overlap
+        total = np.sum(weights)
+        if total > 0:
+            reference[k] = np.sum(cin * weights) / total
+    return reference
+
+
+@pytest.mark.parametrize(
+    ("flow_profile", "pore_volume", "retardation"),
+    [
+        ("sine7", 200.0, 1.0),
+        ("sine7", 200.0, 2.0),
+        ("step", 300.0, 1.0),
+        ("cosine5", 450.0, 1.5),
+    ],
+)
+def test_infiltration_to_extraction_sinusoidal_variable_flow_analytic(flow_profile, pore_volume, retardation):
+    """Sinusoidal cin under variable flow matches an analytic flow-weighted
+    bin-convolution reference to machine precision."""
+    n_cin = 80
+    tedges = pd.date_range("2020-01-01", periods=n_cin + 1, freq="D")
+    cout_tedges = pd.date_range("2020-01-15", periods=40, freq="D")
+
+    t_days = np.arange(n_cin)
+    cin = 5.0 + 2.0 * np.sin(2 * np.pi * t_days / 11.0)
+    if flow_profile == "sine7":
+        flow = 100.0 + 30.0 * np.sin(2 * np.pi * t_days / 7.0)
+    elif flow_profile == "cosine5":
+        flow = 120.0 + 40.0 * np.cos(2 * np.pi * t_days / 5.0)
+    elif flow_profile == "step":
+        flow = np.where(t_days < n_cin // 2, 90.0, 160.0)
+    else:
+        raise AssertionError(flow_profile)
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([pore_volume]),
+        retardation_factor=retardation,
+        spinup=None,
+    )
+
+    tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    cout_tedges_days = ((cout_tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    reference = _reference_single_pv_variable_flow(
+        cin=cin,
+        flow=flow,
+        tedges_days=tedges_days,
+        cout_tedges_days=cout_tedges_days,
+        pore_volume=pore_volume,
+        retardation=retardation,
+    )
+
+    valid = ~np.isnan(reference) & ~np.isnan(cout)
+    assert np.any(valid), "Test setup gives no valid bins"
+    np.testing.assert_allclose(cout[valid], reference[valid], atol=1e-12)
+
+
+# =============================================================================
+# Impulse response vs discrete RTD kernel (Group 4)
+# =============================================================================
+
+
+def _reference_impulse_constant_flow(pore_volumes, flow_rate, pulse_left, pulse_right, n_cout, cout_bin_width):
+    """Discrete RTD reference for a single-bin unit pulse with constant flow.
+
+    Returns the streamtube-arithmetic-mean ``cout`` for each cout bin under
+    ``retardation_factor=1.0``: per streamtube, the source window for cout
+    bin k is ``[k*Δ - V/Q, (k+1)*Δ - V/Q]`` (in days from ``tedges[0]``), and
+    its flow-weighted contribution to that cout bin is ``overlap_with_pulse / Δ``
+    (constant flow cancels). The bundle mean averages over streamtubes.
+    """
+    n_pv = len(pore_volumes)
+    cout = np.zeros(n_cout)
+    for pv in pore_volumes:
+        rt = pv / flow_rate
+        for k in range(n_cout):
+            src_left = k * cout_bin_width - rt
+            src_right = (k + 1) * cout_bin_width - rt
+            overlap = max(0.0, min(src_right, pulse_right) - max(src_left, pulse_left))
+            cout[k] += (overlap / cout_bin_width) / n_pv
+    return cout
+
+
+@pytest.mark.parametrize(
+    "pv_distribution",
+    [
+        "uniform",
+        "two_cluster",
+        "single",
+    ],
+)
+def test_infiltration_to_extraction_impulse_response_discrete_rtd(pv_distribution):
+    """Single-bin pulse cin under constant flow + multi-PV: bundle output
+    equals the discrete sum-of-deltas RTD kernel to machine precision."""
+    n_cin = 60
+    tedges = pd.date_range("2020-01-01", periods=n_cin + 1, freq="D")
+    cout_tedges = tedges
+
+    pulse_idx = 8
+    cin = np.zeros(n_cin)
+    cin[pulse_idx] = 1.0
+    flow_rate = 100.0
+    flow = np.full(n_cin, flow_rate)
+
+    if pv_distribution == "uniform":
+        pore_volumes = np.array([200.0, 250.0, 300.0, 350.0, 400.0, 450.0, 500.0])
+    elif pv_distribution == "two_cluster":
+        pore_volumes = np.array([200.0, 210.0, 220.0, 600.0, 610.0, 620.0])
+    elif pv_distribution == "single":
+        pore_volumes = np.array([350.0])
+    else:
+        raise AssertionError(pv_distribution)
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=pore_volumes,
+        retardation_factor=1.0,
+        spinup=None,
+    )
+
+    reference = _reference_impulse_constant_flow(
+        pore_volumes=pore_volumes,
+        flow_rate=flow_rate,
+        pulse_left=float(pulse_idx),
+        pulse_right=float(pulse_idx + 1),
+        n_cout=n_cin,
+        cout_bin_width=1.0,
+    )
+
+    valid = ~np.isnan(cout)
+    assert np.any(valid)
+    np.testing.assert_allclose(cout[valid], reference[valid], atol=1e-12)
+
+
+# =============================================================================
+# Forward x reverse weight-matrix identity (Group 7)
+# =============================================================================
+
+
+@pytest.mark.parametrize("spinup", [None, "constant"])
+def test_weight_matrix_identity_forward_reverse(spinup):
+    """The W matrix used by the reverse path is bit-identical to the W matrix
+    built by the forward path on the same inputs.
+
+    The reverse path's Tikhonov regularization is applied inside
+    ``solve_inverse_transport`` *after* W is constructed, so the underlying
+    operator must match the forward one exactly. The test rebuilds W twice
+    in the test by replicating the same private pipeline both paths use.
+    """
+    n = 40
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
+    flow = 100.0 + 25.0 * np.sin(np.arange(n) * 2 * np.pi / 9)
+    cin = 3.0 + np.sin(np.arange(n) * 2 * np.pi / 13)
+    aquifer_pore_volumes = np.array([200.0, 350.0, 500.0])
+    retardation_factor = 1.0
+
+    def _build_w(cin_arg):
+        weight_tedges, weight_flow, _, threshold, _ = _resolve_spinup_inputs(
+            spinup,
+            tedges=tedges,
+            flow=flow,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            retardation_factor=retardation_factor,
+            cin=cin_arg,
+        )
+        acc, contrib, zero_flow = _infiltration_to_extraction_weights(
+            tedges=weight_tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            flow=weight_flow,
+            retardation_factor=retardation_factor,
+        )
+        w, _ = _resolve_spinup_mask(
+            accumulated_weights=acc,
+            contributing_bins=contrib,
+            zero_flow_cout=zero_flow,
+            n_pv=len(aquifer_pore_volumes),
+            spinup=threshold,
+        )
+        return w
+
+    w_forward = _build_w(cin)
+    w_reverse = _build_w(None)
+    np.testing.assert_array_equal(w_forward, w_reverse)
+
+
+# =============================================================================
+# Multi-PV boundary partial-coverage contract (Group 8)
+# =============================================================================
+
+
+def _per_streamtube_constant_flow_reference(*, cin, flow_rate, pore_volume, n_cout, cin_offset_days=0.0):
+    """Per-streamtube cout reference under constant flow, retardation=1.
+
+    For a streamtube with residence time RT = pore_volume / flow_rate, the
+    cout for bin k spans cin time ``[k - RT, k+1 - RT]``. Computes the
+    flow-weighted average (constant flow makes this an overlap-weighted
+    mean) over the cin bins that intersect this source window. Returns NaN
+    when the source window is not fully covered by cin.
+
+    ``cin_offset_days`` is the start of cin in days relative to cout's
+    start (negative if cin is padded earlier than cout).
+    """
+    rt = pore_volume / flow_rate
+    n_cin = len(cin)
+    cin_left = cin_offset_days
+    cin_right = cin_offset_days + n_cin
+    out = np.full(n_cout, np.nan)
+    for k in range(n_cout):
+        src_left = k - rt
+        src_right = (k + 1) - rt
+        if src_left < cin_left or src_right > cin_right:
+            continue
+        total_overlap = 0.0
+        weighted_sum = 0.0
+        for i in range(n_cin):
+            bin_left = cin_left + i
+            bin_right = cin_left + i + 1
+            overlap = max(0.0, min(src_right, bin_right) - max(src_left, bin_left))
+            if overlap > 0:
+                weighted_sum += cin[i] * overlap
+                total_overlap += overlap
+        if total_overlap > 0:
+            out[k] = weighted_sum / total_overlap
+    return out
+
+
+@pytest.mark.parametrize("spinup", [None, "constant"])
+def test_multi_pv_boundary_partial_coverage_contract(spinup):
+    """Pin the contract for cout bins with partial multi-PV streamtube
+    coverage at the cin boundary.
+
+    Setup: two streamtubes with very different residence times (RT = 1d
+    short, RT = 8d long), constant flow. Early cout bins have a fully-valid
+    source window for the short PV but a source window past ``tedges[0]``
+    for the long PV. This is the multi-PV partial-coverage scenario the
+    spinup parameter was introduced to handle (issue #161 + PR #178).
+
+    Contract pinned here:
+
+    - ``spinup=None`` (strict): bins where ANY streamtube has an invalid
+      source window become NaN. The exact NaN indices are pinned.
+    - ``spinup="constant"``: left-edge padding restores validity for all
+      streamtubes; the cout values match the bundle mean of per-streamtube
+      flow-weighted overlap references built independently of the package.
+    """
+    n_cin = 30
+    tedges = pd.date_range("2020-01-01", periods=n_cin + 1, freq="D")
+    cout_tedges = tedges
+
+    flow_rate = 100.0
+    flow = np.full(n_cin, flow_rate)
+    cin = 2.0 + np.cos(np.arange(n_cin) * 2 * np.pi / 11)
+    pore_volumes = np.array([100.0, 800.0])  # RT = 1 d (short) and 8 d (long)
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=pore_volumes,
+        retardation_factor=1.0,
+        spinup=spinup,
+    )
+
+    if spinup is None:
+        # The long streamtube needs ≥ 8 days of cin history before its
+        # source window is fully inside cin; cout bins 0..7 are invalid.
+        expected_nan = np.zeros(n_cin, dtype=bool)
+        expected_nan[:8] = True
+        np.testing.assert_array_equal(np.isnan(cout), expected_nan)
+
+        # Independent reference for valid bins: arithmetic mean of per-
+        # streamtube outputs against the original cin (no padding).
+        ref_short = _per_streamtube_constant_flow_reference(
+            cin=cin, flow_rate=flow_rate, pore_volume=pore_volumes[0], n_cout=n_cin
+        )
+        ref_long = _per_streamtube_constant_flow_reference(
+            cin=cin, flow_rate=flow_rate, pore_volume=pore_volumes[1], n_cout=n_cin
+        )
+        reference = 0.5 * (ref_short + ref_long)
+        valid = ~np.isnan(cout)
+        np.testing.assert_allclose(cout[valid], reference[valid], atol=1e-12)
+    else:
+        # spinup="constant" pads the left edge with cin[0] for the warm-
+        # start duration ceil(R · V_max / flow[0]) + 1 = 9 days. Reference:
+        # extend cin and flow on the left by that many days with the
+        # warm-start values; per-streamtube overlap reference becomes
+        # valid for every cout bin.
+        assert not np.any(np.isnan(cout))
+        n_pad = int(np.ceil(1.0 * pore_volumes[-1] / flow_rate)) + 1
+        cin_padded = np.concatenate([np.full(n_pad, cin[0]), cin])
+        ref_short = _per_streamtube_constant_flow_reference(
+            cin=cin_padded,
+            flow_rate=flow_rate,
+            pore_volume=pore_volumes[0],
+            n_cout=n_cin,
+            cin_offset_days=-float(n_pad),
+        )
+        ref_long = _per_streamtube_constant_flow_reference(
+            cin=cin_padded,
+            flow_rate=flow_rate,
+            pore_volume=pore_volumes[1],
+            n_cout=n_cin,
+            cin_offset_days=-float(n_pad),
+        )
+        reference = 0.5 * (ref_short + ref_long)
+        np.testing.assert_allclose(cout, reference, atol=1e-12)
+
+
+def test_weight_matrix_rows_sum_to_one_or_zero():
+    """Each row of W either sums to 1 (valid output bin) or to 0 (invalid).
+
+    Mass-conservation invariant of the bundle weight matrix under strict
+    validity. Catches mutations that double or halve row normalization
+    (mutations that the W*cin cross-check would mask)."""
+    n_cin = 40
+    tedges = pd.date_range("2020-01-01", periods=n_cin + 1, freq="D")
+    cout_tedges = tedges
+    flow = 100.0 + 25.0 * np.sin(np.arange(n_cin) * 2 * np.pi / 9)
+    aquifer_pore_volumes = np.array([150.0, 350.0, 600.0])
+
+    weight_tedges, weight_flow, _, threshold, _ = _resolve_spinup_inputs(
+        None,
+        tedges=tedges,
+        flow=flow,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=1.0,
+    )
+    acc, contrib, zero_flow = _infiltration_to_extraction_weights(
+        tedges=weight_tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        flow=weight_flow,
+        retardation_factor=1.0,
+    )
+    w, invalid = _resolve_spinup_mask(
+        accumulated_weights=acc,
+        contributing_bins=contrib,
+        zero_flow_cout=zero_flow,
+        n_pv=len(aquifer_pore_volumes),
+        spinup=threshold,
+    )
+
+    row_sums = w.sum(axis=1)
+    valid_rows = ~invalid
+    np.testing.assert_allclose(row_sums[valid_rows], 1.0, atol=1e-13)
+    np.testing.assert_allclose(row_sums[invalid], 0.0, atol=1e-13)
