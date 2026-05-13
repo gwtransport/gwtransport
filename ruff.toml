@@ -65,6 +65,9 @@ convention = "numpy"
     "DOC501",  # Test functions don't need Raises docs
     "DOC502",  # Test helpers may document exceptions not directly raised
 ]
+"src/gwtransport/deposition.py" = [
+    "DOC502",  # Public entry points document ValueError; the raises happen inside _validate_deposition_inputs
+]
 "tests/**/test_*.py" = [
     "S101",    # asserts allowed in tests
     "D",
