@@ -66,6 +66,73 @@ from gwtransport.utils import (
 )
 
 
+def _validate_deposition_inputs(
+    *,
+    tedges: pd.DatetimeIndex,
+    flow_values: np.ndarray,
+    aquifer_pore_volume: float,
+    porosity: float,
+    thickness: float,
+    cout_tedges: pd.DatetimeIndex | None = None,
+    cout_values: np.ndarray | None = None,
+    dep_values: np.ndarray | None = None,
+) -> None:
+    """Validate inputs common to deposition forward / reverse / full entry points.
+
+    Activates checks per the kwargs that are not None:
+
+    - ``dep_values`` provided => ``tedges``-parity vs ``dep`` + combined dep+flow
+      NaN-check (forward path; preserves the historical "Input arrays cannot
+      contain NaN values" message that covered both dep and flow).
+    - ``cout_values`` + ``cout_tedges`` provided => ``cout_tedges``-parity check
+      (inverse paths). ``cout_values`` itself is intentionally NOT NaN-checked
+      -- NaN in ``cout`` is allowed and excluded downstream by ``solve_tikhonov``.
+    - ``flow_values`` + ``tedges`` always => parity check + non-negative;
+      additionally, in the inverse path (``dep_values is None``), a flow-only
+      NaN-check fires with the historical "flow array cannot contain NaN
+      values" message.
+    - Physical params (``porosity``, ``thickness``, ``aquifer_pore_volume``)
+      always validated.
+
+    Every error message and f-string substitution is preserved verbatim from
+    the prior triplicate prologue so that ``match=`` regex tests do not break.
+
+    Raises
+    ------
+    ValueError
+        If any of the activated checks fails. The specific message names which
+        invariant was violated (see body for the verbatim strings).
+    """
+    if dep_values is not None and len(tedges) != len(dep_values) + 1:
+        msg = "tedges must have one more element than dep"
+        raise ValueError(msg)
+    if len(tedges) != len(flow_values) + 1:
+        msg = "tedges must have one more element than flow"
+        raise ValueError(msg)
+    if cout_values is not None and cout_tedges is not None and len(cout_tedges) != len(cout_values) + 1:
+        msg = "cout_tedges must have one more element than cout"
+        raise ValueError(msg)
+    if dep_values is not None:
+        if np.any(np.isnan(dep_values)) or np.any(np.isnan(flow_values)):
+            msg = "Input arrays cannot contain NaN values"
+            raise ValueError(msg)
+    elif np.any(np.isnan(flow_values)):
+        msg = "flow array cannot contain NaN values"
+        raise ValueError(msg)
+    if np.any(flow_values < 0):
+        msg = "flow must be non-negative (negative flow not supported)"
+        raise ValueError(msg)
+    if not 0 < porosity < 1:
+        msg = f"Porosity must be in (0, 1), got {porosity}"
+        raise ValueError(msg)
+    if thickness <= 0:
+        msg = f"Thickness must be positive, got {thickness}"
+        raise ValueError(msg)
+    if aquifer_pore_volume <= 0:
+        msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
+        raise ValueError(msg)
+
+
 def compute_deposition_weights(
     *,
     flow: npt.ArrayLike,
@@ -122,9 +189,7 @@ def compute_deposition_weights(
         retardation_factor=retardation_factor,
         direction="extraction_to_infiltration",
     )
-    # residence_time returns shape (n_pore_volumes, n_index); we pass a single
-    # pore volume so select row 0 explicitly.
-    cout_tedges_days_infiltration = cout_tedges_days - cout_rt_at_edges[0, :]
+    cout_tedges_days_infiltration = cout_tedges_days - cout_rt_at_edges.squeeze(axis=0)
 
     flow_cum = np.concatenate(([0.0], np.cumsum(flow_values * np.diff(tedges_days))))
 
@@ -132,21 +197,17 @@ def compute_deposition_weights(
     start_vol = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days_infiltration)
     end_vol = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days)
 
-    # Compute deposition weights
+    # Compute deposition weights. Zero-flow cout bins have extracted_volume == 0;
+    # np.divide with where=mask leaves those rows at the out=zeros sentinel.
     flow_cum_cout = flow_cum[None, :] - start_vol[:, None]
     volume_array = compute_average_heights(
         x_edges=tedges_days, y_edges=flow_cum_cout, y_lower=0.0, y_upper=retardation_factor * float(aquifer_pore_volume)
     )
     area_array = volume_array / (porosity * thickness)
     extracted_volume = np.diff(end_vol)
-    # Zero-flow cout bins have extracted_volume == 0 (no water extracted), so
-    # the weight row collapses to 0: no extraction contributes no deposition
-    # signature to cout. Use a sentinel divisor on those rows to avoid the
-    # division-by-zero warning before np.where discards them.
     numerator = area_array * np.diff(tedges_days)[None, :]
     mask = extracted_volume > 0
-    safe_denom = np.where(mask, extracted_volume, 1.0)[:, None]
-    return np.where(mask[:, None], numerator / safe_denom, 0.0)
+    return np.divide(numerator, extracted_volume[:, None], out=np.zeros_like(numerator), where=mask[:, None])
 
 
 def deposition_to_extraction(
@@ -240,30 +301,14 @@ def deposition_to_extraction(
     tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
     dep_values, flow_values = np.asarray(dep), np.asarray(flow)
 
-    # Validate input dimensions and values
-    if len(tedges) != len(dep_values) + 1:
-        msg = "tedges must have one more element than dep"
-        raise ValueError(msg)
-    if len(tedges) != len(flow_values) + 1:
-        msg = "tedges must have one more element than flow"
-        raise ValueError(msg)
-    if np.any(np.isnan(dep_values)) or np.any(np.isnan(flow_values)):
-        msg = "Input arrays cannot contain NaN values"
-        raise ValueError(msg)
-    if np.any(flow_values < 0):
-        msg = "flow must be non-negative (negative flow not supported)"
-        raise ValueError(msg)
-
-    # Validate physical parameters
-    if not 0 < porosity < 1:
-        msg = f"Porosity must be in (0, 1), got {porosity}"
-        raise ValueError(msg)
-    if thickness <= 0:
-        msg = f"Thickness must be positive, got {thickness}"
-        raise ValueError(msg)
-    if aquifer_pore_volume <= 0:
-        msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
-        raise ValueError(msg)
+    _validate_deposition_inputs(
+        tedges=tedges,
+        flow_values=flow_values,
+        aquifer_pore_volume=aquifer_pore_volume,
+        porosity=porosity,
+        thickness=thickness,
+        dep_values=dep_values,
+    )
 
     # Apply spinup policy: optionally prepend warm-start bins to tedges/flow/dep.
     weight_tedges, weight_flow, weight_dep, _, _ = _resolve_spinup_inputs(
@@ -438,30 +483,15 @@ def extraction_to_deposition(
     tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
     cout_values, flow_values = np.asarray(cout), np.asarray(flow)
 
-    # Validate input dimensions and values
-    if len(cout_tedges) != len(cout_values) + 1:
-        msg = "cout_tedges must have one more element than cout"
-        raise ValueError(msg)
-    if len(tedges) != len(flow_values) + 1:
-        msg = "tedges must have one more element than flow"
-        raise ValueError(msg)
-    if np.any(np.isnan(flow_values)):
-        msg = "flow array cannot contain NaN values"
-        raise ValueError(msg)
-    if np.any(flow_values < 0):
-        msg = "flow must be non-negative (negative flow not supported)"
-        raise ValueError(msg)
-
-    # Validate physical parameters
-    if not 0 < porosity < 1:
-        msg = f"Porosity must be in (0, 1), got {porosity}"
-        raise ValueError(msg)
-    if thickness <= 0:
-        msg = f"Thickness must be positive, got {thickness}"
-        raise ValueError(msg)
-    if aquifer_pore_volume <= 0:
-        msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
-        raise ValueError(msg)
+    _validate_deposition_inputs(
+        tedges=tedges,
+        flow_values=flow_values,
+        aquifer_pore_volume=aquifer_pore_volume,
+        porosity=porosity,
+        thickness=thickness,
+        cout_tedges=cout_tedges,
+        cout_values=cout_values,
+    )
 
     # Apply spinup policy: optionally prepend warm-start bins to tedges/flow.
     weight_tedges, weight_flow, _, _, n_pad = _resolve_spinup_inputs(
@@ -483,8 +513,6 @@ def extraction_to_deposition(
         retardation_factor=retardation_factor,
     )
 
-    n_dep_padded = len(weight_tedges) - 1
-
     # Rescale rows of W by their sum r_i = RT_i / (porosity*thickness). For
     # systems where cout lies in the column space of W (e.g., noise-free
     # roundtrip), this preserves the exact dep. For overdetermined systems
@@ -494,14 +522,14 @@ def extraction_to_deposition(
     # exists to put compute_reverse_target on the same scale as dep, which
     # controls the regularization scale. NaN rows (spin-up), all-zero rows
     # (zero-flow cout bins; carry no info), and NaN values in cout are
-    # excluded by solve_tikhonov.
+    # excluded by solve_tikhonov via its valid_rows = ~isnan(matrix).any(axis=1) & ~isnan(rhs) filter.
     valid_rows = ~np.isnan(deposition_weights).any(axis=1) & (np.abs(deposition_weights).sum(axis=1) > 0)
     valid_weights = deposition_weights[valid_rows]
     row_sums = valid_weights.sum(axis=1, keepdims=True)
     col_active = np.sum(np.abs(valid_weights), axis=0) > 0
 
     if not np.any(col_active):
-        return np.full(n_dep_padded - n_pad, np.nan)
+        return np.full(deposition_weights.shape[1] - n_pad, np.nan)
 
     # Build normalized system: W_norm @ dep = cout_norm
     w_norm = valid_weights / row_sums
@@ -524,22 +552,20 @@ def extraction_to_deposition(
             stacklevel=2,
         )
 
-    # Reconstruct full arrays with NaN for invalid rows
-    full_w_norm = np.full_like(deposition_weights, np.nan)
-    full_w_norm[valid_rows] = w_norm
-    full_cout_norm = np.full(len(cout_values), np.nan)
-    full_cout_norm[valid_rows] = cout_norm
-
     x_target = compute_reverse_target(coeff_matrix=w_norm, rhs_vector=cout_norm)
 
+    # solve_tikhonov filters NaN rows in *both* coefficient_matrix and rhs_vector
+    # (utils.py: valid_rows = ~isnan(matrix).any(axis=1) & ~isnan(rhs)).  We pass
+    # the already-pruned w_norm / cout_norm directly -- a reconstruction back to
+    # full size only to be filtered again would be dead work.
     dep_solved = solve_tikhonov(
-        coefficient_matrix=full_w_norm,
-        rhs_vector=full_cout_norm,
+        coefficient_matrix=w_norm,
+        rhs_vector=cout_norm,
         x_target=x_target,
         regularization_strength=regularization_strength,
     )
 
-    out = np.full(n_dep_padded, np.nan)
+    out = np.full(deposition_weights.shape[1], np.nan)
     out[col_active] = dep_solved[col_active]
     # Drop warm-start prefix so output aligns with the user-provided tedges.
     return out[n_pad:]
@@ -643,30 +669,15 @@ def extraction_to_deposition_full(
     tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
     cout_values, flow_values = np.asarray(cout), np.asarray(flow)
 
-    # Validate input dimensions and values
-    if len(cout_tedges) != len(cout_values) + 1:
-        msg = "cout_tedges must have one more element than cout"
-        raise ValueError(msg)
-    if len(tedges) != len(flow_values) + 1:
-        msg = "tedges must have one more element than flow"
-        raise ValueError(msg)
-    if np.any(np.isnan(flow_values)):
-        msg = "flow array cannot contain NaN values"
-        raise ValueError(msg)
-    if np.any(flow_values < 0):
-        msg = "flow must be non-negative (negative flow not supported)"
-        raise ValueError(msg)
-
-    # Validate physical parameters
-    if not 0 < porosity < 1:
-        msg = f"Porosity must be in (0, 1), got {porosity}"
-        raise ValueError(msg)
-    if thickness <= 0:
-        msg = f"Thickness must be positive, got {thickness}"
-        raise ValueError(msg)
-    if aquifer_pore_volume <= 0:
-        msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
-        raise ValueError(msg)
+    _validate_deposition_inputs(
+        tedges=tedges,
+        flow_values=flow_values,
+        aquifer_pore_volume=aquifer_pore_volume,
+        porosity=porosity,
+        thickness=thickness,
+        cout_tedges=cout_tedges,
+        cout_values=cout_values,
+    )
 
     # Apply spinup policy: optionally prepend warm-start bins to tedges/flow.
     weight_tedges, weight_flow, _, _, n_pad = _resolve_spinup_inputs(

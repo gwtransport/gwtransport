@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 from gwtransport.deposition import (
+    _validate_deposition_inputs,
     compute_deposition_weights,
     deposition_to_extraction,
     extraction_to_deposition,
@@ -1956,3 +1957,134 @@ def test_limit_reduction_cout_approaches_zero(limit_param, limit_values):
     np.testing.assert_allclose(observed_ratios, expected_ratios, rtol=1e-12, atol=0)
     # And, just to be explicit, the final ratio must drop several orders.
     assert observed_ratios[-1] < 1e-2, f"final cout ratio should be << initial: {observed_ratios[-1]}"
+
+
+# =============================================================================
+# Validator helper: one parametrized block hits every ValueError branch in
+# _validate_deposition_inputs via match= regex; a silent-on-good-input test
+# pins the no-raise path. The match strings are verbatim from the prior
+# triplicate prologue -- consolidating must preserve every wording.
+# =============================================================================
+
+
+def _good_validator_inputs():
+    """Return a baseline good-input dict that passes the validator silently."""
+    n = 5
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    return {
+        "tedges": tedges,
+        "flow_values": np.full(n, 100.0),
+        "aquifer_pore_volume": 300.0,
+        "porosity": 0.3,
+        "thickness": 5.0,
+    }
+
+
+def test_validate_deposition_inputs_silent_on_good_input_forward():
+    """No exception when the forward (dep + flow) inputs are valid."""
+    kwargs = _good_validator_inputs()
+    n = len(kwargs["flow_values"])
+    _validate_deposition_inputs(**kwargs, dep_values=np.full(n, 5.0))
+
+
+def test_validate_deposition_inputs_silent_on_good_input_inverse():
+    """No exception when the inverse (cout + flow) inputs are valid (cout may contain NaN)."""
+    kwargs = _good_validator_inputs()
+    n = len(kwargs["flow_values"])
+    cout_tedges = kwargs["tedges"]
+    cout_values = np.full(n, 10.0)
+    cout_values[2] = np.nan  # NaN in cout is intentionally allowed
+    _validate_deposition_inputs(**kwargs, cout_tedges=cout_tedges, cout_values=cout_values)
+
+
+@pytest.mark.parametrize(
+    ("path", "mutate", "match_regex"),
+    [
+        # Forward path (dep_values provided)
+        (
+            "forward",
+            lambda k: {**k, "dep_values": np.full(len(k["flow_values"]) + 1, 5.0)},
+            r"tedges must have one more element than dep",
+        ),
+        (
+            "forward",
+            lambda k: {**k, "dep_values": np.array([5.0, np.nan, 5.0, 5.0, 5.0])},
+            r"Input arrays cannot contain NaN values",
+        ),
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "flow_values": np.array([100.0, np.nan, 100.0, 100.0, 100.0]),
+                "dep_values": np.full(5, 5.0),
+            },
+            r"Input arrays cannot contain NaN values",
+        ),
+        # Inverse path (cout_values provided)
+        (
+            "inverse",
+            lambda k: {**k, "cout_tedges": k["tedges"], "cout_values": np.full(len(k["flow_values"]) + 1, 10.0)},
+            r"cout_tedges must have one more element than cout",
+        ),
+        (
+            "inverse",
+            lambda k: {
+                **k,
+                "flow_values": np.array([100.0, np.nan, 100.0, 100.0, 100.0]),
+                "cout_tedges": k["tedges"],
+                "cout_values": np.full(len(k["flow_values"]), 10.0),
+            },
+            r"flow array cannot contain NaN values",
+        ),
+        # Shared branches (test on forward; inverse takes identical code path)
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "flow_values": np.array([100.0, -50.0, 100.0, 100.0, 100.0]),
+                "dep_values": np.full(5, 5.0),
+            },
+            r"flow must be non-negative \(negative flow not supported\)",
+        ),
+        (
+            "forward",
+            lambda k: {**k, "porosity": 1.5, "dep_values": np.full(len(k["flow_values"]), 5.0)},
+            r"Porosity must be in \(0, 1\), got 1\.5",
+        ),
+        (
+            "forward",
+            lambda k: {**k, "porosity": 0.0, "dep_values": np.full(len(k["flow_values"]), 5.0)},
+            r"Porosity must be in \(0, 1\), got 0\.0",
+        ),
+        (
+            "forward",
+            lambda k: {**k, "thickness": 0.0, "dep_values": np.full(len(k["flow_values"]), 5.0)},
+            r"Thickness must be positive, got 0\.0",
+        ),
+        (
+            "forward",
+            lambda k: {**k, "thickness": -1.0, "dep_values": np.full(len(k["flow_values"]), 5.0)},
+            r"Thickness must be positive, got -1\.0",
+        ),
+        (
+            "forward",
+            lambda k: {**k, "aquifer_pore_volume": 0.0, "dep_values": np.full(len(k["flow_values"]), 5.0)},
+            r"Aquifer pore volume must be positive, got 0\.0",
+        ),
+        (
+            "forward",
+            lambda k: {**k, "aquifer_pore_volume": -10.0, "dep_values": np.full(len(k["flow_values"]), 5.0)},
+            r"Aquifer pore volume must be positive, got -10\.0",
+        ),
+    ],
+)
+def test_validate_deposition_inputs_raises_on_bad_input(path, mutate, match_regex):
+    """Each ValueError branch raises with the exact historical message string.
+
+    Locks the consolidation against accidental wording drift; the regex
+    matches the verbatim string from the prior three duplicate prologues.
+    """
+    del path  # parametrize id only; behavior already encoded in mutate
+    bad = mutate(_good_validator_inputs())
+    with pytest.raises(ValueError, match=match_regex):
+        _validate_deposition_inputs(**bad)
