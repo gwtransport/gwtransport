@@ -108,44 +108,47 @@ class TestWaveRecreation:
         assert np.isclose(vel_new, 2 * vel_old, rtol=1e-14)
 
     def test_recreate_rarefaction_preserves_concentrations(self, freundlich_sorption):
-        """Rarefaction head/tail concentrations unchanged, velocities scale with flow."""
+        """Concentrations preserved; head/tail positions preserved at t_change (P1.7)."""
+        flow_old = 100.0
         raref_old = RarefactionWave(
             t_start=0.0,
             v_start=0.0,
-            flow=100.0,
+            flow=flow_old,
             c_head=10.0,
             c_tail=2.0,
             sorption=freundlich_sorption,
         )
 
-        # Get old velocities
         vel_head_old = raref_old.head_velocity()
         vel_tail_old = raref_old.tail_velocity()
 
         t_change = 8.0
         flow_new = 50.0
 
-        # Position at t_change (use head position)
-        v_at_change = raref_old.head_position_at_time(t_change)
+        v_head_at_change = raref_old.head_position_at_time(t_change)
+        v_tail_at_change = raref_old.tail_position_at_time(t_change)
 
         raref_new = recreate_rarefaction_with_new_flow(raref_old, t_change, flow_new)
 
-        # Verify concentrations preserved
+        # Concentrations preserved
         assert raref_new.c_head == 10.0
         assert raref_new.c_tail == 2.0
+        assert raref_new.flow == flow_new
 
-        # Verify flow updated
-        assert raref_new.flow == 50.0
+        # Fan apex unchanged; apparent age rescales by flow_old / flow_new.
+        assert raref_new.v_start == raref_old.v_start
+        expected_t_start = t_change - (flow_old / flow_new) * (t_change - raref_old.t_start)
+        assert np.isclose(raref_new.t_start, expected_t_start, rtol=1e-14)
 
-        # Verify position
-        assert v_at_change is not None
-        assert np.isclose(raref_new.v_start, v_at_change, rtol=1e-14)
+        # Velocities halved (flow_new = 0.5 * flow_old)
+        assert np.isclose(raref_new.head_velocity(), 0.5 * vel_head_old, rtol=1e-14)
+        assert np.isclose(raref_new.tail_velocity(), 0.5 * vel_tail_old, rtol=1e-14)
 
-        # Verify velocities halved
-        vel_head_new = raref_new.head_velocity()
-        vel_tail_new = raref_new.tail_velocity()
-        assert np.isclose(vel_head_new, 0.5 * vel_head_old, rtol=1e-14)
-        assert np.isclose(vel_tail_new, 0.5 * vel_tail_old, rtol=1e-14)
+        # Head and tail positions at t_change are preserved through the flow change.
+        assert v_head_at_change is not None
+        assert v_tail_at_change is not None
+        assert np.isclose(raref_new.head_position_at_time(t_change), v_head_at_change, rtol=1e-14)
+        assert np.isclose(raref_new.tail_position_at_time(t_change), v_tail_at_change, rtol=1e-14)
 
     def test_recreate_before_wave_start_raises_error(self, constant_retardation):
         """Cannot recreate wave before it starts."""
@@ -186,7 +189,7 @@ class TestFlowChangeHandler:
         t_change = 10.0
         flow_new = 200.0
 
-        new_waves = handle_flow_change(t_change, flow_new, waves)
+        new_waves = handle_flow_change(t_change, flow_new, waves, v_outlet=float("inf"))
 
         # Should create 2 new waves
         assert len(new_waves) == 2
@@ -231,7 +234,7 @@ class TestFlowChangeHandler:
         t_change = 15.0
         flow_new = 150.0
 
-        new_waves = handle_flow_change(t_change, flow_new, waves)
+        new_waves = handle_flow_change(t_change, flow_new, waves, v_outlet=float("inf"))
 
         # Should create 3 new waves
         assert len(new_waves) == 3
@@ -249,10 +252,11 @@ class TestFlowChangeIntegration:
     """Integration tests with FrontTracker solver."""
 
     def test_single_characteristic_flow_doubles(self, constant_retardation):
-        """Single characteristic: flow doubles, arrival time halves."""
+        """Single characteristic: flow doubles, recreation produces a new wave with updated flow."""
         # Characteristic with c=5, flow starts at 100
         # At t=10, flow changes to 200
-        # aquifer_pore_volume = 500
+        # aquifer_pore_volume = 2000 keeps the wave inside the domain at t_change
+        # (position at t=10 with R=2 is 100*10/2 = 500 < 2000).
 
         tedges = pd.date_range("2020-01-01", periods=4, freq="10D")
         cin = np.array([5.0, 5.0, 5.0])
@@ -262,7 +266,7 @@ class TestFlowChangeIntegration:
             cin=cin,
             flow=flow,
             tedges=tedges,
-            aquifer_pore_volume=500.0,
+            aquifer_pore_volume=2000.0,
             sorption=constant_retardation,
         )
 
@@ -274,7 +278,7 @@ class TestFlowChangeIntegration:
         assert np.isclose(flow_change_events[0]["time"], 10.0, rtol=1e-14)
 
         # Verify waves were recreated
-        # Should have: initial char, char after flow change
+        # Should have: initial char (deactivated), char after flow change (active)
         chars = [w for w in tracker.state.waves if isinstance(w, CharacteristicWave)]
         assert len(chars) == 2
 

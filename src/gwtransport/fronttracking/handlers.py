@@ -28,118 +28,40 @@ def handle_characteristic_collision(
     char2: CharacteristicWave,
     t_event: float,
     v_event: float,
-) -> list[ShockWave | RarefactionWave]:
+) -> list[ShockWave]:
     """
-    Handle collision of two characteristics → create shock or rarefaction.
+    Handle collision of two characteristics → create shock.
 
-    When two characteristics with different concentrations intersect, they
-    form a shock discontinuity. The faster characteristic (lower concentration
-    for n>1) catches the slower one from behind.
+    When two characteristics with different concentrations intersect, the
+    faster one catches the slower one from behind. By the entropy condition
+    this compressive interaction is always a shock — independently of the
+    sorption regime (Freundlich ``n>1``, ``n<1``, or constant retardation).
 
     Parameters
     ----------
-    char1 : CharacteristicWave
-        First characteristic
-    char2 : CharacteristicWave
-        Second characteristic
+    char1, char2 : CharacteristicWave
+        Colliding characteristics.
     t_event : float
-        Time of collision [days]
+        Time of collision [days].
     v_event : float
-        Position of collision [m³]
+        Position of collision [m³].
 
     Returns
     -------
-    list of ShockWave or RarefactionWave
-        Single shock or rarefaction wave created at collision point
+    list of ShockWave
+        Single shock created at the collision point.
 
     Raises
     ------
     RuntimeError
-        If the characteristic collision creates a non-entropic shock,
-        indicating a bug in the collision detection logic.
+        If the resulting shock fails the Lax entropy condition.
 
     Notes
     -----
-    The shock has:
-    - c_left: concentration from faster (upstream) characteristic
-    - c_right: concentration from slower (downstream) characteristic
-    - velocity: computed from Rankine-Hugoniot condition
-
-    The parent characteristics are deactivated.
-
-    Examples
-    --------
-    ::
-
-        shock = handle_characteristic_collision(char1, char2, t=15.0, v=100.0)
-        assert shock.satisfies_entropy()
-        assert not char1.is_active  # Parent deactivated
+    ``c_left`` is the upstream (faster) concentration, ``c_right`` the
+    downstream (slower) one — assigned by velocity ordering. The parent
+    characteristics are deactivated.
     """
-    # Get c_min from sorption to determine concentration threshold
-    c_min = getattr(char1.sorption, "c_min", 0.0)
-    is_n_lt_1 = isinstance(char1.sorption, FreundlichSorption) and char1.sorption.n < 1.0
-
-    # Special case: if one characteristic has C near c_min
-    # Need to determine if this is:
-    # 1. C≈c_min from initial condition being overtaken by C>0 → keep C>0
-    # 2. C≈c_min from inlet (clean water) catching C>0 → analyze velocities
-    # Only use special handling for n<1 with c_min=0 where R(0)=1
-    if char1.concentration <= c_min and char2.concentration > c_min and is_n_lt_1 and c_min == 0:
-        # char1 is C≈0, char2 is C>0
-        # Check velocities to determine who is catching whom
-        vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
-        vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
-
-        if vel1 > vel2:
-            # C=0 is faster → catching C>0 from behind
-            # For Freundlich n>1: concentration decrease (C>0 → C=0) forms rarefaction
-            # Physical: clean water (fast) catching contaminated water (slow)
-            # The rarefaction needs head_velocity > tail_velocity. We just verified
-            # vel1 > vel2 and vel1 is the head velocity, so the rarefaction is valid.
-            raref = RarefactionWave(
-                t_start=t_event,
-                v_start=v_event,
-                flow=char1.flow,
-                c_head=char1.concentration,  # C=0 is head (faster)
-                c_tail=char2.concentration,  # C>0 is tail (slower)
-                sorption=char1.sorption,
-            )
-            char1.is_active = False
-            char2.is_active = False
-            return [raref]
-        # C>0 is faster → C>0 catching C=0 → C=0 is from initial condition
-        # Just deactivate the C=0 and keep C>0 active
-        char1.is_active = False
-        return []
-
-    if char2.concentration <= c_min and char1.concentration > c_min and is_n_lt_1 and c_min == 0:
-        # char2 is C≈0, char1 is C>0
-        vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
-        vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
-
-        if vel2 > vel1:
-            # C=0 is faster → catching C>0 from behind
-            # For Freundlich n>1: concentration decrease forms rarefaction
-            # The rarefaction needs head_velocity > tail_velocity. We just verified
-            # vel2 > vel1 and vel2 is the head velocity, so the rarefaction is valid.
-            raref = RarefactionWave(
-                t_start=t_event,
-                v_start=v_event,
-                flow=char1.flow,
-                c_head=char2.concentration,  # C=0 is head (faster)
-                c_tail=char1.concentration,  # C>0 is tail (slower)
-                sorption=char1.sorption,
-            )
-            char1.is_active = False
-            char2.is_active = False
-            return [raref]
-        # C>0 is faster → C=0 is from initial condition
-        char2.is_active = False
-        return []
-
-    # Normal case: analyze velocities to determine wave type
-    # This now handles all cases for n>1 (higher C travels faster) and
-    # concentrations above c_min for n<1 (lower C travels faster)
     vel1 = characteristic_velocity(char1.concentration, char1.flow, char1.sorption)
     vel2 = characteristic_velocity(char2.concentration, char2.flow, char2.sorption)
 
@@ -150,29 +72,24 @@ def handle_characteristic_collision(
         c_left = char2.concentration
         c_right = char1.concentration
 
-    # Create shock at collision point
     shock = ShockWave(
         t_start=t_event,
         v_start=v_event,
-        flow=char1.flow,  # Assume same flow (piecewise constant)
+        flow=char1.flow,
         c_left=c_left,
         c_right=c_right,
         sorption=char1.sorption,
     )
 
-    # Verify entropy condition
     if not shock.satisfies_entropy():
-        # This shouldn't happen if characteristics collided correctly
         msg = (
             f"Characteristic collision created non-entropic shock at t={t_event:.3f}, V={v_event:.3f}. "
             f"c_left={c_left:.3f}, c_right={c_right:.3f}, shock_vel={shock.velocity:.3f}"
         )
         raise RuntimeError(msg)
 
-    # Deactivate parent characteristics
     char1.is_active = False
     char2.is_active = False
-
     return [shock]
 
 
@@ -922,38 +839,28 @@ def recreate_rarefaction_with_new_flow(
     Notes
     -----
     The parent rarefaction should be deactivated by the caller.
-    The rarefaction fan "pivots" at (v_at_change, t_change).
 
-    Before: R(C) = flow_old * (t - t_start_old) / (v - v_start_old)
-    After:  R(C) = flow_new * (t - t_change) / (v - v_at_change)
+    The fan apex (the spatial origin) is invariant under a downstream flow
+    change. The new self-similar law
 
-    Examples
-    --------
-    ::
+        R(C) = flow_new * (t - t_start_new) / (v - v_start_old)
 
-        raref_old = RarefactionWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            c_head=10.0,
-            c_tail=2.0,
-            sorption=sorption,
-        )
-        raref_new = recreate_rarefaction_with_new_flow(
-            raref_old, t_change=10.0, flow_new=200.0
-        )
-        assert raref_new.flow == 200.0
-        assert raref_new.c_head == 10.0  # Concentrations unchanged
+    matches the old one for every C if and only if
+
+        v_start_new = v_start_old
+        t_start_new = t_change - (flow_old / flow_new) * (t_change - t_start_old)
+
+    (R(C) cancels from both sides). Only the apparent "age" of the fan
+    rescales by the flow ratio.
     """
-    v_at_change = raref.position_at_time(t_change)
-
-    if v_at_change is None:
+    if raref.head_position_at_time(t_change) is None:
         msg = f"Rarefaction not yet active at t={t_change}"
         raise ValueError(msg)
 
+    t_start_new = t_change - (raref.flow / flow_new) * (t_change - raref.t_start)
     return RarefactionWave(
-        t_start=t_change,
-        v_start=v_at_change,
+        t_start=t_start_new,
+        v_start=raref.v_start,
         flow=flow_new,
         c_head=raref.c_head,
         c_tail=raref.c_tail,
@@ -966,6 +873,7 @@ def handle_flow_change(
     t_change: float,
     flow_new: float,
     active_waves: list,
+    v_outlet: float,
 ) -> list:
     """
     Handle flow change event by recreating all active waves with new flow.
@@ -982,6 +890,9 @@ def handle_flow_change(
         New flow rate [m³/day]
     active_waves : list
         All currently active waves
+    v_outlet : float
+        Outlet position [m³]. Waves that have already exited the domain are
+        skipped so they stay active for historical concentration queries.
 
     Returns
     -------
@@ -995,31 +906,25 @@ def handle_flow_change(
 
     Notes
     -----
-    Parent waves are deactivated by this handler.
+    Parent waves whose recreations are produced are deactivated. Waves with
+    ``t_start > t_change`` (not yet emitted by the inlet) and waves whose
+    current position has reached the outlet are left untouched.
 
     Physical interpretation:
     - Characteristics: velocity changes from flow_old/R(c) to flow_new/R(c)
     - Shocks: Rankine-Hugoniot velocity recomputed with new flow
-    - Rarefactions: fan pivots at (v_change, t_change)
-
-    Examples
-    --------
-    ::
-
-        new_waves = handle_flow_change(
-            t_change=10.0, flow_new=200.0, active_waves=[char1, shock1, raref1]
-        )
-        assert len(new_waves) == 3
-        assert all(w.flow == 200.0 for w in new_waves)
+    - Rarefactions: fan apex unchanged; age rescales by flow_old / flow_new
     """
     new_waves = []
 
     for wave in active_waves:
-        if not wave.is_active:
+        if not wave.is_active or wave.t_start > t_change:
             continue
 
-        # Create replacement wave with new flow BEFORE deactivating parent
-        # (position_at_time requires wave to be active)
+        v_now = wave.position_at_time(t_change)
+        if v_now is None or v_now >= v_outlet:
+            continue
+
         if isinstance(wave, CharacteristicWave):
             new_wave = recreate_characteristic_with_new_flow(wave, t_change, flow_new)
         elif isinstance(wave, ShockWave):
@@ -1031,8 +936,6 @@ def handle_flow_change(
             raise TypeError(msg)
 
         new_waves.append(new_wave)
-
-        # Deactivate parent wave AFTER recreation
         wave.is_active = False
 
     return new_waves

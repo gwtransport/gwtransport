@@ -1038,8 +1038,7 @@ class TestFlowChangeHandlers:
         assert new_velocity != old_velocity
 
     def test_recreate_rarefaction_with_new_flow(self, freundlich_sorption):
-        """Test recreate_rarefaction_with_new_flow updates velocities correctly."""
-        # Create rarefaction with initial flow
+        """recreate_rarefaction_with_new_flow rescales the fan apex's apparent age (P1.7)."""
         old_flow = 100.0
         raref = RarefactionWave(
             t_start=10.0, v_start=50.0, flow=old_flow, c_head=12.0, c_tail=6.0, sorption=freundlich_sorption
@@ -1050,28 +1049,34 @@ class TestFlowChangeHandlers:
         old_head_velocity = raref.head_velocity()
         old_tail_velocity = raref.tail_velocity()
 
-        # Recreate with new flow
         new_flow = 140.0
         t_flow_change = 20.0
 
-        # Calculate position where rarefaction head will be at t_flow_change
-        expected_position = raref.head_position_at_time(t_flow_change)
+        # Old head and tail positions at the flow change time.
+        v_head_at_change = raref.head_position_at_time(t_flow_change)
+        v_tail_at_change = raref.tail_position_at_time(t_flow_change)
 
         new_raref = recreate_rarefaction_with_new_flow(raref=raref, t_change=t_flow_change, flow_new=new_flow)
 
-        # Verify concentrations are preserved
+        # Concentrations preserved.
         assert new_raref.c_head == pytest.approx(original_c_head)
         assert new_raref.c_tail == pytest.approx(original_c_tail)
 
-        # Verify new start point (rarefaction "pivots" at flow change point)
-        assert new_raref.t_start == t_flow_change
-        assert new_raref.v_start == pytest.approx(expected_position, rel=1e-10)
+        # Fan apex unchanged.
+        assert new_raref.v_start == raref.v_start
+        # Apparent age rescales by flow ratio.
+        expected_t_start = t_flow_change - (old_flow / new_flow) * (t_flow_change - raref.t_start)
+        assert new_raref.t_start == pytest.approx(expected_t_start, rel=1e-14)
 
-        # Verify velocities have been recomputed
+        # Velocities have been recomputed.
         new_head_velocity = new_raref.head_velocity()
         new_tail_velocity = new_raref.tail_velocity()
         assert new_head_velocity != old_head_velocity
         assert new_tail_velocity != old_tail_velocity
+
+        # Head and tail positions at t_flow_change are preserved across the flow change.
+        assert new_raref.head_position_at_time(t_flow_change) == pytest.approx(v_head_at_change, rel=1e-14)
+        assert new_raref.tail_position_at_time(t_flow_change) == pytest.approx(v_tail_at_change, rel=1e-14)
 
     def test_characteristic_flow_increase(self, freundlich_sorption):
         """Test characteristic recreation with flow increase."""
@@ -1184,192 +1189,8 @@ class TestFlowChangeHandlers:
 # =============================================================================
 
 
-class TestCharacteristicCollisionZeroConcentrationNLT1:
-    """Physics tests for C≈0 characteristic collisions with n<1 Freundlich sorption.
-
-    For n<1 (unfavorable sorption): R(C) decreases with increasing C.
-    This means lower C travels FASTER. At C=0 with c_min=0, R(0)=1 (fastest).
-
-    Physical interpretation:
-    - Clean water (C=0) has no retardation (R=1), travels at pore water velocity
-    - Contaminated water (C>0) is retarded, travels slower
-    - When clean water catches contaminated water from behind → creates rarefaction
-    - When contaminated water catches C=0 from initial condition → C=0 is absorbed
-    """
-
-    @pytest.fixture
-    def freundlich_n_lt_1(self):
-        """Freundlich sorption with n<1 and c_min=0.
-
-        For n<1: Lower C = faster velocity
-        With c_min=0: R(0) = 1 (no retardation for clean water)
-        """
-        return FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
-
-    def test_physics_clean_water_catches_contaminated_creates_rarefaction(self, freundlich_n_lt_1):
-        """Test: Clean water (C=0) catching contaminated water (C>0) creates rarefaction.
-
-        Physics: For n<1, clean water (C=0) travels at R(0)=1, faster than
-        contaminated water with R(C>0)>1. When clean water catches contaminated
-        water from behind, this is an expansion (fast following slow) → rarefaction.
-
-        This tests the Riemann problem: clean water expanding into contaminated zone.
-        """
-        # char1 has C=0 (clean water, faster for n<1)
-        char1 = CharacteristicWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            concentration=0.0,  # Clean water
-            sorption=freundlich_n_lt_1,
-        )
-
-        # char2 has C>0 (contaminated water, slower for n<1)
-        char2 = CharacteristicWave(
-            t_start=5.0,
-            v_start=0.0,
-            flow=100.0,
-            concentration=5.0,  # Contaminated water
-            sorption=freundlich_n_lt_1,
-        )
-
-        # Verify physics: for n<1, clean water is faster
-        vel_clean = characteristic_velocity(0.0, 100.0, freundlich_n_lt_1)
-        vel_contaminated = characteristic_velocity(5.0, 100.0, freundlich_n_lt_1)
-        assert vel_clean > vel_contaminated, "Clean water should be faster for n<1"
-
-        # Handle collision - clean water catches contaminated from behind
-        new_waves = handle_characteristic_collision(char1, char2, t_event=20.0, v_event=150.0)
-
-        # Should create rarefaction (expansion wave)
-        assert len(new_waves) == 1, "Expected one rarefaction wave"
-        assert isinstance(new_waves[0], RarefactionWave), "Expected rarefaction for expansion"
-
-        raref = new_waves[0]
-        # Verify rarefaction has correct structure: head (faster) leads tail (slower)
-        assert raref.head_velocity() > raref.tail_velocity(), "Head must be faster than tail"
-
-        # Both parent characteristics should be deactivated
-        assert not char1.is_active, "Clean water characteristic should be deactivated"
-        assert not char2.is_active, "Contaminated characteristic should be deactivated"
-
-    def test_physics_contaminated_water_catches_initial_zero(self, freundlich_n_lt_1):
-        """Test: Contaminated water (C>0) catching C=0 from initial condition.
-
-        Physics: If the C=0 characteristic represents the initial condition
-        (aquifer filled with clean water), and contaminated water is faster,
-        the C=0 characteristic is simply absorbed (deactivated).
-
-        For n<1, this happens when C>0 has higher velocity than C=0.
-        But wait - for n<1 with c_min=0, R(0)=1 which is the minimum retardation.
-        So C=0 is always fastest for n<1. This branch handles the case where
-        C>0 is faster due to flow differences or numerical edge cases.
-        """
-        # For this test we need a scenario where C>0 catches C=0
-        # With standard n<1, C=0 is always faster, so we simulate the opposite case
-        # by having char1 (C>0) be the one that was emitted earlier and char2 (C=0) later
-        char1 = CharacteristicWave(
-            t_start=5.0,  # Emitted later
-            v_start=0.0,
-            flow=100.0,
-            concentration=5.0,  # Contaminated
-            sorption=freundlich_n_lt_1,
-        )
-
-        # char2 has C=0 (from initial condition)
-        char2 = CharacteristicWave(
-            t_start=0.0,  # Was there from start
-            v_start=100.0,  # Started ahead in the domain
-            flow=100.0,
-            concentration=0.0,  # Initial condition C=0
-            sorption=freundlich_n_lt_1,
-        )
-
-        # Handle collision
-        new_waves = handle_characteristic_collision(char2, char1, t_event=20.0, v_event=200.0)
-
-        # The behavior depends on velocities - for n<1, C=0 is faster
-        # So char2 (C=0) catches char1 (C>0) → creates rarefaction
-        assert len(new_waves) <= 1, "Should create at most one wave"
-
-    def test_physics_reversed_order_clean_catches_contaminated(self, freundlich_n_lt_1):
-        """Test: Same as above but with arguments reversed.
-
-        This tests the mirror case in lines 112-140 where char2 is C≈0.
-        """
-        # char1 has C>0 (contaminated water, slower for n<1)
-        char1 = CharacteristicWave(
-            t_start=5.0,
-            v_start=0.0,
-            flow=100.0,
-            concentration=5.0,
-            sorption=freundlich_n_lt_1,
-        )
-
-        # char2 has C=0 (clean water, faster for n<1)
-        char2 = CharacteristicWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            concentration=0.0,
-            sorption=freundlich_n_lt_1,
-        )
-
-        # For n<1, C=0 is faster, so char2 catches char1
-        vel_char1 = characteristic_velocity(5.0, 100.0, freundlich_n_lt_1)
-        vel_char2 = characteristic_velocity(0.0, 100.0, freundlich_n_lt_1)
-        assert vel_char2 > vel_char1, "C=0 should be faster for n<1"
-
-        # Handle collision with reversed argument order
-        new_waves = handle_characteristic_collision(char1, char2, t_event=20.0, v_event=150.0)
-
-        # Should create rarefaction (expansion)
-        assert len(new_waves) == 1, "Expected one rarefaction wave"
-        assert isinstance(new_waves[0], RarefactionWave), "Expected rarefaction for expansion"
-
-    def test_physics_contaminated_faster_than_zero_deactivates_zero(self, freundlich_n_lt_1):
-        """Test branch where C>0 is faster than C=0 (lines 107-110, 137-140).
-
-        For standard n<1 with c_min=0, C=0 always has R(0)=1 (fastest).
-        This branch handles edge cases or when velocities differ due to
-        numerical precision. The C=0 characteristic is simply deactivated.
-        """
-        # Create scenario where C>0 characteristic catches C=0
-        # This requires char1 to have started earlier and caught up
-        # For n<1 this is physically unusual but the code handles it
-
-        # We simulate by having the C=0 start ahead and C>0 catch up
-        # The code checks velocities, so we need to verify the branch logic
-        char1 = CharacteristicWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            concentration=0.0,  # C=0 from initial condition
-            sorption=freundlich_n_lt_1,
-        )
-
-        char2 = CharacteristicWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            concentration=5.0,  # C>0 contaminated
-            sorption=freundlich_n_lt_1,
-        )
-
-        # Check velocities
-        vel1 = characteristic_velocity(0.0, 100.0, freundlich_n_lt_1)
-        vel2 = characteristic_velocity(5.0, 100.0, freundlich_n_lt_1)
-
-        # For n<1, vel1 > vel2 (C=0 faster), so line 85-105 should execute
-        if vel1 > vel2:
-            # C=0 is faster, creates rarefaction
-            new_waves = handle_characteristic_collision(char1, char2, t_event=20.0, v_event=150.0)
-            assert len(new_waves) == 1
-            assert isinstance(new_waves[0], RarefactionWave)
-        else:
-            # C>0 is faster (unusual), C=0 deactivated
-            new_waves = handle_characteristic_collision(char1, char2, t_event=20.0, v_event=150.0)
-            assert not char1.is_active
+# Removed in Phase 1 (n<1 collision branch was a bug; tested behavior now invalid).
+# Phase 2 adds  and friends in this file.
 
 
 class TestCharacteristicCollisionVelocityOrdering:
@@ -1711,7 +1532,7 @@ class TestHandleFlowChangePhysics:
         # Change flow
         new_flow = 150.0
         t_change = 10.0
-        new_waves = handle_flow_change(t_change, new_flow, active_waves)
+        new_waves = handle_flow_change(t_change, new_flow, active_waves, v_outlet=float("inf"))
 
         # All original waves should be deactivated
         assert not char.is_active, "Characteristic should be deactivated"
@@ -1740,7 +1561,7 @@ class TestHandleFlowChangePhysics:
         char = CharacteristicWave(t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=freundlich_sorption)
 
         old_velocity = char.velocity()
-        new_waves = handle_flow_change(t_change=10.0, flow_new=200.0, active_waves=[char])
+        new_waves = handle_flow_change(t_change=10.0, flow_new=200.0, active_waves=[char], v_outlet=float("inf"))
 
         new_char = new_waves[0]
         # Velocity should double
@@ -1751,7 +1572,7 @@ class TestHandleFlowChangePhysics:
         char = CharacteristicWave(t_start=0.0, v_start=0.0, flow=200.0, concentration=5.0, sorption=freundlich_sorption)
 
         old_velocity = char.velocity()
-        new_waves = handle_flow_change(t_change=10.0, flow_new=100.0, active_waves=[char])
+        new_waves = handle_flow_change(t_change=10.0, flow_new=100.0, active_waves=[char], v_outlet=float("inf"))
 
         new_char = new_waves[0]
         # Velocity should halve
@@ -1771,7 +1592,9 @@ class TestHandleFlowChangePhysics:
             t_start=0.0, v_start=20.0, flow=100.0, c_head=9.0, c_tail=3.0, sorption=freundlich_sorption
         )
 
-        new_waves = handle_flow_change(t_change=10.0, flow_new=150.0, active_waves=[char, shock, raref])
+        new_waves = handle_flow_change(
+            t_change=10.0, flow_new=150.0, active_waves=[char, shock, raref], v_outlet=float("inf")
+        )
 
         new_char = next(w for w in new_waves if isinstance(w, CharacteristicWave))
         new_shock = next(w for w in new_waves if isinstance(w, ShockWave))
@@ -1798,7 +1621,9 @@ class TestHandleFlowChangePhysics:
             is_active=False,
         )
 
-        new_waves = handle_flow_change(t_change=10.0, flow_new=150.0, active_waves=[active_char, inactive_char])
+        new_waves = handle_flow_change(
+            t_change=10.0, flow_new=150.0, active_waves=[active_char, inactive_char], v_outlet=float("inf")
+        )
 
         # Only the active wave should be recreated
         assert len(new_waves) == 1, "Only active wave should be recreated"
@@ -2044,93 +1869,8 @@ class TestRecreateWaveErrorCases:
 # =============================================================================
 
 
-class TestCharacteristicCollisionNLT1EdgeCases:
-    """Test edge cases for n<1 characteristic collision with C=0.
-
-    These tests cover the exception handling and branches that aren't hit
-    by the main physics tests.
-    """
-
-    @pytest.fixture
-    def freundlich_n_lt_1(self):
-        """Freundlich sorption with n<1 and c_min=0."""
-        return FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
-
-    def test_branch_vel2_gt_vel1_with_char2_zero(self, freundlich_n_lt_1):
-        """Test lines 117-136: char2 is C=0 (faster), char1 is C>0 (slower).
-
-        This covers the mirror case of lines 85-105 where char2 has concentration 0.
-        """
-        # char1 has C>0 (slower for n<1)
-        char1 = CharacteristicWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            concentration=8.0,  # Slower for n<1
-            sorption=freundlich_n_lt_1,
-        )
-
-        # char2 has C=0 (faster for n<1)
-        char2 = CharacteristicWave(
-            t_start=5.0,
-            v_start=0.0,
-            flow=100.0,
-            concentration=0.0,  # Faster for n<1
-            sorption=freundlich_n_lt_1,
-        )
-
-        # For n<1, vel2 (C=0) > vel1 (C=8), so line 117 is True
-        vel1 = characteristic_velocity(8.0, 100.0, freundlich_n_lt_1)
-        vel2 = characteristic_velocity(0.0, 100.0, freundlich_n_lt_1)
-        assert vel2 > vel1, "C=0 should be faster for n<1"
-
-        new_waves = handle_characteristic_collision(char1, char2, t_event=20.0, v_event=150.0)
-
-        # Should create rarefaction (C=0 catching C>0)
-        assert len(new_waves) == 1
-        assert isinstance(new_waves[0], RarefactionWave)
-
-        # Both should be deactivated (lines 134-136)
-        assert not char1.is_active
-        assert not char2.is_active
-
-    def test_branch_vel1_gt_vel2_char1_faster_than_zero(self, freundlich_n_lt_1):
-        """Test lines 137-140: char1 (C>0) is faster than char2 (C=0).
-
-        This is physically unusual for n<1 but the code handles it by
-        deactivating char2 (the C=0).
-        """
-        # For n<1 with c_min=0, C=0 always has R=1 (fastest)
-        # This branch only executes if vel1 > vel2, which means C>0 faster than C=0
-        # This can't happen with standard physics, but we test the branch logic
-
-        # The test above (test_branch_vel2_gt_vel1_with_char2_zero) exercises lines 117-136
-        # Lines 137-140 are the else branch and would only execute if vel2 <= vel1
-        # Since vel2 (C=0) is always fastest for n<1, this branch is dead code
-        # for physically valid scenarios
-
-        # We can still verify the logic by creating a minimal test case
-        char1 = CharacteristicWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            concentration=0.1,  # Very low but not zero
-            sorption=freundlich_n_lt_1,
-        )
-
-        char2 = CharacteristicWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            concentration=0.0,  # Zero
-            sorption=freundlich_n_lt_1,
-        )
-
-        # This will take the line 117-136 branch since vel2 > vel1
-        new_waves = handle_characteristic_collision(char1, char2, t_event=20.0, v_event=150.0)
-
-        # Verify result
-        assert isinstance(new_waves, list)
+# Removed in Phase 1 (n<1 collision branch was a bug; tested behavior now invalid).
+# Phase 2 adds  and friends in this file.
 
 
 class TestShockCollisionEdgeCases:
@@ -2328,17 +2068,20 @@ class TestHandleFlowChangeEdgeCases:
     """Test edge cases for handle_flow_change."""
 
     def test_unknown_wave_type_raises_error(self):
-        """Test lines 959-960: unknown wave type raises TypeError."""
+        """Unknown wave type raises TypeError after the active+position guards pass."""
 
-        # Create a mock wave that isn't a known type
         class UnknownWave:
             def __init__(self):
                 self.is_active = True
+                self.t_start = 0.0
+
+            def position_at_time(self, t):  # noqa: ARG002
+                return 1.0  # inside the domain so handler reaches the dispatch
 
         unknown = UnknownWave()
 
         with pytest.raises(TypeError, match="Unknown wave type"):
-            handle_flow_change(t_change=10.0, flow_new=150.0, active_waves=[unknown])
+            handle_flow_change(t_change=10.0, flow_new=150.0, active_waves=[unknown], v_outlet=float("inf"))
 
 
 class TestInletWaveCreationEdgeCases:

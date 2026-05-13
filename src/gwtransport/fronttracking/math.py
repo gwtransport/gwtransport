@@ -260,13 +260,14 @@ class FreundlichSorption(NonlinearSorption):
         -----
         - For n > 1: R decreases with increasing C (higher C travels faster)
         - For n < 1: R increases with increasing C (higher C travels slower)
-        - Concentrations at or below c_min return R=1 if c_min=0, else are clipped to c_min
+        - n<1 with c_min=0: R(0)=1 (no sorption at zero, physically correct).
+        - Otherwise: ``c`` is clamped to ``c_min`` before evaluation. This pairs with
+          :meth:`total_concentration`, which also clamps to ``c_min``.
         """
         is_array = isinstance(c, np.ndarray)
         c_arr = np.asarray(c)
 
         if self.c_min == 0 and self.n < 1.0:
-            # Only for n<1 (lower C travels faster) where R(0)=1 is physically correct
             result = np.where(c_arr <= 0, 1.0, self._compute_retardation(c_arr))
         else:
             c_eff = np.maximum(c_arr, self.c_min)
@@ -315,21 +316,28 @@ class FreundlichSorption(NonlinearSorption):
             ∂C_total/∂t + ∂(flow*C)/∂v = 0
 
         The flux term only includes dissolved concentration because sorbed mass
-        is immobile. Concentrations at or below c_min return C if c_min=0, else use c_min.
+        is immobile.
+
+        ``c`` is clamped to ``c_min`` before evaluating the isotherm so that
+        :meth:`retardation` and :meth:`total_concentration` agree on the same
+        ``c_eff`` (P1.4 Option A). For ``c < c_min`` both methods yield
+        ``c_min``-dependent constants; ``dC_tot/dC`` is 0 there, but no shock
+        forms entirely within that regime in practice (default ``c_min`` is
+        ``1e-12``).
         """
         is_array = isinstance(c, np.ndarray)
         c_arr = np.asarray(c)
 
         if self.c_min == 0 and self.n < 1.0:
-            # Only for n<1 (lower C travels faster) where C=0 is physically valid
             sorbed = np.where(
                 c_arr <= 0, 0.0, (self.bulk_density / self.porosity) * self.k_f * (c_arr ** (1.0 / self.n))
             )
+            result = c_arr + sorbed
         else:
             c_eff = np.maximum(c_arr, self.c_min)
             sorbed = (self.bulk_density / self.porosity) * self.k_f * (c_eff ** (1.0 / self.n))
+            result = c_eff + sorbed
 
-        result = c_arr + sorbed
         return result if is_array else float(result)
 
     def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
@@ -387,12 +395,13 @@ class FreundlichSorption(NonlinearSorption):
 
         coefficient = (self.bulk_density * self.k_f) / (self.porosity * self.n)
         base = (r_arr - 1.0) / coefficient
-
         inversion_exponent = 1.0 / exponent
-        c = base**inversion_exponent
-        result = np.maximum(c, self.c_min)
-        result = np.where(r_arr <= 1.0, self.c_min, result)
-        result = np.where(base <= 0, self.c_min, result)
+
+        # Mask base to a safe placeholder before exponentiation; NumPy emits
+        # RuntimeWarning otherwise for base <= 0 with a fractional exponent.
+        safe_base = np.where(base > 0, base, 1.0)
+        c = safe_base**inversion_exponent
+        result = np.where(base > 0, np.maximum(c, self.c_min), self.c_min)
 
         return result if is_array else float(result)
 
@@ -842,21 +851,21 @@ def compute_first_front_arrival_time(
     concentration wave from the inlet arrives at the outlet. This marks
     the end of the spin-up period.
 
-    For the typical case where the first inlet change creates a characteristic
-    (e.g., 0→C transition), this is when that characteristic reaches v_max.
+    The wave type emitted by a step ``0 → c_first`` depends on the sorption
+    regime; this function uses the matching velocity:
 
-    For cases with rarefaction waves:
-
-    - n>1 (higher C travels faster): The head of a rarefaction
-      (higher C) arrives first.
-    - n<1 (lower C travels faster): The head of a rarefaction
-      (lower C) arrives first.
+    - Freundlich ``n > 1`` and ``ConstantRetardation``: the solver emits a
+      Rankine-Hugoniot shock. The arrival uses shock velocity
+      ``s = flow · c / (C_tot(c) - C_tot(0))``.
+    - Freundlich ``n < 1``: the solver emits a single ``CharacteristicWave``
+      with velocity ``flow / R(c)``. The arrival uses that velocity.
 
     Algorithm:
     1. Find first index where cin > 0
-    2. Compute residence time for this concentration from inlet to outlet
-    3. Account for piecewise constant flow during transit
-    4. Return arrival time in days from tedges[0]
+    2. Branch on sorption regime; compute the corresponding target cumulative
+       flow volume that the leading wave must accumulate to reach the outlet.
+    3. Account for piecewise constant flow during transit.
+    4. Return arrival time in days from tedges[0].
 
     Parameters
     ----------
@@ -916,11 +925,19 @@ def compute_first_front_arrival_time(
     idx_first = nonzero_indices[0]
     c_first = float(cin[idx_first])
 
-    # Compute retardation for this concentration
-    r_first = sorption.retardation(c_first)
-
-    # Target: cumulative flow volume needed to reach outlet
-    target_volume = aquifer_pore_volume * r_first
+    # Branch on sorption regime; the solver emits a different wave type for the
+    # 0 → c_first inlet step. See `create_inlet_waves_at_time` in handlers.py.
+    if isinstance(sorption, FreundlichSorption) and sorption.n < 1.0:
+        # n<1: solver creates a single CharacteristicWave; arrival uses
+        # characteristic velocity flow / R(c).
+        target_volume = aquifer_pore_volume * float(sorption.retardation(c_first))
+    else:
+        # n>1 (Freundlich) or ConstantRetardation: solver creates a R-H shock.
+        # Shock velocity from C_tot(0) ≈ 0 (default c_min=1e-12) to C_tot(c_first):
+        #   s = flow · c_first / (C_tot(c_first) - C_tot(0))
+        # so target_volume = V · C_tot(c_first) / c_first. For ConstantRetardation
+        # this coincides with V · R because C_tot(c)/c = R there.
+        target_volume = aquifer_pore_volume * float(sorption.total_concentration(c_first)) / c_first
 
     # Vectorized integration of piecewise-constant flow starting from idx_first.
     # Convert all bin widths to days at once and accumulate the volume profile.

@@ -573,7 +573,7 @@ class FrontTracker:
             if event.flow_new is None:
                 msg = "FLOW_CHANGE event must have flow_new set"
                 raise RuntimeError(msg)
-            new_waves = handle_flow_change(event.time, event.flow_new, active_waves)
+            new_waves = handle_flow_change(event.time, event.flow_new, active_waves, self.state.v_outlet)
 
         # Add new waves to state
         self.state.waves.extend(new_waves)

@@ -58,17 +58,14 @@ class TestFreundlichSorption:
             FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=1.5)
 
     def test_retardation_zero_concentration(self):
-        """Test R(0) behavior depends on n and c_min."""
-        # For n<1 (lower C travels faster) with c_min=0, R(0) = 1
+        """R(0) behavior depends on n and c_min."""
+        # n<1 with c_min=0: R(0)=1 (no sorption at zero, physically correct).
         sorption_unfav = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
-        r = sorption_unfav.retardation(0.0)
-        assert r == 1.0
+        assert sorption_unfav.retardation(0.0) == 1.0
 
-        # For n>1 (higher C travels faster) with c_min>0, R(c_min) is used instead
+        # n>1 with c_min>0: c clamps to c_min, R returns R(c_min) > 1.
         sorption_fav = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
-        r = sorption_fav.retardation(0.0)
-        # Should return R(c_min), which is > 1 for n>1
-        assert r > 1.0
+        assert sorption_fav.retardation(0.0) > 1.0
 
     def test_retardation_positive_concentration_n_greater_1(self):
         """Test R(C) > 1 for C > 0 when n > 1."""
@@ -91,17 +88,14 @@ class TestFreundlichSorption:
         assert r1 < r2, "R should increase with increasing C for n < 1"
 
     def test_total_concentration_zero(self):
-        """Test C_total(0) behavior depends on n and c_min."""
-        # For n<1 with c_min=0, C_total(0) = 0
+        """C_total(0) behavior depends on n and c_min."""
+        # n<1 with c_min=0: C_total(0) = 0.
         sorption_unfav = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
-        c_total = sorption_unfav.total_concentration(0.0)
-        assert c_total == 0.0
+        assert sorption_unfav.total_concentration(0.0) == 0.0
 
-        # For n>1 with c_min>0, C_total(c_min) is used
+        # n>1 with c_min>0: clamps to C_total(c_min) which is small but positive (P1.4 Option A).
         sorption_fav = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
-        c_total = sorption_fav.total_concentration(0.0)
-        # Should be small but positive
-        assert c_total > 0.0
+        assert sorption_fav.total_concentration(0.0) > 0.0
 
     def test_total_concentration_positive(self):
         """Test C_total > C for C > 0."""
@@ -385,8 +379,11 @@ class TestLangmuirSorption:
 
         t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
 
-        r = sorption.retardation(10.0)
-        t_expected = 10.0 + 500.0 * r / 100.0
+        # Langmuir is concave (favorable) like Freundlich n>1: the 0->c step creates
+        # a Rankine-Hugoniot shock, so the analytic arrival uses shock velocity
+        # s = flow * c / (C_tot(c) - C_tot(0)) = flow * c / C_tot(c).
+        c_total = sorption.total_concentration(10.0)
+        t_expected = 10.0 + aquifer_pore_volume * c_total / (10.0 * 100.0)
 
         assert np.isclose(t_first, t_expected, rtol=1e-14)
 
@@ -582,21 +579,20 @@ class TestFirstArrivalTime:
         assert np.isclose(t_first, t_expected, rtol=1e-14)
 
     def test_first_arrival_freundlich_sorption(self):
-        """Test first arrival with Freundlich sorption."""
-
-        cin = np.array([0.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
-        flow = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0])
-        tedges = pd.date_range("2020-01-01", periods=8, freq="10D")  # [0, 10, 20, ...] days
+        """First arrival for Freundlich n>1 uses Rankine-Hugoniot shock velocity (P1.3)."""
+        n_bins = 20
+        cin = np.array([0.0] + [10.0] * (n_bins - 1))
+        flow = np.array([100.0] * n_bins)
+        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="10D")
         aquifer_pore_volume = 500.0
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
         t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
 
-        # Compute retardation for C=10
-        r = sorption.retardation(10.0)
-        # First non-zero at index 1 (day 10), travels for 500*r/100 days
-        # Expected: 10.0 + 500.0 * r / 100.0 days from tedges[0]
-        t_expected = 10.0 + 500.0 * r / 100.0
+        # n>1: solver emits a R-H shock for 0->c step. Shock velocity uses C_tot:
+        # arrival_from_inlet = V * C_tot(c) / (c * flow).
+        c_total = sorption.total_concentration(10.0)
+        t_expected = 10.0 + aquifer_pore_volume * c_total / (10.0 * 100.0)
 
         assert np.isclose(t_first, t_expected, rtol=1e-14)
 
