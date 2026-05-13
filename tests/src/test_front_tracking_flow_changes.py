@@ -146,10 +146,14 @@ class TestWaveRecreation:
         assert np.isclose(raref_new.tail_velocity(), 0.5 * vel_tail_old, rtol=1e-14)
 
         # Head and tail positions at t_change are preserved through the flow change.
+        v_head_new = raref_new.head_position_at_time(t_change)
+        v_tail_new = raref_new.tail_position_at_time(t_change)
         assert v_head_at_change is not None
         assert v_tail_at_change is not None
-        assert np.isclose(raref_new.head_position_at_time(t_change), v_head_at_change, rtol=1e-14)
-        assert np.isclose(raref_new.tail_position_at_time(t_change), v_tail_at_change, rtol=1e-14)
+        assert v_head_new is not None
+        assert v_tail_new is not None
+        assert np.isclose(v_head_new, v_head_at_change, rtol=1e-14)
+        assert np.isclose(v_tail_new, v_tail_at_change, rtol=1e-14)
 
     def test_recreate_before_wave_start_raises_error(self, constant_retardation):
         """Cannot recreate wave before it starts."""
@@ -545,8 +549,12 @@ class TestRegressionsForIssue168FlowChange:
         new = recreate_rarefaction_with_new_flow(raref, t_change, flow_new)
 
         # At t_change, head and tail positions are preserved.
-        assert np.isclose(new.head_position_at_time(t_change), v_head_at_change, rtol=1e-14)
-        assert np.isclose(new.tail_position_at_time(t_change), v_tail_at_change, rtol=1e-14)
+        v_head_new_at_change = new.head_position_at_time(t_change)
+        v_tail_new_at_change = new.tail_position_at_time(t_change)
+        assert v_head_new_at_change is not None
+        assert v_tail_new_at_change is not None
+        assert np.isclose(v_head_new_at_change, v_head_at_change, rtol=1e-14)
+        assert np.isclose(v_tail_new_at_change, v_tail_at_change, rtol=1e-14)
 
         # At t_change + dt, head and tail advance under the new flow rate (closed-form).
         dt = 1.0
@@ -554,5 +562,9 @@ class TestRegressionsForIssue168FlowChange:
         r_tail = freundlich_sorption.retardation(raref.c_tail)
         expected_v_head = v_head_at_change + (flow_new / r_head) * dt
         expected_v_tail = v_tail_at_change + (flow_new / r_tail) * dt
-        assert np.isclose(new.head_position_at_time(t_change + dt), expected_v_head, rtol=1e-14)
-        assert np.isclose(new.tail_position_at_time(t_change + dt), expected_v_tail, rtol=1e-14)
+        v_head_new_later = new.head_position_at_time(t_change + dt)
+        v_tail_new_later = new.tail_position_at_time(t_change + dt)
+        assert v_head_new_later is not None
+        assert v_tail_new_later is not None
+        assert np.isclose(v_head_new_later, expected_v_head, rtol=1e-14)
+        assert np.isclose(v_tail_new_later, expected_v_tail, rtol=1e-14)

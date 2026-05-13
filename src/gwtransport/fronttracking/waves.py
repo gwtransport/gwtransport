@@ -292,13 +292,12 @@ class ShockWave(Wave):
     """Concentration downstream (ahead of) shock [mass/volume]."""
     sorption: SorptionModel
     """Sorption model."""
-    velocity: float | None = None
-    """Shock velocity computed from Rankine-Hugoniot [m³/day]."""
+    velocity: float = field(init=False)
+    """Shock velocity computed from Rankine-Hugoniot [m³/day]; set in ``__post_init__``."""
 
     def __post_init__(self) -> None:
         """Compute shock velocity from Rankine-Hugoniot condition."""
-        if self.velocity is None:
-            self.velocity = self.sorption.shock_velocity(self.c_left, self.c_right, self.flow)
+        self.velocity = self.sorption.shock_velocity(self.c_left, self.c_right, self.flow)
 
     def position_at_time(self, t: float) -> float | None:
         """
