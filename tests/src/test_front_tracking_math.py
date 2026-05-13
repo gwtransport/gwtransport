@@ -7,6 +7,8 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -58,17 +60,14 @@ class TestFreundlichSorption:
             FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=1.5)
 
     def test_retardation_zero_concentration(self):
-        """Test R(0) behavior depends on n and c_min."""
-        # For n<1 (lower C travels faster) with c_min=0, R(0) = 1
+        """R(0) behavior depends on n and c_min."""
+        # n<1 with c_min=0: R(0)=1 (no sorption at zero, physically correct).
         sorption_unfav = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
-        r = sorption_unfav.retardation(0.0)
-        assert r == 1.0
+        assert sorption_unfav.retardation(0.0) == 1.0
 
-        # For n>1 (higher C travels faster) with c_min>0, R(c_min) is used instead
+        # n>1 with c_min>0: c clamps to c_min, R returns R(c_min) > 1.
         sorption_fav = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
-        r = sorption_fav.retardation(0.0)
-        # Should return R(c_min), which is > 1 for n>1
-        assert r > 1.0
+        assert sorption_fav.retardation(0.0) > 1.0
 
     def test_retardation_positive_concentration_n_greater_1(self):
         """Test R(C) > 1 for C > 0 when n > 1."""
@@ -91,17 +90,14 @@ class TestFreundlichSorption:
         assert r1 < r2, "R should increase with increasing C for n < 1"
 
     def test_total_concentration_zero(self):
-        """Test C_total(0) behavior depends on n and c_min."""
-        # For n<1 with c_min=0, C_total(0) = 0
+        """C_total(0) behavior depends on n and c_min."""
+        # n<1 with c_min=0: C_total(0) = 0.
         sorption_unfav = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
-        c_total = sorption_unfav.total_concentration(0.0)
-        assert c_total == 0.0
+        assert sorption_unfav.total_concentration(0.0) == 0.0
 
-        # For n>1 with c_min>0, C_total(c_min) is used
+        # n>1 with c_min>0: clamps to C_total(c_min) which is small but positive (P1.4 Option A).
         sorption_fav = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
-        c_total = sorption_fav.total_concentration(0.0)
-        # Should be small but positive
-        assert c_total > 0.0
+        assert sorption_fav.total_concentration(0.0) > 0.0
 
     def test_total_concentration_positive(self):
         """Test C_total > C for C > 0."""
@@ -145,24 +141,8 @@ class TestFreundlichSorption:
         c = sorption_unfav.concentration_from_retardation(0.5)
         assert c == 0.0
 
-    def test_shock_velocity_rankine_hugoniot(self):
-        """Test shock velocity satisfies Rankine-Hugoniot exactly."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        c_left = 10.0
-        c_right = 2.0
-        flow = 100.0
-
-        v_shock = sorption.shock_velocity(c_left, c_right, flow)
-
-        # Verify Rankine-Hugoniot
-        flux_left = flow * c_left
-        flux_right = flow * c_right
-        c_total_left = sorption.total_concentration(c_left)
-        c_total_right = sorption.total_concentration(c_right)
-
-        v_shock_expected = (flux_right - flux_left) / (c_total_right - c_total_left)
-
-        assert np.isclose(v_shock, v_shock_expected, rtol=1e-14)
+    # Math-layer Rankine-Hugoniot check dropped in P2.5: the canonical assertion lives at
+    # tests/src/test_front_tracking_waves.py:test_velocity_rankine_hugoniot.
 
     def test_shock_velocity_equal_concentrations(self):
         """Test shock velocity when c_left = c_right (degenerate case)."""
@@ -385,8 +365,11 @@ class TestLangmuirSorption:
 
         t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
 
-        r = sorption.retardation(10.0)
-        t_expected = 10.0 + 500.0 * r / 100.0
+        # Langmuir is concave (favorable) like Freundlich n>1: the 0->c step creates
+        # a Rankine-Hugoniot shock, so the analytic arrival uses shock velocity
+        # s = flow * c / (C_tot(c) - C_tot(0)) = flow * c / C_tot(c).
+        c_total = sorption.total_concentration(10.0)
+        t_expected = 10.0 + aquifer_pore_volume * c_total / (10.0 * 100.0)
 
         assert np.isclose(t_first, t_expected, rtol=1e-14)
 
@@ -582,21 +565,20 @@ class TestFirstArrivalTime:
         assert np.isclose(t_first, t_expected, rtol=1e-14)
 
     def test_first_arrival_freundlich_sorption(self):
-        """Test first arrival with Freundlich sorption."""
-
-        cin = np.array([0.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
-        flow = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0])
-        tedges = pd.date_range("2020-01-01", periods=8, freq="10D")  # [0, 10, 20, ...] days
+        """First arrival for Freundlich n>1 uses Rankine-Hugoniot shock velocity (P1.3)."""
+        n_bins = 20
+        cin = np.array([0.0] + [10.0] * (n_bins - 1))
+        flow = np.array([100.0] * n_bins)
+        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="10D")
         aquifer_pore_volume = 500.0
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
         t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
 
-        # Compute retardation for C=10
-        r = sorption.retardation(10.0)
-        # First non-zero at index 1 (day 10), travels for 500*r/100 days
-        # Expected: 10.0 + 500.0 * r / 100.0 days from tedges[0]
-        t_expected = 10.0 + 500.0 * r / 100.0
+        # n>1: solver emits a R-H shock for 0->c step. Shock velocity uses C_tot:
+        # arrival_from_inlet = V * C_tot(c) / (c * flow).
+        c_total = sorption.total_concentration(10.0)
+        t_expected = 10.0 + aquifer_pore_volume * c_total / (10.0 * 100.0)
 
         assert np.isclose(t_first, t_expected, rtol=1e-14)
 
@@ -615,3 +597,86 @@ class TestFirstArrivalTime:
         # Available from day 10 to day 20: 10 * 10 = 100 m³
         # Not enough flow history
         assert t_first == np.inf
+
+
+class TestRegressionsForIssue168:
+    """Regression tests for the physics fixes in Phase 1 (issue #168).
+
+    Each test below is constructed so that the analytic reference value is
+    computed independently of the implementation under test (no mirroring of
+    the function's own arithmetic). Loosening any tolerance here means the fix
+    is incomplete — route the failure back to Phase 1 physics review.
+    """
+
+    def test_first_arrival_step_zero_to_c_uses_shock_velocity_n_gt_1(self):
+        """P1.3 (n>1 branch): 0 -> C step creates a R-H shock; arrival = V*C_tot(C)/(C*flow)."""
+        n_bins = 40
+        c_step = 5.0
+        flow_val = 100.0
+        v_pore = 500.0
+        cin = np.array([0.0] + [c_step] * (n_bins - 1))
+        flow = np.full(n_bins, flow_val)
+        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="10D")
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+
+        # Analytic reference: closed-form shock velocity arrival, independent of
+        # compute_first_front_arrival_time's cumulative-sum integration.
+        c_total_at_c = sorption.total_concentration(c_step)
+        # First nonzero bin starts at tedges[1] = 10 days; transit takes V*C_tot/(C*flow).
+        t_analytic = 10.0 + v_pore * c_total_at_c / (c_step * flow_val)
+
+        t_first = compute_first_front_arrival_time(cin, flow, tedges, v_pore, sorption)
+
+        assert np.isclose(t_first, t_analytic, rtol=1e-14)
+
+    def test_first_arrival_step_zero_to_c_n_lt_1_uses_characteristic_velocity(self):
+        """P1.3 (n<1 branch): solver emits a CharacteristicWave; arrival = V*R(C)/flow."""
+        n_bins = 400
+        c_step = 5.0
+        flow_val = 100.0
+        v_pore = 500.0
+        cin = np.array([0.0] + [c_step] * (n_bins - 1))
+        flow = np.full(n_bins, flow_val)
+        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="10D")
+        # Use a small k_f to keep R(5) modest so the analytic arrival fits in the time grid.
+        sorption = FreundlichSorption(k_f=0.001, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
+
+        # Analytic reference: characteristic velocity (n<1 solver path).
+        r_at_c = sorption.retardation(c_step)
+        t_analytic = 10.0 + v_pore * r_at_c / flow_val
+
+        t_first = compute_first_front_arrival_time(cin, flow, tedges, v_pore, sorption)
+
+        # Sanity: n<1 result must NOT equal the n>1 shock formula here.
+        c_total_at_c = sorption.total_concentration(c_step)
+        wrong_shock_t = 10.0 + v_pore * c_total_at_c / (c_step * flow_val)
+        assert not np.isclose(t_analytic, wrong_shock_t, rtol=1e-3)
+
+        assert np.isclose(t_first, t_analytic, rtol=1e-14)
+
+    def test_freundlich_retardation_total_concentration_agree_below_c_min(self):
+        """P1.4 Option A: below c_min, both methods clamp to c_min consistently."""
+        c_min = 0.1
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=c_min)
+
+        for c in [0.0, c_min / 10.0, c_min / 2.0]:
+            assert sorption.retardation(c) == sorption.retardation(c_min)
+            assert sorption.total_concentration(c) == sorption.total_concentration(c_min)
+
+    def test_concentration_from_retardation_no_runtime_warning_at_r_le_1(self):
+        """P1.5: masking base before exponentiation removes the warning."""
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            # Scalar at r=1 (exactly).
+            sorption.concentration_from_retardation(1.0)
+            # Scalar at r<1.
+            sorption.concentration_from_retardation(0.5)
+            # Array spanning r<1, r=1, r>1.
+            sorption.concentration_from_retardation(np.array([0.5, 1.0, 5.0]))
+
+        runtime_warnings = [w for w in caught if issubclass(w.category, RuntimeWarning)]
+        assert runtime_warnings == [], (
+            f"Expected no RuntimeWarning, got {[(w.category.__name__, str(w.message)) for w in runtime_warnings]}"
+        )
