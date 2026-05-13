@@ -47,16 +47,12 @@ Available functions:
   custom quantile edges. Returns bin edges, expected values (mean pore volume within each
   bin), and probability masses (weight in transport calculations).
 
-- :func:`bin_masses` - Calculate probability mass for custom bin edges using the incomplete
-  gamma function. Lower-level function used internally by bins().
-
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
 import numpy as np
 import numpy.typing as npt
-from scipy.special import gammainc
 from scipy.stats import gamma as gamma_dist
 
 
@@ -119,10 +115,10 @@ def parse_parameters(
         if mean is None or std is None:
             msg = "Either (alpha, beta) or (mean, std) must be provided."
             raise ValueError(msg)
-
+        # mean_std_loc_to_alpha_beta enforces std>0 and mean>loc, which together with
+        # loc>=0 guarantee alpha=(mean-loc)**2/std**2 > 0 and beta=std**2/(mean-loc) > 0.
         alpha, beta = mean_std_loc_to_alpha_beta(mean=mean, std=std, loc=loc)
-
-    if alpha <= 0 or beta <= 0:
+    elif alpha <= 0 or beta <= 0:
         msg = "Alpha and beta must be positive"
         raise ValueError(msg)
 
@@ -206,6 +202,9 @@ def alpha_beta_loc_to_mean_std(*, alpha: float, beta: float, loc: float = 0.0) -
     """
     Convert shape, scale, and location of gamma distribution to mean and standard deviation.
 
+    Parameters are validated via :func:`parse_parameters`, which raises ``ValueError`` if
+    ``alpha`` or ``beta`` are non-positive or ``loc`` is negative.
+
     Parameters
     ----------
     alpha : float
@@ -224,11 +223,6 @@ def alpha_beta_loc_to_mean_std(*, alpha: float, beta: float, loc: float = 0.0) -
         Standard deviation of the gamma distribution, equal to ``sqrt(alpha) * beta``.
         ``std`` is invariant under the ``loc`` shift.
 
-    Raises
-    ------
-    ValueError
-        If ``loc`` is negative.
-
     See Also
     --------
     mean_std_loc_to_alpha_beta : Convert mean/std/loc to shape and scale parameters.
@@ -245,12 +239,8 @@ def alpha_beta_loc_to_mean_std(*, alpha: float, beta: float, loc: float = 0.0) -
     >>> print(f"Std pore volume: {std:.0f} m³")  # doctest: +ELLIPSIS
     Std pore volume: 810... m³
     """
-    if loc < 0:
-        msg = "loc must be non-negative"
-        raise ValueError(msg)
-    mean = alpha * beta + loc
-    std = np.sqrt(alpha) * beta
-    return mean, std
+    parse_parameters(alpha=alpha, beta=beta, loc=loc)
+    return alpha * beta + loc, np.sqrt(alpha) * beta
 
 
 def bins(
@@ -313,7 +303,6 @@ def bins(
 
     See Also
     --------
-    bin_masses : Calculate probability mass for bins.
     mean_std_loc_to_alpha_beta : Convert mean/std/loc to alpha/beta parameters.
     gwtransport.advection.gamma_infiltration_to_extraction : Use bins for transport modeling.
     :ref:`concept-gamma-distribution` : Two-parameter pore volume model.
@@ -344,13 +333,10 @@ def bins(
     """
     alpha, beta, loc = parse_parameters(mean=mean, std=std, loc=loc, alpha=alpha, beta=beta)
 
-    # Calculate boundaries for equal mass bins
-    # If quantile_edges is provided, use it (n_bins is ignored)
-    # Otherwise, use n_bins (which defaults to 100)
     if quantile_edges is not None:
         n_bins = len(quantile_edges) - 1
     else:
-        quantile_edges = np.linspace(0, 1, n_bins + 1)  # includes 0 and 1
+        quantile_edges = np.linspace(0, 1, n_bins + 1)
 
     if n_bins <= 1:
         msg = "Number of bins must be greater than 1"
@@ -364,9 +350,8 @@ def bins(
     # Conditional mean within each bin for the unshifted distribution, then shift by loc.
     # E[X | a <= X < b] for X ~ Gamma(alpha, beta) uses the identity
     #     E[X * 1_{a<=X<b}] = alpha * beta * (F_{alpha+1}(b/beta) - F_{alpha+1}(a/beta))
-    # where F_{alpha+1} is the CDF of Gamma(alpha+1, beta). The bin_masses helper returns
-    # exactly those differences.
-    diff_alpha_plus_1 = bin_masses(alpha=alpha + 1, beta=beta, bin_edges=unshifted_edges)
+    # where F_{alpha+1} is the CDF of Gamma(alpha+1, beta).
+    diff_alpha_plus_1 = _bin_masses(alpha=alpha + 1, beta=beta, bin_edges=unshifted_edges)
     expected_values = beta * alpha * diff_alpha_plus_1 / probability_mass + loc
 
     return {
@@ -378,53 +363,16 @@ def bins(
     }
 
 
-def bin_masses(*, alpha: float, beta: float, bin_edges: npt.ArrayLike) -> npt.NDArray[np.floating]:
-    """
-    Calculate probability mass for each bin in a standard (unshifted) gamma distribution.
+def _bin_masses(*, alpha: float, beta: float, bin_edges: npt.ArrayLike) -> npt.NDArray[np.floating]:
+    """Probability mass per bin for the unshifted Gamma(alpha, beta).
 
-    Is the area under the Gamma(alpha, beta) PDF between the bin edges. This lower-level
-    function operates on the unshifted gamma distribution; if a location shift is needed,
-    callers should subtract ``loc`` from their physical bin edges before passing them in.
-    Because probability mass is invariant under a location shift, the result is identical
-    to that of the shifted distribution.
-
-    Parameters
-    ----------
-    alpha : float
-        Shape parameter of gamma distribution (must be > 0).
-    beta : float
-        Scale parameter of gamma distribution (must be > 0).
-    bin_edges : array-like
-        Bin edges of the unshifted distribution. Array of increasing values of size
-        ``len(bins) + 1``. Must be non-negative.
+    Internal helper. Callers must guarantee ``alpha, beta > 0`` and monotonically
+    increasing ``bin_edges >= 0`` with at least two entries.
 
     Returns
     -------
-    numpy.ndarray
-        Probability mass for each bin.
-
-    Raises
-    ------
-    ValueError
-        If ``alpha`` or ``beta`` are not positive, if ``bin_edges`` contains fewer than two
-        values, if ``bin_edges`` are not monotonically increasing, or if any ``bin_edges``
-        are negative.
+    ndarray
+        Probability mass per bin, of length ``len(bin_edges) - 1``.
     """
-    # Convert inputs to numpy arrays
-    bin_edges = np.asarray(bin_edges)
-
-    # Validate inputs
-    if alpha <= 0 or beta <= 0:
-        msg = "Alpha and beta must be positive"
-        raise ValueError(msg)
-    if len(bin_edges) < 2:  # noqa: PLR2004
-        msg = "Bin edges must contain at least two values"
-        raise ValueError(msg)
-    if np.any(np.diff(bin_edges) < 0):
-        msg = "Bin edges must be increasing"
-        raise ValueError(msg)
-    if np.any(bin_edges < 0):
-        msg = "Bin edges must be non-negative"
-        raise ValueError(msg)
-    val = gammainc(alpha, bin_edges / beta)
+    val = gamma_dist.cdf(np.asarray(bin_edges), alpha, scale=beta)
     return val[1:] - val[:-1]
