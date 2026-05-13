@@ -211,6 +211,12 @@ def deposition_to_extraction(
     gwtransport.advection.infiltration_to_extraction : For concentration transport without deposition
     :ref:`concept-transport-equation` : Flow-weighted averaging approach
 
+    Notes
+    -----
+    This is a *source* term -- positive ``dep`` raises ``cout``. Sink
+    processes (pathogen attachment, first-order decay, particle filtration)
+    require the opposite sign convention and are not modelled here.
+
     Examples
     --------
     >>> import pandas as pd
@@ -384,15 +390,23 @@ def extraction_to_deposition(
 
     Notes
     -----
+    This is a *source* term -- positive ``dep`` raises ``cout``. Sink
+    processes (pathogen attachment, first-order decay, particle filtration)
+    require the opposite sign convention and are not modelled here.
+
     The forward model is ``W @ dep = cout``, where the weight matrix ``W``
     encodes the physical relationship between deposition rates and
     concentrations. Unlike advection (where rows sum to ~1), deposition rows
-    sum to ``residence_time / (porosity * thickness)``. The system is
-    row-normalized before solving so that each observation contributes equally
-    and ``compute_reverse_target`` gives the correct scale for the
-    regularization target. Rows where the residence time cannot be computed
-    (spin-up period) contain NaN and are excluded automatically. NaN values
-    in ``cout`` are also excluded.
+    sum to ``r_i = residence_time_i / (porosity * thickness)``. Rows are
+    rescaled by ``r_i`` before solving: for systems where ``cout`` lies in
+    the column space of ``W`` this preserves the exact ``dep``, while for
+    overdetermined systems with noise it is equivalent to weighted least
+    squares with weights ``1 / r_i^2`` (shorter residence times get more
+    weight; under constant flow all ``r_i`` are equal and this reduces to
+    OLS). The rescaling exists to put ``compute_reverse_target`` on the same
+    scale as ``dep``, which controls the regularization scale. Rows where
+    the residence time cannot be computed (spin-up period) contain NaN and
+    are excluded automatically. NaN values in ``cout`` are also excluded.
 
     Examples
     --------
@@ -471,12 +485,16 @@ def extraction_to_deposition(
 
     n_dep_padded = len(weight_tedges) - 1
 
-    # Normalize weight matrix rows to sum to 1. The deposition weight matrix
-    # W has row sums equal to residence_time/(porosity*thickness), not 1 like
-    # advection. Normalizing makes each observation equally important and
-    # gives compute_reverse_target the correct scale for the target.
-    # NaN rows (spin-up), all-zero rows (zero-flow cout bins; carry no info),
-    # and NaN values in cout are excluded by solve_tikhonov.
+    # Rescale rows of W by their sum r_i = RT_i / (porosity*thickness). For
+    # systems where cout lies in the column space of W (e.g., noise-free
+    # roundtrip), this preserves the exact dep. For overdetermined systems
+    # with noise the rescaling is equivalent to weighted least squares with
+    # weights 1/r_i^2 -- shorter residence times get more weight; under
+    # constant flow all r_i are equal and this reduces to OLS. The rescaling
+    # exists to put compute_reverse_target on the same scale as dep, which
+    # controls the regularization scale. NaN rows (spin-up), all-zero rows
+    # (zero-flow cout bins; carry no info), and NaN values in cout are
+    # excluded by solve_tikhonov.
     valid_rows = ~np.isnan(deposition_weights).any(axis=1) & (np.abs(deposition_weights).sum(axis=1) > 0)
     valid_weights = deposition_weights[valid_rows]
     row_sums = valid_weights.sum(axis=1, keepdims=True)
@@ -615,6 +633,12 @@ def extraction_to_deposition_full(
     --------
     extraction_to_deposition : Recommended solver using Tikhonov regularization.
     gwtransport.utils.solve_underdetermined_system : Underlying solver.
+
+    Notes
+    -----
+    This is a *source* term -- positive ``dep`` raises ``cout``. Sink
+    processes (pathogen attachment, first-order decay, particle filtration)
+    require the opposite sign convention and are not modelled here.
     """
     tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
     cout_values, flow_values = np.asarray(cout), np.asarray(flow)
