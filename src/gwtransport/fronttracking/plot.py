@@ -523,7 +523,6 @@ def plot_wave_interactions(
         "SHOCK_RAREF_COLLISION": {"color": "orange", "marker": "d", "label": "Shock-Raref"},
         "RAREF_RAREF_COLLISION": {"color": "cyan", "marker": "p", "label": "Raref-Raref"},
         "OUTLET_CROSSING": {"color": "black", "marker": "x", "label": "Outlet Crossing"},
-        "INLET_CHANGE": {"color": "gray", "marker": "+", "label": "Inlet Change"},
     }
 
     # Plot each event type

@@ -16,7 +16,6 @@ from gwtransport.fronttracking.handlers import (
     handle_flow_change,
     handle_outlet_crossing,
     handle_rarefaction_characteristic_collision,
-    handle_rarefaction_rarefaction_collision,
     handle_shock_characteristic_collision,
     handle_shock_collision,
     handle_shock_rarefaction_collision,
@@ -722,137 +721,6 @@ class TestRarefactionCharacteristicCollisionHandler:
         assert len(new_waves) == 0
         assert not char.is_active
         assert raref.is_active
-
-
-class TestRarefactionRarefactionCollisionHandler:
-    """Test handle_rarefaction_rarefaction_collision function."""
-
-    @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
-    def test_conservative_behavior_no_waves_created(self, freundlich_sorption):
-        """Test that rarefaction-rarefaction collision creates no new waves.
-
-        This handler is INTENTIONALLY CONSERVATIVE: it detects the collision
-        but makes no topology changes. Both rarefactions remain active.
-        """
-        # For n>1: head has higher C (slower), tail has lower C (faster)
-        # For n<1: head has lower C (faster), tail has higher C (slower)
-        if freundlich_sorption.n > 1.0:
-            c_head1, c_tail1 = 10.0, 5.0
-            c_head2, c_tail2 = 8.0, 3.0
-        else:
-            c_head1, c_tail1 = 5.0, 10.0
-            c_head2, c_tail2 = 3.0, 8.0
-
-        raref1 = RarefactionWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            c_head=c_head1,
-            c_tail=c_tail1,
-            sorption=freundlich_sorption,
-        )
-
-        raref2 = RarefactionWave(
-            t_start=5.0,
-            v_start=0.0,
-            flow=100.0,
-            c_head=c_head2,
-            c_tail=c_tail2,
-            sorption=freundlich_sorption,
-        )
-
-        new_waves = handle_rarefaction_rarefaction_collision(
-            raref1, raref2, t_event=30.0, v_event=250.0, boundary_type="head"
-        )
-
-        # Intentionally conservative: no new waves
-        assert len(new_waves) == 0, "Conservative implementation creates no new waves"
-
-    @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
-    def test_both_rarefactions_remain_active(self, freundlich_sorption):
-        """Test that both rarefactions remain active after collision."""
-        # For n>1: head has higher C (slower), tail has lower C (faster)
-        # For n<1: head has lower C (faster), tail has higher C (slower)
-        if freundlich_sorption.n > 1.0:
-            c_head1, c_tail1 = 12.0, 6.0
-            c_head2, c_tail2 = 9.0, 4.0
-        else:
-            c_head1, c_tail1 = 6.0, 12.0
-            c_head2, c_tail2 = 4.0, 9.0
-
-        raref1 = RarefactionWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            c_head=c_head1,
-            c_tail=c_tail1,
-            sorption=freundlich_sorption,
-        )
-
-        raref2 = RarefactionWave(
-            t_start=5.0,
-            v_start=0.0,
-            flow=100.0,
-            c_head=c_head2,
-            c_tail=c_tail2,
-            sorption=freundlich_sorption,
-        )
-
-        # Both active initially
-        assert raref1.is_active
-        assert raref2.is_active
-
-        handle_rarefaction_rarefaction_collision(raref1, raref2, t_event=30.0, v_event=250.0, boundary_type="tail")
-
-        # Both should remain active
-        assert raref1.is_active, "First rarefaction must remain active"
-        assert raref2.is_active, "Second rarefaction must remain active"
-
-    @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
-    def test_different_boundary_types(self, freundlich_sorption):
-        """Test collision with different boundary types."""
-        # For n>1: head has higher C (slower), tail has lower C (faster)
-        # For n<1: head has lower C (faster), tail has higher C (slower)
-        if freundlich_sorption.n > 1.0:
-            c_head1, c_tail1 = 15.0, 7.0
-            c_head2, c_tail2 = 10.0, 5.0
-        else:
-            c_head1, c_tail1 = 7.0, 15.0
-            c_head2, c_tail2 = 5.0, 10.0
-
-        raref1 = RarefactionWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            c_head=c_head1,
-            c_tail=c_tail1,
-            sorption=freundlich_sorption,
-        )
-
-        raref2 = RarefactionWave(
-            t_start=5.0,
-            v_start=0.0,
-            flow=100.0,
-            c_head=c_head2,
-            c_tail=c_tail2,
-            sorption=freundlich_sorption,
-        )
-
-        # Test with head boundary
-        new_waves_head = handle_rarefaction_rarefaction_collision(
-            raref1, raref2, t_event=30.0, v_event=250.0, boundary_type="head"
-        )
-        assert len(new_waves_head) == 0
-
-        # Reset rarefaction states
-        raref1.is_active = True
-        raref2.is_active = True
-
-        # Test with tail boundary
-        new_waves_tail = handle_rarefaction_rarefaction_collision(
-            raref1, raref2, t_event=35.0, v_event=280.0, boundary_type="tail"
-        )
-        assert len(new_waves_tail) == 0
 
 
 class TestEntropyViolatingScenarios:
@@ -1929,32 +1797,6 @@ class TestShockCharacteristicEdgeCases:
         """Standard Freundlich sorption for testing."""
         return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-    def test_shock_velocity_none_raises_error(self, freundlich_sorption):
-        """Test line 314-315: shock with None velocity raises RuntimeError."""
-        # Create a shock and manually set velocity to None
-        shock = ShockWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            c_left=10.0,
-            c_right=5.0,
-            sorption=freundlich_sorption,
-        )
-
-        char = CharacteristicWave(
-            t_start=5.0,
-            v_start=0.0,
-            flow=100.0,
-            concentration=3.0,
-            sorption=freundlich_sorption,
-        )
-
-        # Force velocity to None to test error handling
-        shock.velocity = None
-
-        with pytest.raises(RuntimeError, match="velocity should be set"):
-            handle_shock_characteristic_collision(shock, char, t_event=20.0, v_event=150.0)
-
 
 class TestShockRarefactionEdgeCases:
     """Test edge cases for shock-rarefaction collision."""
@@ -1996,32 +1838,6 @@ class TestShockRarefactionEdgeCases:
 
         # Should still produce result
         assert isinstance(new_waves, list)
-
-    def test_head_collision_shock_velocity_none_raises_error(self, freundlich_sorption):
-        """Test lines 540-542: shock with None velocity in head collision."""
-        shock = ShockWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            c_left=8.0,
-            c_right=5.0,
-            sorption=freundlich_sorption,
-        )
-
-        raref = RarefactionWave(
-            t_start=5.0,
-            v_start=0.0,
-            flow=100.0,
-            c_head=10.0,
-            c_tail=6.0,
-            sorption=freundlich_sorption,
-        )
-
-        # Force velocity to None
-        shock.velocity = None
-
-        with pytest.raises(RuntimeError, match="velocity should be set"):
-            handle_shock_rarefaction_collision(shock, raref, t_event=20.0, v_event=150.0, boundary_type="head")
 
     def test_head_collision_no_compression_shock(self, freundlich_sorption):
         """Test lines 563-566: no compression shock forms.
@@ -2182,41 +1998,6 @@ class TestCharacteristicCollisionEntropyViolation:
         assert len(new_waves) == 1
         assert isinstance(new_waves[0], ShockWave)
         assert new_waves[0].satisfies_entropy()
-
-
-class TestShockCollisionNoneVelocity:
-    """Test shock collision with None velocity (lines 227-229)."""
-
-    @pytest.fixture
-    def freundlich_sorption(self):
-        """Standard Freundlich sorption for testing."""
-        return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-
-    def test_shock_velocity_none_raises_error(self, freundlich_sorption):
-        """Test lines 227-229: shock with None velocity raises RuntimeError."""
-        shock1 = ShockWave(
-            t_start=0.0,
-            v_start=0.0,
-            flow=100.0,
-            c_left=10.0,
-            c_right=5.0,
-            sorption=freundlich_sorption,
-        )
-
-        shock2 = ShockWave(
-            t_start=5.0,
-            v_start=0.0,
-            flow=100.0,
-            c_left=8.0,
-            c_right=3.0,
-            sorption=freundlich_sorption,
-        )
-
-        # Force shock1 velocity to None - tests the "or" branch
-        shock1.velocity = None
-
-        with pytest.raises(RuntimeError, match="velocities should be set"):
-            handle_shock_collision(shock1, shock2, t_event=20.0, v_event=150.0)
 
 
 class TestShockCharCollisionEntropyViolationPaths:

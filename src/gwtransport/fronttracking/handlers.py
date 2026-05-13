@@ -145,11 +145,9 @@ def handle_shock_collision(
         assert merged.satisfies_entropy()
         assert not shock1.is_active  # Parents deactivated
     """
-    # Determine which shock is upstream (faster)
-    # The shock catching up from behind is upstream
-    if shock1.velocity is None or shock2.velocity is None:
-        msg = "Shock velocities should be set in __post_init__"
-        raise RuntimeError(msg)
+    # Determine which shock is upstream (faster). The shock catching up from
+    # behind is upstream. ShockWave.__post_init__ populates ``velocity``
+    # unconditionally, so the previous `is None` guard here was unreachable.
     if shock1.velocity > shock2.velocity:
         c_left = shock1.c_left
         c_right = shock2.c_right
@@ -218,11 +216,6 @@ def handle_shock_characteristic_collision(
         List containing new wave(s): ShockWave if compression, RarefactionWave
         if expansion, or empty list in edge cases
 
-    Raises
-    ------
-    RuntimeError
-        If the shock velocity is not set (i.e., ``shock.velocity`` is None).
-
     Notes
     -----
     The characteristic concentration modifies one side of the shock:
@@ -240,9 +233,7 @@ def handle_shock_characteristic_collision(
         if new_shock:
             assert new_shock[0].satisfies_entropy()
     """
-    if shock.velocity is None:
-        msg = "Shock velocity should be set in __post_init__"
-        raise RuntimeError(msg)
+    # ShockWave.__post_init__ populates ``velocity`` unconditionally.
     shock_vel = shock.velocity
     char_vel = characteristic_velocity(char.concentration, char.flow, char.sorption)
 
@@ -359,12 +350,6 @@ def handle_shock_rarefaction_collision(
         List of new waves created: may include shock and modified rarefaction
         for tail collision, or compression shock for head collision
 
-    Raises
-    ------
-    RuntimeError
-        If the shock velocity is not set (i.e., ``shock.velocity`` is None)
-        when processing a head collision.
-
     Notes
     -----
     **Tail collision**: Shock penetrates rarefaction, creating:
@@ -459,9 +444,7 @@ def handle_shock_rarefaction_collision(
 
     # Check if compression forms between rarefaction head and shock
     raref_head_vel = characteristic_velocity(raref.c_head, raref.flow, raref.sorption)
-    if shock.velocity is None:
-        msg = "Shock velocity should be set in __post_init__"
-        raise RuntimeError(msg)
+    # ShockWave.__post_init__ populates ``velocity`` unconditionally.
     shock_vel = shock.velocity
 
     if raref_head_vel > shock_vel:
@@ -571,51 +554,6 @@ def handle_rarefaction_characteristic_collision(
 
     # Characteristic is tangent to rarefaction boundary -> safe to absorb.
     char.is_active = False
-    return []
-
-
-def handle_rarefaction_rarefaction_collision(
-    raref1: RarefactionWave,
-    raref2: RarefactionWave,
-    t_event: float,
-    v_event: float,
-    boundary_type: str | None,
-) -> list:
-    """Handle collision between two rarefaction boundaries.
-
-    This handler is intentionally conservative: it records the fact that two
-    rarefaction fans have intersected but does not yet modify the wave
-    topology. Full entropic treatment of rarefaction-rarefaction interactions
-    (potentially involving wave splitting) is reserved for a dedicated
-    future enhancement.
-
-    Parameters
-    ----------
-    raref1 : RarefactionWave
-        First rarefaction wave in the collision.
-    raref2 : RarefactionWave
-        Second rarefaction wave in the collision.
-    t_event : float
-        Time of the boundary intersection [days].
-    v_event : float
-        Position of the intersection [m³].
-    boundary_type : str
-        Boundary of the first rarefaction that intersected: 'head' or 'tail'.
-
-    Returns
-    -------
-    list
-        Empty list; no new waves are created at this stage.
-
-    Notes
-    -----
-    - Waves remain active so that concentration queries remain valid.
-    - The FrontTracker records the event in its diagnostics history.
-    - This is consistent with the design goal of exact analytical
-      computation while deferring complex topology changes.
-    """
-    # No topology changes yet; keep both rarefactions active.
-    _ = (raref1, raref2, t_event, v_event, boundary_type)
     return []
 
 

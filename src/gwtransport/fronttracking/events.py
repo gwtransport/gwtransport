@@ -44,8 +44,6 @@ class EventType(Enum):
     """Rarefaction boundary intersects with another rarefaction boundary."""
     OUTLET_CROSSING = "outlet_crossing"
     """Wave crosses outlet boundary."""
-    INLET_CHANGE = "inlet_concentration_change"
-    """Inlet concentration changes (creates new wave)."""
     FLOW_CHANGE = "flow_change"
     """Flow rate changes (all waves get new velocities)."""
 

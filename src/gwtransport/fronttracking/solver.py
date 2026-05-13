@@ -39,7 +39,6 @@ from gwtransport.fronttracking.handlers import (
     handle_flow_change,
     handle_outlet_crossing,
     handle_rarefaction_characteristic_collision,
-    handle_rarefaction_rarefaction_collision,
     handle_shock_characteristic_collision,
     handle_shock_collision,
     handle_shock_rarefaction_collision,
@@ -231,9 +230,9 @@ class FrontTracker:
             t_current=0.0,
             v_outlet=aquifer_pore_volume,
             sorption=sorption,
-            cin=cin.copy(),
-            flow=flow.copy(),
-            tedges=tedges.copy(),
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
         )
 
         # Compute spin-up period
@@ -554,13 +553,9 @@ class FrontTracker:
             )
 
         elif event.event_type == EventType.RAREF_RAREF_COLLISION:
-            new_waves = handle_rarefaction_rarefaction_collision(
-                event.waves_involved[0],
-                event.waves_involved[1],
-                event.time,
-                event.location,
-                boundary_type=event.boundary_type,
-            )
+            # Conservative: rarefaction-rarefaction collision records the event but
+            # makes no topology change. Both rarefactions remain active.
+            new_waves = []
 
         elif event.event_type == EventType.OUTLET_CROSSING:
             event_record = handle_outlet_crossing(event.waves_involved[0], event.time, event.location)
@@ -708,17 +703,9 @@ class FrontTracker:
                 )
                 raise RuntimeError(msg)
 
-        # Check rarefaction ordering
-        for wave in self.state.waves:
-            if isinstance(wave, RarefactionWave) and wave.is_active:
-                v_head = wave.head_velocity()
-                v_tail = wave.tail_velocity()
-                if v_head <= v_tail:
-                    msg = (
-                        f"Rarefaction at t_start={wave.t_start:.3f} has invalid ordering! "
-                        f"head_velocity={v_head:.3f} <= tail_velocity={v_tail:.3f}"
-                    )
-                    raise RuntimeError(msg)
+        # Rarefaction ordering is enforced at construction by
+        # RarefactionWave.__post_init__; c_head/c_tail are immutable after
+        # construction, so a runtime re-check would never fire here.
 
         # Check mass balance using exact analytical integration
         if check_mass_balance:
