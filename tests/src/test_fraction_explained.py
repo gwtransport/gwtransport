@@ -368,3 +368,92 @@ def test_fraction_explained_rejects_1d_input():
 
     with pytest.raises(ValueError, match="rt must be 2D"):
         fraction_explained(rt=rt_1d)
+
+
+@pytest.mark.filterwarnings("ignore:invalid value encountered in subtract:RuntimeWarning")
+def test_inf_flow_yields_finite_residence_time_and_full_fraction():
+    """flow=np.inf -> no NaN residence times -> fraction_explained == 1.0 everywhere.
+
+    Cumulative volume grows to ``inf`` instantly, so every pore volume's lookup
+    falls inside the valid range and the spin-up gap closes. ``inf - inf = nan``
+    inside numpy's interp emits a harmless RuntimeWarning that we silence here.
+    """
+    flow_tedges = pd.date_range(start="2023-01-01", periods=11, freq="D")
+    flow_values = np.full(10, np.inf)
+    apv = np.array([100.0, 200.0, 300.0, 400.0])
+
+    result = fraction_explained(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        aquifer_pore_volumes=apv,
+        direction="extraction_to_infiltration",
+    )
+
+    np.testing.assert_array_equal(result, np.ones(10))
+
+
+def test_partial_nan_flow_propagates_to_zero_fraction():
+    """A single NaN in ``flow`` invalidates every residence time and drops the fraction to 0.
+
+    Pins the all-or-nothing NaN-gate contract in ``residence_time`` so that any future
+    refactor that switches to per-element NaN propagation breaks this test loudly rather
+    than silently changing what callers see.
+    """
+    flow_tedges = pd.date_range(start="2023-01-01", periods=11, freq="D")
+    flow_values = np.full(10, 100.0)
+    flow_values[3:5] = np.nan
+    apv = np.array([100.0, 200.0, 300.0])
+
+    result = fraction_explained(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        aquifer_pore_volumes=apv,
+        direction="extraction_to_infiltration",
+    )
+
+    np.testing.assert_array_equal(result, np.zeros(10))
+
+
+@pytest.mark.parametrize("seed", [0, 1, 7, 42, 100, 2024])
+def test_fraction_in_zero_one_for_random_inputs(seed):
+    """Property: fraction_explained output is in [0, 1] elementwise for arbitrary valid inputs.
+
+    Exercises a small parametrized random sweep over flow, pore volumes, and retardation
+    rather than a Hypothesis strategy because Hypothesis is not a project dependency.
+    """
+    rng = np.random.default_rng(seed)
+    n_times = int(rng.integers(5, 40))
+    flow_tedges = pd.date_range(start="2023-01-01", periods=n_times + 1, freq="D")
+    flow_values = rng.uniform(low=0.1, high=500.0, size=n_times)
+    n_pv = int(rng.integers(1, 8))
+    apv = rng.uniform(low=10.0, high=2000.0, size=n_pv)
+    retardation = float(rng.uniform(low=1.0, high=5.0))
+
+    for direction in ("extraction_to_infiltration", "infiltration_to_extraction"):
+        result = fraction_explained(
+            flow=flow_values,
+            flow_tedges=flow_tedges,
+            aquifer_pore_volumes=apv,
+            direction=direction,
+            retardation_factor=retardation,
+        )
+        assert np.all(result >= 0.0), f"seed={seed} direction={direction}: min={result.min()}"
+        assert np.all(result <= 1.0), f"seed={seed} direction={direction}: max={result.max()}"
+
+
+def test_fraction_explained_exact_denominator_at_spinup_boundary():
+    """At a time step where exactly one of N pore volumes is valid, ``fraction == 1/N`` exactly.
+
+    Pins the integer-divided-by-integer denominator at the spin-up boundary so any change to
+    the count semantics (e.g. counting partial validity) is caught bitwise.
+    """
+    n_pv = 4
+    n_times = 6
+    rt = np.full((n_pv, n_times), np.nan)
+    # Exactly one pore volume becomes valid at index k=3.
+    rt[2, 3] = 1.5
+
+    result = fraction_explained(rt=rt)
+    expected = np.zeros(n_times)
+    expected[3] = 1.0 / n_pv
+    np.testing.assert_array_equal(result, expected)
