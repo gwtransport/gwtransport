@@ -532,7 +532,20 @@ def generate_example_deposition_timeseries(
     -------
     pandas.Series
         Time series of deposition values indexed by daily timestamps.
+
+    Raises
+    ------
+    ValueError
+        If ``event_decay_scale`` or ``event_duration`` is not positive, or if any
+        ``event_dates`` entry falls outside the generated ``dates`` range.
     """
+    if event_decay_scale <= 0:
+        msg = f"event_decay_scale must be positive, got {event_decay_scale}"
+        raise ValueError(msg)
+    if event_duration <= 0:
+        msg = f"event_duration must be positive, got {event_duration}"
+        raise ValueError(msg)
+
     rng = np.random.default_rng(rng)
 
     # Create synthetic deposition time series - needs to match flow period
@@ -561,12 +574,25 @@ def generate_example_deposition_timeseries(
     else:
         event_dates_index = event_dates_index.tz_convert(dates.tz)
 
+    out_of_range = (event_dates_index < dates[0]) | (event_dates_index > dates[-1])
+    if out_of_range.any():
+        msg = (
+            f"event_dates contains {out_of_range.sum()} date(s) outside the dates range "
+            f"[{dates[0]}, {dates[-1]}]: {event_dates_index[out_of_range].tolist()}"
+        )
+        raise ValueError(msg)
+
+    # Vectorized event accumulation. For each event start, scatter a ``(n_events, event_duration)``
+    # decay block into ``event`` via ``np.add.at`` so overlapping events sum correctly. The
+    # boundary mask drops indices that fall past the end of the series (preserves the loop's
+    # ``min(event_idx + event_duration, n_dates)`` clipping).
+    starts = dates.get_indexer(event_dates_index, method="nearest")
+    cols = np.arange(event_duration)
+    flat_indices = starts[:, None] + cols[None, :]
+    valid = flat_indices < n_dates
+    decay_block = np.broadcast_to(event_magnitude * np.exp(-cols / event_decay_scale), flat_indices.shape)
     event = np.zeros(n_dates)
-    for event_date in event_dates_index:
-        event_idx = dates.get_indexer([event_date], method="nearest")[0]
-        event_indices = np.arange(event_idx, min(event_idx + event_duration, n_dates))
-        decay_pattern = event_magnitude * np.exp(-np.arange(len(event_indices)) / event_decay_scale)
-        event[event_indices] += decay_pattern
+    np.add.at(event, flat_indices[valid], decay_block[valid])
 
     # Combine all components
     total = base + seasonal_pattern + noise + event
