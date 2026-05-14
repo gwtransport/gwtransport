@@ -88,6 +88,13 @@ import pandas as pd
 from scipy import special
 
 from gwtransport import gamma
+from gwtransport._validation import (
+    _validate_no_nan,
+    _validate_non_negative_array,
+    _validate_positive_array,
+    _validate_scalar_or_matching_length,
+    _validate_tedges_parity,
+)
 from gwtransport.residence_time import residence_time
 from gwtransport.utils import solve_inverse_transport
 
@@ -338,6 +345,108 @@ def _diffusion_extend_tedges_flag(spinup: object) -> bool:
         f"float thresholds are not yet implemented (got {spinup!r})"
     )
     raise NotImplementedError(msg)
+
+
+def _validate_diffusion_inputs(
+    *,
+    tedges: pd.DatetimeIndex,
+    flow: np.ndarray,
+    aquifer_pore_volumes: np.ndarray,
+    streamline_length: np.ndarray,
+    molecular_diffusivity: np.ndarray,
+    longitudinal_dispersivity: np.ndarray,
+    retardation_factor: float,
+    suppress_dispersion_warning: bool,
+    cin_values: np.ndarray | None = None,
+    cout_values: np.ndarray | None = None,
+    cout_tedges: pd.DatetimeIndex | None = None,
+) -> None:
+    """Validate inputs common to diffusion forward / reverse entry points.
+
+    Path selection via mutually-exclusive kwargs:
+
+    - ``cin_values`` provided => forward path. ``tedges`` parities cin and flow.
+    - ``cout_values`` + ``cout_tedges`` provided => reverse path. ``tedges`` parities
+      flow; ``cout_tedges`` parities cout.
+
+    All shared physical checks fire on both paths. ``retardation_factor >= 1.0``
+    and ``flow >= 0`` in reverse are new vs. the previous inline prologues (issue
+    #187 documents the omissions). Every other error-message string is preserved
+    verbatim from the prior duplicated prologue so that ``match=`` regex tests do
+    not break.
+
+    The dispersion warning (``UserWarning``) is emitted here as well since the
+    same precondition is checked alongside the validations; it is physically
+    motivated guidance about double-counting velocity heterogeneity, not an
+    input-validation rule.
+
+    Raises
+    ------
+    ValueError
+        If any check fails. The message identifies which invariant was violated.
+
+    Warns
+    -----
+    UserWarning
+        If ``n_pore_volumes > 1`` and any ``longitudinal_dispersivity > 0``
+        and ``suppress_dispersion_warning is False``.
+    """
+    n_pore_volumes = len(aquifer_pore_volumes)
+
+    if cin_values is not None:
+        _validate_tedges_parity(tedges, cin_values, tedges_name="tedges", values_name="cin")
+        _validate_tedges_parity(tedges, flow, tedges_name="tedges", values_name="flow")
+    elif cout_values is not None and cout_tedges is not None:
+        _validate_tedges_parity(tedges, flow, tedges_name="tedges", values_name="flow")
+        _validate_tedges_parity(cout_tedges, cout_values, tedges_name="cout_tedges", values_name="cout")
+    else:
+        msg = "must provide cin_values (forward) or both cout_values and cout_tedges (reverse)"
+        raise ValueError(msg)
+    if len(aquifer_pore_volumes) != len(streamline_length):
+        msg = "aquifer_pore_volumes and streamline_length must have the same length"
+        raise ValueError(msg)
+    _validate_scalar_or_matching_length(
+        molecular_diffusivity,
+        name="molecular_diffusivity",
+        expected_len=n_pore_volumes,
+        ref_name="aquifer_pore_volumes",
+    )
+    _validate_scalar_or_matching_length(
+        longitudinal_dispersivity,
+        name="longitudinal_dispersivity",
+        expected_len=n_pore_volumes,
+        ref_name="aquifer_pore_volumes",
+    )
+    _validate_non_negative_array(molecular_diffusivity, name="molecular_diffusivity")
+    _validate_non_negative_array(longitudinal_dispersivity, name="longitudinal_dispersivity")
+    if cin_values is not None:
+        _validate_no_nan(cin_values, name="cin")
+    elif cout_values is not None:
+        _validate_no_nan(cout_values, name="cout")
+    _validate_no_nan(flow, name="flow")
+    _validate_non_negative_array(flow, name="flow", message="flow must be non-negative (negative flow not supported)")
+    _validate_positive_array(aquifer_pore_volumes, name="aquifer_pore_volumes")
+    _validate_positive_array(streamline_length, name="streamline_length")
+    if retardation_factor < 1.0:
+        msg = "retardation_factor must be >= 1.0"
+        raise ValueError(msg)
+
+    if n_pore_volumes > 1 and np.any(longitudinal_dispersivity > 0) and not suppress_dispersion_warning:
+        msg = (
+            "Using multiple aquifer_pore_volumes with non-zero longitudinal_dispersivity. "
+            "Both represent spreading from velocity heterogeneity at different scales.\n\n"
+            "This is appropriate when:\n"
+            "  - APVD comes from streamline analysis (explicit geometry)\n"
+            "  - You want to add unresolved microdispersion and molecular diffusion\n\n"
+            "This may double-count spreading when:\n"
+            "  - APVD was calibrated from measurements (microdispersion already included)\n\n"
+            "For gamma-parameterized APVD, consider using the 'equivalent APVD std' approach\n"
+            "from 05_Diffusion_Dispersion.ipynb to combine both effects in the faster advection\n"
+            "module. Note: this variance combination is only valid for continuous (gamma)\n"
+            "distributions, not for discrete streamline volumes.\n"
+            "Suppress this warning with suppress_dispersion_warning=True."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=3)
 
 
 def _infiltration_to_extraction_coeff_matrix(
@@ -684,63 +793,17 @@ def infiltration_to_extraction(
     if longitudinal_dispersivity.size == 1:
         longitudinal_dispersivity = np.broadcast_to(longitudinal_dispersivity, (n_pore_volumes,)).copy()
 
-    # Input validation
-    if len(tedges) != len(cin) + 1:
-        msg = "tedges must have one more element than cin"
-        raise ValueError(msg)
-    if len(tedges) != len(flow) + 1:
-        msg = "tedges must have one more element than flow"
-        raise ValueError(msg)
-    if len(aquifer_pore_volumes) != len(streamline_length):
-        msg = "aquifer_pore_volumes and streamline_length must have the same length"
-        raise ValueError(msg)
-    if len(molecular_diffusivity) != n_pore_volumes:
-        msg = "molecular_diffusivity must be a scalar or have same length as aquifer_pore_volumes"
-        raise ValueError(msg)
-    if len(longitudinal_dispersivity) != n_pore_volumes:
-        msg = "longitudinal_dispersivity must be a scalar or have same length as aquifer_pore_volumes"
-        raise ValueError(msg)
-    if np.any(molecular_diffusivity < 0):
-        msg = "molecular_diffusivity must be non-negative"
-        raise ValueError(msg)
-    if np.any(longitudinal_dispersivity < 0):
-        msg = "longitudinal_dispersivity must be non-negative"
-        raise ValueError(msg)
-    if np.any(np.isnan(cin)):
-        msg = "cin contains NaN values, which are not allowed"
-        raise ValueError(msg)
-    if np.any(np.isnan(flow)):
-        msg = "flow contains NaN values, which are not allowed"
-        raise ValueError(msg)
-    if np.any(flow < 0):
-        msg = "flow must be non-negative (negative flow not supported)"
-        raise ValueError(msg)
-    if np.any(aquifer_pore_volumes <= 0):
-        msg = "aquifer_pore_volumes must be positive"
-        raise ValueError(msg)
-    if np.any(streamline_length <= 0):
-        msg = "streamline_length must be positive"
-        raise ValueError(msg)
-
-    # Check for conflicting approaches: multiple pore volumes with longitudinal dispersivity
-    # Both represent the same physical phenomenon (velocity heterogeneity) at different scales.
-    # See concept-dispersion-scales in the documentation for details.
-    if n_pore_volumes > 1 and np.any(longitudinal_dispersivity > 0) and not suppress_dispersion_warning:
-        msg = (
-            "Using multiple aquifer_pore_volumes with non-zero longitudinal_dispersivity. "
-            "Both represent spreading from velocity heterogeneity at different scales.\n\n"
-            "This is appropriate when:\n"
-            "  - APVD comes from streamline analysis (explicit geometry)\n"
-            "  - You want to add unresolved microdispersion and molecular diffusion\n\n"
-            "This may double-count spreading when:\n"
-            "  - APVD was calibrated from measurements (microdispersion already included)\n\n"
-            "For gamma-parameterized APVD, consider using the 'equivalent APVD std' approach\n"
-            "from 05_Diffusion_Dispersion.ipynb to combine both effects in the faster advection\n"
-            "module. Note: this variance combination is only valid for continuous (gamma)\n"
-            "distributions, not for discrete streamline volumes.\n"
-            "Suppress this warning with suppress_dispersion_warning=True."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=2)
+    _validate_diffusion_inputs(
+        tedges=tedges,
+        flow=flow,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
+        retardation_factor=retardation_factor,
+        suppress_dispersion_warning=suppress_dispersion_warning,
+        cin_values=cin,
+    )
 
     extend_tedges = _diffusion_extend_tedges_flag(spinup)
     coeff_matrix, valid_cout_bins = _infiltration_to_extraction_coeff_matrix(
@@ -866,6 +929,11 @@ def extraction_to_infiltration(
     using :func:`gwtransport.utils.solve_tikhonov`. This ensures mathematical
     consistency between forward and inverse operations.
 
+    NaN values in ``cout`` are rejected. The Tikhonov solver here does not
+    mask NaN rows, so any NaN in ``cout`` would poison the solution. This
+    differs from :func:`gwtransport.deposition.extraction_to_deposition`,
+    whose regularized solver excludes NaN ``cout`` rows by construction.
+
     Examples
     --------
     Basic usage with constant flow:
@@ -922,58 +990,18 @@ def extraction_to_infiltration(
     if longitudinal_dispersivity.size == 1:
         longitudinal_dispersivity = np.broadcast_to(longitudinal_dispersivity, (n_pore_volumes,)).copy()
 
-    # Input validation
-    if len(tedges) != len(flow) + 1:
-        msg = "tedges must have one more element than flow"
-        raise ValueError(msg)
-    if len(cout_tedges) != len(cout) + 1:
-        msg = "cout_tedges must have one more element than cout"
-        raise ValueError(msg)
-    if len(aquifer_pore_volumes) != len(streamline_length):
-        msg = "aquifer_pore_volumes and streamline_length must have the same length"
-        raise ValueError(msg)
-    if len(molecular_diffusivity) != n_pore_volumes:
-        msg = "molecular_diffusivity must be a scalar or have same length as aquifer_pore_volumes"
-        raise ValueError(msg)
-    if len(longitudinal_dispersivity) != n_pore_volumes:
-        msg = "longitudinal_dispersivity must be a scalar or have same length as aquifer_pore_volumes"
-        raise ValueError(msg)
-    if np.any(molecular_diffusivity < 0):
-        msg = "molecular_diffusivity must be non-negative"
-        raise ValueError(msg)
-    if np.any(longitudinal_dispersivity < 0):
-        msg = "longitudinal_dispersivity must be non-negative"
-        raise ValueError(msg)
-    if np.any(np.isnan(cout)):
-        msg = "cout contains NaN values, which are not allowed"
-        raise ValueError(msg)
-    if np.any(np.isnan(flow)):
-        msg = "flow contains NaN values, which are not allowed"
-        raise ValueError(msg)
-    if np.any(aquifer_pore_volumes <= 0):
-        msg = "aquifer_pore_volumes must be positive"
-        raise ValueError(msg)
-    if np.any(streamline_length <= 0):
-        msg = "streamline_length must be positive"
-        raise ValueError(msg)
-
-    # Check for conflicting approaches
-    if n_pore_volumes > 1 and np.any(longitudinal_dispersivity > 0) and not suppress_dispersion_warning:
-        msg = (
-            "Using multiple aquifer_pore_volumes with non-zero longitudinal_dispersivity. "
-            "Both represent spreading from velocity heterogeneity at different scales.\n\n"
-            "This is appropriate when:\n"
-            "  - APVD comes from streamline analysis (explicit geometry)\n"
-            "  - You want to add unresolved microdispersion and molecular diffusion\n\n"
-            "This may double-count spreading when:\n"
-            "  - APVD was calibrated from measurements (microdispersion already included)\n\n"
-            "For gamma-parameterized APVD, consider using the 'equivalent APVD std' approach\n"
-            "from 05_Diffusion_Dispersion.ipynb to combine both effects in the faster advection\n"
-            "module. Note: this variance combination is only valid for continuous (gamma)\n"
-            "distributions, not for discrete streamline volumes.\n"
-            "Suppress this warning with suppress_dispersion_warning=True."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=2)
+    _validate_diffusion_inputs(
+        tedges=tedges,
+        flow=flow,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
+        retardation_factor=retardation_factor,
+        suppress_dispersion_warning=suppress_dispersion_warning,
+        cout_values=cout,
+        cout_tedges=cout_tedges,
+    )
 
     n_cin = len(tedges) - 1
 

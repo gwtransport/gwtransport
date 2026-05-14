@@ -2076,6 +2076,26 @@ def test_validate_deposition_inputs_silent_on_good_input_inverse():
             lambda k: {**k, "aquifer_pore_volume": -10.0, "dep_values": np.full(len(k["flow_values"]), 5.0)},
             r"Aquifer pore volume must be positive, got -10\.0",
         ),
+        # NEW: retardation_factor < 1.0 (issue #187 omission fix; new validation surface)
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "retardation_factor": 0.5,
+                "dep_values": np.full(len(k["flow_values"]), 5.0),
+            },
+            r"retardation_factor must be >= 1\.0",
+        ),
+        (
+            "inverse",
+            lambda k: {
+                **k,
+                "retardation_factor": 0.5,
+                "cout_tedges": k["tedges"],
+                "cout_values": np.full(len(k["flow_values"]), 10.0),
+            },
+            r"retardation_factor must be >= 1\.0",
+        ),
     ],
 )
 def test_validate_deposition_inputs_raises_on_bad_input(path, mutate, match_regex):

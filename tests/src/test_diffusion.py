@@ -18,6 +18,7 @@ from gwtransport.advection import (
 from gwtransport.diffusion import (
     _cfrac_mean_volume,
     _infiltration_to_extraction_coeff_matrix,
+    _validate_diffusion_inputs,
     extraction_to_infiltration,
     gamma_extraction_to_infiltration,
     infiltration_to_extraction,
@@ -267,62 +268,6 @@ class TestInfiltrationToExtractionDiffusion:
         # Both outputs should be bounded by the input range (convex combination).
         assert np.all(cout_hetero[valid] <= np.max(cin) + 1e-10)
         assert np.all(cout_single[valid] <= np.max(cin) + 1e-10)
-
-    def test_input_validation(self, simple_setup):
-        """Test that invalid inputs raise appropriate errors."""
-        # Negative molecular_diffusivity
-        with pytest.raises(ValueError, match="molecular_diffusivity must be non-negative"):
-            infiltration_to_extraction(
-                cin=simple_setup["cin"],
-                flow=simple_setup["flow"],
-                tedges=simple_setup["tedges"],
-                cout_tedges=simple_setup["cout_tedges"],
-                aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
-                streamline_length=simple_setup["streamline_length"],
-                molecular_diffusivity=-1.0,
-                longitudinal_dispersivity=0.0,
-            )
-
-        # Negative longitudinal_dispersivity
-        with pytest.raises(ValueError, match="longitudinal_dispersivity must be non-negative"):
-            infiltration_to_extraction(
-                cin=simple_setup["cin"],
-                flow=simple_setup["flow"],
-                tedges=simple_setup["tedges"],
-                cout_tedges=simple_setup["cout_tedges"],
-                aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
-                streamline_length=simple_setup["streamline_length"],
-                molecular_diffusivity=1.0,
-                longitudinal_dispersivity=-1.0,
-            )
-
-        # Mismatched pore volumes and travel distances
-        with pytest.raises(ValueError, match="same length"):
-            infiltration_to_extraction(
-                cin=simple_setup["cin"],
-                flow=simple_setup["flow"],
-                tedges=simple_setup["tedges"],
-                cout_tedges=simple_setup["cout_tedges"],
-                aquifer_pore_volumes=np.array([500.0, 600.0]),
-                streamline_length=np.array([100.0, 200.0, 300.0]),
-                molecular_diffusivity=1.0,
-                longitudinal_dispersivity=0.0,
-            )
-
-        # NaN in cin
-        cin_with_nan = simple_setup["cin"].copy()
-        cin_with_nan[2] = np.nan
-        with pytest.raises(ValueError, match="NaN"):
-            infiltration_to_extraction(
-                cin=cin_with_nan,
-                flow=simple_setup["flow"],
-                tedges=simple_setup["tedges"],
-                cout_tedges=simple_setup["cout_tedges"],
-                aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
-                streamline_length=simple_setup["streamline_length"],
-                molecular_diffusivity=1.0,
-                longitudinal_dispersivity=0.0,
-            )
 
 
 class TestInfiltrationToExtractionDiffusionPhysics:
@@ -954,62 +899,6 @@ class TestExtractionToInfiltrationDiffusion:
         # significant oscillations beyond input range
         assert np.all(cin[valid] >= 0.0 - 3.0)
         assert np.all(cin[valid] <= 1.0 + 3.0)
-
-    def test_input_validation(self, simple_setup):
-        """Test that invalid inputs raise appropriate errors."""
-        # Negative molecular_diffusivity
-        with pytest.raises(ValueError, match="molecular_diffusivity must be non-negative"):
-            extraction_to_infiltration(
-                cout=simple_setup["cout"],
-                flow=simple_setup["flow_cin"],
-                tedges=simple_setup["cin_tedges"],
-                cout_tedges=simple_setup["cout_tedges"],
-                aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
-                streamline_length=simple_setup["streamline_length"],
-                molecular_diffusivity=-1.0,
-                longitudinal_dispersivity=0.0,
-            )
-
-        # Negative longitudinal_dispersivity
-        with pytest.raises(ValueError, match="longitudinal_dispersivity must be non-negative"):
-            extraction_to_infiltration(
-                cout=simple_setup["cout"],
-                flow=simple_setup["flow_cin"],
-                tedges=simple_setup["cin_tedges"],
-                cout_tedges=simple_setup["cout_tedges"],
-                aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
-                streamline_length=simple_setup["streamline_length"],
-                molecular_diffusivity=1.0,
-                longitudinal_dispersivity=-1.0,
-            )
-
-        # Mismatched pore volumes and travel distances
-        with pytest.raises(ValueError, match="same length"):
-            extraction_to_infiltration(
-                cout=simple_setup["cout"],
-                flow=simple_setup["flow_cin"],
-                tedges=simple_setup["cin_tedges"],
-                cout_tedges=simple_setup["cout_tedges"],
-                aquifer_pore_volumes=np.array([500.0, 600.0]),
-                streamline_length=np.array([100.0, 200.0, 300.0]),
-                molecular_diffusivity=1.0,
-                longitudinal_dispersivity=0.0,
-            )
-
-        # NaN in cout
-        cout_with_nan = simple_setup["cout"].copy()
-        cout_with_nan[2] = np.nan
-        with pytest.raises(ValueError, match="NaN"):
-            extraction_to_infiltration(
-                cout=cout_with_nan,
-                flow=simple_setup["flow_cin"],
-                tedges=simple_setup["cin_tedges"],
-                cout_tedges=simple_setup["cout_tedges"],
-                aquifer_pore_volumes=simple_setup["aquifer_pore_volumes"],
-                streamline_length=simple_setup["streamline_length"],
-                molecular_diffusivity=1.0,
-                longitudinal_dispersivity=0.0,
-            )
 
 
 class TestExtractionToInfiltrationDiffusionPhysics:
@@ -2018,7 +1907,10 @@ class TestGammaExtractionToInfiltrationDiffusion:
         n_cout = len(gamma_setup["cout_tedges"]) - 1
         cout = np.ones(n_cout) * 5.0
 
-        with pytest.warns(UserWarning, match="multiple.*pore.*volumes|velocity heterogeneity"):
+        with pytest.warns(
+            UserWarning,
+            match=r"Using multiple aquifer_pore_volumes with non-zero longitudinal_dispersivity",
+        ):
             gamma_extraction_to_infiltration(
                 cout=cout,
                 flow=gamma_setup["flow"],
@@ -2165,26 +2057,6 @@ class TestGammaExtractionToInfiltrationDiffusion:
 # =============================================================================
 
 
-def test_infiltration_to_extraction_rejects_negative_flow():
-    """Negative flow must raise ValueError with the standard message."""
-    tedges = pd.date_range(start="2020-01-01", periods=11, freq="D")
-    cin = np.ones(10)
-    flow = np.full(10, 100.0)
-    flow[5] = -1.0
-
-    with pytest.raises(ValueError, match="flow must be non-negative"):
-        infiltration_to_extraction(
-            cin=cin,
-            flow=flow,
-            tedges=tedges,
-            cout_tedges=tedges,
-            aquifer_pore_volumes=np.array([500.0]),
-            streamline_length=np.array([80.0]),
-            molecular_diffusivity=np.array([0.03]),
-            longitudinal_dispersivity=np.array([0.0]),
-        )
-
-
 def test_infiltration_to_extraction_accepts_zero_flow_without_warnings():
     """flow == 0 is accepted; no runtime warnings emitted."""
     tedges = pd.date_range(start="2020-01-01", periods=201, freq="D")
@@ -2265,3 +2137,212 @@ def test_diffusion_spinup_float_raises():
             longitudinal_dispersivity=np.array([0.0]),
             spinup=0.5,
         )
+
+
+# =============================================================================
+# Validator helper: parametrized snapshot pinning every ValueError branch of
+# _validate_diffusion_inputs. Verbatim messages from the prior duplicated
+# prologues; new branches (retardation_factor>=1 in fwd+rev, flow>=0 in rev)
+# are the issue #187 omission fixes.
+# =============================================================================
+
+
+def _good_diffusion_inputs():
+    """Baseline good-input dict that passes _validate_diffusion_inputs silently."""
+    n = 5
+    n_pv = 2
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    return {
+        "tedges": tedges,
+        "flow": np.full(n, 100.0),
+        "aquifer_pore_volumes": np.full(n_pv, 500.0),
+        "streamline_length": np.full(n_pv, 100.0),
+        "molecular_diffusivity": np.full(n_pv, 0.0),
+        "longitudinal_dispersivity": np.full(n_pv, 0.0),
+        "retardation_factor": 1.0,
+        "suppress_dispersion_warning": True,
+    }
+
+
+def test_validate_diffusion_inputs_silent_on_good_input_forward():
+    """No exception when the forward (cin) inputs are valid."""
+    kwargs = _good_diffusion_inputs()
+    n = len(kwargs["flow"])
+    _validate_diffusion_inputs(**kwargs, cin_values=np.ones(n))
+
+
+def test_validate_diffusion_inputs_silent_on_good_input_reverse():
+    """No exception when the reverse (cout + cout_tedges) inputs are valid."""
+    kwargs = _good_diffusion_inputs()
+    n = len(kwargs["flow"])
+    _validate_diffusion_inputs(**kwargs, cout_values=np.ones(n), cout_tedges=kwargs["tedges"])
+
+
+@pytest.mark.parametrize(
+    ("path", "mutate", "match_regex"),
+    [
+        # ---------------- forward path ----------------
+        (
+            "forward",
+            lambda k: {**k, "cin_values": np.ones(len(k["flow"]) + 1)},
+            r"tedges must have one more element than cin",
+        ),
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "cin_values": np.ones(len(k["flow"])),
+                "flow": np.full(len(k["flow"]) + 1, 100.0),
+            },
+            r"tedges must have one more element than flow",
+        ),
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "aquifer_pore_volumes": np.full(2, 500.0),
+                "streamline_length": np.full(3, 100.0),
+                "molecular_diffusivity": np.full(2, 0.0),
+                "longitudinal_dispersivity": np.full(2, 0.0),
+                "cin_values": np.ones(len(k["flow"])),
+            },
+            r"aquifer_pore_volumes and streamline_length must have the same length",
+        ),
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "molecular_diffusivity": np.full(3, 0.0),
+                "cin_values": np.ones(len(k["flow"])),
+            },
+            r"molecular_diffusivity must be a scalar or have same length as aquifer_pore_volumes",
+        ),
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "longitudinal_dispersivity": np.full(3, 0.0),
+                "cin_values": np.ones(len(k["flow"])),
+            },
+            r"longitudinal_dispersivity must be a scalar or have same length as aquifer_pore_volumes",
+        ),
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "molecular_diffusivity": np.array([-1.0, 0.0]),
+                "cin_values": np.ones(len(k["flow"])),
+            },
+            r"molecular_diffusivity must be non-negative",
+        ),
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "longitudinal_dispersivity": np.array([-1.0, 0.0]),
+                "cin_values": np.ones(len(k["flow"])),
+            },
+            r"longitudinal_dispersivity must be non-negative",
+        ),
+        (
+            "forward",
+            lambda k: {**k, "cin_values": np.array([1.0, np.nan, 1.0, 1.0, 1.0])},
+            r"cin contains NaN values, which are not allowed",
+        ),
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "flow": np.array([100.0, np.nan, 100.0, 100.0, 100.0]),
+                "cin_values": np.ones(len(k["flow"])),
+            },
+            r"flow contains NaN values, which are not allowed",
+        ),
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "flow": np.array([100.0, -50.0, 100.0, 100.0, 100.0]),
+                "cin_values": np.ones(len(k["flow"])),
+            },
+            r"flow must be non-negative \(negative flow not supported\)",
+        ),
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "aquifer_pore_volumes": np.array([500.0, 0.0]),
+                "cin_values": np.ones(len(k["flow"])),
+            },
+            r"aquifer_pore_volumes must be positive",
+        ),
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "streamline_length": np.array([100.0, 0.0]),
+                "cin_values": np.ones(len(k["flow"])),
+            },
+            r"streamline_length must be positive",
+        ),
+        # NEW: retardation_factor < 1 (omission fix)
+        (
+            "forward",
+            lambda k: {**k, "retardation_factor": 0.5, "cin_values": np.ones(len(k["flow"]))},
+            r"retardation_factor must be >= 1\.0",
+        ),
+        # ---------------- reverse path ----------------
+        (
+            "reverse",
+            lambda k: {
+                **k,
+                "flow": np.full(len(k["flow"]) + 1, 100.0),
+                "cout_values": np.ones(len(k["flow"])),
+                "cout_tedges": k["tedges"],
+            },
+            r"tedges must have one more element than flow",
+        ),
+        (
+            "reverse",
+            lambda k: {
+                **k,
+                "cout_values": np.ones(len(k["flow"]) + 1),
+                "cout_tedges": k["tedges"],
+            },
+            r"cout_tedges must have one more element than cout",
+        ),
+        (
+            "reverse",
+            lambda k: {**k, "cout_values": np.array([1.0, np.nan, 1.0, 1.0, 1.0]), "cout_tedges": k["tedges"]},
+            r"cout contains NaN values, which are not allowed",
+        ),
+        # NEW: flow >= 0 in reverse (omission fix)
+        (
+            "reverse",
+            lambda k: {
+                **k,
+                "flow": np.array([100.0, -50.0, 100.0, 100.0, 100.0]),
+                "cout_values": np.ones(len(k["flow"])),
+                "cout_tedges": k["tedges"],
+            },
+            r"flow must be non-negative \(negative flow not supported\)",
+        ),
+        # NEW: retardation_factor < 1 in reverse (omission fix)
+        (
+            "reverse",
+            lambda k: {
+                **k,
+                "retardation_factor": 0.5,
+                "cout_values": np.ones(len(k["flow"])),
+                "cout_tedges": k["tedges"],
+            },
+            r"retardation_factor must be >= 1\.0",
+        ),
+    ],
+)
+def test_validate_diffusion_inputs_raises_on_bad_input(path, mutate, match_regex):
+    """Each ValueError branch raises with the exact historical message string."""
+    del path  # parametrize id only
+    bad = mutate(_good_diffusion_inputs())
+    with pytest.raises(ValueError, match=match_regex):
+        _validate_diffusion_inputs(**bad)

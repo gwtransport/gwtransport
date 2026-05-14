@@ -6,6 +6,7 @@ import pytest
 
 from gwtransport import advection as adv_mod
 from gwtransport.advection import (
+    _validate_advection_inputs,
     extraction_to_infiltration,
     extraction_to_infiltration_series,
     gamma_extraction_to_infiltration,
@@ -683,39 +684,6 @@ def test_infiltration_to_extraction_retardation_factor():
     assert cout_r2[expected_step_idx_r2 - 3] == 0.0
     # The R=2 step lags by exactly PV/flow = 2 bins
     assert expected_step_idx_r2 - expected_step_idx_r1 == int(pore_volume / 100.0)
-
-
-def test_infiltration_to_extraction_error_conditions():
-    """Test infiltration_to_extraction error conditions."""
-    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-
-    cin = pd.Series(np.ones(len(dates)), index=dates)
-    flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
-    aquifer_pore_volumes = np.array([1000.0])
-
-    # Test mismatched tedges length
-    wrong_tedges = tedges[:-2]  # Too short
-    with pytest.raises(ValueError, match="tedges must have one more element than cin"):
-        infiltration_to_extraction(
-            cin=cin.to_numpy(),
-            flow=flow.to_numpy(),
-            tedges=wrong_tedges,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-        )
-
-    # Test mismatched flow and tedges
-    wrong_flow = flow[:-2]  # Too short
-    with pytest.raises(ValueError, match="tedges must have one more element than flow"):
-        infiltration_to_extraction(
-            cin=cin.to_numpy(),
-            flow=wrong_flow,
-            tedges=tedges,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-        )
 
 
 # ===============================================================================
@@ -1463,39 +1431,6 @@ def test_extraction_to_infiltration_retardation_factor():
     assert np.sum(valid) > 30
     np.testing.assert_allclose(cin_back_r1[valid], cin_values[valid], atol=1e-9)
     np.testing.assert_allclose(cin_back_r2[valid], cin_values[valid], atol=1e-9)
-
-
-def test_extraction_to_infiltration_error_conditions():
-    """Test extraction_to_infiltration error conditions."""
-    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-
-    cout = pd.Series(np.ones(len(dates)), index=dates)
-    flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
-    aquifer_pore_volumes = np.array([1000.0])
-
-    # Test mismatched cout_tedges length
-    wrong_cout_tedges = tedges[:-2]  # Too short
-    with pytest.raises(ValueError, match="cout_tedges must have one more element than cout"):
-        extraction_to_infiltration(
-            cout=cout.to_numpy(),
-            flow=flow.to_numpy(),
-            tedges=cin_tedges,
-            cout_tedges=wrong_cout_tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-        )
-
-    # Test mismatched flow and tedges
-    wrong_flow = flow[:-2]  # Too short
-    with pytest.raises(ValueError, match="tedges must have one more element than flow"):
-        extraction_to_infiltration(
-            cout=cout.to_numpy(),
-            flow=wrong_flow,
-            tedges=cin_tedges,
-            cout_tedges=tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-        )
 
 
 # ===============================================================================
@@ -2668,23 +2603,6 @@ def _zero_flow_invariance_setup():
     }
 
 
-def test_infiltration_to_extraction_rejects_negative_flow():
-    """Negative flow must raise ValueError with the standard message."""
-    tedges = pd.date_range(start="2020-01-01", periods=11, freq="D")
-    cin = np.ones(10)
-    flow = np.full(10, 100.0)
-    flow[5] = -1.0
-
-    with pytest.raises(ValueError, match="flow must be non-negative"):
-        infiltration_to_extraction(
-            cin=cin,
-            flow=flow,
-            tedges=tedges,
-            cout_tedges=tedges,
-            aquifer_pore_volumes=np.array([500.0]),
-        )
-
-
 def test_infiltration_to_extraction_accepts_zero_flow_without_warnings():
     """flow == 0 is accepted; no division-by-zero warnings emitted."""
     tedges = pd.date_range(start="2020-01-01", periods=201, freq="D")
@@ -3680,3 +3598,141 @@ def test_weight_matrix_rows_sum_to_one_or_zero():
     valid_rows = ~invalid
     np.testing.assert_allclose(row_sums[valid_rows], 1.0, atol=1e-13)
     np.testing.assert_allclose(row_sums[invalid], 0.0, atol=1e-13)
+
+
+# =============================================================================
+# Validator helper: parametrized snapshot pinning every ValueError branch of
+# _validate_advection_inputs. Verbatim messages from the prior duplicated
+# prologues; new branches (flow>=0 in rev) are the issue #187 omission fix.
+# =============================================================================
+
+
+def _good_advection_inputs():
+    """Baseline good-input dict that passes _validate_advection_inputs silently."""
+    n = 5
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    return {
+        "tedges": tedges,
+        "flow": np.full(n, 100.0),
+        "retardation_factor": 1.0,
+    }
+
+
+def test_validate_advection_inputs_silent_on_good_input_forward():
+    """No exception when the forward (cin) inputs are valid."""
+    kwargs = _good_advection_inputs()
+    n = len(kwargs["flow"])
+    _validate_advection_inputs(**kwargs, cin_values=np.ones(n))
+
+
+def test_validate_advection_inputs_silent_on_good_input_reverse():
+    """No exception when the reverse (cout + cout_tedges) inputs are valid."""
+    kwargs = _good_advection_inputs()
+    n = len(kwargs["flow"])
+    _validate_advection_inputs(**kwargs, cout_values=np.ones(n), cout_tedges=kwargs["tedges"])
+
+
+@pytest.mark.parametrize(
+    ("path", "mutate", "match_regex"),
+    [
+        # ---------------- forward path ----------------
+        (
+            "forward",
+            lambda k: {**k, "cin_values": np.ones(len(k["flow"]) + 1)},
+            r"tedges must have one more element than cin",
+        ),
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "cin_values": np.ones(len(k["flow"])),
+                "flow": np.full(len(k["flow"]) + 1, 100.0),
+            },
+            r"tedges must have one more element than flow",
+        ),
+        (
+            "forward",
+            lambda k: {**k, "cin_values": np.array([1.0, np.nan, 1.0, 1.0, 1.0])},
+            r"cin contains NaN values, which are not allowed",
+        ),
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "flow": np.array([100.0, np.nan, 100.0, 100.0, 100.0]),
+                "cin_values": np.ones(len(k["flow"])),
+            },
+            r"flow contains NaN values, which are not allowed",
+        ),
+        (
+            "forward",
+            lambda k: {
+                **k,
+                "flow": np.array([100.0, -50.0, 100.0, 100.0, 100.0]),
+                "cin_values": np.ones(len(k["flow"])),
+            },
+            r"flow must be non-negative \(negative flow not supported\)",
+        ),
+        (
+            "forward",
+            lambda k: {**k, "retardation_factor": 0.5, "cin_values": np.ones(len(k["flow"]))},
+            r"retardation_factor must be >= 1\.0",
+        ),
+        # ---------------- reverse path ----------------
+        (
+            "reverse",
+            lambda k: {
+                **k,
+                "flow": np.full(len(k["flow"]) + 1, 100.0),
+                "cout_values": np.ones(len(k["flow"])),
+                "cout_tedges": k["tedges"],
+            },
+            r"tedges must have one more element than flow",
+        ),
+        (
+            "reverse",
+            lambda k: {
+                **k,
+                "cout_values": np.ones(len(k["flow"]) + 1),
+                "cout_tedges": k["tedges"],
+            },
+            r"cout_tedges must have one more element than cout",
+        ),
+        (
+            "reverse",
+            lambda k: {
+                **k,
+                "cout_values": np.array([1.0, np.nan, 1.0, 1.0, 1.0]),
+                "cout_tedges": k["tedges"],
+            },
+            r"cout contains NaN values, which are not allowed",
+        ),
+        # NEW: flow >= 0 in reverse (omission fix; symmetric with diffusion reverse)
+        (
+            "reverse",
+            lambda k: {
+                **k,
+                "flow": np.array([100.0, -50.0, 100.0, 100.0, 100.0]),
+                "cout_values": np.ones(len(k["flow"])),
+                "cout_tedges": k["tedges"],
+            },
+            r"flow must be non-negative \(negative flow not supported\)",
+        ),
+        (
+            "reverse",
+            lambda k: {
+                **k,
+                "retardation_factor": 0.5,
+                "cout_values": np.ones(len(k["flow"])),
+                "cout_tedges": k["tedges"],
+            },
+            r"retardation_factor must be >= 1\.0",
+        ),
+    ],
+)
+def test_validate_advection_inputs_raises_on_bad_input(path, mutate, match_regex):
+    """Each ValueError branch raises with the exact historical message string."""
+    del path
+    bad = mutate(_good_advection_inputs())
+    with pytest.raises(ValueError, match=match_regex):
+        _validate_advection_inputs(**bad)
