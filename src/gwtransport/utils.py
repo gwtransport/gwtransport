@@ -20,16 +20,9 @@ Available functions:
   Automatically handles unsorted data with configurable extrapolation (None for clamping,
   float for constant values). Handles multi-dimensional query arrays.
 
-- ``_interp_series`` (private) - Interpolate pandas Series to new DatetimeIndex using
-  scipy.interpolate.interp1d. Automatically filters NaN values and converts datetime to
-  numerical representation.
-
 - :func:`linear_average` - Compute average values of piecewise linear time series between
   specified x-edges. Supports 1D or 2D edge arrays for batch processing. Handles NaN values
   and offers multiple extrapolation methods ('nan', 'outer', 'raise').
-
-- ``_diff`` (private) - Compute cell widths from cell coordinate arrays with configurable
-  alignment ('centered', 'left', 'right'). Returns widths matching input array length.
 
 - :func:`partial_isin` - Calculate fraction of each input bin overlapping with each output bin.
   Returns dense matrix where element (i,j) represents overlap fraction. Uses vectorized
@@ -87,7 +80,6 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import requests
-from scipy import interpolate
 from scipy.linalg import null_space
 from scipy.optimize import minimize
 
@@ -258,68 +250,6 @@ def linear_interpolate(
     return np.interp(x_query, x_ref_sorted, y_ref_sorted, left=left, right=right)
 
 
-def _interp_series(*, series: pd.Series, index_new: pd.DatetimeIndex, **interp1d_kwargs) -> pd.Series:
-    """
-    Interpolate a pandas.Series to a new index.
-
-    Parameters
-    ----------
-    series : pandas.Series
-        Series to interpolate.
-    index_new : pandas.DatetimeIndex
-        New index to interpolate to.
-    interp1d_kwargs : dict, optional
-        Keyword arguments passed to scipy.interpolate.interp1d. Default is {}.
-
-    Returns
-    -------
-    pandas.Series
-        Interpolated series.
-    """
-    series = series[series.index.notna() & series.notna()]  # pyright: ignore[reportAssignmentType]
-    dt = (series.index - series.index[0]) / pd.to_timedelta(1, unit="D")
-    dt_interp = (index_new - series.index[0]) / pd.to_timedelta(1, unit="D")
-    interp_obj = interpolate.interp1d(dt, series.values, bounds_error=False, **interp1d_kwargs)
-    return pd.Series(interp_obj(dt_interp), index=index_new)
-
-
-def _diff(*, a: npt.ArrayLike, alignment: str = "centered") -> npt.NDArray[np.floating]:
-    """Compute the cell widths for a given array of cell coordinates.
-
-    If alignment is "centered", the coordinates are assumed to be centered in the cells.
-    If alignment is "left", the coordinates are assumed to be at the left edge of the cells.
-    If alignment is "right", the coordinates are assumed to be at the right edge of the cells.
-
-    Parameters
-    ----------
-    a : array-like
-        Input array.
-
-    Returns
-    -------
-    numpy.ndarray
-        Array with differences between elements.
-
-    Raises
-    ------
-    ValueError
-        If ``alignment`` is not ``'centered'``, ``'left'``, or ``'right'``.
-    """
-    # Convert input to array
-    a = np.asarray(a)
-
-    if alignment == "centered":
-        mid = a[:-1] + (a[1:] - a[:-1]) / 2
-        return np.concatenate((a[[1]] - a[[0]], mid[1:] - mid[:-1], a[[-1]] - a[[-2]]))
-    if alignment == "left":
-        return np.concatenate((a[1:] - a[:-1], a[[-1]] - a[[-2]]))
-    if alignment == "right":
-        return np.concatenate((a[[1]] - a[[0]], a[1:] - a[:-1]))
-
-    msg = f"Invalid alignment: {alignment}"
-    raise ValueError(msg)
-
-
 def linear_average(
     *,
     x_data: npt.ArrayLike,
@@ -349,11 +279,17 @@ def linear_average(
         - If 1D: shape ``(n_edges,)``, must be in ascending order.
         - If 2D: shape ``(n_series_x, n_edges)``, each row must be in ascending order.
     extrapolate_method : str, optional
-        Method for handling extrapolation. Default is 'nan'.
+        Method for handling bin edges that fall outside ``x_data``. Default
+        is ``'nan'``.
 
-        - 'outer': Extrapolate using the outermost data points.
-        - 'nan': Extrapolate using np.nan.
-        - 'raise': Raise an error for out-of-bounds values.
+        - ``'outer'``: average over the **in-range** portion of each bin
+          (clip-then-average). The bin width used for normalisation is the
+          clipped width, not the original width. For example,
+          ``x_data = y_data = [1, 2, 3]`` and ``x_edges = [0, 5]`` returns
+          ``2.0`` (integral over ``[1, 3]`` divided by clipped width 2),
+          **not** ``2.2`` (which a constant-extension scheme would give).
+        - ``'nan'``: bins that extend outside ``x_data`` are returned as ``nan``.
+        - ``'raise'``: raise an error if any bin edge falls outside ``x_data``.
 
     Returns
     -------
@@ -372,6 +308,20 @@ def linear_average(
         row. If ``x_data`` is not in ascending order. If ``x_edges`` rows are not in
         ascending order. If ``extrapolate_method`` is ``'raise'`` and any edge falls
         outside the data range.
+
+    Notes
+    -----
+    **NaN handling is asymmetric between 1D and 2D ``y_data``.**
+
+    - 1D ``y_data`` is treated as a single series; internal NaN gaps are
+      silently bridged by linear interpolation across the gap (via
+      ``np.interp`` with ``left=nan, right=nan``).
+    - 2D ``y_data`` is treated row-wise; any output bin whose
+      ``[edge_left, edge_right]`` touches a NaN segment **in that row** is
+      set to NaN, while other rows are unaffected.
+
+    Callers that need NaN-bridging behaviour across multiple series must
+    pre-fill (e.g., ``pd.DataFrame.interpolate``) before calling.
 
     Examples
     --------
@@ -1176,7 +1126,6 @@ def solve_underdetermined_system(
     nullspace_objective: str | Callable[[np.ndarray, np.ndarray, np.ndarray], float] = "squared_differences",
     optimization_method: str = "BFGS",
     rcond: float | None = None,
-    x_target: npt.NDArray[np.floating] | None = None,
 ) -> npt.NDArray[np.floating]:
     """
     Solve an underdetermined linear system with nullspace regularization.
@@ -1201,10 +1150,6 @@ def solve_underdetermined_system(
           adjacent elements: ``sum((x[i+1] - x[i])**2)``
         * "summed_differences" : Minimize sum of absolute differences between
           adjacent elements: ``sum(|x[i+1] - x[i]|)``
-        * "reverse_matrix" : Minimize distance to a target solution:
-          ``sum((x - x_target)**2)``. Requires ``x_target`` parameter.
-          Combines pseudoinverse exactness for well-determined modes with
-          physically motivated regularization for undetermined modes.
         * callable : Custom objective function with signature
           ``objective(coeffs, x_ls, nullspace_basis)`` where:
 
@@ -1223,10 +1168,6 @@ def solve_underdetermined_system(
         Default is None, which uses the default of each function.
         Increasing rcond truncates more modes, expanding the nullspace
         available for smoothness optimization. Useful for noisy data.
-    x_target : numpy.ndarray or None, optional
-        Target solution vector for the ``"reverse_matrix"`` nullspace objective.
-        Required when ``nullspace_objective="reverse_matrix"``. The nullspace
-        coefficients are chosen to minimize ``||x - x_target||^2``.
 
     Returns
     -------
@@ -1339,7 +1280,6 @@ def solve_underdetermined_system(
         nullspace_basis=nullspace_basis,
         nullspace_objective=nullspace_objective,
         optimization_method=optimization_method,
-        x_target=x_target,
     )
 
     return x_ls + nullspace_basis @ coeffs
@@ -1351,7 +1291,6 @@ def _optimize_nullspace_coefficients(
     nullspace_basis: np.ndarray,
     nullspace_objective: str | Callable[[np.ndarray, np.ndarray, np.ndarray], float],
     optimization_method: str,
-    x_target: np.ndarray | None = None,
 ) -> npt.NDArray[np.floating]:
     """Optimize coefficients in the nullspace to minimize the objective.
 
@@ -1363,14 +1302,11 @@ def _optimize_nullspace_coefficients(
         Nullspace basis matrix of shape (n, nullrank).
     nullspace_objective : str or callable
         Objective to minimize. Supported string values are
-        ``'squared_differences'``, ``'summed_differences'``, and
-        ``'reverse_matrix'``. A callable with signature
-        ``objective(coeffs, x_ls, nullspace_basis)`` is also accepted.
+        ``'squared_differences'`` and ``'summed_differences'``. A callable
+        with signature ``objective(coeffs, x_ls, nullspace_basis)`` is also
+        accepted.
     optimization_method : str
         Optimization method passed to ``scipy.optimize.minimize``.
-    x_target : ndarray or None, optional
-        Target solution vector required when
-        ``nullspace_objective='reverse_matrix'``. Default is None.
 
     Returns
     -------
@@ -1380,15 +1316,8 @@ def _optimize_nullspace_coefficients(
     Raises
     ------
     ValueError
-        If ``nullspace_objective`` is ``'reverse_matrix'`` and ``x_target`` is
-        None. If iterative optimization fails to converge.
+        If iterative optimization fails to converge.
     """
-    if nullspace_objective == "reverse_matrix":
-        if x_target is None:
-            msg = "x_target is required when nullspace_objective='reverse_matrix'"
-            raise ValueError(msg)
-        return _solve_target_analytical(x_ls=x_ls, nullspace_basis=nullspace_basis, x_target=x_target)
-
     # For squared_differences, solve the quadratic form analytically:
     # min ||D(x_ls + N c)||^2 => (N'D'DN) c = -N'D'D x_ls
     coeffs_sq = _solve_squared_differences_analytical(x_ls=x_ls, nullspace_basis=nullspace_basis)
@@ -1472,51 +1401,6 @@ def _solve_squared_differences_analytical(
         raise np.linalg.LinAlgError(msg)
 
     return np.linalg.solve(dntdn, rhs)
-
-
-def _solve_target_analytical(
-    *,
-    x_ls: np.ndarray,
-    nullspace_basis: np.ndarray,
-    x_target: np.ndarray,
-) -> npt.NDArray[np.floating]:
-    """Solve the target-based nullspace problem analytically.
-
-    Minimizes ``||x_ls + N @ c - x_target||^2`` over non-NaN entries of
-    x_target by solving the normal equations
-    ``(N_v^T N_v) c = N_v^T (x_target_v - x_ls_v)`` where ``_v`` denotes
-    the valid (non-NaN) subset.
-
-    Parameters
-    ----------
-    x_ls : ndarray
-        Least-squares solution vector.
-    nullspace_basis : ndarray
-        Nullspace basis matrix of shape (n, nullrank).
-    x_target : ndarray
-        Target solution vector of length n. May contain NaN for entries
-        that should be excluded from the minimization.
-
-    Returns
-    -------
-    ndarray
-        Optimal nullspace coefficients of length nullrank.
-    """
-    valid = ~np.isnan(x_target)
-    if not np.any(valid):
-        return np.zeros(nullspace_basis.shape[1])
-
-    delta = x_target[valid] - x_ls[valid]
-    n_valid = nullspace_basis[valid]
-    ntn = n_valid.T @ n_valid
-    rhs = n_valid.T @ delta
-
-    # Use lstsq to handle ill-conditioned systems gracefully.
-    # When valid target entries don't span all nullspace directions,
-    # lstsq returns the minimum-norm solution (zero coefficients for
-    # unconstrained directions, preserving x_ls there).
-    coeffs, *_ = np.linalg.lstsq(ntn, rhs, rcond=None)
-    return coeffs
 
 
 def compute_reverse_target(
