@@ -74,6 +74,11 @@ import numpy.typing as npt
 import pandas as pd
 
 from gwtransport import gamma
+from gwtransport._validation import (
+    _validate_no_nan,
+    _validate_non_negative_array,
+    _validate_tedges_parity,
+)
 from gwtransport.advection_utils import (
     _infiltration_to_extraction_weights,
     _resolve_spinup_inputs,
@@ -91,6 +96,53 @@ from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.residence_time import residence_time
 from gwtransport.utils import solve_inverse_transport
+
+
+def _validate_advection_inputs(
+    *,
+    tedges: pd.DatetimeIndex,
+    flow: np.ndarray,
+    retardation_factor: float,
+    cin_values: np.ndarray | None = None,
+    cout_values: np.ndarray | None = None,
+    cout_tedges: pd.DatetimeIndex | None = None,
+) -> None:
+    """Validate inputs common to advection forward / reverse entry points.
+
+    Path selection via mutually-exclusive kwargs:
+
+    - ``cin_values`` provided => forward path. ``tedges`` parities cin and flow.
+    - ``cout_values`` + ``cout_tedges`` provided => reverse path. ``tedges`` parities
+      flow; ``cout_tedges`` parities cout.
+
+    All shared checks fire on both paths. ``flow >= 0`` is enforced in both
+    directions (the previous reverse prologue omitted this; see issue #187). Every
+    other error-message string is preserved verbatim from the prior duplicated
+    prologue so that ``match=`` regex tests do not break.
+
+    Raises
+    ------
+    ValueError
+        If any check fails. The message identifies which invariant was violated.
+    """
+    if cin_values is not None:
+        _validate_tedges_parity(tedges, cin_values, tedges_name="tedges", values_name="cin")
+        _validate_tedges_parity(tedges, flow, tedges_name="tedges", values_name="flow")
+    elif cout_values is not None and cout_tedges is not None:
+        _validate_tedges_parity(tedges, flow, tedges_name="tedges", values_name="flow")
+        _validate_tedges_parity(cout_tedges, cout_values, tedges_name="cout_tedges", values_name="cout")
+    else:
+        msg = "must provide cin_values (forward) or both cout_values and cout_tedges (reverse)"
+        raise ValueError(msg)
+    if cin_values is not None:
+        _validate_no_nan(cin_values, name="cin")
+    elif cout_values is not None:
+        _validate_no_nan(cout_values, name="cout")
+    _validate_no_nan(flow, name="flow")
+    _validate_non_negative_array(flow, name="flow", message="flow must be non-negative (negative flow not supported)")
+    if retardation_factor < 1.0:
+        msg = "retardation_factor must be >= 1.0"
+        raise ValueError(msg)
 
 
 def infiltration_to_extraction_series(
@@ -864,26 +916,12 @@ def infiltration_to_extraction(
     flow = np.asarray(flow)
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
 
-    if len(tedges) != len(cin) + 1:
-        msg = "tedges must have one more element than cin"
-        raise ValueError(msg)
-    if len(tedges) != len(flow) + 1:
-        msg = "tedges must have one more element than flow"
-        raise ValueError(msg)
-
-    # Validate inputs do not contain NaN values
-    if np.any(np.isnan(cin)):
-        msg = "cin contains NaN values, which are not allowed"
-        raise ValueError(msg)
-    if np.any(np.isnan(flow)):
-        msg = "flow contains NaN values, which are not allowed"
-        raise ValueError(msg)
-    if np.any(flow < 0):
-        msg = "flow must be non-negative (negative flow not supported)"
-        raise ValueError(msg)
-    if retardation_factor < 1.0:
-        msg = "retardation_factor must be >= 1.0"
-        raise ValueError(msg)
+    _validate_advection_inputs(
+        tedges=tedges,
+        flow=flow,
+        retardation_factor=retardation_factor,
+        cin_values=cin,
+    )
 
     weight_tedges, weight_flow, weight_cin, threshold, _ = _resolve_spinup_inputs(
         spinup,
@@ -1022,6 +1060,13 @@ def extraction_to_infiltration(
     :ref:`concept-pore-volume-distribution` : Background on aquifer heterogeneity modeling
     :ref:`concept-transport-equation` : Flow-weighted averaging approach
 
+    Notes
+    -----
+    NaN values in ``cout`` are rejected. The Tikhonov solver here does not
+    mask NaN rows, so any NaN in ``cout`` would poison the solution. This
+    differs from :func:`gwtransport.deposition.extraction_to_deposition`,
+    whose regularized solver excludes NaN ``cout`` rows by construction.
+
     Examples
     --------
     Basic usage with pandas Series:
@@ -1098,23 +1143,13 @@ def extraction_to_infiltration(
     cout = np.asarray(cout)
     flow = np.asarray(flow)
 
-    if len(tedges) != len(flow) + 1:
-        msg = "tedges must have one more element than flow"
-        raise ValueError(msg)
-    if len(cout_tedges) != len(cout) + 1:
-        msg = "cout_tedges must have one more element than cout"
-        raise ValueError(msg)
-
-    # Validate inputs do not contain NaN values
-    if np.any(np.isnan(cout)):
-        msg = "cout contains NaN values, which are not allowed"
-        raise ValueError(msg)
-    if np.any(np.isnan(flow)):
-        msg = "flow contains NaN values, which are not allowed"
-        raise ValueError(msg)
-    if retardation_factor < 1.0:
-        msg = "retardation_factor must be >= 1.0"
-        raise ValueError(msg)
+    _validate_advection_inputs(
+        tedges=tedges,
+        flow=flow,
+        retardation_factor=retardation_factor,
+        cout_values=cout,
+        cout_tedges=cout_tedges,
+    )
 
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
 

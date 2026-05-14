@@ -68,6 +68,12 @@ convention = "numpy"
 "src/gwtransport/deposition.py" = [
     "DOC502",  # Public entry points document ValueError; the raises happen inside _validate_deposition_inputs
 ]
+"src/gwtransport/diffusion.py" = [
+    "DOC502",  # Public entry points document ValueError; the raises happen inside _validate_diffusion_inputs
+]
+"src/gwtransport/advection.py" = [
+    "DOC502",  # Public entry points document ValueError; the raises happen inside _validate_advection_inputs
+]
 "tests/**/test_*.py" = [
     "S101",    # asserts allowed in tests
     "D",

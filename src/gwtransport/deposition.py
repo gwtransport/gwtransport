@@ -54,6 +54,12 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from gwtransport._validation import (
+    _validate_no_nan,
+    _validate_non_negative_array,
+    _validate_positive_scalar,
+    _validate_tedges_parity,
+)
 from gwtransport.advection_utils import _resolve_spinup_inputs
 from gwtransport.deposition_utils import compute_average_heights
 from gwtransport.residence_time import residence_time
@@ -73,6 +79,7 @@ def _validate_deposition_inputs(
     aquifer_pore_volume: float,
     porosity: float,
     thickness: float,
+    retardation_factor: float = 1.0,
     cout_tedges: pd.DatetimeIndex | None = None,
     cout_values: np.ndarray | None = None,
     dep_values: np.ndarray | None = None,
@@ -91,8 +98,8 @@ def _validate_deposition_inputs(
       additionally, in the inverse path (``dep_values is None``), a flow-only
       NaN-check fires with the historical "flow array cannot contain NaN
       values" message.
-    - Physical params (``porosity``, ``thickness``, ``aquifer_pore_volume``)
-      always validated.
+    - Physical params (``porosity``, ``thickness``, ``aquifer_pore_volume``,
+      ``retardation_factor``) always validated.
 
     Every error message and f-string substitution is preserved verbatim from
     the prior triplicate prologue so that ``match=`` regex tests do not break.
@@ -103,33 +110,34 @@ def _validate_deposition_inputs(
         If any of the activated checks fails. The specific message names which
         invariant was violated (see body for the verbatim strings).
     """
-    if dep_values is not None and len(tedges) != len(dep_values) + 1:
-        msg = "tedges must have one more element than dep"
-        raise ValueError(msg)
-    if len(tedges) != len(flow_values) + 1:
-        msg = "tedges must have one more element than flow"
-        raise ValueError(msg)
-    if cout_values is not None and cout_tedges is not None and len(cout_tedges) != len(cout_values) + 1:
-        msg = "cout_tedges must have one more element than cout"
-        raise ValueError(msg)
     if dep_values is not None:
+        _validate_tedges_parity(tedges, dep_values, tedges_name="tedges", values_name="dep")
+    _validate_tedges_parity(tedges, flow_values, tedges_name="tedges", values_name="flow")
+    if cout_values is not None and cout_tedges is not None:
+        _validate_tedges_parity(cout_tedges, cout_values, tedges_name="cout_tedges", values_name="cout")
+    if dep_values is not None:
+        # Compound NaN-check covers both ``dep`` and ``flow`` under one message; mapping to
+        # two separate ``_validate_no_nan`` calls would change wording and which array name
+        # surfaces first.
         if np.any(np.isnan(dep_values)) or np.any(np.isnan(flow_values)):
             msg = "Input arrays cannot contain NaN values"
             raise ValueError(msg)
-    elif np.any(np.isnan(flow_values)):
-        msg = "flow array cannot contain NaN values"
-        raise ValueError(msg)
-    if np.any(flow_values < 0):
-        msg = "flow must be non-negative (negative flow not supported)"
-        raise ValueError(msg)
+    else:
+        _validate_no_nan(flow_values, name="flow", message="flow array cannot contain NaN values")
+    _validate_non_negative_array(
+        flow_values, name="flow", message="flow must be non-negative (negative flow not supported)"
+    )
     if not 0 < porosity < 1:
         msg = f"Porosity must be in (0, 1), got {porosity}"
         raise ValueError(msg)
-    if thickness <= 0:
-        msg = f"Thickness must be positive, got {thickness}"
-        raise ValueError(msg)
-    if aquifer_pore_volume <= 0:
-        msg = f"Aquifer pore volume must be positive, got {aquifer_pore_volume}"
+    _validate_positive_scalar(thickness, name="thickness", message=f"Thickness must be positive, got {thickness}")
+    _validate_positive_scalar(
+        aquifer_pore_volume,
+        name="aquifer_pore_volume",
+        message=f"Aquifer pore volume must be positive, got {aquifer_pore_volume}",
+    )
+    if retardation_factor < 1.0:
+        msg = "retardation_factor must be >= 1.0"
         raise ValueError(msg)
 
 
@@ -307,6 +315,7 @@ def deposition_to_extraction(
         aquifer_pore_volume=aquifer_pore_volume,
         porosity=porosity,
         thickness=thickness,
+        retardation_factor=retardation_factor,
         dep_values=dep_values,
     )
 
@@ -489,6 +498,7 @@ def extraction_to_deposition(
         aquifer_pore_volume=aquifer_pore_volume,
         porosity=porosity,
         thickness=thickness,
+        retardation_factor=retardation_factor,
         cout_tedges=cout_tedges,
         cout_values=cout_values,
     )
@@ -675,6 +685,7 @@ def extraction_to_deposition_full(
         aquifer_pore_volume=aquifer_pore_volume,
         porosity=porosity,
         thickness=thickness,
+        retardation_factor=retardation_factor,
         cout_tedges=cout_tedges,
         cout_values=cout_values,
     )
