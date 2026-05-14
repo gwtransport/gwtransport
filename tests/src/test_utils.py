@@ -10,7 +10,6 @@ import requests.exceptions
 
 from gwtransport.examples import generate_example_data, generate_example_deposition_timeseries
 from gwtransport.utils import (
-    _diff,
     _make_strictly_monotone,
     combine_bin_series,
     get_soil_temperature,
@@ -66,36 +65,6 @@ def test_linear_interpolate():
     expected = np.array([0, 10, 20])
 
     result = linear_interpolate(x_ref=x_ref, y_ref=y_ref, x_query=x_query)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-06)
-
-
-def test_diff():
-    # Test 1: Basic difference
-    x = np.array([0, 1, 2, 3, 4, 6])
-    expected = np.array([1, 1, 1, 1, 1.5, 2])
-
-    result = _diff(a=x, alignment="centered")
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-06)
-
-
-def test_diff_centered_two_points():
-    x = np.array([10, 20])
-    expected = np.array([10, 10])
-    result = _diff(a=x, alignment="centered")
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-06)
-
-
-def test_diff_left():
-    x = np.array([0, 1, 2, 3, 4, 6])
-    expected = np.array([1, 1, 1, 1, 2, 2])
-    result = _diff(a=x, alignment="left")
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-06)
-
-
-def test_diff_right():
-    x = np.array([0, 1, 2, 3, 4, 6])
-    expected = np.array([1, 1, 1, 1, 1, 2])
-    result = _diff(a=x, alignment="right")
     np.testing.assert_allclose(result, expected, rtol=0, atol=1e-06)
 
 

@@ -594,7 +594,6 @@ def extraction_to_deposition_full(
     nullspace_objective: str | Callable = "squared_differences",
     optimization_method: str = "BFGS",
     rcond: float | None = None,
-    x_target: npt.NDArray[np.floating] | None = None,
     spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """Compute deposition rates from concentration changes using nullspace solver.
@@ -641,9 +640,6 @@ def extraction_to_deposition_full(
     rcond : float or None, optional
         Cutoff for small singular values in the least-squares step.
         Default is None (uses numpy default).
-    x_target : numpy.ndarray or None, optional
-        Optional target solution for the nullspace optimization.
-        Default is None.
     spinup : {"constant"} | float in [0, 1] | None, optional
         Spin-up policy applied before building the forward weight matrix.
         Default ``"constant"`` shifts ``tedges[0]`` backward by
@@ -716,7 +712,6 @@ def extraction_to_deposition_full(
         nullspace_objective=nullspace_objective,
         optimization_method=optimization_method,
         rcond=rcond,
-        x_target=x_target,
     )
     # Drop warm-start prefix so output aligns with the user-provided tedges.
     return dep_padded[n_pad:]

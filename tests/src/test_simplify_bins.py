@@ -285,3 +285,45 @@ class TestSimplifyBinsEdgeCases:
         new_edges, new_values, _ = simplify_bins(edges=edges, values=values)
         assert_array_equal(new_edges, [0.0, 3.0, 5.0])
         assert_array_equal(new_values, [1.0, 5.0])
+
+
+class TestSimplifyBinsIdempotenceAndEdgeAlignment:
+    """Idempotence under repeated application and exact preservation of the first/last edges."""
+
+    def test_idempotence_no_flow(self):
+        """``simplify_bins(simplify_bins(x))`` equals ``simplify_bins(x)`` without flow."""
+        edges = np.array([0.0, 1.0, 2.0, 3.0, 5.0, 6.0, 8.0])
+        values = np.array([1.0, 1.0, 5.0, 5.0, 5.0, 2.0])
+        new_edges_1, new_values_1, _ = simplify_bins(edges=edges, values=values, tol=0.1)
+        new_edges_2, new_values_2, _ = simplify_bins(edges=new_edges_1, values=new_values_1, tol=0.1)
+        assert_array_equal(new_edges_2, new_edges_1)
+        assert_array_equal(new_values_2, new_values_1)
+
+    def test_idempotence_with_flow(self):
+        """``simplify_bins(simplify_bins(x))`` equals ``simplify_bins(x)`` with flow weighting."""
+        edges = np.array([0.0, 1.0, 2.0, 3.0, 5.0, 6.0, 8.0])
+        values = np.array([1.0, 1.05, 5.0, 4.98, 5.02, 2.0])
+        flow = np.array([3.0, 1.0, 2.0, 4.0, 1.5, 0.8])
+        new_edges_1, new_values_1, new_flow_1 = simplify_bins(edges=edges, values=values, flow=flow, tol=0.1)
+        new_edges_2, new_values_2, new_flow_2 = simplify_bins(
+            edges=new_edges_1, values=new_values_1, flow=new_flow_1, tol=0.1
+        )
+        assert_array_equal(new_edges_2, new_edges_1)
+        assert_array_equal(new_values_2, new_values_1)
+        assert_array_equal(new_flow_2, new_flow_1)
+
+    def test_edge_alignment_preserved_exactly_numeric(self):
+        """First and last numeric edges are preserved bitwise, not just within tolerance."""
+        edges = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+        values = np.array([1.0, 1.0, 5.0, 5.0])
+        new_edges, _, _ = simplify_bins(edges=edges, values=values)
+        # Exact preservation: bitwise equality. ``assert_array_equal`` enforces this.
+        assert_array_equal(new_edges[[0, -1]], edges[[0, -1]])
+
+    def test_edge_alignment_preserved_exactly_with_flow(self):
+        """First and last numeric edges are preserved bitwise even when flow drives merging."""
+        edges = np.array([0.0, 1.5, 2.7, 3.9, 6.1])
+        values = np.array([1.0, 1.0, 1.0, 1.0])
+        flow = np.array([2.0, 3.0, 1.0, 4.0])
+        new_edges, _, _ = simplify_bins(edges=edges, values=values, flow=flow)
+        assert_array_equal(new_edges[[0, -1]], edges[[0, -1]])
