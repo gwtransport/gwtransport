@@ -19,7 +19,7 @@ All calculations are exact analytical with machine precision.
 
 import logging
 from dataclasses import dataclass
-from heapq import heappop, heappush
+from operator import itemgetter
 
 import numpy as np
 import pandas as pd
@@ -65,7 +65,6 @@ logger = logging.getLogger(__name__)
 
 # Numerical tolerance constants
 EPSILON_CONCENTRATION = 1e-15  # Tolerance for concentration changes
-MIN_EVENT_DATA_LENGTH = 5  # Minimum length of event_data tuple before accessing extra field
 
 
 @dataclass
@@ -313,7 +312,6 @@ class FrontTracker:
         Find the next event (earliest in time).
 
         Searches all possible wave interactions and returns the earliest event.
-        Uses a priority queue (min-heap) to efficiently find the minimum time.
 
         Returns
         -------
@@ -332,21 +330,20 @@ class FrontTracker:
 
         All collision times are computed using exact analytical formulas.
         """
-        candidates = []  # Will use as min-heap by time
-        counter = 0  # Unique counter to break ties without comparing EventType
+        # 5-tuple format: (t, event_type, waves, v, extra). We only pop once, so a single
+        # ``min(...)`` is equivalent to a min-heap and lets us drop the tie-break counter
+        # plus the EventType-comparison defensive read at the bottom.
+        candidates: list[tuple[float, EventType, list, float | None, object]] = []
 
         # Get only active waves
         active_waves = [w for w in self.state.waves if w.is_active]
 
-        # 1. Flow change events (checked FIRST to get priority in tie-breaking)
+        # 1. Flow change events (checked FIRST so they sort first among ties).
         for t_change, flow_new in self._flow_change_schedule:
             if t_change > self.state.t_current:
-                # All active waves are involved in flow change
-                heappush(
-                    candidates,
-                    (t_change, counter, EventType.FLOW_CHANGE, active_waves.copy(), None, flow_new),
+                candidates.append(
+                    (t_change, EventType.FLOW_CHANGE, active_waves.copy(), None, flow_new),
                 )
-                counter += 1
                 break  # Only schedule the next flow change
 
         # 2. Characteristic-Characteristic collisions
@@ -357,8 +354,7 @@ class FrontTracker:
                 if result:
                     t, v = result
                     if 0 <= v <= self.state.v_outlet:  # In domain
-                        heappush(candidates, (t, counter, EventType.CHAR_CHAR_COLLISION, [w1, w2], v, None))
-                        counter += 1
+                        candidates.append((t, EventType.CHAR_CHAR_COLLISION, [w1, w2], v, None))
 
         # 2. Shock-Shock collisions
         shocks = [w for w in active_waves if isinstance(w, ShockWave)]
@@ -368,8 +364,7 @@ class FrontTracker:
                 if result:
                     t, v = result
                     if 0 <= v <= self.state.v_outlet:
-                        heappush(candidates, (t, counter, EventType.SHOCK_SHOCK_COLLISION, [w1, w2], v, None))
-                        counter += 1
+                        candidates.append((t, EventType.SHOCK_SHOCK_COLLISION, [w1, w2], v, None))
 
         # 3. Shock-Characteristic collisions
         for shock in shocks:
@@ -378,8 +373,7 @@ class FrontTracker:
                 if result:
                     t, v = result
                     if 0 <= v <= self.state.v_outlet:
-                        heappush(candidates, (t, counter, EventType.SHOCK_CHAR_COLLISION, [shock, char], v, None))
-                        counter += 1
+                        candidates.append((t, EventType.SHOCK_CHAR_COLLISION, [shock, char], v, None))
 
         # 4. Rarefaction-Characteristic collisions
         rarefs = [w for w in active_waves if isinstance(w, RarefactionWave)]
@@ -388,11 +382,7 @@ class FrontTracker:
                 intersections = find_rarefaction_boundary_intersections(raref, char, self.state.t_current)
                 for t, v, boundary in intersections:
                     if 0 <= v <= self.state.v_outlet:
-                        heappush(
-                            candidates,
-                            (t, counter, EventType.RAREF_CHAR_COLLISION, [raref, char], v, boundary),
-                        )
-                        counter += 1
+                        candidates.append((t, EventType.RAREF_CHAR_COLLISION, [raref, char], v, boundary))
 
         # 5. Shock-Rarefaction collisions
         for shock in shocks:
@@ -400,11 +390,7 @@ class FrontTracker:
                 intersections = find_rarefaction_boundary_intersections(raref, shock, self.state.t_current)
                 for t, v, boundary in intersections:
                     if 0 <= v <= self.state.v_outlet:
-                        heappush(
-                            candidates,
-                            (t, counter, EventType.SHOCK_RAREF_COLLISION, [shock, raref], v, boundary),
-                        )
-                        counter += 1
+                        candidates.append((t, EventType.SHOCK_RAREF_COLLISION, [shock, raref], v, boundary))
 
         # 6. Rarefaction-Rarefaction collisions
         for i, raref1 in enumerate(rarefs):
@@ -412,11 +398,7 @@ class FrontTracker:
                 intersections = find_rarefaction_boundary_intersections(raref1, raref2, self.state.t_current)
                 for t, v, boundary in intersections:
                     if 0 <= v <= self.state.v_outlet:
-                        heappush(
-                            candidates,
-                            (t, counter, EventType.RAREF_RAREF_COLLISION, [raref1, raref2], v, boundary),
-                        )
-                        counter += 1
+                        candidates.append((t, EventType.RAREF_RAREF_COLLISION, [raref1, raref2], v, boundary))
 
         # 7. Outlet crossings
         for wave in active_waves:
@@ -431,11 +413,9 @@ class FrontTracker:
                         dt_head = (self.state.v_outlet - v_head) / vel_head
                         t_cross_head = t_eval + dt_head
                         if t_cross_head > self.state.t_current:
-                            heappush(
-                                candidates,
-                                (t_cross_head, counter, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet, None),
+                            candidates.append(
+                                (t_cross_head, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet, None),
                             )
-                            counter += 1
 
                 # Tail crossing
                 v_tail = wave.tail_position_at_time(t_eval)
@@ -445,30 +425,20 @@ class FrontTracker:
                         dt_tail = (self.state.v_outlet - v_tail) / vel_tail
                         t_cross_tail = t_eval + dt_tail
                         if t_cross_tail > self.state.t_current:
-                            heappush(
-                                candidates,
-                                (t_cross_tail, counter, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet, None),
+                            candidates.append(
+                                (t_cross_tail, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet, None),
                             )
-                            counter += 1
             else:
                 # For characteristics and shocks, use existing logic
                 t_cross = find_outlet_crossing(wave, self.state.v_outlet, self.state.t_current)
                 if t_cross and t_cross > self.state.t_current:
-                    heappush(
-                        candidates, (t_cross, counter, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet, None)
+                    candidates.append(
+                        (t_cross, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet, None),
                     )
-                    counter += 1
 
-        # Return earliest event
+        # Return earliest event (Python's min is stable: ties resolve in insertion order).
         if candidates:
-            # Handle 6-tuple format: (t, counter, event_type, waves, v, extra)
-            event_data = heappop(candidates)
-            t = event_data[0]
-            # Skip counter at index 1
-            event_type = event_data[2]
-            waves = event_data[3]
-            v = event_data[4]
-            extra = event_data[5] if len(event_data) > MIN_EVENT_DATA_LENGTH else None
+            t, event_type, waves, v, extra = min(candidates, key=itemgetter(0))
 
             # For FLOW_CHANGE events, extra contains flow_new
             flow_new = extra if event_type == EventType.FLOW_CHANGE else None

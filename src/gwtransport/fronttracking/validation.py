@@ -141,25 +141,17 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     if not check5_pass:
         failures.append(f"Found {nan_count} NaN values after spin-up period")
 
-    # Check 6: Events chronologically ordered
-    event_times = [e["time"] for e in structure.get("events", [])]
-    if len(event_times) > 1:
-        is_ordered = all(event_times[i] <= event_times[i + 1] for i in range(len(event_times) - 1))
-        check6_pass = is_ordered
-        checks.append({
-            "name": "Events chronologically ordered",
-            "passed": check6_pass,
-            "message": f"{len(event_times)} events",
-        })
-        if not check6_pass:
-            failures.append("Events are not in chronological order")
-    else:
-        check6_pass = True
-        checks.append({
-            "name": "Events chronologically ordered",
-            "passed": True,
-            "message": f"{len(event_times)} events (N/A)",
-        })
+    # Check 6: Events chronologically ordered. np.diff(...) >= 0 is vacuously True on
+    # length <= 1, collapsing the previous length-1 special case.
+    event_times = np.asarray([e["time"] for e in structure.get("events", [])])
+    check6_pass = bool(np.all(np.diff(event_times) >= 0))
+    checks.append({
+        "name": "Events chronologically ordered",
+        "passed": check6_pass,
+        "message": f"{len(event_times)} events" if len(event_times) > 1 else f"{len(event_times)} events (N/A)",
+    })
+    if not check6_pass:
+        failures.append("Events are not in chronological order")
 
     # Check 7: Rarefaction concentration ordering
     rarefactions = [w for w in structure["waves"] if isinstance(w, RarefactionWave)]

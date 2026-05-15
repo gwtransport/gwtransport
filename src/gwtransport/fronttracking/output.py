@@ -1048,12 +1048,7 @@ def _integrate_rarefaction_spatial_freundlich(
     # Dissolved: ∫ C(u) du via incomplete beta function
     a_diss = 1 - 1 / beta
     b_diss = 1 + 1 / beta
-
-    if a_diss > 0 and b_diss > 0:
-        beta_diss = betainc(a_diss, b_diss, t_end_norm) - betainc(a_diss, b_diss, t_start_norm)
-        beta_diss *= beta_func(a_diss, b_diss)
-    else:
-        beta_diss = float(mp.betainc(a_diss, b_diss, t_start_norm, t_end_norm, regularized=False))
+    beta_diss = _betainc_definite(a_diss, b_diss, t_start_norm, t_end_norm)
 
     coeff_diss = (1 / alpha) ** (1 / beta)
     mass_dissolved = coeff_diss * kappa * beta_diss
@@ -1062,17 +1057,30 @@ def _integrate_rarefaction_spatial_freundlich(
     exponent_sorb = 1 / (1 - n)
     a_sorb = 1 - exponent_sorb
     b_sorb = 1 + exponent_sorb
-
-    if a_sorb > 0 and b_sorb > 0:
-        beta_sorb = betainc(a_sorb, b_sorb, t_end_norm) - betainc(a_sorb, b_sorb, t_start_norm)
-        beta_sorb *= beta_func(a_sorb, b_sorb)
-    else:
-        beta_sorb = float(mp.betainc(a_sorb, b_sorb, t_start_norm, t_end_norm, regularized=False))
+    beta_sorb = _betainc_definite(a_sorb, b_sorb, t_start_norm, t_end_norm)
 
     coeff_sorb = (rho_b / n_por) * k_f / (alpha**exponent_sorb)
     mass_sorbed = coeff_sorb * kappa * beta_sorb
 
     return mass_dissolved + mass_sorbed
+
+
+def _betainc_definite(a: float, b: float, x_start: float, x_end: float) -> float:
+    """Definite incomplete beta integral ``B(x_end; a, b) - B(x_start; a, b)`` (unregularised).
+
+    Dispatches to ``scipy.special.betainc`` when both shape parameters are positive
+    (fast vectorised path). Falls back to ``mpmath.betainc`` for ``a <= 0`` or ``b <= 0``,
+    where scipy's gamma-domain restriction would yield NaN. The mpmath branch is the
+    analytic-continuation fallback required for Freundlich ``n > 1`` integrals.
+
+    Returns
+    -------
+    float
+        ``B(x_end; a, b) - B(x_start; a, b)`` (unregularised).
+    """
+    if a > 0 and b > 0:
+        return float((betainc(a, b, x_end) - betainc(a, b, x_start)) * beta_func(a, b))
+    return float(mp.betainc(a, b, x_start, x_end, regularized=False))
 
 
 def _integrate_rarefaction_spatial_langmuir(
