@@ -13,6 +13,7 @@ from gwtransport.diffusion_fast import (
     _build_gaussian_matrix,
     _build_rebin_matrix,
     _build_v_smooth_matrix,
+    _validate_inputs,
     extraction_to_infiltration,
     gamma_extraction_to_infiltration,
     gamma_infiltration_to_extraction,
@@ -331,9 +332,13 @@ def test_retardation_constant_input(retardation_factor):
     assert_allclose(cout[valid], 10.0, atol=1e-12)
 
 
-@pytest.mark.parametrize("retardation_factor", [1.0, 2.7])
+@pytest.mark.parametrize("retardation_factor", [1.0, 2.7, 5.0])
 def test_retardation_zero_diffusion_matches_advection(retardation_factor):
-    """Zero diffusion with retardation matches pure advection (exact, G=I)."""
+    """Zero diffusion with retardation matches pure advection (exact, G=I), constant Q.
+
+    Companion ``test_retardation_zero_diffusion_matches_advection_variable_flow`` extends
+    to a variable-flow regime.
+    """
     tedges, cout_tedges, flow = _make_transport_data(n_days=400)
     n_days = len(flow)
     cin = np.sin(np.linspace(0, 4 * np.pi, n_days)) + 2.0
@@ -359,6 +364,38 @@ def test_retardation_zero_diffusion_matches_advection(retardation_factor):
     valid = ~np.isnan(cout_fast) & ~np.isnan(cout_adv)
     assert np.sum(valid) > 50
     assert_allclose(cout_fast[valid], cout_adv[valid], atol=1e-13)
+
+
+@pytest.mark.parametrize("retardation_factor", [1.0, 2.7, 5.0])
+def test_retardation_zero_diffusion_matches_advection_variable_flow(retardation_factor):
+    """Zero-diffusion match must hold under variable Q, too (extends the constant-flow sibling)."""
+    n_days = 400
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    cout_tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    # Variable flow with both a weekly oscillation and a slow trend.
+    flow = 100.0 + 60.0 * np.sin(np.arange(n_days) * 2 * np.pi / 7) + 0.05 * np.arange(n_days)
+    cin = np.sin(np.linspace(0, 4 * np.pi, n_days)) + 2.0
+
+    kwargs = {
+        "cin": cin,
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([500.0]),
+        "retardation_factor": retardation_factor,
+    }
+
+    cout_fast = infiltration_to_extraction(
+        **kwargs,
+        mean_streamline_length=80.0,
+        mean_molecular_diffusivity=0.0,
+        mean_longitudinal_dispersivity=0.0,
+    )
+    cout_adv = advection_i2e(**kwargs)
+
+    valid = ~np.isnan(cout_fast) & ~np.isnan(cout_adv)
+    assert np.sum(valid) > 50
+    assert_allclose(cout_fast[valid], cout_adv[valid], atol=1e-12)
 
 
 @pytest.mark.parametrize("retardation_factor", [1.0, 2.7])
@@ -1933,3 +1970,113 @@ def test_build_v_smooth_matrix_v_weighted_col_sums_alpha_l():
     # interior columns where the kernel is fully contained.
     interior = slice(10, n - 10)
     assert_allclose(col_v_sums[interior], dv_arr[interior], atol=1e-12)
+
+
+def _good_diffusion_fast_inputs():
+    """Baseline known-valid inputs for _validate_inputs (mirrors the diffusion.py snapshot)."""
+    return {
+        "cin_or_cout": np.array([1.0, 2.0, 3.0, 4.0, 5.0]),
+        "flow": np.array([100.0, 100.0, 100.0, 100.0, 100.0]),
+        "tedges": pd.date_range("2023-01-01", periods=6, freq="D"),
+        "cout_tedges": pd.date_range("2023-01-01", periods=6, freq="D"),
+        "aquifer_pore_volumes": np.array([300.0]),
+        "mean_streamline_length": 80.0,
+        "mean_molecular_diffusivity": 0.01,
+        "mean_longitudinal_dispersivity": 0.5,
+        "retardation_factor": 1.0,
+        "is_forward": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutate", "match_regex"),
+    [
+        (
+            lambda k: {**k, "tedges": k["tedges"][:-1]},
+            r"tedges must have one more element than cin",
+        ),
+        (
+            lambda k: {**k, "flow": k["flow"][:-1]},
+            r"tedges must have one more element than flow",
+        ),
+        (
+            lambda k: {**k, "mean_molecular_diffusivity": -0.1},
+            r"mean_molecular_diffusivity must be non-negative",
+        ),
+        (
+            lambda k: {**k, "mean_longitudinal_dispersivity": -0.1},
+            r"mean_longitudinal_dispersivity must be non-negative",
+        ),
+        (
+            lambda k: {**k, "cin_or_cout": np.array([1.0, np.nan, 3.0, 4.0, 5.0])},
+            r"cin contains NaN values",
+        ),
+        (
+            lambda k: {**k, "flow": np.array([100.0, np.nan, 100.0, 100.0, 100.0])},
+            r"flow contains NaN values",
+        ),
+        (
+            lambda k: {**k, "flow": np.array([100.0, -50.0, 100.0, 100.0, 100.0])},
+            r"flow must be non-negative \(negative flow not supported\)",
+        ),
+        (
+            lambda k: {**k, "aquifer_pore_volumes": np.array([0.0])},
+            r"aquifer_pore_volumes must be positive",
+        ),
+        (
+            lambda k: {**k, "mean_streamline_length": 0.0},
+            r"mean_streamline_length must be positive",
+        ),
+        (
+            lambda k: {**k, "retardation_factor": 0.5},
+            r"retardation_factor must be >= 1\.0 \(anti-retardation is not physical\)",
+        ),
+    ],
+)
+def test_validate_diffusion_fast_inputs_raises_on_bad_input(mutate, match_regex):
+    """Each ValueError branch of _validate_inputs raises with the historical message.
+
+    Mirrors the snapshot pattern in test_diffusion.py:test_validate_diffusion_inputs_raises_on_bad_input.
+    Pins the diffusion_fast validation surface (with the new R>=1 contract from Group 8).
+    """
+    bad = mutate(_good_diffusion_fast_inputs())
+    with pytest.raises(ValueError, match=match_regex):
+        _validate_inputs(**bad)
+
+
+@pytest.mark.parametrize("bad_r", [0.0, 0.5, 0.99])
+def test_diffusion_fast_rejects_retardation_below_one(bad_r):
+    """The public infiltration_to_extraction surface raises on R < 1 (mirrors diffusion.py)."""
+    tedges, cout_tedges, flow = _make_transport_data(n_days=50)
+    cin = np.ones(len(flow))
+
+    with pytest.raises(ValueError, match=r"retardation_factor must be >= 1\.0"):
+        infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            mean_streamline_length=80.0,
+            mean_molecular_diffusivity=0.01,
+            mean_longitudinal_dispersivity=0.5,
+            retardation_factor=bad_r,
+        )
+
+
+def test_streamline_length_zero_rejected():
+    """L=0 has no streamtube; raise rather than risk div-by-zero downstream."""
+    tedges, cout_tedges, flow = _make_transport_data(n_days=50)
+    cin = np.ones(len(flow))
+
+    with pytest.raises(ValueError, match=r"mean_streamline_length must be positive"):
+        infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            mean_streamline_length=0.0,
+            mean_molecular_diffusivity=0.01,
+            mean_longitudinal_dispersivity=0.5,
+        )

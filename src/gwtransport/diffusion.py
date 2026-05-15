@@ -67,6 +67,17 @@ heterogeneity at different scales. Microdispersion is an aquifer property; macro
 depends additionally on hydrological boundary conditions. See :ref:`concept-dispersion-scales`
 for guidance on when to use each approach and how to avoid double-counting spreading effects.
 
+Streamtube assumption (no cross-sectional area parameter)
+---------------------------------------------------------
+
+Each entry in ``aquifer_pore_volumes`` is treated as an independent 1D streamtube. There is
+no cross-sectional area parameter: the variance budget uses ``2 D_m tau`` (molecular
+diffusion in time) and ``2 alpha_L xi`` (mechanical dispersion in travelled distance), with
+the streamline length ``L`` and the pore volume ``V_pore`` together fixing the implicit
+streamtube cross-section ``A = V_pore / L``. Callers who need distributed-area effects must
+provide multiple streamtubes (via ``aquifer_pore_volumes`` or the gamma-parameterised
+wrappers).
+
 References
 ----------
 Bear, J. (1972). Dynamics of Fluids in Porous Media. American Elsevier

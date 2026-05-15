@@ -147,7 +147,16 @@ class TestInfiltrationToExtractionDiffusion:
         assert var_large > var_small  # More spreading = larger variance
 
     def test_output_bounded_by_input(self, simple_setup):
-        """Test that output concentrations are bounded by input range."""
+        """Output concentrations lie in the convex hull of the input to machine ULP precision.
+
+        Linear-superposition smoothing of a non-negative signal cannot create excursions
+        outside ``[min(cin), max(cin)]``. Implementation-level floating-point composition
+        (K-Z flux quadrature + V-coordinate weighting) introduces ULP-scale rounding noise;
+        the previous +/- 1e-10 slack was 6 orders of magnitude looser than needed. A
+        return value that returned the mean of cin would still satisfy these bounds; the
+        next test (constant-input -> constant-output) and the mass-conservation tests
+        guard against that mode separately.
+        """
         cout = infiltration_to_extraction(
             cin=simple_setup["cin"],
             flow=simple_setup["flow"],
@@ -159,9 +168,12 @@ class TestInfiltrationToExtractionDiffusion:
             longitudinal_dispersivity=0.0,
         )
         valid = ~np.isnan(cout)
-        # Output should be between min and max of input (plus small tolerance for numerics)
-        assert np.all(cout[valid] >= np.min(simple_setup["cin"]) - 1e-10)
-        assert np.all(cout[valid] <= np.max(simple_setup["cin"]) + 1e-10)
+        assert np.sum(valid) > 0, "expected at least one valid cout bin under simple setup"
+        cin_min = float(np.min(simple_setup["cin"]))
+        cin_max = float(np.max(simple_setup["cin"]))
+        ulp_tol = 16.0 * np.finfo(cout.dtype).eps * max(abs(cin_min), abs(cin_max), 1.0)
+        assert np.all(cout[valid] >= cin_min - ulp_tol)
+        assert np.all(cout[valid] <= cin_max + ulp_tol)
 
     def test_constant_input_gives_constant_output(self):
         """Test that constant input concentration gives constant output."""
@@ -261,13 +273,25 @@ class TestInfiltrationToExtractionDiffusion:
         assert np.all(cout_hetero[valid] >= -1e-10)
         assert np.all(cout_single[valid] >= -1e-10)
 
-        # Heterogeneous and single-L results should be physically distinct,
-        # demonstrating the per-streamtube L coupling matters.
-        assert not np.allclose(cout_hetero[valid], cout_single[valid], atol=1e-3)
+        # Per-streamtube sigma_v = (R V/L) * sqrt(2 D_m tau + 2 alpha_L L). For the
+        # heterogeneous case V/L = 5 for all three streamtubes (so sigma_v is identical
+        # across streamtubes); for the single-L case V/L varies (4, 5, 6) so sigma_v
+        # spreads across streamtubes. The empirically observed max-bin difference is
+        # ~4.6e-3 at this resolution; the threshold below replaces the previous
+        # ``not np.allclose(atol=1e-3)`` vacuous form with an explicit lower bound that
+        # catches the failure mode the original wording targeted (operator collapses to
+        # the single-L form).
+        max_abs_diff = float(np.max(np.abs(cout_hetero[valid] - cout_single[valid])))
+        assert max_abs_diff > 3e-3, (
+            f"hetero and single-L breakthroughs differ by only {max_abs_diff:.4e}; "
+            "expected > 3e-3 given the per-streamtube V/L variation"
+        )
 
-        # Both outputs should be bounded by the input range (convex combination).
-        assert np.all(cout_hetero[valid] <= np.max(cin) + 1e-10)
-        assert np.all(cout_single[valid] <= np.max(cin) + 1e-10)
+        # Both outputs lie in the convex hull of the input to machine ULP precision.
+        cin_max = float(np.max(cin))
+        ulp_tol = 16.0 * np.finfo(cout_hetero.dtype).eps * max(abs(cin_max), 1.0)
+        assert np.all(cout_hetero[valid] <= cin_max + ulp_tol)
+        assert np.all(cout_single[valid] <= cin_max + ulp_tol)
 
 
 class TestInfiltrationToExtractionDiffusionPhysics:
@@ -303,15 +327,18 @@ class TestInfiltrationToExtractionDiffusionPhysics:
         )
 
         valid = ~np.isnan(cout)
-        if np.sum(valid) > 0:
-            # The center of mass should be around day 15-17 (10-12 + 5 days residence)
-            times = np.arange(len(cout))
-            cout_valid = cout.copy()
-            cout_valid[~valid] = 0
-            if np.sum(cout_valid) > 0:
-                center_of_mass = np.sum(times * cout_valid) / np.sum(cout_valid)
-                # Center should be around day 16 (midpoint of input + residence time)
-                assert 14 < center_of_mass < 19
+        # Hard precondition: spin-up must release enough valid bins to cover the breakthrough.
+        # Previously this branch was wrapped in two nested ``if np.sum(...) > 0`` guards, so
+        # the assertion never fired when the operator regressed to all-NaN.
+        assert np.sum(valid) >= 10, f"expected at least 10 valid bins, got {np.sum(valid)}"
+        times = np.arange(len(cout))
+        cout_valid = cout.copy()
+        cout_valid[~valid] = 0.0
+        total_mass = float(np.sum(cout_valid))
+        assert total_mass > 0.0, "valid bins exist but carry zero mass"
+        # Center of mass should be around day 16 (midpoint of input + 5-day residence).
+        center_of_mass = float(np.sum(times * cout_valid) / total_mass)
+        assert 14.0 < center_of_mass < 19.0, f"center of mass {center_of_mass:.2f} outside [14, 19]"
 
     def test_mass_approximately_conserved(self):
         """Test that mass is approximately conserved through transport."""
@@ -1373,8 +1400,9 @@ class TestFlowWeightedDiffusion:
     scenarios are the minimal tests that distinguish the two approaches.
     """
 
-    def test_zero_diffusivity_varying_flow_matches_advection(self):
-        """D=0 with varying flow: diffusion module must match pure advection."""
+    @pytest.mark.parametrize("retardation_factor", [1.0, 2.7, 5.0])
+    def test_zero_diffusivity_varying_flow_matches_advection(self, retardation_factor):
+        """D=0 with varying flow: diffusion module must match pure advection across R values."""
         tedges = pd.date_range("2020-01-01", periods=31, freq="D")
         # Coarser output bins so that multiple flow bins fall inside one cout bin
         cout_tedges = pd.date_range("2020-01-01", periods=11, freq="3D")
@@ -1393,6 +1421,7 @@ class TestFlowWeightedDiffusion:
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
+            retardation_factor=retardation_factor,
         )
         cout_diff = infiltration_to_extraction(
             cin=cin,
@@ -1403,6 +1432,7 @@ class TestFlowWeightedDiffusion:
             streamline_length=streamline_length,
             molecular_diffusivity=0.0,
             longitudinal_dispersivity=0.0,
+            retardation_factor=retardation_factor,
         )
 
         valid = ~np.isnan(cout_adv)
