@@ -44,6 +44,18 @@ and molecular diffusion on top of macrodispersion captured by the aquifer
 pore-volume distribution (APVD). See :ref:`concept-dispersion` for
 background.
 
+Streamtube assumption (no cross-sectional area parameter)
+---------------------------------------------------------
+
+Each entry in ``aquifer_pore_volumes`` is treated as an independent 1D
+streamtube. There is no cross-sectional area parameter: molecular diffusion
+enters the V-space variance budget through ``2 D_m tau`` and mechanical
+dispersion through ``2 alpha_L L``, with the mean streamline length ``L``
+and the pore volume ``V_pore`` together fixing the implicit streamtube
+cross-section ``A = V_pore / L``. Callers who need distributed-area effects
+must provide multiple streamtubes (via ``aquifer_pore_volumes`` or the
+gamma-parameterised wrappers).
+
 Available functions:
 
 - :func:`infiltration_to_extraction` — forward transport.
@@ -75,6 +87,40 @@ from gwtransport.utils import solve_inverse_transport
 
 # Minimum coefficient sum to consider a row valid
 _EPSILON_COEFF_SUM = 1e-10
+
+# Default Gaussian-cutoff sigma for the uniform-V smoother. Wider than the legacy
+# ``convolve_diffusion`` 3.0 default; tighter values lose the asymptotic tail mass
+# that the V-mass-preserving rebinning depends on.
+_DEFAULT_CUTOFF_SIGMA_V = 4.0
+
+
+def _prepare_v_grid(
+    *,
+    weight_tedges: pd.DatetimeIndex,
+    tedges: pd.DatetimeIndex,
+    flow: npt.NDArray[np.floating],
+) -> tuple[
+    npt.NDArray[np.floating],
+    npt.NDArray[np.floating],
+    npt.NDArray[np.floating],
+]:
+    """Build the unconditional V-grid arrays needed by both transport branches.
+
+    The output-side bookkeeping (``cout_dt_days``, ``cout_tedges_days``,
+    ``v_out_edges``, ``flow_out_arr``, ``sigma_v_out``) is *not* computed
+    here: it is dead work on the smooth-then-advect (``flow_out is None``) path.
+
+    Returns
+    -------
+    tuple of ndarray
+        ``(tedges_days, v_in_widedge_edges, v_in_natural_edges)``.
+    """
+    weight_dt_days = (np.diff(weight_tedges) / pd.Timedelta("1D")).astype(float)
+    natural_dt_days = (np.diff(tedges) / pd.Timedelta("1D")).astype(float)
+    tedges_days = ((weight_tedges - weight_tedges[0]) / pd.Timedelta("1D")).to_numpy(dtype=float)
+    v_in_widedge_edges = np.concatenate(([0.0], np.cumsum(flow * weight_dt_days)))
+    v_in_natural_edges = np.concatenate(([0.0], np.cumsum(flow * natural_dt_days)))
+    return tedges_days, v_in_widedge_edges, v_in_natural_edges
 
 
 def infiltration_to_extraction(
@@ -197,6 +243,7 @@ def infiltration_to_extraction(
         mean_streamline_length=mean_streamline_length,
         mean_molecular_diffusivity=mean_molecular_diffusivity,
         mean_longitudinal_dispersivity=mean_longitudinal_dispersivity,
+        retardation_factor=retardation_factor,
         is_forward=True,
         flow_out=flow_out,
     )
@@ -230,39 +277,10 @@ def infiltration_to_extraction(
     # Cumulative-volume edges on the user's natural ``tedges`` (no wide
     # spin-up). The smoothing operator runs on this grid so the uniform-V
     # resampling does not have to span a 100-year warm-start interval.
-    weight_dt_days = (np.diff(weight_tedges) / pd.Timedelta("1D")).astype(float)
-    v_in_widedge_edges = np.concatenate(([0.0], np.cumsum(flow * weight_dt_days)))
-    natural_dt_days = (np.diff(tedges) / pd.Timedelta("1D")).astype(float)
-    v_in_natural_edges = np.concatenate(([0.0], np.cumsum(flow * natural_dt_days)))
-
-    # Output-side V-edges expressed in the SAME cumulative-volume reference
-    # frame as ``v_in_widedge_edges`` (anchored at ``weight_tedges[0]``).
-    # ``flow_out`` is used only for sigma_V; the V-grid is set by the
-    # underlying flow so it is consistent with ``w_adv``.
-    cout_dt_days = (np.diff(cout_tedges) / pd.Timedelta("1D")).astype(float)
-    tedges_days = ((weight_tedges - weight_tedges[0]) / pd.Timedelta("1D")).to_numpy(dtype=float)
-    cout_tedges_days = ((cout_tedges - weight_tedges[0]) / pd.Timedelta("1D")).to_numpy(dtype=float)
-    v_out_edges = np.interp(cout_tedges_days, tedges_days, v_in_widedge_edges)
-    if flow_out is None:
-        # Per-cout-bin flux inferred from the V-edge increments. Matches
-        # the slow ``diffusion`` module's ``flow_during_cout``.
-        flow_out_arr = np.where(cout_dt_days > 0.0, np.diff(v_out_edges) / cout_dt_days, 0.0)
-    else:
-        flow_out_arr = np.asarray(flow_out, dtype=float)
-
-    # Moment-averaged sigma_V in V-coordinate units [m^3] on the output
-    # grid: used by both the K-Z correction and (when applicable) the
-    # output-side smoothing matrix.
-    sigma_v_out = _compute_sigma_v(
-        flow=flow_out_arr,
-        tedges=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        streamline_length=mean_streamline_length,
-        molecular_diffusivity=mean_molecular_diffusivity,
-        longitudinal_dispersivity=mean_longitudinal_dispersivity,
-        retardation_factor=retardation_factor,
-        direction="extraction_to_infiltration",
+    tedges_days, v_in_widedge_edges, v_in_natural_edges = _prepare_v_grid(
+        weight_tedges=weight_tedges, tedges=tedges, flow=flow
     )
+    cutoff_sigma = asymptotic_cutoff_sigma if asymptotic_cutoff_sigma is not None else _DEFAULT_CUTOFF_SIGMA_V
 
     if flow_out is None:
         # Smooth-then-advect: V-coord smoothing on the natural input grid,
@@ -280,15 +298,29 @@ def infiltration_to_extraction(
         m_v_in = _build_v_smooth_matrix(
             v_edges=v_in_natural_edges,
             sigma_v_per_bin=sigma_v_in,
-            asymptotic_cutoff_sigma=asymptotic_cutoff_sigma if asymptotic_cutoff_sigma is not None else 4.0,
+            asymptotic_cutoff_sigma=cutoff_sigma,
         )
         cin_diffused = m_v_in @ np.asarray(cin, dtype=float)
         cout = w_adv @ cin_diffused
     else:
         # Advect-then-smooth: pure advection produces ``cout_unsmoothed`` on
         # the output grid, then V-coord smoothing applies the dispersive
-        # spread. Validity normalisation handles cout bins that pre-date
-        # streamtube breakthrough or fall in zero-flow windows.
+        # spread. The output-side V-grid and sigma_V are only needed here.
+        cout_tedges_days = ((cout_tedges - weight_tedges[0]) / pd.Timedelta("1D")).to_numpy(dtype=float)
+        v_out_edges = np.interp(cout_tedges_days, tedges_days, v_in_widedge_edges)
+        sigma_v_out = _compute_sigma_v(
+            flow=np.asarray(flow_out, dtype=float),
+            tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            streamline_length=mean_streamline_length,
+            molecular_diffusivity=mean_molecular_diffusivity,
+            longitudinal_dispersivity=mean_longitudinal_dispersivity,
+            retardation_factor=retardation_factor,
+            direction="extraction_to_infiltration",
+        )
+
+        # Validity normalisation handles cout bins that pre-date streamtube
+        # breakthrough or fall in zero-flow windows.
         cout_unsmoothed = w_adv @ np.asarray(cin, dtype=float)
         total_coeff = np.sum(w_adv, axis=1)
         zero_row_mask = total_coeff < _EPSILON_COEFF_SUM
@@ -298,7 +330,7 @@ def infiltration_to_extraction(
         m_v_out = _build_v_smooth_matrix(
             v_edges=v_out_edges,
             sigma_v_per_bin=sigma_v_out,
-            asymptotic_cutoff_sigma=asymptotic_cutoff_sigma if asymptotic_cutoff_sigma is not None else 4.0,
+            asymptotic_cutoff_sigma=cutoff_sigma,
         )
         smoothed = m_v_out @ cout_unsmoothed
         smoothed_validity = m_v_out @ validity
@@ -452,6 +484,7 @@ def extraction_to_infiltration(
         mean_streamline_length=mean_streamline_length,
         mean_molecular_diffusivity=mean_molecular_diffusivity,
         mean_longitudinal_dispersivity=mean_longitudinal_dispersivity,
+        retardation_factor=retardation_factor,
         is_forward=False,
         flow_out=flow_out,
     )
@@ -485,30 +518,10 @@ def extraction_to_infiltration(
     # Cumulative-volume edges shared between the smoothing matrices on the
     # input and output sides; see the comment block in
     # ``infiltration_to_extraction`` for the reference-frame rationale.
-    weight_dt_days = (np.diff(weight_tedges) / pd.Timedelta("1D")).astype(float)
-    v_in_widedge_edges = np.concatenate(([0.0], np.cumsum(flow * weight_dt_days)))
-    natural_dt_days = (np.diff(tedges) / pd.Timedelta("1D")).astype(float)
-    v_in_natural_edges = np.concatenate(([0.0], np.cumsum(flow * natural_dt_days)))
-
-    cout_dt_days = (np.diff(cout_tedges) / pd.Timedelta("1D")).astype(float)
-    tedges_days = ((weight_tedges - weight_tedges[0]) / pd.Timedelta("1D")).to_numpy(dtype=float)
-    cout_tedges_days = ((cout_tedges - weight_tedges[0]) / pd.Timedelta("1D")).to_numpy(dtype=float)
-    v_out_edges = np.interp(cout_tedges_days, tedges_days, v_in_widedge_edges)
-    if flow_out is None:
-        flow_out_arr = np.where(cout_dt_days > 0.0, np.diff(v_out_edges) / cout_dt_days, 0.0)
-    else:
-        flow_out_arr = np.asarray(flow_out, dtype=float)
-
-    sigma_v_out = _compute_sigma_v(
-        flow=flow_out_arr,
-        tedges=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        streamline_length=mean_streamline_length,
-        molecular_diffusivity=mean_molecular_diffusivity,
-        longitudinal_dispersivity=mean_longitudinal_dispersivity,
-        retardation_factor=retardation_factor,
-        direction="extraction_to_infiltration",
+    tedges_days, v_in_widedge_edges, v_in_natural_edges = _prepare_v_grid(
+        weight_tedges=weight_tedges, tedges=tedges, flow=flow
     )
+    cutoff_sigma = asymptotic_cutoff_sigma if asymptotic_cutoff_sigma is not None else _DEFAULT_CUTOFF_SIGMA_V
 
     if flow_out is None:
         # Smooth-then-advect: W_forward = w_adv @ M_v_in
@@ -525,16 +538,28 @@ def extraction_to_infiltration(
         m_v_in = _build_v_smooth_matrix(
             v_edges=v_in_natural_edges,
             sigma_v_per_bin=sigma_v_in,
-            asymptotic_cutoff_sigma=asymptotic_cutoff_sigma if asymptotic_cutoff_sigma is not None else 4.0,
+            asymptotic_cutoff_sigma=cutoff_sigma,
         )
         # Force dense ndarray (avoid scipy's np.matrix from sparse @ dense).
         w_forward = np.asarray(w_adv @ m_v_in)
     else:
         # Advect-then-smooth: W_forward = M_v_out @ w_adv
+        cout_tedges_days = ((cout_tedges - weight_tedges[0]) / pd.Timedelta("1D")).to_numpy(dtype=float)
+        v_out_edges = np.interp(cout_tedges_days, tedges_days, v_in_widedge_edges)
+        sigma_v_out = _compute_sigma_v(
+            flow=np.asarray(flow_out, dtype=float),
+            tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            streamline_length=mean_streamline_length,
+            molecular_diffusivity=mean_molecular_diffusivity,
+            longitudinal_dispersivity=mean_longitudinal_dispersivity,
+            retardation_factor=retardation_factor,
+            direction="extraction_to_infiltration",
+        )
         m_v_out = _build_v_smooth_matrix(
             v_edges=v_out_edges,
             sigma_v_per_bin=sigma_v_out,
-            asymptotic_cutoff_sigma=asymptotic_cutoff_sigma if asymptotic_cutoff_sigma is not None else 4.0,
+            asymptotic_cutoff_sigma=cutoff_sigma,
         )
         w_forward = np.asarray(m_v_out @ w_adv)
 
@@ -953,12 +978,11 @@ def _compute_sigma_v(
     if np.any(valid_mask):
         rt_array = np.interp(np.arange(len(rt_array)), np.where(valid_mask)[0], rt_array[valid_mask])
 
-    mol_var_x = 2.0 * molecular_diffusivity * rt_array
-    disp_var_x = 2.0 * longitudinal_dispersivity * streamline_length
-
-    var_numerator = mol_var_x / mean_pv * ev3 + disp_var_x * ev2
-
-    sigma_v_sq = (retardation_factor / streamline_length) ** 2 * var_numerator
+    # E[sigma_V^2] = (R/L)^2 * (2 D_m tau_bar / V_bar * E[V^3] + 2 alpha_L L * E[V^2])
+    sigma_v_sq = (retardation_factor / streamline_length) ** 2 * (
+        2.0 * molecular_diffusivity * rt_array / mean_pv * ev3
+        + 2.0 * longitudinal_dispersivity * streamline_length * ev2
+    )
     return np.sqrt(np.maximum(sigma_v_sq, 0.0))
 
 
@@ -1041,7 +1065,7 @@ def _build_v_smooth_matrix(
     v_edges: npt.NDArray[np.floating],
     sigma_v_per_bin: npt.NDArray[np.floating],
     refinement: int = 4,
-    asymptotic_cutoff_sigma: float | None = 4.0,
+    asymptotic_cutoff_sigma: float | None = _DEFAULT_CUTOFF_SIGMA_V,
 ) -> sparse.csr_matrix:
     """Build the V-coordinate Gaussian smoothing matrix via uniform-V resampling.
 
@@ -1235,6 +1259,7 @@ def _validate_inputs(
     mean_streamline_length: float,
     mean_molecular_diffusivity: float,
     mean_longitudinal_dispersivity: float,
+    retardation_factor: float,
     is_forward: bool,
     flow_out: np.ndarray | None = None,
 ) -> None:
@@ -1246,7 +1271,9 @@ def _validate_inputs(
         If array lengths are inconsistent, mean_molecular_diffusivity or
         mean_longitudinal_dispersivity are negative, cin or cout or flow
         contain NaN values, aquifer_pore_volumes contains non-positive
-        values, or mean_streamline_length is non-positive.
+        values, mean_streamline_length is non-positive, or retardation_factor
+        is below 1 (anti-retardation is not physical for the supported
+        sorption isotherms).
     """
     if is_forward:
         if len(tedges) != len(cin_or_cout) + 1:
@@ -1278,6 +1305,9 @@ def _validate_inputs(
         raise ValueError(msg)
     if mean_streamline_length <= 0:
         msg = "mean_streamline_length must be positive"
+        raise ValueError(msg)
+    if retardation_factor < 1.0:
+        msg = "retardation_factor must be >= 1.0 (anti-retardation is not physical)"
         raise ValueError(msg)
     if flow_out is not None:
         n_cout = len(cout_tedges) - 1
