@@ -133,10 +133,12 @@ def run_scenario(scenario: Scenario) -> dict:
         scenario.v_pore,
         tracker.state.waves,
         sorption,
+        theta_edges=tracker.state.theta_edges,
+        tedges_days=inputs["tedges_days"],
     )
 
     domain_mass = np.array([
-        compute_domain_mass(float(t), scenario.v_pore, tracker.state.waves, sorption)
+        compute_domain_mass(tracker.state.theta_at_t(float(t)), scenario.v_pore, tracker.state.waves, sorption)
         for t in inputs["domain_mass_times"]
     ])
 

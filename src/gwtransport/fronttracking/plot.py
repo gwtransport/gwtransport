@@ -372,18 +372,20 @@ def plot_breakthrough_curve(
     if t_max is None:
         t_max = float((state.tedges[-1] - state.tedges[0]) / pd.Timedelta(days=1))
 
-    # Use exact analytical segments. ``identify_outlet_segments`` returns
-    # segments with ``t_start``/``t_end`` in user-facing days.
-    segments = identify_outlet_segments(0.0, t_max, state.v_outlet, state.waves, state.sorption)
+    # ``identify_outlet_segments`` works in (V, θ). Translate the user-facing
+    # plotting window [0, t_max] to a θ-range, then back to t for the axes.
+    theta_start = state.theta_at_t(0.0)
+    theta_max = state.theta_at_t(t_max)
+    segments = identify_outlet_segments(theta_start, theta_max, state.v_outlet, state.waves, state.sorption)
 
     for i, segment in enumerate(segments):
-        t_start = segment["t_start"]
-        t_end = segment["t_end"]
+        t_seg_start = state.t_at_theta(segment["theta_start"])
+        t_seg_end = state.t_at_theta(segment["theta_end"])
 
         if segment["type"] == "constant":
             c_const = segment["concentration"]
             ax.plot(
-                [t_start, t_end],
+                [t_seg_start, t_seg_end],
                 [c_const, c_const],
                 "b-",
                 linewidth=2,
@@ -391,7 +393,7 @@ def plot_breakthrough_curve(
             )
         elif segment["type"] == "rarefaction":
             raref = segment["wave"]
-            t_raref = np.linspace(t_start, t_end, n_rarefaction_points)
+            t_raref = np.linspace(t_seg_start, t_seg_end, n_rarefaction_points)
             c_raref = np.zeros_like(t_raref)
 
             for j, t in enumerate(t_raref):

@@ -19,10 +19,10 @@ compute_cumulative_inlet_mass(t, cin, flow, tedges_days)
     Compute cumulative mass entering domain from t=0 to t
 compute_cumulative_outlet_mass(t, v_outlet, waves, sorption, flow, tedges_days)
     Compute cumulative mass exiting domain from t=0 to t
-find_last_rarefaction_start_time(v_outlet, waves)
-    Find time when last rarefaction head reaches outlet
-integrate_rarefaction_total_mass(raref, v_outlet, t_start, sorption, flow)
-    Compute total mass exiting through rarefaction to infinity
+find_last_rarefaction_start_theta(v_outlet, waves)
+    Find θ at which last rarefaction head reaches outlet
+integrate_rarefaction_total_mass(raref, v_outlet, theta_start, sorption)
+    Compute total mass exiting through rarefaction to infinity (in θ)
 compute_total_outlet_mass(v_outlet, waves, sorption, flow, tedges_days)
     Compute total integrated outlet mass until all mass has exited
 
@@ -211,24 +211,24 @@ def compute_breakthrough_curve(
 
 
 def identify_outlet_segments(
-    t_start: float,
-    t_end: float,
+    theta_start: float,
+    theta_end: float,
     v_outlet: float,
     waves: Sequence[Wave],
     sorption: SorptionModel,
 ) -> list[dict]:
-    """
-    Identify which waves control outlet concentration in time interval [t_start, t_end].
+    """Identify which waves control outlet concentration in θ-interval [theta_start, theta_end].
 
     Finds all wave crossing events at the outlet and constructs segments where
-    concentration is constant or varying (rarefaction).
+    concentration is constant or varying (rarefaction). All times are expressed
+    as cumulative flow θ [m³].
 
     Parameters
     ----------
-    t_start : float
-        Start of time interval [days].
-    t_end : float
-        End of time interval [days].
+    theta_start : float
+        Start of cumulative-flow interval [m³].
+    theta_end : float
+        End of cumulative-flow interval [m³].
     v_outlet : float
         Outlet position [m³].
     waves : list of Wave
@@ -241,10 +241,10 @@ def identify_outlet_segments(
     segments : list of dict
         List of segment dictionaries, each containing:
 
-        - 't_start' : float
-            Segment start time
-        - 't_end' : float
-            Segment end time
+        - 'theta_start' : float
+            Segment start θ [m³]
+        - 'theta_end' : float
+            Segment end θ [m³]
         - 'type' : str
             'constant' or 'rarefaction'
         - 'concentration' : float
@@ -259,19 +259,20 @@ def identify_outlet_segments(
     Notes
     -----
     Segments are constructed by:
-    1. Finding all wave crossing events at outlet in [t_start, t_end]
-    2. Sorting events chronologically
-    3. Creating constant-concentration segments between events
-    4. Handling rarefaction fans with time-varying concentration
 
-    The segments completely partition the time interval [t_start, t_end].
+    1. Finding all wave crossing events at the outlet for θ in [theta_start, theta_end].
+    2. Sorting events by θ.
+    3. Creating constant-concentration segments between events.
+    4. Handling rarefaction fans with θ-varying concentration.
+
+    The segments completely partition the interval [theta_start, theta_end].
     """
-    # Find all waves that cross outlet in this time range
-    outlet_events = []
+    # Find all waves that cross outlet in this θ-range
+    outlet_events: list[dict] = []
 
-    # Track rarefactions that already contain the outlet at t_start
+    # Track rarefactions that already contain the outlet at theta_start
     # These need to be handled separately since they don't generate crossing events
-    active_rarefactions_at_start = []
+    active_rarefactions_at_start: list[RarefactionWave] = []
 
     for wave in waves:
         if not wave.is_active:
@@ -279,60 +280,50 @@ def identify_outlet_segments(
 
         # For rarefactions, detect both head and tail crossings
         if isinstance(wave, RarefactionWave):
-            # Check if outlet is already inside this rarefaction at t_start
-            if wave.contains_point(v_outlet, t_start):
+            # Check if outlet is already inside this rarefaction at theta_start
+            if wave.contains_point(v_outlet, theta_start):
                 active_rarefactions_at_start.append(wave)
-                # Don't add crossing events for this wave since we're already inside it
-                # But we still need to detect when the tail crosses during [t_start, t_end]
-                v_tail = wave.tail_position_at_theta(t_start)
-                if v_tail is not None and v_tail < v_outlet:
-                    vel_tail = wave.tail_speed()
-                    if vel_tail > 0:
-                        dt = (v_outlet - v_tail) / vel_tail
-                        t_cross = t_start + dt
-                        if t_start < t_cross <= t_end:
-                            outlet_events.append({
-                                "time": t_cross,
-                                "wave": wave,
-                                "boundary": "tail",
-                                "c_after": wave.c_tail,
-                            })
-                continue
-
-            # Head crossing
-            v_head = wave.head_position_at_theta(t_start)
-            if v_head is not None and v_head < v_outlet:
-                vel_head = wave.head_speed()
-                if vel_head > 0:
-                    dt = (v_outlet - v_head) / vel_head
-                    t_cross = t_start + dt
-                    if t_start <= t_cross <= t_end:
+                # Detect when the tail crosses during [theta_start, theta_end]
+                tail_speed = wave.tail_speed()
+                if tail_speed > EPSILON_VELOCITY:
+                    theta_cross = wave.theta_start + (v_outlet - wave.v_start) / tail_speed
+                    if theta_start < theta_cross <= theta_end:
                         outlet_events.append({
-                            "time": t_cross,
-                            "wave": wave,
-                            "boundary": "head",
-                            "c_after": wave.c_head,
-                        })
-
-            # Tail crossing
-            v_tail = wave.tail_position_at_theta(t_start)
-            if v_tail is not None and v_tail < v_outlet:
-                vel_tail = wave.tail_speed()
-                if vel_tail > 0:
-                    dt = (v_outlet - v_tail) / vel_tail
-                    t_cross = t_start + dt
-                    if t_start <= t_cross <= t_end:
-                        outlet_events.append({
-                            "time": t_cross,
+                            "theta": theta_cross,
                             "wave": wave,
                             "boundary": "tail",
                             "c_after": wave.c_tail,
                         })
+                continue
+
+            # Head crossing
+            head_speed = wave.head_speed()
+            if head_speed > EPSILON_VELOCITY and wave.v_start < v_outlet:
+                theta_cross = wave.theta_start + (v_outlet - wave.v_start) / head_speed
+                if theta_start <= theta_cross <= theta_end:
+                    outlet_events.append({
+                        "theta": theta_cross,
+                        "wave": wave,
+                        "boundary": "head",
+                        "c_after": wave.c_head,
+                    })
+
+            # Tail crossing
+            tail_speed = wave.tail_speed()
+            if tail_speed > EPSILON_VELOCITY and wave.v_start < v_outlet:
+                theta_cross = wave.theta_start + (v_outlet - wave.v_start) / tail_speed
+                if theta_start <= theta_cross <= theta_end:
+                    outlet_events.append({
+                        "theta": theta_cross,
+                        "wave": wave,
+                        "boundary": "tail",
+                        "c_after": wave.c_tail,
+                    })
         else:
             # Characteristics and shocks
-            t_cross = find_outlet_crossing(wave, v_outlet, t_start)
+            theta_cross = find_outlet_crossing(wave, v_outlet, theta_start)
 
-            if t_cross is not None and t_start <= t_cross <= t_end:
+            if theta_cross is not None and theta_start <= theta_cross <= theta_end:
                 if isinstance(wave, CharacteristicWave):
                     c_after = wave.concentration
                 elif isinstance(wave, ShockWave):
@@ -341,58 +332,58 @@ def identify_outlet_segments(
                 else:
                     c_after = 0.0
 
-                outlet_events.append({"time": t_cross, "wave": wave, "boundary": None, "c_after": c_after})
+                outlet_events.append({"theta": theta_cross, "wave": wave, "boundary": None, "c_after": c_after})
 
-    # Sort events by time
-    outlet_events.sort(key=itemgetter("time"))
+    # Sort events by θ
+    outlet_events.sort(key=itemgetter("theta"))
 
     # Create segments between events
-    segments = []
-    current_t = t_start
-    current_c = concentration_at_point(v_outlet, t_start, waves, sorption)
+    segments: list[dict] = []
+    current_theta = theta_start
+    current_c = concentration_at_point(v_outlet, theta_start, waves, sorption)
 
     # Handle case where we start inside a rarefaction
     if active_rarefactions_at_start:
-        # Should only be one rarefaction containing the outlet at t_start
+        # Should only be one rarefaction containing the outlet at theta_start
         raref = active_rarefactions_at_start[0]
 
         # Find when tail crosses (if it does)
-        tail_cross_time = None
+        tail_cross_theta = None
         for event in outlet_events:
-            if event["wave"] is raref and event["boundary"] == "tail" and event["time"] > t_start:
-                tail_cross_time = event["time"]
+            if event["wave"] is raref and event["boundary"] == "tail" and event["theta"] > theta_start:
+                tail_cross_theta = event["theta"]
                 break
 
-        # Create rarefaction segment from t_start
-        raref_end = min(tail_cross_time or t_end, t_end)
+        # Create rarefaction segment from theta_start
+        raref_end = min(tail_cross_theta or theta_end, theta_end)
 
-        c_start = concentration_at_point(v_outlet, t_start, waves, sorption)
+        c_start = concentration_at_point(v_outlet, theta_start, waves, sorption)
         c_end = None
-        if tail_cross_time and tail_cross_time <= t_end:
+        if tail_cross_theta and tail_cross_theta <= theta_end:
             c_end = raref.c_tail
 
         segments.append({
-            "t_start": t_start,
-            "t_end": raref_end,
+            "theta_start": theta_start,
+            "theta_end": raref_end,
             "type": "rarefaction",
             "wave": raref,
             "c_start": c_start,
             "c_end": c_end,
         })
 
-        current_t = raref_end
+        current_theta = raref_end
         current_c = (
-            concentration_at_point(v_outlet, raref_end + 1e-10, waves, sorption) if raref_end < t_end else current_c
+            concentration_at_point(v_outlet, raref_end + 1e-10, waves, sorption) if raref_end < theta_end else current_c
         )
 
     for event in outlet_events:
         # Check if we're entering a rarefaction fan
         if isinstance(event["wave"], RarefactionWave) and event["boundary"] == "head":
             # Before rarefaction head: constant segment
-            if event["time"] > current_t:
+            if event["theta"] > current_theta:
                 segments.append({
-                    "t_start": current_t,
-                    "t_end": event["time"],
+                    "theta_start": current_theta,
+                    "theta_end": event["theta"],
                     "type": "constant",
                     "concentration": current_c,
                     "c_start": current_c,
@@ -401,54 +392,56 @@ def identify_outlet_segments(
 
             # Find when tail crosses (if it does)
             raref = event["wave"]
-            tail_cross_time = None
+            tail_cross_theta = None
 
             for later_event in outlet_events:
                 if (
                     later_event["wave"] is raref
                     and later_event["boundary"] == "tail"
-                    and later_event["time"] > event["time"]
+                    and later_event["theta"] > event["theta"]
                 ):
-                    tail_cross_time = later_event["time"]
+                    tail_cross_theta = later_event["theta"]
                     break
 
             # Rarefaction segment
-            raref_end = min(tail_cross_time or t_end, t_end)
+            raref_end = min(tail_cross_theta or theta_end, theta_end)
 
             segments.append({
-                "t_start": event["time"],
-                "t_end": raref_end,
+                "theta_start": event["theta"],
+                "theta_end": raref_end,
                 "type": "rarefaction",
                 "wave": raref,
                 "c_start": raref.c_head,
-                "c_end": raref.c_tail if tail_cross_time and tail_cross_time <= t_end else None,
+                "c_end": raref.c_tail if tail_cross_theta and tail_cross_theta <= theta_end else None,
             })
 
-            current_t = raref_end
+            current_theta = raref_end
             current_c = (
-                concentration_at_point(v_outlet, raref_end + 1e-10, waves, sorption) if raref_end < t_end else current_c
+                concentration_at_point(v_outlet, raref_end + 1e-10, waves, sorption)
+                if raref_end < theta_end
+                else current_c
             )
         else:
             # Regular event (characteristic or shock crossing)
             # Segment before event
-            if event["time"] > current_t:
+            if event["theta"] > current_theta:
                 segments.append({
-                    "t_start": current_t,
-                    "t_end": event["time"],
+                    "theta_start": current_theta,
+                    "theta_end": event["theta"],
                     "type": "constant",
                     "concentration": current_c,
                     "c_start": current_c,
                     "c_end": current_c,
                 })
 
-            current_t = event["time"]
+            current_theta = event["theta"]
             current_c = event["c_after"]
 
     # Final segment
-    if t_end > current_t:
+    if theta_end > current_theta:
         segments.append({
-            "t_start": current_t,
-            "t_end": t_end,
+            "theta_start": current_theta,
+            "theta_end": theta_end,
             "type": "constant",
             "concentration": current_c,
             "c_start": current_c,
@@ -1150,19 +1143,16 @@ def compute_cumulative_outlet_mass(
     flow: npt.ArrayLike,
     tedges_days: npt.ArrayLike,
 ) -> float:
-    """
-    Compute cumulative mass exiting domain from t=0 to t.
+    """Compute cumulative mass exiting the domain from t=0 to ``t``.
 
-    Integrates outlet mass flux over time:
-        M_out(t) = ∫₀^t cout(τ) * flow(τ) dτ
-
-    using exact analytical integration. Outlet concentration cout(τ) is obtained
-    from the wave solution, and flow(τ) is piecewise constant.
+    Internally evaluated in (V, θ) coordinates: ``mass = ∫ c(θ) dθ`` from 0 to
+    ``θ(t)``. Because ``dθ = flow · dt``, the flow drops out of the integrand
+    and the result equals ``∫ cout(τ) · flow(τ) dτ`` in time coordinates.
 
     Parameters
     ----------
     t : float
-        Time up to which to integrate [days].
+        User-facing time up to which to integrate [days from ``tedges_days[0]``].
     v_outlet : float
         Outlet position [m³].
     waves : list of Wave
@@ -1170,24 +1160,26 @@ def compute_cumulative_outlet_mass(
     sorption : SorptionModel
         Sorption model.
     flow : array-like
-        Flow rate time series [m³/day].
-        Piecewise constant within bins defined by tedges_days.
+        Flow rate per bin [m³/day]; piecewise constant on ``tedges_days``.
     tedges_days : numpy.ndarray
-        Time bin edges [days]. Length len(flow) + 1.
+        Time bin edges [days]. Length ``len(flow) + 1``.
 
     Returns
     -------
     mass_out : float
-        Cumulative mass exited [mass].
+        Cumulative mass exited from t=0 to ``t`` [mass].
 
     Notes
     -----
-    The outlet concentration is obtained from wave solution via
-    concentration_at_point(v_outlet, τ, waves, sorption).
+    Algorithm:
 
-    For each flow bin [t_i, t_{i+1}], the mass flux integral is computed
-    exactly using identify_outlet_segments and analytical integration
-    (constant segments and rarefaction segments).
+    1. Build ``theta_edges = cumsum(flow · Δt)`` and translate ``t`` to
+       ``theta_end`` by piecewise-linear interpolation against
+       ``(tedges_days, theta_edges)``. Past ``tedges_days[-1]`` the last-bin
+       flow is extrapolated.
+    2. Call :func:`identify_outlet_segments` over ``[0, theta_end]``.
+    3. For each segment: constant → ``c · Δθ``; rarefaction → exact analytic
+       θ-integral via :func:`integrate_rarefaction_exact`.
 
     Examples
     --------
@@ -1209,56 +1201,42 @@ def compute_cumulative_outlet_mass(
     if t <= tedges_arr[0]:
         return 0.0
 
-    # Integrate bin by bin through all flow bins, then continue to t if needed
+    # Build θ-edges from flow × Δt, then translate the user-facing endpoint to θ.
+    dt_days = np.diff(tedges_arr)
+    theta_edges = np.concatenate([[0.0], np.cumsum(flow_arr * dt_days)])
+    theta_start = float(theta_edges[0])
+
+    if t >= tedges_arr[-1]:
+        # Extrapolate past the last bin at the last-bin flow rate.
+        theta_end = float(theta_edges[-1] + (t - tedges_arr[-1]) * flow_arr[-1])
+    else:
+        theta_end = float(np.interp(t, tedges_arr, theta_edges))
+
+    if theta_end <= theta_start:
+        return 0.0
+
+    segments = identify_outlet_segments(theta_start, theta_end, v_outlet, waves, sorption)
+
     total_mass = 0.0
 
-    # Process bins within tedges range
-    n_flow_bins = len(flow_arr)
+    for seg in segments:
+        seg_theta_start = max(seg["theta_start"], theta_start)
+        seg_theta_end = min(seg["theta_end"], theta_end)
+        seg_dtheta = seg_theta_end - seg_theta_start
 
-    for i in range(n_flow_bins):
-        t_bin_start = tedges_arr[i]
-        t_bin_end = tedges_arr[i + 1]
-
-        # Skip bins entirely before t
-        if t_bin_end <= tedges_arr[0]:
+        if seg_dtheta <= EPSILON_TIME:
             continue
 
-        # Clip to [tedges[0], t]
-        t_bin_start = max(t_bin_start, tedges_arr[0])
-        t_bin_end = min(t_bin_end, t)
-
-        flow_i = flow_arr[i]
-        dt_i = t_bin_end - t_bin_start
-
-        if dt_i <= 0:
-            continue
-
-        # Compute ∫_{t_bin_start}^{t_bin_end} cout(τ) dτ using exact integration
-        segments = identify_outlet_segments(t_bin_start, t_bin_end, v_outlet, waves, sorption)
-
-        integral_c_dt = 0.0
-
-        for seg in segments:
-            seg_t_start = max(seg["t_start"], t_bin_start)
-            seg_t_end = min(seg["t_end"], t_bin_end)
-            seg_dt = seg_t_end - seg_t_start
-
-            if seg_dt <= EPSILON_TIME:
-                continue
-
-            if seg["type"] == "constant":
-                integral_c_dt += seg["concentration"] * seg_dt
-            elif seg["type"] == "rarefaction":
-                if isinstance(sorption, NonlinearSorption):
-                    raref = seg["wave"]
-                    integral_c_dt += integrate_rarefaction_exact(raref, v_outlet, seg_t_start, seg_t_end, sorption)
-                else:
-                    # ConstantRetardation - use midpoint
-                    c_mid = concentration_at_point(v_outlet, 0.5 * (seg_t_start + seg_t_end), waves, sorption)
-                    integral_c_dt += c_mid * seg_dt
-
-        # Mass for this bin = flow * ∫ cout dt
-        total_mass += flow_i * integral_c_dt
+        if seg["type"] == "constant":
+            total_mass += seg["concentration"] * seg_dtheta
+        elif seg["type"] == "rarefaction":
+            if isinstance(sorption, NonlinearSorption):
+                raref = seg["wave"]
+                total_mass += integrate_rarefaction_exact(raref, v_outlet, seg_theta_start, seg_theta_end, sorption)
+            else:
+                # ConstantRetardation - rarefactions shouldn't form; fall back to midpoint.
+                c_mid = concentration_at_point(v_outlet, 0.5 * (seg_theta_start + seg_theta_end), waves, sorption)
+                total_mass += c_mid * seg_dtheta
 
     return float(total_mass)
 
@@ -1345,7 +1323,7 @@ def compute_total_outlet_mass(
     See Also
     --------
     compute_cumulative_outlet_mass : Cumulative outlet mass up to time t
-    find_last_rarefaction_start_time : Find when last rarefaction starts
+    find_last_rarefaction_start_theta : Find θ at which last rarefaction starts
     integrate_rarefaction_total_mass : Total mass in rarefaction to infinity
 
     Notes
@@ -1372,60 +1350,34 @@ def compute_total_outlet_mass(
         total_mass >= 0.0
         t_end >= tedges_days[0]
     """
-    # Find when the last rarefaction starts at the outlet
-    t_last_raref_start = find_last_rarefaction_start_time(v_outlet, waves)
-
     tedges_arr = np.asarray(tedges_days, dtype=float)
     flow_arr = np.asarray(flow, dtype=float)
 
-    # Integrate up to when last rarefaction starts
-    if t_last_raref_start <= tedges_arr[-1]:
-        # All waves start within provided time range
-        mass_up_to_raref_start = compute_cumulative_outlet_mass(
-            t_last_raref_start, v_outlet, waves, sorption, flow_arr, tedges_arr
-        )
-        flow_at_raref_start = flow_arr[-1]  # Use last flow value
+    # Find the θ at which the last rarefaction head reaches the outlet
+    theta_last_raref_start = find_last_rarefaction_start_theta(v_outlet, waves)
+
+    # Build θ-edges from flow × Δt for the t ↔ θ translation
+    dt_days = np.diff(tedges_arr)
+    theta_edges = np.concatenate([[0.0], np.cumsum(flow_arr * dt_days)])
+
+    # Translate theta_last_raref_start back to user-facing time, extending
+    # past tedges_days[-1] using the last-bin flow if necessary.
+    last_flow = float(flow_arr[-1])
+    if theta_last_raref_start <= theta_edges[-1]:
+        t_last_raref_start = float(np.interp(theta_last_raref_start, theta_edges, tedges_arr))
+    elif last_flow > 0:
+        t_last_raref_start = float(tedges_arr[-1] + (theta_last_raref_start - theta_edges[-1]) / last_flow)
     else:
-        # Need to extend beyond tedges to reach rarefaction start
-        # First, compute mass up to tedges[-1]
-        mass_within_tedges = compute_cumulative_outlet_mass(
-            tedges_arr[-1], v_outlet, waves, sorption, flow_arr, tedges_arr
-        )
+        t_last_raref_start = float(tedges_arr[-1])
 
-        # Then, integrate from tedges[-1] to t_last_raref_start
-        flow_extended = flow_arr[-1]
-        t_start_extended = tedges_arr[-1]
-        t_end_extended = t_last_raref_start
+    # Mass up to theta_last_raref_start (∫ c dθ); reuse the cumulative routine
+    # so the t ↔ θ extrapolation rules stay consistent.
+    mass_up_to_raref_start = compute_cumulative_outlet_mass(
+        t_last_raref_start, v_outlet, waves, sorption, flow_arr, tedges_arr
+    )
 
-        # Get outlet segments for extended period
-        segments = identify_outlet_segments(t_start_extended, t_end_extended, v_outlet, waves, sorption)
-
-        integral_c_dt = 0.0
-
-        for seg in segments:
-            seg_t_start = max(seg["t_start"], t_start_extended)
-            seg_t_end = min(seg["t_end"], t_end_extended)
-            seg_dt = seg_t_end - seg_t_start
-
-            if seg_dt <= EPSILON_TIME:
-                continue
-
-            if seg["type"] == "constant":
-                integral_c_dt += seg["concentration"] * seg_dt
-            elif seg["type"] == "rarefaction":
-                if isinstance(sorption, NonlinearSorption):
-                    raref = seg["wave"]
-                    integral_c_dt += integrate_rarefaction_exact(raref, v_outlet, seg_t_start, seg_t_end, sorption)
-                else:
-                    # ConstantRetardation - use midpoint
-                    c_mid = concentration_at_point(v_outlet, 0.5 * (seg_t_start + seg_t_end), waves, sorption)
-                    integral_c_dt += c_mid * seg_dt
-
-        mass_up_to_raref_start = mass_within_tedges + flow_extended * integral_c_dt
-        flow_at_raref_start = flow_extended
-
-    # Find rarefactions that are active at the outlet after t_last_raref_start
-    # and add their total integrated mass
+    # Add the analytical tail-to-infinity contribution for every rarefaction
+    # whose head crosses the outlet at exactly theta_last_raref_start.
     total_raref_mass = 0.0
 
     for wave in waves:
@@ -1433,28 +1385,20 @@ def compute_total_outlet_mass(
             continue
 
         if isinstance(wave, RarefactionWave):
-            # Check if this rarefaction reaches the outlet
-            head_vel = wave.head_speed()
-            if head_vel > EPSILON_VELOCITY and wave.v_start < v_outlet:
-                t_raref_start_at_outlet = wave.t_start + (v_outlet - wave.v_start) / head_vel
+            head_speed = wave.head_speed()
+            if head_speed > EPSILON_VELOCITY and wave.v_start < v_outlet:
+                theta_head_crosses_outlet = wave.theta_start + (v_outlet - wave.v_start) / head_speed
 
-                # If this rarefaction starts at or after t_last_raref_start, include its total mass
-                # (with small tolerance for numerical precision)
-                if abs(t_raref_start_at_outlet - t_last_raref_start) < EPSILON_TIME_MATCH:
-                    # This is the last rarefaction - integrate to infinity
-                    raref_mass = integrate_rarefaction_total_mass(
+                # Compare in θ-space (flow-free) — equivalent to the legacy time
+                # tolerance but unit-agnostic with respect to flow rate.
+                if abs(theta_head_crosses_outlet - theta_last_raref_start) < EPSILON_TIME_MATCH:
+                    total_raref_mass += integrate_rarefaction_total_mass(
                         raref=wave,
                         v_outlet=v_outlet,
-                        t_start=t_raref_start_at_outlet,
+                        theta_start=theta_head_crosses_outlet,
                         sorption=sorption,
-                        flow=flow_at_raref_start,
                     )
-                    total_raref_mass += raref_mass
 
-    # For rarefactions with finite tails (c_tail > 0, typical for n < 1),
-    # all mass is already accounted for in the rarefaction integration
-    # from head to tail. No additional mass needs to be integrated after
-    # the tail - if there were more waves, they would be in the wave list.
     total_mass = mass_up_to_raref_start + total_raref_mass
 
     return float(total_mass), t_last_raref_start
