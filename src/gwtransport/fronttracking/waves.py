@@ -426,9 +426,7 @@ class DecayingShockWave(Wave):
 
     Formed when a rarefaction fan and a shock collide. The shock then has
     one side fed by the fan's self-similar profile (the "decay" side) and
-    the other side at the original outer state (the "fixed" side). Unlike
-    a Phase-1 shock + rarefaction overlay, this is a single analytical
-    wave with closed-form trajectory.
+    the other side at the original outer state (the "fixed" side).
 
     Two collision regimes are supported via ``decay_side``:
 
@@ -481,9 +479,8 @@ class DecayingShockWave(Wave):
     theta_origin : float
         Cumulative flow at the rarefaction apex [m³]. Must satisfy
         ``theta_origin < theta_start``.
-    sorption : SorptionModel
-        Sorption model. Must be :class:`FreundlichSorption` or
-        :class:`LangmuirSorption`.
+    sorption : FreundlichSorption or LangmuirSorption
+        Sorption model.
     is_active : bool, optional
         Activity flag. Default True.
 
@@ -508,8 +505,8 @@ class DecayingShockWave(Wave):
     """Position of the rarefaction apex [m³]."""
     theta_origin: float
     """Cumulative flow at the rarefaction apex [m³]."""
-    sorption: SorptionModel
-    """Sorption model (Freundlich or Langmuir)."""
+    sorption: FreundlichSorption | LangmuirSorption
+    """Sorption model (Freundlich or Langmuir; nonlinear-only)."""
     K: float = field(init=False)
     """Invariant constant from collision IC; set in ``__post_init__``."""
 
@@ -651,19 +648,17 @@ class DecayingShockWave(Wave):
         v_origin)``, so the mass integral reduces to the fan integral over
         ``[θ_arrival, θ_tail or +∞]``.
 
-        Currently returns 0.0 if no outlet crossing exists. The Phase-2 dispatch
-        site in ``output.py`` will call the analytical fan integrator on the
-        same fan-profile parameters; this method is provided for symmetric API
-        with ``RarefactionWave.tail_position_at_theta`` and is exercised by the
-        smoke test only via the Freundlich n=2 c_R=0 closed form.
+        Raises
+        ------
+        NotImplementedError
+            Currently always. The fan integrator lives in ``output.py``
+            (``integrate_rarefaction_exact``) and the dispatch site is not
+            yet wired; calling this method directly would silently zero out
+            the outlet mass contribution.
         """
-        # Phase 2 step 4 wires the fan integral; for step 1 the smoke test
-        # verifies just the invariant + position + outlet_crossing closed forms.
-        # Implementing the full fan-integral here would duplicate
-        # `integrate_rarefaction_exact` in output.py — defer to the dispatch
-        # site rather than re-encode the antiderivative.
         del v_outlet
-        return 0.0
+        msg = "mass_after_outlet_arrival is wired via output.py dispatch (not yet implemented)"
+        raise NotImplementedError(msg)
 
     def concentration_left(self) -> float:
         """Concentration on the left (upstream) side at θ=theta_start.
@@ -777,7 +772,15 @@ def _compute_k_langmuir(
     """Closed-form invariant K for Langmuir DecayingShockWave (c_fixed=0).
 
     K = θ_local · c_d^2 / ((K_L + c_d)^2 + a) with a = ρ_b · s_max · K_L / n_por.
-    See plan §"Closed-form derivations" for the derivation.
+
+    Parameters
+    ----------
+    sorption : LangmuirSorption
+        Sorption model.
+    theta_local : float
+        Cumulative flow from rarefaction apex to collision [m³].
+    c_decay_initial : float
+        Decaying-side concentration at the collision [mass/volume].
 
     Returns
     -------
@@ -898,7 +901,11 @@ def _outlet_crossing_freundlich(
         theta_local = k_invariant * (n * u_target ** (n - 1.0) + alpha) / u_target**n
         return float(theta_origin + theta_local)
 
-    # n=2, c_fixed > 0: V_s - v_origin = 2·K·u / (u - u_r)^2 ⇒ quadratic in u
+    # n=2, c_fixed > 0: V_s - v_origin = 2·K·u / (u - u_r)^2 ⇒ quadratic in u.
+    # The plus-sqrt root always satisfies u > u_r for K, alpha, delta_v > 0
+    # (algebraic identity: roots multiply to u_r^2 - K·α/θ < u_r^2, so exactly
+    # one root exceeds u_r and it is the plus-sqrt branch). The minus-sqrt
+    # root is the unphysical companion.
     u_r = c_fixed**0.5
     b_coef = -(2.0 * delta_v * u_r + 2.0 * k_invariant)
     c_coef = delta_v * u_r * u_r
@@ -906,10 +913,6 @@ def _outlet_crossing_freundlich(
     if disc < 0:
         return None
     u_target = (-b_coef + np.sqrt(disc)) / (2.0 * delta_v)
-    if u_target <= u_r:
-        u_target = (-b_coef - np.sqrt(disc)) / (2.0 * delta_v)
-    if u_target <= u_r:
-        return None
     theta_local = k_invariant * (2.0 * u_target + alpha) / (u_target - u_r) ** 2
     return float(theta_origin + theta_local)
 
