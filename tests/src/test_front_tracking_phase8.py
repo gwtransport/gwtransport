@@ -114,13 +114,13 @@ class TestAnalyticalCorrectness:
         assert len(shocks) >= 1, "Should create at least one shock for extreme ratio"
 
         for shock in shocks:
-            assert shock.velocity is not None
-            v_expected = sorption.shock_velocity(shock.c_left, shock.c_right, shock.flow)
+            assert shock.speed is not None
+            v_expected = sorption.shock_speed(shock.c_left, shock.c_right)
             np.testing.assert_allclose(
-                shock.velocity,
+                shock.speed,
                 v_expected,
                 rtol=1e-14,
-                err_msg=f"Extreme ratio shock velocity error: {shock.velocity} != {v_expected}",
+                err_msg=f"Extreme ratio shock velocity error: {shock.speed} != {v_expected}",
             )
 
 
@@ -407,7 +407,7 @@ class TestEntropyAndPhysicsNLessThanOne:
         assert len(shocks) > 0, "Should create at least one shock in complex scenario"
 
         for shock in shocks:
-            assert shock.satisfies_entropy(), f"Shock at t={shock.t_start} violates entropy for n<1"
+            assert shock.satisfies_entropy(), f"Shock at t={shock.theta_start} violates entropy for n<1"
 
 
 class TestComplexInteractions:
@@ -484,12 +484,13 @@ class TestComplexInteractions:
         total_waves = structure[0]["n_shocks"] + structure[0]["n_rarefactions"] + structure[0]["n_characteristics"]
         assert total_waves >= 5, f"Should create multiple waves from rapid changes, got {total_waves}"
 
-        # All events should be ordered chronologically
-        event_times = [event["time"] for event in structure[0]["events"]]
-        assert event_times == sorted(event_times), "Events should be chronologically ordered"
+        # Events are ordered by θ (which is monotone in t for non-negative flow).
+        event_thetas = [event["theta"] for event in structure[0]["events"]]
+        assert event_thetas == sorted(event_thetas), "Events should be chronologically ordered in θ"
 
-        # Output should not have NaN values after first arrival
-        t_first = structure[0]["t_first_arrival"]
+        # Output should not have NaN values after first arrival (translate θ→t).
+        tracker_state = structure[0]["tracker_state"]
+        t_first = tracker_state.t_at_theta(structure[0]["theta_first_arrival"])
         cout_tedges_days = ((cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)).values
         mask_after_spinup = cout_tedges_days[:-1] >= t_first
         cout_after_spinup = cout[mask_after_spinup]

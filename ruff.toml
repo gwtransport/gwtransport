@@ -74,6 +74,15 @@ convention = "numpy"
 "src/gwtransport/advection.py" = [
     "DOC502",  # Public entry points document ValueError; the raises happen inside _validate_advection_inputs
 ]
+"src/gwtransport/fronttracking/*.py" = [
+    # Physics module: docstrings intentionally use unicode symbols (θ, α, ρ, ×, ≤, ≥) for math notation.
+    "RUF002",  # Ambiguous unicode in docstrings (greek letters / math symbols are intentional)
+    "RUF003",  # Ambiguous unicode in comments (same rationale as RUF002)
+    # Many internal functions have simple, type-hint-evident returns; Returns sections add noise.
+    "DOC201",  # `return` not documented in docstring
+    "DOC102",  # Documented parameter not in signature (small drift after refactor)
+    "DOC501",  # Raised exception missing from docstring
+]
 "tests/**/test_*.py" = [
     "S101",    # asserts allowed in tests
     "D",

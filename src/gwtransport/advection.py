@@ -1327,6 +1327,7 @@ def _flow_weighted_front_tracking_output(
     v_outlet: float,
     waves: list,
     sorption: SorptionModel,
+    theta_edges: npt.NDArray[np.floating],
 ) -> npt.NDArray[np.floating]:
     """Compute flow-weighted bin-averaged concentration from front-tracking output.
 
@@ -1334,17 +1335,16 @@ def _flow_weighted_front_tracking_output(
     sub-bin, then combines sub-bins with flow-weighting:
     ``c_avg = Σ(Q_k · c_k · dt_k) / Σ(Q_k · dt_k)``.
 
-    This is the per-streamtube outlet concentration for one pore volume:
-    mass flux divided by water flux for the streamtube's contribution to each
-    output bin. Aggregation across streamtubes is the caller's responsibility
-    (simple arithmetic mean over streamtubes — equal flow per streamtube).
+    Internally translates the output ``t``-bin edges to θ via the same
+    ``(flow_tedges_days, theta_edges)`` map the tracker built, and calls
+    :func:`compute_bin_averaged_concentration_exact` in θ-coordinates.
 
     Parameters
     ----------
     cout_tedges_days : ndarray
         Output time bin edges [days from reference].
     flow_tedges_days : ndarray
-        Flow time bin edges [days from reference].
+        Flow time bin edges [days from reference] (length ``len(flow) + 1``).
     flow : ndarray
         Flow rate per flow bin [m³/day].
     v_outlet : float
@@ -1353,21 +1353,30 @@ def _flow_weighted_front_tracking_output(
         Wave list from front tracking simulation.
     sorption : object
         Sorption model.
+    theta_edges : ndarray
+        Cumulative-flow edges at the flow-bin boundaries [m³]
+        (length ``len(flow) + 1``).
 
     Returns
     -------
     ndarray
         Flow-weighted bin-averaged concentrations. Length = len(cout_tedges_days) - 1.
     """
-    # Merge cout edges with flow edges that fall within the cout range
     inner_flow_edges = flow_tedges_days[
         (flow_tedges_days > cout_tedges_days[0]) & (flow_tedges_days < cout_tedges_days[-1])
     ]
     fine_edges = np.unique(np.concatenate([cout_tedges_days, inner_flow_edges]))
 
-    # Compute time-averaged C on fine grid
+    # np.interp clips on both sides — extrapolate past flow_tedges_days[-1] at
+    # last-bin flow (matches FrontTrackerState.theta_at_t extrapolation rule);
+    # without this, fine_edges past the flow window collapse to duplicate θ
+    # and compute_bin_averaged_concentration_exact rejects the zero-width bin.
+    fine_theta_edges = np.interp(fine_edges, flow_tedges_days, theta_edges)
+    overflow = fine_edges > flow_tedges_days[-1]
+    if overflow.any():
+        fine_theta_edges[overflow] = theta_edges[-1] + (fine_edges[overflow] - flow_tedges_days[-1]) * float(flow[-1])
     c_fine = compute_bin_averaged_concentration_exact(
-        t_edges=fine_edges,
+        theta_bin_edges=fine_theta_edges,
         v_outlet=v_outlet,
         waves=waves,
         sorption=sorption,
@@ -1632,13 +1641,15 @@ def infiltration_to_extraction_front_tracking_detailed(
         List of detailed simulation structures, one for each pore volume, with keys:
 
         - 'waves': List[Wave] - All wave objects created during simulation
-        - 'events': List[dict] - All events with times, types, and details
-        - 't_first_arrival': float - First arrival time (end of spin-up period)
+        - 'events': List[dict] - All events; each record carries ``"theta"`` (m³)
+          and ``"type"``. Translate to user-facing time t via
+          ``tracker_state.t_at_theta(event["theta"])`` if needed.
+        - 'theta_first_arrival': float - Cumulative flow at first nonzero arrival [m³]
         - 'n_events': int - Total number of events
         - 'n_shocks': int - Number of shocks created
         - 'n_rarefactions': int - Number of rarefactions created
         - 'n_characteristics': int - Number of characteristics created
-        - 'final_time': float - Final simulation time
+        - 'theta_current': float - Final simulation cumulative flow [m³]
         - 'sorption': SorptionModel - Sorption object
         - 'tracker_state': FrontTrackerState - Complete simulation state
         - 'aquifer_pore_volume': float - Pore volume for this simulation
@@ -1666,11 +1677,13 @@ def infiltration_to_extraction_front_tracking_detailed(
         )
 
         # Access spin-up period for first pore volume
-        print(f"First arrival: {structures[0]['t_first_arrival']:.2f} days")
+        theta_first = structures[0]["theta_first_arrival"]
+        t_first = structures[0]["tracker_state"].t_at_theta(theta_first)
+        print(f"First arrival: θ={theta_first:.2f} m³ (t={t_first:.2f} days)")
 
         # Analyze events for first pore volume
         for event in structures[0]["events"]:
-            print(f"t={event['time']:.2f}: {event['type']}")
+            print(f"θ={event['theta']:.2f}: {event['type']}")
     """
     cin, flow, tedges, cout_tedges, aquifer_pore_volumes, sorption, cout_tedges_days = _validate_front_tracking_inputs(
         cin=cin,
@@ -1714,18 +1727,18 @@ def infiltration_to_extraction_front_tracking_detailed(
             v_outlet=aquifer_pore_volume,
             waves=tracker.state.waves,
             sorption=sorption,
+            theta_edges=tracker.state.theta_edges,
         )
 
-        # Build detailed structure dict for this pore volume
         structure = {
             "waves": tracker.state.waves,
             "events": tracker.state.events,
-            "t_first_arrival": tracker.t_first_arrival,
+            "theta_first_arrival": tracker.theta_first_arrival,
             "n_events": len(tracker.state.events),
             "n_shocks": sum(1 for w in tracker.state.waves if isinstance(w, ShockWave)),
             "n_rarefactions": sum(1 for w in tracker.state.waves if isinstance(w, RarefactionWave)),
             "n_characteristics": sum(1 for w in tracker.state.waves if isinstance(w, CharacteristicWave)),
-            "final_time": tracker.state.t_current,
+            "theta_current": tracker.state.theta_current,
             "sorption": sorption,
             "tracker_state": tracker.state,
             "aquifer_pore_volume": aquifer_pore_volume,

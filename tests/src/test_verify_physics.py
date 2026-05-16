@@ -76,7 +76,7 @@ class TestVerifyPhysicsPassingChecks:
         assert results["all_passed"], f"Expected all checks to pass. Failures: {results['failures']}"
         assert results["n_passed"] == results["n_checks"]
         assert len(results["failures"]) == 0
-        assert "✓" in results["summary"]
+        assert "passed" in results["summary"]
 
     def test_verify_physics_check_count(self, pulse_simulation_data):
         """Test that verify_physics runs the expected number of checks."""
@@ -97,10 +97,10 @@ class TestVerifyPhysicsPassingChecks:
         expected_checks = {
             "Shock entropy condition",
             "Non-negative concentrations",
-            "Output ≤ input maximum",
-            "Finite first arrival time",
+            "Output <= input maximum",
+            "Finite first arrival θ",
             "No NaN after spin-up",
-            "Events chronologically ordered",
+            "Events θ-ordered",
             "Rarefaction wave ordering",
             "Total integrated outlet mass",
         }
@@ -211,7 +211,8 @@ class TestVerifyPhysicsFailingChecks:
 
         # Introduce NaN values after spin-up
         cout_modified = cout.copy()
-        t_first = structure["t_first_arrival"]
+        # Translate θ_first_arrival → t for time-based indexing
+        t_first = structure["tracker_state"].t_at_theta(structure["theta_first_arrival"])
 
         # Find indices after spin-up
         cout_tedges_days = ((cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)).values
@@ -244,7 +245,7 @@ class TestVerifyPhysicsFailingChecks:
         cout_modified[100:150] = max_cin * 2.0
 
         # Violation 3: NaN after spin-up
-        t_first = structure["t_first_arrival"]
+        t_first = structure["tracker_state"].t_at_theta(structure["theta_first_arrival"])
         cout_tedges_days = ((cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)).values
         mask_after_spinup = cout_tedges_days[:-1] >= t_first
         indices_after_spinup = np.where(mask_after_spinup)[0]

@@ -17,7 +17,7 @@ from gwtransport.advection import (
     infiltration_to_extraction_front_tracking,
     infiltration_to_extraction_front_tracking_detailed,
 )
-from gwtransport.fronttracking.math import FreundlichSorption, LangmuirSorption, compute_first_front_arrival_time
+from gwtransport.fronttracking.math import FreundlichSorption, LangmuirSorption, compute_first_front_arrival_theta
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.utils import compute_time_edges
 
@@ -237,11 +237,12 @@ class TestFrontTrackingAPI:
             porosity=porosity,
         )
 
-        # Compute t_first_arrival (returns days from tedges[0])
-        t_first_expected = compute_first_front_arrival_time(
+        # Build θ-edges and compute expected θ-first-arrival directly in θ-space.
+        tedges_days = np.asarray((tedges - tedges[0]) / pd.Timedelta(days=1), dtype=float)
+        theta_edges = np.concatenate(([0.0], np.cumsum(flow * np.diff(tedges_days))))
+        theta_first_expected = compute_first_front_arrival_theta(
             cin=cin,
-            flow=flow,
-            tedges=tedges,
+            theta_edges=theta_edges,
             aquifer_pore_volume=aquifer_pore_volume,
             sorption=sorption,
         )
@@ -268,12 +269,14 @@ class TestFrontTrackingAPI:
 
         assert len(structures) == 1
         structure = structures[0]
-        assert structure["t_first_arrival"] == pytest.approx(t_first_expected, rel=1e-14)
+        assert structure["theta_first_arrival"] == pytest.approx(theta_first_expected, rel=1e-14)
 
-        # Verify spin-up: cout is zero for bins whose upper edge is before first arrival
+        # Verify spin-up: cout is zero for bins whose upper-edge θ is before θ_first.
+        tracker_state = structure["tracker_state"]
         for i in range(len(cout)):
             t_upper = (cout_tedges[i + 1] - tedges[0]) / np.timedelta64(1, "D")
-            if t_upper < t_first_expected:
+            theta_upper = tracker_state.theta_at_t(float(t_upper))
+            if theta_upper < theta_first_expected:
                 assert cout[i] == 0.0
 
     def test_api_freundlich_n_gt_1_n_greater_than_one(self):

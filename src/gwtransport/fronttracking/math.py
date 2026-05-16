@@ -19,7 +19,6 @@ from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
 
 # Numerical tolerance constants
 EPSILON_FREUNDLICH_N = 1e-10  # Tolerance for checking if n ≈ 1.0 (Freundlich constructor rejects this)
@@ -55,14 +54,17 @@ class NonlinearSorption(ABC):
         """Invert retardation factor to obtain concentration."""
         raise NotImplementedError
 
-    def shock_velocity(self, c_left: float, c_right: float, flow: float) -> float:
-        """
-        Compute shock velocity via Rankine-Hugoniot condition.
+    def shock_speed(self, c_left: float, c_right: float) -> float:
+        """Compute shock speed dV/dθ via Rankine-Hugoniot in (V, θ) coordinates.
 
-        The Rankine-Hugoniot condition ensures mass conservation across the shock:
-            s_shock = [flux(C_R) - flux(C_L)] / [C_total(C_R) - C_total(C_L)]
+        With cumulative-flow coordinate θ = ∫flow(t') dt', the PDE
+        ``∂C_T/∂t + flow·∂C/∂V = 0`` becomes ``∂C_T/∂θ + ∂C/∂V = 0``, and
+        Rankine-Hugoniot reduces to::
 
-        where flux(C) = flow * C (only dissolved species are transported).
+            dV_s/dθ = (C_R - C_L) / (C_T(C_R) - C_T(C_L))
+
+        Flow drops out entirely; the result is a property of the sorption
+        isotherm alone.
 
         Parameters
         ----------
@@ -70,47 +72,29 @@ class NonlinearSorption(ABC):
             Concentration upstream (behind) shock [mass/volume].
         c_right : float
             Concentration downstream (ahead of) shock [mass/volume].
-        flow : float
-            Flow rate [volume/time]. Must be positive.
 
         Returns
         -------
-        s_shock : float
-            Shock velocity [volume/time].
-
-        Notes
-        -----
-        The Rankine-Hugoniot condition is derived from integrating the conservation
-        law across the shock discontinuity. It ensures that the total mass flux
-        (advective transport) is conserved.
+        shock_speed : float
+            Shock speed dV/dθ [m³ / m³ flow = dimensionless].
         """
-        # Flux = flow * C (only dissolved species flow)
-        flux_left = flow * c_left
-        flux_right = flow * c_right
-
-        # Total concentration (dissolved + sorbed)
         c_total_left = self.total_concentration(c_left)
         c_total_right = self.total_concentration(c_right)
-
-        # Rankine-Hugoniot condition
         denom = c_total_right - c_total_left
 
         if abs(denom) < EPSILON_DENOMINATOR:
             avg_retardation = 0.5 * (self.retardation(c_left) + self.retardation(c_right))
-            return float(flow / avg_retardation)
+            return float(1.0 / avg_retardation)
 
-        return float((flux_right - flux_left) / denom)
+        return float((c_right - c_left) / denom)
 
-    def check_entropy_condition(self, c_left: float, c_right: float, shock_vel: float, flow: float) -> bool:
-        """
-        Verify Lax entropy condition for physical admissibility of shock.
+    def check_entropy_condition(self, c_left: float, c_right: float, shock_speed: float) -> bool:
+        """Verify Lax entropy condition in (V, θ) coordinates.
 
-        The Lax entropy condition ensures that characteristics flow INTO the shock
-        from both sides, which is required for physical shocks::
+        In θ-space, characteristic speeds are ``λ_θ(C) = 1 / R(C)``, and the
+        Lax condition for a physical shock is::
 
-            λ(C_L) > s_shock > λ(C_R)
-
-        where λ(C) = flow / R(C) is the characteristic velocity.
+            λ_θ(C_L) ≥ dV_s/dθ ≥ λ_θ(C_R)
 
         Parameters
         ----------
@@ -118,27 +102,23 @@ class NonlinearSorption(ABC):
             Concentration upstream of shock [mass/volume].
         c_right : float
             Concentration downstream of shock [mass/volume].
-        shock_vel : float
-            Shock velocity [volume/time].
-        flow : float
-            Flow rate [volume/time].
+        shock_speed : float
+            Shock speed dV/dθ.
 
         Returns
         -------
         satisfies : bool
             True if shock satisfies entropy condition (is physical).
         """
-        # Characteristic velocities
-        lambda_left = flow / self.retardation(c_left)
-        lambda_right = flow / self.retardation(c_right)
+        lambda_left = 1.0 / self.retardation(c_left)
+        lambda_right = 1.0 / self.retardation(c_right)
 
-        if not np.isfinite(lambda_left) or not np.isfinite(lambda_right) or not np.isfinite(shock_vel):
+        if not np.isfinite(lambda_left) or not np.isfinite(lambda_right) or not np.isfinite(shock_speed):
             return False
 
-        # Lax condition: λ(C_L) > s_shock > λ(C_R)
-        tolerance = 1e-14 * max(abs(lambda_left), abs(lambda_right), abs(shock_vel))
+        tolerance = 1e-14 * max(abs(lambda_left), abs(lambda_right), abs(shock_speed))
 
-        return bool((lambda_left > shock_vel - tolerance) and (shock_vel > lambda_right - tolerance))
+        return bool((lambda_left > shock_speed - tolerance) and (shock_speed > lambda_right - tolerance))
 
 
 @dataclass
@@ -239,8 +219,9 @@ class FreundlichSorption(NonlinearSorption):
         """
         Compute retardation factor R(C).
 
-        The retardation factor relates concentration velocity to pore water velocity:
-            v_C = flow / R(C)
+        The retardation factor relates concentration speed to pore water speed in
+        (V, θ) coordinates:
+            dV/dθ = 1 / R(C)
 
         For Freundlich sorption:
             R(C) = 1 + (rho_b*k_f)/(n_por*n) * C^((1/n)-1)
@@ -416,10 +397,10 @@ class ConstantRetardation:
     Notes
     -----
     With constant retardation:
-    - All concentrations travel at same velocity: flow / R
+    - All concentrations travel at same speed in (V, θ): dV/dθ = 1/R
     - No rarefaction waves form (all concentrations travel together)
     - Shocks occur only at concentration discontinuities at inlet
-    - Solution reduces to simple time-shifting
+    - Solution reduces to simple θ-shifting (and then t-shifting via the θ↔t map)
 
     This is equivalent to using `infiltration_to_extraction_series` in the
     gwtransport package.
@@ -498,55 +479,37 @@ class ConstantRetardation:
         msg = "concentration_from_retardation not applicable for ConstantRetardation (R is independent of C)"
         raise NotImplementedError(msg)
 
-    def shock_velocity(self, c_left: float, c_right: float, flow: float) -> float:  # noqa: ARG002
-        """
-        Compute shock velocity for constant retardation.
+    def shock_speed(self, c_left: float, c_right: float) -> float:  # noqa: ARG002
+        """Compute shock speed dV/dθ for constant retardation.
 
-        With constant R, the shock velocity simplifies to:
-            s_shock = flow / R
-
-        This is the same as all characteristic velocities.
+        With constant R, ``dV/dθ = 1 / R`` for any concentration pair —
+        identical to every characteristic speed.
 
         Parameters
         ----------
-        c_left : float
-            Concentration upstream of shock (not used for constant R).
-        c_right : float
-            Concentration downstream of shock (not used for constant R).
-        flow : float
-            Flow rate [volume/time].
+        c_left, c_right : float
+            Concentrations (unused — kept for ABC compatibility).
 
         Returns
         -------
-        s_shock : float
-            Shock velocity [volume/time].
+        shock_speed : float
+            Shock speed dV/dθ = 1/R.
         """
-        return flow / self.retardation_factor
+        return 1.0 / self.retardation_factor
 
-    def check_entropy_condition(self, c_left: float, c_right: float, shock_vel: float, flow: float) -> bool:  # noqa: ARG002, PLR6301
-        """
-        Check entropy condition for constant retardation.
+    def check_entropy_condition(self, c_left: float, c_right: float, shock_speed: float) -> bool:  # noqa: PLR6301
+        """Entropy condition for constant retardation: trivially satisfied.
 
-        With constant R, all characteristic velocities are equal, so the
-        entropy condition is trivially satisfied for any shock (or rather,
-        shocks don't really exist - they're just contact discontinuities).
-
-        Parameters
-        ----------
-        c_left : float
-            Concentration upstream.
-        c_right : float
-            Concentration downstream.
-        shock_vel : float
-            Shock velocity.
-        flow : float
-            Flow rate.
+        With constant R every characteristic speed equals the shock speed in
+        θ-space, so the Lax condition holds as an equality regardless of
+        ``c_left``/``c_right``.
 
         Returns
         -------
         satisfies : bool
-            Always True for constant retardation.
+            Always True.
         """
+        del c_left, c_right, shock_speed
         return True
 
 
@@ -734,8 +697,10 @@ class LangmuirSorption(NonlinearSorption):
         r_arr = np.asarray(r)
 
         r_minus_1 = r_arr - 1.0
-        # For R <= 1 or very large R, return 0
-        c = np.where(r_minus_1 > 0, np.sqrt(self.a_coeff / r_minus_1) - self.k_l, 0.0)
+        # Mask r_minus_1 to a safe placeholder before division to avoid the
+        # RuntimeWarning emitted by np.where's eager evaluation when r == 1.
+        safe_r_minus_1 = np.where(r_minus_1 > 0, r_minus_1, 1.0)
+        c = np.where(r_minus_1 > 0, np.sqrt(self.a_coeff / safe_r_minus_1) - self.k_l, 0.0)
         result = np.maximum(c, 0.0)
 
         return result if is_array else float(result)
@@ -745,201 +710,149 @@ SorptionModel = NonlinearSorption | ConstantRetardation
 """Type alias for all sorption models accepted by the front-tracking solver."""
 
 
-def characteristic_velocity(c: float, flow: float, sorption: SorptionModel) -> float:
-    """
-    Compute characteristic velocity for given concentration.
+def characteristic_speed(c: float, sorption: SorptionModel) -> float:
+    """Compute characteristic speed dV/dθ = 1/R(C).
 
-    In smooth regions of the solution, concentration travels at velocity:
-        v = flow / R(C)
+    In (V, θ) coordinates, every characteristic propagates at a flow-free
+    speed determined solely by the local concentration and the sorption
+    isotherm.
 
     Parameters
     ----------
     c : float
         Dissolved concentration [mass/volume].
-    flow : float
-        Flow rate [volume/time].
     sorption : SorptionModel
         Sorption model.
 
     Returns
     -------
-    velocity : float
-        Characteristic velocity [volume/time].
+    speed : float
+        Characteristic speed dV/dθ.
 
     Examples
     --------
     >>> sorption = FreundlichSorption(
     ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
     ... )
-    >>> v = characteristic_velocity(c=5.0, flow=100.0, sorption=sorption)
-    >>> v > 0
+    >>> s = characteristic_speed(c=5.0, sorption=sorption)
+    >>> s > 0
     True
     """
-    return float(flow / sorption.retardation(c))
+    return float(1.0 / sorption.retardation(c))
 
 
 def characteristic_position(
-    c: float, flow: float, sorption: SorptionModel, t_start: float, v_start: float, t: float
+    c: float,
+    sorption: SorptionModel,
+    theta_start: float,
+    v_start: float,
+    theta: float,
 ) -> float | None:
-    """
-    Compute exact position of characteristic at time t.
+    """Compute position of a characteristic at cumulative flow θ.
 
-    Characteristics propagate linearly in time:
-        V(t) = v_start + velocity * (t - t_start)
+    Characteristics propagate linearly in θ::
 
-    where velocity = flow / R(C) is constant along the characteristic.
+        V(θ) = v_start + characteristic_speed(C) * (θ - θ_start)
 
     Parameters
     ----------
     c : float
         Concentration carried by characteristic [mass/volume].
-    flow : float
-        Flow rate [volume/time].
     sorption : SorptionModel
         Sorption model.
-    t_start : float
-        Time when characteristic starts [days].
+    theta_start : float
+        Cumulative flow at which the characteristic starts [m³].
     v_start : float
-        Starting position [volume].
-    t : float
-        Time at which to compute position [days].
+        Starting position [m³].
+    theta : float
+        Cumulative flow at which to evaluate position [m³].
 
     Returns
     -------
     position : float or None
-        Position at time t [volume], or None if t < t_start.
+        Position at θ [m³], or None if θ < θ_start.
 
     Examples
     --------
     >>> sorption = ConstantRetardation(retardation_factor=2.0)
     >>> v = characteristic_position(
-    ...     c=5.0, flow=100.0, sorption=sorption, t_start=0.0, v_start=0.0, t=10.0
+    ...     c=5.0, sorption=sorption, theta_start=0.0, v_start=0.0, theta=1000.0
     ... )
-    >>> bool(np.isclose(v, 500.0))  # v = 100/2 * 10 = 500
+    >>> bool(np.isclose(v, 500.0))  # v = (1/2) * 1000 = 500
     True
     """
-    if t < t_start:
+    if theta < theta_start:
         return None
 
-    velocity = characteristic_velocity(c, flow, sorption)
-    dt_days = t - t_start
-
-    return v_start + velocity * dt_days
+    return v_start + characteristic_speed(c, sorption) * (theta - theta_start)
 
 
-def compute_first_front_arrival_time(
+def compute_first_front_arrival_theta(
     cin: npt.NDArray[np.floating],
-    flow: npt.NDArray[np.floating],
-    tedges: pd.DatetimeIndex,
+    theta_edges: npt.NDArray[np.floating],
     aquifer_pore_volume: float,
     sorption: SorptionModel,
 ) -> float:
-    """
-    Compute exact time when first wave reaches outlet (v_max).
+    """Cumulative-flow θ at which ``c_first`` arrives at the outlet (end of spin-up).
 
-    This function returns the precise moment when the first non-zero
-    concentration wave from the inlet arrives at the outlet. This marks
-    the end of the spin-up period.
+    "Arrival" means the θ at which the ``c_first`` *level* is fully present at
+    the outlet, ``θ_emit + V·R(c_first)`` for ``n<1`` and
+    ``θ_emit + V·C_T(c_first)/c_first`` for ``n>1``/constant retardation.
 
-    The wave type emitted by a step ``0 → c_first`` depends on the sorption
-    regime; this function uses the matching velocity:
+    .. warning::
 
-    - Freundlich ``n > 1`` and ``ConstantRetardation``: the solver emits a
-      Rankine-Hugoniot shock. The arrival uses shock velocity
-      ``s = flow · c / (C_tot(c) - C_tot(0))``.
-    - Freundlich ``n < 1``: the solver emits a single ``CharacteristicWave``
-      with velocity ``flow / R(c)``. The arrival uses that velocity.
-
-    Algorithm:
-    1. Find first index where cin > 0
-    2. Branch on sorption regime; compute the corresponding target cumulative
-       flow volume that the leading wave must accumulate to reach the outlet.
-    3. Account for piecewise constant flow during transit.
-    4. Return arrival time in days from tedges[0].
+       For ``n<1`` with ``c_min > 0`` (default ``c_min = 1e-12`` in
+       :class:`FreundlichSorption`), the actual wave emitted is a
+       :class:`RarefactionWave` whose head (``c = c_min ≈ 0``) reaches the
+       outlet at θ ≈ ``V·R(c_min) ≈ V`` — *much* earlier than the value this
+       function returns (which is the *tail* arrival ``V·R(c_first)``).
+       The function preserves the legacy "tail arrival" semantics intentionally,
+       so the returned θ is a conservative end-of-spin-up: c is ≤ c_first
+       everywhere before it. Consult the solver event log for the true rarefaction
+       head crossing.
 
     Parameters
     ----------
     cin : numpy.ndarray
-        Inlet concentration [mass/volume]. Length = len(tedges) - 1.
-    flow : numpy.ndarray
-        Flow rate [volume/time]. Length = len(tedges) - 1.
-    tedges : pandas.DatetimeIndex
-        Time bin edges. Length = len(cin) + 1.
-        Expected to be DatetimeIndex.
+        Inlet concentration [mass/volume].
+    theta_edges : numpy.ndarray
+        Cumulative-flow edges; length ``len(cin) + 1``.
     aquifer_pore_volume : float
-        Total pore volume [volume]. Must be positive.
+        Total pore volume [m³]. Must be positive.
     sorption : SorptionModel
         Sorption model.
 
     Returns
     -------
-    t_first_arrival : float
-        Time when first wave reaches outlet, measured in days from tedges[0].
-        Returns np.inf if no concentration ever arrives.
-
-    Notes
-    -----
-    The residence time accounts for retardation:
-        residence_time = aquifer_pore_volume * R(C) / flow_avg
-
-    For piecewise constant flow, we integrate:
-        ∫₀^residence_time flow(t) dt = aquifer_pore_volume * R(C)
-
-    This function computes the EXACT crossing time in days, not a bin edge.
+    theta_first_arrival : float
+        Cumulative-flow θ at which ``c_first`` is fully present at the outlet
+        [m³]. Returns ``np.inf`` only if ``cin`` is identically zero.
 
     Examples
     --------
-    >>> import pandas as pd
-    >>> cin = np.array([0.0, 10.0] + [10.0] * 10)  # First bin zero, then nonzero
-    >>> flow = np.array([100.0] * 12)  # Constant flow
-    >>> tedges = pd.date_range("2020-01-01", periods=13, freq="D")
+    >>> cin = np.array([0.0, 10.0] + [10.0] * 10)
+    >>> theta_edges = np.linspace(0.0, 1300.0, 13)  # constant flow=100, dt=1
     >>> sorption = ConstantRetardation(retardation_factor=2.0)
-    >>> t_first = compute_first_front_arrival_time(cin, flow, tedges, 500.0, sorption)
-    >>> # Result is in days from tedges[0]
-    >>> bool(np.isclose(t_first, 11.0))  # 1 day (offset) + 10 days (travel time)
+    >>> theta_first = compute_first_front_arrival_theta(
+    ...     cin, theta_edges, 500.0, sorption
+    ... )
+    >>> bool(np.isclose(theta_first, 100.0 + 500.0 * 2.0))  # θ_emit + V·R
     True
     """
-    # Find first non-zero concentration
     nonzero_indices = np.where(cin > 0)[0]
-
     if len(nonzero_indices) == 0:
-        # No concentration ever arrives
-        return np.inf
-
-    idx_first = nonzero_indices[0]
-    c_first = float(cin[idx_first])
-
-    # Branch on sorption regime; the solver emits a different wave type for the
-    # 0 → c_first inlet step. See `create_inlet_waves_at_time` in handlers.py.
-    if isinstance(sorption, FreundlichSorption) and sorption.n < 1.0:
-        # n<1: solver creates a single CharacteristicWave; arrival uses
-        # characteristic velocity flow / R(c).
-        target_volume = aquifer_pore_volume * float(sorption.retardation(c_first))
-    else:
-        # n>1 (Freundlich) or ConstantRetardation: solver creates a R-H shock.
-        # Shock velocity from C_tot(0) ≈ 0 (default c_min=1e-12) to C_tot(c_first):
-        #   s = flow · c_first / (C_tot(c_first) - C_tot(0))
-        # so target_volume = V · C_tot(c_first) / c_first. For ConstantRetardation
-        # this coincides with V · R because C_tot(c)/c = R there.
-        target_volume = aquifer_pore_volume * float(sorption.total_concentration(c_first)) / c_first
-
-    # Vectorized integration of piecewise-constant flow starting from idx_first.
-    # Convert all bin widths to days at once and accumulate the volume profile.
-    tedges_days = np.asarray((tedges - tedges[0]) / pd.Timedelta(days=1), dtype=float)
-    dt_days = np.diff(tedges_days[idx_first:])
-    volumes = np.asarray(flow[idx_first:], dtype=float) * dt_days
-    cumulative_volume = np.cumsum(volumes)
-
-    # Locate the first bin whose cumulative volume reaches the target.
-    bin_offset = int(np.searchsorted(cumulative_volume, target_volume, side="left"))
-
-    if bin_offset >= len(cumulative_volume):
-        # Never reaches outlet with given flow history
         return float(np.inf)
 
-    # Volume already accumulated before entering the bin where arrival occurs.
-    volume_before_bin = float(cumulative_volume[bin_offset - 1]) if bin_offset > 0 else 0.0
-    remaining_volume = target_volume - volume_before_bin
-    dt_partial = remaining_volume / float(flow[idx_first + bin_offset])
+    idx_first = int(nonzero_indices[0])
+    c_first = float(cin[idx_first])
 
-    return float(float(tedges_days[idx_first + bin_offset]) + dt_partial)
+    if isinstance(sorption, FreundlichSorption) and sorption.n < 1.0:
+        # n<1: the 0→c_first step emits a rarefaction; its tail (c=c_first)
+        # reaches the outlet after V·R(c_first) units of cumulative flow.
+        target_volume = aquifer_pore_volume * float(sorption.retardation(c_first))
+    else:
+        # n>1 or constant: R-H shock with speed = c / (C_T(c) - C_T(0));
+        # target volume = V · C_T(c_first) / c_first.
+        target_volume = aquifer_pore_volume * float(sorption.total_concentration(c_first)) / c_first
+
+    return float(theta_edges[idx_first]) + target_volume

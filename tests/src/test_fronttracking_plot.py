@@ -72,18 +72,29 @@ class TestPlotVtDiagramData:
         fig, ax = plt.subplots()
         plot_vt_diagram(tracker_pulse.state, ax=ax)
 
-        active_chars = sum(1 for w in tracker_pulse.state.waves if isinstance(w, CharacteristicWave) and w.is_active)
-        active_shocks = sum(1 for w in tracker_pulse.state.waves if isinstance(w, ShockWave) and w.is_active)
-        active_rarefs = sum(1 for w in tracker_pulse.state.waves if isinstance(w, RarefactionWave) and w.is_active)
+        state = tracker_pulse.state
+        # Default t_max in plot_vt_diagram is (tedges[-1] - tedges[0]) in days,
+        # corresponding to theta_max = state.theta_at_t(t_max). Waves whose
+        # theta_start is past that are active in state but not visible — only
+        # count waves whose trajectory begins within the visible θ window.
+        t_max_days = float((state.tedges[-1] - state.tedges[0]) / pd.Timedelta(days=1))
+        theta_max = state.theta_at_t(t_max_days)
 
-        # plot.py uses blue for characteristics, red for shocks; rarefactions render
-        # as fill_between collections (not lines).
-        if active_chars > 0:
-            assert sum(1 for ln in ax.get_lines() if ln.get_color() == "b") >= active_chars
-        if active_shocks > 0:
-            assert sum(1 for ln in ax.get_lines() if ln.get_color() == "r") >= active_shocks
-        if active_rarefs > 0:
-            assert len(ax.collections) >= active_rarefs
+        def _visible(w):
+            return w.is_active and w.theta_start < theta_max
+
+        visible_chars = sum(1 for w in state.waves if isinstance(w, CharacteristicWave) and _visible(w))
+        visible_shocks = sum(1 for w in state.waves if isinstance(w, ShockWave) and _visible(w))
+        visible_rarefs = sum(1 for w in state.waves if isinstance(w, RarefactionWave) and _visible(w))
+
+        # plot.py uses blue ('b') for characteristics, red ('r') for shocks; rarefactions render
+        # as green head/tail lines plus a fill_between collection.
+        if visible_chars > 0:
+            assert sum(1 for ln in ax.get_lines() if ln.get_color() == "b") >= visible_chars
+        if visible_shocks > 0:
+            assert sum(1 for ln in ax.get_lines() if ln.get_color() == "r") >= visible_shocks
+        if visible_rarefs > 0:
+            assert len(ax.collections) >= visible_rarefs
 
         plt.close(fig)
 
