@@ -718,47 +718,50 @@ class TestDecayingShockWave:
     def test_concentration_at_point_three_region_branching(self):
         """concentration_at_point dispatches correctly across the shock, fan, and downstream.
 
-        Reuses test 1 setup (Freundlich n=2, c_R=0, K=1000/27, theta_test=79000/27,
-        V_s_test=2000/27, c_decay_test=1.0). Verifies all three regions:
+        Reuses the c_R>0 setup (v_origin=20, c_fixed=1) so the test catches
+        v_origin-coefficient bugs in the fan-branch r_target and c_fixed-sign
+        bugs in the at-shock average. Hand-derived state at theta_test=1216:
+        V_s=36, c_decay=4 (u=2), so the fan spans R in [R(4), R(1)] = [13.5, 26].
 
-        - v > V_s(theta) + tol: downstream, returns c_fixed=0.
-        - |v - V_s(theta)| within tol: returns 0.5*(c_decay + c_fixed) = 0.5.
-        - v < V_s(theta): inside the fan; returns the self-similar c
-          satisfying R(c) = (theta - theta_origin)/(v - v_origin).
+        Three regions checked:
 
-        Hand-computed fan-interior point: at v = 1000/27 (= V_s_test/2),
-        R = (52000/27) / (1000/27) = 52. concentration_from_retardation(52) =
-        (25/(R-1))^2 = (25/51)^2 = 625/2601 for Freundlich n=2 with alpha=50.
+        - v > V_s(theta) + tol: downstream, returns c_fixed=1.
+        - |v - V_s(theta)| within tol: returns 0.5*(c_decay + c_fixed) = 2.5.
+        - v_fan = v_origin + 12 = 32 (R = 216/12 = 18, inside [13.5, 26]):
+          fan-interior c = concentration_from_retardation(18) = (25/17)^2 =
+          625/289 for Freundlich n=2 with alpha=50.
         """
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        v_collision = 1000.0 / 27.0
+        v_origin = 20.0
+        theta_origin = 1000.0
+        v_collision = v_origin + 6.0  # = 26
 
         wave = DecayingShockWave(
-            theta_start=1500.0,
+            theta_start=theta_origin + 56.0,  # = 1056
             v_start=v_collision,
-            c_decay_initial=4.0,
-            c_fixed=0.0,
+            c_decay_initial=9.0,  # u_c = 3
+            c_fixed=1.0,  # u_R = 1
             decay_side="left",
-            v_origin=0.0,
-            theta_origin=1000.0,
+            v_origin=v_origin,
+            theta_origin=theta_origin,
             sorption=sorption,
         )
 
-        theta_test = 79000.0 / 27.0
-        v_s_test = 2000.0 / 27.0
+        theta_test = theta_origin + 216.0  # = 1216
+        v_s_test = v_origin + 16.0  # = 36
 
-        # At the shock face: average of decay and fixed.
+        # At the shock face: 0.5 * (c_decay + c_fixed) = 0.5 * (4 + 1) = 2.5.
         c_at_shock = wave.concentration_at_point(v=v_s_test, theta=theta_test)
         assert c_at_shock is not None
-        assert pytest.approx(0.5, rel=1e-14) == c_at_shock
+        assert pytest.approx(2.5, rel=1e-14) == c_at_shock
 
-        # Downstream of the shock: c_fixed = 0.
+        # Downstream of the shock: c_fixed = 1.
         c_downstream = wave.concentration_at_point(v=v_s_test + 1.0, theta=theta_test)
-        assert c_downstream == 0.0
+        assert c_downstream == 1.0
 
-        # Inside the fan at v = v_s_test / 2 = 1000/27. R = 52, c = 625/2601.
-        v_fan = 1000.0 / 27.0
-        c_fan_expected = 625.0 / 2601.0
+        # Inside the fan at v_fan = 32 (R = 18, in [13.5, 26]): c = (25/17)^2.
+        v_fan = v_origin + 12.0  # = 32
+        c_fan_expected = (25.0 / 17.0) ** 2
         c_fan = wave.concentration_at_point(v=v_fan, theta=theta_test)
         assert c_fan is not None
         assert pytest.approx(c_fan_expected, rel=1e-13) == c_fan

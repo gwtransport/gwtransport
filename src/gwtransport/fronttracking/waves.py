@@ -902,10 +902,10 @@ def _outlet_crossing_freundlich(
         return float(theta_origin + theta_local)
 
     # n=2, c_fixed > 0: V_s - v_origin = 2·K·u / (u - u_r)^2 ⇒ quadratic in u.
-    # The plus-sqrt root always satisfies u > u_r for K, alpha, delta_v > 0
-    # (algebraic identity: roots multiply to u_r^2 - K·α/θ < u_r^2, so exactly
-    # one root exceeds u_r and it is the plus-sqrt branch). The minus-sqrt
-    # root is the unphysical companion.
+    # The plus-sqrt root always satisfies u > u_r for K, alpha, delta_v > 0:
+    # the quadratic's roots multiply to u_r² and sum to 2u_r + 2K/delta_v > 2u_r,
+    # so exactly one root exceeds u_r and it is the plus-sqrt branch. The
+    # minus-sqrt root is the unphysical companion.
     u_r = c_fixed**0.5
     b_coef = -(2.0 * delta_v * u_r + 2.0 * k_invariant)
     c_coef = delta_v * u_r * u_r
