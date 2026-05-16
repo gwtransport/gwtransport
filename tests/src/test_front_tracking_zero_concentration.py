@@ -131,14 +131,16 @@ class TestFirstArrivalTime:
             porosity=0.3,
         )
 
-        # First arrival should be > day 5 (injection start)
-        assert structure[0]["t_first_arrival"] > 5.0
+        # First arrival θ should be > injection-start θ. With constant flow=100,
+        # injection starts at t=5, so θ_injection_start = 500. First arrival is
+        # tail-of-spin-up = θ_emit + V·R(c_first) (see compute_first_front_arrival_theta).
+        theta_first = structure[0]["theta_first_arrival"]
+        assert theta_first > 500.0  # > θ at injection-start (t=5, flow=100)
+        assert np.isfinite(theta_first)
 
-        # First arrival should be finite
-        assert np.isfinite(structure[0]["t_first_arrival"])
-
-        # Output before first arrival should be zero
-        t_first = structure[0]["t_first_arrival"]
+        # Output before first arrival (translated to time) should be zero.
+        tracker_state = structure[0]["tracker_state"]
+        t_first = tracker_state.t_at_theta(theta_first)
         cout_tedges_days = (cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)
         mask_before = cout_tedges_days[1:-1] < t_first - 1e-10
         cout_before = cout[:-1][mask_before]

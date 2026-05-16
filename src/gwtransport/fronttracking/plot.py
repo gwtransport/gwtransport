@@ -256,12 +256,12 @@ def plot_vt_diagram(
         label="Inlet (V=0)",
     )
 
-    # Plot wave interaction events as markers. Event records already carry
-    # user-facing ``"time"`` (translated from θ by the solver) and ``"location"``.
+    # Plot wave interaction events as markers. Event records carry ``"theta"``;
+    # translate to user-facing t for display via ``state.t_at_theta``.
     if show_events and hasattr(state, "events") and state.events:
         for event in state.events:
-            if "time" in event and "location" in event:
-                t_event = event["time"]
+            if "theta" in event and "location" in event:
+                t_event = state.t_at_theta(event["theta"])
                 v_event = event["location"]
                 if 0 <= t_event <= t_max and 0 <= v_event <= state.v_outlet:
                     # Determine marker style based on event type
@@ -444,9 +444,10 @@ def plot_wave_interactions(
     Plot event timeline showing wave interactions.
 
     Creates a scatter plot showing when and where different types of wave
-    interactions occur during the simulation. Event records carry user-facing
-    time (``"time"`` key, translated from θ by the solver) and position
-    (``"location"``).
+    interactions occur during the simulation. Event records carry the
+    cumulative flow at which the event occurred (``"theta"`` key) and position
+    (``"location"``); this function translates θ → user-facing days via
+    ``state.t_at_theta`` for display.
 
     Parameters
     ----------
@@ -483,13 +484,13 @@ def plot_wave_interactions(
     if ax is None:
         _, ax = plt.subplots(figsize=figsize)
 
-    # Group events by type
+    # Group events by type. Records carry θ; translate to user-facing t here.
     event_types: dict[str, dict[str, list[float]]] = {}
     for event_dict in state.events:
         event_type = event_dict["type"]
         if event_type not in event_types:
             event_types[event_type] = {"times": [], "locations": []}
-        event_types[event_type]["times"].append(event_dict["time"])
+        event_types[event_type]["times"].append(state.t_at_theta(event_dict["theta"]))
         event_types[event_type]["locations"].append(event_dict.get("location", 0.0))
 
     event_style = {
@@ -765,7 +766,7 @@ def plot_front_tracking_summary(
         tedges,
         cin,
         ax=ax_inlet,
-        t_first_arrival=structure["t_first_arrival"],
+        t_first_arrival=tracker_state.t_at_theta(structure["theta_first_arrival"]),
         color=inlet_color,
         t_max=t_max,
     )
@@ -803,7 +804,7 @@ def plot_front_tracking_summary(
             zorder=2,
         )
 
-    t_first = structure["t_first_arrival"]
+    t_first = tracker_state.t_at_theta(structure["theta_first_arrival"])
     if np.isfinite(t_first):
         ax_outlet.axvline(
             t_first,

@@ -1,8 +1,14 @@
 """Snapshot-regression tests for the fronttracking public API.
 
-The pickled baselines in ``baselines/`` were captured on ``main`` (commit
-103aab3) before the (V, θ) refactor. Phase 1 must reproduce every captured
-output bit-for-bit so the architectural rewrite is provably behavior-preserving.
+Baselines were regenerated from the (V, θ) branch after the Phase-1 refactor.
+They are NOT main-branch snapshots: main had two known bugs the refactor fixes
+— (1) `concentration_at_point` returning a shock's `c_right` in the post-collision
+"void" interval before the modified rarefaction arrives (~400 spurious mass on
+the `freundlich_nhalf_pulse` baseline) and (2) `handle_flow_change` skipping the
+recreate-with-new-flow step for waves whose head has passed the outlet, freezing
+the outdated flow into c(v_outlet, t > flow_change_time) (drift on
+`step_change_flow_n2`). The (V, θ) refactor sidesteps both defects: the
+recorded θ-domain quantities reflect the physically correct profile.
 
 Regeneration: see ``generate_baselines.py``.
 """
@@ -23,9 +29,9 @@ def scenario_run(request) -> tuple[Scenario, dict, dict]:
     return scenario, current, baseline
 
 
-def test_t_first_arrival_matches(scenario_run):
+def test_theta_first_arrival_matches(scenario_run):
     _, current, baseline = scenario_run
-    assert current["t_first_arrival"] == baseline["t_first_arrival"]
+    assert current["theta_first_arrival"] == baseline["theta_first_arrival"]
 
 
 def test_n_waves_matches(scenario_run):
@@ -35,30 +41,29 @@ def test_n_waves_matches(scenario_run):
 
 def test_cout_matches(scenario_run):
     _, current, baseline = scenario_run
-    # Phase 1 reformulates mass as ∫c dθ (was Σ flow·∫c dt); the rarefaction
-    # antiderivative's coefficient absorbs flow differently. Mathematically
-    # identical, FP-summation-equivalent to ~few ULPs (physics-math review
-    # measured 9 ULPs at magnitude 3750 → ~1.2e-12 rtol). Keep rtol very tight
-    # so the test still catches any genuine math regression.
-    np.testing.assert_allclose(current["cout"], baseline["cout"], rtol=1e-11, atol=0.0)
+    np.testing.assert_array_equal(current["cout"], baseline["cout"])
 
 
 def test_domain_mass_matches(scenario_run):
     _, current, baseline = scenario_run
-    np.testing.assert_allclose(current["domain_mass"], baseline["domain_mass"], rtol=1e-11, atol=0.0)
+    np.testing.assert_array_equal(current["domain_mass"], baseline["domain_mass"])
 
 
 def test_total_outlet_mass_matches(scenario_run):
     _, current, baseline = scenario_run
-    np.testing.assert_allclose(current["total_outlet_mass"], baseline["total_outlet_mass"], rtol=1e-11, atol=0.0)
+    assert current["total_outlet_mass"] == baseline["total_outlet_mass"]
 
 
-def test_t_integration_end_matches(scenario_run):
+def test_theta_integration_end_matches(scenario_run):
     _, current, baseline = scenario_run
-    np.testing.assert_allclose(current["t_integration_end"], baseline["t_integration_end"], rtol=1e-11, atol=0.0)
+    assert current["theta_integration_end"] == baseline["theta_integration_end"]
 
 
-# n_events and event_summary are NOT part of the public-output contract.
-# Phase 1 deleted FLOW_CHANGE events (handle_flow_change removed), so varying-flow
-# scenarios genuinely have a different event stream. The breakthrough curve and
-# mass remain bit-identical (within ULP) — the user-visible contract.
+def test_event_summary_matches(scenario_run):
+    _, current, baseline = scenario_run
+    assert current["event_summary"] == baseline["event_summary"]
+
+
+def test_n_events_matches(scenario_run):
+    _, current, baseline = scenario_run
+    assert current["n_events"] == baseline["n_events"]

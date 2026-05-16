@@ -4,10 +4,9 @@ Physics validation utilities for front tracking in (V, θ) coordinates.
 This module provides functions to verify physical correctness of front-tracking
 simulations, including entropy conditions, concentration bounds, mass conservation,
 and event ordering. The solver runs in cumulative-flow coordinate
-``θ = ∫flow(t') dt'``; user-facing event records still carry the translated time
-``"time"`` (days) on the public ``state.events`` interface. Because ``flow ≥ 0``
-is enforced, θ is monotone non-decreasing in t and event ordering in either
-coordinate is equivalent.
+``θ = ∫flow(t') dt'``; events on ``state.events`` carry ``"theta"`` (m³). Because
+``flow ≥ 0`` is enforced, θ is monotone non-decreasing in t, so θ-ordering and
+chronological ordering are equivalent.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -16,7 +15,6 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import logging
 
 import numpy as np
-import pandas as pd
 
 from gwtransport.fronttracking.output import (
     compute_cumulative_inlet_mass,
@@ -40,7 +38,7 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     1. Entropy condition for all shocks
     2. No negative concentrations (within tolerance)
     3. Output concentration <= input maximum
-    4. Finite first arrival time
+    4. Finite first arrival θ
     5. No NaN values after spin-up period
     6. Events θ-ordered (equivalent to chronological under non-negative flow)
     7. Rarefaction head/tail θ-speed ordering
@@ -50,12 +48,12 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     ----------
     structure : dict
         Structure returned from ``infiltration_to_extraction_front_tracking_detailed``.
-        Must contain keys: ``'waves'``, ``'t_first_arrival'``, ``'events'``,
+        Must contain keys: ``'waves'``, ``'theta_first_arrival'``, ``'events'``,
         ``'n_shocks'``, ``'n_rarefactions'``, and optionally ``'tracker_state'``.
     cout : array-like
         Bin-averaged output concentrations.
     cout_tedges : pandas.DatetimeIndex
-        Output time edges for bins.
+        Output time edges for bins (only used for the spin-up mask).
     cin : array-like
         Input concentrations.
     verbose : bool, optional
@@ -121,20 +119,30 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     if not check3_pass:
         failures.append(f"Output exceeds input: {max_cout:.2f} > {max_cin:.2f}")
 
-    # Check 4: Finite first arrival time
-    t_first = structure["t_first_arrival"]
-    check4_pass = np.isfinite(t_first)
+    # Check 4: Finite first arrival θ
+    theta_first = structure["theta_first_arrival"]
+    check4_pass = np.isfinite(theta_first)
     checks.append({
-        "name": "Finite first arrival time",
+        "name": "Finite first arrival θ",
         "passed": check4_pass,
-        "message": f"First arrival: {t_first:.2f} days",
+        "message": f"First arrival: θ={theta_first:.2f}",
     })
     if not check4_pass:
-        failures.append(f"First arrival time is not finite: {t_first}")
+        failures.append(f"First arrival θ is not finite: {theta_first}")
 
-    # Check 5: No NaN values after spin-up period
-    cout_tedges_days = ((cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)).values
-    mask_after_spinup = cout_tedges_days[:-1] >= t_first
+    # Check 5: No NaN values after spin-up
+    tracker_state = structure.get("tracker_state")
+    if tracker_state is not None and np.isfinite(theta_first):
+        theta_at_edge = np.asarray([
+            tracker_state.theta_at_t(float(t)) for t in (cout_tedges[:-1] - cout_tedges[0]).total_seconds() / 86400.0
+        ])
+        mask_after_spinup = theta_at_edge >= theta_first
+    elif not np.isfinite(theta_first):
+        # No spin-up bound — every output row counts as "after spin-up".
+        mask_after_spinup = np.ones(len(cout), dtype=bool)
+    else:
+        # No tracker state to translate — nothing to check.
+        mask_after_spinup = np.zeros(len(cout), dtype=bool)
     cout_after_spinup = cout[mask_after_spinup]
     nan_count = np.sum(np.isnan(cout_after_spinup))
     check5_pass = nan_count == 0
@@ -147,27 +155,23 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
         failures.append(f"Found {nan_count} NaN values after spin-up period")
 
     # Check 6: Events θ-ordered.
-    # The solver records events in θ-order and writes the translated time
-    # ``e["time"]`` (days) to ``state.events``. Because ``flow >= 0`` is enforced,
-    # the θ → t map is monotone non-decreasing, so monotone-non-decreasing event
-    # times is exactly equivalent to monotone-non-decreasing θ.
-    event_times = [e["time"] for e in structure.get("events", [])]
-    if len(event_times) > 1:
-        is_ordered = all(event_times[i] <= event_times[i + 1] for i in range(len(event_times) - 1))
+    event_thetas = [e["theta"] for e in structure.get("events", [])]
+    if len(event_thetas) > 1:
+        is_ordered = all(event_thetas[i] <= event_thetas[i + 1] for i in range(len(event_thetas) - 1))
         check6_pass = is_ordered
         checks.append({
             "name": "Events θ-ordered",
             "passed": check6_pass,
-            "message": f"{len(event_times)} events",
+            "message": f"{len(event_thetas)} events",
         })
         if not check6_pass:
-            failures.append("Events are not θ-ordered (equivalent: not chronologically ordered)")
+            failures.append("Events are not θ-ordered")
     else:
         check6_pass = True
         checks.append({
             "name": "Events θ-ordered",
             "passed": True,
-            "message": f"{len(event_times)} events (N/A)",
+            "message": f"{len(event_thetas)} events (N/A)",
         })
 
     # Check 7: Rarefaction head/tail θ-speed ordering.
@@ -188,31 +192,22 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     if not check7_pass:
         failures.append(f"{raref_ordering_violations} rarefactions have incorrect head/tail ordering")
 
-    # Check 8: Total integrated outlet mass (until all mass exits).
-    # Compares total integrated outlet mass against total inlet mass.
-    tracker_state = structure.get("tracker_state")
-    if tracker_state is not None and hasattr(tracker_state, "flow"):
+    # Check 8: Total integrated outlet mass vs total inlet mass (in θ-space).
+    if tracker_state is not None and hasattr(tracker_state, "theta_edges"):
         waves = structure["waves"]
         v_outlet = tracker_state.v_outlet
         sorption = tracker_state.sorption
-        flow_arr = tracker_state.flow
-        tedges_in = tracker_state.tedges
-        tedges_days = (tedges_in - tedges_in[0]) / pd.Timedelta(days=1)
+        theta_edges_arr = np.asarray(tracker_state.theta_edges, dtype=float)
 
-        # Total mass that entered the domain across the full input window.
-        t_inlet_end = tedges_days.values[-1]
         total_mass_in = compute_cumulative_inlet_mass(
-            t=t_inlet_end, cin=cin, flow=flow_arr, tedges_days=tedges_days.values
+            theta=float(theta_edges_arr[-1]), cin=cin, theta_edges=theta_edges_arr
         )
 
-        # Total mass that exits the domain (integrated until all mass has exited).
-        total_mass_out, t_integration_end = compute_total_outlet_mass(
-            v_outlet=v_outlet, waves=waves, sorption=sorption, flow=flow_arr, tedges_days=tedges_days.values
+        total_mass_out, theta_integration_end = compute_total_outlet_mass(
+            v_outlet=v_outlet, waves=waves, sorption=sorption
         )
 
-        # If the inlet does not explicitly transition to C=0, the solver assumes
-        # the last cin level continues forever, biasing the mass balance.
-        epsilon_conc_zero = 1e-10  # Tolerance for checking if concentration is zero
+        epsilon_conc_zero = 1e-10
         if len(cin) > 0 and abs(cin[-1]) > epsilon_conc_zero and verbose:
             msg = (
                 f"\nWARNING: Inlet concentration ends at C={cin[-1]:.3f} (not zero).\n"
@@ -228,18 +223,17 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
         else:
             relative_error_total = abs(total_mass_out - total_mass_in)
 
-        # Analytical rarefaction integrals to infinity can have O(1e-7) precision.
         check8_pass = relative_error_total <= max(rtol, 1e-6)
         checks.append({
             "name": "Total integrated outlet mass",
             "passed": check8_pass,
-            "message": f"Relative error: {relative_error_total:.2e} (integrated to t={t_integration_end:.1f} days)",
+            "message": (f"Relative error: {relative_error_total:.2e} (integrated to θ={theta_integration_end:.1f})"),
         })
         if not check8_pass:
             failures.append(
                 f"Total outlet mass mismatch: relative_error={relative_error_total:.2e} > {rtol:.2e} "
                 f"(total_mass_out={total_mass_out:.6e}, total_mass_in={total_mass_in:.6e}, "
-                f"t_integration_end={t_integration_end:.1f} days)"
+                f"θ_integration_end={theta_integration_end:.1f})"
             )
     else:
         check8_pass = True

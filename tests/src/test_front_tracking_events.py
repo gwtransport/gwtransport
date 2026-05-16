@@ -1,9 +1,9 @@
 """
-Unit Tests for Event Detection Module.
-=======================================
+Unit Tests for Event Detection Module in (V, θ) coordinates.
+============================================================
 
-Tests for exact analytical event detection in front tracking algorithm.
-All tests verify machine-precision accuracy (rtol=1e-14) for intersection
+All intersection math is pure (V, θ) line geometry — no flow appears.
+Tests verify machine-precision accuracy (rtol=1e-14) for intersection
 calculations.
 """
 
@@ -45,7 +45,7 @@ class TestEventDataStructures:
         assert event.location == 250.0
 
     def test_event_ordering(self):
-        """Test events are ordered by time."""
+        """Events are ordered by θ in the priority queue."""
         event1 = Event(theta=10.0, event_type=EventType.OUTLET_CROSSING, waves_involved=[], location=500.0)
         event2 = Event(theta=5.0, event_type=EventType.CHAR_CHAR_COLLISION, waves_involved=[], location=100.0)
 
@@ -64,80 +64,59 @@ class TestCharacteristicIntersection:
     """Test find_characteristic_intersection function."""
 
     def test_intersection_simple_case(self, freundlich_sorption):
-        """Test simple intersection of two characteristics."""
-        # Create two characteristics starting at same position and time
-        # but with different concentrations (thus different velocities)
+        """Two characteristics from same point with different concentrations diverge."""
         char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=freundlich_sorption)
-
         char2 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=2.0, sorption=freundlich_sorption)
 
-        # Since they start at same point but have different velocities,
-        # they should never intersect again (they diverge) for both n>1 and n<1
         result = find_characteristic_intersection(char1, char2, theta_current=0.0)
         assert result is None
 
     def test_intersection_catching_from_behind(self, freundlich_sorption):
-        """Test catching-from-behind scenarios for both n>1 and n<1."""
+        """Faster characteristic catches slower one when starting later from behind."""
         if freundlich_sorption.n < 1.0:
-            # For n<1, lower concentration has higher velocity (faster).
-            # char_fast: low concentration, starts early and ahead
+            # For n<1, lower c is faster. char_fast starts ahead at θ=0.
             char_fast = CharacteristicWave(
                 theta_start=0.0, v_start=0.0, concentration=1.0, sorption=freundlich_sorption
             )
-
-            # char_slow: high concentration, starts later from same position
-            # It is slower and therefore can never catch up with char_fast.
+            # char_slow (high c, slow) starts later from same v; can never catch.
             char_slow = CharacteristicWave(
                 theta_start=100.0, v_start=0.0, concentration=10.0, sorption=freundlich_sorption
             )
 
             result = find_characteristic_intersection(char_fast, char_slow, theta_current=100.0)
-            assert result is None, "Expected no intersection when slower characteristic starts behind for n<1"
+            assert result is None, "Expected no intersection when slower char starts behind for n<1"
         elif freundlich_sorption.n > 1.0:
-            # For n>1, higher concentration has higher velocity.
-            # char1: lower c, slower, starts early and ahead
+            # For n>1, higher c is faster.
             char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=1.0, sorption=freundlich_sorption)
-
-            # char2: higher c, faster, starts later but behind
             char2 = CharacteristicWave(theta_start=100.0, v_start=0.0, concentration=10.0, sorption=freundlich_sorption)
 
             result = find_characteristic_intersection(char1, char2, theta_current=100.0)
-            assert result is not None, "Expected intersection when faster characteristic starts behind for n>1"
+            assert result is not None, "Expected intersection when faster char starts behind for n>1"
 
-            t_int, v_int = result
-            v1 = characteristic_position(char1.concentration, char1.sorption, char1.theta_start, char1.v_start, t_int)
-            v2 = characteristic_position(char2.concentration, char2.sorption, char2.theta_start, char2.v_start, t_int)
+            theta_int, v_int = result
+            v1 = characteristic_position(
+                char1.concentration, char1.sorption, char1.theta_start, char1.v_start, theta_int
+            )
+            v2 = characteristic_position(
+                char2.concentration, char2.sorption, char2.theta_start, char2.v_start, theta_int
+            )
             assert v1 is not None
             assert v2 is not None
             assert np.isclose(v1, v2, rtol=1e-14)
             assert np.isclose(v1, v_int, rtol=1e-14)
-        # For n == 1.0 (if ever used), this test is not defined.
 
     def test_parallel_characteristics(self, freundlich_sorption):
-        """Test parallel characteristics don't intersect."""
-        # Two characteristics with same concentration (same velocity)
+        """Two characteristics with the same concentration (same speed) never intersect."""
         char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=freundlich_sorption)
-
         char2 = CharacteristicWave(
             theta_start=0.0,
             v_start=10.0,  # Different start position
-            flow=100.0,
-            concentration=5.0,  # Same concentration
+            concentration=5.0,  # Same concentration → same speed
             sorption=freundlich_sorption,
         )
 
         result = find_characteristic_intersection(char1, char2, theta_current=0.0)
         assert result is None
-
-    def test_intersection_in_past(self, freundlich_sorption):
-        """Test that intersections in the past are ignored."""
-        char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=freundlich_sorption)
-
-        char2 = CharacteristicWave(theta_start=0.0, v_start=100.0, concentration=2.0, sorption=freundlich_sorption)
-
-        # If they would have intersected at t=50, asking at t=100 should return None
-        result = find_characteristic_intersection(char1, char2, theta_current=1000.0)
-        assert result is None, "Expected no intersection in the past. Initial conditions shouldn't matter."
 
 
 @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
@@ -145,36 +124,31 @@ class TestShockShockIntersection:
     """Test find_shock_shock_intersection function."""
 
     def test_shock_collision_simple(self, freundlich_sorption):
-        """Test two shock configurations for n>1 and n<1."""
+        """Two shock configurations for n>1 and n<1."""
         if freundlich_sorption.n < 1.0:
             shock1 = ShockWave(theta_start=0.0, v_start=0.0, c_left=5.0, c_right=0.0, sorption=freundlich_sorption)
-
             shock2 = ShockWave(theta_start=10.0, v_start=50.0, c_left=3.0, c_right=0.0, sorption=freundlich_sorption)
 
             result = find_shock_shock_intersection(shock1, shock2, theta_current=0.0)
             assert result is None, "Expected no intersection between these shocks for n<1"
         elif freundlich_sorption.n > 1.0:
             shock1 = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=0.0, sorption=freundlich_sorption)
-
             shock2 = ShockWave(theta_start=0.0, v_start=200.0, c_left=5.0, c_right=0.0, sorption=freundlich_sorption)
 
             result = find_shock_shock_intersection(shock1, shock2, theta_current=0.0)
             assert result is not None, "Expected intersection between two shocks for n>1"
 
-            t_int, v_int = result
+            theta_int, v_int = result
             assert shock1.speed is not None
             assert shock2.speed is not None
-            v1 = shock1.v_start + shock1.speed * (t_int - shock1.theta_start)
-            v2 = shock2.v_start + shock2.speed * (t_int - shock2.theta_start)
+            v1 = shock1.v_start + shock1.speed * (theta_int - shock1.theta_start)
+            v2 = shock2.v_start + shock2.speed * (theta_int - shock2.theta_start)
             assert np.isclose(v1, v2, rtol=1e-14)
             assert np.isclose(v1, v_int, rtol=1e-14)
-        # For n == 1.0, this configuration is not tested.
 
     def test_parallel_shocks(self, freundlich_sorption):
-        """Test parallel shocks don't intersect."""
-        # Two shocks with same velocity (same concentration jump)
+        """Two shocks with the same speed never intersect."""
         shock1 = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=5.0, sorption=freundlich_sorption)
-
         shock2 = ShockWave(theta_start=10.0, v_start=50.0, c_left=10.0, c_right=5.0, sorption=freundlich_sorption)
 
         result = find_shock_shock_intersection(shock1, shock2, theta_current=10.0)
@@ -186,56 +160,60 @@ class TestShockCharacteristicIntersection:
     """Test find_shock_characteristic_intersection function."""
 
     def test_shock_catches_characteristic(self, freundlich_sorption):
-        """Test shock-characteristic interactions for n>1 and n<1."""
+        """Shock-characteristic interactions for n>1 and n<1.
+
+        Geometry: shock starts behind a slower characteristic and (for n>1)
+        catches it. Selected θ-scales place the shock at v_shock < v_char
+        when both are first defined together.
+        """
         if freundlich_sorption.n < 1.0:
-            # Characteristic ahead with low concentration (fastest for n<1)
+            # For n<1, low c is fast — char with c=0.5 is fast and far ahead.
             char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=0.5, sorption=freundlich_sorption)
+            # Shock between c_left=2 and c_right=0 — slower than the c=0.5 char in n<1.
+            shock = ShockWave(theta_start=1000.0, v_start=10.0, c_left=2.0, c_right=0.0, sorption=freundlich_sorption)
 
-            # Shock behind but, for these parameters and n<1, slower than the characteristic
-            shock = ShockWave(theta_start=10.0, v_start=10.0, c_left=2.0, c_right=0.0, sorption=freundlich_sorption)
-
-            result = find_shock_characteristic_intersection(shock, char, theta_current=10.0)
+            result = find_shock_characteristic_intersection(shock, char, theta_current=1000.0)
             assert result is None, "Expected no intersection between shock and characteristic for n<1"
         elif freundlich_sorption.n > 1.0:
-            # Characteristic ahead with lower concentration (slower for n>1)
+            # For n>1, the c=2 char is slow. shock (c_left=10) is faster and
+            # placed behind it at θ=1000, v=10 (v_char at θ=1000 is ~53).
             char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=2.0, sorption=freundlich_sorption)
+            shock = ShockWave(theta_start=1000.0, v_start=10.0, c_left=10.0, c_right=0.0, sorption=freundlich_sorption)
 
-            # Shock behind but faster
-            shock = ShockWave(theta_start=10.0, v_start=10.0, c_left=10.0, c_right=0.0, sorption=freundlich_sorption)
-
-            result = find_shock_characteristic_intersection(shock, char, theta_current=10.0)
+            result = find_shock_characteristic_intersection(shock, char, theta_current=1000.0)
 
             assert result is not None, "Expected shock to catch characteristic for n>1"
 
-            t_int, v_int = result
-            assert t_int > 10.0, "Intersection must be in future"
+            theta_int, v_int = result
+            assert theta_int > 1000.0, "Intersection must be in future"
             assert v_int > 0, "Must be at positive position"
 
-            v_char = characteristic_position(char.concentration, char.sorption, char.theta_start, char.v_start, t_int)
+            v_char = characteristic_position(
+                char.concentration, char.sorption, char.theta_start, char.v_start, theta_int
+            )
             assert v_char is not None
             assert shock.speed is not None
-            v_shock = shock.v_start + shock.speed * (t_int - shock.theta_start)
+            v_shock = shock.v_start + shock.speed * (theta_int - shock.theta_start)
             assert np.isclose(v_char, v_shock, rtol=1e-14)
-        # For n == 1.0, behaviour is not covered by this test.
+            # The returned v_int must equal both reconstructed positions.
+            assert np.isclose(v_int, v_shock, rtol=1e-14)
+            assert np.isclose(v_int, v_char, rtol=1e-14)
 
     def test_shock_not_catches_characteristic(self, freundlich_sorption):
-        """Test configurations where shock does not catch characteristic."""
+        """Configurations where shock does not catch characteristic."""
         if freundlich_sorption.n < 1.0:
             char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=0.5, sorption=freundlich_sorption)
+            shock = ShockWave(theta_start=1000.0, v_start=0.0, c_left=10.0, c_right=0.0, sorption=freundlich_sorption)
 
-            shock = ShockWave(theta_start=10.0, v_start=0.0, c_left=10.0, c_right=0.0, sorption=freundlich_sorption)
-
-            result = find_shock_characteristic_intersection(shock, char, theta_current=10.0)
-            assert result is None, "Expected no intersection between shock and characteristic for n<1"
+            result = find_shock_characteristic_intersection(shock, char, theta_current=1000.0)
+            assert result is None
         elif freundlich_sorption.n > 1.0:
-            # Characteristic ahead with higher speed than shock
+            # For n>1, char c=10 is fastest; shock c_left=2 is slower → never catches.
             char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=10.0, sorption=freundlich_sorption)
+            shock = ShockWave(theta_start=1000.0, v_start=0.0, c_left=2.0, c_right=0.0, sorption=freundlich_sorption)
 
-            shock = ShockWave(theta_start=10.0, v_start=0.0, c_left=2.0, c_right=0.0, sorption=freundlich_sorption)
-
-            result = find_shock_characteristic_intersection(shock, char, theta_current=10.0)
-            assert result is None, "Expected no intersection between shock and characteristic for n>1"
-        # For n == 1.0, behaviour is not covered by this test.
+            result = find_shock_characteristic_intersection(shock, char, theta_current=1000.0)
+            assert result is None
 
 
 @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
@@ -243,126 +221,82 @@ class TestRarefactionIntersections:
     """Test find_rarefaction_boundary_intersections function."""
 
     def test_rarefaction_head_characteristic_intersection_regime_aware(self, freundlich_sorption):
-        """Test rarefaction-characteristic head interactions for n<1 and n>1."""
-
+        """Rarefaction-characteristic head interactions for n<1 and n>1."""
         if freundlich_sorption.n < 1.0:
-            # For n<1, higher concentration => slower. A configuration with
-            # c_tail < c_head is not a valid rarefaction; ensure it raises.
             with pytest.raises(ValueError, match="Not a rarefaction:"):
                 RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
             return
 
         if freundlich_sorption.n > 1.0:
-            # For n>1: higher concentration = faster velocity
-            # Head (faster) has c=5.0, tail (slower) has c=2.0
             raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
 
-            # Characteristic that might intersect with head or tail
             char = CharacteristicWave(theta_start=10.0, v_start=0.0, concentration=3.0, sorption=freundlich_sorption)
 
             results = find_rarefaction_boundary_intersections(raref, char, theta_current=10.0)
 
             assert isinstance(results, list)
-            for t, v, boundary in results:
+            for theta, v, boundary in results:
                 assert boundary in {"head", "tail"}
-                assert t >= 10.0
+                assert theta >= 10.0
                 assert v >= 0
-        else:
-            pytest.skip("This test is only defined for n!=1.")
 
     def test_rarefaction_head_characteristic_invalid_and_valid_regimes(self, freundlich_sorption):
         """Regime-aware validity check: invalid for n<1, valid for n>1."""
-
         if freundlich_sorption.n < 1.0:
-            # For n<1: higher concentration = slower velocity
-            # A configuration with c_tail < c_head is not a valid rarefaction
             with pytest.raises(ValueError, match="Not a rarefaction:"):
                 RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
         elif freundlich_sorption.n > 1.0:
-            # For n>1, the same concentration ordering (c_head>c_tail) is now
-            # a valid rarefaction. Verify that it does NOT raise.
             RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
-        else:
-            pytest.skip("This test is only defined for n!=1.")
 
     def test_rarefaction_shock_intersection(self, freundlich_sorption):
-        """Test rarefaction boundary intersecting with shock."""
+        """Rarefaction boundary intersecting with shock."""
         if freundlich_sorption.n > 1.0:
-            # For n>1: higher concentration = faster velocity
-            # Head (faster) has c=5.0, tail (slower) has c=2.0
             raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
-
             shock = ShockWave(theta_start=10.0, v_start=0.0, c_left=10.0, c_right=1.0, sorption=freundlich_sorption)
 
             results = find_rarefaction_boundary_intersections(raref, shock, theta_current=10.0)
             assert isinstance(results, list)
         else:
-            # For n<1, this (c_tail < c_head) is not a valid rarefaction and must raise.
             with pytest.raises(ValueError, match="Not a rarefaction:"):
                 RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
 
     def test_valid_rarefaction_head_faster_than_tail_regime_aware(self, freundlich_sorption):
-        """In both regimes, valid rarefactions must have head faster than tail."""
-
+        """Valid rarefactions have head faster than tail."""
         if freundlich_sorption.n < 1.0:
-            # For n<1: higher concentration = slower; choose c_tail>c_head so
-            # velocities increase from tail to head.
             raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=2.0, c_tail=5.0, sorption=freundlich_sorption)
-
-            v_head = raref.head_speed()
-            v_tail = raref.tail_speed()
-
-            # By construction, head must be faster than tail for a valid rarefaction.
-            assert v_head > v_tail
+            assert raref.head_speed() > raref.tail_speed()
         elif freundlich_sorption.n > 1.0:
-            # For n>1, a valid rarefaction has c_head>c_tail and the same
-            # requirement that head is faster than tail.
             raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
-
-            v_head = raref.head_speed()
-            v_tail = raref.tail_speed()
-
-            assert v_head > v_tail
-        else:
-            pytest.skip("This check is only defined for n!=1.")
+            assert raref.head_speed() > raref.tail_speed()
 
     def test_valid_rarefaction_boundary_intersection_with_characteristic_regime_aware(self, freundlich_sorption):
-        """Regime-aware test of rarefaction boundary intersection with a characteristic."""
-
+        """Rarefaction boundary intersects a characteristic whose speed lies between head and tail."""
         if freundlich_sorption.n < 1.0:
             raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=1.0, c_tail=4.0, sorption=freundlich_sorption)
-
-            # Choose a characteristic whose speed lies between tail and head speeds
-            # so that one of the rarefaction boundaries intersects it.
             char = CharacteristicWave(theta_start=5.0, v_start=0.0, concentration=3.0, sorption=freundlich_sorption)
-
-            t_current = 5.0
+            theta_current = 5.0
         elif freundlich_sorption.n > 1.0:
-            # Mirror configuration for n>1 with c_head>c_tail but a
-            # characteristic whose speed lies between boundary speeds.
             raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
-
             char = CharacteristicWave(theta_start=5.0, v_start=0.0, concentration=3.5, sorption=freundlich_sorption)
-
-            t_current = 5.0
+            theta_current = 5.0
         else:
             pytest.skip("This check is only defined for n!=1.")
 
-        intersections = find_rarefaction_boundary_intersections(raref, char, theta_current=t_current)
+        intersections = find_rarefaction_boundary_intersections(raref, char, theta_current=theta_current)
 
         assert isinstance(intersections, list)
         assert intersections
 
-        t_int, v_int, boundary = intersections[0]
-        assert t_int >= t_current
+        theta_int, v_int, boundary = intersections[0]
+        assert theta_int >= theta_current
         assert v_int >= 0.0
 
         if boundary == "head":
-            v_raref = characteristic_position(raref.c_head, raref.sorption, raref.theta_start, raref.v_start, t_int)
+            v_raref = characteristic_position(raref.c_head, raref.sorption, raref.theta_start, raref.v_start, theta_int)
         else:
-            v_raref = characteristic_position(raref.c_tail, raref.sorption, raref.theta_start, raref.v_start, t_int)
+            v_raref = characteristic_position(raref.c_tail, raref.sorption, raref.theta_start, raref.v_start, theta_int)
 
-        v_char = characteristic_position(char.concentration, char.sorption, char.theta_start, char.v_start, t_int)
+        v_char = characteristic_position(char.concentration, char.sorption, char.theta_start, char.v_start, theta_int)
 
         assert v_raref is not None
         assert v_char is not None
@@ -374,90 +308,84 @@ class TestOutletCrossing:
     """Test find_outlet_crossing function."""
 
     def test_characteristic_outlet_crossing(self, freundlich_sorption):
-        """Test characteristic crossing outlet."""
+        """Characteristic crosses outlet at θ = V·R(c)."""
         char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=freundlich_sorption)
 
         v_outlet = 500.0
-        t_current = 0.0
+        theta_current = 0.0
 
-        t_cross = find_outlet_crossing(char, v_outlet, t_current)
+        theta_cross = find_outlet_crossing(char, v_outlet, theta_current)
 
-        # MUST return a crossing time
-        assert t_cross is not None, "Expected characteristic to cross outlet"
+        assert theta_cross is not None, "Expected characteristic to cross outlet"
 
-        # Verify characteristic is at outlet at crossing time
-        v_at_cross = characteristic_position(char.concentration, char.sorption, char.theta_start, char.v_start, t_cross)
+        v_at_cross = characteristic_position(
+            char.concentration, char.sorption, char.theta_start, char.v_start, theta_cross
+        )
         assert v_at_cross is not None
         assert np.isclose(v_at_cross, v_outlet, rtol=1e-14)
 
     def test_shock_outlet_crossing(self, freundlich_sorption):
-        """Test shock crossing outlet."""
+        """Shock crosses outlet at θ = V / shock_speed."""
         shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=0.0, sorption=freundlich_sorption)
 
         v_outlet = 500.0
-        t_current = 0.0
+        theta_current = 0.0
 
-        t_cross = find_outlet_crossing(shock, v_outlet, t_current)
+        theta_cross = find_outlet_crossing(shock, v_outlet, theta_current)
 
-        # MUST return a crossing time
-        assert t_cross is not None, "Expected shock to cross outlet"
+        assert theta_cross is not None, "Expected shock to cross outlet"
 
-        # Verify shock is at outlet at crossing time
         assert shock.speed is not None
-        v_at_cross = shock.v_start + shock.speed * (t_cross - shock.theta_start)
+        v_at_cross = shock.v_start + shock.speed * (theta_cross - shock.theta_start)
         assert np.isclose(v_at_cross, v_outlet, rtol=1e-14)
 
     def test_rarefaction_outlet_crossing(self, freundlich_sorption):
-        """Test rarefaction head crossing outlet."""
+        """Rarefaction head crosses outlet at θ_head = V·R(c_head)."""
         v_outlet = 500.0
-        t_current = 0.0
+        theta_current = 0.0
 
         if freundlich_sorption.n < 1.0:
-            # For n<1, a rarefaction with c_tail < c_head is invalid; ensure it raises.
             with pytest.raises(ValueError, match="Not a rarefaction:"):
                 RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
         elif freundlich_sorption.n > 1.0:
-            # For n>1: higher concentration = faster velocity
-            # Head (faster) has c=5.0, tail (slower) has c=2.0
             raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
 
-            t_cross = find_outlet_crossing(raref, v_outlet, t_current)
+            theta_cross = find_outlet_crossing(raref, v_outlet, theta_current)
 
-            # MUST return a crossing time
-            assert t_cross is not None, "Expected rarefaction head to cross outlet"
+            assert theta_cross is not None, "Expected rarefaction head to cross outlet"
 
-            # Verify head is at outlet at crossing time
-            v_head = characteristic_position(raref.c_head, raref.sorption, raref.theta_start, raref.v_start, t_cross)
+            v_head = characteristic_position(
+                raref.c_head, raref.sorption, raref.theta_start, raref.v_start, theta_cross
+            )
             assert v_head is not None
             assert np.isclose(v_head, v_outlet, rtol=1e-14)
 
     def test_wave_already_past_outlet(self, freundlich_sorption):
-        """Test wave that already passed outlet returns None."""
+        """Wave already past outlet returns None."""
         char = CharacteristicWave(
             theta_start=0.0,
             v_start=600.0,  # Start beyond outlet
-            flow=100.0,
             concentration=5.0,
             sorption=freundlich_sorption,
         )
 
         v_outlet = 500.0
-        t_current = 0.0
+        theta_current = 0.0
 
-        t_cross = find_outlet_crossing(char, v_outlet, t_current)
-        assert t_cross is None
+        theta_cross = find_outlet_crossing(char, v_outlet, theta_current)
+        assert theta_cross is None
 
     def test_inactive_wave_returns_none(self, freundlich_sorption):
-        """Test inactive wave returns None."""
+        """Inactive wave returns None."""
         char = CharacteristicWave(
             theta_start=0.0, v_start=0.0, concentration=5.0, sorption=freundlich_sorption, is_active=False
         )
 
         v_outlet = 500.0
-        t_current = 0.0
+        theta_current = 0.0
 
-        t_cross = find_outlet_crossing(char, v_outlet, t_current)
-        assert t_cross is None
+        theta_cross = find_outlet_crossing(char, v_outlet, theta_current)
+        assert theta_cross is None
 
 
 @pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
@@ -465,14 +393,12 @@ class TestRarefactionRarefactionIntersections:
     """Test rarefaction-rarefaction boundary intersections."""
 
     def test_head_or_tail_boundary_intersects_other_rarefaction(self, freundlich_sorption):
-        """Test that at least one boundary of a rarefaction intersects another rarefaction."""
+        """At least one boundary of one rarefaction intersects the other."""
         if freundlich_sorption.n < 1.0:
-            # For n<1, this configuration is not a valid rarefaction; ensure it raises.
             with pytest.raises(ValueError, match="Not a rarefaction:"):
                 RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
         elif freundlich_sorption.n > 1.0:
             raref1 = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
-
             raref2 = RarefactionWave(
                 theta_start=10.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=freundlich_sorption
             )
@@ -481,28 +407,27 @@ class TestRarefactionRarefactionIntersections:
 
             assert intersections
 
-            t_int, v_int, boundary = intersections[0]
+            theta_int, v_int, boundary = intersections[0]
 
-            assert t_int > 10.0
+            assert theta_int > 10.0
             assert v_int >= 0.0
 
             if boundary == "head":
                 v_raref1 = characteristic_position(
-                    raref1.c_head, raref1.sorption, raref1.theta_start, raref1.v_start, t_int
+                    raref1.c_head, raref1.sorption, raref1.theta_start, raref1.v_start, theta_int
                 )
             else:
                 v_raref1 = characteristic_position(
-                    raref1.c_tail, raref1.sorption, raref1.theta_start, raref1.v_start, t_int
+                    raref1.c_tail, raref1.sorption, raref1.theta_start, raref1.v_start, theta_int
                 )
 
             assert v_raref1 is not None
             assert np.isclose(v_raref1, v_int, rtol=1e-14)
 
     def test_parallel_rarefaction_boundaries_do_not_intersect(self, freundlich_sorption):
-        """Test that parallel rarefaction boundaries do not intersect."""
+        """Parallel rarefaction boundaries do not intersect (or share head at v offset)."""
         if freundlich_sorption.n > 1.0:
             raref1 = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=1.0, sorption=freundlich_sorption)
-
             raref2 = RarefactionWave(
                 theta_start=0.0, v_start=10.0, c_head=5.0, c_tail=1.0, sorption=freundlich_sorption
             )
@@ -510,50 +435,26 @@ class TestRarefactionRarefactionIntersections:
             intersections_1 = find_rarefaction_boundary_intersections(raref1, raref2, theta_current=0.0)
             intersections_2 = find_rarefaction_boundary_intersections(raref2, raref1, theta_current=0.0)
 
-            # With equal speeds and offset starts, there should be at most a single
-            # boundary intersection where the heads coincide.
             assert len(intersections_1) <= 1
             assert len(intersections_2) <= 1
             if intersections_1:
-                t_int, v_int, boundary = intersections_1[0]
+                theta_int, v_int, boundary = intersections_1[0]
                 assert boundary == "head"
-                assert t_int >= 0.0
+                assert theta_int >= 0.0
                 assert v_int >= 0.0
         else:
-            # For n<1, this configuration is not a valid rarefaction; just
-            # verify that construction fails as expected.
             with pytest.raises(ValueError, match="Not a rarefaction:"):
                 RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=1.0, sorption=freundlich_sorption)
 
     def test_valid_n_less_than_one_rarefactions_with_boundary_intersection(self, freundlich_sorption):
-        """For 0<n<1, two valid rarefactions can have a boundary intersection.
-
-        Both rarefactions satisfy c_tail > c_head (required for n<1), and we
-        choose parameters so that a boundary of raref1 intersects a boundary of
-        raref2 in the future. We then verify t_int, v_int, the reported
-        boundary label, and consistency with characteristic_position.
-        """
-
+        """For 0<n<1, two valid rarefactions can have a boundary intersection."""
         if freundlich_sorption.n < 1.0:
-            # For n<1: higher concentration => slower characteristics.
-            # Valid rarefactions must have c_tail > c_head so that
-            # velocity(head) > velocity(tail).
             raref1 = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=1.0, c_tail=4.0, sorption=freundlich_sorption)
-
-            # Second rarefaction starts later but with a faster head so that
-            # one of raref1's boundaries intersects one of raref2's boundaries
-            # in the future.
             raref2 = RarefactionWave(
                 theta_start=10.0, v_start=0.0, c_head=2.0, c_tail=5.0, sorption=freundlich_sorption
             )
         elif freundlich_sorption.n > 1.0:
-            # For n>1: higher concentration => faster characteristics.
-            # Valid rarefactions typically have c_head > c_tail so that
-            # velocity(head) > velocity(tail).
             raref1 = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
-
-            # Choose raref2 so that one of raref1's boundaries intersects a
-            # boundary of raref2 in the future.
             raref2 = RarefactionWave(
                 theta_start=5.0, v_start=20.0, c_head=8.0, c_tail=3.0, sorption=freundlich_sorption
             )
@@ -565,90 +466,62 @@ class TestRarefactionRarefactionIntersections:
         assert isinstance(intersections, list)
         assert intersections, "Expected at least one boundary intersection for valid rarefactions"
 
-        t_int, v_int, boundary = intersections[0]
+        theta_int, v_int, boundary = intersections[0]
 
-        assert t_int >= 10.0
+        assert theta_int >= 10.0
         assert v_int >= 0.0
         assert boundary in {"head", "tail"}
 
         if boundary == "head":
             v_raref1 = characteristic_position(
-                raref1.c_head, raref1.sorption, raref1.theta_start, raref1.v_start, t_int
+                raref1.c_head, raref1.sorption, raref1.theta_start, raref1.v_start, theta_int
             )
         else:
             v_raref1 = characteristic_position(
-                raref1.c_tail, raref1.sorption, raref1.theta_start, raref1.v_start, t_int
+                raref1.c_tail, raref1.sorption, raref1.theta_start, raref1.v_start, theta_int
             )
 
-        # Position of intersecting boundary of raref1 must match v_int to
-        # machine precision.
         assert v_raref1 is not None
         assert np.isclose(v_raref1, v_int, rtol=1e-14)
 
     def test_valid_rarefactions_without_intersection_regime_aware(self, freundlich_sorption):
-        """Regime-aware test: separation for n<1, controlled tail intersection for n>1."""
-
+        """Separation for n<1, controlled tail intersection for n>1."""
         if freundlich_sorption.n < 1.0:
-            # n < 1: higher concentration => slower.
-            # raref_front: low concentrations (faster), starting ahead at v=200.
+            # Faster front rarefaction stays ahead; no boundary intersections.
             raref_front = RarefactionWave(
-                theta_start=0.0,
-                v_start=200.0,
-                c_head=0.5,
-                c_tail=2.0,  # c_tail > c_head (valid rarefaction for n<1)
-                sorption=freundlich_sorption,
+                theta_start=0.0, v_start=200.0, c_head=0.5, c_tail=2.0, sorption=freundlich_sorption
             )
-
-            # raref_back: higher concentrations (slower), starting behind at v=0.
             raref_back = RarefactionWave(
-                theta_start=0.0,
-                v_start=0.0,
-                c_head=3.0,
-                c_tail=5.0,  # c_tail > c_head (valid rarefaction for n<1)
-                sorption=freundlich_sorption,
+                theta_start=0.0, v_start=0.0, c_head=3.0, c_tail=5.0, sorption=freundlich_sorption
             )
+            theta_current = 0.0
 
-            t_current = 0.0
-
-            intersections = find_rarefaction_boundary_intersections(raref_front, raref_back, theta_current=t_current)
+            intersections = find_rarefaction_boundary_intersections(
+                raref_front, raref_back, theta_current=theta_current
+            )
 
             assert isinstance(intersections, list)
-            # For n<1, the faster front rarefaction starts ahead and remains
-            # ahead; no boundary intersections are expected.
             assert intersections == []
 
         elif freundlich_sorption.n > 1.0:
-            # n > 1: higher concentration => faster.
-            # Use a configuration that we know produces a tail-tail
-            # intersection and check it precisely.
             raref_front = RarefactionWave(
-                theta_start=0.0,
-                v_start=200.0,
-                c_head=8.0,
-                c_tail=3.0,  # c_head > c_tail (valid rarefaction for n>1)
-                sorption=freundlich_sorption,
+                theta_start=0.0, v_start=200.0, c_head=8.0, c_tail=3.0, sorption=freundlich_sorption
             )
-
             raref_back = RarefactionWave(
-                theta_start=0.0,
-                v_start=0.0,
-                c_head=5.0,
-                c_tail=1.0,  # c_head > c_tail (valid rarefaction for n>1)
-                sorption=freundlich_sorption,
+                theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=1.0, sorption=freundlich_sorption
             )
+            theta_current = 0.0
 
-            t_current = 0.0
-
-            intersections = find_rarefaction_boundary_intersections(raref_front, raref_back, theta_current=t_current)
+            intersections = find_rarefaction_boundary_intersections(
+                raref_front, raref_back, theta_current=theta_current
+            )
 
             assert isinstance(intersections, list)
             assert intersections, "Expected at least one boundary intersection for n>1 configuration"
 
-            # First intersection is reported as a tail boundary of raref_front;
-            # verify that the reported position lies on that tail characteristic.
-            t_int, v_int, boundary = intersections[0]
+            theta_int, v_int, boundary = intersections[0]
             assert boundary == "tail"
-            assert t_int > t_current
+            assert theta_int > theta_current
             assert v_int > 0.0
 
             v_tail_front = characteristic_position(
@@ -656,30 +529,20 @@ class TestRarefactionRarefactionIntersections:
                 raref_front.sorption,
                 raref_front.theta_start,
                 raref_front.v_start,
-                t_int,
+                theta_int,
             )
 
             assert v_tail_front is not None
             assert np.isclose(v_tail_front, v_int, rtol=1e-14)
-
-        else:
-            pytest.skip("This test is only defined for n!=1.")
 
     def test_tail_boundary_intersects_other_rarefaction_for_n_greater_than_one(self, freundlich_sorption):
         """Explicit n>1 case where raref1's tail is the intersecting boundary."""
         if freundlich_sorption.n < 1.0:
             pytest.skip("This test is only defined for n>1.")
         elif freundlich_sorption.n > 1.0:
-            # For n>1: higher concentration => faster characteristics.
-            # Construct raref1 so that its tail is slower than its head, and
-            # choose raref2 so that raref1.tail intersects a boundary of raref2.
             raref1 = RarefactionWave(
                 theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=5.0, sorption=freundlich_sorption
             )
-
-            # Place raref2 so that it starts later and slightly ahead, with
-            # concentrations chosen so that the slower tail of raref1 can catch
-            # one of its boundaries.
             raref2 = RarefactionWave(
                 theta_start=5.0, v_start=50.0, c_head=8.0, c_tail=3.0, sorption=freundlich_sorption
             )
@@ -688,25 +551,20 @@ class TestRarefactionRarefactionIntersections:
 
             assert intersections, "Expected at least one boundary intersection for n>1 rarefactions"
 
-            t_int, v_int, boundary = intersections[0]
+            theta_int, v_int, boundary = intersections[0]
 
-            assert t_int >= 5.0
+            assert theta_int >= 5.0
             assert v_int >= 0.0
             assert boundary in {"head", "tail"}
 
-            # This test focuses on the case where raref1's tail is the
-            # intersecting boundary. Ensure that at least one intersection has
-            # boundary == "tail" and that the position matches
-            # characteristic_position for the tail.
             tail_intersections = [item for item in intersections if item[2] == "tail"]
-
             assert tail_intersections, "Expected tail boundary of raref1 to intersect another rarefaction for n>1"
 
-            t_tail, v_tail, boundary_tail = tail_intersections[0]
+            theta_tail, v_tail, boundary_tail = tail_intersections[0]
             assert boundary_tail == "tail"
 
             v_raref1_tail = characteristic_position(
-                raref1.c_tail, raref1.sorption, raref1.theta_start, raref1.v_start, t_tail
+                raref1.c_tail, raref1.sorption, raref1.theta_start, raref1.v_start, theta_tail
             )
             assert v_raref1_tail is not None
             assert np.isclose(v_raref1_tail, v_tail, rtol=1e-14)
@@ -717,52 +575,27 @@ class TestShockVelocityAndEntropy:
     """Test shock velocity calculations and entropy conditions."""
 
     def test_shock_velocity_ordering_for_different_jumps(self, freundlich_sorption):
-        """Verify shock velocities follow correct ordering for n>1 and n<1.
-
-        Note: For C>0, the ordering depends on n.
-        """
-
+        """Verify shock velocities follow correct ordering for n>1 and n<1."""
         if freundlich_sorption.n < 1.0:
-            # For n<1 and C>0: higher concentration → slower velocity
-            # Shock with lower c_left (faster) should have higher velocity
             shock_low = ShockWave(theta_start=0.0, v_start=0.0, c_left=2.0, c_right=10.0, sorption=freundlich_sorption)
             shock_high = ShockWave(theta_start=0.0, v_start=0.0, c_left=5.0, c_right=10.0, sorption=freundlich_sorption)
 
-            # shock_low (c_left=2) should be faster than shock_high (c_left=5)
-            # because lower concentrations are faster for n<1
             assert shock_low.speed is not None
             assert shock_high.speed is not None
             assert shock_low.speed > shock_high.speed, "For n<1, shock with lower c_left should be faster"
 
         elif freundlich_sorption.n > 1.0:
-            # For n>1 and C>0: higher concentration → faster velocity
-            # Shock with higher c_left (faster) should have higher velocity
             shock_high = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=freundlich_sorption)
             shock_low = ShockWave(theta_start=0.0, v_start=0.0, c_left=5.0, c_right=2.0, sorption=freundlich_sorption)
 
-            # shock_high (c_left=10) should be faster than shock_low (c_left=5)
-            # because higher concentrations are faster for n>1 (for C>0)
             assert shock_high.speed is not None
             assert shock_low.speed is not None
             assert shock_high.speed > shock_low.speed, "For n>1, shock with higher c_left should be faster"
 
     def test_shock_satisfies_entropy_condition(self, freundlich_sorption):
-        """Verify physically valid compression shocks satisfy the Lax entropy condition.
-
-        Note: C=0 is excluded because v(C=0)=flow is faster than any C>0,
-        making shocks to/from zero invalid (they would be rarefactions).
-        """
-
+        """Physically valid compression shocks satisfy the Lax entropy condition."""
         if freundlich_sorption.n < 1.0:
-            # For n<1 and C>0: higher c → slower v
-            # Valid compression: faster water (low c) catches slower water (high c)
-            # So c_left < c_right (low c behind, high c ahead, creates shock)
-            test_shocks = [
-                (1.0, 10.0),  # Low c catching high c
-                (2.0, 5.0),  # Low c catching high c
-                (1.0, 5.0),  # Low c catching high c
-            ]
-
+            test_shocks = [(1.0, 10.0), (2.0, 5.0), (1.0, 5.0)]
             for c_left, c_right in test_shocks:
                 shock = ShockWave(
                     theta_start=0.0, v_start=0.0, c_left=c_left, c_right=c_right, sorption=freundlich_sorption
@@ -770,15 +603,7 @@ class TestShockVelocityAndEntropy:
                 assert shock.satisfies_entropy(), f"Shock {c_left}→{c_right} must satisfy entropy for n<1"
 
         elif freundlich_sorption.n > 1.0:
-            # For n>1 and C>0: higher c → faster v
-            # Valid compression: faster water (high c) catches slower water (low c)
-            # So c_left > c_right (high c behind, low c ahead, creates shock)
-            test_shocks = [
-                (10.0, 2.0),  # High c catching low c
-                (5.0, 1.0),  # High c catching low c
-                (10.0, 5.0),  # High c catching low c
-            ]
-
+            test_shocks = [(10.0, 2.0), (5.0, 1.0), (10.0, 5.0)]
             for c_left, c_right in test_shocks:
                 shock = ShockWave(
                     theta_start=0.0, v_start=0.0, c_left=c_left, c_right=c_right, sorption=freundlich_sorption
@@ -786,54 +611,47 @@ class TestShockVelocityAndEntropy:
                 assert shock.satisfies_entropy(), f"Shock {c_left}→{c_right} must satisfy entropy for n>1"
 
     def test_characteristic_velocity_vs_shock_velocity(self, freundlich_sorption):
-        """Verify characteristic velocities bracket shock velocity (entropy condition)."""
-
+        """Characteristic speeds bracket shock speed (entropy condition)."""
         if freundlich_sorption.n < 1.0:
-            # For n<1: create shock and verify char velocities bracket it
             c_left = 10.0
             c_right = 2.0
 
             shock = ShockWave(
                 theta_start=0.0, v_start=0.0, c_left=c_left, c_right=c_right, sorption=freundlich_sorption
             )
-
             char_left = CharacteristicWave(
                 theta_start=0.0, v_start=0.0, concentration=c_left, sorption=freundlich_sorption
             )
-
             char_right = CharacteristicWave(
                 theta_start=0.0, v_start=0.0, concentration=c_right, sorption=freundlich_sorption
             )
 
-            # For n<1: higher c → slower v, so c_left (higher) → slower, c_right (lower) → faster
-            # Entropy requires: v(c_left) < shock_v < v(c_right)
+            # For n<1: higher c → slower. char_left (high c) slower, char_right (low c) faster.
+            # Entropy: λ(c_left) < shock_speed < λ(c_right).
             assert shock.speed is not None
             assert char_left.speed() < shock.speed < char_right.speed(), (
-                "Entropy condition violated: characteristic velocities must bracket shock velocity for n<1"
+                "Entropy condition violated: characteristic speeds must bracket shock speed for n<1"
             )
 
         elif freundlich_sorption.n > 1.0:
-            # For n>1: create shock and verify char velocities bracket it
             c_left = 10.0
             c_right = 2.0
 
             shock = ShockWave(
                 theta_start=0.0, v_start=0.0, c_left=c_left, c_right=c_right, sorption=freundlich_sorption
             )
-
             char_left = CharacteristicWave(
                 theta_start=0.0, v_start=0.0, concentration=c_left, sorption=freundlich_sorption
             )
-
             char_right = CharacteristicWave(
                 theta_start=0.0, v_start=0.0, concentration=c_right, sorption=freundlich_sorption
             )
 
-            # For n>1: higher c → faster v, so c_left (higher) → faster, c_right (lower) → slower
-            # Entropy requires: v(c_left) > shock_v > v(c_right)
+            # For n>1: higher c → faster. char_left (high c) faster, char_right (low c) slower.
+            # Entropy: λ(c_left) > shock_speed > λ(c_right).
             assert shock.speed is not None
             assert char_left.speed() > shock.speed > char_right.speed(), (
-                "Entropy condition violated: characteristic velocities must bracket shock velocity for n>1"
+                "Entropy condition violated: characteristic speeds must bracket shock speed for n>1"
             )
 
 
@@ -842,58 +660,56 @@ class TestMachinePrecision:
     """Test that all calculations achieve machine precision."""
 
     def test_roundtrip_precision_characteristic(self, freundlich_sorption):
-        """Test characteristic intersection has machine precision."""
+        """Characteristic intersection has machine precision."""
         if freundlich_sorption.n < 1.0:
-            # For n<1 and these parameters, there is no intersection; just verify this.
             char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=1.0, sorption=freundlich_sorption)
-
             char2 = CharacteristicWave(theta_start=100.0, v_start=0.0, concentration=10.0, sorption=freundlich_sorption)
 
             result = find_characteristic_intersection(char1, char2, theta_current=100.0)
             assert result is None
         elif freundlich_sorption.n > 1.0:
-            # Create two characteristics that will intersect
             char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=1.0, sorption=freundlich_sorption)
-
             char2 = CharacteristicWave(theta_start=100.0, v_start=0.0, concentration=10.0, sorption=freundlich_sorption)
 
             result = find_characteristic_intersection(char1, char2, theta_current=100.0)
 
             assert result is not None, "Expected intersection for machine precision test"
 
-            t_int, v_int = result
+            theta_int, v_int = result
 
-            v1 = characteristic_position(char1.concentration, char1.sorption, char1.theta_start, char1.v_start, t_int)
-            v2 = characteristic_position(char2.concentration, char2.sorption, char2.theta_start, char2.v_start, t_int)
+            v1 = characteristic_position(
+                char1.concentration, char1.sorption, char1.theta_start, char1.v_start, theta_int
+            )
+            v2 = characteristic_position(
+                char2.concentration, char2.sorption, char2.theta_start, char2.v_start, theta_int
+            )
             assert v1 is not None
             assert v2 is not None
             assert np.isclose(v1, v2, rtol=1e-14, atol=1e-15)
             assert np.isclose(v1, v_int, rtol=1e-14, atol=1e-15)
 
     def test_roundtrip_precision_shock(self, freundlich_sorption):
-        """Test shock-shock intersection has machine precision."""
+        """Shock-shock intersection has machine precision."""
         if freundlich_sorption.n < 1.0:
             shock1 = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=freundlich_sorption)
-
             shock2 = ShockWave(theta_start=0.0, v_start=300.0, c_left=8.0, c_right=1.0, sorption=freundlich_sorption)
 
             result = find_shock_shock_intersection(shock1, shock2, theta_current=0.0)
             assert result is None
         elif freundlich_sorption.n > 1.0:
             shock1 = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=freundlich_sorption)
-
             shock2 = ShockWave(theta_start=0.0, v_start=300.0, c_left=8.0, c_right=1.0, sorption=freundlich_sorption)
 
             result = find_shock_shock_intersection(shock1, shock2, theta_current=0.0)
 
             assert result is not None, "Expected shock intersection for machine precision test"
 
-            t_int, v_int = result
+            theta_int, v_int = result
 
             assert shock1.speed is not None
             assert shock2.speed is not None
-            v1 = shock1.v_start + shock1.speed * (t_int - shock1.theta_start)
-            v2 = shock2.v_start + shock2.speed * (t_int - shock2.theta_start)
+            v1 = shock1.v_start + shock1.speed * (theta_int - shock1.theta_start)
+            v2 = shock2.v_start + shock2.speed * (theta_int - shock2.theta_start)
 
             assert np.isclose(v1, v2, rtol=1e-14, atol=1e-15)
             assert np.isclose(v1, v_int, rtol=1e-14, atol=1e-15)

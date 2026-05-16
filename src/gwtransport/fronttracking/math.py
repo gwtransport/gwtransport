@@ -19,7 +19,6 @@ from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
 
 # Numerical tolerance constants
 EPSILON_FREUNDLICH_N = 1e-10  # Tolerance for checking if n ≈ 1.0 (Freundlich constructor rejects this)
@@ -498,9 +497,7 @@ class ConstantRetardation:
         """
         return 1.0 / self.retardation_factor
 
-    def check_entropy_condition(  # noqa: ARG002, PLR6301
-        self, c_left: float, c_right: float, shock_speed: float
-    ) -> bool:
+    def check_entropy_condition(self, c_left: float, c_right: float, shock_speed: float) -> bool:  # noqa: PLR6301
         """Entropy condition for constant retardation: trivially satisfied.
 
         With constant R every characteristic speed equals the shock speed in
@@ -512,6 +509,7 @@ class ConstantRetardation:
         satisfies : bool
             Always True.
         """
+        del c_left, c_right, shock_speed
         return True
 
 
@@ -699,8 +697,10 @@ class LangmuirSorption(NonlinearSorption):
         r_arr = np.asarray(r)
 
         r_minus_1 = r_arr - 1.0
-        # For R <= 1 or very large R, return 0
-        c = np.where(r_minus_1 > 0, np.sqrt(self.a_coeff / r_minus_1) - self.k_l, 0.0)
+        # Mask r_minus_1 to a safe placeholder before division to avoid the
+        # RuntimeWarning emitted by np.where's eager evaluation when r == 1.
+        safe_r_minus_1 = np.where(r_minus_1 > 0, r_minus_1, 1.0)
+        c = np.where(r_minus_1 > 0, np.sqrt(self.a_coeff / safe_r_minus_1) - self.k_l, 0.0)
         result = np.maximum(c, 0.0)
 
         return result if is_array else float(result)
@@ -787,119 +787,72 @@ def characteristic_position(
     return v_start + characteristic_speed(c, sorption) * (theta - theta_start)
 
 
-def compute_first_front_arrival_time(
+def compute_first_front_arrival_theta(
     cin: npt.NDArray[np.floating],
-    flow: npt.NDArray[np.floating],
-    tedges: pd.DatetimeIndex,
+    theta_edges: npt.NDArray[np.floating],
     aquifer_pore_volume: float,
     sorption: SorptionModel,
 ) -> float:
-    """
-    Compute exact time when first wave reaches outlet (v_max).
+    """Cumulative-flow θ at which ``c_first`` arrives at the outlet (end of spin-up).
 
-    This function returns the precise moment when the first non-zero
-    concentration wave from the inlet arrives at the outlet. This marks
-    the end of the spin-up period.
+    "Arrival" means the θ at which the ``c_first`` *level* is fully present at
+    the outlet, ``θ_emit + V·R(c_first)`` for ``n<1`` and
+    ``θ_emit + V·C_T(c_first)/c_first`` for ``n>1``/constant retardation.
 
-    The wave type emitted by a step ``0 → c_first`` depends on the sorption
-    regime; this function uses the matching velocity:
+    .. warning::
 
-    - Freundlich ``n > 1`` and ``ConstantRetardation``: the solver emits a
-      Rankine-Hugoniot shock. The arrival uses shock velocity
-      ``s = flow · c / (C_tot(c) - C_tot(0))``.
-    - Freundlich ``n < 1``: the solver emits a single ``CharacteristicWave``
-      with velocity ``flow / R(c)``. The arrival uses that velocity.
-
-    Algorithm:
-    1. Find first index where cin > 0
-    2. Branch on sorption regime; compute the corresponding target cumulative
-       flow volume that the leading wave must accumulate to reach the outlet.
-    3. Account for piecewise constant flow during transit.
-    4. Return arrival time in days from tedges[0].
+       For ``n<1`` with ``c_min > 0`` (default ``c_min = 1e-12`` in
+       :class:`FreundlichSorption`), the actual wave emitted is a
+       :class:`RarefactionWave` whose head (``c = c_min ≈ 0``) reaches the
+       outlet at θ ≈ ``V·R(c_min) ≈ V`` — *much* earlier than the value this
+       function returns (which is the *tail* arrival ``V·R(c_first)``).
+       The function preserves the legacy "tail arrival" semantics intentionally,
+       so the returned θ is a conservative end-of-spin-up: c is ≤ c_first
+       everywhere before it. Consult the solver event log for the true rarefaction
+       head crossing.
 
     Parameters
     ----------
     cin : numpy.ndarray
-        Inlet concentration [mass/volume]. Length = len(tedges) - 1.
-    flow : numpy.ndarray
-        Flow rate [volume/time]. Length = len(tedges) - 1.
-    tedges : pandas.DatetimeIndex
-        Time bin edges. Length = len(cin) + 1.
-        Expected to be DatetimeIndex.
+        Inlet concentration [mass/volume].
+    theta_edges : numpy.ndarray
+        Cumulative-flow edges; length ``len(cin) + 1``.
     aquifer_pore_volume : float
-        Total pore volume [volume]. Must be positive.
+        Total pore volume [m³]. Must be positive.
     sorption : SorptionModel
         Sorption model.
 
     Returns
     -------
-    t_first_arrival : float
-        Time when first wave reaches outlet, measured in days from tedges[0].
-        Returns np.inf if no concentration ever arrives.
-
-    Notes
-    -----
-    The residence time accounts for retardation:
-        residence_time = aquifer_pore_volume * R(C) / flow_avg
-
-    For piecewise constant flow, we integrate:
-        ∫₀^residence_time flow(t) dt = aquifer_pore_volume * R(C)
-
-    This function computes the EXACT crossing time in days, not a bin edge.
+    theta_first_arrival : float
+        Cumulative-flow θ at which ``c_first`` is fully present at the outlet
+        [m³]. Returns ``np.inf`` only if ``cin`` is identically zero.
 
     Examples
     --------
-    >>> import pandas as pd
-    >>> cin = np.array([0.0, 10.0] + [10.0] * 10)  # First bin zero, then nonzero
-    >>> flow = np.array([100.0] * 12)  # Constant flow
-    >>> tedges = pd.date_range("2020-01-01", periods=13, freq="D")
+    >>> cin = np.array([0.0, 10.0] + [10.0] * 10)
+    >>> theta_edges = np.linspace(0.0, 1300.0, 13)  # constant flow=100, dt=1
     >>> sorption = ConstantRetardation(retardation_factor=2.0)
-    >>> t_first = compute_first_front_arrival_time(cin, flow, tedges, 500.0, sorption)
-    >>> # Result is in days from tedges[0]
-    >>> bool(np.isclose(t_first, 11.0))  # 1 day (offset) + 10 days (travel time)
+    >>> theta_first = compute_first_front_arrival_theta(
+    ...     cin, theta_edges, 500.0, sorption
+    ... )
+    >>> bool(np.isclose(theta_first, 100.0 + 500.0 * 2.0))  # θ_emit + V·R
     True
     """
-    # Find first non-zero concentration
     nonzero_indices = np.where(cin > 0)[0]
-
     if len(nonzero_indices) == 0:
-        # No concentration ever arrives
-        return np.inf
-
-    idx_first = nonzero_indices[0]
-    c_first = float(cin[idx_first])
-
-    # Branch on sorption regime; the solver emits a different wave type for the
-    # 0 → c_first inlet step. See `create_inlet_waves_at_time` in handlers.py.
-    if isinstance(sorption, FreundlichSorption) and sorption.n < 1.0:
-        # n<1: solver emits a CharacteristicWave with θ-speed 1/R(c);
-        # target cumulative volume = V * R(c).
-        target_volume = aquifer_pore_volume * float(sorption.retardation(c_first))
-    else:
-        # n>1 (Freundlich) or ConstantRetardation: solver creates a R-H shock.
-        # Shock velocity from C_tot(0) ≈ 0 (default c_min=1e-12) to C_tot(c_first):
-        #   s = flow · c_first / (C_tot(c_first) - C_tot(0))
-        # so target_volume = V · C_tot(c_first) / c_first. For ConstantRetardation
-        # this coincides with V · R because C_tot(c)/c = R there.
-        target_volume = aquifer_pore_volume * float(sorption.total_concentration(c_first)) / c_first
-
-    # Vectorized integration of piecewise-constant flow starting from idx_first.
-    # Convert all bin widths to days at once and accumulate the volume profile.
-    tedges_days = np.asarray((tedges - tedges[0]) / pd.Timedelta(days=1), dtype=float)
-    dt_days = np.diff(tedges_days[idx_first:])
-    volumes = np.asarray(flow[idx_first:], dtype=float) * dt_days
-    cumulative_volume = np.cumsum(volumes)
-
-    # Locate the first bin whose cumulative volume reaches the target.
-    bin_offset = int(np.searchsorted(cumulative_volume, target_volume, side="left"))
-
-    if bin_offset >= len(cumulative_volume):
-        # Never reaches outlet with given flow history
         return float(np.inf)
 
-    # Volume already accumulated before entering the bin where arrival occurs.
-    volume_before_bin = float(cumulative_volume[bin_offset - 1]) if bin_offset > 0 else 0.0
-    remaining_volume = target_volume - volume_before_bin
-    dt_partial = remaining_volume / float(flow[idx_first + bin_offset])
+    idx_first = int(nonzero_indices[0])
+    c_first = float(cin[idx_first])
 
-    return float(float(tedges_days[idx_first + bin_offset]) + dt_partial)
+    if isinstance(sorption, FreundlichSorption) and sorption.n < 1.0:
+        # n<1: the 0→c_first step emits a rarefaction; its tail (c=c_first)
+        # reaches the outlet after V·R(c_first) units of cumulative flow.
+        target_volume = aquifer_pore_volume * float(sorption.retardation(c_first))
+    else:
+        # n>1 or constant: R-H shock with speed = c / (C_T(c) - C_T(0));
+        # target volume = V · C_T(c_first) / c_first.
+        target_volume = aquifer_pore_volume * float(sorption.total_concentration(c_first)) / c_first
+
+    return float(theta_edges[idx_first]) + target_volume

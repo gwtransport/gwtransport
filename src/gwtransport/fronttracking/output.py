@@ -1,30 +1,20 @@
-"""
-Concentration Extraction from Front Tracking Solutions.
+"""Concentration extraction from front-tracking solutions (V, θ coordinates).
 
-This module computes outlet concentrations from front tracking wave solutions
-using exact analytical integration. All calculations maintain machine precision
-with no numerical dispersion.
+Every public function in this module takes θ (cumulative flow, m³). Callers
+translate user-facing time t → θ at the API boundary via
+``FrontTrackerState.theta_at_t``.
 
 Functions
 ---------
-concentration_at_point(v, t, waves, sorption)
-    Compute concentration at any point (v, t) in domain
-compute_breakthrough_curve(t_array, v_outlet, waves, sorption)
-    Compute concentration at outlet over time array
-compute_bin_averaged_concentration_exact(t_edges, v_outlet, waves, sorption)
-    Compute bin-averaged concentrations using exact analytical integration
-compute_domain_mass(t, v_outlet, waves, sorption)
-    Compute total mass in domain [0, v_outlet] at time t using exact analytical integration
-compute_cumulative_inlet_mass(t, cin, flow, tedges_days)
-    Compute cumulative mass entering domain from t=0 to t
-compute_cumulative_outlet_mass(t, v_outlet, waves, sorption, flow, tedges_days)
-    Compute cumulative mass exiting domain from t=0 to t
+concentration_at_point(v, theta, waves, sorption)
+compute_breakthrough_curve(theta_array, v_outlet, waves, sorption)
+compute_bin_averaged_concentration_exact(theta_bin_edges, v_outlet, waves, sorption)
+compute_domain_mass(theta, v_outlet, waves, sorption)
+compute_cumulative_inlet_mass(theta, cin, theta_edges)
+compute_cumulative_outlet_mass(theta, v_outlet, waves, sorption)
 find_last_rarefaction_start_theta(v_outlet, waves)
-    Find θ at which last rarefaction head reaches outlet
 integrate_rarefaction_total_mass(raref, v_outlet, theta_start, sorption)
-    Compute total mass exiting through rarefaction to infinity (in θ)
-compute_total_outlet_mass(v_outlet, waves, sorption, flow, tedges_days)
-    Compute total integrated outlet mass until all mass has exited
+compute_total_outlet_mass(v_outlet, waves, sorption) -> (mass, theta_integration_end)
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -156,23 +146,19 @@ def concentration_at_point(
 
 
 def compute_breakthrough_curve(
-    t_array: npt.NDArray[np.floating],
+    theta_array: npt.NDArray[np.floating],
     v_outlet: float,
     waves: Sequence[Wave],
     sorption: SorptionModel,
-    *,
-    theta_edges: npt.NDArray[np.floating],
-    tedges_days: npt.NDArray[np.floating],
 ) -> npt.NDArray[np.floating]:
-    """
-    Compute concentration at outlet over time array.
-
-    This is the breakthrough curve: C(v_outlet, t) for all t in t_array.
+    """Concentration at the outlet evaluated over a θ-array (breakthrough curve).
 
     Parameters
     ----------
-    t_array : array-like
-        Time points [days]. Must be sorted in ascending order.
+    theta_array : array-like
+        Cumulative-flow points at which to query the outlet concentration [m³].
+        Must be sorted in ascending order. Callers translate from user-facing
+        time via ``FrontTrackerState.theta_at_t`` before passing.
     v_outlet : float
         Outlet position [m³].
     waves : list of Wave
@@ -183,7 +169,7 @@ def compute_breakthrough_curve(
     Returns
     -------
     c_out : numpy.ndarray
-        Array of concentrations matching t_array [mass/volume].
+        Concentration at ``v_outlet`` for each θ in ``theta_array`` [mass/volume].
 
     See Also
     --------
@@ -194,19 +180,15 @@ def compute_breakthrough_curve(
     --------
     ::
 
-        t_array = np.linspace(0, 100, 1000)
+        theta_array = np.linspace(0.0, tracker.state.theta_edges[-1], 1000)
         c_out = compute_breakthrough_curve(
-            t_array, v_outlet=500.0, waves=all_waves, sorption=sorption
+            theta_array, v_outlet=500.0, waves=tracker.state.waves, sorption=sorption
         )
-        len(c_out) == len(t_array)
     """
-    t_array = np.asarray(t_array, dtype=float)
-    theta_array = np.interp(t_array, tedges_days, theta_edges)
-    c_out = np.zeros(len(t_array))
-
-    for i, theta in enumerate(theta_array):
+    theta_arr = np.asarray(theta_array, dtype=float)
+    c_out = np.zeros(len(theta_arr))
+    for i, theta in enumerate(theta_arr):
         c_out[i] = concentration_at_point(v_outlet, float(theta), waves, sorption)
-
     return c_out
 
 
@@ -377,9 +359,14 @@ def identify_outlet_segments(
         )
 
     for event in outlet_events:
-        # Check if we're entering a rarefaction fan
+        # Skip events that fall inside an already-emitted (typically rarefaction)
+        # segment. By Phase-1 convention ``concentration_at_point`` lets active
+        # rarefactions "win" over a behind-shock c_left; the segment list must
+        # reflect the same convention to avoid double-counting.
+        if event["theta"] < current_theta:
+            continue
+
         if isinstance(event["wave"], RarefactionWave) and event["boundary"] == "head":
-            # Before rarefaction head: constant segment
             if event["theta"] > current_theta:
                 segments.append({
                     "theta_start": current_theta,
@@ -390,10 +377,8 @@ def identify_outlet_segments(
                     "c_end": current_c,
                 })
 
-            # Find when tail crosses (if it does)
             raref = event["wave"]
             tail_cross_theta = None
-
             for later_event in outlet_events:
                 if (
                     later_event["wave"] is raref
@@ -403,7 +388,6 @@ def identify_outlet_segments(
                     tail_cross_theta = later_event["theta"]
                     break
 
-            # Rarefaction segment
             raref_end = min(tail_cross_theta or theta_end, theta_end)
 
             segments.append({
@@ -422,8 +406,6 @@ def identify_outlet_segments(
                 else current_c
             )
         else:
-            # Regular event (characteristic or shock crossing)
-            # Segment before event
             if event["theta"] > current_theta:
                 segments.append({
                     "theta_start": current_theta,
@@ -582,27 +564,27 @@ def _integrate_rarefaction_exact_langmuir(
 
 
 def compute_bin_averaged_concentration_exact(
-    t_edges: npt.NDArray[np.floating],
+    theta_bin_edges: npt.NDArray[np.floating],
     v_outlet: float,
     waves: Sequence[Wave],
     sorption: SorptionModel,
-    *,
-    theta_edges: npt.NDArray[np.floating],
-    tedges_days: npt.NDArray[np.floating],
 ) -> npt.NDArray[np.floating]:
-    """
-    Compute bin-averaged concentration using EXACT analytical integration.
+    """θ-bin-averaged outlet concentration via exact analytical integration.
 
-    For each time bin [t_i, t_{i+1}], computes:
-        C_avg = (1/(t_{i+1} - t_i)) * ∫_{t_i}^{t_{i+1}} C(v_outlet, t) dt
+    For each θ-bin ``[θ_i, θ_{i+1}]``::
 
-    This is the critical function for maintaining machine precision in output.
-    All integrations use exact analytical formulas with no numerical quadrature.
+        C_avg = (1 / Δθ) · ∫_{θ_i}^{θ_{i+1}} C(v_outlet, θ) dθ
+
+    Because the rarefaction profile and shock projection are flow-independent
+    in θ-space, this also equals the flow-weighted time-bin average
+    ``∫C·flow dt / ∫flow dt`` when the caller picks bin edges that map to
+    the desired time bins via ``state.theta_at_t``.
 
     Parameters
     ----------
-    t_edges : array-like
-        Time bin edges [days]. Length N+1 for N bins.
+    theta_bin_edges : array-like
+        Cumulative-flow bin edges [m³]. Length N+1 for N bins. Callers
+        translate t-bin edges with ``state.theta_at_t``.
     v_outlet : float
         Outlet position [m³].
     waves : list of Wave
@@ -618,8 +600,8 @@ def compute_bin_averaged_concentration_exact(
     Raises
     ------
     ValueError
-        If any time bin has non-positive width (``t_edges[i] >= t_edges[i+1]``),
-        or if an unknown segment type is encountered during integration.
+        If any θ-bin has non-positive width, or if an unknown segment type
+        is encountered during integration.
 
     See Also
     --------
@@ -627,73 +609,33 @@ def compute_bin_averaged_concentration_exact(
     compute_breakthrough_curve : Breakthrough curve
     integrate_rarefaction_exact : Exact rarefaction integration
 
-    Notes
-    -----
-    **Algorithm**:
-
-    1. For each bin [t_i, t_{i+1}]:
-
-       a. Identify which wave segments control outlet during this period
-       b. For each segment, compute: Constant C gives integral = C * Δt,
-          Rarefaction C(t) uses exact analytical integral formula
-       c. Sum segment integrals and divide by bin width
-
-    **Machine Precision**:
-
-    - Constant segments: exact to floating-point precision
-    - Rarefaction segments: uses closed-form antiderivative
-    - No numerical quadrature or interpolation
-    - Maintains mass balance to ~1e-14 relative error
-
-    **Rarefaction Integration**:
-
-    For Freundlich sorption, rarefaction concentration at outlet varies as::
-
-        C(t) = [(kappa*t + mu - 1)/alpha]^(1/beta)
-
-    The exact integral is::
-
-        ∫ C dt = (1/(alpha^(1/beta)*kappa*exponent)) * (kappa*t + mu - 1)^exponent
-
-    where exponent = 1/beta + 1.
-
     Examples
     --------
     ::
 
-        # After running front tracking simulation
-        t_edges = np.array([0.0, 10.0, 20.0, 30.0])
+        theta_bin_edges = np.array([tracker.state.theta_at_t(t) for t in t_edges])
         c_avg = compute_bin_averaged_concentration_exact(
-            t_edges=t_edges,
+            theta_bin_edges=theta_bin_edges,
             v_outlet=500.0,
             waves=tracker.state.waves,
             sorption=sorption,
         )
-        len(c_avg) == len(t_edges) - 1
-        np.all(c_avg >= 0)
     """
-    t_edges = np.asarray(t_edges, dtype=float)
-    tedges_days_arr = np.asarray(tedges_days, dtype=float)
-    theta_edges_arr = np.asarray(theta_edges, dtype=float)
-    n_bins = len(t_edges) - 1
+    theta_edges = np.asarray(theta_bin_edges, dtype=float)
+    n_bins = len(theta_edges) - 1
     c_avg = np.zeros(n_bins)
 
     for i in range(n_bins):
-        t_start = t_edges[i]
-        t_end = t_edges[i + 1]
-        dt = t_end - t_start
+        theta_start = float(theta_edges[i])
+        theta_end = float(theta_edges[i + 1])
+        dtheta_bin = theta_end - theta_start
 
-        if dt <= 0:
-            msg = f"Invalid time bin: t_edges[{i}]={t_start} >= t_edges[{i + 1}]={t_end}"
+        if dtheta_bin <= 0:
+            msg = f"Invalid θ-bin: theta_bin_edges[{i}]={theta_start} >= theta_bin_edges[{i + 1}]={theta_end}"
             raise ValueError(msg)
 
-        # identify_outlet_segments works in (V, θ). Translate the user-facing
-        # bin [t_start, t_end] to a θ-range and back.
-        theta_start = float(np.interp(t_start, tedges_days_arr, theta_edges_arr))
-        theta_end = float(np.interp(t_end, tedges_days_arr, theta_edges_arr))
         segments = identify_outlet_segments(theta_start, theta_end, v_outlet, waves, sorption)
 
-        # Sum ∫c dθ over segments; convert to ∫c dt via average flow over the bin.
         total_integral_theta = 0.0
         for seg in segments:
             seg_theta_start = max(seg["theta_start"], theta_start)
@@ -719,12 +661,7 @@ def compute_bin_averaged_concentration_exact(
                 msg = f"Unknown segment type: {seg['type']}"
                 raise ValueError(msg)
 
-        # ∫c dt = ∫c dθ / flow_avg where flow_avg = Δθ / Δt over [t_start, t_end].
-        dtheta_bin = theta_end - theta_start
-        if dtheta_bin > 0:
-            c_avg[i] = total_integral_theta / dtheta_bin
-        else:
-            c_avg[i] = 0.0
+        c_avg[i] = total_integral_theta / dtheta_bin
 
     return c_avg
 
@@ -1032,162 +969,102 @@ def _integrate_rarefaction_spatial_langmuir(
 
 
 def compute_cumulative_inlet_mass(
-    t: float,
+    theta: float,
     cin: npt.ArrayLike,
-    flow: npt.ArrayLike,
-    tedges_days: npt.ArrayLike,
+    theta_edges: npt.ArrayLike,
 ) -> float:
-    """
-    Compute cumulative mass entering domain from t=0 to t.
+    """Cumulative inlet mass entering the domain from θ=0 to ``theta``.
 
-    Integrates inlet mass flux over time:
-        M_in(t) = ∫₀^t cin(τ) * flow(τ) dτ
-
-    using exact analytical integration of piecewise-constant functions.
+    In cumulative-flow coordinates ``M_in(θ) = ∫₀^θ cin(τ) dτ``; for
+    piecewise-constant ``cin`` this is exact under summation over θ-bin
+    widths.
 
     Parameters
     ----------
-    t : float
-        Time up to which to integrate [days].
+    theta : float
+        Cumulative flow up to which to integrate [m³].
     cin : array-like
-        Inlet concentration time series [mass/volume].
-        Piecewise constant within bins defined by tedges_days.
-    flow : array-like
-        Flow rate time series [m³/day].
-        Piecewise constant within bins defined by tedges_days.
-    tedges_days : numpy.ndarray
-        Time bin edges [days]. Length len(cin) + 1.
+        Inlet concentration per θ-bin [mass/volume].
+    theta_edges : array-like
+        θ bin edges [m³], length ``len(cin) + 1``.
 
     Returns
     -------
     mass_in : float
-        Cumulative mass entered [mass].
-
-    Notes
-    -----
-    For piecewise-constant cin and flow:
-        M_in = Σ cin[i] * flow[i] * dt[i]
-
-    where the sum is over all bins from tedges_days[0] to t.
-    Partial bins are handled exactly.
+        Cumulative inlet mass [mass].
 
     Examples
     --------
     ::
 
         mass_in = compute_cumulative_inlet_mass(
-            t=50.0, cin=cin, flow=flow, tedges_days=tedges_days
+            theta=5000.0, cin=cin, theta_edges=theta_edges
         )
         mass_in >= 0.0
     """
-    tedges_arr = np.asarray(tedges_days, dtype=float)
-    cin_arr = np.asarray(cin, dtype=float)
-    flow_arr = np.asarray(flow, dtype=float)
-
-    # Find which bin t falls into
-    if t <= tedges_arr[0]:
-        return 0.0
-
-    if t >= tedges_arr[-1]:
-        # Integrate all bins
-        dt = np.diff(tedges_arr)
-        return float(np.sum(cin_arr * flow_arr * dt))
-
-    # Find bin containing t
-    bin_idx = np.searchsorted(tedges_arr, t, side="right") - 1
-
-    # Mass flux across inlet boundary = Q * C_in (aqueous concentration)
-    # This is correct for sorbing solutes: only dissolved mass flows with water
-    # Integrate complete bins before t
-    if bin_idx > 0:
-        dt_complete = np.diff(tedges_arr[: bin_idx + 1])
-        mass_complete = np.sum(cin_arr[:bin_idx] * flow_arr[:bin_idx] * dt_complete)
-    else:
-        mass_complete = 0.0
-
-    # Add partial bin
-    if bin_idx >= 0 and bin_idx < len(cin_arr):
-        dt_partial = t - tedges_arr[bin_idx]
-        mass_partial = cin_arr[bin_idx] * flow_arr[bin_idx] * dt_partial
-    else:
-        mass_partial = 0.0
-
-    return float(mass_complete + mass_partial)
+    te = np.asarray(theta_edges, dtype=float)
+    widths = np.clip(theta - te[:-1], 0.0, np.diff(te))
+    return float(np.sum(np.asarray(cin, dtype=float) * widths))
 
 
 def find_last_rarefaction_start_theta(
     v_outlet: float,
     waves: Sequence[Wave],
 ) -> float:
-    """Return the θ at which the last rarefaction head reaches ``v_outlet``.
+    """Return the θ at which the last active wave reaches ``v_outlet``.
 
-    For non-rarefaction waves, returns the θ at which the wave crosses the outlet.
-    Returns 0.0 if no waves reach the outlet.
+    Uses the rarefaction's head speed; the shock/characteristic propagation
+    speed otherwise. Returns 0.0 if no waves reach the outlet.
     """
     theta_last = 0.0
-
     for wave in waves:
         if not wave.is_active:
             continue
-
         if isinstance(wave, RarefactionWave):
-            head_speed = wave.head_speed()
-            if head_speed > EPSILON_VELOCITY:
-                theta_arrival = wave.theta_start + (v_outlet - wave.v_start) / head_speed
-                theta_last = max(theta_last, theta_arrival)
-        elif isinstance(wave, (CharacteristicWave, ShockWave)):
-            speed = wave.speed if isinstance(wave, ShockWave) else wave.speed()
-            if speed is not None and speed > EPSILON_VELOCITY:
-                theta_arrival = wave.theta_start + (v_outlet - wave.v_start) / speed
-                theta_last = max(theta_last, theta_arrival)
-
+            speed = wave.head_speed()
+        elif isinstance(wave, ShockWave):
+            speed = wave.speed
+        elif isinstance(wave, CharacteristicWave):
+            speed = wave.speed()
+        else:
+            continue
+        if speed is not None and speed > EPSILON_VELOCITY:
+            theta_last = max(theta_last, wave.theta_start + (v_outlet - wave.v_start) / speed)
     return theta_last
 
 
 def compute_cumulative_outlet_mass(
-    t: float,
+    theta: float,
     v_outlet: float,
     waves: Sequence[Wave],
     sorption: SorptionModel,
-    flow: npt.ArrayLike,
-    tedges_days: npt.ArrayLike,
 ) -> float:
-    """Compute cumulative mass exiting the domain from t=0 to ``t``.
+    """Cumulative mass exiting through the outlet from θ=0 to ``theta``.
 
-    Internally evaluated in (V, θ) coordinates: ``mass = ∫ c(θ) dθ`` from 0 to
-    ``θ(t)``. Because ``dθ = flow · dt``, the flow drops out of the integrand
-    and the result equals ``∫ cout(τ) · flow(τ) dτ`` in time coordinates.
+    Pure θ-integral: ``mass = ∫₀^θ c(θ', v_outlet) dθ'``. Because
+    ``dθ = flow · dt``, this equals ``∫ cout · flow dt`` in time coordinates;
+    no flow or tedges information is needed here.
 
     Parameters
     ----------
-    t : float
-        User-facing time up to which to integrate [days from ``tedges_days[0]``].
+    theta : float
+        Cumulative flow up to which to integrate [m³].
     v_outlet : float
         Outlet position [m³].
     waves : list of Wave
         All waves in the simulation.
     sorption : SorptionModel
         Sorption model.
-    flow : array-like
-        Flow rate per bin [m³/day]; piecewise constant on ``tedges_days``.
-    tedges_days : numpy.ndarray
-        Time bin edges [days]. Length ``len(flow) + 1``.
 
     Returns
     -------
     mass_out : float
-        Cumulative mass exited from t=0 to ``t`` [mass].
+        Cumulative outlet mass [mass].
 
     Notes
     -----
-    Algorithm:
-
-    1. Build ``theta_edges = cumsum(flow · Δt)`` and translate ``t`` to
-       ``theta_end`` by piecewise-linear interpolation against
-       ``(tedges_days, theta_edges)``. Past ``tedges_days[-1]`` the last-bin
-       flow is extrapolated.
-    2. Call :func:`identify_outlet_segments` over ``[0, theta_end]``.
-    3. For each segment: constant → ``c · Δθ``; rarefaction → exact analytic
+    1. Call :func:`identify_outlet_segments` over ``[0, theta]``.
+    2. For each segment: constant → ``c · Δθ``; rarefaction → exact analytic
        θ-integral via :func:`integrate_rarefaction_exact`.
 
     Examples
@@ -1195,42 +1072,22 @@ def compute_cumulative_outlet_mass(
     ::
 
         mass_out = compute_cumulative_outlet_mass(
-            t=50.0,
+            theta=5000.0,
             v_outlet=500.0,
             waves=tracker.state.waves,
             sorption=sorption,
-            flow=flow,
-            tedges_days=tedges_days,
         )
         mass_out >= 0.0
     """
-    tedges_arr = np.asarray(tedges_days, dtype=float)
-    flow_arr = np.asarray(flow, dtype=float)
-
-    if t <= tedges_arr[0]:
+    if theta <= 0.0:
         return 0.0
 
-    # Build θ-edges from flow × Δt, then translate the user-facing endpoint to θ.
-    dt_days = np.diff(tedges_arr)
-    theta_edges = np.concatenate([[0.0], np.cumsum(flow_arr * dt_days)])
-    theta_start = float(theta_edges[0])
-
-    if t >= tedges_arr[-1]:
-        # Extrapolate past the last bin at the last-bin flow rate.
-        theta_end = float(theta_edges[-1] + (t - tedges_arr[-1]) * flow_arr[-1])
-    else:
-        theta_end = float(np.interp(t, tedges_arr, theta_edges))
-
-    if theta_end <= theta_start:
-        return 0.0
-
-    segments = identify_outlet_segments(theta_start, theta_end, v_outlet, waves, sorption)
+    segments = identify_outlet_segments(0.0, theta, v_outlet, waves, sorption)
 
     total_mass = 0.0
-
     for seg in segments:
-        seg_theta_start = max(seg["theta_start"], theta_start)
-        seg_theta_end = min(seg["theta_end"], theta_end)
+        seg_theta_start = max(seg["theta_start"], 0.0)
+        seg_theta_end = min(seg["theta_end"], theta)
         seg_dtheta = seg_theta_end - seg_theta_start
 
         if seg_dtheta <= EPSILON_TIME:
@@ -1243,7 +1100,6 @@ def compute_cumulative_outlet_mass(
                 raref = seg["wave"]
                 total_mass += integrate_rarefaction_exact(raref, v_outlet, seg_theta_start, seg_theta_end, sorption)
             else:
-                # ConstantRetardation - rarefactions shouldn't form; fall back to midpoint.
                 c_mid = concentration_at_point(v_outlet, 0.5 * (seg_theta_start + seg_theta_end), waves, sorption)
                 total_mass += c_mid * seg_dtheta
 
@@ -1297,15 +1153,12 @@ def compute_total_outlet_mass(
     v_outlet: float,
     waves: Sequence[Wave],
     sorption: SorptionModel,
-    flow: npt.ArrayLike,
-    tedges_days: npt.ArrayLike,
 ) -> tuple[float, float]:
-    """
-    Compute total integrated outlet mass until all mass has exited.
+    """Total outlet mass integrated until the last wave passes the outlet.
 
-    Automatically determines when the last wave passes the outlet and
-    integrates the outlet mass flux until that time, regardless of the
-    provided tedges extent.
+    Pure θ-domain: returns ``(mass, theta_integration_end)``. The caller
+    translates ``theta_integration_end`` to user-facing time via
+    ``FrontTrackerState.t_at_theta`` if needed.
 
     Parameters
     ----------
@@ -1315,91 +1168,59 @@ def compute_total_outlet_mass(
         All waves in the simulation.
     sorption : SorptionModel
         Sorption model.
-    flow : array-like
-        Flow rate time series [m³/day].
-        Piecewise constant within bins defined by tedges_days.
-    tedges_days : numpy.ndarray
-        Time bin edges [days]. Length len(flow) + 1.
 
     Returns
     -------
     total_mass_out : float
         Total mass that exits through outlet [mass].
-    t_integration_end : float
-        Time until which integration was performed [days].
-        This is the time when the last wave passes the outlet.
+    theta_integration_end : float
+        Cumulative flow at the cutoff between explicit segment integration
+        and the analytical tail-to-infinity term [m³]. For each rarefaction
+        whose head crosses the outlet at this θ, the tail contribution is
+        added analytically; for rarefactions whose tail crosses *later*, that
+        tail contribution is the part folded into the segment integral up to
+        this cutoff (not necessarily the same as "the θ at which the last
+        wave passes the outlet").
 
     See Also
     --------
-    compute_cumulative_outlet_mass : Cumulative outlet mass up to time t
+    compute_cumulative_outlet_mass : Cumulative outlet mass up to θ
     find_last_rarefaction_start_theta : Find θ at which last rarefaction starts
     integrate_rarefaction_total_mass : Total mass in rarefaction to infinity
 
     Notes
     -----
-    This function:
-    1. Finds when the last rarefaction *starts* at the outlet (head arrival)
-    2. Integrates outlet mass flux until that time
-    3. Adds analytical integral of rarefaction mass from start to infinity
-
-    For rarefactions to C=0, the tail has infinite arrival time but the
-    total mass is finite and computed analytically.
+    1. ``theta_last`` = θ at which the last active wave reaches the outlet
+       (rarefaction head, shock, or characteristic). Equal to the returned
+       ``theta_integration_end``.
+    2. Integrate outlet mass flux from θ=0 to ``theta_last``.
+    3. Add the analytical tail-to-infinity contribution for any active
+       rarefaction whose head crosses at exactly ``theta_last``.
 
     Examples
     --------
     ::
 
-        total_mass, t_end = compute_total_outlet_mass(
+        total_mass, theta_end = compute_total_outlet_mass(
             v_outlet=500.0,
             waves=tracker.state.waves,
             sorption=sorption,
-            flow=flow,
-            tedges_days=tedges_days,
         )
         total_mass >= 0.0
-        t_end >= tedges_days[0]
+        theta_end >= 0.0
     """
-    tedges_arr = np.asarray(tedges_days, dtype=float)
-    flow_arr = np.asarray(flow, dtype=float)
-
-    # Find the θ at which the last rarefaction head reaches the outlet
     theta_last_raref_start = find_last_rarefaction_start_theta(v_outlet, waves)
 
-    # Build θ-edges from flow × Δt for the t ↔ θ translation
-    dt_days = np.diff(tedges_arr)
-    theta_edges = np.concatenate([[0.0], np.cumsum(flow_arr * dt_days)])
+    mass_up_to_raref_start = compute_cumulative_outlet_mass(theta_last_raref_start, v_outlet, waves, sorption)
 
-    # Translate theta_last_raref_start back to user-facing time, extending
-    # past tedges_days[-1] using the last-bin flow if necessary.
-    last_flow = float(flow_arr[-1])
-    if theta_last_raref_start <= theta_edges[-1]:
-        t_last_raref_start = float(np.interp(theta_last_raref_start, theta_edges, tedges_arr))
-    elif last_flow > 0:
-        t_last_raref_start = float(tedges_arr[-1] + (theta_last_raref_start - theta_edges[-1]) / last_flow)
-    else:
-        t_last_raref_start = float(tedges_arr[-1])
-
-    # Mass up to theta_last_raref_start (∫ c dθ); reuse the cumulative routine
-    # so the t ↔ θ extrapolation rules stay consistent.
-    mass_up_to_raref_start = compute_cumulative_outlet_mass(
-        t_last_raref_start, v_outlet, waves, sorption, flow_arr, tedges_arr
-    )
-
-    # Add the analytical tail-to-infinity contribution for every rarefaction
-    # whose head crosses the outlet at exactly theta_last_raref_start.
     total_raref_mass = 0.0
-
     for wave in waves:
         if not wave.is_active:
             continue
-
         if isinstance(wave, RarefactionWave):
             head_speed = wave.head_speed()
             if head_speed > EPSILON_VELOCITY and wave.v_start < v_outlet:
                 theta_head_crosses_outlet = wave.theta_start + (v_outlet - wave.v_start) / head_speed
-
-                # Compare in θ-space (flow-free) — equivalent to the legacy time
-                # tolerance but unit-agnostic with respect to flow rate.
                 if abs(theta_head_crosses_outlet - theta_last_raref_start) < EPSILON_TIME_MATCH:
                     total_raref_mass += integrate_rarefaction_total_mass(
                         raref=wave,
@@ -1408,6 +1229,4 @@ def compute_total_outlet_mass(
                         sorption=sorption,
                     )
 
-    total_mass = mass_up_to_raref_start + total_raref_mass
-
-    return float(total_mass), t_last_raref_start
+    return float(mass_up_to_raref_start + total_raref_mass), float(theta_last_raref_start)

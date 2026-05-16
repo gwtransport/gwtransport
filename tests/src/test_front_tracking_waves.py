@@ -1,7 +1,9 @@
 """
-Unit tests for front tracking wave classes.
+Unit tests for front tracking wave classes in (V, θ) coordinates.
 
 Tests verify wave behavior, position calculations, and concentration queries.
+All wave dynamics are in cumulative-flow coordinate θ; speeds are flow-free
+(``dV/dθ = 1/R(C)`` for characteristics, Rankine-Hugoniot for shocks).
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -28,47 +30,47 @@ class TestCharacteristicWave:
         assert char.is_active
 
     def test_velocity_constant_retardation(self):
-        """Test velocity computation with constant retardation."""
+        """Speed dV/dθ = 1/R for constant retardation."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption)
 
-        velocity = char.speed()
-        expected = 100.0 / 2.0
+        speed = char.speed()
+        expected = 1.0 / 2.0
 
-        assert np.isclose(velocity, expected, rtol=1e-14)
+        assert np.isclose(speed, expected, rtol=1e-14)
 
     def test_velocity_freundlich(self):
-        """Test velocity computation with Freundlich sorption."""
+        """Speed dV/dθ = 1/R(c) for Freundlich sorption."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=10.0, sorption=sorption)
 
-        velocity = char.speed()
+        speed = char.speed()
         r = sorption.retardation(10.0)
-        expected = 100.0 / r
+        expected = 1.0 / r
 
-        assert np.isclose(velocity, expected, rtol=1e-14)
+        assert np.isclose(speed, expected, rtol=1e-14)
 
-    def test_position_at_time_linear_propagation(self):
-        """Test that characteristic propagates linearly."""
+    def test_position_at_theta_linear_propagation(self):
+        """V(θ) = (1/R) · θ for theta_start=0, v_start=0."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption)
 
-        for t in [1.0, 5.0, 10.0]:
-            v = char.position_at_theta(t)
+        for theta in [1.0, 5.0, 10.0]:
+            v = char.position_at_theta(theta)
             assert v is not None
-            expected = (100.0 / 2.0) * t
+            expected = (1.0 / 2.0) * theta
             assert np.isclose(v, expected, rtol=1e-14)
 
-    def test_position_at_time_before_start(self):
-        """Test position is None for t < t_start."""
+    def test_position_at_theta_before_start(self):
+        """Position is None for θ < θ_start."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         char = CharacteristicWave(theta_start=10.0, v_start=0.0, concentration=5.0, sorption=sorption)
 
         v = char.position_at_theta(5.0)
         assert v is None
 
-    def test_position_at_time_inactive(self):
-        """Test position is None when inactive."""
+    def test_position_at_theta_inactive(self):
+        """Position is None when wave is inactive."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption)
         char.is_active = False
@@ -76,20 +78,20 @@ class TestCharacteristicWave:
         v = char.position_at_theta(10.0)
         assert v is None
 
-    def test_position_at_time_nonzero_start(self):
-        """Test propagation from non-zero starting position."""
+    def test_position_at_theta_nonzero_start(self):
+        """V(θ) = v_start + (1/R)·(θ - θ_start)."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         char = CharacteristicWave(theta_start=5.0, v_start=100.0, concentration=5.0, sorption=sorption)
 
         v = char.position_at_theta(15.0)
-        velocity = 100.0 / 2.0
-        expected = 100.0 + velocity * (15.0 - 5.0)
+        speed = 1.0 / 2.0
+        expected = 100.0 + speed * (15.0 - 5.0)
 
         assert v is not None
         assert np.isclose(v, expected, rtol=1e-14)
 
     def test_concentration_left_right_equal(self):
-        """Test that left and right concentrations are same for characteristic."""
+        """Left and right concentrations are equal along a characteristic."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption)
 
@@ -98,22 +100,20 @@ class TestCharacteristicWave:
         assert char.concentration_left() == char.concentration_right()
 
     def test_concentration_at_point_reached(self):
-        """Test concentration at point that characteristic has reached."""
+        """Concentration at a point the characteristic has reached."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption)
 
-        # At t=10, characteristic is at v = 50*10 = 500
-        # Should return concentration for v < 500
-        c = char.concentration_at_point(v=300.0, theta=10.0)
+        # At θ=10, char at v = 0.5·10 = 5.0 → query v ≤ 5 returns the carried c.
+        c = char.concentration_at_point(v=3.0, theta=10.0)
         assert c == 5.0
 
     def test_concentration_at_point_not_reached(self):
-        """Test concentration at point that characteristic hasn't reached yet."""
+        """Concentration is None for v ahead of the characteristic's position."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption)
 
-        # At t=10, characteristic is at v = 50*10 = 500
-        # Should return None for v > 500
+        # At θ=10, char at v=5; query v=600 is far ahead → None.
         c = char.concentration_at_point(v=600.0, theta=10.0)
         assert c is None
 
@@ -133,7 +133,7 @@ class TestShockWave:
         assert shock.is_active
 
     def test_velocity_computed_in_post_init(self):
-        """Test that shock velocity is computed automatically."""
+        """Shock speed is computed automatically in __post_init__."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=sorption)
 
@@ -141,36 +141,33 @@ class TestShockWave:
         assert shock.speed > 0
 
     def test_velocity_rankine_hugoniot(self):
-        """Test shock velocity satisfies Rankine-Hugoniot."""
+        """Shock speed satisfies Rankine-Hugoniot in (V, θ)."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=sorption)
 
-        # Verify Rankine-Hugoniot
-        flux_left = 100.0 * 10.0
-        flux_right = 100.0 * 2.0
+        # dV_s/dθ = (c_R - c_L) / (C_T(c_R) - C_T(c_L)) — flow-free.
         c_total_left = sorption.total_concentration(10.0)
         c_total_right = sorption.total_concentration(2.0)
-
-        v_expected = (flux_right - flux_left) / (c_total_right - c_total_left)
+        expected = (2.0 - 10.0) / (c_total_right - c_total_left)
 
         assert shock.speed is not None
-        assert np.isclose(shock.speed, v_expected, rtol=1e-14)
+        assert np.isclose(shock.speed, expected, rtol=1e-14)
 
-    def test_position_at_time_linear_propagation(self):
-        """Test shock propagates linearly."""
+    def test_position_at_theta_linear_propagation(self):
+        """Shock propagates linearly in θ."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=sorption)
 
-        v_shock = shock.speed
-        assert v_shock is not None
-        for t in [1.0, 5.0, 10.0]:
-            v = shock.position_at_theta(t)
+        speed = shock.speed
+        assert speed is not None
+        for theta in [1.0, 5.0, 10.0]:
+            v = shock.position_at_theta(theta)
             assert v is not None
-            expected = v_shock * t
+            expected = speed * theta
             assert np.isclose(v, expected, rtol=1e-14)
 
-    def test_position_at_time_before_start(self):
-        """Test position is None for t < t_start."""
+    def test_position_at_theta_before_start(self):
+        """Position is None for θ < θ_start."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         shock = ShockWave(theta_start=10.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=sorption)
 
@@ -178,7 +175,7 @@ class TestShockWave:
         assert v is None
 
     def test_concentration_left_right(self):
-        """Test left and right concentration getters."""
+        """Left and right concentration getters."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=sorption)
 
@@ -186,31 +183,29 @@ class TestShockWave:
         assert shock.concentration_right() == 2.0
 
     def test_concentration_at_point_upstream(self):
-        """Test concentration upstream of shock."""
+        """Concentration upstream of shock returns c_left."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=sorption)
 
-        # Shock at some position
         v_shock = shock.position_at_theta(10.0)
         assert v_shock is not None
         c = shock.concentration_at_point(v=v_shock - 10.0, theta=10.0)
 
-        assert c == 10.0  # Upstream concentration
+        assert c == 10.0
 
     def test_concentration_at_point_downstream(self):
-        """Test concentration downstream of shock."""
+        """Concentration downstream of shock returns c_right."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=sorption)
 
-        # Shock at some position
         v_shock = shock.position_at_theta(10.0)
         assert v_shock is not None
         c = shock.concentration_at_point(v=v_shock + 10.0, theta=10.0)
 
-        assert c == 2.0  # Downstream concentration
+        assert c == 2.0
 
     def test_concentration_at_point_exact_shock_position(self):
-        """Test concentration exactly at shock position."""
+        """At the exact shock position returns the average."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=sorption)
 
@@ -218,21 +213,20 @@ class TestShockWave:
         assert v_shock is not None
         c = shock.concentration_at_point(v=v_shock, theta=10.0)
 
-        # At exact shock position, returns average
         assert c is not None
         assert np.isclose(c, 0.5 * (10.0 + 2.0), rtol=1e-14)
 
     def test_satisfies_entropy_physical_shock(self):
-        """Test that physical compression shock satisfies entropy."""
+        """A physical compression shock satisfies entropy."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=sorption)
 
         assert shock.satisfies_entropy()
 
     def test_satisfies_entropy_unphysical_shock(self):
-        """Test that unphysical expansion shock violates entropy."""
+        """An unphysical expansion shock violates entropy."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        # For n > 1, this is backwards (expansion, not compression)
+        # For n > 1, c_left < c_right is backwards (expansion)
         shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=2.0, c_right=10.0, sorption=sorption)
 
         assert not shock.satisfies_entropy()
@@ -242,9 +236,8 @@ class TestRarefactionWave:
     """Test RarefactionWave class."""
 
     def test_initialization_valid(self):
-        """Test valid initialization (head faster than tail)."""
+        """Valid initialization (head faster than tail)."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        # For n > 1, higher C is faster
         raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption)
 
         assert raref.c_head == 10.0
@@ -252,51 +245,47 @@ class TestRarefactionWave:
         assert raref.is_active
 
     def test_initialization_invalid_velocities(self):
-        """Test that rarefaction with head slower than tail raises error."""
+        """Rarefaction with head slower than tail raises."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        # For n > 1, lower C is slower - this would be backwards
+        # For n > 1, lower C is slower — head_speed < tail_speed.
         with pytest.raises(ValueError, match="Not a rarefaction"):
             RarefactionWave(theta_start=0.0, v_start=0.0, c_head=2.0, c_tail=10.0, sorption=sorption)
 
     def test_head_tail_velocities(self):
-        """Test head and tail velocity computations."""
+        """Head and tail speeds are 1/R(c_head) and 1/R(c_tail)."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption)
 
-        v_head = raref.head_speed()
-        v_tail = raref.tail_speed()
+        s_head = raref.head_speed()
+        s_tail = raref.tail_speed()
 
-        # Head should be faster than tail
-        assert v_head > v_tail
+        assert s_head > s_tail
 
-        # Verify exact values
         r_head = sorption.retardation(10.0)
         r_tail = sorption.retardation(2.0)
-        assert np.isclose(v_head, 100.0 / r_head, rtol=1e-14)
-        assert np.isclose(v_tail, 100.0 / r_tail, rtol=1e-14)
+        assert np.isclose(s_head, 1.0 / r_head, rtol=1e-14)
+        assert np.isclose(s_tail, 1.0 / r_tail, rtol=1e-14)
 
     def test_head_tail_positions(self):
-        """Test head and tail position computations."""
+        """Head and tail position computations."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption)
 
-        t = 10.0
-        v_head = raref.head_position_at_theta(t)
-        v_tail = raref.tail_position_at_theta(t)
+        theta = 10.0
+        v_head = raref.head_position_at_theta(theta)
+        v_tail = raref.tail_position_at_theta(theta)
 
-        # Head should be ahead of tail
         assert v_head is not None
         assert v_tail is not None
         assert v_head > v_tail
 
-        # Verify exact values
-        expected_head = raref.head_speed() * t
-        expected_tail = raref.tail_speed() * t
+        expected_head = raref.head_speed() * theta
+        expected_tail = raref.tail_speed() * theta
         assert np.isclose(v_head, expected_head, rtol=1e-14)
         assert np.isclose(v_tail, expected_tail, rtol=1e-14)
 
-    def test_position_at_time_returns_head(self):
-        """Test that position_at_time returns head position."""
+    def test_position_at_theta_returns_head(self):
+        """``position_at_theta`` returns head position."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption)
 
@@ -306,91 +295,89 @@ class TestRarefactionWave:
         assert v == v_head
 
     def test_contains_point_inside_fan(self):
-        """Test contains_point for point inside rarefaction fan."""
+        """contains_point is True for (v, θ) inside the fan."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption)
 
-        t = 20.0
-        v_head = raref.head_position_at_theta(t)
-        v_tail = raref.tail_position_at_theta(t)
+        theta = 20.0
+        v_head = raref.head_position_at_theta(theta)
+        v_tail = raref.tail_position_at_theta(theta)
         assert v_head is not None
         assert v_tail is not None
         v_mid = 0.5 * (v_head + v_tail)
 
-        assert raref.contains_point(v_mid, t)
+        assert raref.contains_point(v_mid, theta)
 
     def test_contains_point_outside_fan(self):
-        """Test contains_point for points outside rarefaction fan."""
+        """contains_point is False before tail or beyond head."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption)
 
-        t = 20.0
-        v_head = raref.head_position_at_theta(t)
-        v_tail = raref.tail_position_at_theta(t)
+        theta = 20.0
+        v_head = raref.head_position_at_theta(theta)
+        v_tail = raref.tail_position_at_theta(theta)
         assert v_head is not None
         assert v_tail is not None
 
-        # Before tail
-        assert not raref.contains_point(v_tail - 10.0, t)
-
-        # After head
-        assert not raref.contains_point(v_head + 10.0, t)
+        assert not raref.contains_point(v_tail - 10.0, theta)
+        assert not raref.contains_point(v_head + 10.0, theta)
 
     def test_concentration_at_point_self_similar(self):
-        """Test self-similar solution for concentration in rarefaction."""
+        """Self-similar fan: R(C) = (θ - θ_start)/(v - v_start)."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption)
 
-        t = 20.0
-        v = 150.0
+        # Pick a point inside the fan at θ = 20, v that gives R between R(c_tail) and R(c_head).
+        theta = 20.0
+        r_tail = float(sorption.retardation(2.0))
+        r_head = float(sorption.retardation(10.0))
+        # v_head_at_theta = theta/r_head; v_tail_at_theta = theta/r_tail. Pick midpoint.
+        v_head = theta / r_head
+        v_tail = theta / r_tail
+        v = 0.5 * (v_head + v_tail)
 
-        c = raref.concentration_at_point(v, t)
+        c = raref.concentration_at_point(v, theta)
 
-        # Should be between tail and head
         assert c is not None
         assert 2.0 <= c <= 10.0
 
-        # Verify self-similar solution: R(C) = flow*t/v
-        r_target = 100.0 * t / v
+        # Verify self-similar solution: R(C) = θ/v.
+        r_target = theta / v
         c_from_r = sorption.concentration_from_retardation(r_target)
         assert np.isclose(c, c_from_r, rtol=1e-14)
 
     def test_concentration_at_point_outside_fan(self):
-        """Test concentration is None outside rarefaction fan."""
+        """Concentration is None outside the fan."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption)
 
-        t = 20.0
-        v_head = raref.head_position_at_theta(t)
+        theta = 20.0
+        v_head = raref.head_position_at_theta(theta)
         assert v_head is not None
 
-        # After head
-        c = raref.concentration_at_point(v_head + 100.0, t)
+        c = raref.concentration_at_point(v_head + 100.0, theta)
         assert c is None
 
     def test_concentration_at_origin(self):
-        """Test concentration at origin of rarefaction."""
+        """At v = v_start (origin of fan) returns c_tail."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption)
 
-        # At v=0 (origin), concentration should be tail value
         c = raref.concentration_at_point(v=0.0, theta=10.0)
         assert c is not None
         assert np.isclose(c, 2.0, rtol=1e-14)
 
     def test_concentration_left_right(self):
-        """Test concentration_left and concentration_right."""
+        """concentration_left = c_tail (upstream), concentration_right = c_head (downstream)."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption)
 
-        assert raref.concentration_left() == 2.0  # Tail (upstream)
-        assert raref.concentration_right() == 10.0  # Head (downstream)
+        assert raref.concentration_left() == 2.0
+        assert raref.concentration_right() == 10.0
 
     def test_concentration_with_constant_retardation_returns_none(self):
-        """Test that rarefaction with constant R returns None (shouldn't form)."""
+        """RarefactionWave with constant R raises (no rarefaction can form)."""
         sorption = ConstantRetardation(retardation_factor=2.0)
 
-        # With constant retardation, all concentrations travel at same speed
-        # So we can't even create a rarefaction (would raise ValueError)
         with pytest.raises(ValueError, match="Not a rarefaction"):
             RarefactionWave(theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption)

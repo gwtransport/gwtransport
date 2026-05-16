@@ -115,6 +115,9 @@ def run_scenario(scenario: Scenario) -> dict:
 
     The capture is the contract for snapshot regression: anything in the returned
     dict must be reproducible bit-identically by the refactored code.
+
+    All recorded quantities are in θ-space; user-facing time-domain values are
+    derived only at this outer test boundary via ``state.theta_at_t``.
     """
     inputs = _build_inputs(scenario)
     sorption = _make_sorption(scenario)
@@ -128,13 +131,12 @@ def run_scenario(scenario: Scenario) -> dict:
     )
     tracker.run(max_iterations=100000, verbose=False)
 
+    theta_sample = np.array([tracker.state.theta_at_t(float(t)) for t in inputs["t_sample"]])
     cout: npt.NDArray[np.floating] = compute_breakthrough_curve(
-        inputs["t_sample"],
+        theta_sample,
         scenario.v_pore,
         tracker.state.waves,
         sorption,
-        theta_edges=tracker.state.theta_edges,
-        tedges_days=inputs["tedges_days"],
     )
 
     domain_mass = np.array([
@@ -142,19 +144,17 @@ def run_scenario(scenario: Scenario) -> dict:
         for t in inputs["domain_mass_times"]
     ])
 
-    total_mass, t_integration_end = compute_total_outlet_mass(
+    total_mass, theta_integration_end = compute_total_outlet_mass(
         scenario.v_pore,
         tracker.state.waves,
         sorption,
-        inputs["flow"],
-        inputs["tedges_days"],
     )
 
-    event_summary = tuple((float(ev["time"]), str(ev["type"])) for ev in tracker.state.events)
+    event_summary = tuple((float(ev["theta"]), str(ev["type"])) for ev in tracker.state.events)
 
     return {
         "scenario_name": scenario.name,
-        "t_first_arrival": float(tracker.t_first_arrival),
+        "theta_first_arrival": float(tracker.theta_first_arrival),
         "n_waves": len(tracker.state.waves),
         "n_events": len(tracker.state.events),
         "event_summary": event_summary,
@@ -162,7 +162,7 @@ def run_scenario(scenario: Scenario) -> dict:
         "domain_mass_times": inputs["domain_mass_times"],
         "domain_mass": domain_mass,
         "total_outlet_mass": float(total_mass),
-        "t_integration_end": float(t_integration_end),
+        "theta_integration_end": float(theta_integration_end),
         "t_sample": inputs["t_sample"],
     }
 

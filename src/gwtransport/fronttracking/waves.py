@@ -138,9 +138,11 @@ class CharacteristicWave(Wave):
         return self.v_start + self.speed() * (theta - self.theta_start)
 
     def concentration_left(self) -> float:
+        """Concentration on the left (upstream) side; equals the carried value."""
         return self.concentration
 
     def concentration_right(self) -> float:
+        """Concentration on the right (downstream) side; equals the carried value."""
         return self.concentration
 
     def concentration_at_point(self, v: float, theta: float) -> float | None:
@@ -220,9 +222,11 @@ class ShockWave(Wave):
         return self.v_start + self.speed * (theta - self.theta_start)
 
     def concentration_left(self) -> float:
+        """Upstream concentration of the shock."""
         return self.c_left
 
     def concentration_right(self) -> float:
+        """Downstream concentration of the shock."""
         return self.c_right
 
     def concentration_at_point(self, v: float, theta: float) -> float | None:
@@ -343,7 +347,7 @@ class RarefactionWave(Wave):
         return self.head_position_at_theta(theta)
 
     def contains_point(self, v: float, theta: float) -> bool:
-        """True if (v, θ) lies between the tail and head of the fan."""
+        """Return ``True`` if ``(v, θ)`` lies between the fan's tail and head."""
         if theta <= self.theta_start or not self.is_active:
             return False
 
@@ -399,11 +403,10 @@ class RarefactionWave(Wave):
             # ConstantRetardation case — rarefactions don't form
             return None
 
-        c_min = min(self.c_tail, self.c_head)
-        c_max = max(self.c_tail, self.c_head)
-
-        c_float = float(c)
-        if c_min <= c_float <= c_max:
-            return c_float
-
-        return None
+        # contains_point(v, theta) was True, so the point is geometrically inside
+        # the fan. The inverted c may drift by a few ULPs past [c_tail, c_head]
+        # — clamp rather than rejecting so callers at the head/tail boundaries
+        # get the correct boundary concentration.
+        c_lo = min(self.c_tail, self.c_head)
+        c_hi = max(self.c_tail, self.c_head)
+        return min(max(float(c), c_lo), c_hi)

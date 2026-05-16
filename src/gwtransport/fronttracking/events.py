@@ -69,11 +69,10 @@ class Event:
     location: float
     boundary_type: str | None = None
 
-    def __lt__(self, other):
-        """Events ordered by cumulative flow θ (for the priority queue)."""
+    def __lt__(self, other):  # noqa: D105
         return self.theta < other.theta
 
-    def __repr__(self):
+    def __repr__(self):  # noqa: D105
         return (
             f"Event(θ={self.theta:.3f}, type={self.event_type.value}, "
             f"location={self.location:.3f}, n_waves={len(self.waves_involved)})"
@@ -264,9 +263,16 @@ def find_outlet_crossing(wave, v_outlet: float, theta_current: float) -> float |
     Assumes positive flow (waves always move toward larger V). For rarefactions,
     returns the θ at which the head (leading edge) crosses. Returns None if
     the wave has already passed the outlet, is not active, or moves backward.
+    The "already past" check uses a relative tolerance so that a wave whose
+    crossing event has just been processed (and is at v_outlet ± a few ULPs)
+    does not re-emit a duplicate crossing one ULP later.
     """
     if not wave.is_active:
         return None
+
+    # Suppress re-emission when v_current is within FP of v_outlet: the
+    # crossing was already recorded on the prior iteration.
+    tol = 1e-12 * max(abs(v_outlet), abs(wave.v_start), 1.0)
 
     if isinstance(wave, CharacteristicWave):
         theta_eval = max(theta_current, wave.theta_start)
@@ -274,7 +280,7 @@ def find_outlet_crossing(wave, v_outlet: float, theta_current: float) -> float |
             wave.concentration, wave.sorption, wave.theta_start, wave.v_start, theta_eval
         )
 
-        if v_current is None or v_current >= v_outlet:
+        if v_current is None or v_current >= v_outlet - tol:
             return None
 
         speed = characteristic_speed(wave.concentration, wave.sorption)
@@ -292,7 +298,7 @@ def find_outlet_crossing(wave, v_outlet: float, theta_current: float) -> float |
         theta_eval = max(theta_current, wave.theta_start)
         v_current = wave.v_start + wave.speed * (theta_eval - wave.theta_start)
 
-        if v_current >= v_outlet:
+        if v_current >= v_outlet - tol:
             return None
 
         if wave.speed <= 0:
@@ -306,7 +312,7 @@ def find_outlet_crossing(wave, v_outlet: float, theta_current: float) -> float |
         s_head = characteristic_speed(wave.c_head, wave.sorption)
         v_head = characteristic_position(wave.c_head, wave.sorption, wave.theta_start, wave.v_start, theta_eval)
 
-        if v_head is None or v_head >= v_outlet:
+        if v_head is None or v_head >= v_outlet - tol:
             return None
 
         if s_head <= 0:

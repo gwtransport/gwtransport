@@ -3170,22 +3170,22 @@ def test_flow_weighted_front_tracking_output_edge_routing(monkeypatch):
     """Routing of fine sub-bins to flow / cout bins must follow the half-open
     ``[t_k, t_{k+1})`` convention.
 
-    The helper builds ``fine_edges`` via ``np.unique(...)``, so a midpoint
-    never lands exactly on an inner flow edge in practice — meaning this
-    test does NOT distinguish ``side="left"`` from ``side="right"`` on the
-    current code. It pins the routing-output invariant: any future routing
-    bug (e.g., ``+/- 1`` index shift, swap, or normalization error) is
-    caught by the explicit reference loop.
+    In (V, θ) the helper translates fine ``t``-edges to ``θ``-edges via the
+    ``(flow_tedges_days, theta_edges)`` map and queries the patched
+    ``compute_bin_averaged_concentration_exact`` in θ-space. The flow-weighting
+    that follows is still in (t, flow) — this test pins the routing invariant.
     """
     cout_tedges_days = np.array([0.0, 6.0, 12.0])
     flow_tedges_days = np.array([0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0])
     flow = np.array([10.0, 20.0, 30.0, 40.0, 50.0, 60.0])
+    dt_flow = np.diff(flow_tedges_days)
+    theta_edges = np.concatenate(([0.0], np.cumsum(flow * dt_flow)))
 
-    # Patch C(t) to be linear in the fine-bin midpoint so the flow-weighted
+    # Patch C(θ) to be the θ-midpoint of each fine sub-bin so the flow-weighted
     # average is strictly routing-dependent.
-    def _linear_c(*, t_edges, v_outlet, waves, sorption):
+    def _linear_c(*, theta_bin_edges, v_outlet, waves, sorption):
         del v_outlet, waves, sorption
-        return (t_edges[:-1] + t_edges[1:]) / 2
+        return (theta_bin_edges[:-1] + theta_bin_edges[1:]) / 2
 
     monkeypatch.setattr(adv_mod, "compute_bin_averaged_concentration_exact", _linear_c)
 
@@ -3196,13 +3196,16 @@ def test_flow_weighted_front_tracking_output_edge_routing(monkeypatch):
         v_outlet=100.0,
         waves=[],
         sorption=ConstantRetardation(retardation_factor=1.0),
+        theta_edges=theta_edges,
     )
 
-    # Reference: explicit half-open bin assignment.
+    # Reference: explicit half-open bin assignment, with c_fine computed in θ
+    # to match the patched function.
     fine_edges = np.unique(np.concatenate([cout_tedges_days, flow_tedges_days[1:-1]]))
     fine_mids = (fine_edges[:-1] + fine_edges[1:]) / 2
     dt_fine = np.diff(fine_edges)
-    c_fine = fine_mids.copy()
+    fine_theta_edges = np.interp(fine_edges, flow_tedges_days, theta_edges)
+    c_fine = (fine_theta_edges[:-1] + fine_theta_edges[1:]) / 2
     # For each fine_mid, find the flow bin k such that t_k <= mid < t_{k+1}.
     flow_idx = np.array([np.searchsorted(flow_tedges_days, m, side="right") - 1 for m in fine_mids])
     cout_idx = np.array([np.searchsorted(cout_tedges_days, m, side="right") - 1 for m in fine_mids])

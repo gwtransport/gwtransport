@@ -1,9 +1,11 @@
 """Event-driven front-tracking solver in (V, θ) coordinates.
 
-The simulation runs entirely in cumulative-flow space θ; only the public
-state.events records and ``t_first_arrival`` expose user-facing time t.
+The simulation runs entirely in cumulative-flow space θ. Every public
+output — wave attributes, ``state.events[i]['theta']``,
+``theta_first_arrival`` — is in θ. Translation to user-facing time t is
+the caller's responsibility via ``state.t_at_theta``.
 Time-varying flow is absorbed into the precomputed ``theta_edges`` array
-at ``__init__`` — there is no flow-change event.
+at ``__init__``; there is no flow-change event.
 
 Algorithm:
 
@@ -44,7 +46,7 @@ from gwtransport.fronttracking.handlers import (
 )
 from gwtransport.fronttracking.math import (
     SorptionModel,
-    compute_first_front_arrival_time,
+    compute_first_front_arrival_theta,
 )
 from gwtransport.fronttracking.output import (
     compute_cumulative_inlet_mass,
@@ -73,8 +75,9 @@ class FrontTrackerState:
     waves : list of Wave
         All waves created during simulation (includes inactive waves).
     events : list of dict
-        Event history with details about each event. Records use ``"time"``
-        key carrying user-facing days (translated from θ at append time).
+        Event history. Records use the ``"theta"`` key carrying the
+        cumulative flow at which the event occurred [m³]. Callers translate
+        to user-facing time via ``FrontTrackerState.t_at_theta``.
     theta_current : float
         Current simulation cumulative flow [m³].
     v_outlet : float
@@ -104,11 +107,6 @@ class FrontTrackerState:
     tedges: pd.DatetimeIndex
     tedges_days: npt.NDArray[np.floating]
     theta_edges: npt.NDArray[np.floating]
-
-    @property
-    def t_current(self) -> float:
-        """User-facing time corresponding to ``theta_current`` [days from tedges[0]]."""
-        return self.t_at_theta(self.theta_current)
 
     def t_at_theta(self, theta: float) -> float:
         """Translate cumulative flow θ back to user-facing time t [days].
@@ -177,14 +175,16 @@ class FrontTracker:
     ----------
     state : FrontTrackerState
         Complete simulation state.
-    t_first_arrival : float
-        First arrival time (end of spin-up period) [days from tedges[0]].
+    theta_first_arrival : float
+        Cumulative flow θ at which the first nonzero-concentration wave reaches
+        the outlet [m³]. Translate to user-facing time via
+        ``state.t_at_theta(theta_first_arrival)``.
 
     Notes
     -----
-    Internally the solver works exclusively in cumulative flow θ; events
-    appended to ``state.events`` carry user-facing time t (translated from
-    θ via ``state.t_at_theta``).
+    The solver works exclusively in cumulative flow θ; events appended to
+    ``state.events`` carry ``"theta"``. Translation to user-facing time t is
+    the caller's responsibility (use ``state.t_at_theta``).
     """
 
     def __init__(
@@ -229,7 +229,7 @@ class FrontTracker:
             theta_edges=theta_edges,
         )
 
-        self.t_first_arrival = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
+        self.theta_first_arrival = compute_first_front_arrival_theta(cin, theta_edges, aquifer_pore_volume, sorption)
 
         self._initialize_inlet_waves()
 
@@ -325,47 +325,31 @@ class FrontTracker:
                         )
                         counter += 1
 
+        v_outlet = self.state.v_outlet
+        # Same FP-tolerance discipline as events.find_outlet_crossing — prevents
+        # re-emitting an outlet crossing for a boundary that's at v_outlet ± ULPs.
+        outlet_tol = 1e-12 * max(abs(v_outlet), 1.0)
+
         for wave in active_waves:
             if isinstance(wave, RarefactionWave):
-                # Both head and tail crossings of the outlet are tracked.
                 theta_eval = max(theta_current, wave.theta_start)
-                v_head = wave.head_position_at_theta(theta_eval)
-                if v_head is not None and v_head < self.state.v_outlet:
-                    s_head = wave.head_speed()
-                    if s_head > 0:
-                        theta_cross_head = theta_eval + (self.state.v_outlet - v_head) / s_head
-                        if theta_cross_head > theta_current:
-                            heappush(
-                                candidates,
-                                (
-                                    theta_cross_head,
-                                    counter,
-                                    EventType.OUTLET_CROSSING,
-                                    [wave],
-                                    self.state.v_outlet,
-                                    None,
-                                ),
-                            )
-                            counter += 1
-
-                v_tail = wave.tail_position_at_theta(theta_eval)
-                if v_tail is not None and v_tail < self.state.v_outlet:
-                    s_tail = wave.tail_speed()
-                    if s_tail > 0:
-                        theta_cross_tail = theta_eval + (self.state.v_outlet - v_tail) / s_tail
-                        if theta_cross_tail > theta_current:
-                            heappush(
-                                candidates,
-                                (
-                                    theta_cross_tail,
-                                    counter,
-                                    EventType.OUTLET_CROSSING,
-                                    [wave],
-                                    self.state.v_outlet,
-                                    None,
-                                ),
-                            )
-                            counter += 1
+                for pos_fn, speed_fn in (
+                    (wave.head_position_at_theta, wave.head_speed),
+                    (wave.tail_position_at_theta, wave.tail_speed),
+                ):
+                    v_pos = pos_fn(theta_eval)
+                    if v_pos is None or v_pos >= v_outlet - outlet_tol:
+                        continue
+                    s = speed_fn()
+                    if s <= 0:
+                        continue
+                    theta_cross = theta_eval + (v_outlet - v_pos) / s
+                    if theta_cross > theta_current:
+                        heappush(
+                            candidates,
+                            (theta_cross, counter, EventType.OUTLET_CROSSING, [wave], v_outlet, None),
+                        )
+                        counter += 1
             else:
                 theta_cross = find_outlet_crossing(wave, self.state.v_outlet, theta_current)
                 if theta_cross and theta_cross > theta_current:
@@ -439,15 +423,13 @@ class FrontTracker:
 
         elif event.event_type == EventType.OUTLET_CROSSING:
             event_record = handle_outlet_crossing(event.waves_involved[0], event.theta, event.location)
-            event_record["time"] = self.state.t_at_theta(event_record.pop("theta"))
             self.state.events.append(event_record)
             return
 
-        # Add new waves to state
         self.state.waves.extend(new_waves)
 
         self.state.events.append({
-            "time": self.state.t_at_theta(event.theta),
+            "theta": event.theta,
             "type": event.event_type.value,
             "location": event.location,
             "waves_before": event.waves_involved,
@@ -461,7 +443,7 @@ class FrontTracker:
         if verbose:
             logger.info("Starting simulation at θ=%.3f", self.state.theta_current)
             logger.info("Initial waves: %d", len(self.state.waves))
-            logger.info("First arrival time: %.3f days", self.t_first_arrival)
+            logger.info("First arrival: θ=%.3f", self.theta_first_arrival)
 
         while iteration < max_iterations:
             event = self.find_next_event()
@@ -496,20 +478,20 @@ class FrontTracker:
             logger.info("  Total events: %d", len(self.state.events))
             logger.info("  Total waves created: %d", len(self.state.waves))
             logger.info("  Active waves: %d", sum(1 for w in self.state.waves if w.is_active))
-            logger.info("  First arrival time: %.6f days", self.t_first_arrival)
+            logger.info("  First arrival: θ=%.6f", self.theta_first_arrival)
 
     def verify_physics(self, *, check_mass_balance: bool = False, mass_balance_rtol: float = 1e-12):
         """Verify physical correctness: shock entropy and (optionally) mass balance.
 
-        Mass balance equation::
+        Mass balance equation in θ-space::
 
-            mass_in_domain(t) + mass_out_cumulative(t) = mass_in_cumulative(t)
+            mass_in_domain(θ) + mass_out_cumulative(θ) = mass_in_cumulative(θ)
 
         Raises
         ------
         RuntimeError
             If an active shock violates entropy or if mass balance fails to
-            ``mass_balance_rtol`` at the current simulation time.
+            ``mass_balance_rtol`` at the current simulation θ.
         """
         for wave in self.state.waves:
             if isinstance(wave, ShockWave) and wave.is_active and not wave.satisfies_entropy():
@@ -521,30 +503,26 @@ class FrontTracker:
                 raise RuntimeError(msg)
 
         if check_mass_balance:
-            t_current = self.state.t_current
-            tedges_days = self.state.tedges_days
+            theta = self.state.theta_current
 
             mass_in_domain = compute_domain_mass(
-                theta=self.state.theta_current,
+                theta=theta,
                 v_outlet=self.state.v_outlet,
                 waves=self.state.waves,
                 sorption=self.state.sorption,
             )
 
             mass_in_cumulative = compute_cumulative_inlet_mass(
-                t=t_current,
+                theta=theta,
                 cin=self.state.cin,
-                flow=self.state.flow,
-                tedges_days=tedges_days,
+                theta_edges=self.state.theta_edges,
             )
 
             mass_out_cumulative = compute_cumulative_outlet_mass(
-                t=t_current,
+                theta=theta,
                 v_outlet=self.state.v_outlet,
                 waves=self.state.waves,
                 sorption=self.state.sorption,
-                flow=self.state.flow,
-                tedges_days=tedges_days,
             )
 
             mass_balance_error = (mass_in_domain + mass_out_cumulative) - mass_in_cumulative
@@ -556,7 +534,7 @@ class FrontTracker:
 
             if relative_error > mass_balance_rtol:
                 msg = (
-                    f"Mass balance violation at t={t_current:.6f}! "
+                    f"Mass balance violation at θ={theta:.6f}! "
                     f"mass_in_domain={mass_in_domain:.6e}, "
                     f"mass_out={mass_out_cumulative:.6e}, "
                     f"mass_in={mass_in_cumulative:.6e}, "

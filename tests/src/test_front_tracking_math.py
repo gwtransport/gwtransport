@@ -19,8 +19,41 @@ from gwtransport.fronttracking.math import (
     LangmuirSorption,
     characteristic_position,
     characteristic_speed,
-    compute_first_front_arrival_time,
+    compute_first_front_arrival_theta,
 )
+
+
+def _theta_edges_from(flow: np.ndarray, tedges: pd.DatetimeIndex) -> np.ndarray:
+    """Build θ-edges from per-bin flow and time-edges (test-only helper)."""
+    dt = np.asarray((tedges - tedges[0]) / pd.Timedelta(days=1), dtype=float)
+    return np.concatenate(([0.0], np.cumsum(np.asarray(flow, dtype=float) * np.diff(dt))))
+
+
+def _t_at_theta(theta: float, flow: np.ndarray, tedges: pd.DatetimeIndex) -> float:
+    """Translate θ→t against a piecewise-constant flow profile (test-only helper)."""
+    tedges_days = np.asarray((tedges - tedges[0]) / pd.Timedelta(days=1), dtype=float)
+    theta_edges = _theta_edges_from(flow, tedges)
+    if theta <= theta_edges[0]:
+        return float(tedges_days[0])
+    if theta >= theta_edges[-1]:
+        last_flow = float(flow[-1])
+        return (
+            float(tedges_days[-1] + (theta - theta_edges[-1]) / last_flow) if last_flow > 0 else float(tedges_days[-1])
+        )
+    i = int(np.searchsorted(theta_edges, theta, side="right")) - 1
+    flow_i = float(flow[i])
+    return float(tedges_days[i] + (theta - theta_edges[i]) / flow_i) if flow_i > 0 else float(tedges_days[i])
+
+
+def compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption):
+    """Test shim: θ-native helper + θ→t translation (uses test-local helpers)."""
+    theta_edges = _theta_edges_from(np.asarray(flow), tedges)
+    theta = compute_first_front_arrival_theta(np.asarray(cin), theta_edges, aquifer_pore_volume, sorption)
+    # Past the simulation window with non-positive trailing flow → no finite t,
+    # preserve the legacy `np.inf` sentinel.
+    if (not np.isfinite(theta) or theta > theta_edges[-1]) and (not np.isfinite(theta) or float(flow[-1]) <= 0):
+        return float(np.inf)
+    return _t_at_theta(float(theta), np.asarray(flow), tedges)
 
 
 class TestFreundlichSorption:
@@ -145,15 +178,14 @@ class TestFreundlichSorption:
     # tests/src/test_front_tracking_waves.py:test_velocity_rankine_hugoniot.
 
     def test_shock_velocity_equal_concentrations(self):
-        """Test shock velocity when c_left = c_right (degenerate case)."""
+        """Shock speed when c_left = c_right (degenerate case) returns characteristic speed."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         c = 5.0
-        flow = 100.0
 
         v_shock = sorption.shock_speed(c, c)
 
-        # Should return characteristic velocity
-        v_char = flow / sorption.retardation(c)
+        # In (V, θ), characteristic speed = 1/R(c).
+        v_char = 1.0 / float(sorption.retardation(c))
         assert np.isclose(v_shock, v_char, rtol=1e-14)
 
     def test_entropy_condition_physical_shock_n_greater_1(self):
@@ -304,32 +336,27 @@ class TestLangmuirSorption:
         assert np.isclose(c, 0.0, atol=1e-14)
 
     def test_shock_velocity_rankine_hugoniot(self):
-        """Test shock velocity satisfies Rankine-Hugoniot exactly."""
+        """Shock speed in (V, θ) satisfies flow-free Rankine-Hugoniot."""
         sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
         c_left = 10.0
         c_right = 2.0
-        flow = 100.0
 
         v_shock = sorption.shock_speed(c_left, c_right)
 
-        # Verify Rankine-Hugoniot
-        flux_left = flow * c_left
-        flux_right = flow * c_right
+        # In (V, θ): dV_s/dθ = (c_R - c_L) / (C_T(c_R) - C_T(c_L)).
         c_total_left = sorption.total_concentration(c_left)
         c_total_right = sorption.total_concentration(c_right)
-
-        v_shock_expected = (flux_right - flux_left) / (c_total_right - c_total_left)
+        v_shock_expected = (c_right - c_left) / (c_total_right - c_total_left)
 
         assert np.isclose(v_shock, v_shock_expected, rtol=1e-14)
 
     def test_shock_velocity_equal_concentrations(self):
-        """Test shock velocity when c_left = c_right (degenerate case)."""
+        """Shock speed when c_left = c_right (degenerate case)."""
         sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
         c = 5.0
-        flow = 100.0
 
         v_shock = sorption.shock_speed(c, c)
-        v_char = flow / sorption.retardation(c)
+        v_char = 1.0 / float(sorption.retardation(c))
         assert np.isclose(v_shock, v_char, rtol=1e-14)
 
     def test_entropy_condition_physical_shock(self):
@@ -409,11 +436,10 @@ class TestConstantRetardation:
             sorption.concentration_from_retardation(2.0)
 
     def test_shock_velocity_constant(self):
-        """Test shock velocity equals characteristic velocity."""
+        """Shock speed equals characteristic speed 1/R for constant retardation."""
         sorption = ConstantRetardation(retardation_factor=2.0)
-        flow = 100.0
         v_shock = sorption.shock_speed(c_left=10.0, c_right=2.0)
-        v_expected = flow / 2.0
+        v_expected = 1.0 / 2.0
         assert np.isclose(v_shock, v_expected, rtol=1e-14)
 
     def test_entropy_condition_always_true(self):
@@ -428,61 +454,56 @@ class TestCharacteristicFunctions:
     """Test characteristic velocity and position functions."""
 
     def test_characteristic_velocity_freundlich(self):
-        """Test characteristic velocity computation."""
+        """Characteristic speed in (V, θ): dV/dθ = 1/R(c) — flow-free."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         c = 5.0
-        flow = 100.0
 
         v = characteristic_speed(c, sorption)
-        v_expected = flow / sorption.retardation(c)
+        v_expected = 1.0 / float(sorption.retardation(c))
 
         assert np.isclose(v, v_expected, rtol=1e-14)
 
     def test_characteristic_velocity_constant(self):
-        """Test characteristic velocity with constant retardation."""
+        """Characteristic speed with constant retardation is 1/R."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         c = 5.0
-        flow = 100.0
 
         v = characteristic_speed(c, sorption)
-        v_expected = flow / 2.0
+        v_expected = 1.0 / 2.0
 
         assert np.isclose(v, v_expected, rtol=1e-14)
 
     def test_characteristic_position_linear_propagation(self):
-        """Test that characteristic propagates linearly."""
+        """V(θ) = (1/R) · θ — linear in cumulative flow."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         c = 5.0
-        flow = 100.0
-        t_start = 0.0
+        theta_start = 0.0
         v_start = 0.0
 
-        # Test at multiple times
-        for t in [1.0, 5.0, 10.0]:
-            v_pos = characteristic_position(c, sorption, t_start, v_start, t)
+        for theta in [1.0, 5.0, 10.0]:
+            v_pos = characteristic_position(c, sorption, theta_start, v_start, theta)
             assert v_pos is not None
-            v_expected = (flow / 2.0) * t
+            v_expected = (1.0 / 2.0) * theta
             assert np.isclose(v_pos, v_expected, rtol=1e-14)
 
     def test_characteristic_position_before_start(self):
-        """Test that position is None for t < t_start."""
+        """Position is None for θ < θ_start."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         v_pos = characteristic_position(c=5.0, sorption=sorption, theta_start=10.0, v_start=0.0, theta=5.0)
         assert v_pos is None
 
     def test_characteristic_position_nonzero_start(self):
-        """Test propagation from non-zero starting position."""
+        """V(θ) = v_start + (1/R)·(θ - θ_start)."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         c = 5.0
-        flow = 100.0
-        t_start = 5.0
+        theta_start = 5.0
         v_start = 100.0
-        t = 15.0
+        theta = 15.0
 
-        v_pos = characteristic_position(c, sorption, t_start, v_start, t)
+        v_pos = characteristic_position(c, sorption, theta_start, v_start, theta)
         assert v_pos is not None
-        velocity = flow / 2.0
-        v_expected = v_start + velocity * (t - t_start)
+        speed = 1.0 / 2.0
+        v_expected = v_start + speed * (theta - theta_start)
 
         assert np.isclose(v_pos, v_expected, rtol=1e-14)
 
@@ -576,21 +597,25 @@ class TestFirstArrivalTime:
 
         assert np.isclose(t_first, t_expected, rtol=1e-14)
 
-    def test_first_arrival_insufficient_flow_history(self):
-        """Test that insufficient flow history returns infinity."""
+    def test_first_arrival_extrapolates_past_simulation_window(self):
+        """Past the simulation window, the last bin's flow is extrapolated (θ-native semantics).
 
+        Previously this test asserted ``np.inf`` for "insufficient flow history";
+        the (V, θ) refactor moves the time/θ map into the public API where
+        out-of-window translation extrapolates the last positive flow.
+        """
         cin = np.array([0.0, 10.0])
-        flow = np.array([10.0, 10.0])  # Very low flow
+        flow = np.array([10.0, 10.0])  # Constant 10 m³/day
         tedges = pd.date_range("2020-01-01", periods=3, freq="10D")  # [0, 10, 20] days
-        aquifer_pore_volume = 10000.0  # Very large volume
+        aquifer_pore_volume = 10000.0  # Very large pore volume
         sorption = ConstantRetardation(retardation_factor=2.0)
 
         t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
 
-        # Target: 10000 * 2 = 20000 m³
-        # Available from day 10 to day 20: 10 * 10 = 100 m³
-        # Not enough flow history
-        assert t_first == np.inf
+        # V_target = V·R = 20000 m³. cin>0 from t=10 day onward. θ_emit = 100.
+        # θ_target = 100 + 20000 = 20100. tedges_days[-1] = 20, theta_edges[-1] = 200.
+        # t_target = 20 + (20100 - 200)/10 = 2010 days.
+        assert np.isclose(t_first, 2010.0, rtol=1e-14)
 
 
 class TestRegressionsForIssue168:
