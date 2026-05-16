@@ -521,7 +521,7 @@ class FrontTracker:
             tedges_days = self.state.tedges_days
 
             mass_in_domain = compute_domain_mass(
-                t=t_current,
+                theta=self.state.theta_current,
                 v_outlet=self.state.v_outlet,
                 waves=self.state.waves,
                 sorption=self.state.sorption,

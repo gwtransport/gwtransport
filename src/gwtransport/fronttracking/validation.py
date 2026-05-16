@@ -1,9 +1,13 @@
 """
-Physics validation utilities for front tracking.
+Physics validation utilities for front tracking in (V, θ) coordinates.
 
-This module provides functions to verify physical correctness of
-front-tracking simulations, including entropy conditions, concentration
-bounds, and mass conservation.
+This module provides functions to verify physical correctness of front-tracking
+simulations, including entropy conditions, concentration bounds, mass conservation,
+and event ordering. The solver runs in cumulative-flow coordinate
+``θ = ∫flow(t') dt'``; user-facing event records still carry the translated time
+``"time"`` (days) on the public ``state.events`` interface. Because ``flow ≥ 0``
+is enforced, θ is monotone non-decreasing in t and event ordering in either
+coordinate is equivalent.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -22,6 +26,7 @@ from gwtransport.fronttracking.waves import RarefactionWave, ShockWave
 
 # Numerical tolerance constants
 EPSILON_CONCENTRATION_TOLERANCE = -1e-14  # Minimum allowed concentration (machine precision)
+EPSILON_RAREFACTION_ORDERING = 1e-10  # Slack for c_head/c_tail θ-speed ordering
 
 logger = logging.getLogger(__name__)
 
@@ -31,21 +36,22 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     Run comprehensive physics verification checks on front tracking results.
 
     Performs the following checks:
+
     1. Entropy condition for all shocks
     2. No negative concentrations (within tolerance)
-    3. Output concentration ≤ input maximum
+    3. Output concentration <= input maximum
     4. Finite first arrival time
     5. No NaN values after spin-up period
-    6. Events chronologically ordered
-    7. Rarefaction concentration ordering (head vs tail)
+    6. Events θ-ordered (equivalent to chronological under non-negative flow)
+    7. Rarefaction head/tail θ-speed ordering
     8. Total integrated outlet mass (until all mass exits)
 
     Parameters
     ----------
     structure : dict
-        Structure returned from infiltration_to_extraction_front_tracking_detailed.
-        Must contain keys: 'waves', 't_first_arrival', 'events', 'n_shocks',
-        'n_rarefactions', etc.
+        Structure returned from ``infiltration_to_extraction_front_tracking_detailed``.
+        Must contain keys: ``'waves'``, ``'t_first_arrival'``, ``'events'``,
+        ``'n_shocks'``, ``'n_rarefactions'``, and optionally ``'tracker_state'``.
     cout : array-like
         Bin-averaged output concentrations.
     cout_tedges : pandas.DatetimeIndex
@@ -53,8 +59,7 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     cin : array-like
         Input concentrations.
     verbose : bool, optional
-        If True, print detailed results. If False, only return summary.
-        Default True.
+        If True, print detailed results. If False, only return summary. Default True.
     rtol : float, optional
         Relative tolerance for numerical checks. Default 1e-10.
 
@@ -62,11 +67,12 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     -------
     results : dict
         Dictionary containing:
-        - 'all_passed': bool - True if all checks passed
-        - 'n_checks': int - Total number of checks performed
-        - 'n_passed': int - Number of checks that passed
-        - 'failures': list of str - Description of failed checks (empty if all passed)
-        - 'summary': str - One-line summary (e.g., "✓ All 8 checks passed")
+
+        - ``'all_passed'``: bool - True if all checks passed
+        - ``'n_checks'``: int - Total number of checks performed
+        - ``'n_passed'``: int - Number of checks that passed
+        - ``'failures'``: list of str - Description of failed checks (empty if all passed)
+        - ``'summary'``: str - One-line summary
 
     Examples
     --------
@@ -74,13 +80,12 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
 
         results = verify_physics(structure, cout, cout_tedges, cin, verbose=False)
         print(results["summary"])
-        # ✓ All 8 checks passed
         assert results["all_passed"]
     """
-    failures = []
-    checks = []
+    failures: list[str] = []
+    checks: list[dict] = []
 
-    # Check 1: Entropy condition for all shocks
+    # Check 1: Entropy condition for all shocks (Lax in (V, θ): λ_θ(C_L) >= s >= λ_θ(C_R)).
     shocks = [w for w in structure["waves"] if isinstance(w, ShockWave)]
     entropy_violations = [s for s in shocks if not s.satisfies_entropy()]
     check1_pass = len(entropy_violations) == 0
@@ -109,7 +114,7 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     max_cin = np.max(cin)
     check3_pass = max_cout <= max_cin * (1.0 + rtol)
     checks.append({
-        "name": "Output ≤ input maximum",
+        "name": "Output <= input maximum",
         "passed": check3_pass,
         "message": f"Max output: {max_cout:.2f}, Max input: {max_cin:.2f}",
     })
@@ -141,34 +146,37 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     if not check5_pass:
         failures.append(f"Found {nan_count} NaN values after spin-up period")
 
-    # Check 6: Events chronologically ordered
+    # Check 6: Events θ-ordered.
+    # The solver records events in θ-order and writes the translated time
+    # ``e["time"]`` (days) to ``state.events``. Because ``flow >= 0`` is enforced,
+    # the θ → t map is monotone non-decreasing, so monotone-non-decreasing event
+    # times is exactly equivalent to monotone-non-decreasing θ.
     event_times = [e["time"] for e in structure.get("events", [])]
     if len(event_times) > 1:
         is_ordered = all(event_times[i] <= event_times[i + 1] for i in range(len(event_times) - 1))
         check6_pass = is_ordered
         checks.append({
-            "name": "Events chronologically ordered",
+            "name": "Events θ-ordered",
             "passed": check6_pass,
             "message": f"{len(event_times)} events",
         })
         if not check6_pass:
-            failures.append("Events are not in chronological order")
+            failures.append("Events are not θ-ordered (equivalent: not chronologically ordered)")
     else:
         check6_pass = True
         checks.append({
-            "name": "Events chronologically ordered",
+            "name": "Events θ-ordered",
             "passed": True,
             "message": f"{len(event_times)} events (N/A)",
         })
 
-    # Check 7: Rarefaction concentration ordering
+    # Check 7: Rarefaction head/tail θ-speed ordering.
+    # In (V, θ) every speed is dV/dθ = 1/R(C); a valid rarefaction has the head
+    # propagating faster than (or equal to) the tail.
     rarefactions = [w for w in structure["waves"] if isinstance(w, RarefactionWave)]
     raref_ordering_violations = 0
     for raref in rarefactions:
-        # For n>1 (higher C travels faster), head should be higher concentration (faster)
-        # For n<1 (lower C travels faster), head should be lower concentration (faster)
-        # We can check this via velocities: head_velocity should always be >= tail_velocity
-        if raref.head_velocity() < raref.tail_velocity() - 1e-10:
+        if raref.head_speed() < raref.tail_speed() - EPSILON_RAREFACTION_ORDERING:
             raref_ordering_violations += 1
 
     check7_pass = raref_ordering_violations == 0
@@ -180,12 +188,10 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     if not check7_pass:
         failures.append(f"{raref_ordering_violations} rarefactions have incorrect head/tail ordering")
 
-    # Check 8: Total integrated outlet mass (until all mass exits)
-    # This replaces the old mass balance check by computing total integrated outlet mass
-    # and comparing it to total inlet mass
+    # Check 8: Total integrated outlet mass (until all mass exits).
+    # Compares total integrated outlet mass against total inlet mass.
     tracker_state = structure.get("tracker_state")
     if tracker_state is not None and hasattr(tracker_state, "flow"):
-        # Get simulation parameters
         waves = structure["waves"]
         v_outlet = tracker_state.v_outlet
         sorption = tracker_state.sorption
@@ -193,39 +199,36 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
         tedges_in = tracker_state.tedges
         tedges_days = (tedges_in - tedges_in[0]) / pd.Timedelta(days=1)
 
-        # Total mass that entered domain
+        # Total mass that entered the domain across the full input window.
         t_inlet_end = tedges_days.values[-1]
         total_mass_in = compute_cumulative_inlet_mass(
             t=t_inlet_end, cin=cin, flow=flow_arr, tedges_days=tedges_days.values
         )
 
-        # Total mass that exits domain (integrating until all mass has exited)
+        # Total mass that exits the domain (integrated until all mass has exited).
         total_mass_out, t_integration_end = compute_total_outlet_mass(
             v_outlet=v_outlet, waves=waves, sorption=sorption, flow=flow_arr, tedges_days=tedges_days.values
         )
 
-        # Check if inlet ends with explicit transition to C=0
-        # Without this, the front tracking solver assumes the inlet continues
-        # at the last concentration forever, leading to incorrect mass balance
+        # If the inlet does not explicitly transition to C=0, the solver assumes
+        # the last cin level continues forever, biasing the mass balance.
         epsilon_conc_zero = 1e-10  # Tolerance for checking if concentration is zero
         if len(cin) > 0 and abs(cin[-1]) > epsilon_conc_zero and verbose:
             msg = (
-                f"\n⚠️  WARNING: Inlet concentration ends at C={cin[-1]:.3f} (not zero).\n"
+                f"\nWARNING: Inlet concentration ends at C={cin[-1]:.3f} (not zero).\n"
                 "   For accurate mass balance, the inlet should explicitly end with C=0.\n"
                 "   Consider appending cin[-1]=0.0 or adding a final time step with C=0.\n"
-                "   Without this, the solver assumes inlet continues indefinitely,\n"
+                "   Without this, the solver assumes the inlet continues indefinitely,\n"
                 "   causing mass balance errors in the validation check.\n"
             )
             print(msg)  # noqa: T201
 
-        # Check if total outlet mass matches total inlet mass
         if total_mass_in > 0:
             relative_error_total = abs(total_mass_out - total_mass_in) / total_mass_in
         else:
             relative_error_total = abs(total_mass_out - total_mass_in)
 
-        # For integrated rarefaction mass, use slightly relaxed tolerance
-        # Analytical rarefaction integrals to infinity can have O(1e-7) precision
+        # Analytical rarefaction integrals to infinity can have O(1e-7) precision.
         check8_pass = relative_error_total <= max(rtol, 1e-6)
         checks.append({
             "name": "Total integrated outlet mass",
@@ -239,7 +242,6 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
                 f"t_integration_end={t_integration_end:.1f} days)"
             )
     else:
-        # Skip if tracker state not available
         check8_pass = True
         checks.append({
             "name": "Total integrated outlet mass",
@@ -253,9 +255,9 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     all_passed = len(failures) == 0
 
     if all_passed:
-        summary = f"✓ All {n_checks} physics checks passed"
+        summary = f"All {n_checks} physics checks passed"
     else:
-        summary = f"✗ {n_passed}/{n_checks} checks passed ({len(failures)} failures)"
+        summary = f"{n_passed}/{n_checks} checks passed ({len(failures)} failures)"
 
     results = {
         "all_passed": all_passed,
@@ -266,11 +268,10 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
         "summary": summary,
     }
 
-    # Log detailed output if verbose
     if verbose:
         logger.info("\nPhysics Verification:")
         for i, check in enumerate(checks, 1):
-            status = "✓" if check["passed"] else "✗"
+            status = "PASS" if check["passed"] else "FAIL"
             logger.info("  %d. %s: %s %s", i, check["name"], status, check["message"])
 
         if all_passed:

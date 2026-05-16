@@ -59,144 +59,97 @@ EPSILON_CONCENTRATION = 1e-10  # Tolerance for checking if concentration is effe
 
 def concentration_at_point(
     v: float,
-    t: float,
+    theta: float,
     waves: Sequence[Wave],
     sorption: SorptionModel,  # noqa: ARG001
 ) -> float:
-    """
-    Compute concentration at point (v, t) with exact analytical value.
+    """Compute concentration at point (v, θ) with exact analytical value.
 
-    Searches through all waves to find which wave controls the concentration
-    at the given point in space-time. Uses exact analytical solutions for
-    characteristics, shocks, and rarefaction fans.
+    The function works entirely in (V, θ) coordinates: public callers must
+    translate user-facing time t → θ at the API boundary (e.g., via
+    ``FrontTrackerState.theta_at_t``).
 
     Parameters
     ----------
     v : float
         Position [m³].
-    t : float
-        Time [days].
+    theta : float
+        Cumulative flow [m³].
     waves : list of Wave
         All waves in the simulation (active and inactive).
     sorption : SorptionModel
-        Sorption model.
+        Sorption model (unused — kept for API symmetry; wave methods carry
+        their own sorption reference).
 
     Returns
     -------
     concentration : float
-        Concentration at point (v, t) [mass/volume].
+        Concentration at point (v, θ) [mass/volume].
 
     Notes
     -----
-    **Wave Priority**:
-    The algorithm checks waves in this order:
-    1. Rarefaction waves (if point is inside rarefaction fan)
-    2. Shocks (discontinuities)
-    3. Rarefaction tails (if rarefaction tail has passed point)
-    4. Characteristics (smooth regions)
-
-    If no active wave controls the point, returns 0.0 (initial condition).
-
-    **Rarefaction Tail Behavior**:
-    After a rarefaction tail passes a query point, that point maintains the
-    tail concentration as a plateau. This ensures proper concentration behavior
-    after rarefaction waves pass through.
-
-    **Machine Precision**:
-    All position and concentration calculations use exact analytical formulas.
-    Numerical tolerance is only used for equality checks (v == v_shock).
-
-    Examples
-    --------
-    ::
-
-        sorption = FreundlichSorption(
-            k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
-        )
-        # After running simulation with waves...
-        c = concentration_at_point(v=250.0, t=5.0, waves=all_waves, sorption=sorption)
-        c >= 0.0
+    **Wave priority**: rarefaction fans first (spatial extent), then most
+    recently crossing shock or rarefaction tail, then characteristics. If
+    no active wave controls the point, returns 0.0 (initial condition).
     """
-    # Check rarefactions first (they have spatial extent and override other waves)
     for wave in waves:
         if isinstance(wave, RarefactionWave) and wave.is_active:
-            c = wave.concentration_at_point(v, t)
+            c = wave.concentration_at_point(v, theta)
             if c is not None:
                 return c
 
-    # Track the most recent wave to affect position v
-    # We need to compare crossing times of shocks and rarefaction tails
-    latest_wave_time = -np.inf
+    latest_wave_theta = -np.inf
     latest_wave_c = None
 
-    # Check shocks - track which shocks control this position
     for wave in waves:
         if isinstance(wave, ShockWave) and wave.is_active:
-            v_shock = wave.position_at_time(t)
+            v_shock = wave.position_at_theta(theta)
             if v_shock is not None:
-                # Tolerance for exact shock position
                 tol = 1e-15
 
                 if abs(v - v_shock) < tol:
-                    # Exactly at shock position
                     return 0.5 * (wave.c_left + wave.c_right)
 
-                # Determine if shock has crossed position v and when
-                if wave.velocity is not None and abs(wave.velocity) > EPSILON_VELOCITY:
-                    t_cross = wave.t_start + (v - wave.v_start) / wave.velocity
+                if wave.speed is not None and abs(wave.speed) > EPSILON_VELOCITY:
+                    theta_cross = wave.theta_start + (v - wave.v_start) / wave.speed
 
-                    if t_cross <= t:
-                        # Shock has crossed position v by time t
-                        # After crossing, point sees c_left (concentration behind shock)
-                        if t_cross > latest_wave_time:
-                            latest_wave_time = t_cross
+                    if theta_cross <= theta:
+                        if theta_cross > latest_wave_theta:
+                            latest_wave_theta = theta_cross
                             latest_wave_c = wave.c_left
-                    elif v > v_shock and wave.t_start > latest_wave_time:
-                        # Point is ahead of shock (shock hasn't reached it yet)
-                        # Check if this is the closest shock ahead of us
-                        # In this case, we see c_right unless overridden by another wave
-                        # We track this with a negative time (shock formation time) to indicate
-                        # it's a "passive" state (not actively changed)
-                        latest_wave_time = wave.t_start
+                    elif v > v_shock and wave.theta_start > latest_wave_theta:
+                        latest_wave_theta = wave.theta_start
                         latest_wave_c = wave.c_right
 
-    # Check rarefaction tails - they can override previous waves
     for wave in waves:
         if isinstance(wave, RarefactionWave) and wave.is_active:
-            v_tail = wave.tail_position_at_time(t)
+            v_tail = wave.tail_position_at_theta(theta)
             if v_tail is not None and v_tail > v + 1e-15:
-                # Rarefaction tail has passed position v
-                # Find when it passed: v_start + tail_velocity * (t_pass - t_start) = v
-                tail_vel = wave.tail_velocity()
-                if tail_vel > EPSILON_VELOCITY:
-                    t_pass = wave.t_start + (v - wave.v_start) / tail_vel
-                    if t_pass <= t and t_pass > latest_wave_time:
-                        latest_wave_time = t_pass
+                tail_speed = wave.tail_speed()
+                if tail_speed > EPSILON_VELOCITY:
+                    theta_pass = wave.theta_start + (v - wave.v_start) / tail_speed
+                    if theta_pass <= theta and theta_pass > latest_wave_theta:
+                        latest_wave_theta = theta_pass
                         latest_wave_c = wave.c_tail
 
     if latest_wave_c is not None:
         return latest_wave_c
 
-    # Check characteristics
-    # Find the most recent characteristic that has reached position v by time t
     latest_c = 0.0
-    latest_time = -np.inf
+    latest_theta = -np.inf
 
     for wave in waves:
         if isinstance(wave, CharacteristicWave) and wave.is_active:
-            # Check if this characteristic has reached position v by time t
-            v_char_at_t = wave.position_at_time(t)
+            v_char_at_theta = wave.position_at_theta(theta)
 
-            if v_char_at_t is not None and v_char_at_t >= v - 1e-15:
-                # This characteristic has passed through v
-                # Find when it passed: v_start + vel*(t_pass - t_start) = v
-                vel = wave.velocity()
+            if v_char_at_theta is not None and v_char_at_theta >= v - 1e-15:
+                speed = wave.speed()
 
-                if vel > EPSILON_VELOCITY:
-                    t_pass = wave.t_start + (v - wave.v_start) / vel
+                if speed > EPSILON_VELOCITY:
+                    theta_pass = wave.theta_start + (v - wave.v_start) / speed
 
-                    if t_pass <= t and t_pass > latest_time:
-                        latest_time = t_pass
+                    if theta_pass <= theta and theta_pass > latest_theta:
+                        latest_theta = theta_pass
                         latest_c = wave.concentration
 
     return latest_c
@@ -207,6 +160,9 @@ def compute_breakthrough_curve(
     v_outlet: float,
     waves: Sequence[Wave],
     sorption: SorptionModel,
+    *,
+    theta_edges: npt.NDArray[np.floating],
+    tedges_days: npt.NDArray[np.floating],
 ) -> npt.NDArray[np.floating]:
     """
     Compute concentration at outlet over time array.
@@ -245,10 +201,11 @@ def compute_breakthrough_curve(
         len(c_out) == len(t_array)
     """
     t_array = np.asarray(t_array, dtype=float)
+    theta_array = np.interp(t_array, tedges_days, theta_edges)
     c_out = np.zeros(len(t_array))
 
-    for i, t in enumerate(t_array):
-        c_out[i] = concentration_at_point(v_outlet, t, waves, sorption)
+    for i, theta in enumerate(theta_array):
+        c_out[i] = concentration_at_point(v_outlet, float(theta), waves, sorption)
 
     return c_out
 
@@ -327,9 +284,9 @@ def identify_outlet_segments(
                 active_rarefactions_at_start.append(wave)
                 # Don't add crossing events for this wave since we're already inside it
                 # But we still need to detect when the tail crosses during [t_start, t_end]
-                v_tail = wave.tail_position_at_time(t_start)
+                v_tail = wave.tail_position_at_theta(t_start)
                 if v_tail is not None and v_tail < v_outlet:
-                    vel_tail = wave.tail_velocity()
+                    vel_tail = wave.tail_speed()
                     if vel_tail > 0:
                         dt = (v_outlet - v_tail) / vel_tail
                         t_cross = t_start + dt
@@ -343,9 +300,9 @@ def identify_outlet_segments(
                 continue
 
             # Head crossing
-            v_head = wave.head_position_at_time(t_start)
+            v_head = wave.head_position_at_theta(t_start)
             if v_head is not None and v_head < v_outlet:
-                vel_head = wave.head_velocity()
+                vel_head = wave.head_speed()
                 if vel_head > 0:
                     dt = (v_outlet - v_head) / vel_head
                     t_cross = t_start + dt
@@ -358,9 +315,9 @@ def identify_outlet_segments(
                         })
 
             # Tail crossing
-            v_tail = wave.tail_position_at_time(t_start)
+            v_tail = wave.tail_position_at_theta(t_start)
             if v_tail is not None and v_tail < v_outlet:
-                vel_tail = wave.tail_velocity()
+                vel_tail = wave.tail_speed()
                 if vel_tail > 0:
                     dt = (v_outlet - v_tail) / vel_tail
                     t_cross = t_start + dt
@@ -502,32 +459,29 @@ def identify_outlet_segments(
 
 
 def integrate_rarefaction_exact(
-    raref: RarefactionWave, v_outlet: float, t_start: float, t_end: float, sorption: SorptionModel
+    raref: RarefactionWave, v_outlet: float, theta_start: float, theta_end: float, sorption: SorptionModel
 ) -> float:
-    """
-    Exact analytical integral of rarefaction concentration over time at fixed position.
+    """Exact θ-integral ``∫ c(θ) dθ`` of a rarefaction at the outlet.
 
-    Computes integral of C(t) dt from t_start to t_end where C(t) is the
-    self-similar rarefaction solution at the outlet. Dispatches to
-    isotherm-specific closed-form formulas.
+    Dispatches to the isotherm-specific closed-form formula. The result is
+    the mass-like quantity ``∫ c dθ`` (equal to ``∫ c·flow dt`` in time
+    coordinates).
 
     Parameters
     ----------
     raref : RarefactionWave
         Rarefaction wave controlling the outlet.
     v_outlet : float
-        Outlet position [m3].
-    t_start : float
-        Integration start time [days]. Can be -np.inf.
-    t_end : float
-        Integration end time [days]. Can be np.inf.
+        Outlet position [m³].
+    theta_start, theta_end : float
+        Integration range in cumulative flow [m³]. Either can be ``±np.inf``.
     sorption : SorptionModel
-        Sorption model (FreundlichSorption or LangmuirSorption).
+        Sorption model (``FreundlichSorption`` or ``LangmuirSorption``).
 
     Returns
     -------
     integral : float
-        Exact integral value [concentration * time].
+        ``∫ c(θ) dθ`` [mass — i.e. concentration × volume].
 
     Raises
     ------
@@ -535,44 +489,40 @@ def integrate_rarefaction_exact(
         If sorption model does not support exact rarefaction integration.
     """
     if isinstance(sorption, FreundlichSorption):
-        return _integrate_rarefaction_exact_freundlich(raref, v_outlet, t_start, t_end, sorption)
+        return _integrate_rarefaction_exact_freundlich(raref, v_outlet, theta_start, theta_end, sorption)
     if isinstance(sorption, LangmuirSorption):
-        return _integrate_rarefaction_exact_langmuir(raref, v_outlet, t_start, t_end, sorption)
+        return _integrate_rarefaction_exact_langmuir(raref, v_outlet, theta_start, theta_end, sorption)
     msg = f"Exact rarefaction integration not supported for {type(sorption).__name__}"
     raise TypeError(msg)
 
 
 def _integrate_rarefaction_exact_freundlich(
-    raref: RarefactionWave, v_outlet: float, t_start: float, t_end: float, sorption: FreundlichSorption
+    raref: RarefactionWave, v_outlet: float, theta_start: float, theta_end: float, sorption: FreundlichSorption
 ) -> float:
-    """Exact temporal integral for Freundlich rarefaction.
+    """Exact θ-integral ``∫ c(θ) dθ`` for a Freundlich rarefaction.
 
-    See `integrate_rarefaction_exact` for parameters.
+    In (V, θ), self-similar concentration inside the rarefaction is::
 
-    Returns
-    -------
-    float
-        Exact integral value [concentration * time].
+        c(θ) = [((θ - θ_origin)/(v_outlet - v_origin) - 1) / α]^(1/β)
+
+    with ``α = ρ_b·k_f/(n_por·n)`` and ``β = 1/n - 1``. The antiderivative is
+    ``F(θ) = coeff · base(θ)^(1/β + 1)`` where
+    ``base(θ) = κ_θ·θ + μ_θ - 1`` with ``κ_θ = 1/(v_outlet - v_origin)``
+    and ``μ_θ = -θ_origin/(v_outlet - v_origin)``.
+
+    The user-facing mass integral is ``∫ c·flow dt = ∫ c dθ``; the user-facing
+    time integral over a constant-flow bin is ``(1/flow) · ∫ c dθ``.
 
     Raises
     ------
     ValueError
-        If sorption is linear (n = 1) or integral diverges.
-
-    Notes
-    -----
-    For Freundlich: C(t) = [(kappa*t + mu - 1)/alpha]^(1/beta) where
-    kappa = flow/(v_outlet - v_origin), mu = -flow*t_origin/(v_outlet - v_origin),
-    alpha = rho_b*k_f/(n_por*n), beta = 1/n - 1.
-
-    Antiderivative: F(t) = coeff * (kappa*t + mu - 1)^(1/beta + 1)
+        If sorption is linear (n = 1) or the integral diverges at θ=+∞.
     """
-    t_origin = raref.t_start
+    theta_origin = raref.theta_start
     v_origin = raref.v_start
-    flow = raref.flow
 
-    kappa = flow / (v_outlet - v_origin)
-    mu = -flow * t_origin / (v_outlet - v_origin)
+    kappa_theta = 1.0 / (v_outlet - v_origin)
+    mu_theta = -theta_origin / (v_outlet - v_origin)
 
     alpha = sorption.bulk_density * sorption.k_f / (sorption.porosity * sorption.n)
     beta = 1.0 / sorption.n - 1.0
@@ -582,73 +532,60 @@ def _integrate_rarefaction_exact_freundlich(
         raise ValueError(msg)
 
     exponent = 1.0 / beta + 1.0
-    coeff = 1.0 / (alpha ** (1.0 / beta) * kappa * exponent)
+    coeff = 1.0 / (alpha ** (1.0 / beta) * kappa_theta * exponent)
 
-    def antiderivative(t: float) -> float:
-        if np.isinf(t):
-            if t > 0:
+    def antiderivative(theta: float) -> float:
+        if np.isinf(theta):
+            if theta > 0:
                 if exponent < 0:
                     return 0.0
-                msg = f"Integral diverges at t=+∞ with exponent={exponent} > 0"
+                msg = f"Integral diverges at θ=+∞ with exponent={exponent} > 0"
                 raise ValueError(msg)
             return 0.0
 
-        base = kappa * t + mu - 1.0
+        base = kappa_theta * theta + mu_theta - 1.0
         if base <= 0:
             return 0.0
         return coeff * base**exponent
 
-    return antiderivative(t_end) - antiderivative(t_start)
+    return antiderivative(theta_end) - antiderivative(theta_start)
 
 
 def _integrate_rarefaction_exact_langmuir(
-    raref: RarefactionWave, v_outlet: float, t_start: float, t_end: float, sorption: LangmuirSorption
+    raref: RarefactionWave, v_outlet: float, theta_start: float, theta_end: float, sorption: LangmuirSorption
 ) -> float:
-    """Exact temporal integral for Langmuir rarefaction.
+    """Exact θ-integral ``∫ c(θ) dθ`` for a Langmuir rarefaction.
 
-    See `integrate_rarefaction_exact` for parameters.
+    Inside the fan, ``c(θ) = sqrt(A / B(θ)) - K_L`` with
+    ``B(θ) = κ_θ·θ + μ_θ - 1``, ``κ_θ = 1/(v_outlet - v_origin)``,
+    ``μ_θ = -θ_origin/(v_outlet - v_origin)``, and
+    ``A = ρ_b·s_max·K_L/n_por``.
 
-    Returns
-    -------
-    float
-        Exact integral value [concentration * time].
-
-    Notes
-    -----
-    For Langmuir: C(t) = sqrt(A / B(t)) - K_L where
-    B(t) = kappa*t + mu - 1,
-    kappa = flow/(v_outlet - v_origin), mu = -flow*t_origin/(v_outlet - v_origin),
-    A = rho_b * s_max * K_L / n_por.
-
-    Antiderivative: F(t) = (2*sqrt(A)/kappa) * sqrt(B(t)) - K_L * t
+    Antiderivative: ``F(θ) = (2·sqrt(A)/κ_θ)·sqrt(B(θ)) - K_L·θ``.
     """
-    t_origin = raref.t_start
+    theta_origin = raref.theta_start
     v_origin = raref.v_start
-    flow = raref.flow
 
-    kappa = flow / (v_outlet - v_origin)
-    mu = -flow * t_origin / (v_outlet - v_origin)
+    kappa_theta = 1.0 / (v_outlet - v_origin)
+    mu_theta = -theta_origin / (v_outlet - v_origin)
     a_coeff = sorption.a_coeff
     k_l = sorption.k_l
 
-    coeff_sqrt = 2.0 * np.sqrt(a_coeff) / kappa
+    coeff_sqrt = 2.0 * np.sqrt(a_coeff) / kappa_theta
 
-    def antiderivative(t: float) -> float:
-        if np.isinf(t):
-            if t > 0:
-                # For Langmuir, sqrt(B) → ∞ as t → ∞: integral diverges.
-                # Physical Langmuir rarefactions always have finite tail velocity,
-                # so t_end should always be finite.
-                msg = "Langmuir rarefaction integral diverges at t=+∞"
+    def antiderivative(theta: float) -> float:
+        if np.isinf(theta):
+            if theta > 0:
+                msg = "Langmuir rarefaction integral diverges at θ=+∞"
                 raise ValueError(msg)
             return 0.0
 
-        base = kappa * t + mu - 1.0
+        base = kappa_theta * theta + mu_theta - 1.0
         if base <= 0:
             return 0.0
-        return coeff_sqrt * np.sqrt(base) - k_l * t
+        return coeff_sqrt * np.sqrt(base) - k_l * theta
 
-    return antiderivative(t_end) - antiderivative(t_start)
+    return antiderivative(theta_end) - antiderivative(theta_start)
 
 
 def compute_bin_averaged_concentration_exact(
@@ -791,7 +728,7 @@ def compute_bin_averaged_concentration_exact(
 
 
 def compute_domain_mass(
-    t: float,
+    theta: float,
     v_outlet: float,
     waves: Sequence[Wave],
     sorption: SorptionModel,
@@ -883,13 +820,13 @@ def compute_domain_mass(
             continue
 
         if isinstance(wave, (CharacteristicWave, ShockWave)):
-            v_pos = wave.position_at_time(t)
+            v_pos = wave.position_at_theta(theta)
             if v_pos is not None and 0 <= v_pos <= v_outlet:
                 wave_positions.append(v_pos)
 
         elif isinstance(wave, RarefactionWave):
-            v_head = wave.head_position_at_time(t)
-            v_tail = wave.tail_position_at_time(t)
+            v_head = wave.head_position_at_theta(theta)
+            v_tail = wave.tail_position_at_theta(theta)
 
             if v_head is not None and 0 <= v_head <= v_outlet:
                 wave_positions.append(v_head)
@@ -923,7 +860,7 @@ def compute_domain_mass(
         raref_wave = None
 
         for wave in waves:
-            if isinstance(wave, RarefactionWave) and wave.is_active and wave.contains_point(v_mid, t):
+            if isinstance(wave, RarefactionWave) and wave.is_active and wave.contains_point(v_mid, theta):
                 inside_rarefaction = True
                 raref_wave = wave
                 break
@@ -931,11 +868,11 @@ def compute_domain_mass(
         if inside_rarefaction and raref_wave is not None:
             # Rarefaction: concentration varies with position
             # Use EXACT analytical spatial integration
-            mass_segment = _integrate_rarefaction_spatial_exact(raref_wave, v_start, v_end, t, sorption)
+            mass_segment = _integrate_rarefaction_spatial_exact(raref_wave, v_start, v_end, theta, sorption)
         else:
             # Constant concentration region - exact integration
             v_mid = 0.5 * (v_start + v_end)
-            c = concentration_at_point(v_mid, t, waves, sorption)
+            c = concentration_at_point(v_mid, theta, waves, sorption)
             c_total = sorption.total_concentration(c)
             mass_segment = c_total * dv
 
@@ -948,67 +885,51 @@ def _integrate_rarefaction_spatial_exact(
     raref: RarefactionWave,
     v_start: float,
     v_end: float,
-    t: float,
+    theta: float,
     sorption: SorptionModel,
 ) -> float:
-    """
-    Exact analytical spatial integral of rarefaction total concentration at fixed time.
+    """Exact analytical spatial integral of rarefaction total concentration at fixed θ.
 
-    Computes integral of C_total(v) dv from v_start to v_end analytically using
-    closed-form antiderivatives. This maintains machine precision for the mass
-    balance diagnostic.
+    In (V, θ) the self-similar fan satisfies ``R(C) = (θ - θ_origin)/(v - v_origin)``;
+    define ``kappa = θ - θ_origin`` and ``u = v - v_origin``. The dissolved and sorbed
+    contributions to ∫ C_total(v) dv each reduce to power-law forms in u that admit
+    closed forms via incomplete beta functions (Freundlich) or elementary sqrt
+    operations (Langmuir).
 
     Parameters
     ----------
     raref : RarefactionWave
         Rarefaction wave.
-    v_start : float
-        Integration start position [m3].
-    v_end : float
-        Integration end position [m3].
-    t : float
-        Time [days].
+    v_start, v_end : float
+        Integration range [m³].
+    theta : float
+        Cumulative flow at which to evaluate [m³].
     sorption : SorptionModel
         Sorption model.
 
     Returns
     -------
     mass : float
-        Exact mass in segment to machine precision.
+        Mass in the segment ``[v_start, v_end]``.
 
     Raises
     ------
     TypeError
         If sorption model does not support exact spatial integration.
-
-    Notes
-    -----
-    For rarefaction at time t: R(C) = kappa/(v - v0) where kappa = flow*(t - t0).
-
-    For Freundlich: R = 1 + alpha*C^beta where alpha = rho_b*k_f/(n_por*n),
-    beta = 1/n - 1.
-    Total concentration: C_total = C + (rho_b/n_por)*k_f*C^(1/n).
-
-    Both integrals reduce to power-law forms u^p (kappa-u)^q du which can be
-    expressed using the generalized incomplete beta function via mpmath.betainc().
-
-    For Langmuir, the integral uses only sqrt operations.
     """
     if isinstance(sorption, ConstantRetardation):
-        # Constant retardation: no rarefactions
         v_mid = 0.5 * (v_start + v_end)
-        c = raref.concentration_at_point(v_mid, t) or 0.0
+        c = raref.concentration_at_point(v_mid, theta) or 0.0
         c_total = sorption.total_concentration(c)
         return c_total * (v_end - v_start)
 
-    t_origin = raref.t_start
+    theta_origin = raref.theta_start
     v_origin = raref.v_start
-    flow = raref.flow
 
-    if t <= t_origin:
+    if theta <= theta_origin:
         return 0.0
 
-    kappa = flow * (t - t_origin)
+    kappa = theta - theta_origin
     u_start = v_start - v_origin
     u_end = v_end - v_origin
 
@@ -1192,64 +1113,33 @@ def compute_cumulative_inlet_mass(
     return float(mass_complete + mass_partial)
 
 
-def find_last_rarefaction_start_time(
+def find_last_rarefaction_start_theta(
     v_outlet: float,
     waves: Sequence[Wave],
 ) -> float:
+    """Return the θ at which the last rarefaction head reaches ``v_outlet``.
+
+    For non-rarefaction waves, returns the θ at which the wave crosses the outlet.
+    Returns 0.0 if no waves reach the outlet.
     """
-    Find the time when the last rarefaction head reaches the outlet.
-
-    For rarefactions, we integrate analytically so we only need to know
-    when the rarefaction starts at the outlet (head arrival).
-
-    Parameters
-    ----------
-    v_outlet : float
-        Outlet position [m³].
-    waves : list of Wave
-        All waves in the simulation.
-
-    Returns
-    -------
-    t_last : float
-        Time when last rarefaction head reaches outlet [days].
-        For non-rarefaction waves, uses their arrival time.
-        Returns 0.0 if no waves reach the outlet.
-
-    Notes
-    -----
-    This function finds when the last wave structure *starts* at the outlet.
-    For rarefactions, this is the head arrival time. The tail may arrive
-    much later (or at infinite time for rarefactions to C=0), but the
-    total mass in the rarefaction is computed analytically.
-
-    Examples
-    --------
-    ::
-
-        t_last = find_last_rarefaction_start_time(v_outlet=500.0, waves=all_waves)
-        t_last >= 0.0
-    """
-    t_last = 0.0
+    theta_last = 0.0
 
     for wave in waves:
         if not wave.is_active:
             continue
 
         if isinstance(wave, RarefactionWave):
-            # For rarefaction, use head arrival (when rarefaction starts)
-            head_vel = wave.head_velocity()
-            if head_vel > EPSILON_VELOCITY:
-                t_arrival = wave.t_start + (v_outlet - wave.v_start) / head_vel
-                t_last = max(t_last, t_arrival)
+            head_speed = wave.head_speed()
+            if head_speed > EPSILON_VELOCITY:
+                theta_arrival = wave.theta_start + (v_outlet - wave.v_start) / head_speed
+                theta_last = max(theta_last, theta_arrival)
         elif isinstance(wave, (CharacteristicWave, ShockWave)):
-            # For characteristics and shocks, compute arrival time
-            vel = wave.velocity if isinstance(wave, ShockWave) else wave.velocity()
-            if vel is not None and vel > EPSILON_VELOCITY:
-                t_arrival = wave.t_start + (v_outlet - wave.v_start) / vel
-                t_last = max(t_last, t_arrival)
+            speed = wave.speed if isinstance(wave, ShockWave) else wave.speed()
+            if speed is not None and speed > EPSILON_VELOCITY:
+                theta_arrival = wave.theta_start + (v_outlet - wave.v_start) / speed
+                theta_last = max(theta_last, theta_arrival)
 
-    return t_last
+    return theta_last
 
 
 def compute_cumulative_outlet_mass(
@@ -1376,19 +1266,14 @@ def compute_cumulative_outlet_mass(
 def integrate_rarefaction_total_mass(
     raref: RarefactionWave,
     v_outlet: float,
-    t_start: float,
+    theta_start: float,
     sorption: SorptionModel,
-    flow: float,
 ) -> float:
-    """
-    Compute total mass exiting through a rarefaction.
+    """Total mass exiting through a rarefaction at the outlet (in (V, θ)).
 
-    For a rarefaction that starts at the outlet at time t_start, compute the
-    total mass that will exit through the rarefaction. Integration endpoint
-    depends on the rarefaction tail concentration:
-
-    - If c_tail ≈ 0: Integrate to infinity (tail extends infinitely)
-    - If c_tail > 0: Integrate to finite tail arrival time
+    Mass equals ``∫ c(θ) dθ`` from ``theta_start`` (rarefaction-head outlet
+    crossing) to either ``θ=+∞`` (if c_tail ≈ 0) or the θ at which the tail
+    crosses the outlet.
 
     Parameters
     ----------
@@ -1396,71 +1281,29 @@ def integrate_rarefaction_total_mass(
         Rarefaction wave.
     v_outlet : float
         Outlet position [m³].
-    t_start : float
-        Time when rarefaction head reaches outlet [days].
+    theta_start : float
+        Cumulative flow at which the rarefaction head reaches the outlet [m³].
     sorption : SorptionModel
         Sorption model.
-    flow : float
-        Flow rate [m³/day] (assumed constant).
 
     Returns
     -------
     total_mass : float
         Total mass that exits through rarefaction [mass].
-
-    Notes
-    -----
-    Uses the exact analytical integral:
-        M_total = ∫_{t_start}^{t_end} Q * C(t) dt
-
-    where C(t) is the concentration at the outlet from the rarefaction wave.
-
-    For n > 1 (favorable sorption), rarefactions typically decrease to C=0,
-    so t_end = ∞ and the integral converges.
-
-    For n < 1 (unfavorable sorption), rarefactions typically increase from
-    low C to high C, so c_tail > 0 and the tail arrives at finite time
-    t_end = t_start + (v_outlet - v_start) / tail_velocity.
-
-    Examples
-    --------
-    ::
-
-        mass = integrate_rarefaction_total_mass(
-            raref=raref_wave,
-            v_outlet=500.0,
-            t_start=40.0,
-            sorption=sorption,
-            flow=100.0,
-        )
-        mass >= 0.0
     """
     if isinstance(sorption, ConstantRetardation):
-        # No rarefactions with constant retardation
         return 0.0
 
-    # Determine integration endpoint based on c_tail
-    # For rarefactions with c_tail ≈ 0, the tail extends to infinity
-    # For rarefactions with c_tail > 0, the tail arrives at finite time
     if raref.c_tail < EPSILON_CONCENTRATION:
-        # Rarefaction tail goes to C≈0, extends to infinite time
-        # This is typical for n > 1 rarefactions (concentration decreases)
-        t_end = np.inf
+        theta_end = np.inf
     else:
-        # Rarefaction tail has finite concentration, arrives at finite time
-        # This is typical for n < 1 rarefactions (concentration increases)
-        tail_velocity = raref.tail_velocity()
-        if tail_velocity < EPSILON_VELOCITY:
-            # Tail velocity is effectively zero, extends to infinity
-            t_end = np.inf
+        tail_speed = raref.tail_speed()
+        if tail_speed < EPSILON_VELOCITY:
+            theta_end = np.inf
         else:
-            # Compute finite tail arrival time
-            t_end = raref.t_start + (v_outlet - raref.v_start) / tail_velocity
+            theta_end = raref.theta_start + (v_outlet - raref.v_start) / tail_speed
 
-    # Integrate from t_start to t_end
-    integral_c_dt = integrate_rarefaction_exact(raref, v_outlet, t_start, t_end, sorption)
-
-    return flow * integral_c_dt
+    return integrate_rarefaction_exact(raref, v_outlet, theta_start, theta_end, sorption)
 
 
 def compute_total_outlet_mass(
@@ -1591,7 +1434,7 @@ def compute_total_outlet_mass(
 
         if isinstance(wave, RarefactionWave):
             # Check if this rarefaction reaches the outlet
-            head_vel = wave.head_velocity()
+            head_vel = wave.head_speed()
             if head_vel > EPSILON_VELOCITY and wave.v_start < v_outlet:
                 t_raref_start_at_outlet = wave.t_start + (v_outlet - wave.v_start) / head_vel
 
