@@ -215,7 +215,7 @@ class TestFindNextEvent:
 
         event = tracker.find_next_event()
         while event is not None and event.event_type.name != "OUTLET_CROSSING":
-            tracker.state.t_current = event.time
+            tracker.state.theta_current = event.theta
             tracker.handle_event(event)
             event = tracker.find_next_event()
 
@@ -498,14 +498,7 @@ class TestVerifyPhysicsNegativeCases:
         # Constructing a "rarefaction" with reversed head/tail velocities is already
         # guarded against in RarefactionWave.__post_init__, which will raise ValueError.
         with pytest.raises(ValueError):
-            RarefactionWave(
-                t_start=0.0,
-                v_start=0.0,
-                flow=100.0,
-                c_head=1.0,
-                c_tail=10.0,
-                sorption=freundlich_sorption,
-            )
+            RarefactionWave(theta_start=0.0, v_start=0.0, c_head=1.0, c_tail=10.0, sorption=freundlich_sorption)
 
 
 class TestRuntimeMassBalanceVerification:
@@ -756,7 +749,7 @@ class TestLangmuirSorption:
 
         for wave in tracker.state.waves:
             if isinstance(wave, RarefactionWave) and wave.is_active:
-                tail_vel = wave.tail_velocity()
+                tail_vel = wave.tail_speed()
                 assert tail_vel > 0, "Langmuir rarefaction tail velocity must be positive"
 
 
@@ -874,7 +867,7 @@ class TestRiemannProblems:
         # R-H velocity for (0, 6).
         c_tot_diff = freundlich_sorption.total_concentration(6.0) - freundlich_sorption.total_concentration(0.0)
         rh_vel = flow_val * (6.0 - 0.0) / c_tot_diff
-        assert np.isclose(final.velocity, rh_vel, rtol=1e-12)
+        assert np.isclose(final.speed, rh_vel, rtol=1e-12)
 
     def test_constant_retardation_breakthrough_matches_pure_advection(self, constant_retardation):
         """For ConstantRetardation, front-tracking matches the shifted-inlet closed form."""

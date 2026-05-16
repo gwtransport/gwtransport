@@ -114,9 +114,13 @@ class FrontTrackerState:
         """Translate cumulative flow θ back to user-facing time t [days].
 
         Piecewise linear inversion of the (tedges_days → theta_edges) map.
-        For zero-flow bins θ is constant across ``[tedges_days[i], tedges_days[i+1])``;
-        the inversion is right-continuous, returning the leftmost t with
-        ``theta_at_t(t) == θ`` (i.e. ``tedges_days[i]``).
+        Implementation note on the (rare) zero-flow case: when a bin has
+        ``flow[i] == 0``, θ is constant across ``[tedges_days[i], tedges_days[i+1])``;
+        ``np.searchsorted(..., side='right') - 1`` lands on the rightmost
+        such bin, so this function returns ``tedges_days[i]`` for the
+        right-most i sharing that θ. Events scheduled at zero-flow bin
+        boundaries therefore align with the END of the zero-flow interval
+        — pick one convention and call it documented.
         """
         if theta <= self.theta_edges[0]:
             return float(self.tedges_days[0])

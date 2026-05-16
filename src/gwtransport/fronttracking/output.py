@@ -586,6 +586,9 @@ def compute_bin_averaged_concentration_exact(
     v_outlet: float,
     waves: Sequence[Wave],
     sorption: SorptionModel,
+    *,
+    theta_edges: npt.NDArray[np.floating],
+    tedges_days: npt.NDArray[np.floating],
 ) -> npt.NDArray[np.floating]:
     """
     Compute bin-averaged concentration using EXACT analytical integration.
@@ -670,6 +673,8 @@ def compute_bin_averaged_concentration_exact(
         np.all(c_avg >= 0)
     """
     t_edges = np.asarray(t_edges, dtype=float)
+    tedges_days_arr = np.asarray(tedges_days, dtype=float)
+    theta_edges_arr = np.asarray(theta_edges, dtype=float)
     n_bins = len(t_edges) - 1
     c_avg = np.zeros(n_bins)
 
@@ -682,40 +687,44 @@ def compute_bin_averaged_concentration_exact(
             msg = f"Invalid time bin: t_edges[{i}]={t_start} >= t_edges[{i + 1}]={t_end}"
             raise ValueError(msg)
 
-        # Identify wave segments controlling outlet in this time bin
-        segments = identify_outlet_segments(t_start, t_end, v_outlet, waves, sorption)
+        # identify_outlet_segments works in (V, θ). Translate the user-facing
+        # bin [t_start, t_end] to a θ-range and back.
+        theta_start = float(np.interp(t_start, tedges_days_arr, theta_edges_arr))
+        theta_end = float(np.interp(t_end, tedges_days_arr, theta_edges_arr))
+        segments = identify_outlet_segments(theta_start, theta_end, v_outlet, waves, sorption)
 
-        # Integrate each segment
-        total_integral = 0.0
-
+        # Sum ∫c dθ over segments; convert to ∫c dt via average flow over the bin.
+        total_integral_theta = 0.0
         for seg in segments:
-            seg_t_start = max(seg["t_start"], t_start)
-            seg_t_end = min(seg["t_end"], t_end)
-            seg_dt = seg_t_end - seg_t_start
+            seg_theta_start = max(seg["theta_start"], theta_start)
+            seg_theta_end = min(seg["theta_end"], theta_end)
+            seg_dtheta = seg_theta_end - seg_theta_start
 
-            if seg_dt <= EPSILON_TIME:  # Skip negligible segments
+            if seg_dtheta <= EPSILON_TIME:
                 continue
 
             if seg["type"] == "constant":
-                # C is constant over segment - exact integral
-                integral = seg["concentration"] * seg_dt
-
+                total_integral_theta += seg["concentration"] * seg_dtheta
             elif seg["type"] == "rarefaction":
-                # C(t) given by self-similar solution - use exact analytical integral
                 if isinstance(sorption, NonlinearSorption):
                     raref = seg["wave"]
-                    integral = integrate_rarefaction_exact(raref, v_outlet, seg_t_start, seg_t_end, sorption)
+                    total_integral_theta += integrate_rarefaction_exact(
+                        raref, v_outlet, seg_theta_start, seg_theta_end, sorption
+                    )
                 else:
-                    # ConstantRetardation - rarefactions shouldn't form, use constant approximation
-                    c_mid = concentration_at_point(v_outlet, 0.5 * (seg_t_start + seg_t_end), waves, sorption)
-                    integral = c_mid * seg_dt
+                    theta_mid = 0.5 * (seg_theta_start + seg_theta_end)
+                    c_mid = concentration_at_point(v_outlet, theta_mid, waves, sorption)
+                    total_integral_theta += c_mid * seg_dtheta
             else:
                 msg = f"Unknown segment type: {seg['type']}"
                 raise ValueError(msg)
 
-            total_integral += integral
-
-        c_avg[i] = total_integral / dt
+        # ∫c dt = ∫c dθ / flow_avg where flow_avg = Δθ / Δt over [t_start, t_end].
+        dtheta_bin = theta_end - theta_start
+        if dtheta_bin > 0:
+            c_avg[i] = total_integral_theta / dtheta_bin
+        else:
+            c_avg[i] = 0.0
 
     return c_avg
 

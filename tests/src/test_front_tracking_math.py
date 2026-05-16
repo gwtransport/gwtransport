@@ -18,7 +18,7 @@ from gwtransport.fronttracking.math import (
     FreundlichSorption,
     LangmuirSorption,
     characteristic_position,
-    characteristic_velocity,
+    characteristic_speed,
     compute_first_front_arrival_time,
 )
 
@@ -150,7 +150,7 @@ class TestFreundlichSorption:
         c = 5.0
         flow = 100.0
 
-        v_shock = sorption.shock_velocity(c, c, flow)
+        v_shock = sorption.shock_speed(c, c)
 
         # Should return characteristic velocity
         v_char = flow / sorption.retardation(c)
@@ -161,10 +161,9 @@ class TestFreundlichSorption:
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         c_left = 10.0
         c_right = 2.0
-        flow = 100.0
 
-        v_shock = sorption.shock_velocity(c_left, c_right, flow)
-        satisfies = sorption.check_entropy_condition(c_left, c_right, v_shock, flow)
+        v_shock = sorption.shock_speed(c_left, c_right)
+        satisfies = sorption.check_entropy_condition(c_left, c_right, v_shock)
 
         assert satisfies, "Physical compression shock should satisfy entropy"
 
@@ -173,10 +172,9 @@ class TestFreundlichSorption:
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         c_left = 2.0  # Lower concentration on left
         c_right = 10.0  # Higher concentration on right
-        flow = 100.0
 
-        v_shock = sorption.shock_velocity(c_left, c_right, flow)
-        satisfies = sorption.check_entropy_condition(c_left, c_right, v_shock, flow)
+        v_shock = sorption.shock_speed(c_left, c_right)
+        satisfies = sorption.check_entropy_condition(c_left, c_right, v_shock)
 
         assert not satisfies, "Unphysical expansion shock should violate entropy"
 
@@ -186,10 +184,9 @@ class TestFreundlichSorption:
         # For n < 1, physical shocks have c_left < c_right
         c_left = 2.0
         c_right = 10.0
-        flow = 100.0
 
-        v_shock = sorption.shock_velocity(c_left, c_right, flow)
-        satisfies = sorption.check_entropy_condition(c_left, c_right, v_shock, flow)
+        v_shock = sorption.shock_speed(c_left, c_right)
+        satisfies = sorption.check_entropy_condition(c_left, c_right, v_shock)
 
         assert satisfies, "Physical shock for n<1 should satisfy entropy"
 
@@ -313,7 +310,7 @@ class TestLangmuirSorption:
         c_right = 2.0
         flow = 100.0
 
-        v_shock = sorption.shock_velocity(c_left, c_right, flow)
+        v_shock = sorption.shock_speed(c_left, c_right)
 
         # Verify Rankine-Hugoniot
         flux_left = flow * c_left
@@ -331,7 +328,7 @@ class TestLangmuirSorption:
         c = 5.0
         flow = 100.0
 
-        v_shock = sorption.shock_velocity(c, c, flow)
+        v_shock = sorption.shock_speed(c, c)
         v_char = flow / sorption.retardation(c)
         assert np.isclose(v_shock, v_char, rtol=1e-14)
 
@@ -340,20 +337,18 @@ class TestLangmuirSorption:
         sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
         c_left = 10.0
         c_right = 2.0
-        flow = 100.0
 
-        v_shock = sorption.shock_velocity(c_left, c_right, flow)
-        assert sorption.check_entropy_condition(c_left, c_right, v_shock, flow)
+        v_shock = sorption.shock_speed(c_left, c_right)
+        assert sorption.check_entropy_condition(c_left, c_right, v_shock)
 
     def test_entropy_condition_unphysical_shock(self):
         """Test entropy for unphysical expansion shock (c_left < c_right)."""
         sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
         c_left = 2.0
         c_right = 10.0
-        flow = 100.0
 
-        v_shock = sorption.shock_velocity(c_left, c_right, flow)
-        assert not sorption.check_entropy_condition(c_left, c_right, v_shock, flow)
+        v_shock = sorption.shock_speed(c_left, c_right)
+        assert not sorption.check_entropy_condition(c_left, c_right, v_shock)
 
     def test_first_arrival_langmuir_sorption(self):
         """Test first arrival time with Langmuir sorption."""
@@ -417,16 +412,15 @@ class TestConstantRetardation:
         """Test shock velocity equals characteristic velocity."""
         sorption = ConstantRetardation(retardation_factor=2.0)
         flow = 100.0
-        v_shock = sorption.shock_velocity(c_left=10.0, c_right=2.0, flow=flow)
+        v_shock = sorption.shock_speed(c_left=10.0, c_right=2.0)
         v_expected = flow / 2.0
         assert np.isclose(v_shock, v_expected, rtol=1e-14)
 
     def test_entropy_condition_always_true(self):
         """Test that entropy condition is always satisfied."""
         sorption = ConstantRetardation(retardation_factor=2.0)
-        flow = 100.0
-        v_shock = sorption.shock_velocity(10.0, 2.0, flow)
-        satisfies = sorption.check_entropy_condition(10.0, 2.0, v_shock, flow)
+        v_shock = sorption.shock_speed(10.0, 2.0)
+        satisfies = sorption.check_entropy_condition(10.0, 2.0, v_shock)
         assert satisfies
 
 
@@ -439,7 +433,7 @@ class TestCharacteristicFunctions:
         c = 5.0
         flow = 100.0
 
-        v = characteristic_velocity(c, flow, sorption)
+        v = characteristic_speed(c, sorption)
         v_expected = flow / sorption.retardation(c)
 
         assert np.isclose(v, v_expected, rtol=1e-14)
@@ -450,7 +444,7 @@ class TestCharacteristicFunctions:
         c = 5.0
         flow = 100.0
 
-        v = characteristic_velocity(c, flow, sorption)
+        v = characteristic_speed(c, sorption)
         v_expected = flow / 2.0
 
         assert np.isclose(v, v_expected, rtol=1e-14)
@@ -465,7 +459,7 @@ class TestCharacteristicFunctions:
 
         # Test at multiple times
         for t in [1.0, 5.0, 10.0]:
-            v_pos = characteristic_position(c, flow, sorption, t_start, v_start, t)
+            v_pos = characteristic_position(c, sorption, t_start, v_start, t)
             assert v_pos is not None
             v_expected = (flow / 2.0) * t
             assert np.isclose(v_pos, v_expected, rtol=1e-14)
@@ -473,7 +467,7 @@ class TestCharacteristicFunctions:
     def test_characteristic_position_before_start(self):
         """Test that position is None for t < t_start."""
         sorption = ConstantRetardation(retardation_factor=2.0)
-        v_pos = characteristic_position(c=5.0, flow=100.0, sorption=sorption, t_start=10.0, v_start=0.0, t=5.0)
+        v_pos = characteristic_position(c=5.0, sorption=sorption, theta_start=10.0, v_start=0.0, theta=5.0)
         assert v_pos is None
 
     def test_characteristic_position_nonzero_start(self):
@@ -485,7 +479,7 @@ class TestCharacteristicFunctions:
         v_start = 100.0
         t = 15.0
 
-        v_pos = characteristic_position(c, flow, sorption, t_start, v_start, t)
+        v_pos = characteristic_position(c, sorption, t_start, v_start, t)
         assert v_pos is not None
         velocity = flow / 2.0
         v_expected = v_start + velocity * (t - t_start)
@@ -629,7 +623,7 @@ class TestRegressionsForIssue168:
 
         assert np.isclose(t_first, t_analytic, rtol=1e-14)
 
-    def test_first_arrival_step_zero_to_c_n_lt_1_uses_characteristic_velocity(self):
+    def test_first_arrival_step_zero_to_c_n_lt_1_uses_characteristic_speed(self):
         """P1.3 (n<1 branch): solver emits a CharacteristicWave; arrival = V*R(C)/flow."""
         n_bins = 400
         c_step = 5.0

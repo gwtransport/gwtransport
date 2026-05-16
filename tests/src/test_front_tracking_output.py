@@ -32,9 +32,7 @@ class TestConcentrationAtPoint:
         """Test concentration from single characteristic."""
         sorption = ConstantRetardation(retardation_factor=2.0)
 
-        char = CharacteristicWave(
-            t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=sorption, is_active=True
-        )
+        char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption, is_active=True)
 
         waves = [char]
 
@@ -42,37 +40,35 @@ class TestConcentrationAtPoint:
         # The characteristic has swept through region [0, 500]
 
         # Behind characteristic (already passed): c=5
-        c = concentration_at_point(v=400.0, t=10.0, waves=waves, sorption=sorption)
+        c = concentration_at_point(v=400.0, theta=10.0, waves=waves, sorption=sorption)
         assert c == 5.0
 
         # At characteristic position: c=5
-        c = concentration_at_point(v=500.0, t=10.0, waves=waves, sorption=sorption)
+        c = concentration_at_point(v=500.0, theta=10.0, waves=waves, sorption=sorption)
         assert c == 5.0
 
         # Ahead of characteristic (not reached yet): c=0
-        c = concentration_at_point(v=600.0, t=10.0, waves=waves, sorption=sorption)
+        c = concentration_at_point(v=600.0, theta=10.0, waves=waves, sorption=sorption)
         assert c == 0.0
 
     def test_single_shock_discontinuity(self):
         """Test concentration jump across shock."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-        shock = ShockWave(
-            t_start=0.0, v_start=0.0, flow=100.0, c_left=10.0, c_right=2.0, sorption=sorption, is_active=True
-        )
+        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=sorption, is_active=True)
 
         waves = [shock]
 
         # Get shock position at t=10
-        v_shock = shock.position_at_time(10.0)
+        v_shock = shock.position_at_theta(10.0)
         assert v_shock is not None
 
         # Before shock: c_left
-        c = concentration_at_point(v=v_shock - 10.0, t=10.0, waves=waves, sorption=sorption)
+        c = concentration_at_point(v=v_shock - 10.0, theta=10.0, waves=waves, sorption=sorption)
         assert c == 10.0
 
         # After shock: c_right
-        c = concentration_at_point(v=v_shock + 10.0, t=10.0, waves=waves, sorption=sorption)
+        c = concentration_at_point(v=v_shock + 10.0, theta=10.0, waves=waves, sorption=sorption)
         assert c == 2.0
 
     def test_rarefaction_self_similar_solution(self):
@@ -80,19 +76,19 @@ class TestConcentrationAtPoint:
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
         raref = RarefactionWave(
-            t_start=0.0, v_start=0.0, flow=100.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
+            theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
         )
 
         waves = [raref]
 
         # Inside rarefaction fan
-        t = 20.0
+        theta = 2000.0
         v = 150.0
 
-        c = concentration_at_point(v=v, t=t, waves=waves, sorption=sorption)
+        c = concentration_at_point(v=v, theta=theta, waves=waves, sorption=sorption)
 
-        # Verify self-similar solution: R(C) = flow*t/v
-        r_expected = raref.flow * t / v
+        # Verify self-similar solution: R(C) = theta/v
+        r_expected = theta / v
         r_actual = sorption.retardation(c)
 
         assert np.isclose(r_actual, r_expected, rtol=1e-14)
@@ -102,13 +98,9 @@ class TestConcentrationAtPoint:
         sorption = ConstantRetardation(retardation_factor=2.0)
 
         # Two characteristics at different times with different concentrations
-        char1 = CharacteristicWave(
-            t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=sorption, is_active=True
-        )
+        char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption, is_active=True)
 
-        char2 = CharacteristicWave(
-            t_start=5.0, v_start=0.0, flow=100.0, concentration=10.0, sorption=sorption, is_active=True
-        )
+        char2 = CharacteristicWave(theta_start=5.0, v_start=0.0, concentration=10.0, sorption=sorption, is_active=True)
 
         waves = [char1, char2]
 
@@ -116,21 +108,19 @@ class TestConcentrationAtPoint:
         # char1 reaches v=250 at t = 0 + 250/(100/2) = 5.0
         # char2 reaches v=250 at t = 5 + 250/(100/2) = 10.0
         # Most recent is char2, so c=10
-        c = concentration_at_point(v=250.0, t=15.0, waves=waves, sorption=sorption)
+        c = concentration_at_point(v=250.0, theta=15.0, waves=waves, sorption=sorption)
         assert c == 10.0
 
     def test_inactive_waves_ignored(self):
         """Test that inactive waves don't contribute."""
         sorption = ConstantRetardation(retardation_factor=2.0)
 
-        char = CharacteristicWave(
-            t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=sorption, is_active=False
-        )
+        char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption, is_active=False)
 
         waves = [char]
 
         # Inactive wave should not affect concentration
-        c = concentration_at_point(v=500.0, t=10.0, waves=waves, sorption=sorption)
+        c = concentration_at_point(v=500.0, theta=10.0, waves=waves, sorption=sorption)
         assert c == 0.0
 
     def test_no_waves_returns_zero(self):
@@ -138,7 +128,7 @@ class TestConcentrationAtPoint:
         sorption = ConstantRetardation(retardation_factor=2.0)
         waves = []
 
-        c = concentration_at_point(v=100.0, t=5.0, waves=waves, sorption=sorption)
+        c = concentration_at_point(v=100.0, theta=5.0, waves=waves, sorption=sorption)
         assert c == 0.0
 
 
@@ -149,9 +139,7 @@ class TestComputeBreakthroughCurve:
         """Test breakthrough curve with constant concentration."""
         sorption = ConstantRetardation(retardation_factor=2.0)
 
-        char = CharacteristicWave(
-            t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=sorption, is_active=True
-        )
+        char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption, is_active=True)
 
         waves = [char]
         v_outlet = 500.0
@@ -174,16 +162,14 @@ class TestComputeBreakthroughCurve:
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
         # Shock from inlet: c_left=10 (incoming), c_right=0 (initial condition)
-        shock = ShockWave(
-            t_start=0.0, v_start=0.0, flow=100.0, c_left=10.0, c_right=0.0, sorption=sorption, is_active=True
-        )
+        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=0.0, sorption=sorption, is_active=True)
 
         waves = [shock]
         v_outlet = 300.0
 
         # Shock crosses outlet at some time t_cross
-        assert shock.velocity is not None
-        t_cross = v_outlet / shock.velocity
+        assert shock.speed is not None
+        t_cross = v_outlet / shock.speed
 
         t_array = np.linspace(0, t_cross * 2, 100)
         c_out = compute_breakthrough_curve(t_array, v_outlet, waves, sorption)
@@ -208,26 +194,26 @@ class TestIdentifyOutletSegments:
         """Test segment identification with one characteristic."""
         sorption = ConstantRetardation(retardation_factor=2.0)
 
-        char = CharacteristicWave(
-            t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=sorption, is_active=True
-        )
+        char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption, is_active=True)
 
         waves = [char]
         v_outlet = 500.0
 
         # Characteristic crosses at t = 10
-        segments = identify_outlet_segments(t_start=0.0, t_end=20.0, v_outlet=v_outlet, waves=waves, sorption=sorption)
+        segments = identify_outlet_segments(
+            theta_start=0.0, t_end=20.0, v_outlet=v_outlet, waves=waves, sorption=sorption
+        )
 
         # Should have 2 segments: [0, 10] with c=0, [10, 20] with c=5
         assert len(segments) == 2
 
-        assert segments[0]["t_start"] == 0.0
-        assert np.isclose(segments[0]["t_end"], 10.0, rtol=1e-10)
+        assert segments[0]["theta_start"] == 0.0
+        assert np.isclose(segments[0]["theta_end"], 10.0, rtol=1e-10)
         assert segments[0]["type"] == "constant"
         assert segments[0]["concentration"] == 0.0
 
-        assert np.isclose(segments[1]["t_start"], 10.0, rtol=1e-10)
-        assert segments[1]["t_end"] == 20.0
+        assert np.isclose(segments[1]["theta_start"], 10.0, rtol=1e-10)
+        assert segments[1]["theta_end"] == 20.0
         assert segments[1]["type"] == "constant"
         assert segments[1]["concentration"] == 5.0
 
@@ -236,19 +222,19 @@ class TestIdentifyOutletSegments:
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
         raref = RarefactionWave(
-            t_start=0.0, v_start=0.0, flow=100.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
+            theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
         )
 
         waves = [raref]
         v_outlet = 500.0
 
         # Head crosses at t_head = v_outlet / v_head
-        t_head = v_outlet / raref.head_velocity()
+        t_head = v_outlet / raref.head_speed()
         # Tail crosses at t_tail = v_outlet / v_tail
-        t_tail = v_outlet / raref.tail_velocity()
+        t_tail = v_outlet / raref.tail_speed()
 
         segments = identify_outlet_segments(
-            t_start=0.0, t_end=t_tail * 1.5, v_outlet=v_outlet, waves=waves, sorption=sorption
+            theta_start=0.0, theta_end=t_tail * 1.5, v_outlet=v_outlet, waves=waves, sorption=sorption
         )
 
         # Should have segments: [0, t_head] constant, [t_head, t_tail] rarefaction, [t_tail, end] constant
@@ -257,24 +243,22 @@ class TestIdentifyOutletSegments:
 
         raref_seg = raref_segments[0]
         assert raref_seg["wave"] is raref
-        assert np.isclose(raref_seg["t_start"], t_head, rtol=1e-10)
+        assert np.isclose(raref_seg["theta_start"], t_head, rtol=1e-10)
 
     def test_multiple_crossings_create_multiple_segments(self):
         """Test multiple wave crossings create correct segments."""
         sorption = ConstantRetardation(retardation_factor=2.0)
 
-        char1 = CharacteristicWave(
-            t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=sorption, is_active=True
-        )
+        char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption, is_active=True)
 
-        char2 = CharacteristicWave(
-            t_start=5.0, v_start=0.0, flow=100.0, concentration=10.0, sorption=sorption, is_active=True
-        )
+        char2 = CharacteristicWave(theta_start=5.0, v_start=0.0, concentration=10.0, sorption=sorption, is_active=True)
 
         waves = [char1, char2]
         v_outlet = 500.0
 
-        segments = identify_outlet_segments(t_start=0.0, t_end=20.0, v_outlet=v_outlet, waves=waves, sorption=sorption)
+        segments = identify_outlet_segments(
+            theta_start=0.0, t_end=20.0, v_outlet=v_outlet, waves=waves, sorption=sorption
+        )
 
         # Should have 3 segments: [0, 10] c=0, [10, 15] c=5, [15, 20] c=10
         assert len(segments) == 3
@@ -288,7 +272,7 @@ class TestIntegrateRarefactionExact:
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
         raref = RarefactionWave(
-            t_start=0.0, v_start=0.0, flow=100.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
+            theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
         )
 
         v_outlet = 500.0
@@ -304,7 +288,7 @@ class TestIntegrateRarefactionExact:
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
         raref = RarefactionWave(
-            t_start=0.0, v_start=0.0, flow=100.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
+            theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
         )
 
         v_outlet = 500.0
@@ -327,15 +311,15 @@ class TestIntegrateRarefactionExact:
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
         raref = RarefactionWave(
-            t_start=0.0, v_start=0.0, flow=100.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
+            theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
         )
 
         v_outlet = 500.0
 
         # Rarefaction head arrives at outlet at t_head
-        t_head = v_outlet / raref.head_velocity()
+        t_head = v_outlet / raref.head_speed()
         # Rarefaction tail arrives at outlet at t_tail
-        t_tail = v_outlet / raref.tail_velocity()
+        t_tail = v_outlet / raref.tail_speed()
 
         # Integrate over the period when rarefaction is passing outlet
         t_start = t_head + 0.1
@@ -363,7 +347,7 @@ class TestIntegrateRarefactionExact:
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
         raref = RarefactionWave(
-            t_start=0.0, v_start=0.0, flow=100.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
+            theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
         )
 
         v_outlet = 500.0
@@ -381,9 +365,7 @@ class TestComputeBinAveragedConcentrationExact:
         """Test bin averaging with constant concentration."""
         sorption = ConstantRetardation(retardation_factor=2.0)
 
-        char = CharacteristicWave(
-            t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=sorption, is_active=True
-        )
+        char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption, is_active=True)
 
         waves = [char]
         v_outlet = 500.0
@@ -408,13 +390,9 @@ class TestComputeBinAveragedConcentrationExact:
         sorption = ConstantRetardation(retardation_factor=2.0)
 
         # Create pulse: rise then fall
-        char1 = CharacteristicWave(
-            t_start=0.0, v_start=0.0, flow=100.0, concentration=10.0, sorption=sorption, is_active=True
-        )
+        char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=10.0, sorption=sorption, is_active=True)
 
-        char2 = CharacteristicWave(
-            t_start=5.0, v_start=0.0, flow=100.0, concentration=0.0, sorption=sorption, is_active=True
-        )
+        char2 = CharacteristicWave(theta_start=5.0, v_start=0.0, concentration=0.0, sorption=sorption, is_active=True)
 
         waves = [char1, char2]
         v_outlet = 500.0
@@ -438,15 +416,15 @@ class TestComputeBinAveragedConcentrationExact:
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
         raref = RarefactionWave(
-            t_start=0.0, v_start=0.0, flow=100.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
+            theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
         )
 
         waves = [raref]
         v_outlet = 500.0
 
         # Create bins spanning rarefaction passage
-        t_head = v_outlet / raref.head_velocity()
-        t_tail = v_outlet / raref.tail_velocity()
+        t_head = v_outlet / raref.head_speed()
+        t_tail = v_outlet / raref.tail_speed()
 
         t_edges = np.linspace(t_head - 5, t_tail + 5, 20)
         c_avg = compute_bin_averaged_concentration_exact(t_edges, v_outlet, waves, sorption)
@@ -481,9 +459,7 @@ class TestComputeBinAveragedConcentrationExact:
         """Test that fine binning approximates breakthrough curve."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-        shock = ShockWave(
-            t_start=0.0, v_start=0.0, flow=100.0, c_left=10.0, c_right=2.0, sorption=sorption, is_active=True
-        )
+        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=sorption, is_active=True)
 
         waves = [shock]
         v_outlet = 300.0
@@ -507,16 +483,14 @@ class TestMachinePrecision:
         """Test that characteristic position calculation is exact."""
         sorption = ConstantRetardation(retardation_factor=2.0)
 
-        char = CharacteristicWave(
-            t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=sorption, is_active=True
-        )
+        char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption, is_active=True)
 
         # Position at t=10: v = 0 + (100/2)*10 = 500
-        v_at_10 = char.position_at_time(10.0)
+        v_at_10 = char.position_at_theta(10.0)
         assert v_at_10 is not None
 
         # Concentration at that position should be exact
-        c = concentration_at_point(v=v_at_10, t=10.0, waves=[char], sorption=sorption)
+        c = concentration_at_point(v=v_at_10, theta=10.0, waves=[char], sorption=sorption)
 
         assert c == 5.0  # Exact equality
 
@@ -529,7 +503,7 @@ class TestMachinePrecision:
         flow = 100.0
 
         shock = ShockWave(
-            t_start=0.0, v_start=0.0, flow=flow, c_left=c_left, c_right=c_right, sorption=sorption, is_active=True
+            theta_start=0.0, v_start=0.0, c_left=c_left, c_right=c_right, sorption=sorption, is_active=True
         )
 
         # Verify Rankine-Hugoniot condition exactly
@@ -537,7 +511,7 @@ class TestMachinePrecision:
         total_conc_jump = sorption.total_concentration(c_right) - sorption.total_concentration(c_left)
 
         v_shock_expected = flux_jump / total_conc_jump
-        v_shock_actual = shock.velocity
+        v_shock_actual = shock.speed
         assert v_shock_actual is not None
         assert np.isclose(v_shock_actual, v_shock_expected, rtol=1e-14)
 
@@ -546,7 +520,7 @@ class TestMachinePrecision:
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
         raref = RarefactionWave(
-            t_start=0.0, v_start=0.0, flow=100.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
+            theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
         )
 
         v_outlet = 500.0
@@ -575,9 +549,7 @@ class TestMassBalanceFunctions:
         sorption = FreundlichSorption(k_f=0.01, n=1.5, bulk_density=1500.0, porosity=0.3)
 
         # Single characteristic with constant concentration
-        char = CharacteristicWave(
-            t_start=0.0, v_start=0.0, flow=100.0, concentration=10.0, sorption=sorption, is_active=True
-        )
+        char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=10.0, sorption=sorption, is_active=True)
 
         v_outlet = 500.0
         t = 10.0
@@ -594,9 +566,7 @@ class TestMassBalanceFunctions:
         sorption = FreundlichSorption(k_f=0.01, n=1.5, bulk_density=1500.0, porosity=0.3)
 
         # Shock creates concentration discontinuity
-        shock = ShockWave(
-            t_start=5.0, v_start=100.0, flow=100.0, c_left=15.0, c_right=5.0, sorption=sorption, is_active=True
-        )
+        shock = ShockWave(theta_start=5.0, v_start=100.0, c_left=15.0, c_right=5.0, sorption=sorption, is_active=True)
 
         v_outlet = 500.0
         t = 15.0
@@ -614,7 +584,7 @@ class TestMassBalanceFunctions:
 
         # Rarefaction requires special integration
         raref = RarefactionWave(
-            t_start=5.0, v_start=100.0, flow=100.0, c_head=12.0, c_tail=4.0, sorption=sorption, is_active=True
+            theta_start=5.0, v_start=100.0, c_head=12.0, c_tail=4.0, sorption=sorption, is_active=True
         )
 
         v_outlet = 500.0
@@ -631,9 +601,7 @@ class TestMassBalanceFunctions:
         """Test that domain mass is monotonically increasing with time."""
         sorption = FreundlichSorption(k_f=0.01, n=1.5, bulk_density=1500.0, porosity=0.3)
 
-        char = CharacteristicWave(
-            t_start=0.0, v_start=0.0, flow=100.0, concentration=10.0, sorption=sorption, is_active=True
-        )
+        char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=10.0, sorption=sorption, is_active=True)
 
         v_outlet = 500.0
         waves = [char]
@@ -709,9 +677,7 @@ class TestMassBalanceFunctions:
         """Test compute_cumulative_outlet_mass with simple scenario."""
         sorption = FreundlichSorption(k_f=0.01, n=1.5, bulk_density=1500.0, porosity=0.3)
 
-        char = CharacteristicWave(
-            t_start=0.0, v_start=0.0, flow=100.0, concentration=10.0, sorption=sorption, is_active=True
-        )
+        char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=10.0, sorption=sorption, is_active=True)
 
         v_outlet = 500.0
         waves = [char]
@@ -736,9 +702,7 @@ class TestMassBalanceFunctions:
         """Test that inlet mass - outlet mass = domain mass (conservation)."""
         sorption = FreundlichSorption(k_f=0.01, n=1.5, bulk_density=1500.0, porosity=0.3)
         # Simple constant concentration scenario
-        char = CharacteristicWave(
-            t_start=0.0, v_start=0.0, flow=100.0, concentration=10.0, sorption=sorption, is_active=True
-        )
+        char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=10.0, sorption=sorption, is_active=True)
 
         v_outlet = 500.0
         waves = [char]
