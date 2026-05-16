@@ -1,9 +1,15 @@
 """
-Wave Representation for Front Tracking.
+Wave Representation for Front Tracking in (V, θ) coordinates.
 
 This module implements wave classes for representing characteristics, shocks,
-and rarefaction waves in the front tracking algorithm. Each wave type knows
-how to compute its position and concentration at any point in space-time.
+and rarefaction waves in the front tracking algorithm. Each wave stores its
+formation position in cumulative-flow coordinate ``θ = ∫flow(t') dt'`` and
+knows how to compute its position at any later θ.
+
+The change from (V, t) to (V, θ) makes every wave velocity a property of the
+sorption isotherm alone — flow no longer enters into wave dynamics. Time-
+varying flow is absorbed entirely into the θ(t) mapping at the API boundary;
+no wave needs recreation when the flow rate changes.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -20,8 +26,7 @@ EPSILON_POSITION = 1e-15  # Tolerance for checking if two positions are equal
 
 @dataclass
 class Wave(ABC):
-    """
-    Abstract base class for all wave types in front tracking.
+    """Abstract base class for all wave types in front tracking.
 
     All waves share common attributes and must implement methods for
     computing position and concentration. Waves can be active or inactive
@@ -30,103 +35,75 @@ class Wave(ABC):
 
     Parameters
     ----------
-    t_start : float
-        Time when wave forms [days].
+    theta_start : float
+        Cumulative flow at which the wave forms [m³].
     v_start : float
-        Position where wave forms [m³].
-    flow : float
-        Flow rate at formation time [m³/day].
+        Position at which the wave forms [m³].
     is_active : bool, optional
         Whether wave is currently active. Default True.
     """
 
-    t_start: float
-    """Time when wave forms [days]."""
+    theta_start: float
+    """Cumulative flow at which the wave forms [m³]."""
     v_start: float
-    """Position where wave forms [m³]."""
-    flow: float
-    """Flow rate at formation time [m³/day]."""
+    """Position at which the wave forms [m³]."""
     is_active: bool = field(default=True, kw_only=True)
     """Whether wave is currently active."""
 
     @abstractmethod
-    def position_at_time(self, t: float) -> float | None:
-        """
-        Compute wave position at time t.
+    def position_at_theta(self, theta: float) -> float | None:
+        """Compute wave position at cumulative flow θ.
 
         Parameters
         ----------
-        t : float
-            Time [days].
+        theta : float
+            Cumulative flow [m³].
 
         Returns
         -------
         position : float or None
-            Position [m³], or None if t < t_start or wave is inactive.
+            Position [m³], or None if θ < θ_start or the wave is inactive.
         """
 
     @abstractmethod
     def concentration_left(self) -> float:
-        """
-        Get concentration on left (upstream) side of wave.
-
-        Returns
-        -------
-        c_left : float
-            Upstream concentration [mass/volume].
-        """
+        """Concentration on the left (upstream) side of the wave."""
 
     @abstractmethod
     def concentration_right(self) -> float:
-        """
-        Get concentration on right (downstream) side of wave.
-
-        Returns
-        -------
-        c_right : float
-            Downstream concentration [mass/volume].
-        """
+        """Concentration on the right (downstream) side of the wave."""
 
     @abstractmethod
-    def concentration_at_point(self, v: float, t: float) -> float | None:
-        """
-        Compute concentration at point (v, t) if wave controls it.
-
-        Parameters
-        ----------
-        v : float
-            Position [m³].
-        t : float
-            Time [days].
+    def concentration_at_point(self, v: float, theta: float) -> float | None:
+        """Compute concentration at point (v, θ) if the wave controls it.
 
         Returns
         -------
         concentration : float or None
-            Concentration [mass/volume] if wave controls this point, None otherwise.
+            Concentration [mass/volume] if the wave controls this point, None
+            otherwise.
         """
 
 
 @dataclass
 class CharacteristicWave(Wave):
-    """
-    Characteristic line along which concentration is constant.
+    """Characteristic line along which concentration is constant.
 
-    In smooth regions, concentration travels at velocity flow/R(C). Along
-    each characteristic line, the concentration value is constant. This is
-    the fundamental solution element for hyperbolic conservation laws.
+    In smooth regions, concentration travels at speed ``1/R(C)`` in (V, θ)
+    coordinates. Along each characteristic line, the concentration value is
+    constant. This is the fundamental solution element for hyperbolic
+    conservation laws.
 
     Parameters
     ----------
-    t_start : float
-        Formation time [days].
+    theta_start : float
+        Formation cumulative flow [m³].
     v_start : float
         Starting position [m³].
-    flow : float
-        Flow rate [m³/day].
     concentration : float
         Constant concentration carried [mass/volume].
-    sorption : FreundlichSorption or ConstantRetardation
-        Sorption model determining velocity.
+    sorption : SorptionModel
+        Sorption model determining the speed.
     is_active : bool, optional
         Activity status. Default True.
 
@@ -134,105 +111,45 @@ class CharacteristicWave(Wave):
     --------
     >>> sorption = ConstantRetardation(retardation_factor=2.0)
     >>> char = CharacteristicWave(
-    ...     t_start=0.0, v_start=0.0, flow=100.0, concentration=5.0, sorption=sorption
+    ...     theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption
     ... )
-    >>> char.velocity()
-    50.0
-    >>> char.position_at_time(10.0)
+    >>> char.speed()
+    0.5
+    >>> char.position_at_theta(1000.0)
     500.0
     """
 
     concentration: float
     """Constant concentration carried [mass/volume]."""
     sorption: SorptionModel
-    """Sorption model determining velocity."""
+    """Sorption model determining the speed."""
 
-    def velocity(self) -> float:
+    def speed(self) -> float:
+        """Characteristic speed dV/dθ = 1/R(C)."""
+        return float(1.0 / self.sorption.retardation(self.concentration))
+
+    def position_at_theta(self, theta: float) -> float | None:
+        """Position at cumulative flow θ.
+
+        ``V(θ) = v_start + speed * (θ - θ_start)``.
         """
-        Compute characteristic velocity.
-
-        The velocity is v = flow / R(C), where R is the retardation factor.
-
-        Returns
-        -------
-        velocity : float
-            Characteristic velocity [m³/day].
-        """
-        return float(self.flow / self.sorption.retardation(self.concentration))
-
-    def position_at_time(self, t: float) -> float | None:
-        """
-        Compute position at time t.
-
-        Characteristics propagate linearly: V(t) = v_start + velocity*(t - t_start).
-
-        Parameters
-        ----------
-        t : float
-            Time [days].
-
-        Returns
-        -------
-        position : float or None
-            Position [m³], or None if t < t_start or inactive.
-        """
-        if t < self.t_start or not self.is_active:
+        if theta < self.theta_start or not self.is_active:
             return None
-        return self.v_start + self.velocity() * (t - self.t_start)
+        return self.v_start + self.speed() * (theta - self.theta_start)
 
     def concentration_left(self) -> float:
-        """
-        Get upstream concentration (same as concentration for characteristics).
-
-        Returns
-        -------
-        c_left : float
-            Upstream concentration [mass/volume].
-        """
         return self.concentration
 
     def concentration_right(self) -> float:
-        """
-        Get downstream concentration (same as concentration for characteristics).
-
-        Returns
-        -------
-        c_right : float
-            Downstream concentration [mass/volume].
-        """
         return self.concentration
 
-    def concentration_at_point(self, v: float, t: float) -> float | None:
-        """
-        Get concentration if point is on this characteristic.
-
-        For practical purposes, we check if the characteristic has reached
-        position v by time t.
-
-        Parameters
-        ----------
-        v : float
-            Position [m³].
-        t : float
-            Time [days].
-
-        Returns
-        -------
-        concentration : float or None
-            Concentration if point is on characteristic, None otherwise.
-
-        Notes
-        -----
-        In practice, this method is used by higher-level algorithms to
-        determine which wave controls a given point. The exact point-on-line
-        check is handled by the solver.
-        """
-        v_at_t = self.position_at_time(t)
-        if v_at_t is None:
+    def concentration_at_point(self, v: float, theta: float) -> float | None:
+        """Return the carried concentration if the characteristic has reached ``v`` by θ."""
+        v_at_theta = self.position_at_theta(theta)
+        if v_at_theta is None:
             return None
 
-        # If characteristic has reached or passed this position
-        if v_at_t >= v:
+        if v_at_theta >= v:
             return self.concentration
 
         return None
@@ -240,32 +157,30 @@ class CharacteristicWave(Wave):
 
 @dataclass
 class ShockWave(Wave):
-    """
-    Shock wave (discontinuity) with jump in concentration.
+    """Shock wave (discontinuity) with jump in concentration.
 
     Shocks form when faster water overtakes slower water, creating a sharp
-    front. The shock velocity is determined by the Rankine-Hugoniot condition
-    to ensure mass conservation across the discontinuity.
+    front. In (V, θ) the shock speed is given by the Rankine-Hugoniot
+    condition and is independent of flow::
+
+        dV_s/dθ = (C_R - C_L) / (C_T(C_R) - C_T(C_L))
 
     Parameters
     ----------
-    t_start : float
-        Formation time [days].
+    theta_start : float
+        Formation cumulative flow [m³].
     v_start : float
         Formation position [m³].
-    flow : float
-        Flow rate [m³/day].
     c_left : float
         Concentration upstream (behind) shock [mass/volume].
     c_right : float
         Concentration downstream (ahead of) shock [mass/volume].
-    sorption : FreundlichSorption or ConstantRetardation
+    sorption : SorptionModel
         Sorption model.
     is_active : bool, optional
         Activity status. Default True.
-    velocity : float, optional
-        Shock velocity computed from Rankine-Hugoniot. Computed automatically
-        if not provided.
+    speed : float, optional
+        Shock speed dV/dθ. Computed from Rankine-Hugoniot in ``__post_init__``.
 
     Examples
     --------
@@ -273,14 +188,13 @@ class ShockWave(Wave):
     ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
     ... )
     >>> shock = ShockWave(
-    ...     t_start=0.0,
+    ...     theta_start=0.0,
     ...     v_start=0.0,
-    ...     flow=100.0,
     ...     c_left=10.0,
     ...     c_right=2.0,
     ...     sorption=sorption,
     ... )
-    >>> shock.velocity > 0
+    >>> shock.speed > 0
     True
     >>> shock.satisfies_entropy()
     True
@@ -292,154 +206,72 @@ class ShockWave(Wave):
     """Concentration downstream (ahead of) shock [mass/volume]."""
     sorption: SorptionModel
     """Sorption model."""
-    velocity: float = field(init=False)
-    """Shock velocity computed from Rankine-Hugoniot [m³/day]; set in ``__post_init__``."""
+    speed: float = field(init=False)
+    """Shock speed dV/dθ; set in ``__post_init__``."""
 
     def __post_init__(self) -> None:
-        """Compute shock velocity from Rankine-Hugoniot condition."""
-        self.velocity = self.sorption.shock_velocity(self.c_left, self.c_right, self.flow)
+        """Compute shock speed from Rankine-Hugoniot in (V, θ)."""
+        self.speed = self.sorption.shock_speed(self.c_left, self.c_right)
 
-    def position_at_time(self, t: float) -> float | None:
-        """
-        Compute shock position at time t.
-
-        Shock propagates at constant velocity: V(t) = v_start + velocity*(t - t_start).
-
-        Parameters
-        ----------
-        t : float
-            Time [days].
-
-        Returns
-        -------
-        position : float or None
-            Position [m³], or None if t < t_start or inactive.
-
-        Raises
-        ------
-        RuntimeError
-            If shock velocity is None (should have been set in ``__post_init__``).
-        """
-        if t < self.t_start or not self.is_active:
+    def position_at_theta(self, theta: float) -> float | None:
+        """Position at cumulative flow θ. Shock propagates linearly in θ."""
+        if theta < self.theta_start or not self.is_active:
             return None
-        if self.velocity is None:
-            msg = "Shock velocity should be set in __post_init__"
-            raise RuntimeError(msg)
-        return self.v_start + self.velocity * (t - self.t_start)
+        return self.v_start + self.speed * (theta - self.theta_start)
 
     def concentration_left(self) -> float:
-        """
-        Get upstream concentration.
-
-        Returns
-        -------
-        c_left : float
-            Upstream concentration [mass/volume].
-        """
         return self.c_left
 
     def concentration_right(self) -> float:
-        """
-        Get downstream concentration.
-
-        Returns
-        -------
-        c_right : float
-            Downstream concentration [mass/volume].
-        """
         return self.c_right
 
-    def concentration_at_point(self, v: float, t: float) -> float | None:
+    def concentration_at_point(self, v: float, theta: float) -> float | None:
+        """Return c_left if upstream of the shock at θ, c_right if downstream.
+
+        At the exact shock position the average is returned (convention; the
+        shock is infinitesimally thin in practice).
         """
-        Get concentration at point based on which side of shock.
-
-        Parameters
-        ----------
-        v : float
-            Position [m³].
-        t : float
-            Time [days].
-
-        Returns
-        -------
-        concentration : float or None
-            c_left if upstream of shock, c_right if downstream, None if shock hasn't formed yet.
-
-        Notes
-        -----
-        At the exact shock position, returns the average of left and right values.
-        This is a convention for the singular point; in practice, the shock is
-        infinitesimally thin.
-        """
-        v_shock = self.position_at_time(t)
+        v_shock = self.position_at_theta(theta)
         if v_shock is None:
             return None
 
-        # Tolerance for exact shock position
         tol = 1e-15
 
         if v < v_shock - tol:
-            # Upstream of shock
             return self.c_left
         if v > v_shock + tol:
-            # Downstream of shock
             return self.c_right
-        # Exactly at shock (rarely happens in practice)
         return 0.5 * (self.c_left + self.c_right)
 
     def satisfies_entropy(self) -> bool:
-        """
-        Check if shock satisfies Lax entropy condition.
-
-        The entropy condition ensures characteristics flow INTO the shock
-        from both sides, which is required for physical admissibility.
-
-        Returns
-        -------
-        satisfies : bool
-            True if shock satisfies entropy condition.
-
-        Raises
-        ------
-        RuntimeError
-            If shock velocity is None (should have been set in ``__post_init__``).
-
-        Notes
-        -----
-        The condition is: lambda(c_left) > shock_velocity > lambda(c_right),
-        where lambda(C) = flow / R(C) is the characteristic velocity.
-
-        Shocks that violate this condition are unphysical and should be
-        replaced by rarefaction waves.
-        """
-        if self.velocity is None:
-            msg = "Shock velocity should be set in __post_init__"
-            raise RuntimeError(msg)
-        return self.sorption.check_entropy_condition(self.c_left, self.c_right, self.velocity, self.flow)
+        """Check Lax entropy condition in (V, θ): ``λ_θ(C_L) ≥ s ≥ λ_θ(C_R)``."""
+        return self.sorption.check_entropy_condition(self.c_left, self.c_right, self.speed)
 
 
 @dataclass
 class RarefactionWave(Wave):
-    """
-    Rarefaction (expansion fan) with smooth concentration gradient.
+    """Rarefaction (expansion fan) with smooth concentration gradient.
 
     Rarefactions form when slower water follows faster water, creating an
-    expanding region where concentration varies smoothly. The solution is
-    self-similar: C = C(V/t).
+    expanding region where concentration varies smoothly. In (V, θ) the
+    solution is self-similar in ``(V - v_start)`` vs ``(θ - θ_start)``::
+
+        R(C) = (θ - θ_start) / (V - v_start)
+
+    Head and tail propagate at flow-free speeds ``1/R(C_head)`` and
+    ``1/R(C_tail)``.
 
     Parameters
     ----------
-    t_start : float
-        Formation time [days].
+    theta_start : float
+        Formation cumulative flow [m³].
     v_start : float
         Formation position [m³].
-    flow : float
-        Flow rate [m³/day].
     c_head : float
         Concentration at leading edge (faster) [mass/volume].
     c_tail : float
         Concentration at trailing edge (slower) [mass/volume].
-    sorption : FreundlichSorption or ConstantRetardation
+    sorption : SorptionModel
         Sorption model (must be concentration-dependent).
     is_active : bool, optional
         Activity status. Default True.
@@ -447,7 +279,7 @@ class RarefactionWave(Wave):
     Raises
     ------
     ValueError
-        If head velocity <= tail velocity (would be compression, not rarefaction).
+        If head speed <= tail speed (would be a compression, not a rarefaction).
 
     Examples
     --------
@@ -455,16 +287,15 @@ class RarefactionWave(Wave):
     ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
     ... )
     >>> raref = RarefactionWave(
-    ...     t_start=0.0,
+    ...     theta_start=0.0,
     ...     v_start=0.0,
-    ...     flow=100.0,
     ...     c_head=10.0,
     ...     c_tail=2.0,
     ...     sorption=sorption,
     ... )
-    >>> raref.head_velocity() > raref.tail_velocity()
+    >>> raref.head_speed() > raref.tail_speed()
     True
-    >>> raref.contains_point(v=150.0, t=20.0)
+    >>> raref.contains_point(v=150.0, theta=2000.0)
     True
     """
 
@@ -476,122 +307,48 @@ class RarefactionWave(Wave):
     """Sorption model (must be concentration-dependent)."""
 
     def __post_init__(self):
-        """
-        Verify this is actually a rarefaction (head faster than tail).
+        """Verify this is a rarefaction (head faster than tail)."""
+        s_head = self.head_speed()
+        s_tail = self.tail_speed()
 
-        Raises
-        ------
-        ValueError
-            If head velocity is not greater than tail velocity, indicating a
-            compression wave (shock) rather than a rarefaction.
-        """
-        v_head = self.head_velocity()
-        v_tail = self.tail_velocity()
-
-        if v_head <= v_tail:
+        if s_head <= s_tail:
             msg = (
-                f"Not a rarefaction: head_velocity={v_head:.3f} <= tail_velocity={v_tail:.3f}. "
+                f"Not a rarefaction: head_speed={s_head:.6g} <= tail_speed={s_tail:.6g}. "
                 f"This would be a compression (shock) instead."
             )
             raise ValueError(msg)
 
-    def head_velocity(self) -> float:
-        """
-        Compute velocity of rarefaction head (leading edge).
+    def head_speed(self) -> float:
+        """Speed of rarefaction head dV/dθ = 1/R(C_head)."""
+        return float(1.0 / self.sorption.retardation(self.c_head))
 
-        Returns
-        -------
-        velocity : float
-            Head velocity [m³/day].
-        """
-        return float(self.flow / self.sorption.retardation(self.c_head))
+    def tail_speed(self) -> float:
+        """Speed of rarefaction tail dV/dθ = 1/R(C_tail)."""
+        return float(1.0 / self.sorption.retardation(self.c_tail))
 
-    def tail_velocity(self) -> float:
-        """
-        Compute velocity of rarefaction tail (trailing edge).
-
-        Returns
-        -------
-        velocity : float
-            Tail velocity [m³/day].
-        """
-        return float(self.flow / self.sorption.retardation(self.c_tail))
-
-    def head_position_at_time(self, t: float) -> float | None:
-        """
-        Compute position of rarefaction head at time t.
-
-        Parameters
-        ----------
-        t : float
-            Time [days].
-
-        Returns
-        -------
-        position : float or None
-            Head position [m³], or None if t < t_start or inactive.
-        """
-        if t < self.t_start or not self.is_active:
+    def head_position_at_theta(self, theta: float) -> float | None:
+        """Position of rarefaction head at cumulative flow θ."""
+        if theta < self.theta_start or not self.is_active:
             return None
-        return self.v_start + self.head_velocity() * (t - self.t_start)
+        return self.v_start + self.head_speed() * (theta - self.theta_start)
 
-    def tail_position_at_time(self, t: float) -> float | None:
-        """
-        Compute position of rarefaction tail at time t.
-
-        Parameters
-        ----------
-        t : float
-            Time [days].
-
-        Returns
-        -------
-        position : float or None
-            Tail position [m³], or None if t < t_start or inactive.
-        """
-        if t < self.t_start or not self.is_active:
+    def tail_position_at_theta(self, theta: float) -> float | None:
+        """Position of rarefaction tail at cumulative flow θ."""
+        if theta < self.theta_start or not self.is_active:
             return None
-        return self.v_start + self.tail_velocity() * (t - self.t_start)
+        return self.v_start + self.tail_speed() * (theta - self.theta_start)
 
-    def position_at_time(self, t: float) -> float | None:
-        """
-        Return head position (leading edge of rarefaction).
+    def position_at_theta(self, theta: float) -> float | None:
+        """Head position (leading edge of rarefaction). Implements abstract Wave method."""
+        return self.head_position_at_theta(theta)
 
-        This implements the abstract Wave method.
-
-        Parameters
-        ----------
-        t : float
-            Time [days].
-
-        Returns
-        -------
-        position : float or None
-            Head position [m³].
-        """
-        return self.head_position_at_time(t)
-
-    def contains_point(self, v: float, t: float) -> bool:
-        """
-        Check if point (v, t) is inside the rarefaction fan.
-
-        Parameters
-        ----------
-        v : float
-            Position [m³].
-        t : float
-            Time [days].
-
-        Returns
-        -------
-        contains : bool
-            True if point is between tail and head.
-        """
-        if t <= self.t_start or not self.is_active:
+    def contains_point(self, v: float, theta: float) -> bool:
+        """True if (v, θ) lies between the tail and head of the fan."""
+        if theta <= self.theta_start or not self.is_active:
             return False
 
-        v_head = self.head_position_at_time(t)
-        v_tail = self.tail_position_at_time(t)
+        v_head = self.head_position_at_theta(theta)
+        v_tail = self.tail_position_at_theta(theta)
 
         if v_head is None or v_tail is None:
             return False
@@ -599,90 +356,49 @@ class RarefactionWave(Wave):
         return v_tail <= v <= v_head
 
     def concentration_left(self) -> float:
-        """
-        Get upstream concentration (tail).
-
-        Returns
-        -------
-        c_left : float
-            Upstream concentration at the trailing edge [mass/volume].
-        """
+        """Upstream concentration is the trailing-edge value c_tail."""
         return self.c_tail
 
     def concentration_right(self) -> float:
-        """
-        Get downstream concentration (head).
-
-        Returns
-        -------
-        c_right : float
-            Downstream concentration at the leading edge [mass/volume].
-        """
+        """Downstream concentration is the leading-edge value c_head."""
         return self.c_head
 
-    def concentration_at_point(self, v: float, t: float) -> float | None:
-        """
-        Compute concentration at point (v, t) via self-similar solution.
+    def concentration_at_point(self, v: float, theta: float) -> float | None:
+        """Self-similar concentration inside the fan: ``R(C) = (θ - θ_start)/(v - v_start)``.
 
-        Within the rarefaction fan, concentration varies smoothly according to:
-            R(C) = flow * (t - t_start) / (v - v_start)
-
-        This is inverted to find C using the sorption model.
-
-        Parameters
-        ----------
-        v : float
-            Position [m³].
-        t : float
-            Time [days].
-
-        Returns
-        -------
-        concentration : float or None
-            Concentration if point is in rarefaction, None otherwise.
-
-        Notes
-        -----
-        The self-similar solution automatically maintains mass balance and
-        provides the exact analytical form of the concentration profile.
-
-        For ConstantRetardation, rarefactions don't form (all concentrations
-        travel at same speed), so this returns None.
+        Outside the fan returns None. For ``ConstantRetardation``, rarefactions
+        don't form (all concentrations travel at the same speed), so this also
+        returns None.
 
         Examples
         --------
         >>> sorption = FreundlichSorption(
         ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
         ... )
-        >>> raref = RarefactionWave(0.0, 0.0, 100.0, 10.0, 2.0, sorption)
-        >>> c = raref.concentration_at_point(v=150.0, t=20.0)
+        >>> raref = RarefactionWave(0.0, 0.0, 10.0, 2.0, sorption)
+        >>> c = raref.concentration_at_point(v=150.0, theta=2000.0)
         >>> c is not None
         True
         >>> 2.0 <= c <= 10.0
         True
         """
-        # Special case: at origin of rarefaction (before contains_point check)
-        if abs(v - self.v_start) < EPSILON_POSITION and t >= self.t_start:
+        if abs(v - self.v_start) < EPSILON_POSITION and theta >= self.theta_start:
             return self.c_tail
 
-        if not self.contains_point(v, t):
+        if not self.contains_point(v, theta):
             return None
 
-        # Self-similar solution: R(C) = flow*(t - t_start)/(v - v_start)
-        r_target = self.flow * (t - self.t_start) / (v - self.v_start)
+        r_target = (theta - self.theta_start) / (v - self.v_start)
 
         if r_target <= 1.0:
             return None  # Unphysical
 
-        # Invert R to get C
-        # For ConstantRetardation, this would raise NotImplementedError
         try:
             c = self.sorption.concentration_from_retardation(r_target)
         except NotImplementedError:
-            # ConstantRetardation case - rarefactions don't form
+            # ConstantRetardation case — rarefactions don't form
             return None
 
-        # Verify C is in valid range [c_tail, c_head]
         c_min = min(self.c_tail, self.c_head)
         c_max = max(self.c_tail, self.c_head)
 
