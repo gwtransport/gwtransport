@@ -145,6 +145,34 @@ def test_mass_balance_constant_retardation_machine_precision():
     assert saw_nonzero_domain, "Sample window must include θ where m_dom > 0 to exercise compute_domain_mass"
 
 
+def test_theta_constant_across_zero_flow_bin():
+    """θ is constant across every zero-flow bin: ``theta_edges[i+1] == theta_edges[i]``.
+
+    The (V, θ) refactor's flow-change machinery is exactly the precomputed
+    ``theta_edges`` array; a zero-flow bin must produce a zero-width θ-segment.
+    A regression that silently advances θ across a flow=0 bin would be invisible
+    to the breakthrough-curve checks (cout is unchanged in θ-space) but would
+    corrupt all θ→t translations afterwards.
+    """
+    flow = np.array([100.0] * 20 + [0.0] * 3 + [100.0] * 17)  # zero-flow bins at indices [20, 23)
+    cin = np.zeros(len(flow))
+    cin[5:15] = 4.0
+    tedges = pd.date_range("2020-01-01", periods=len(flow) + 1, freq="D")
+    tr = FrontTracker(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        aquifer_pore_volume=200.0,
+        sorption=ConstantRetardation(retardation_factor=2.0),
+    )
+    theta_edges = tr.state.theta_edges
+    for i in range(len(flow)):
+        if flow[i] == 0.0:
+            assert theta_edges[i + 1] == theta_edges[i], (
+                f"Zero-flow bin {i}: θ advanced by {theta_edges[i + 1] - theta_edges[i]:.6e} (must be 0)"
+            )
+
+
 def test_theta_at_t_roundtrip_machine_precision():
     """``theta_at_t`` and ``t_at_theta`` invert each other to machine precision.
 
