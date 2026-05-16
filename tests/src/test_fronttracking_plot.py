@@ -31,6 +31,16 @@ def freundlich_favorable():
 
 
 @pytest.fixture
+def freundlich_unfavorable():
+    """n<1 isotherm: step decrease creates trailing shock, step increase creates leading rarefaction.
+
+    Used by the pulse fixture so the resulting wave interactions exercise only tail
+    (not head) shock-rarefaction collisions — head collisions are unsupported (see #168).
+    """
+    return FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3)
+
+
+@pytest.fixture
 def tracker_step(freundlich_favorable):
     """Step input 0 -> 10 with constant flow; long enough that breakthrough is fully visible."""
     n_bins = 50
@@ -49,8 +59,8 @@ def tracker_step(freundlich_favorable):
 
 
 @pytest.fixture
-def tracker_pulse(freundlich_favorable):
-    """Pulse input 0 -> 10 -> 0."""
+def tracker_pulse(freundlich_unfavorable):
+    """Pulse input 0 -> 10 -> 0 with n<1 sorption (avoids the unsupported head-collision path)."""
     tedges = pd.to_datetime(["2020-01-01", "2020-01-11", "2020-01-21", "2020-02-01"])
     cin = np.array([0.0, 10.0, 0.0])
     flow = np.array([100.0, 100.0, 100.0])
@@ -59,7 +69,7 @@ def tracker_pulse(freundlich_favorable):
         flow=flow,
         tedges=tedges,
         aquifer_pore_volume=500.0,
-        sorption=freundlich_favorable,
+        sorption=freundlich_unfavorable,
     )
     tracker.run()
     return tracker

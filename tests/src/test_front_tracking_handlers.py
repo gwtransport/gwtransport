@@ -371,8 +371,8 @@ class TestShockRarefactionCollisionHandler:
         assert len(new_waves) > 0, "Expected at least one new wave"
         assert all(isinstance(w, ShockWave) for w in new_waves), "All new waves must be shocks"
 
-    def test_head_catches_shock(self, freundlich_sorption):
-        """Test rarefaction head catching shock."""
+    def test_head_collision_not_supported(self, freundlich_sorption):
+        """Head-collision branch raises ``NotImplementedError`` (see #168)."""
         shock = ShockWave(
             t_start=0.0,
             v_start=0.0,
@@ -381,7 +381,6 @@ class TestShockRarefactionCollisionHandler:
             c_right=4.0,
             sorption=freundlich_sorption,
         )
-
         raref = RarefactionWave(
             t_start=5.0,
             v_start=0.0,
@@ -390,11 +389,8 @@ class TestShockRarefactionCollisionHandler:
             c_tail=5.0,
             sorption=freundlich_sorption,
         )
-
-        new_waves = handle_shock_rarefaction_collision(shock, raref, t_event=20.0, v_event=150.0, boundary_type="head")
-
-        # May create new waves or return empty
-        assert isinstance(new_waves, list)
+        with pytest.raises(NotImplementedError, match="not currently supported"):
+            handle_shock_rarefaction_collision(shock, raref, t_event=20.0, v_event=150.0, boundary_type="head")
 
 
 class TestOutletCrossingHandler:
@@ -1298,70 +1294,26 @@ class TestShockRarefactionHeadCollisionPhysics:
         """Freundlich sorption with n>1."""
         return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-    def test_physics_rarefaction_head_creates_compression(self, freundlich_n_gt_1):
-        """Test rarefaction head catching shock creates compression.
-
-        Physics: If rarefaction head is faster than the shock it catches,
-        the head compresses against the shock, potentially forming a new shock.
-        """
-        # Slow shock that rarefaction head can catch
-        shock = ShockWave(
-            t_start=0.0,
-            v_start=50.0,  # Started ahead
-            flow=100.0,
-            c_left=8.0,
-            c_right=5.0,  # Moderate jump
-            sorption=freundlich_n_gt_1,
-        )
-
-        # Fast rarefaction with high-C head (fast for n>1)
-        raref = RarefactionWave(
-            t_start=5.0,
-            v_start=0.0,  # Started behind
-            flow=100.0,
-            c_head=12.0,  # Higher C = slower velocity for n>1
-            c_tail=6.0,  # Lower C = faster velocity
-            sorption=freundlich_n_gt_1,
-        )
-
-        # Check velocities
-        shock_vel = shock.velocity
-        head_vel = raref.head_velocity()
-        assert shock_vel is not None
-
-        new_waves = handle_shock_rarefaction_collision(shock, raref, t_event=25.0, v_event=180.0, boundary_type="head")
-
-        # If head is faster than shock, may create new shock
-        if head_vel > shock_vel:
-            # Check for shock in result
-            shocks = [w for w in new_waves if isinstance(w, ShockWave)]
-            for s in shocks:
-                assert s.satisfies_entropy(), "Compression shock must satisfy entropy"
-
-    def test_physics_shock_deactivated_on_head_collision(self, freundlich_n_gt_1):
-        """Test that original shock is deactivated when caught by rarefaction head."""
+    def test_head_collision_compression_path_not_supported(self, freundlich_n_gt_1):
+        """Head-collision branch raises ``NotImplementedError`` for the compression path (see #168)."""
         shock = ShockWave(
             t_start=0.0,
             v_start=50.0,
             flow=100.0,
-            c_left=6.0,
-            c_right=4.0,
+            c_left=8.0,
+            c_right=5.0,
             sorption=freundlich_n_gt_1,
         )
-
         raref = RarefactionWave(
             t_start=5.0,
             v_start=0.0,
             flow=100.0,
-            c_head=10.0,
-            c_tail=5.0,
+            c_head=12.0,
+            c_tail=6.0,
             sorption=freundlich_n_gt_1,
         )
-
-        handle_shock_rarefaction_collision(shock, raref, t_event=25.0, v_event=180.0, boundary_type="head")
-
-        # Original shock should be deactivated
-        assert not shock.is_active, "Original shock should be deactivated"
+        with pytest.raises(NotImplementedError, match="not currently supported"):
+            handle_shock_rarefaction_collision(shock, raref, t_event=25.0, v_event=180.0, boundary_type="head")
 
 
 # =============================================================================
@@ -1839,46 +1791,26 @@ class TestShockRarefactionEdgeCases:
         # Should still produce result
         assert isinstance(new_waves, list)
 
-    def test_head_collision_no_compression_shock(self, freundlich_sorption):
-        """Test lines 563-566: no compression shock forms.
-
-        When the rarefaction head is slower than the shock, no new shock forms.
-        """
-        # Fast shock
+    def test_head_collision_no_compression_path_not_supported(self, freundlich_sorption):
+        """Head-collision branch raises ``NotImplementedError`` for the slow-head sub-path (see #168)."""
         shock = ShockWave(
             t_start=0.0,
             v_start=0.0,
             flow=100.0,
-            c_left=15.0,  # High C - fast
-            c_right=2.0,  # Low C - large jump
+            c_left=15.0,
+            c_right=2.0,
             sorption=freundlich_sorption,
         )
-
-        # Slow rarefaction with low-C head (slow for n>1)
         raref = RarefactionWave(
             t_start=5.0,
             v_start=50.0,
             flow=100.0,
-            c_head=4.0,  # Low C = slow for n>1
-            c_tail=3.0,  # Even lower C
+            c_head=4.0,
+            c_tail=3.0,
             sorption=freundlich_sorption,
         )
-
-        # Check that rarefaction head is slower than shock
-        raref_head_vel = raref.head_velocity()
-        shock_vel = shock.velocity
-        assert shock_vel is not None
-
-        if raref_head_vel <= shock_vel:
-            # Line 563-566: no compression forms
-            new_waves = handle_shock_rarefaction_collision(
-                shock, raref, t_event=20.0, v_event=150.0, boundary_type="head"
-            )
-
-            # Should return empty list and deactivate both
-            assert len(new_waves) == 0
-            assert not shock.is_active
-            assert not raref.is_active
+        with pytest.raises(NotImplementedError, match="not currently supported"):
+            handle_shock_rarefaction_collision(shock, raref, t_event=20.0, v_event=150.0, boundary_type="head")
 
 
 class TestHandleFlowChangeEdgeCases:

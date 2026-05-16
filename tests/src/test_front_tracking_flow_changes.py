@@ -291,33 +291,6 @@ class TestFlowChangeIntegration:
         assert chars[0].flow == 100.0
         assert chars[1].flow == 200.0
 
-    def test_flow_change_before_characteristic_collision(self, freundlich_sorption):
-        """Two characteristics: flow change affects collision time."""
-        # c1=10, c2=2, both start at t=0
-        # Without flow change: would collide at some t1
-        # With flow increase: should collide earlier
-
-        tedges = pd.date_range("2020-01-01", periods=4, freq="10D")
-        cin = np.array([10.0, 2.0, 2.0])
-        flow = np.array([100.0, 200.0, 200.0])  # Flow doubles at t=10
-
-        tracker = FrontTracker(
-            cin=cin,
-            flow=flow,
-            tedges=tedges,
-            aquifer_pore_volume=1000.0,
-            sorption=freundlich_sorption,
-        )
-
-        tracker.run(max_iterations=200, verbose=False)
-
-        # Verify flow change occurred
-        flow_events = [e for e in tracker.state.events if e["type"] == "flow_change"]
-        assert len(flow_events) >= 1
-
-        # Verify simulation completed successfully
-        assert len(tracker.state.events) > 0
-
     def test_multiple_flow_changes(self, constant_retardation):
         """Multiple flow changes create multiple sets of waves."""
         tedges = pd.date_range("2020-01-01", periods=6, freq="10D")

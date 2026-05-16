@@ -437,38 +437,15 @@ def handle_shock_rarefaction_collision(
         raref.is_active = False
         return [new_shock]
 
-    # boundary_type == 'head'
-    # Rarefaction head catching shock
-    # This creates compression between rarefaction head and shock
-    # May form new compression shock
-
-    # Check if compression forms between rarefaction head and shock
-    raref_head_vel = characteristic_velocity(raref.c_head, raref.flow, raref.sorption)
-    # ShockWave.__post_init__ populates ``velocity`` unconditionally.
-    shock_vel = shock.velocity
-
-    if raref_head_vel > shock_vel:
-        # Rarefaction head is faster - creates compression
-        # Try to form shock between rarefaction head and state downstream of original shock
-        new_shock = ShockWave(
-            t_start=t_event,
-            v_start=v_event,
-            flow=raref.flow,
-            c_left=raref.c_head,
-            c_right=shock.c_right,
-            sorption=raref.sorption,
-        )
-
-        if new_shock.satisfies_entropy():
-            # Compression shock forms
-            # Deactivate original shock (rarefaction continues)
-            shock.is_active = False
-            return [new_shock]
-
-    # No compression shock forms - deactivate both for safety
-    shock.is_active = False
-    raref.is_active = False
-    return []
+    # boundary_type == 'head': not currently supported. See gwtransport issue #168.
+    msg = (
+        "Shock-rarefaction head collision is not currently supported. The configuration "
+        "requires a continuously-decaying shock state that the piecewise-constant wave "
+        "representation cannot express. See https://github.com/gwtransport/gwtransport/issues/168. "
+        "Workaround: restrict cin to a monotone profile or use linear retardation "
+        "(Freundlich n=1 / ConstantRetardation)."
+    )
+    raise NotImplementedError(msg)
 
 
 def handle_rarefaction_characteristic_collision(
