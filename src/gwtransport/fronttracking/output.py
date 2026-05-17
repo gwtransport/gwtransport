@@ -284,10 +284,10 @@ def identify_outlet_segments(
                 active_rarefactions_at_start.append(wave)
             elif theta_cross <= theta_end:
                 # c_after is the fan c just past arrival (the decay-side c at
-                # the arrival θ).
+                # the arrival θ). theta_cross > wave.theta_start by construction
+                # (outlet_crossing_theta enforces v_outlet > v_start), so
+                # c_decay_at_theta does not return None.
                 c_after = wave.c_decay_at_theta(theta_cross)
-                if c_after is None:
-                    c_after = wave.c_decay_initial
                 outlet_events.append({
                     "theta": theta_cross,
                     "wave": wave,
@@ -373,7 +373,6 @@ def identify_outlet_segments(
                     break
 
             raref_end = min(tail_cross_theta or theta_end, theta_end)
-            c_start = concentration_at_point(v_outlet, theta_start, waves, sorption)
             c_end = raref.c_tail if tail_cross_theta and tail_cross_theta <= theta_end else None
 
             segments.append({
@@ -381,7 +380,7 @@ def identify_outlet_segments(
                 "theta_end": raref_end,
                 "type": "rarefaction",
                 "wave": raref,
-                "c_start": c_start,
+                "c_start": current_c,
                 "c_end": c_end,
             })
         else:
@@ -389,7 +388,6 @@ def identify_outlet_segments(
             # for n>1 with c_min); treat the whole [theta_start, theta_end]
             # as one decaying-fan segment.
             raref_end = theta_end
-            c_start = concentration_at_point(v_outlet, theta_start, waves, sorption)
             c_end = concentration_at_point(v_outlet, theta_end, waves, sorption)
 
             segments.append({
@@ -397,7 +395,7 @@ def identify_outlet_segments(
                 "theta_end": raref_end,
                 "type": "decaying_fan",
                 "wave": raref,
-                "c_start": c_start,
+                "c_start": current_c,
                 "c_end": c_end,
             })
 
@@ -885,11 +883,9 @@ def compute_domain_mass(
     # Add domain boundaries
     wave_positions.extend([0.0, v_outlet])
 
-    # Sort and remove duplicates
+    # Sort and remove duplicates; all entries are within [0, v_outlet] by
+    # construction (each append site is guarded by the bounds check).
     wave_positions = sorted(set(wave_positions))
-
-    # Remove positions outside domain
-    wave_positions = [v for v in wave_positions if 0 <= v <= v_outlet]
 
     # Compute mass in each segment using refined integration
     total_mass = 0.0
@@ -1209,7 +1205,7 @@ def find_last_rarefaction_start_theta(
             speed = wave.speed()
         else:
             continue
-        if speed is not None and speed > EPSILON_VELOCITY:
+        if speed > EPSILON_VELOCITY:
             theta_last = max(theta_last, wave.theta_start + (v_outlet - wave.v_start) / speed)
     return theta_last
 
