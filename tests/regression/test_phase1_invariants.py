@@ -105,12 +105,6 @@ def test_compute_first_front_arrival_theta_constant_retardation_analytic():
 def test_mass_balance_constant_retardation_machine_precision():
     """Mass balance holds to machine precision for the linear (conservative) case.
 
-    Nonlinear sorption violates mass balance in Phase 1 due to the
-    shock-rarefaction wave-splitting overlay (pre-existing in main; fixed in
-    Phase 2 by ``DecayingShockWave``). The constant-retardation case is
-    Phase-1-correct and is the only one suitable for a strict mass-balance
-    assertion until Phase 2 lands.
-
     Samples include θ values **mid-transit** (where m_dom > 0) so that a
     silent mutation of ``compute_domain_mass`` cannot pass the invariant.
     """
@@ -139,10 +133,56 @@ def test_mass_balance_constant_retardation_machine_precision():
         if m_dom > 0:
             saw_nonzero_domain = True
         err = abs((m_dom + m_out) - m_in)
-        tol = 1e-12 * max(m_in, 1.0)
+        tol = 1e-14 * max(m_in, 1.0)
         assert err <= tol, f"mass-balance violation at θ={theta}: err={err:.6e} > tol={tol:.6e}"
 
     assert saw_nonzero_domain, "Sample window must include θ where m_dom > 0 to exercise compute_domain_mass"
+
+
+def test_mass_balance_freundlich_n2_canonical_pulse_machine_precision():
+    """Mass balance holds to machine precision for n=2 Freundlich canonical pulse.
+
+    Exercises the full Phase 2 step 4 closed-form chain: DecayingShockWave
+    trajectory + ``integrate_fan_exact`` (temporal) + ``integrate_fan_spatial_exact``
+    (spatial in ``compute_domain_mass``). Samples θ values covering:
+
+    - pre-shock-arrival (m_dom > 0, m_out = 0): mass fully in domain
+    - during outlet drainage (m_dom > 0 and m_out > 0): both contribute
+    - post-fan (m_dom small): asymptotic decay region
+
+    Prior to step 4 this test would XFAIL at ~5e-7 due to the c_min clamp in
+    ``total_concentration`` biasing Rankine-Hugoniot shock speeds.
+    """
+    sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+    v_outlet = 200.0
+    cin = np.zeros(500)
+    cin[5:15] = 4.0
+    flow = np.full(500, 100.0)
+    tedges = pd.date_range("2020-01-01", periods=501, freq="D")
+
+    tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
+    tr.run(max_iterations=100000)
+
+    # Theta checkpoints spanning the pulse evolution.
+    checkpoints = [4000.0, 6000.0, 9000.0, 15000.0, 25000.0]
+    saw_dom = False
+    saw_out = False
+    for theta in checkpoints:
+        m_in = compute_cumulative_inlet_mass(theta=theta, cin=cin, theta_edges=tr.state.theta_edges)
+        m_dom = compute_domain_mass(theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
+        m_out = compute_cumulative_outlet_mass(
+            theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption
+        )
+        if m_dom > 1.0:
+            saw_dom = True
+        if m_out > 1.0:
+            saw_out = True
+        err = abs((m_dom + m_out) - m_in)
+        tol = 1e-14 * max(m_in, 1.0)
+        assert err <= tol, f"mass-balance violation at θ={theta}: err={err:.6e} > tol={tol:.6e}"
+
+    assert saw_dom, "Sample window must include θ where m_dom > 1 to exercise the closed-form fan integral"
+    assert saw_out, "Sample window must include θ where m_out > 1 to exercise compute_cumulative_outlet_mass"
 
 
 def test_theta_constant_across_zero_flow_bin():

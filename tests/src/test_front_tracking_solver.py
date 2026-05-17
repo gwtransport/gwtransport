@@ -778,6 +778,30 @@ class TestRiemannProblems:
 
         assert np.isclose(mass_out, mass_in, rtol=1e-12)
 
+    def test_square_pulse_langmuir_total_mass_at_outlet(self):
+        """Langmuir canonical pulse: total outlet mass == inlet mass at machine precision.
+
+        Langmuir is favorable like n>1 Freundlich; the same head-collision
+        DecayingShockWave path is exercised. Closed-form fan integral converges
+        because the Langmuir fan c reaches 0 at finite θ. The finite-θ clamp in
+        ``_integrate_fan_exact_langmuir`` is load-bearing — removing it raises
+        ``ValueError: Langmuir fan integral diverges at θ=+∞``.
+        """
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        v_pore = 200.0
+        n_bins = 500
+        cin = np.zeros(n_bins)
+        cin[5:15] = 4.0
+        flow = np.full(n_bins, 100.0)
+        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="D")
+
+        tracker = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_pore, sorption=sorption)
+        tracker.run(max_iterations=10000, verbose=False)
+
+        mass_in = float(np.sum(cin * np.diff(tracker.state.theta_edges)))
+        mass_out, _ = compute_total_outlet_mass(v_outlet=v_pore, waves=tracker.state.waves, sorption=sorption)
+        assert np.isclose(mass_out, mass_in, rtol=1e-12)
+
     def test_two_step_increase_merges_into_single_shock(self, freundlich_sorption):
         """For n>1, 0→C1→C2 with C1<C2 produces a faster trailing shock that merges with
         the leading shock; final shock satisfies R-H on (0, C2)."""

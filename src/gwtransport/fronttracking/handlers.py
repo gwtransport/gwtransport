@@ -363,7 +363,14 @@ def handle_shock_rarefaction_collision(
         raref.is_active = False
         return [new_shock]
 
-    # Non-canonical head branch fallback.
+    # Non-canonical head branch fallback (Phase-1 overlay behavior preserved).
+    # When the new shock satisfies entropy, the raref is intentionally kept
+    # active: deactivating it would lose the fan's interior mass that the
+    # constant-velocity new shock does not capture. The overlay is the
+    # P1.8 bug pattern with approximately-conserved mass; the canonical paths
+    # above replace it with an exact DecayingShockWave when the closed form
+    # applies. Phase 2 step 5+ extends closed-form coverage to multi-pulse
+    # / c_fixed>0 cases that currently fall through here.
     s_raref_head = characteristic_speed(raref.c_head, raref.sorption)
 
     if s_raref_head > shock.speed:

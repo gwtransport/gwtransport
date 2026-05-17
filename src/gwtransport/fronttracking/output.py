@@ -235,11 +235,14 @@ def identify_outlet_segments(
         - 'theta_end' : float
             Segment end θ [m³]
         - 'type' : str
-            'constant' or 'rarefaction'
+            ``'constant'``, ``'rarefaction'``, or ``'decaying_fan'``.
+            ``'decaying_fan'`` is owned by a :class:`DecayingShockWave` after
+            its head crosses ``v_outlet``; c at ``v_outlet`` then follows the
+            wave's self-similar fan profile.
         - 'concentration' : float
             For constant segments
         - 'wave' : Wave
-            For rarefaction segments
+            For rarefaction and decaying_fan segments
         - 'c_start' : float
             Concentration at segment start
         - 'c_end' : float
@@ -252,7 +255,7 @@ def identify_outlet_segments(
     1. Finding all wave crossing events at the outlet for θ in [theta_start, theta_end].
     2. Sorting events by θ.
     3. Creating constant-concentration segments between events.
-    4. Handling rarefaction fans with θ-varying concentration.
+    4. Handling rarefaction and decaying-fan profiles with θ-varying concentration.
 
     The segments completely partition the interval [theta_start, theta_end].
     """
@@ -462,10 +465,15 @@ def identify_outlet_segments(
                 })
 
             decaying = event["wave"]
-            # DecayingShockWave's fan covers [theta_arrival, theta_end] of the
-            # query window; the fan asymptotes to c_fixed (decay_side='left')
-            # without a discrete tail event.
+            # The decaying_fan segment ends at the next outlet-crossing event
+            # (if any falls in the window) or at theta_end. Without this split,
+            # multi-DSW pulses would have the first DSW's fan swallow every
+            # later wave's arrival.
             seg_end = theta_end
+            for later_event in outlet_events:
+                if later_event["theta"] > event["theta"] and later_event["theta"] <= theta_end:
+                    seg_end = later_event["theta"]
+                    break
             c_end_val = concentration_at_point(v_outlet, seg_end, waves, sorption)
 
             segments.append({
@@ -556,7 +564,8 @@ def integrate_fan_exact(
     v_outlet : float
         Outlet position [m³].
     theta_start, theta_end : float
-        Integration range in cumulative flow [m³]. Either can be ``+np.inf``.
+        Integration range in cumulative flow [m³]. ``theta_end`` may be
+        ``+np.inf``; ``theta_start`` must be finite.
     sorption : SorptionModel
         Sorption model (``FreundlichSorption`` or ``LangmuirSorption``).
 
@@ -597,10 +606,18 @@ def _integrate_fan_exact_freundlich(
     ``base(θ) = κ_θ·θ + μ_θ - 1`` with ``κ_θ = 1/(v_outlet - v_origin)``
     and ``μ_θ = -θ_origin/(v_outlet - v_origin)``.
 
+    For ``n > 1`` the antiderivative naturally vanishes at +∞ (exponent < 0).
+    For ``n < 1`` (exponent > 0) the antiderivative grows without bound at +∞;
+    callers must pass a finite ``theta_end``. The n<1 mirror DecayingShockWave
+    mass-to-+∞ semantics are different (c = c_fixed downstream of the shock
+    after arrival, so the +∞ contribution is 0) and are handled at the
+    ``mass_after_outlet_arrival`` / ``compute_total_outlet_mass`` level, not
+    here — see those functions for the dispatch.
+
     Raises
     ------
     ValueError
-        If sorption is linear (n = 1) or the integral diverges at θ=+∞.
+        If sorption is linear (n = 1), or if ``theta_end = +∞`` with n < 1.
     """
     kappa_theta = 1.0 / (v_outlet - v_origin)
     mu_theta = -theta_origin / (v_outlet - v_origin)
@@ -647,7 +664,10 @@ def _integrate_fan_exact_langmuir(
     ``μ_θ = -θ_origin/(v_outlet - v_origin)``, and
     ``A = ρ_b·s_max·K_L/n_por``.
 
-    Antiderivative: ``F(θ) = (2·sqrt(A)/κ_θ)·sqrt(B(θ)) - K_L·θ``.
+    Antiderivative: ``F(θ) = (2·sqrt(A)/κ_θ)·sqrt(B(θ)) - K_L·θ``. The Langmuir
+    fan c reaches 0 at a finite θ_zero (when ``B = A/K_L²``); the antiderivative
+    is only physically meaningful while ``c ≥ 0``. For ``theta_end = +∞`` the
+    upper bound is clamped to ``theta_zero`` since c=0 beyond that point.
     """
     kappa_theta = 1.0 / (v_outlet - v_origin)
     mu_theta = -theta_origin / (v_outlet - v_origin)
@@ -656,13 +676,11 @@ def _integrate_fan_exact_langmuir(
 
     coeff_sqrt = 2.0 * np.sqrt(a_coeff) / kappa_theta
 
-    def antiderivative(theta: float) -> float:
-        if np.isinf(theta):
-            if theta > 0:
-                msg = "Langmuir fan integral diverges at θ=+∞"
-                raise ValueError(msg)
-            return 0.0
+    # c(θ) = 0 when B(θ) = A/K_L², i.e. κ_θ·θ + μ_θ - 1 = A/K_L².
+    theta_zero = (a_coeff / (k_l * k_l) + 1.0 - mu_theta) / kappa_theta
+    theta_end = theta_zero if (np.isinf(theta_end) and theta_end > 0) else min(theta_end, theta_zero)
 
+    def antiderivative(theta: float) -> float:
         base = kappa_theta * theta + mu_theta - 1.0
         if base <= 0:
             return 0.0
@@ -791,19 +809,20 @@ def compute_domain_mass(
     sorption: SorptionModel,
 ) -> float:
     """
-    Compute total mass in domain [0, v_outlet] at time t using exact analytical integration.
+    Compute total mass in domain [0, v_outlet] at cumulative flow θ.
 
-    Implements runtime mass balance verification as described in High Priority #3
-    of FRONT_TRACKING_REBUILD_PLAN.md. Integrates concentration over space:
+    Integrates concentration over space::
 
-        M(t) = ∫₀^v_outlet C(v, t) dv
+        M(θ) = ∫₀^v_outlet C_total(v, θ) dv
 
-    using exact analytical formulas for each wave type.
+    Exact analytical formulas for every wave type: constant regions
+    (``C_total · Δv``), RarefactionWave fan interiors and DecayingShockWave fan
+    interiors (closed-form via :func:`integrate_fan_spatial_exact`).
 
     Parameters
     ----------
-    t : float
-        Time at which to compute domain mass [days].
+    theta : float
+        Cumulative flow at which to compute domain mass [m³].
     v_outlet : float
         Outlet position (domain extent) [m³].
     waves : list of Wave
@@ -814,55 +833,21 @@ def compute_domain_mass(
     Returns
     -------
     mass : float
-        Total mass in domain [mass]. Computed to machine precision (~1e-14).
+        Total mass in domain [mass]. Closed-form analytical to machine precision.
 
     See Also
     --------
     compute_cumulative_inlet_mass : Cumulative inlet mass
     compute_cumulative_outlet_mass : Cumulative outlet mass
     concentration_at_point : Point-wise concentration
-
-    Notes
-    -----
-    **Algorithm**:
-
-    1. Partition spatial domain [0, v_outlet] into segments where concentration
-       is controlled by a single wave or is constant.
-    2. For each segment, compute mass analytically:
-       - Constant C: mass = C * Δv
-       - Rarefaction C(v): use exact spatial integration formula
-    3. Sum all segment masses.
-
-    **Wave Priority** (same as concentration_at_point):
-
-    1. Rarefactions (if position is inside rarefaction fan)
-    2. Shocks and rarefaction tails (most recent to pass)
-    3. Characteristics (smooth regions)
-
-    **Rarefaction Spatial Integration**:
-
-    For a rarefaction fan at fixed time t, concentration varies with position v
-    according to the self-similar solution:
-
-        R(C) = flow*(t - t_origin)/(v - v_origin)
-
-    The spatial integral ∫ C dv is computed analytically using the inverse
-    retardation relation.
-
-    **Integration Precision**:
-
-    - Constant concentration regions: Exact analytical (C_total * dv)
-    - Rarefaction regions: High-precision trapezoidal quadrature (10+ points)
-    - Overall accuracy: ~1e-10 to 1e-12 relative error
-    - Sufficient for runtime verification; primary outputs remain exact
+    integrate_fan_spatial_exact : Closed-form fan spatial integral
 
     Examples
     --------
     ::
 
-        # After running simulation to time t=10.0
         mass = compute_domain_mass(
-            t=10.0, v_outlet=500.0, waves=tracker.state.waves, sorption=sorption
+            theta=2500.0, v_outlet=500.0, waves=tracker.state.waves, sorption=sorption
         )
         mass >= 0.0
     """
@@ -917,25 +902,44 @@ def compute_domain_mass(
         if dv < EPSILON_VELOCITY:
             continue
 
-        # Check if this segment is inside a rarefaction fan
-        # Sample at midpoint to check
+        # Check whether the midpoint is inside any fan-bearing wave; the fan
+        # spatial integral is closed-form for both RarefactionWave and
+        # DecayingShockWave (the latter via the parameterised
+        # ``integrate_fan_spatial_exact``).
         v_mid = 0.5 * (v_start + v_end)
-        inside_rarefaction = False
-        raref_wave = None
+        raref_wave: RarefactionWave | None = None
+        decaying_wave: DecayingShockWave | None = None
 
         for wave in waves:
-            if isinstance(wave, RarefactionWave) and wave.is_active and wave.contains_point(v_mid, theta):
-                inside_rarefaction = True
+            if not wave.is_active:
+                continue
+            if isinstance(wave, RarefactionWave) and wave.contains_point(v_mid, theta):
                 raref_wave = wave
                 break
+            if isinstance(wave, DecayingShockWave):
+                v_s = wave.position_at_theta(theta)
+                if v_s is None:
+                    continue
+                # decay_side='left': fan is upstream of V_s (v < V_s);
+                # decay_side='right': fan is downstream of V_s (v > V_s).
+                in_fan = (wave.decay_side == "left" and v_mid < v_s) or (wave.decay_side == "right" and v_mid > v_s)
+                if in_fan and v_mid != wave.v_origin:
+                    decaying_wave = wave
+                    break
 
-        if inside_rarefaction and raref_wave is not None:
-            # Rarefaction: concentration varies with position
-            # Use EXACT analytical spatial integration
+        if raref_wave is not None:
             mass_segment = _integrate_rarefaction_spatial_exact(raref_wave, v_start, v_end, theta, sorption)
+        elif decaying_wave is not None:
+            mass_segment = integrate_fan_spatial_exact(
+                decaying_wave.theta_origin,
+                decaying_wave.v_origin,
+                v_start,
+                v_end,
+                theta,
+                sorption,
+            )
         else:
-            # Constant concentration region - exact integration
-            v_mid = 0.5 * (v_start + v_end)
+            # Constant region: c at midpoint is exact for the segment.
             c = concentration_at_point(v_mid, theta, waves, sorption)
             c_total = sorption.total_concentration(c)
             mass_segment = c_total * dv
@@ -952,13 +956,12 @@ def _integrate_rarefaction_spatial_exact(
     theta: float,
     sorption: SorptionModel,
 ) -> float:
-    """Exact analytical spatial integral of rarefaction total concentration at fixed θ.
+    """Exact spatial integral of a rarefaction's total concentration at fixed θ.
 
-    In (V, θ) the self-similar fan satisfies ``R(C) = (θ - θ_origin)/(v - v_origin)``;
-    define ``kappa = θ - θ_origin`` and ``u = v - v_origin``. The dissolved and sorbed
-    contributions to ∫ C_total(v) dv each reduce to power-law forms in u that admit
-    closed forms via incomplete beta functions (Freundlich) or elementary sqrt
-    operations (Langmuir).
+    Thin wrapper over :func:`integrate_fan_spatial_exact` that pulls the fan
+    apex from ``raref.theta_start, raref.v_start``. For ``ConstantRetardation``
+    the rarefaction degenerates to a single c value (no fan), so we use the
+    wave's ``concentration_at_point`` directly.
 
     Parameters
     ----------
@@ -973,13 +976,8 @@ def _integrate_rarefaction_spatial_exact(
 
     Returns
     -------
-    mass : float
+    float
         Mass in the segment ``[v_start, v_end]``.
-
-    Raises
-    ------
-    TypeError
-        If sorption model does not support exact spatial integration.
     """
     if isinstance(sorption, ConstantRetardation):
         v_mid = 0.5 * (v_start + v_end)
@@ -987,9 +985,50 @@ def _integrate_rarefaction_spatial_exact(
         c_total = sorption.total_concentration(c)
         return c_total * (v_end - v_start)
 
-    theta_origin = raref.theta_start
-    v_origin = raref.v_start
+    return integrate_fan_spatial_exact(raref.theta_start, raref.v_start, v_start, v_end, theta, sorption)
 
+
+def integrate_fan_spatial_exact(
+    theta_origin: float,
+    v_origin: float,
+    v_start: float,
+    v_end: float,
+    theta: float,
+    sorption: SorptionModel,
+) -> float:
+    """Exact spatial integral ``∫ C_total(v, θ) dv`` for any self-similar fan.
+
+    Decoupled from the wave object so the same closed-form math applies to
+    :class:`RarefactionWave` (apex = ``theta_start, v_start``) and
+    :class:`DecayingShockWave` (apex = ``theta_origin, v_origin``).
+
+    In (V, θ) the self-similar fan satisfies ``R(C) = (θ - θ_origin)/(v - v_origin)``;
+    define ``kappa = θ - θ_origin`` and ``u = v - v_origin``. The dissolved and
+    sorbed contributions reduce to power-law forms in ``u`` that admit closed
+    forms via incomplete beta functions (Freundlich) or elementary sqrt
+    operations (Langmuir).
+
+    Parameters
+    ----------
+    theta_origin, v_origin : float
+        Cumulative flow and position at the fan's apex [m³].
+    v_start, v_end : float
+        Integration range in v [m³].
+    theta : float
+        Cumulative flow at which to evaluate [m³].
+    sorption : SorptionModel
+        Sorption model (``FreundlichSorption`` or ``LangmuirSorption``).
+
+    Returns
+    -------
+    float
+        Mass in the segment ``[v_start, v_end]``.
+
+    Raises
+    ------
+    TypeError
+        If the sorption model does not support exact spatial integration.
+    """
     if theta <= theta_origin:
         return 0.0
 
@@ -997,8 +1036,14 @@ def _integrate_rarefaction_spatial_exact(
     u_start = v_start - v_origin
     u_end = v_end - v_origin
 
-    if u_start <= 0 or u_end <= 0:
+    # The fan only exists for v > v_origin; clip u_start at 0 (the apex
+    # contributes nothing to the integral since c(v_origin)=0 for n>1 and
+    # the Beta-function form handles the lower-bound singularity for n<1).
+    # If the whole segment is upstream of the apex, return 0.
+    if u_end <= 0:
         return 0.0
+    if u_start < 0:
+        u_start = 0.0
 
     if isinstance(sorption, LangmuirSorption):
         return _integrate_rarefaction_spatial_langmuir(sorption, kappa, u_start, u_end)
@@ -1006,7 +1051,7 @@ def _integrate_rarefaction_spatial_exact(
     if isinstance(sorption, FreundlichSorption):
         return _integrate_rarefaction_spatial_freundlich(sorption, kappa, u_start, u_end)
 
-    msg = f"Exact spatial rarefaction integration not supported for {type(sorption).__name__}"
+    msg = f"Exact spatial fan integration not supported for {type(sorption).__name__}"
     raise TypeError(msg)
 
 
@@ -1376,13 +1421,18 @@ def compute_total_outlet_mass(
                     )
         elif isinstance(wave, DecayingShockWave):
             theta_cross = wave.outlet_crossing_theta(v_outlet)
-            # For c_fixed=0 the fan integral to +∞ converges; for c_fixed>0
-            # multi-pulse cases the constant-c_fixed tail past the fan is
-            # captured by the segment-up-to-theta_last integration above.
+            # Only decay_side='left' (favorable n>1, Langmuir) has a fan-to-+∞
+            # contribution: after V_s passes v_outlet, v_outlet is inside the
+            # fan and c follows the decaying profile. For decay_side='right'
+            # (n<1 mirror) the post-arrival c = c_fixed (immediately upstream
+            # of the shock); the +∞ contribution is c_fixed · ∞ which is only
+            # finite for c_fixed=0 (giving 0). The c_fixed>0 case (multi-pulse)
+            # leaves a constant-c_fixed tail handled by the segment integration.
             if (
                 theta_cross is not None
                 and abs(theta_cross - theta_last_raref_start) < EPSILON_TIME_MATCH
                 and wave.c_fixed < EPSILON_CONCENTRATION
+                and wave.decay_side == "left"
             ):
                 total_raref_mass += integrate_fan_exact(
                     theta_origin=wave.theta_origin,

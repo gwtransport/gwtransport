@@ -642,10 +642,16 @@ class DecayingShockWave(Wave):
     def mass_after_outlet_arrival(self, v_outlet: float) -> float:
         """Mass exiting at ``v_outlet`` from the wave's outlet arrival to ``θ=+∞``.
 
-        After ``V_s`` reaches ``v_outlet``, ``v_outlet`` falls *inside* the fan;
-        c at ``v_outlet`` follows the fan's self-similar profile and asymptotes
-        to ``c_fixed``. For ``c_fixed=0`` the mass integral to +∞ converges
-        (the fan c-profile decays).
+        Semantics depend on ``decay_side``:
+
+        - ``'left'`` (favorable n>1, Langmuir): after ``V_s`` reaches
+          ``v_outlet``, ``v_outlet`` falls *inside* the fan; c at ``v_outlet``
+          follows the fan's self-similar profile and asymptotes to
+          ``c_fixed``. For ``c_fixed=0`` the +∞ integral converges.
+        - ``'right'`` (n<1 mirror): after ``V_s`` reaches ``v_outlet``,
+          ``v_outlet`` is *upstream* of the shock; c at ``v_outlet`` jumps to
+          ``c_fixed`` and stays there. For ``c_fixed=0`` the +∞ contribution
+          is zero.
 
         Parameters
         ----------
@@ -660,9 +666,8 @@ class DecayingShockWave(Wave):
         Raises
         ------
         ValueError
-            If ``c_fixed > 0``: the mass integral to +∞ diverges. Use the
-            segment-based ``compute_cumulative_outlet_mass`` over a finite
-            upper bound instead.
+            If ``c_fixed > 0`` (mass integral diverges; use segment-based
+            mass functions over a finite upper bound instead).
         """
         if self.c_fixed > 0.0:
             msg = (
@@ -670,6 +675,8 @@ class DecayingShockWave(Wave):
                 f"got c_fixed={self.c_fixed}"
             )
             raise ValueError(msg)
+        if self.decay_side == "right":
+            return 0.0
         theta_arrival = self.outlet_crossing_theta(v_outlet)
         if theta_arrival is None:
             return 0.0
@@ -730,13 +737,26 @@ class DecayingShockWave(Wave):
                 return None
             return 0.5 * (c_decay + self.c_fixed)
 
-        if v > v_s + tol:
-            if self.decay_side == "left":
-                return self.c_fixed
-            return self.c_decay_at_theta(theta)
+        # Region selection depends on decay_side:
+        # 'left'  (favorable n>1, Langmuir): fan extends upstream of V_s
+        #         (v < V_s), c_fixed downstream (v > V_s).
+        # 'right' (n<1 mirror): fan extends downstream of V_s (v > V_s),
+        #         c_fixed upstream (v < V_s).
+        if self.decay_side == "left":
+            v_fan_side = v < v_s - tol
+            v_fixed_side = v > v_s + tol
+        else:
+            v_fan_side = v > v_s + tol
+            v_fixed_side = v < v_s - tol
 
-        # v < v_s: inside the fan
-        if v <= self.v_origin:
+        if v_fixed_side:
+            return self.c_fixed
+
+        if not v_fan_side:
+            return None  # within tol of shock face — handled above
+
+        # Fan-interior: self-similar profile with apex at (v_origin, theta_origin).
+        if v == self.v_origin:
             return None
         r_target = (theta - self.theta_origin) / (v - self.v_origin)
         if r_target <= 1.0:
