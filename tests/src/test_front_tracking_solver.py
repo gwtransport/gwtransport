@@ -742,19 +742,14 @@ class TestRiemannProblems:
         # Trapezoidal-rule error over sharp leading/trailing edges.
         assert np.isclose(mass_out, mass_in, rtol=2e-3)
 
-    @pytest.mark.xfail(
-        reason="Phase-1 shock-rarefaction wave-splitting overlay (#168) leaves a deterministic "
-        "mass deficit for Freundlich n>1 pulses with c_tail=0; Phase 2 replaces the overlay with "
-        "an analytical DecayingShockWave and this test will pass at machine precision.",
-        strict=True,
-    )
     def test_square_pulse_n_gt_1_total_mass_at_outlet(self, freundlich_sorption):
-        """Total outlet mass equals total inlet mass for an n>1 square pulse.
+        """Total outlet mass equals total inlet mass for an n>1 square pulse at machine precision.
 
         Uses the analytical ``compute_total_outlet_mass`` (closed-form θ-integrals
         + tail-to-infinity rarefaction contribution) — no trapezoidal-rule error.
-        Currently XFAILs by a ~6% deterministic deficit; Phase 2's
-        ``DecayingShockWave`` will close the gap to machine precision (rtol=1e-12).
+        Phase 2's ``DecayingShockWave`` replaces the Phase-1 shock + rarefaction
+        wave-splitting overlay (which previously left a ~6% mass deficit) with a
+        single analytical wave whose closed-form trajectory is exact.
         """
         v_pore = 200.0
         c_step = 4.0

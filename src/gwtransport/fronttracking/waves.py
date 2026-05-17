@@ -639,26 +639,50 @@ class DecayingShockWave(Wave):
             )
         return None
 
-    def mass_after_outlet_arrival(self, v_outlet: float) -> float:  # noqa: PLR6301
+    def mass_after_outlet_arrival(self, v_outlet: float) -> float:
         """Mass exiting at ``v_outlet`` from the wave's outlet arrival to ``θ=+∞``.
 
-        After ``V_s`` reaches ``v_outlet``, ``v_outlet`` falls *inside* the fan
-        (between the apex and the shock). The c at ``v_outlet`` is then given by
-        the fan's self-similar profile ``R(c) = (θ − theta_origin)/(v_outlet −
-        v_origin)``, so the mass integral reduces to the fan integral over
-        ``[θ_arrival, θ_tail or +∞]``.
+        After ``V_s`` reaches ``v_outlet``, ``v_outlet`` falls *inside* the fan;
+        c at ``v_outlet`` follows the fan's self-similar profile and asymptotes
+        to ``c_fixed``. For ``c_fixed=0`` the mass integral to +∞ converges
+        (the fan c-profile decays).
+
+        Parameters
+        ----------
+        v_outlet : float
+            Outlet position [m³].
+
+        Returns
+        -------
+        float
+            Total mass exiting at v_outlet from theta_arrival to +∞.
 
         Raises
         ------
-        NotImplementedError
-            Currently always. The fan integrator lives in ``output.py``
-            (``integrate_rarefaction_exact``) and the dispatch site is not
-            yet wired; calling this method directly would silently zero out
-            the outlet mass contribution.
+        ValueError
+            If ``c_fixed > 0``: the mass integral to +∞ diverges. Use the
+            segment-based ``compute_cumulative_outlet_mass`` over a finite
+            upper bound instead.
         """
-        del v_outlet
-        msg = "mass_after_outlet_arrival is wired via output.py dispatch (not yet implemented)"
-        raise NotImplementedError(msg)
+        if self.c_fixed > 0.0:
+            msg = (
+                f"mass_after_outlet_arrival requires c_fixed=0 for the +∞ integral to converge; "
+                f"got c_fixed={self.c_fixed}"
+            )
+            raise ValueError(msg)
+        theta_arrival = self.outlet_crossing_theta(v_outlet)
+        if theta_arrival is None:
+            return 0.0
+        from gwtransport.fronttracking.output import integrate_fan_exact  # noqa: PLC0415
+
+        return integrate_fan_exact(
+            theta_origin=self.theta_origin,
+            v_origin=self.v_origin,
+            v_outlet=v_outlet,
+            theta_start=theta_arrival,
+            theta_end=float("inf"),
+            sorption=self.sorption,
+        )
 
     def concentration_left(self) -> float:
         """Concentration on the left (upstream) side at θ=theta_start.

@@ -15,8 +15,8 @@ Handlers modify wave states in-place by deactivating parent waves and
 creating new child waves.
 """
 
-from gwtransport.fronttracking.math import FreundlichSorption, SorptionModel, characteristic_speed
-from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
+from gwtransport.fronttracking.math import FreundlichSorption, LangmuirSorption, SorptionModel, characteristic_speed
+from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWave, RarefactionWave, ShockWave
 
 # Numerical tolerance constants
 EPSILON_CONCENTRATION = 1e-15  # Tolerance for checking if concentration change is negligible
@@ -222,17 +222,97 @@ def handle_shock_rarefaction_collision(
 ) -> list:
     """Shock interacts with a rarefaction fan (tail or head boundary).
 
-    **Tail collision**: shock penetrates the rarefaction, creating a new
-    shock continuing through the fan plus a modified rarefaction with a
-    compressed tail (if not fully overtaken).
+    For the canonical favorable (n>1 or Langmuir) head-collision case and the
+    n<1 mirrored tail-collision case, emits a single :class:`DecayingShockWave`
+    whose closed-form trajectory subsumes the fan + shock together. The
+    fallback for non-canonical cases (e.g. n>1 tail-collision corner-case
+    triggered by multi-pulse inlets) retains the Phase-1 piecewise-constant
+    overlay; Phase-2 step 5+ adds parametric tests that will surface any
+    remaining defects here.
 
-    **Head collision**: the rarefaction's head catches the shock, possibly
-    forming a compression shock.
-
-    Phase 1 retains the (V, t)-era behavior unchanged except for the change
-    of variables to θ — Phase 2 of the refactor replaces this with the
-    analytical ``DecayingShockWave``.
+    Returns
+    -------
+    list of Wave
+        Emitted waves. For canonical cases this is ``[DecayingShockWave]``;
+        for non-canonical cases it may be ``[ShockWave]``,
+        ``[ShockWave, RarefactionWave]``, or ``[]``.
     """
+    sorption = raref.sorption
+    is_freundlich_unfavorable = isinstance(sorption, FreundlichSorption) and sorption.n < 1.0
+    is_favorable_freundlich = isinstance(sorption, FreundlichSorption) and sorption.n > 1.0
+    is_langmuir = isinstance(sorption, LangmuirSorption)
+
+    # Multi-pulse non-canonical cases (raref.c_tail != shock.c_right for head
+    # collision, raref.c_head != shock.c_left for tail collision) carry a
+    # fan_tail concentration different from the shock's c_fixed; the current
+    # DecayingShockWave does not store fan_tail separately, so its
+    # ``concentration_at_point`` would clamp the fan-interior c incorrectly
+    # past the fan's physical extent. Defer to Phase-1 overlay for these.
+    is_canonical_head = boundary_type == "head" and abs(raref.c_tail - shock.c_right) < EPSILON_CONCENTRATION
+    is_canonical_tail = boundary_type == "tail" and abs(raref.c_head - shock.c_left) < EPSILON_CONCENTRATION
+
+    if is_canonical_head and (is_favorable_freundlich or is_langmuir):
+        # Canonical favorable case: rarefaction head catches shock. After
+        # collision, shock c_left decays from raref.c_head toward shock.c_right.
+        # Only emit a DecayingShockWave if the rarefaction's head was actually
+        # faster than the shock (precondition for physical collision); when
+        # the test/solver feeds degenerate inputs (raref slower than shock,
+        # impossible in a real run), deactivate both and emit nothing.
+        s_raref_head = characteristic_speed(raref.c_head, raref.sorption)
+        if s_raref_head <= shock.speed:
+            shock.is_active = False
+            raref.is_active = False
+            return []
+        assert isinstance(sorption, (FreundlichSorption, LangmuirSorption))  # noqa: S101
+        try:
+            decaying = DecayingShockWave(
+                theta_start=theta_event,
+                v_start=v_event,
+                c_decay_initial=raref.c_head,
+                c_fixed=shock.c_right,
+                decay_side="left",
+                v_origin=raref.v_start,
+                theta_origin=raref.theta_start,
+                sorption=sorption,
+            )
+        except NotImplementedError:
+            # Closed form not derived yet (e.g. Freundlich n!=2 with c_fixed>0).
+            # Fall through to Phase-1 overlay below; step 5+ extends coverage.
+            pass
+        else:
+            shock.is_active = False
+            raref.is_active = False
+            return [decaying]
+
+    if is_canonical_tail and is_freundlich_unfavorable:
+        # Canonical n<1 mirror: trailing shock catches rarefaction's tail.
+        # After collision, shock c_right decays from raref.c_tail toward
+        # shock.c_left.
+        s_raref_tail = characteristic_speed(raref.c_tail, raref.sorption)
+        if shock.speed <= s_raref_tail:
+            shock.is_active = False
+            raref.is_active = False
+            return []
+        assert isinstance(sorption, FreundlichSorption)  # noqa: S101
+        try:
+            decaying = DecayingShockWave(
+                theta_start=theta_event,
+                v_start=v_event,
+                c_decay_initial=raref.c_tail,
+                c_fixed=shock.c_left,
+                decay_side="right",
+                v_origin=raref.v_start,
+                theta_origin=raref.theta_start,
+                sorption=sorption,
+            )
+        except NotImplementedError:
+            pass
+        else:
+            shock.is_active = False
+            raref.is_active = False
+            return [decaying]
+
+    # Non-canonical (multi-pulse corner cases) — fall back to Phase-1 overlay.
     if boundary_type == "tail":
         raref_c_at_collision = raref.concentration_at_point(v_event, theta_event)
 
@@ -279,13 +359,11 @@ def handle_shock_rarefaction_collision(
             shock.is_active = False
             raref.is_active = False
             return [new_shock, modified_raref]
-        # Rarefaction completely overtaken — only the new shock continues
         shock.is_active = False
         raref.is_active = False
         return [new_shock]
 
-    # boundary_type == 'head': rarefaction head catches shock — may form a
-    # compression shock between raref.c_head and shock.c_right.
+    # Non-canonical head branch fallback.
     s_raref_head = characteristic_speed(raref.c_head, raref.sorption)
 
     if s_raref_head > shock.speed:

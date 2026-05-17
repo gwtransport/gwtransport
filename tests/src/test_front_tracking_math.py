@@ -123,14 +123,18 @@ class TestFreundlichSorption:
         assert r1 < r2, "R should increase with increasing C for n < 1"
 
     def test_total_concentration_zero(self):
-        """C_total(0) behavior depends on n and c_min."""
+        """C_total(0) = 0 physically: c=0 means no dissolved mass, no sorbed mass (s(0)=0)."""
         # n<1 with c_min=0: C_total(0) = 0.
         sorption_unfav = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
         assert sorption_unfav.total_concentration(0.0) == 0.0
 
-        # n>1 with c_min>0: clamps to C_total(c_min) which is small but positive (P1.4 Option A).
+        # n>1 with c_min>0: c_min only clamps retardation (to keep R finite as c->0);
+        # total_concentration uses c^(1/n) which is well-defined at c=0 with no
+        # singularity, so C_T(0) = 0 unconditionally. Phase 2 step 4 corrects an
+        # earlier design (c_min-clamped C_T) that biased Rankine-Hugoniot shock
+        # speeds when c_R=0.
         sorption_fav = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
-        assert sorption_fav.total_concentration(0.0) > 0.0
+        assert sorption_fav.total_concentration(0.0) == 0.0
 
     def test_total_concentration_positive(self):
         """Test C_total > C for C > 0."""
@@ -673,14 +677,25 @@ class TestRegressionsForIssue168:
 
         assert np.isclose(t_first, t_analytic, rtol=1e-14)
 
-    def test_freundlich_retardation_total_concentration_agree_below_c_min(self):
-        """P1.4 Option A: below c_min, both methods clamp to c_min consistently."""
+    def test_freundlich_retardation_clamps_below_c_min_but_total_concentration_does_not(self):
+        """Retardation clamps to c_min (avoids R->inf as c->0 for n>1); C_T does not clamp.
+
+        ``c_min`` exists to keep ``R(c)`` finite as ``c -> 0`` for ``n > 1``
+        (where ``R(c) = 1 + alpha * c^((1-n)/n)`` diverges). It does NOT apply
+        to ``total_concentration``, whose ``c^(1/n)`` factor is well-defined
+        at ``c = 0`` for any ``n > 0``. Phase 2 step 4 disentangled these:
+        ``C_T(0) = 0`` physically, regardless of ``c_min``.
+        """
         c_min = 0.1
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=c_min)
 
         for c in [0.0, c_min / 10.0, c_min / 2.0]:
+            # retardation clamps c -> c_min so R(c<c_min) = R(c_min) (no singularity).
             assert sorption.retardation(c) == sorption.retardation(c_min)
-            assert sorption.total_concentration(c) == sorption.total_concentration(c_min)
+            # total_concentration uses c^(1/n) directly; at c=0 it returns 0.
+            assert sorption.total_concentration(c) == c + (
+                sorption.bulk_density / sorption.porosity * sorption.k_f * (max(c, 0.0) ** (1.0 / sorption.n))
+            )
 
     def test_concentration_from_retardation_no_runtime_warning_at_r_le_1(self):
         """P1.5: masking base before exponentiation removes the warning."""

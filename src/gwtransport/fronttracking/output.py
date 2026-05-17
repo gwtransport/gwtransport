@@ -37,7 +37,7 @@ from gwtransport.fronttracking.math import (
     NonlinearSorption,
     SorptionModel,
 )
-from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave, Wave
+from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWave, RarefactionWave, ShockWave, Wave
 
 # Numerical tolerance constants
 EPSILON_VELOCITY = 1e-15  # Tolerance for checking if velocity is effectively zero
@@ -78,10 +78,17 @@ def concentration_at_point(
 
     Notes
     -----
-    **Wave priority**: rarefaction fans first (spatial extent), then most
-    recently crossing shock or rarefaction tail, then characteristics. If
-    no active wave controls the point, returns 0.0 (initial condition).
+    **Wave priority**: decaying shocks first (closed-form analytical), then
+    rarefaction fans (spatial extent), then most recently crossing shock or
+    rarefaction tail, then characteristics. If no active wave controls the
+    point, returns 0.0 (initial condition).
     """
+    for wave in waves:
+        if isinstance(wave, DecayingShockWave) and wave.is_active:
+            c = wave.concentration_at_point(v, theta)
+            if c is not None:
+                return c
+
     for wave in waves:
         if isinstance(wave, RarefactionWave) and wave.is_active:
             c = wave.concentration_at_point(v, theta)
@@ -252,12 +259,38 @@ def identify_outlet_segments(
     # Find all waves that cross outlet in this θ-range
     outlet_events: list[dict] = []
 
-    # Track rarefactions that already contain the outlet at theta_start
-    # These need to be handled separately since they don't generate crossing events
-    active_rarefactions_at_start: list[RarefactionWave] = []
+    # Track rarefactions / decaying shocks that already contain the outlet at
+    # theta_start (no crossing event in [theta_start, theta_end]).
+    active_rarefactions_at_start: list[RarefactionWave | DecayingShockWave] = []
 
     for wave in waves:
         if not wave.is_active:
+            continue
+
+        if isinstance(wave, DecayingShockWave):
+            # The wave's outlet crossing arrival behaves like a rarefaction head
+            # arrival: before arrival, v_outlet is downstream (c=c_fixed for
+            # decay_side='left'); after arrival, v_outlet is inside the fan
+            # whose c follows the self-similar profile and asymptotes to the
+            # fan's tail concentration.
+            theta_cross = wave.outlet_crossing_theta(v_outlet)
+            if theta_cross is None:
+                continue
+            if theta_cross <= theta_start:
+                # Outlet already inside the fan at theta_start.
+                active_rarefactions_at_start.append(wave)
+            elif theta_cross <= theta_end:
+                # c_after is the fan c just past arrival (the decay-side c at
+                # the arrival θ).
+                c_after = wave.c_decay_at_theta(theta_cross)
+                if c_after is None:
+                    c_after = wave.c_decay_initial
+                outlet_events.append({
+                    "theta": theta_cross,
+                    "wave": wave,
+                    "boundary": "head",
+                    "c_after": c_after,
+                })
             continue
 
         # For rarefactions, detect both head and tail crossings
@@ -324,34 +357,46 @@ def identify_outlet_segments(
     current_theta = theta_start
     current_c = concentration_at_point(v_outlet, theta_start, waves, sorption)
 
-    # Handle case where we start inside a rarefaction
+    # Handle case where we start inside a rarefaction or decaying-shock fan
     if active_rarefactions_at_start:
-        # Should only be one rarefaction containing the outlet at theta_start
         raref = active_rarefactions_at_start[0]
 
-        # Find when tail crosses (if it does)
-        tail_cross_theta = None
-        for event in outlet_events:
-            if event["wave"] is raref and event["boundary"] == "tail" and event["theta"] > theta_start:
-                tail_cross_theta = event["theta"]
-                break
+        if isinstance(raref, RarefactionWave):
+            # Find when tail crosses (if it does)
+            tail_cross_theta = None
+            for event in outlet_events:
+                if event["wave"] is raref and event["boundary"] == "tail" and event["theta"] > theta_start:
+                    tail_cross_theta = event["theta"]
+                    break
 
-        # Create rarefaction segment from theta_start
-        raref_end = min(tail_cross_theta or theta_end, theta_end)
+            raref_end = min(tail_cross_theta or theta_end, theta_end)
+            c_start = concentration_at_point(v_outlet, theta_start, waves, sorption)
+            c_end = raref.c_tail if tail_cross_theta and tail_cross_theta <= theta_end else None
 
-        c_start = concentration_at_point(v_outlet, theta_start, waves, sorption)
-        c_end = None
-        if tail_cross_theta and tail_cross_theta <= theta_end:
-            c_end = raref.c_tail
+            segments.append({
+                "theta_start": theta_start,
+                "theta_end": raref_end,
+                "type": "rarefaction",
+                "wave": raref,
+                "c_start": c_start,
+                "c_end": c_end,
+            })
+        else:
+            # DecayingShockWave fan extends to θ=+∞ (or asymptotes to c_fixed
+            # for n>1 with c_min); treat the whole [theta_start, theta_end]
+            # as one decaying-fan segment.
+            raref_end = theta_end
+            c_start = concentration_at_point(v_outlet, theta_start, waves, sorption)
+            c_end = concentration_at_point(v_outlet, theta_end, waves, sorption)
 
-        segments.append({
-            "theta_start": theta_start,
-            "theta_end": raref_end,
-            "type": "rarefaction",
-            "wave": raref,
-            "c_start": c_start,
-            "c_end": c_end,
-        })
+            segments.append({
+                "theta_start": theta_start,
+                "theta_end": raref_end,
+                "type": "decaying_fan",
+                "wave": raref,
+                "c_start": c_start,
+                "c_end": c_end,
+            })
 
         current_theta = raref_end
         current_c = (
@@ -405,6 +450,35 @@ def identify_outlet_segments(
                 if raref_end < theta_end
                 else current_c
             )
+        elif isinstance(event["wave"], DecayingShockWave) and event["boundary"] == "head":
+            if event["theta"] > current_theta:
+                segments.append({
+                    "theta_start": current_theta,
+                    "theta_end": event["theta"],
+                    "type": "constant",
+                    "concentration": current_c,
+                    "c_start": current_c,
+                    "c_end": current_c,
+                })
+
+            decaying = event["wave"]
+            # DecayingShockWave's fan covers [theta_arrival, theta_end] of the
+            # query window; the fan asymptotes to c_fixed (decay_side='left')
+            # without a discrete tail event.
+            seg_end = theta_end
+            c_end_val = concentration_at_point(v_outlet, seg_end, waves, sorption)
+
+            segments.append({
+                "theta_start": event["theta"],
+                "theta_end": seg_end,
+                "type": "decaying_fan",
+                "wave": decaying,
+                "c_start": event["c_after"],
+                "c_end": c_end_val,
+            })
+
+            current_theta = seg_end
+            current_c = c_end_val
         else:
             if event["theta"] > current_theta:
                 segments.append({
@@ -438,9 +512,9 @@ def integrate_rarefaction_exact(
 ) -> float:
     """Exact θ-integral ``∫ c(θ) dθ`` of a rarefaction at the outlet.
 
-    Dispatches to the isotherm-specific closed-form formula. The result is
-    the mass-like quantity ``∫ c dθ`` (equal to ``∫ c·flow dt`` in time
-    coordinates).
+    Convenience wrapper over :func:`integrate_fan_exact` that pulls the fan
+    apex from ``raref.theta_start, raref.v_start``. Returns the mass-like
+    quantity ``∫ c dθ`` (= ``∫ c·flow dt`` in time coordinates).
 
     Parameters
     ----------
@@ -457,26 +531,64 @@ def integrate_rarefaction_exact(
     -------
     integral : float
         ``∫ c(θ) dθ`` [mass — i.e. concentration × volume].
+    """
+    return integrate_fan_exact(raref.theta_start, raref.v_start, v_outlet, theta_start, theta_end, sorption)
+
+
+def integrate_fan_exact(
+    theta_origin: float,
+    v_origin: float,
+    v_outlet: float,
+    theta_start: float,
+    theta_end: float,
+    sorption: SorptionModel,
+) -> float:
+    """Exact θ-integral ``∫ c(θ) dθ`` for any self-similar fan at the outlet.
+
+    Decoupled from the wave object so the same closed-form math applies to
+    both :class:`RarefactionWave` (apex = ``theta_start, v_start``) and
+    :class:`DecayingShockWave` (apex = ``theta_origin, v_origin``).
+
+    Parameters
+    ----------
+    theta_origin, v_origin : float
+        Cumulative flow and position at the fan's apex [m³].
+    v_outlet : float
+        Outlet position [m³].
+    theta_start, theta_end : float
+        Integration range in cumulative flow [m³]. Either can be ``+np.inf``.
+    sorption : SorptionModel
+        Sorption model (``FreundlichSorption`` or ``LangmuirSorption``).
+
+    Returns
+    -------
+    float
+        Mass-like quantity ``∫ c(θ) dθ`` [mass — concentration × volume].
 
     Raises
     ------
     TypeError
-        If sorption model does not support exact rarefaction integration.
+        If the sorption model does not support exact fan integration.
     """
     if isinstance(sorption, FreundlichSorption):
-        return _integrate_rarefaction_exact_freundlich(raref, v_outlet, theta_start, theta_end, sorption)
+        return _integrate_fan_exact_freundlich(theta_origin, v_origin, v_outlet, theta_start, theta_end, sorption)
     if isinstance(sorption, LangmuirSorption):
-        return _integrate_rarefaction_exact_langmuir(raref, v_outlet, theta_start, theta_end, sorption)
-    msg = f"Exact rarefaction integration not supported for {type(sorption).__name__}"
+        return _integrate_fan_exact_langmuir(theta_origin, v_origin, v_outlet, theta_start, theta_end, sorption)
+    msg = f"Exact fan integration not supported for {type(sorption).__name__}"
     raise TypeError(msg)
 
 
-def _integrate_rarefaction_exact_freundlich(
-    raref: RarefactionWave, v_outlet: float, theta_start: float, theta_end: float, sorption: FreundlichSorption
+def _integrate_fan_exact_freundlich(
+    theta_origin: float,
+    v_origin: float,
+    v_outlet: float,
+    theta_start: float,
+    theta_end: float,
+    sorption: FreundlichSorption,
 ) -> float:
-    """Exact θ-integral ``∫ c(θ) dθ`` for a Freundlich rarefaction.
+    """Exact θ-integral ``∫ c(θ) dθ`` for a Freundlich fan with given apex.
 
-    In (V, θ), self-similar concentration inside the rarefaction is::
+    In (V, θ), self-similar concentration inside the fan is::
 
         c(θ) = [((θ - θ_origin)/(v_outlet - v_origin) - 1) / α]^(1/β)
 
@@ -485,17 +597,11 @@ def _integrate_rarefaction_exact_freundlich(
     ``base(θ) = κ_θ·θ + μ_θ - 1`` with ``κ_θ = 1/(v_outlet - v_origin)``
     and ``μ_θ = -θ_origin/(v_outlet - v_origin)``.
 
-    The user-facing mass integral is ``∫ c·flow dt = ∫ c dθ``; the user-facing
-    time integral over a constant-flow bin is ``(1/flow) · ∫ c dθ``.
-
     Raises
     ------
     ValueError
         If sorption is linear (n = 1) or the integral diverges at θ=+∞.
     """
-    theta_origin = raref.theta_start
-    v_origin = raref.v_start
-
     kappa_theta = 1.0 / (v_outlet - v_origin)
     mu_theta = -theta_origin / (v_outlet - v_origin)
 
@@ -503,7 +609,7 @@ def _integrate_rarefaction_exact_freundlich(
     beta = 1.0 / sorption.n - 1.0
 
     if abs(beta) < EPSILON_BETA:
-        msg = "integrate_rarefaction_exact requires nonlinear sorption (n != 1)"
+        msg = "integrate_fan_exact requires nonlinear sorption (n != 1)"
         raise ValueError(msg)
 
     exponent = 1.0 / beta + 1.0
@@ -526,10 +632,15 @@ def _integrate_rarefaction_exact_freundlich(
     return antiderivative(theta_end) - antiderivative(theta_start)
 
 
-def _integrate_rarefaction_exact_langmuir(
-    raref: RarefactionWave, v_outlet: float, theta_start: float, theta_end: float, sorption: LangmuirSorption
+def _integrate_fan_exact_langmuir(
+    theta_origin: float,
+    v_origin: float,
+    v_outlet: float,
+    theta_start: float,
+    theta_end: float,
+    sorption: LangmuirSorption,
 ) -> float:
-    """Exact θ-integral ``∫ c(θ) dθ`` for a Langmuir rarefaction.
+    """Exact θ-integral ``∫ c(θ) dθ`` for a Langmuir fan with given apex.
 
     Inside the fan, ``c(θ) = sqrt(A / B(θ)) - K_L`` with
     ``B(θ) = κ_θ·θ + μ_θ - 1``, ``κ_θ = 1/(v_outlet - v_origin)``,
@@ -538,9 +649,6 @@ def _integrate_rarefaction_exact_langmuir(
 
     Antiderivative: ``F(θ) = (2·sqrt(A)/κ_θ)·sqrt(B(θ)) - K_L·θ``.
     """
-    theta_origin = raref.theta_start
-    v_origin = raref.v_start
-
     kappa_theta = 1.0 / (v_outlet - v_origin)
     mu_theta = -theta_origin / (v_outlet - v_origin)
     a_coeff = sorption.a_coeff
@@ -551,7 +659,7 @@ def _integrate_rarefaction_exact_langmuir(
     def antiderivative(theta: float) -> float:
         if np.isinf(theta):
             if theta > 0:
-                msg = "Langmuir rarefaction integral diverges at θ=+∞"
+                msg = "Langmuir fan integral diverges at θ=+∞"
                 raise ValueError(msg)
             return 0.0
 
@@ -657,6 +765,16 @@ def compute_bin_averaged_concentration_exact(
                     theta_mid = 0.5 * (seg_theta_start + seg_theta_end)
                     c_mid = concentration_at_point(v_outlet, theta_mid, waves, sorption)
                     total_integral_theta += c_mid * seg_dtheta
+            elif seg["type"] == "decaying_fan":
+                decaying = seg["wave"]
+                total_integral_theta += integrate_fan_exact(
+                    decaying.theta_origin,
+                    decaying.v_origin,
+                    v_outlet,
+                    seg_theta_start,
+                    seg_theta_end,
+                    sorption,
+                )
             else:
                 msg = f"Unknown segment type: {seg['type']}"
                 raise ValueError(msg)
@@ -771,6 +889,13 @@ def compute_domain_mass(
                 wave_positions.append(v_head)
             if v_tail is not None and 0 <= v_tail <= v_outlet:
                 wave_positions.append(v_tail)
+
+        elif isinstance(wave, DecayingShockWave):
+            v_pos = wave.position_at_theta(theta)
+            if v_pos is not None and 0 <= v_pos <= v_outlet:
+                wave_positions.append(v_pos)
+            if 0 <= wave.v_origin <= v_outlet:
+                wave_positions.append(wave.v_origin)
 
     # Add domain boundaries
     wave_positions.extend([0.0, v_outlet])
@@ -1013,12 +1138,23 @@ def find_last_rarefaction_start_theta(
 ) -> float:
     """Return the θ at which the last active wave reaches ``v_outlet``.
 
-    Uses the rarefaction's head speed; the shock/characteristic propagation
-    speed otherwise. Returns 0.0 if no waves reach the outlet.
+    Uses the rarefaction's head speed for linear waves; for
+    :class:`DecayingShockWave` uses the closed-form ``outlet_crossing_theta``
+    since V_s(θ) is nonlinear in θ.
+
+    Returns
+    -------
+    float
+        Latest θ at which any active wave reaches v_outlet; 0.0 if none do.
     """
     theta_last = 0.0
     for wave in waves:
         if not wave.is_active:
+            continue
+        if isinstance(wave, DecayingShockWave):
+            theta_cross = wave.outlet_crossing_theta(v_outlet)
+            if theta_cross is not None:
+                theta_last = max(theta_last, theta_cross)
             continue
         if isinstance(wave, RarefactionWave):
             speed = wave.head_speed()
@@ -1102,6 +1238,16 @@ def compute_cumulative_outlet_mass(
             else:
                 c_mid = concentration_at_point(v_outlet, 0.5 * (seg_theta_start + seg_theta_end), waves, sorption)
                 total_mass += c_mid * seg_dtheta
+        elif seg["type"] == "decaying_fan":
+            decaying = seg["wave"]
+            total_mass += integrate_fan_exact(
+                decaying.theta_origin,
+                decaying.v_origin,
+                v_outlet,
+                seg_theta_start,
+                seg_theta_end,
+                sorption,
+            )
 
     return float(total_mass)
 
@@ -1228,5 +1374,23 @@ def compute_total_outlet_mass(
                         theta_start=theta_head_crosses_outlet,
                         sorption=sorption,
                     )
+        elif isinstance(wave, DecayingShockWave):
+            theta_cross = wave.outlet_crossing_theta(v_outlet)
+            # For c_fixed=0 the fan integral to +∞ converges; for c_fixed>0
+            # multi-pulse cases the constant-c_fixed tail past the fan is
+            # captured by the segment-up-to-theta_last integration above.
+            if (
+                theta_cross is not None
+                and abs(theta_cross - theta_last_raref_start) < EPSILON_TIME_MATCH
+                and wave.c_fixed < EPSILON_CONCENTRATION
+            ):
+                total_raref_mass += integrate_fan_exact(
+                    theta_origin=wave.theta_origin,
+                    v_origin=wave.v_origin,
+                    v_outlet=v_outlet,
+                    theta_start=theta_cross,
+                    theta_end=np.inf,
+                    sorption=sorption,
+                )
 
     return float(mass_up_to_raref_start + total_raref_mass), float(theta_last_raref_start)

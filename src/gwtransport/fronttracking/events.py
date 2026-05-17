@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from gwtransport.fronttracking.math import characteristic_position, characteristic_speed
-from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
+from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWave, RarefactionWave, ShockWave
 
 # Numerical tolerance constants
 EPSILON_SPEED = 1e-15  # Tolerance for checking if two speeds are equal (machine precision)
@@ -320,5 +320,16 @@ def find_outlet_crossing(wave, v_outlet: float, theta_current: float) -> float |
 
         dtheta = (v_outlet - v_head) / s_head
         return theta_eval + dtheta
+
+    if isinstance(wave, DecayingShockWave):
+        # Closed-form inverse V_s(theta) = v_outlet.
+        theta_cross = wave.outlet_crossing_theta(v_outlet)
+        if theta_cross is None:
+            return None
+        # Suppress re-emission within FP of the prior crossing (same convention
+        # as the linear-shock branch above).
+        if theta_cross <= theta_current + 1e-15 * max(abs(theta_current), 1.0):
+            return None
+        return theta_cross
 
     return None
