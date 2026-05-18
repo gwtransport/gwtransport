@@ -38,10 +38,12 @@ from gwtransport.fronttracking.output import (
     compute_cumulative_outlet_mass,
     compute_domain_mass,
     compute_total_outlet_mass,
+    integrate_fan_exact,
     integrate_fan_spatial_exact,
+    integrate_rarefaction_exact,
 )
 from gwtransport.fronttracking.solver import FrontTracker
-from gwtransport.fronttracking.waves import RarefactionWave
+from gwtransport.fronttracking.waves import DecayingShockWave, RarefactionWave
 
 
 def test_rarefaction_concentration_at_point_clamps_at_tail_boundary():
@@ -437,4 +439,236 @@ def test_freundlich_n_just_above_1_reduces_to_constant_velocity_shock():
     assert relative_spread < 0.1, (
         f"n=1.001 outlet c should be near-constant past DSW arrival; got mean={c_mean:.6f}, "
         f"std={c_std:.6f}, relative_spread={relative_spread:.6f}"
+    )
+
+
+def test_mass_balance_freundlich_n2_c_fixed_gt_0_pre_filled_aquifer():
+    """Step 5c regression: c_fixed > 0 DSW mass balance at machine precision.
+
+    The canonical c_R > 0 scenario (pulse ``c_low → c_H → c_low``) cannot
+    test the DSW c_fixed > 0 closed form directly because the simulator
+    initializes the aquifer at c=0, and the 0→c_low fill-up shock at θ=0
+    merges with the leading pulse shock before any DSW could form (the
+    canonical_head dispatch check ``raref.c_tail == shock.c_right`` fails
+    when c_right has been "knocked down" to 0 by the merger).
+
+    Workaround: pre-fill the aquifer with c=c_low for long enough that the
+    fill-up shock exits before the pulse arrives (θ_fillup_exit ≈ 10200
+    for our params). Use a SHORT pulse (3 bins) so the trailing fan head
+    catches the leading shock INSIDE the domain, forming a DSW with
+    c_fixed = c_low > 0 (decay_side='left'). Then assert per-checkpoint
+    ``m_in = m_dom + m_out`` at machine precision.
+
+    Without the Step 5c V_tail/θ_tail clamps in ``integrate_fan_exact`` /
+    ``integrate_fan_spatial_exact``, the fan formula extrapolates past
+    the physical fan range and underestimates m_out / m_dom by 37–84% at
+    intermediate θ (per physics-math reviewer round 2 diagnosis).
+    """
+    sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+    v_outlet = 200.0
+    # Pre-fill: 150 bins at c=1 lets the 0→1 fillup shock exit (θ_exit ≈ 10200, at bin 102).
+    # Short 3-bin pulse so fan head catches shock at V≈120 (inside V_outlet=200).
+    n_bins = 1000
+    cin = np.full(n_bins, 1.0)
+    cin[150:153] = 4.0
+    flow = np.full(n_bins, 100.0)
+    tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="D")
+
+    tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
+    tr.run(max_iterations=100000)
+
+    # Verify a DSW with c_fixed > 0 actually formed.
+    dsws = [w for w in tr.state.waves if isinstance(w, DecayingShockWave) and w.c_fixed > 0.0]
+    assert len(dsws) == 1, f"expected exactly one DSW with c_fixed > 0; got {len(dsws)}"
+    assert dsws[0].decay_side == "left", f"expected decay_side='left'; got {dsws[0].decay_side!r}"
+    assert np.isclose(dsws[0].c_fixed, 1.0), f"expected c_fixed=1; got {dsws[0].c_fixed}"
+
+    # Per-checkpoint mass balance at machine precision. Sample θ past the
+    # fillup-exit (θ=10200) so the fillup transient doesn't perturb m_dom.
+    theta_max = float(tr.state.theta_edges[-1])
+    for frac in (0.25, 0.5, 0.75, 0.99):
+        theta = float(frac * theta_max)
+        m_in = compute_cumulative_inlet_mass(theta=theta, cin=cin, theta_edges=tr.state.theta_edges)
+        m_dom = compute_domain_mass(theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
+        m_out = compute_cumulative_outlet_mass(theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
+        err = abs((m_dom + m_out) - m_in)
+        # Empirical max abs_err = 3.6e-12 at frac=0.25 (per test-reviewer Q5);
+        # rtol=1e-14·m_in + atol=1e-11 covers the worst case with ~3× margin.
+        tol = 1e-14 * max(m_in, 1.0) + 1e-11
+        assert err <= tol, f"c_fixed>0 mass balance at θ={theta}: err={err:.6e} > tol={tol:.6e}"
+
+
+def test_integrate_fan_exact_c_apex_constant_region_freundlich_n2():
+    """Temporal fan integral: c_apex > 0 splits ``[θ_start, θ_end]`` at ``θ_tail``.
+
+    For Freundlich n=2 with c_apex=1, the fan c at v_outlet is bounded
+    below by c_apex; the formula extrapolates to c < c_apex past
+    ``θ_tail = θ_origin + (v_outlet − v_origin) · R(c_apex)``. The
+    integral should clamp at θ_tail and add c_apex·(θ_end − θ_tail) for
+    any θ_end > θ_tail.
+
+    Hand-derived: for sorption(k_f=0.01, ρ_b=1500, n_por=0.3, n=2),
+    R(c=1) = 1 + (ρ_b·k_f/(n_por·n))·c^(-1/2) = 1 + 25 = 26. So with
+    θ_origin=0, v_origin=0, v_outlet=10: θ_tail = 10·26 = 260. For
+    θ_end = 500 (well past θ_tail), the constant-region contribution
+    is c_apex · (500 − 260) = 1 · 240 = 240.
+    """
+    sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+    v_outlet = 10.0
+    theta_origin = 0.0
+    v_origin = 0.0
+    c_apex = 1.0
+
+    # R(c_apex)·(v_outlet - v_origin) = θ_tail offset from θ_origin.
+    r_c_apex = float(sorption.retardation(c_apex))
+    theta_tail = theta_origin + (v_outlet - v_origin) * r_c_apex
+    assert np.isclose(theta_tail, 260.0), f"hand-derived θ_tail check: {theta_tail}"
+
+    # Integration over [θ_origin, θ_tail]: pure fan portion (no constant region
+    # below θ_tail). Compared to scipy.quad over the closed-form fan integrand.
+    def c_fan(theta_val):
+        # c(θ) = [(R(c) - 1) / α]^(1/β) where R(c) = (θ-θ_origin)/(v_outlet-v_origin).
+        # For n=2: c = [(r-1) / α]^(1/(1/n-1)) = [(r-1)/α]^(-2). α = 25 here.
+        alpha = sorption.bulk_density * sorption.k_f / (sorption.porosity * sorption.n)
+        r = (theta_val - theta_origin) / (v_outlet - v_origin)
+        base = r - 1.0
+        if base <= 0:
+            return 0.0
+        # 1/β = 1/(1/n - 1) = 1/(-0.5) = -2 for n=2 → c = (base/α)^(-2)
+        return (base / alpha) ** (-2)
+
+    fan_only_quad, _ = scipy.integrate.quad(c_fan, 100.0, theta_tail, limit=200)
+    fan_only_closed = integrate_fan_exact(theta_origin, v_origin, v_outlet, 100.0, theta_tail, sorption, c_apex=c_apex)
+    assert np.isclose(fan_only_closed, fan_only_quad, rtol=1e-10), (
+        f"fan-only portion mismatch: closed={fan_only_closed}, quad={fan_only_quad}"
+    )
+
+    # Integration over [100, 500]: fan portion + constant c_apex region.
+    full_closed = integrate_fan_exact(theta_origin, v_origin, v_outlet, 100.0, 500.0, sorption, c_apex=c_apex)
+    expected_constant = c_apex * (500.0 - theta_tail)
+    assert np.isclose(full_closed - fan_only_closed, expected_constant, rtol=1e-14), (
+        f"constant-region contribution: full={full_closed}, fan={fan_only_closed}, "
+        f"diff={full_closed - fan_only_closed}, expected={expected_constant}"
+    )
+
+    # Sanity: c_apex=0 default reproduces the original behavior on the same range
+    # for [100, θ_tail] (where the fan formula is valid). For θ > θ_tail the
+    # c_apex=0 path gives c < c_apex (extrapolated, unphysical), so the default
+    # path agrees with the c_apex>0 path only up to θ_tail.
+    default_closed_fan_only = integrate_fan_exact(theta_origin, v_origin, v_outlet, 100.0, theta_tail, sorption)
+    assert np.isclose(default_closed_fan_only, fan_only_closed, rtol=1e-14)
+
+
+def test_integrate_fan_spatial_exact_c_apex_constant_region_freundlich_n2():
+    """Spatial fan integral: c_apex > 0 splits ``[v_start, v_end]`` at ``v_tail``.
+
+    Mirror of the temporal test. For Freundlich n=2 c_apex=1 at θ=500
+    with apex at (0, 0): u_tail = κ/R(c_apex) = 500/26 ≈ 19.23. For
+    v_end = 100 (well past u_tail), the [0, u_tail] segment contributes
+    C_total(c_apex) · u_tail = C_T(1) · 19.23 = 51 · 19.23 = 980.77.
+    """
+    sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+    theta = 500.0
+    theta_origin = 0.0
+    v_origin = 0.0
+    c_apex = 1.0
+    kappa = theta - theta_origin
+
+    r_c_apex = float(sorption.retardation(c_apex))
+    u_tail = kappa / r_c_apex
+    c_total_apex = float(sorption.total_concentration(c_apex))
+    expected_constant = c_total_apex * u_tail
+
+    # Below u_tail only: should equal C_T(c_apex) · u_tail (no fan portion).
+    below_tail = integrate_fan_spatial_exact(theta_origin, v_origin, 0.0, u_tail, theta, sorption, c_apex=c_apex)
+    assert np.isclose(below_tail, expected_constant, rtol=1e-14), (
+        f"[0, u_tail] constant region: got {below_tail}, expected {expected_constant}"
+    )
+
+    # Fan portion only ([u_tail, 50]): should match the c_apex=0 default since
+    # u_start is already at u_tail (no constant-region trigger inside).
+    fan_only_with_apex = integrate_fan_spatial_exact(
+        theta_origin, v_origin, u_tail, 50.0, theta, sorption, c_apex=c_apex
+    )
+    fan_only_default = integrate_fan_spatial_exact(theta_origin, v_origin, u_tail, 50.0, theta, sorption)
+    assert np.isclose(fan_only_with_apex, fan_only_default, rtol=1e-14), (
+        f"fan-only [u_tail, 50] should not depend on c_apex when u_start >= u_tail; "
+        f"got with_apex={fan_only_with_apex}, default={fan_only_default}"
+    )
+
+    # Full [0, 50]: constant region + fan region.
+    full = integrate_fan_spatial_exact(theta_origin, v_origin, 0.0, 50.0, theta, sorption, c_apex=c_apex)
+    assert np.isclose(full, expected_constant + fan_only_default, rtol=1e-14)
+
+    # u_end < u_tail (entirely inside the constant region). Catches a
+    # ``min(u_end, u_tail) - u_start`` → ``u_tail - u_start`` mutation that
+    # would otherwise be invisible when u_end ≥ u_tail.
+    half_u_tail = 0.5 * u_tail
+    partial = integrate_fan_spatial_exact(theta_origin, v_origin, 0.0, half_u_tail, theta, sorption, c_apex=c_apex)
+    expected_partial = c_total_apex * half_u_tail
+    assert np.isclose(partial, expected_partial, rtol=1e-14), (
+        f"[0, u_tail/2] constant region: got {partial}, expected {expected_partial}"
+    )
+
+    # Non-zero theta_origin (test-reviewer Gap 2): same hand-derivation translated
+    # by theta_origin. Catches a sign error or wrong subtraction on theta_origin
+    # that the theta_origin=0 cases above can't see.
+    theta_origin_shifted = 100.0
+    theta_shifted = theta + theta_origin_shifted  # preserve κ = theta - theta_origin = 500
+    u_tail_shifted = kappa / r_c_apex
+    full_shifted = integrate_fan_spatial_exact(
+        theta_origin_shifted, v_origin, 0.0, 50.0, theta_shifted, sorption, c_apex=c_apex
+    )
+    # κ is invariant under (theta, theta_origin) translation; integral matches the theta_origin=0 case.
+    assert np.isclose(full_shifted, full, rtol=1e-14), (
+        f"theta_origin>0 case (u_tail={u_tail_shifted}): got {full_shifted}, expected {full}"
+    )
+
+
+def test_integrate_rarefaction_exact_passes_c_tail_as_c_apex():
+    """The ``integrate_rarefaction_exact`` wrapper plumbs ``c_apex=raref.c_tail``.
+
+    Closes test-reviewer Gap 3: the wrapper at output.py:541 passes
+    ``c_apex=raref.c_tail`` to ``integrate_fan_exact``. A mutation that
+    silently drops the wiring (``c_apex=0.0``) would break c_tail>0 cases
+    end-to-end but is invisible to the existing canonical c_tail=0
+    rarefaction tests. This synthetic test exercises the wrapper directly.
+
+    For a Freundlich n=2 rarefaction with c_tail=1.0, c_head=4.0
+    spanning v=0 to v=v_outlet=10, the fan integral at v_outlet over
+    [θ_start, θ_end] with θ_end well past θ_tail must include the
+    constant c_tail contribution past θ_tail. Without the
+    ``c_apex=raref.c_tail`` wiring, the wrapper would extrapolate the
+    fan formula and underestimate the integral.
+    """
+    sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+    raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=4.0, c_tail=1.0, sorption=sorption)
+    v_outlet = 10.0
+
+    # θ_tail at v_outlet for c_tail=1: θ_tail = 0 + 10·R(1) = 10·26 = 260.
+    r_c_tail = float(sorption.retardation(raref.c_tail))
+    theta_tail_expected = raref.theta_start + (v_outlet - raref.v_start) * r_c_tail
+    assert np.isclose(theta_tail_expected, 260.0)
+
+    # Past θ_tail: wrapper must equal explicit-c_apex call. Diverges if c_apex
+    # wiring drops to 0.
+    wrapper_result = integrate_rarefaction_exact(raref, v_outlet, 100.0, 500.0, sorption)
+    explicit_result = integrate_fan_exact(
+        raref.theta_start, raref.v_start, v_outlet, 100.0, 500.0, sorption, c_apex=raref.c_tail
+    )
+    assert np.isclose(wrapper_result, explicit_result, rtol=1e-14), (
+        f"wrapper plumbing: got {wrapper_result}, expected {explicit_result}"
+    )
+
+    # And the wrapper must NOT equal the c_apex=0 default (which would mean the
+    # wiring was dropped). Empirical diff for these params is ≈ 117.55 = 240
+    # (constant c_apex·Δθ past θ_tail) minus the fan_integral over [θ_tail, 500]
+    # that the c_apex=0 path includes but the c_apex>0 path clamps away. Sign
+    # and order-of-magnitude check suffice to catch the wiring-drop mutation.
+    default_result = integrate_fan_exact(raref.theta_start, raref.v_start, v_outlet, 100.0, 500.0, sorption)
+    assert wrapper_result > default_result, (
+        f"wrapper without c_apex wiring would underestimate; got wrapper={wrapper_result}, default={default_result}"
+    )
+    assert wrapper_result - default_result > 100.0, (
+        f"wrapper-vs-default diff too small to confirm c_apex wiring; got {wrapper_result - default_result}"
     )

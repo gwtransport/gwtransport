@@ -538,7 +538,9 @@ def integrate_rarefaction_exact(
     integral : float
         ``∫ c(θ) dθ`` [mass — i.e. concentration × volume].
     """
-    return integrate_fan_exact(raref.theta_start, raref.v_start, v_outlet, theta_start, theta_end, sorption)
+    return integrate_fan_exact(
+        raref.theta_start, raref.v_start, v_outlet, theta_start, theta_end, sorption, c_apex=raref.c_tail
+    )
 
 
 def integrate_fan_exact(
@@ -548,6 +550,7 @@ def integrate_fan_exact(
     theta_start: float,
     theta_end: float,
     sorption: SorptionModel,
+    c_apex: float = 0.0,
 ) -> float:
     """Exact θ-integral ``∫ c(θ) dθ`` for any self-similar fan at the outlet.
 
@@ -566,6 +569,15 @@ def integrate_fan_exact(
         ``+np.inf``; ``theta_start`` must be finite.
     sorption : SorptionModel
         Sorption model (``FreundlichSorption`` or ``LangmuirSorption``).
+    c_apex : float, optional
+        Concentration on the constant side at the fan apex. For
+        ``RarefactionWave`` this is ``raref.c_tail``; for
+        ``DecayingShockWave`` (decay_side='left') this is ``wave.c_fixed``.
+        For ``c_apex > 0`` the fan formula extrapolates past the physical
+        fan range; the integration is clamped at ``θ_tail`` (where
+        ``c(θ_tail) = c_apex``) and the constant-c_apex region beyond
+        contributes ``c_apex · (theta_end − θ_tail)``. Default 0.0
+        preserves the c=0 apex behavior for canonical c_R=0 fans.
 
     Returns
     -------
@@ -578,8 +590,16 @@ def integrate_fan_exact(
         If the sorption model does not support exact fan integration.
     """
     if isinstance(sorption, FreundlichSorption):
-        return _integrate_fan_exact_freundlich(theta_origin, v_origin, v_outlet, theta_start, theta_end, sorption)
+        return _integrate_fan_exact_freundlich(
+            theta_origin, v_origin, v_outlet, theta_start, theta_end, sorption, c_apex
+        )
     if isinstance(sorption, LangmuirSorption):
+        if c_apex > 0.0:
+            # Langmuir DSW c_fixed>0 is not currently constructible (handlers.py only
+            # creates Langmuir DSW with c_fixed=0). Defensive guard so a future caller
+            # bypassing the constructor doesn't silently get a wrong answer.
+            msg = f"integrate_fan_exact: c_apex > 0 not supported for Langmuir (got {c_apex})"
+            raise NotImplementedError(msg)
         return _integrate_fan_exact_langmuir(theta_origin, v_origin, v_outlet, theta_start, theta_end, sorption)
     msg = f"Exact fan integration not supported for {type(sorption).__name__}"
     raise TypeError(msg)
@@ -592,6 +612,7 @@ def _integrate_fan_exact_freundlich(
     theta_start: float,
     theta_end: float,
     sorption: FreundlichSorption,
+    c_apex: float = 0.0,
 ) -> float:
     """Exact θ-integral ``∫ c(θ) dθ`` for a Freundlich fan with given apex.
 
@@ -612,6 +633,12 @@ def _integrate_fan_exact_freundlich(
     ``mass_after_outlet_arrival`` / ``compute_total_outlet_mass`` level, not
     here — see those functions for the dispatch.
 
+    When ``c_apex > 0`` the fan formula extrapolates to ``c < c_apex`` for
+    ``θ > θ_tail = θ_origin + (v_outlet - v_origin) · R(c_apex)``; the
+    integration is split into the fan portion ``[θ_start, min(θ_end, θ_tail)]``
+    via the antiderivative, plus a constant-c_apex contribution
+    ``c_apex · (θ_end - θ_tail)`` for any ``θ_end > θ_tail``.
+
     Raises
     ------
     ValueError
@@ -630,6 +657,16 @@ def _integrate_fan_exact_freundlich(
     exponent = 1.0 / beta + 1.0
     coeff = 1.0 / (alpha ** (1.0 / beta) * kappa_theta * exponent)
 
+    # Clamp the upper bound at θ_tail where the fan c(θ) reaches c_apex; beyond
+    # θ_tail the formula is unphysical (gives c < c_apex). The constant-c_apex
+    # region's contribution is added back at the bottom.
+    if c_apex > 0.0:
+        theta_tail = theta_origin + (v_outlet - v_origin) * float(sorption.retardation(c_apex))
+        theta_end_fan = min(theta_end, theta_tail)
+    else:
+        theta_tail = float("inf")
+        theta_end_fan = theta_end
+
     def antiderivative(theta: float) -> float:
         if np.isinf(theta):
             if theta > 0:
@@ -644,7 +681,9 @@ def _integrate_fan_exact_freundlich(
             return 0.0
         return coeff * base**exponent
 
-    return antiderivative(theta_end) - antiderivative(theta_start)
+    fan_integral = antiderivative(theta_end_fan) - antiderivative(theta_start)
+    constant_contrib = c_apex * max(theta_end - theta_tail, 0.0) if c_apex > 0.0 else 0.0
+    return fan_integral + constant_contrib
 
 
 def _integrate_fan_exact_langmuir(
@@ -790,6 +829,7 @@ def compute_bin_averaged_concentration_exact(
                     seg_theta_start,
                     seg_theta_end,
                     sorption,
+                    c_apex=decaying.c_fixed,
                 )
             else:
                 msg = f"Unknown segment type: {seg['type']}"
@@ -933,6 +973,7 @@ def compute_domain_mass(
                 v_end,
                 theta,
                 sorption,
+                c_apex=decaying_wave.c_fixed,
             )
         else:
             # Constant region: c at midpoint is exact for the segment.
@@ -981,7 +1022,9 @@ def _integrate_rarefaction_spatial_exact(
         c_total = sorption.total_concentration(c)
         return c_total * (v_end - v_start)
 
-    return integrate_fan_spatial_exact(raref.theta_start, raref.v_start, v_start, v_end, theta, sorption)
+    return integrate_fan_spatial_exact(
+        raref.theta_start, raref.v_start, v_start, v_end, theta, sorption, c_apex=raref.c_tail
+    )
 
 
 def integrate_fan_spatial_exact(
@@ -991,6 +1034,7 @@ def integrate_fan_spatial_exact(
     v_end: float,
     theta: float,
     sorption: SorptionModel,
+    c_apex: float = 0.0,
 ) -> float:
     """Exact spatial integral ``∫ C_total(v, θ) dv`` for any self-similar fan.
 
@@ -1014,6 +1058,15 @@ def integrate_fan_spatial_exact(
         Cumulative flow at which to evaluate [m³].
     sorption : SorptionModel
         Sorption model (``FreundlichSorption`` or ``LangmuirSorption``).
+    c_apex : float, optional
+        Concentration on the constant side at the fan apex (typically the
+        parent rarefaction's ``c_tail`` or the DSW's ``c_fixed`` for
+        ``decay_side='left'``). For ``c_apex > 0`` the fan formula is
+        unphysical for ``u < u_tail = kappa / R(c_apex)``; the integration
+        is split into a constant-C_total(c_apex) region for
+        ``u ∈ [u_start, u_tail]`` plus the fan integral for
+        ``u ∈ [u_tail, u_end]``. Default 0.0 preserves the c=0 apex
+        behavior for canonical c_R=0 rarefactions.
 
     Returns
     -------
@@ -1041,11 +1094,26 @@ def integrate_fan_spatial_exact(
     if u_start < 0:
         u_start = 0.0
 
+    # Split off the constant-c_apex region near the apex for c_apex > 0.
+    # The fan formula is only valid for u ≥ u_tail = kappa / R(c_apex);
+    # below u_tail, c is clamped to c_apex (the parent's tail / DSW's fixed
+    # concentration). Spatial counterpart of the temporal θ_tail clamp in
+    # _integrate_fan_exact_freundlich.
+    constant_contrib = 0.0
+    if c_apex > 0.0:
+        u_tail = kappa / float(sorption.retardation(c_apex))
+        if u_start < u_tail:
+            c_total_apex = float(sorption.total_concentration(c_apex))
+            constant_contrib = c_total_apex * (min(u_end, u_tail) - u_start)
+            u_start = u_tail
+        if u_end <= u_start:
+            return constant_contrib
+
     if isinstance(sorption, LangmuirSorption):
-        return _integrate_rarefaction_spatial_langmuir(sorption, kappa, u_start, u_end)
+        return constant_contrib + _integrate_rarefaction_spatial_langmuir(sorption, kappa, u_start, u_end)
 
     if isinstance(sorption, FreundlichSorption):
-        return _integrate_rarefaction_spatial_freundlich(sorption, kappa, u_start, u_end)
+        return constant_contrib + _integrate_rarefaction_spatial_freundlich(sorption, kappa, u_start, u_end)
 
     msg = f"Exact spatial fan integration not supported for {type(sorption).__name__}"
     raise TypeError(msg)
@@ -1302,6 +1370,7 @@ def compute_cumulative_outlet_mass(
                 seg_theta_start,
                 seg_theta_end,
                 sorption,
+                c_apex=decaying.c_fixed,
             )
 
     return float(total_mass)
