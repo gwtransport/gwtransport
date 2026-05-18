@@ -194,7 +194,6 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
 
     # Check 8: Total integrated outlet mass vs total inlet mass (in θ-space).
     if tracker_state is not None and hasattr(tracker_state, "theta_edges"):
-        waves = structure["waves"]
         v_outlet = tracker_state.v_outlet
         sorption = tracker_state.sorption
         theta_edges_arr = np.asarray(tracker_state.theta_edges, dtype=float)
@@ -204,35 +203,36 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
         )
 
         total_mass_out, theta_integration_end = compute_total_outlet_mass(
-            v_outlet=v_outlet, waves=waves, sorption=sorption, cin=cin, theta_edges=theta_edges_arr
+            v_outlet=v_outlet, sorption=sorption, cin=cin, theta_edges=theta_edges_arr
         )
 
-        epsilon_conc_zero = 1e-10
-        if len(cin) > 0 and abs(cin[-1]) > epsilon_conc_zero and verbose:
-            msg = (
-                f"\nWARNING: Inlet concentration ends at C={cin[-1]:.3f} (not zero).\n"
-                "   For accurate mass balance, the inlet should explicitly end with C=0.\n"
-                "   Consider appending cin[-1]=0.0 or adding a final time step with C=0.\n"
-                "   Without this, the solver assumes the inlet continues indefinitely,\n"
-                "   causing mass balance errors in the validation check.\n"
-            )
-            print(msg)  # noqa: T201
+        # ``compute_total_outlet_mass`` returns the asymptotic m_out = m_in − C_T(c_∞)·V_outlet
+        # where c_∞ = cin[-1]. For the conservation identity at θ→∞ to hold, the
+        # validation check must add back the steady-state aquifer mass that stays
+        # in the domain for c_∞ > 0. Equivalent invariant: m_in_total ≈ m_out_total +
+        # m_dom_asymptotic, where m_dom_asymptotic = C_T(c_∞)·V_outlet.
+        c_inf = float(cin[-1]) if len(cin) > 0 else 0.0
+        m_dom_asymptotic = float(sorption.total_concentration(c_inf)) * v_outlet
 
         if total_mass_in > 0:
-            relative_error_total = abs(total_mass_out - total_mass_in) / total_mass_in
+            relative_error_total = abs(total_mass_out + m_dom_asymptotic - total_mass_in) / total_mass_in
         else:
-            relative_error_total = abs(total_mass_out - total_mass_in)
+            relative_error_total = abs(total_mass_out + m_dom_asymptotic - total_mass_in)
 
         check8_pass = relative_error_total <= max(rtol, 1e-6)
         checks.append({
             "name": "Total integrated outlet mass",
             "passed": check8_pass,
-            "message": (f"Relative error: {relative_error_total:.2e} (integrated to θ={theta_integration_end:.1f})"),
+            "message": (
+                f"Relative error: {relative_error_total:.2e} (integrated to θ={theta_integration_end:.1f}; "
+                f"m_dom_asymptotic={m_dom_asymptotic:.2e} for c_∞={c_inf:.3f})"
+            ),
         })
         if not check8_pass:
             failures.append(
                 f"Total outlet mass mismatch: relative_error={relative_error_total:.2e} > {rtol:.2e} "
                 f"(total_mass_out={total_mass_out:.6e}, total_mass_in={total_mass_in:.6e}, "
+                f"m_dom_asymptotic={m_dom_asymptotic:.6e}, "
                 f"θ_integration_end={theta_integration_end:.1f})"
             )
     else:

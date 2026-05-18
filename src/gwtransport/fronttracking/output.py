@@ -8,13 +8,16 @@ Functions
 ---------
 concentration_at_point(v, theta, waves, sorption)
 compute_breakthrough_curve(theta_array, v_outlet, waves, sorption)
-compute_bin_averaged_concentration_exact(theta_bin_edges, v_outlet, waves, sorption)
+compute_bin_averaged_concentration_exact(theta_bin_edges, v_outlet, waves, sorption, *, cin=None, theta_edges_inlet=None)
 compute_domain_mass(theta, v_outlet, waves, sorption)
 compute_cumulative_inlet_mass(theta, cin, theta_edges)
-compute_cumulative_outlet_mass(theta, v_outlet, waves, sorption)
-find_last_rarefaction_start_theta(v_outlet, waves)
-integrate_rarefaction_total_mass(raref, v_outlet, theta_start, sorption)
-compute_total_outlet_mass(v_outlet, waves, sorption) -> (mass, theta_integration_end)
+compute_cumulative_outlet_mass(theta, v_outlet, waves, sorption, *, cin, theta_edges)
+compute_total_outlet_mass(v_outlet, sorption, *, cin, theta_edges) -> (mass, theta_integration_end)
+
+Step 5b note: outlet-mass functions use the PDE conservation identity
+``m_out(θ) = m_in(θ) − m_dom(θ)`` (Bear & Cheng 2010, §3.5). m_dom honors
+historical wave activity via ``wave.was_active_at(theta)`` so retrospective
+queries at θ before a collision event correctly attribute c at v_outlet.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -908,7 +911,11 @@ def compute_domain_mass(
     wave_positions = []
 
     for wave in waves:
-        if not wave.is_active:
+        # Use was_active_at(theta) — not is_active — so historical wave geometries
+        # contribute to retrospective m_dom queries. Without this, a wave deactivated
+        # by a later collision event is skipped here, which propagates as a "cin echo
+        # at the outlet" bug (m_out = m_in − 0 instead of m_in − m_dom_correct).
+        if not wave.was_active_at(theta):
             continue
 
         if isinstance(wave, (CharacteristicWave, ShockWave)):
@@ -931,13 +938,6 @@ def compute_domain_mass(
                 wave_positions.append(v_pos)
             if 0 <= wave.v_origin <= v_outlet:
                 wave_positions.append(wave.v_origin)
-            # Step 5b: For multi-DSW exclusion, the V_apex of any NEWER DSW
-            # is a boundary of this DSW's effective coverage (per the
-            # [V_apex_W2, V_s_W1] exclusion rule). Inserting newer apex
-            # positions ensures the owner-selection loop sees consistent
-            # midpoint dispatch in [V_apex_W2, V_s_W1] vs [0, V_apex_W2].
-            # (For canonical multi-pulse all share V_apex=0, so this is a
-            # no-op; included for non-canonical apex configurations.)
 
     # Add domain boundaries
     wave_positions.extend([0.0, v_outlet])
@@ -962,20 +962,19 @@ def compute_domain_mass(
         # DecayingShockWave (the latter via the parameterised
         # ``integrate_fan_spatial_exact``).
         #
-        # Multi-fan dispatch (Step 5b): when multiple DSWs nominally contain
-        # v_mid, the NEWER one (later ``theta_start``) wins, with an extended
-        # exclusion rule: for any newer DSW W₂, an older DSW W₁'s fan does NOT
-        # cover v_mid if v_mid ∈ [V_apex_W₂, V_s_W₁]. This subsumes both the
-        # inter-shock gap (v_mid between V_s_W₂ and V_s_W₁) AND the
-        # post-W₂-arrival regime (v_mid left of both shocks). Same priority
-        # applies among rarefactions (newest by theta_start wins).
+        # Multi-fan dispatch: when multiple DSWs (or rarefactions) nominally
+        # contain v_mid, the NEWER one (later ``theta_start``) wins. The
+        # planned exclusion rule v_mid ∈ [V_apex_W₂, V_s_W₁] (round-2 plan
+        # review) is structurally equivalent to "newest wins" given the
+        # iterate-newest-first sort — verified by code-opt impl review —
+        # so the explicit exclusion loop has been collapsed.
         v_mid = 0.5 * (v_start + v_end)
         raref_wave: RarefactionWave | None = None
         decaying_wave: DecayingShockWave | None = None
 
         dsw_candidates: list[DecayingShockWave] = []
         for wave in waves:
-            if not wave.is_active:
+            if not wave.was_active_at(theta):
                 continue
             if isinstance(wave, DecayingShockWave):
                 v_s = wave.position_at_theta(theta)
@@ -988,36 +987,16 @@ def compute_domain_mass(
                     dsw_candidates.append(wave)
 
         if dsw_candidates:
-            # Sort by theta_start descending — newest first.
-            dsw_candidates.sort(key=lambda w: -w.theta_start)
-            for candidate in dsw_candidates:
-                # Extended exclusion rule for decay_side='left': v_mid ∈
-                # [V_apex_W2, V_s_W1] for any newer W₂ → W₁ is shielded.
-                if candidate.decay_side == "left":
-                    v_s_candidate = candidate.position_at_theta(theta)
-                    excluded = False
-                    for other in dsw_candidates:
-                        if other is candidate or other.decay_side != "left":
-                            continue
-                        if other.theta_start <= candidate.theta_start:
-                            continue
-                        if other.v_origin <= v_mid <= v_s_candidate:
-                            excluded = True
-                            break
-                    if excluded:
-                        continue
-                decaying_wave = candidate
-                break
+            decaying_wave = max(dsw_candidates, key=lambda w: w.theta_start)
 
         if decaying_wave is None:
             raref_candidates = [
                 wave
                 for wave in waves
-                if wave.is_active and isinstance(wave, RarefactionWave) and wave.contains_point(v_mid, theta)
+                if wave.was_active_at(theta) and isinstance(wave, RarefactionWave) and wave.contains_point(v_mid, theta)
             ]
             if raref_candidates:
-                raref_candidates.sort(key=lambda w: -w.theta_start)
-                raref_wave = raref_candidates[0]
+                raref_wave = max(raref_candidates, key=lambda w: w.theta_start)
 
         if raref_wave is not None:
             mass_segment = _integrate_rarefaction_spatial_exact(raref_wave, v_start, v_end, theta, sorption)
@@ -1311,43 +1290,6 @@ def compute_cumulative_inlet_mass(
     return float(np.sum(np.asarray(cin, dtype=float) * widths))
 
 
-def find_last_rarefaction_start_theta(
-    v_outlet: float,
-    waves: Sequence[Wave],
-) -> float:
-    """Return the θ at which the last active wave reaches ``v_outlet``.
-
-    Uses the rarefaction's head speed for linear waves; for
-    :class:`DecayingShockWave` uses the closed-form ``outlet_crossing_theta``
-    since V_s(θ) is nonlinear in θ.
-
-    Returns
-    -------
-    float
-        Latest θ at which any active wave reaches v_outlet; 0.0 if none do.
-    """
-    theta_last = 0.0
-    for wave in waves:
-        if not wave.is_active:
-            continue
-        if isinstance(wave, DecayingShockWave):
-            theta_cross = wave.outlet_crossing_theta(v_outlet)
-            if theta_cross is not None:
-                theta_last = max(theta_last, theta_cross)
-            continue
-        if isinstance(wave, RarefactionWave):
-            speed = wave.head_speed()
-        elif isinstance(wave, ShockWave):
-            speed = wave.speed
-        elif isinstance(wave, CharacteristicWave):
-            speed = wave.speed()
-        else:
-            continue
-        if speed > EPSILON_VELOCITY:
-            theta_last = max(theta_last, wave.theta_start + (v_outlet - wave.v_start) / speed)
-    return theta_last
-
-
 def compute_cumulative_outlet_mass(
     theta: float,
     v_outlet: float,
@@ -1411,52 +1353,8 @@ def compute_cumulative_outlet_mass(
     return m_in - m_dom
 
 
-def integrate_rarefaction_total_mass(
-    raref: RarefactionWave,
-    v_outlet: float,
-    theta_start: float,
-    sorption: SorptionModel,
-) -> float:
-    """Total mass exiting through a rarefaction at the outlet (in (V, θ)).
-
-    Mass equals ``∫ c(θ) dθ`` from ``theta_start`` (rarefaction-head outlet
-    crossing) to either ``θ=+∞`` (if c_tail ≈ 0) or the θ at which the tail
-    crosses the outlet.
-
-    Parameters
-    ----------
-    raref : RarefactionWave
-        Rarefaction wave.
-    v_outlet : float
-        Outlet position [m³].
-    theta_start : float
-        Cumulative flow at which the rarefaction head reaches the outlet [m³].
-    sorption : SorptionModel
-        Sorption model.
-
-    Returns
-    -------
-    total_mass : float
-        Total mass that exits through rarefaction [mass].
-    """
-    if isinstance(sorption, ConstantRetardation):
-        return 0.0
-
-    if raref.c_tail < EPSILON_CONCENTRATION:
-        theta_end = np.inf
-    else:
-        tail_speed = raref.tail_speed()
-        if tail_speed < EPSILON_VELOCITY:
-            theta_end = np.inf
-        else:
-            theta_end = raref.theta_start + (v_outlet - raref.v_start) / tail_speed
-
-    return integrate_rarefaction_exact(raref, v_outlet, theta_start, theta_end, sorption)
-
-
 def compute_total_outlet_mass(
     v_outlet: float,
-    waves: Sequence[Wave],
     sorption: SorptionModel,
     *,
     cin: npt.ArrayLike,
@@ -1475,18 +1373,14 @@ def compute_total_outlet_mass(
       stays in the domain at steady state; the rest exits.
 
     Sidesteps the multi-fan dispatch problem entirely — the integration is
-    purely a closed-form arithmetic over (cin, theta_edges) plus one
-    ``sorption.total_concentration`` evaluation.
+    purely closed-form arithmetic over (cin, theta_edges) plus one
+    ``sorption.total_concentration`` evaluation. The wave list is not
+    needed.
 
     Parameters
     ----------
     v_outlet : float
         Outlet position [m³].
-    waves : list of Wave
-        Wave list (kept for signature parity; the conservation form derives
-        the asymptotic mass from cin alone, but compute_domain_mass is still
-        needed by callers that want finite-θ outlet mass — see
-        :func:`compute_cumulative_outlet_mass`).
     sorption : SorptionModel
         Sorption model — used only for ``C_T(c_∞)``.
     cin : array-like (kw-only)
@@ -1512,8 +1406,4 @@ def compute_total_outlet_mass(
     m_in_total = float(np.sum(cin_arr * np.diff(te)))
     c_inf = float(cin_arr[-1]) if cin_arr.size > 0 else 0.0
     m_dom_asymptotic = float(sorption.total_concentration(c_inf)) * v_outlet
-    # `waves` is kept in the signature for parity with compute_cumulative_outlet_mass
-    # (legacy callers pass it); the asymptotic conservation form only needs
-    # cin, theta_edges, and c_∞.
-    del waves
     return m_in_total - m_dom_asymptotic, float(te[-1])

@@ -80,8 +80,8 @@ def handle_characteristic_collision(
         )
         raise RuntimeError(msg)
 
-    char1.is_active = False
-    char2.is_active = False
+    char1.deactivate(theta_event)
+    char2.deactivate(theta_event)
     return [shock]
 
 
@@ -136,8 +136,8 @@ def handle_shock_collision(
         )
         raise RuntimeError(msg)
 
-    shock1.is_active = False
-    shock2.is_active = False
+    shock1.deactivate(theta_event)
+    shock2.deactivate(theta_event)
 
     return [merged]
 
@@ -199,17 +199,17 @@ def handle_shock_characteristic_collision(
                 c_tail=c_tail,
                 sorption=shock.sorption,
             )
-            shock.is_active = False
-            char.is_active = False
+            shock.deactivate(theta_event)
+            char.deactivate(theta_event)
             return [raref]
         # Edge case (s_head == s_tail within machine precision): deactivate
         # and emit nothing.
-        shock.is_active = False
-        char.is_active = False
+        shock.deactivate(theta_event)
+        char.deactivate(theta_event)
         return []
 
-    shock.is_active = False
-    char.is_active = False
+    shock.deactivate(theta_event)
+    char.deactivate(theta_event)
     return [new_shock]
 
 
@@ -260,8 +260,8 @@ def handle_shock_rarefaction_collision(
         # impossible in a real run), deactivate both and emit nothing.
         s_raref_head = characteristic_speed(raref.c_head, raref.sorption)
         if s_raref_head <= shock.speed:
-            shock.is_active = False
-            raref.is_active = False
+            shock.deactivate(theta_event)
+            raref.deactivate(theta_event)
             return []
         assert isinstance(sorption, (FreundlichSorption, LangmuirSorption))  # noqa: S101
         try:
@@ -280,8 +280,8 @@ def handle_shock_rarefaction_collision(
             # Fall through to Phase-1 overlay below; step 5+ extends coverage.
             pass
         else:
-            shock.is_active = False
-            raref.is_active = False
+            shock.deactivate(theta_event)
+            raref.deactivate(theta_event)
             return [decaying]
 
     if is_canonical_tail and is_freundlich_unfavorable:
@@ -290,8 +290,8 @@ def handle_shock_rarefaction_collision(
         # shock.c_left.
         s_raref_tail = characteristic_speed(raref.c_tail, raref.sorption)
         if shock.speed <= s_raref_tail:
-            shock.is_active = False
-            raref.is_active = False
+            shock.deactivate(theta_event)
+            raref.deactivate(theta_event)
             return []
         assert isinstance(sorption, FreundlichSorption)  # noqa: S101
         try:
@@ -308,8 +308,8 @@ def handle_shock_rarefaction_collision(
         except NotImplementedError:
             pass
         else:
-            shock.is_active = False
-            raref.is_active = False
+            shock.deactivate(theta_event)
+            raref.deactivate(theta_event)
             return [decaying]
 
     # Non-canonical (multi-pulse corner cases) — fall back to Phase-1 overlay.
@@ -325,8 +325,8 @@ def handle_shock_rarefaction_collision(
                 sorption=shock.sorption,
             )
             if new_shock.satisfies_entropy():
-                raref.is_active = False
-                shock.is_active = False
+                raref.deactivate(theta_event)
+                shock.deactivate(theta_event)
                 return [new_shock]
             return []
 
@@ -339,8 +339,8 @@ def handle_shock_rarefaction_collision(
         )
 
         if not new_shock.satisfies_entropy():
-            raref.is_active = False
-            shock.is_active = False
+            raref.deactivate(theta_event)
+            shock.deactivate(theta_event)
             return []
 
         c_new_tail = raref_c_at_collision
@@ -356,11 +356,11 @@ def handle_shock_rarefaction_collision(
                 c_tail=c_new_tail,
                 sorption=raref.sorption,
             )
-            shock.is_active = False
-            raref.is_active = False
+            shock.deactivate(theta_event)
+            raref.deactivate(theta_event)
             return [new_shock, modified_raref]
-        shock.is_active = False
-        raref.is_active = False
+        shock.deactivate(theta_event)
+        raref.deactivate(theta_event)
         return [new_shock]
 
     # Non-canonical head branch fallback (Phase-1 overlay behavior preserved).
@@ -383,11 +383,11 @@ def handle_shock_rarefaction_collision(
         )
 
         if new_shock.satisfies_entropy():
-            shock.is_active = False
+            shock.deactivate(theta_event)
             return [new_shock]
 
-    shock.is_active = False
-    raref.is_active = False
+    shock.deactivate(theta_event)
+    raref.deactivate(theta_event)
     return []
 
 
@@ -436,7 +436,7 @@ def handle_rarefaction_characteristic_collision(
         )
         raise RuntimeError(msg)
 
-    char.is_active = False
+    char.deactivate(theta_event)
     return []
 
 

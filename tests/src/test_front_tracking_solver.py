@@ -777,7 +777,6 @@ class TestRiemannProblems:
 
         mass_out, _theta_end = compute_total_outlet_mass(
             v_outlet=v_pore,
-            waves=tracker.state.waves,
             sorption=freundlich_sorption,
             cin=cin,
             theta_edges=tracker.state.theta_edges,
@@ -808,7 +807,6 @@ class TestRiemannProblems:
         mass_in = float(np.sum(cin * np.diff(tracker.state.theta_edges)))
         mass_out, _ = compute_total_outlet_mass(
             v_outlet=v_pore,
-            waves=tracker.state.waves,
             sorption=sorption,
             cin=cin,
             theta_edges=tracker.state.theta_edges,
@@ -958,7 +956,6 @@ class TestParametricMassBalance:
         mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
         mass_out, _ = compute_total_outlet_mass(
             v_outlet=v_outlet,
-            waves=tr.state.waves,
             sorption=sorption,
             cin=cin,
             theta_edges=tr.state.theta_edges,
@@ -1015,7 +1012,6 @@ class TestParametricMassBalance:
         mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
         mass_out, _ = compute_total_outlet_mass(
             v_outlet=v_outlet,
-            waves=tr.state.waves,
             sorption=freundlich_sorption,
             cin=cin,
             theta_edges=tr.state.theta_edges,
@@ -1044,7 +1040,6 @@ class TestParametricMassBalance:
         mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
         mass_out, _ = compute_total_outlet_mass(
             v_outlet=v_outlet,
-            waves=tr.state.waves,
             sorption=freundlich_sorption,
             cin=cin,
             theta_edges=tr.state.theta_edges,

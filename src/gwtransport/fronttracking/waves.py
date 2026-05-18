@@ -56,7 +56,47 @@ class Wave(ABC):
     v_start: float
     """Position at which the wave forms [m³]."""
     is_active: bool = field(default=True, kw_only=True)
-    """Whether wave is currently active."""
+    """Whether wave is currently active (in the solver's event-loop sense)."""
+    theta_deactivation: float = field(default=float("inf"), kw_only=True)
+    """Cumulative flow at which the wave was deactivated (default ``+∞``).
+
+    Historical record set by collision handlers when a wave is replaced
+    (e.g., a parent rarefaction superseded by a ``DecayingShockWave``).
+    ``is_active = False`` is the "current state" flag the solver uses for
+    its event loop; ``theta_deactivation`` is the moment in θ-history when
+    the wave stopped contributing. Retrospective queries (any θ in the
+    past) must use ``was_active_at(theta)`` instead of ``is_active`` so
+    that ``compute_domain_mass`` etc. correctly attribute c at v_outlet
+    during the wave's lifetime even after later events have deactivated
+    the wave.
+    """
+
+    def was_active_at(self, theta: float) -> bool:
+        """Whether the wave was active at cumulative flow ``theta`` (geometric truth).
+
+        Returns ``True`` for ``theta_start <= theta < theta_deactivation``.
+        Use this for retrospective queries — ``is_active`` reflects only
+        the wave's *current* (post-simulation) state and is wrong for
+        ``compute_domain_mass`` etc. at θ before any deactivation event.
+
+        A wave constructed with ``is_active=False`` but no recorded
+        ``theta_deactivation`` (default ``+∞``) is treated as never-active —
+        e.g., synthetic test fixtures that want the wave excluded from
+        dispatch entirely.
+        """
+        if not self.is_active and self.theta_deactivation == float("inf"):
+            return False
+        return self.theta_start <= theta < self.theta_deactivation
+
+    def deactivate(self, theta: float) -> None:
+        """Mark the wave inactive at cumulative flow ``theta`` (collision handler API).
+
+        Sets both ``is_active = False`` (solver event-loop flag) and
+        ``theta_deactivation = theta`` (historical record for retrospective
+        ``was_active_at`` queries).
+        """
+        self.is_active = False
+        self.theta_deactivation = theta
 
     @abstractmethod
     def position_at_theta(self, theta: float) -> float | None:
@@ -70,7 +110,10 @@ class Wave(ABC):
         Returns
         -------
         position : float or None
-            Position [m³], or None if θ < θ_start or the wave is inactive.
+            Position [m³], or None if θ < θ_start or θ >= theta_deactivation.
+            (Past-θ queries respect the wave's historical lifetime; current-state
+            queries before deactivation behave identically to the ``is_active``
+            check.)
         """
 
     @abstractmethod
@@ -141,7 +184,7 @@ class CharacteristicWave(Wave):
 
         ``V(θ) = v_start + speed * (θ - θ_start)``.
         """
-        if theta < self.theta_start or not self.is_active:
+        if theta < self.theta_start or theta >= self.theta_deactivation:
             return None
         return self.v_start + self.speed() * (theta - self.theta_start)
 
@@ -225,7 +268,7 @@ class ShockWave(Wave):
 
     def position_at_theta(self, theta: float) -> float | None:
         """Position at cumulative flow θ. Shock propagates linearly in θ."""
-        if theta < self.theta_start or not self.is_active:
+        if theta < self.theta_start or theta >= self.theta_deactivation:
             return None
         return self.v_start + self.speed * (theta - self.theta_start)
 
@@ -340,13 +383,13 @@ class RarefactionWave(Wave):
 
     def head_position_at_theta(self, theta: float) -> float | None:
         """Position of rarefaction head at cumulative flow θ."""
-        if theta < self.theta_start or not self.is_active:
+        if theta < self.theta_start or theta >= self.theta_deactivation:
             return None
         return self.v_start + self.head_speed() * (theta - self.theta_start)
 
     def tail_position_at_theta(self, theta: float) -> float | None:
         """Position of rarefaction tail at cumulative flow θ."""
-        if theta < self.theta_start or not self.is_active:
+        if theta < self.theta_start or theta >= self.theta_deactivation:
             return None
         return self.v_start + self.tail_speed() * (theta - self.theta_start)
 
@@ -356,7 +399,7 @@ class RarefactionWave(Wave):
 
     def contains_point(self, v: float, theta: float) -> bool:
         """Return ``True`` if ``(v, θ)`` lies between the fan's tail and head."""
-        if theta <= self.theta_start or not self.is_active:
+        if theta <= self.theta_start or theta >= self.theta_deactivation:
             return False
 
         v_head = self.head_position_at_theta(theta)
@@ -566,7 +609,7 @@ class DecayingShockWave(Wave):
 
         Returns ``None`` for ``θ < theta_start`` or when the wave is inactive.
         """
-        if theta < self.theta_start or not self.is_active:
+        if theta < self.theta_start or theta >= self.theta_deactivation:
             return None
 
         theta_local = theta - self.theta_origin
@@ -591,7 +634,7 @@ class DecayingShockWave(Wave):
 
         Returns ``None`` for ``θ < theta_start`` or when inactive.
         """
-        if theta < self.theta_start or not self.is_active:
+        if theta < self.theta_start or theta >= self.theta_deactivation:
             return None
 
         c_d = self.c_decay_at_theta(theta)
@@ -729,7 +772,7 @@ class DecayingShockWave(Wave):
 
         Returns ``None`` for ``θ < theta_start`` or inactive waves.
         """
-        if theta < self.theta_start or not self.is_active:
+        if theta < self.theta_start or theta >= self.theta_deactivation:
             return None
 
         v_s = self.position_at_theta(theta)

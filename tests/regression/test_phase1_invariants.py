@@ -344,7 +344,6 @@ def test_mass_balance_freundlich_nhalf_mirror_canonical_pulse():
     mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
     mass_out, _ = compute_total_outlet_mass(
         v_outlet=v_outlet,
-        waves=tr.state.waves,
         sorption=sorption,
         cin=cin,
         theta_edges=tr.state.theta_edges,
@@ -380,7 +379,6 @@ def test_mass_balance_freundlich_n2_multipulse():
     mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
     mass_out, _ = compute_total_outlet_mass(
         v_outlet=v_outlet,
-        waves=tr.state.waves,
         sorption=sorption,
         cin=cin,
         theta_edges=tr.state.theta_edges,
@@ -470,7 +468,6 @@ def test_freundlich_n_just_above_1_reduces_to_constant_velocity_shock():
     mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
     mass_out, _ = compute_total_outlet_mass(
         v_outlet=v_outlet,
-        waves=tr.state.waves,
         sorption=sorption,
         cin=cin,
         theta_edges=tr.state.theta_edges,
