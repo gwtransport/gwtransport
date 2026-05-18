@@ -74,8 +74,7 @@ class Wave(ABC):
     def was_active_at(self, theta: float) -> bool:
         """Whether the wave was active at cumulative flow ``theta`` (geometric truth).
 
-
-                Use for retrospective queries — ``is_active`` reflects only the
+        Use for retrospective queries — ``is_active`` reflects only the
         wave's *current* (post-simulation) state, which is wrong for
         ``compute_domain_mass`` and similar at θ before a deactivation event.
 
