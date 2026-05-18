@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport.advection import infiltration_to_extraction_front_tracking_detailed
+from gwtransport.advection import infiltration_to_extraction_nonlinear_sorption
 from gwtransport.utils import compute_time_edges
 
 
@@ -75,7 +75,7 @@ def test_step_change_plateau(c_initial, c_final, freundlich_n, expected_wave_typ
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
     # Run front tracking
-    cout, structure = infiltration_to_extraction_front_tracking_detailed(
+    cout, structure = infiltration_to_extraction_nonlinear_sorption(
         cin=cin,
         flow=flow,
         tedges=tedges,
@@ -174,7 +174,7 @@ def test_pulse_returns_to_baseline(freundlich_n):
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
     # Run front tracking
-    cout, structure = infiltration_to_extraction_front_tracking_detailed(
+    cout, structure = infiltration_to_extraction_nonlinear_sorption(
         cin=cin,
         flow=flow,
         tedges=tedges,
@@ -262,7 +262,7 @@ def test_multiple_steps_final_plateau(freundlich_n):
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
     # Run front tracking
-    cout, structure = infiltration_to_extraction_front_tracking_detailed(
+    cout, structure = infiltration_to_extraction_nonlinear_sorption(
         cin=cin,
         flow=flow,
         tedges=tedges,
@@ -345,7 +345,7 @@ def test_step_down_to_zero_plateau(c_initial, freundlich_n):
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
     # Run front tracking
-    cout, structure = infiltration_to_extraction_front_tracking_detailed(
+    cout, structure = infiltration_to_extraction_nonlinear_sorption(
         cin=cin,
         flow=flow,
         tedges=tedges,
@@ -437,7 +437,7 @@ def test_pulse_from_zero_returns_to_zero(freundlich_n):
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
     # Run front tracking
-    cout, structure = infiltration_to_extraction_front_tracking_detailed(
+    cout, structure = infiltration_to_extraction_nonlinear_sorption(
         cin=cin,
         flow=flow,
         tedges=tedges,

@@ -12,13 +12,13 @@ compute_bin_averaged_concentration_exact(theta_bin_edges, v_outlet, waves, sorpt
 compute_domain_mass(theta, v_outlet, waves, sorption)
 compute_cumulative_inlet_mass(theta, cin, theta_edges)
 compute_cumulative_outlet_mass(theta, v_outlet, waves, sorption, *, cin, theta_edges)
-compute_total_outlet_mass(v_outlet, sorption, *, cin, theta_edges) -> (mass, theta_integration_end)
+compute_total_outlet_mass(v_outlet, sorption, *, cin, theta_edges) -> float
 
-Step 5b note: outlet-mass functions use the PDE conservation identity
+Outlet-mass functions use the PDE conservation identity
 ``m_out(θ) = m_in(θ) − m_dom(θ)`` (Bear & Cheng 2010, Ch. 3: mass
-conservation for transport with sorption). m_dom honors historical wave
-activity via ``wave.was_active_at(theta)`` so retrospective queries at θ
-before a collision event correctly attribute c at v_outlet.
+conservation for transport with sorption). ``m_dom`` honors historical
+wave activity via ``wave.was_active_at(theta)`` so retrospective queries
+at θ before a collision event correctly attribute c at v_outlet.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -48,8 +48,6 @@ from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWav
 EPSILON_VELOCITY = 1e-15  # Tolerance for checking if velocity is effectively zero
 EPSILON_BETA = 1e-15  # Tolerance for checking if beta is effectively zero (linear case)
 EPSILON_TIME = 1e-15  # Tolerance for negligible time segments
-EPSILON_TIME_MATCH = 1e-6  # Tolerance for matching arrival times (for rarefaction identification)
-EPSILON_CONCENTRATION = 1e-10  # Tolerance for checking if concentration is effectively zero
 
 
 def concentration_at_point(
@@ -88,17 +86,49 @@ def concentration_at_point(
     rarefaction tail, then characteristics. If no active wave controls the
     point, returns 0.0 (initial condition).
     """
+    # Multi-DSW dispatch: when several active DSW fans contain v, the newest
+    # (largest ``theta_start``) wins — same rule as ``compute_domain_mass`` at
+    # line ~1057. Iterating chronologically and short-circuiting picks the
+    # older DSW's fan value, which is wrong for overlap regions. The fan
+    # predicate mirrors the in-fan check used downstream.
+    dsw_in_fan: list[DecayingShockWave] = []
+    for wave in waves:
+        if isinstance(wave, DecayingShockWave) and wave.was_active_at(theta):
+            v_s = wave.position_at_theta(theta)
+            if v_s is None:
+                continue
+            in_fan = (wave.decay_side == "left" and v < v_s) or (wave.decay_side == "right" and v > v_s)
+            if in_fan and v != wave.v_origin:
+                dsw_in_fan.append(wave)
+
+    if dsw_in_fan:
+        newest = max(dsw_in_fan, key=lambda w: w.theta_start)
+        c = newest.concentration_at_point(v, theta)
+        if c is not None:
+            return c
+
+    # Fallback: no DSW fan contains v — handle shock-face (v ≈ V_s) and
+    # fixed-side (v on the c_fixed side) cases. Chronological iteration is
+    # fine here because (a) shock-face is rare and unique by v ≈ V_s, and
+    # (b) all DSWs in a typical multi-pulse share the same c_fixed baseline.
     for wave in waves:
         if isinstance(wave, DecayingShockWave) and wave.was_active_at(theta):
             c = wave.concentration_at_point(v, theta)
             if c is not None:
                 return c
 
+    # Multi-rarefaction dispatch: same shape as DSWs. RarefactionWave returns
+    # None outside its fan, so collecting non-None candidates is equivalent to
+    # an in-fan check. Newest wins.
+    raref_candidates: list[tuple[float, RarefactionWave]] = []
     for wave in waves:
         if isinstance(wave, RarefactionWave) and wave.was_active_at(theta):
             c = wave.concentration_at_point(v, theta)
             if c is not None:
-                return c
+                raref_candidates.append((c, wave))
+
+    if raref_candidates:
+        return max(raref_candidates, key=lambda cw: cw[1].theta_start)[0]
 
     latest_wave_theta = -np.inf
     latest_wave_c = None
@@ -106,12 +136,10 @@ def concentration_at_point(
     # of the shock CLOSEST to v from the left (largest V_shock with V_shock < v).
     # ``theta_start`` would mis-rank stacked shocks (youngest = innermost ≠
     # closest-to-v), so we track V_shock directly.
-    # OBSTRUCTION CHECK: a shock's c_R applies at v only when no other active
+    # Obstruction check: a shock's c_R applies at v only when no other active
     # wave (rarefaction tail/head, DSW V_s, other shock) sits between V_shock
-    # and v. Otherwise the c_R is the c in the IMMEDIATE-right-of-shock zone,
-    # not at v. Without this check, the c=12 plateau past V_shock=0 would
-    # incorrectly extend through all downstream rarefactions to v_outlet
-    # (Phase 2 Step 5b round 5c).
+    # and v. Otherwise c_R is the c in the immediate-right-of-shock zone, not
+    # at v.
     rightmost_passed_v_shock = -np.inf
     rightmost_passed_c_right: float | None = None
 
@@ -142,7 +170,7 @@ def concentration_at_point(
                 if abs(v - v_shock) < tol:
                     return 0.5 * (wave.c_left + wave.c_right)
 
-                if wave.speed is not None and abs(wave.speed) > EPSILON_VELOCITY:
+                if abs(wave.speed) > EPSILON_VELOCITY:
                     theta_cross = wave.theta_start + (v - wave.v_start) / wave.speed
 
                     if theta_cross <= theta:
@@ -413,9 +441,11 @@ def identify_outlet_segments(
     current_theta = theta_start
     current_c = concentration_at_point(v_outlet, theta_start, waves, sorption)
 
-    # Handle case where we start inside a rarefaction or decaying-shock fan
+    # Handle case where we start inside a rarefaction or decaying-shock fan.
+    # Multi-fan overlap: pick the newest (largest ``theta_start``) — matches
+    # ``concentration_at_point`` and ``compute_domain_mass`` dispatch.
     if active_rarefactions_at_start:
-        raref = active_rarefactions_at_start[0]
+        raref = max(active_rarefactions_at_start, key=lambda w: w.theta_start)
 
         if isinstance(raref, RarefactionWave):
             # Find when tail crosses (if it does)
@@ -459,9 +489,9 @@ def identify_outlet_segments(
 
     for event in outlet_events:
         # Skip events that fall inside an already-emitted (typically rarefaction)
-        # segment. By Phase-1 convention ``concentration_at_point`` lets active
-        # rarefactions "win" over a behind-shock c_left; the segment list must
-        # reflect the same convention to avoid double-counting.
+        # segment. ``concentration_at_point`` lets active rarefactions "win"
+        # over a behind-shock c_left; the segment list must reflect the same
+        # convention to avoid double-counting.
         if event["theta"] < current_theta:
             continue
 
@@ -797,9 +827,9 @@ def compute_bin_averaged_concentration_exact(
     With ``cin`` + ``theta_edges_inlet`` provided (recommended for multi-DSW
     cases), uses the conservation-law identity
     ``C_avg = (Δm_in − Δm_dom) / Δθ`` per bin — analytical and explicit, no
-    outlet-side fan dispatch. Otherwise falls back to the legacy
-    outlet-segment integration (correct for canonical single-DSW cases;
-    may miscount multi-DSW or n<1 mirror geometries).
+    outlet-side fan dispatch. Otherwise falls back to outlet-segment
+    integration (correct for canonical single-DSW cases; may miscount
+    multi-DSW or n<1 mirror geometries).
 
     Parameters
     ----------
@@ -866,14 +896,12 @@ def compute_bin_averaged_concentration_exact(
         eps_clamp = 1e-12 * max(max_c, 1.0)
         result = np.where(np.abs(result) < eps_clamp, 0.0, result)
         # Large-negative diagnostic: residuals beyond the FP-noise band signal
-        # a real conservation-form violation. Most commonly this is the
-        # post-inlet model artifact (plan Step 5h): when output edges exceed
-        # ``theta_edges_inlet[-1]``, m_in caps at the last injected mass
-        # while the simulator's wave list continues to evolve, so m_in − m_dom
-        # produces FP-cancellation residuals from the inconsistent θ ranges
-        # between the inlet integral and the wave-list-derived domain mass.
-        # Surface as a UserWarning so users see it; clamp to 0 (physical
-        # non-negativity) to preserve API contract (``cout >= 0``).
+        # a real conservation-form violation, most commonly the post-inlet
+        # artifact — output edges exceed ``theta_edges_inlet[-1]``, m_in
+        # caps at the last injected mass while the simulator's wave list
+        # continues to evolve, producing FP-cancellation residuals from
+        # inconsistent θ ranges. Surface as a UserWarning; clamp to 0 to
+        # preserve the ``cout >= 0`` API contract.
         if result.size:
             min_val = float(np.min(result))
             if min_val < -eps_clamp:
@@ -971,10 +999,7 @@ def compute_domain_mass(
         )
         mass >= 0.0
     """
-    # Partition spatial domain into segments based on wave structure
-    # We'll evaluate concentration at many points and identify constant regions
-
-    # Collect all wave positions at time t
+    # Partition spatial domain into segments at active wave positions.
     wave_positions = []
 
     for wave in waves:
@@ -1030,11 +1055,9 @@ def compute_domain_mass(
         # ``integrate_fan_spatial_exact``).
         #
         # Multi-fan dispatch: when multiple DSWs (or rarefactions) nominally
-        # contain v_mid, the NEWER one (later ``theta_start``) wins. The
-        # planned exclusion rule v_mid ∈ [V_apex_W₂, V_s_W₁] (round-2 plan
-        # review) is structurally equivalent to "newest wins" given the
-        # iterate-newest-first sort — verified by code-opt impl review —
-        # so the explicit exclusion loop has been collapsed.
+        # contain v_mid, the newer one (later ``theta_start``) wins —
+        # geometrically equivalent to the exclusion rule
+        # ``v_mid ∈ [V_apex_W₂, V_s_W₁]`` for simulator-produced layouts.
         v_mid = 0.5 * (v_start + v_end)
         raref_wave: RarefactionWave | None = None
         decaying_wave: DecayingShockWave | None = None
@@ -1426,7 +1449,7 @@ def compute_total_outlet_mass(
     *,
     cin: npt.ArrayLike,
     theta_edges: npt.NDArray[np.floating],
-) -> tuple[float, float]:
+) -> float:
     """Asymptotic total outlet mass via the conservation-law identity.
 
     Computed as ``m_in_total − m_dom_asymptotic`` where ``m_dom_asymptotic``
@@ -1457,11 +1480,8 @@ def compute_total_outlet_mass(
 
     Returns
     -------
-    total_mass_out : float
+    float
         Asymptotic outlet mass [mass]. Equals ``m_in_total`` for ``cin[-1]=0``.
-    theta_integration_end : float
-        ``theta_edges[-1]`` (the simulation end θ). Caller translates to
-        user-facing time via ``FrontTrackerState.t_at_theta`` if needed.
 
     See Also
     --------
@@ -1473,4 +1493,4 @@ def compute_total_outlet_mass(
     m_in_total = float(np.sum(cin_arr * np.diff(te)))
     c_inf = float(cin_arr[-1]) if cin_arr.size > 0 else 0.0
     m_dom_asymptotic = float(sorption.total_concentration(c_inf)) * v_outlet
-    return m_in_total - m_dom_asymptotic, float(te[-1])
+    return m_in_total - m_dom_asymptotic

@@ -798,10 +798,9 @@ def compute_first_front_arrival_theta(
        :class:`RarefactionWave` whose head (``c = c_min ≈ 0``) reaches the
        outlet at θ ≈ ``V·R(c_min) ≈ V`` — *much* earlier than the value this
        function returns (which is the *tail* arrival ``V·R(c_first)``).
-       The function preserves the legacy "tail arrival" semantics intentionally,
-       so the returned θ is a conservative end-of-spin-up: c is ≤ c_first
-       everywhere before it. Consult the solver event log for the true rarefaction
-       head crossing.
+       The function returns "tail arrival" semantics: the returned θ is a
+       conservative end-of-spin-up where c ≤ c_first everywhere before it.
+       Consult the solver event log for the true rarefaction head crossing.
 
     Parameters
     ----------

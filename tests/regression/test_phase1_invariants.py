@@ -392,7 +392,7 @@ def test_mass_balance_freundlich_nhalf_mirror_pointwise_breakthrough(n):
     # (no wave list), so this is a smoke test for the formula wiring — it
     # catches sign flips or missing c_∞ retrieval but not wave-list bugs.
     mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
-    mass_out, _ = compute_total_outlet_mass(
+    mass_out = compute_total_outlet_mass(
         v_outlet=v_outlet,
         sorption=sorption,
         cin=cin,
@@ -426,7 +426,7 @@ def test_mass_balance_freundlich_n2_multipulse():
     tr.run(max_iterations=100000)
 
     mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
-    mass_out, _ = compute_total_outlet_mass(
+    mass_out = compute_total_outlet_mass(
         v_outlet=v_outlet,
         sorption=sorption,
         cin=cin,
@@ -525,7 +525,7 @@ def test_freundlich_n_just_above_1_reduces_to_constant_velocity_shock():
     tr.run(max_iterations=100000)
 
     mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
-    mass_out, _ = compute_total_outlet_mass(
+    mass_out = compute_total_outlet_mass(
         v_outlet=v_outlet,
         sorption=sorption,
         cin=cin,

@@ -189,12 +189,14 @@ class FrontTracker:
 
     def __init__(
         self,
-        cin: np.ndarray,
-        flow: np.ndarray,
+        cin: npt.ArrayLike,
+        flow: npt.ArrayLike,
         tedges: pd.DatetimeIndex,
         aquifer_pore_volume: float,
         sorption: SorptionModel,
     ):
+        cin = np.asarray(cin, dtype=float)
+        flow = np.asarray(flow, dtype=float)
         if len(tedges) != len(cin) + 1:
             msg = f"tedges must have length len(cin) + 1, got {len(tedges)} vs {len(cin) + 1}"
             raise ValueError(msg)
@@ -213,7 +215,7 @@ class FrontTracker:
 
         tedges_days = np.asarray((tedges - tedges[0]) / pd.Timedelta(days=1), dtype=float)
         dt_days = np.diff(tedges_days)
-        bin_volumes = np.asarray(flow, dtype=float) * dt_days
+        bin_volumes = flow * dt_days
         theta_edges = np.concatenate(([0.0], np.cumsum(bin_volumes)))
 
         self.state = FrontTrackerState(

@@ -775,7 +775,7 @@ class TestRiemannProblems:
         # mass_in = ∫ cin·flow dt = ∫ cin dθ (the θ-form drops flow).
         mass_in = float(np.sum(cin * np.diff(tracker.state.theta_edges)))
 
-        mass_out, _theta_end = compute_total_outlet_mass(
+        mass_out = compute_total_outlet_mass(
             v_outlet=v_pore,
             sorption=freundlich_sorption,
             cin=cin,
@@ -805,7 +805,7 @@ class TestRiemannProblems:
         tracker.run(max_iterations=10000, verbose=False)
 
         mass_in = float(np.sum(cin * np.diff(tracker.state.theta_edges)))
-        mass_out, _ = compute_total_outlet_mass(
+        mass_out = compute_total_outlet_mass(
             v_outlet=v_pore,
             sorption=sorption,
             cin=cin,
@@ -954,7 +954,7 @@ class TestParametricMassBalance:
         tr.run(max_iterations=100000)
 
         mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
-        mass_out, _ = compute_total_outlet_mass(
+        mass_out = compute_total_outlet_mass(
             v_outlet=v_outlet,
             sorption=sorption,
             cin=cin,
@@ -1010,7 +1010,7 @@ class TestParametricMassBalance:
         tr.run(max_iterations=100000)
 
         mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
-        mass_out, _ = compute_total_outlet_mass(
+        mass_out = compute_total_outlet_mass(
             v_outlet=v_outlet,
             sorption=freundlich_sorption,
             cin=cin,
@@ -1038,7 +1038,7 @@ class TestParametricMassBalance:
         tr.run(max_iterations=100000)
 
         mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
-        mass_out, _ = compute_total_outlet_mass(
+        mass_out = compute_total_outlet_mass(
             v_outlet=v_outlet,
             sorption=freundlich_sorption,
             cin=cin,

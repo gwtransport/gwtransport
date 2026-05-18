@@ -8,10 +8,7 @@ All tests have correct physics expectations for Freundlich n>1.
 import numpy as np
 import pandas as pd
 
-from gwtransport.advection import (
-    infiltration_to_extraction_front_tracking,
-    infiltration_to_extraction_front_tracking_detailed,
-)
+from gwtransport.advection import infiltration_to_extraction_nonlinear_sorption
 from gwtransport.fronttracking.math import FreundlichSorption
 from gwtransport.fronttracking.waves import RarefactionWave, ShockWave
 from gwtransport.utils import compute_time_edges
@@ -33,7 +30,7 @@ class TestWaveCreation:
         cout_dates = pd.date_range(start=dates[0], periods=25, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        _cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        _cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -60,7 +57,7 @@ class TestWaveCreation:
         cout_dates = pd.date_range(start=dates[0], periods=25, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        _cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        _cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -95,7 +92,7 @@ class TestAnalyticalCorrectness:
         cout_dates = pd.date_range(start=dates[0], periods=25, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        _cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        _cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -139,7 +136,7 @@ class TestEntropyAndPhysics:
         cout_dates = pd.date_range(start=dates[0], periods=30, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        _cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        _cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -168,7 +165,7 @@ class TestEntropyAndPhysics:
         cout_dates = pd.date_range(start=dates[0], periods=25, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        cout = infiltration_to_extraction_front_tracking(
+        cout, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -195,7 +192,7 @@ class TestEntropyAndPhysics:
         cout_dates = pd.date_range(start=dates[0], periods=25, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        cout = infiltration_to_extraction_front_tracking(
+        cout, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -233,7 +230,7 @@ class TestConstantRetardation:
         cout_dates = pd.date_range(start=dates[0], periods=25, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        cout = infiltration_to_extraction_front_tracking(
+        cout, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -262,7 +259,7 @@ class TestWaveCreationNLessThanOne:
         cout_dates = pd.date_range(start=dates[0], periods=25, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        _cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        _cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -303,7 +300,7 @@ class TestWaveCreationNLessThanOne:
         cout_dates = pd.date_range(start=dates[0], periods=25, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        _cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        _cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -343,7 +340,7 @@ class TestEntropyAndPhysicsNLessThanOne:
         cout_dates = pd.date_range(start=dates[0], periods=60, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -390,7 +387,7 @@ class TestEntropyAndPhysicsNLessThanOne:
         cout_dates = pd.date_range(start=dates[0], periods=40, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        _cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        _cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -427,7 +424,7 @@ class TestComplexInteractions:
         cout_dates = pd.date_range(start=dates[0], periods=40, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -468,7 +465,7 @@ class TestComplexInteractions:
         cout_dates = pd.date_range(start=dates[0], periods=50, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,

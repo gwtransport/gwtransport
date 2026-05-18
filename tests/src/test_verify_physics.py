@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport.advection import infiltration_to_extraction_front_tracking_detailed
+from gwtransport.advection import infiltration_to_extraction_nonlinear_sorption
 from gwtransport.fronttracking.validation import verify_physics
 
 
@@ -28,7 +28,7 @@ class TestVerifyPhysicsPassingChecks:
         -------
         tuple
             (cin, cout, cout_tedges, structure) where structure is from
-            infiltration_to_extraction_front_tracking_detailed.
+            infiltration_to_extraction_nonlinear_sorption.
         """
         # Setup from Example 1 in notebook 9
         tedges = pd.date_range(start="2020-01-01", periods=100, freq="D")
@@ -51,7 +51,7 @@ class TestVerifyPhysicsPassingChecks:
         cout_tedges = pd.date_range(start=tedges[0], periods=1350, freq="D")
 
         # Run simulation
-        cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -159,7 +159,7 @@ class TestVerifyPhysicsFailingChecks:
         porosity = 0.3
         cout_tedges = pd.date_range(start=tedges[0], periods=1350, freq="D")
 
-        cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -289,7 +289,7 @@ class TestVerifyPhysicsEdgeCases:
         aquifer_pore_volume = 200.0
         cout_tedges = pd.date_range(start=tedges[0], periods=100, freq="D")
 
-        cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -317,7 +317,7 @@ class TestVerifyPhysicsEdgeCases:
         aquifer_pore_volume = 200.0
         cout_tedges = pd.date_range(start=tedges[0], periods=100, freq="D")
 
-        cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,

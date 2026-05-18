@@ -25,6 +25,7 @@ cout[4] pre-fix.
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from gwtransport.fronttracking.math import FreundlichSorption
 from gwtransport.fronttracking.output import (
@@ -33,6 +34,7 @@ from gwtransport.fronttracking.output import (
     concentration_at_point,
 )
 from gwtransport.fronttracking.solver import FrontTracker
+from gwtransport.fronttracking.waves import DecayingShockWave
 
 
 def _build_canonical_n2_pulse_tracker():
@@ -177,3 +179,49 @@ def test_multi_rarefaction_overlap_no_overcount_in_domain_mass():
     rel_err = abs(m_dom - m_in) / max(m_in, 1.0)
     # Pre-round-5c: m_dom=727694, rel_err ≈ 240. Post-fix: rel_err ≤ 1e-12.
     assert rel_err < 1e-12, f"m_dom={m_dom}, m_in={m_in}, rel_err={rel_err:.3e}"
+
+
+def test_multi_dsw_concentration_at_point_uses_newest():
+    """Two-pulse Freundlich n=2 with two coexisting DSWs: ``concentration_at_point``
+    must match the ``max(theta_start)`` rule used by ``compute_domain_mass``.
+
+    Pre-fix: ``concentration_at_point`` iterated DSWs chronologically and
+    short-circuited on the first non-None c, returning DSW0's (older) fan
+    value (~0.102) for v in the overlap region. The newer DSW1's fan has
+    physically swept through that region, so the correct value is DSW1's
+    (~0.300). The fix collects DSWs whose ``v`` is strictly in-fan and picks
+    the one with the largest ``theta_start``.
+    """
+    sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+    v_outlet = 200.0
+    cin = np.zeros(80)
+    cin[5:15] = 4.0
+    cin[40:50] = 6.0
+    flow = np.full(80, 100.0)
+    tedges = pd.date_range("2020-01-01", periods=81, freq="D")
+
+    tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
+    tr.run(max_iterations=100000)
+
+    dsws = [w for w in tr.state.waves if isinstance(w, DecayingShockWave)]
+    theta_query = 10000.0
+    active = [w for w in dsws if w.was_active_at(theta_query)]
+    assert len(active) == 2, f"need two coexisting DSWs to exercise the dispatch; got {len(active)}"
+
+    v_s_values = [w.position_at_theta(theta_query) for w in active]
+    assert all(v is not None for v in v_s_values)
+    v_query = min(v for v in v_s_values if v is not None) * 0.5  # left of both shocks → in both fans
+
+    newest = max(active, key=lambda w: w.theta_start)
+    c_newest = newest.concentration_at_point(v_query, theta_query)
+    c_dispatch = concentration_at_point(v_query, theta_query, tr.state.waves, sorption)
+    assert c_newest is not None
+    assert c_dispatch is not None
+    assert c_dispatch == pytest.approx(c_newest, rel=1e-12)
+
+    older_in_fan = min(active, key=lambda w: w.theta_start).concentration_at_point(v_query, theta_query)
+    assert older_in_fan is not None
+    assert abs(c_dispatch - older_in_fan) > 0.1, (
+        f"dispatch={c_dispatch} suspiciously close to older DSW's fan value {older_in_fan}; "
+        "regression to chronological iteration?"
+    )

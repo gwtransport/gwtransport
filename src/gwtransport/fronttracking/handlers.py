@@ -224,10 +224,10 @@ def handle_shock_rarefaction_collision(
 
     For the canonical favorable (n>1 or Langmuir) head-collision case and the
     n<1 mirrored tail-collision case, emits a single :class:`DecayingShockWave`
-    whose closed-form trajectory subsumes the fan + shock together. The
-    fallback for non-canonical cases (e.g. n>1 tail-collision corner-case
-    triggered by multi-pulse inlets) retains the Phase-1 piecewise-constant
-    overlay (approximately mass-conserving, not closed-form).
+    whose closed-form trajectory subsumes the fan + shock together. For
+    non-canonical cases (e.g. n>1 tail-collision corner-case triggered by
+    multi-pulse inlets), falls back to a piecewise-constant overlay
+    (approximately mass-conserving, not closed-form).
 
     Returns
     -------
@@ -243,10 +243,10 @@ def handle_shock_rarefaction_collision(
 
     # Multi-pulse non-canonical cases (raref.c_tail != shock.c_right for head
     # collision, raref.c_head != shock.c_left for tail collision) carry a
-    # fan_tail concentration different from the shock's c_fixed; the current
-    # DecayingShockWave does not store fan_tail separately, so its
+    # fan_tail concentration different from the shock's c_fixed;
+    # ``DecayingShockWave`` does not store fan_tail separately, so its
     # ``concentration_at_point`` would clamp the fan-interior c incorrectly
-    # past the fan's physical extent. Defer to Phase-1 overlay for these.
+    # past the fan's physical extent. Defer to the piecewise overlay below.
     is_canonical_head = boundary_type == "head" and abs(raref.c_tail - shock.c_right) < EPSILON_CONCENTRATION
     is_canonical_tail = boundary_type == "tail" and abs(raref.c_head - shock.c_left) < EPSILON_CONCENTRATION
 
@@ -276,7 +276,7 @@ def handle_shock_rarefaction_collision(
             )
         except NotImplementedError:
             # Closed form not derived yet (e.g. Langmuir + c_fixed>0). Fall
-            # through to Phase-1 overlay below.
+            # through to the piecewise overlay below.
             pass
         else:
             shock.deactivate(theta_event)
@@ -311,7 +311,8 @@ def handle_shock_rarefaction_collision(
             raref.deactivate(theta_event)
             return [decaying]
 
-    # Non-canonical (multi-pulse corner cases) — fall back to Phase-1 overlay.
+    # Non-canonical (multi-pulse corner cases) — fall back to the
+    # piecewise-constant overlay.
     if boundary_type == "tail":
         raref_c_at_collision = raref.concentration_at_point(v_event, theta_event)
 
@@ -362,14 +363,13 @@ def handle_shock_rarefaction_collision(
         raref.deactivate(theta_event)
         return [new_shock]
 
-    # Non-canonical head branch fallback (Phase-1 overlay behavior preserved).
-    # When the new shock satisfies entropy, the raref is intentionally kept
-    # active: deactivating it would lose the fan's interior mass that the
-    # constant-velocity new shock does not capture. The overlay is the
-    # P1.8 bug pattern with approximately-conserved mass; the canonical paths
-    # above replace it with an exact DecayingShockWave when the closed form
-    # applies. Non-canonical head_collision (raref.c_tail != shock.c_right)
-    # still uses this overlay.
+    # Non-canonical head branch fallback. When the new shock satisfies
+    # entropy, the rarefaction is intentionally kept active: deactivating it
+    # would lose the fan's interior mass that the constant-velocity new shock
+    # does not capture. Mass is only approximately conserved here; the
+    # canonical paths above replace it with an exact ``DecayingShockWave`` when
+    # the closed form applies. Non-canonical head collisions
+    # (``raref.c_tail != shock.c_right``) still use this overlay.
     s_raref_head = characteristic_speed(raref.c_head, raref.sorption)
 
     if s_raref_head > shock.speed:
@@ -474,8 +474,8 @@ def create_inlet_waves_at_theta(
     - equal: contact discontinuity → characteristic.
 
     For shocks the entropy condition is verified; if violated, an empty list
-    is returned (mass balance may be affected — a known limitation that
-    motivates Phase 2 ``DecayingShockWave``).
+    is returned (mass balance may be affected — a known limitation handled
+    by ``DecayingShockWave``).
     """
     if abs(c_new - c_prev) < EPSILON_CONCENTRATION:
         return []

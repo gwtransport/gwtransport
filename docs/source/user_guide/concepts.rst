@@ -337,10 +337,15 @@ For contaminants with concentration-dependent retardation, ``gwtransport`` provi
 
 **Wave physics (both isotherms):**
 
-- **Shocks** form when faster concentrations overtake slower ones
-- **Rarefaction waves** form when concentrations spread apart
+- **Shocks** form when faster concentrations overtake slower ones.
+- **Rarefaction waves** form when concentrations spread apart.
+- **Decaying shocks** form when a rarefaction fan catches up to a shock — the shock keeps moving but its strength decreases as the fan feeds into its trailing side. ``gwtransport`` integrates the decay in closed form (Freundlich and Langmuir), so a long-running simulation does not lose accuracy as the shock weakens.
 
-The solver tracks these waves analytically, eliminating numerical artifacts. Use :py:func:`gwtransport.advection.infiltration_to_extraction_front_tracking` for non-linear sorption (pass Freundlich or Langmuir parameters).
+The solver tracks these waves analytically, eliminating numerical artifacts. Use :py:func:`gwtransport.advection.infiltration_to_extraction_nonlinear_sorption` for non-linear sorption (pass Freundlich or Langmuir parameters).
+
+**Robustness under variable flow.** The wave dynamics are formulated in cumulative-flow coordinates :math:`\theta = \int Q(t')\,dt'` rather than wall-clock time, so changes in pumping rate enter only through the :math:`\theta(t)` mapping at the API boundary — wave geometries do not need to be rebuilt when :math:`Q(t)` varies. The same simulation routine handles steady, ramped, and rapidly fluctuating flow without recalibration.
+
+**Mass conservation.** Total outlet mass is computed from the conservation identity :math:`m_{\text{out}}(\theta) = m_{\text{in}}(\theta) - m_{\text{dom}}(\theta)`, where :math:`m_{\text{dom}}` is the spatial integral of total concentration over the domain. The identity is exact, so reported mass balance is at machine precision (relative error :math:`\lesssim 10^{-13}` for typical canonical cases).
 
 See :doc:`/examples/10_Advection_with_non_linear_sorption` for a complete example.
 

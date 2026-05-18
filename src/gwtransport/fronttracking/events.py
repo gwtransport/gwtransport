@@ -292,9 +292,6 @@ def find_outlet_crossing(wave, v_outlet: float, theta_current: float) -> float |
         return theta_eval + dtheta
 
     if isinstance(wave, ShockWave):
-        if wave.speed is None:
-            return None
-
         theta_eval = max(theta_current, wave.theta_start)
         v_current = wave.v_start + wave.speed * (theta_eval - wave.theta_start)
 

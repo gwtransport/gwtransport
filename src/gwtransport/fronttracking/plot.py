@@ -698,7 +698,7 @@ def plot_front_tracking_summary(
     Parameters
     ----------
     structure : dict
-        Structure returned from infiltration_to_extraction_front_tracking_detailed.
+        Structure returned from infiltration_to_extraction_nonlinear_sorption.
         Must contain keys: 'tracker_state', 't_first_arrival'.
     tedges : pandas.DatetimeIndex
         Time bin edges for inlet concentration.

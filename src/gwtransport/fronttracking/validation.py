@@ -47,7 +47,7 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     Parameters
     ----------
     structure : dict
-        Structure returned from ``infiltration_to_extraction_front_tracking_detailed``.
+        Structure returned from ``infiltration_to_extraction_nonlinear_sorption``.
         Must contain keys: ``'waves'``, ``'theta_first_arrival'``, ``'events'``,
         ``'n_shocks'``, ``'n_rarefactions'``, and optionally ``'tracker_state'``.
     cout : array-like
@@ -202,9 +202,10 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
             theta=float(theta_edges_arr[-1]), cin=cin, theta_edges=theta_edges_arr
         )
 
-        total_mass_out, theta_integration_end = compute_total_outlet_mass(
+        total_mass_out = compute_total_outlet_mass(
             v_outlet=v_outlet, sorption=sorption, cin=cin, theta_edges=theta_edges_arr
         )
+        theta_integration_end = float(theta_edges_arr[-1])
 
         # ``compute_total_outlet_mass`` returns the asymptotic m_out = m_in − C_T(c_∞)·V_outlet
         # where c_∞ = cin[-1]. For the conservation identity at θ→∞ to hold, the

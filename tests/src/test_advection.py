@@ -12,7 +12,7 @@ from gwtransport.advection import (
     gamma_extraction_to_infiltration,
     gamma_infiltration_to_extraction,
     infiltration_to_extraction,
-    infiltration_to_extraction_front_tracking,
+    infiltration_to_extraction_nonlinear_sorption,
     infiltration_to_extraction_series,
 )
 from gwtransport.advection_utils import (
@@ -2500,7 +2500,7 @@ class TestFlowWeightedFrontTracking:
         flow = np.full(30, 100.0)
         aquifer_pore_volumes = np.array([500.0])
 
-        cout_ft = infiltration_to_extraction_front_tracking(
+        cout_ft, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -2531,7 +2531,7 @@ class TestFlowWeightedFrontTracking:
         cin = np.ones(60) * 7.0
         flow = 100.0 + 50.0 * np.sin(np.arange(60) * 2 * np.pi / 5)
 
-        cout = infiltration_to_extraction_front_tracking(
+        cout, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -2555,7 +2555,7 @@ class TestFlowWeightedFrontTracking:
         cin[5:10] = 10.0
         flow = np.full(60, 100.0)
 
-        cout = infiltration_to_extraction_front_tracking(
+        cout, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
