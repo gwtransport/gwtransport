@@ -659,11 +659,11 @@ class DecayingShockWave(Wave):
         """Cumulative flow at which ``V_s = v_outlet``.
 
         Returns ``None`` if the outlet is upstream of the wave's birth
-        position, the wave is inactive, or no crossing exists in
-        ``(theta_start, +∞)``.
+        position or no crossing exists in ``(theta_start, +∞)``. The wave's
+        current activity flag is not consulted — callers asking
+        retrospectively about a historical crossing need the closed-form
+        answer regardless of subsequent deactivation.
         """
-        if not self.is_active:
-            return None
         if v_outlet <= self.v_start:
             return None
 

@@ -87,22 +87,28 @@ def concentration_at_point(
     point, returns 0.0 (initial condition).
     """
     for wave in waves:
-        if isinstance(wave, DecayingShockWave) and wave.is_active:
+        if isinstance(wave, DecayingShockWave) and wave.was_active_at(theta):
             c = wave.concentration_at_point(v, theta)
             if c is not None:
                 return c
 
     for wave in waves:
-        if isinstance(wave, RarefactionWave) and wave.is_active:
+        if isinstance(wave, RarefactionWave) and wave.was_active_at(theta):
             c = wave.concentration_at_point(v, theta)
             if c is not None:
                 return c
 
     latest_wave_theta = -np.inf
     latest_wave_c = None
+    # Stacked-shock geometry: for v right of multiple shocks, c at v is c_right
+    # of the shock CLOSEST to v from the left (largest V_shock with V_shock < v).
+    # ``theta_start`` would mis-rank stacked shocks (youngest = innermost ≠
+    # closest-to-v), so we track V_shock directly.
+    rightmost_passed_v_shock = -np.inf
+    rightmost_passed_c_right: float | None = None
 
     for wave in waves:
-        if isinstance(wave, ShockWave) and wave.is_active:
+        if isinstance(wave, ShockWave) and wave.was_active_at(theta):
             v_shock = wave.position_at_theta(theta)
             if v_shock is not None:
                 tol = 1e-15
@@ -117,12 +123,12 @@ def concentration_at_point(
                         if theta_cross > latest_wave_theta:
                             latest_wave_theta = theta_cross
                             latest_wave_c = wave.c_left
-                    elif v > v_shock and wave.theta_start > latest_wave_theta:
-                        latest_wave_theta = wave.theta_start
-                        latest_wave_c = wave.c_right
+                    elif v > v_shock > rightmost_passed_v_shock:
+                        rightmost_passed_v_shock = v_shock
+                        rightmost_passed_c_right = wave.c_right
 
     for wave in waves:
-        if isinstance(wave, RarefactionWave) and wave.is_active:
+        if isinstance(wave, RarefactionWave) and wave.was_active_at(theta):
             v_tail = wave.tail_position_at_theta(theta)
             if v_tail is not None and v_tail > v + 1e-15:
                 tail_speed = wave.tail_speed()
@@ -132,6 +138,8 @@ def concentration_at_point(
                         latest_wave_theta = theta_pass
                         latest_wave_c = wave.c_tail
 
+    if rightmost_passed_c_right is not None:
+        return rightmost_passed_c_right
     if latest_wave_c is not None:
         return latest_wave_c
 
@@ -139,7 +147,7 @@ def concentration_at_point(
     latest_theta = -np.inf
 
     for wave in waves:
-        if isinstance(wave, CharacteristicWave) and wave.is_active:
+        if isinstance(wave, CharacteristicWave) and wave.was_active_at(theta):
             v_char_at_theta = wave.position_at_theta(theta)
 
             if v_char_at_theta is not None and v_char_at_theta >= v - 1e-15:
@@ -270,7 +278,13 @@ def identify_outlet_segments(
     active_rarefactions_at_start: list[RarefactionWave | DecayingShockWave] = []
 
     for wave in waves:
-        if not wave.is_active:
+        # Retrospective filter: ``identify_outlet_segments`` is called over
+        # arbitrary [theta_start, theta_end] windows (e.g., plotting after the
+        # simulation ends). ``is_active`` is the wave's *current* (end-of-sim)
+        # state and skips waves that legitimately crossed v_outlet during the
+        # window but were later deactivated by a collision. Skip only if the
+        # wave's lifetime ended before the window started.
+        if wave.theta_deactivation <= theta_start:
             continue
 
         if isinstance(wave, DecayingShockWave):
