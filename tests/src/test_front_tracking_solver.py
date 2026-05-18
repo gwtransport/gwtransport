@@ -499,7 +499,6 @@ class TestRuntimeMassBalanceVerification:
 
         tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-6)
 
-    @pytest.mark.skip(reason="Pulse input creates waves that may exit domain - needs investigation")
     def test_mass_balance_pulse_input_freundlich(self, pulse_input):
         """Mass balance with pulse input and Freundlich n=2."""
         cin, flow, tedges = pulse_input
@@ -535,7 +534,6 @@ class TestRuntimeMassBalanceVerification:
         # ConstantRetardation has no rarefactions → exact integration at 1e-12.
         tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-12)
 
-    @pytest.mark.skip(reason="Freundlich n!=2: exact spatial rarefaction integration not yet implemented")
     def test_mass_balance_freundlich_n_lt_1(self, simple_step_input):
         """Mass balance with Freundlich n<1."""
         cin, flow, tedges = simple_step_input
@@ -569,7 +567,6 @@ class TestRuntimeMassBalanceVerification:
 
         tracker.verify_physics(check_mass_balance=True, mass_balance_rtol=1e-6)
 
-    @pytest.mark.skip(reason="Multiple concentration changes with C→0 transitions needs investigation")
     def test_mass_balance_multiple_concentration_changes(self):
         """Mass balance with multiple inlet concentration changes."""
         tedges = pd.DatetimeIndex(["2020-01-01", "2020-01-11", "2020-01-21", "2020-02-01", "2020-02-11"])
