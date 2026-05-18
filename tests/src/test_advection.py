@@ -12,7 +12,7 @@ from gwtransport.advection import (
     gamma_extraction_to_infiltration,
     gamma_infiltration_to_extraction,
     infiltration_to_extraction,
-    infiltration_to_extraction_front_tracking,
+    infiltration_to_extraction_nonlinear_sorption,
     infiltration_to_extraction_series,
 )
 from gwtransport.advection_utils import (
@@ -2500,7 +2500,7 @@ class TestFlowWeightedFrontTracking:
         flow = np.full(30, 100.0)
         aquifer_pore_volumes = np.array([500.0])
 
-        cout_ft = infiltration_to_extraction_front_tracking(
+        cout_ft, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -2531,7 +2531,7 @@ class TestFlowWeightedFrontTracking:
         cin = np.ones(60) * 7.0
         flow = 100.0 + 50.0 * np.sin(np.arange(60) * 2 * np.pi / 5)
 
-        cout = infiltration_to_extraction_front_tracking(
+        cout, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -2555,7 +2555,7 @@ class TestFlowWeightedFrontTracking:
         cin[5:10] = 10.0
         flow = np.full(60, 100.0)
 
-        cout = infiltration_to_extraction_front_tracking(
+        cout, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -3183,8 +3183,8 @@ def test_flow_weighted_front_tracking_output_edge_routing(monkeypatch):
 
     # Patch C(θ) to be the θ-midpoint of each fine sub-bin so the flow-weighted
     # average is strictly routing-dependent.
-    def _linear_c(*, theta_bin_edges, v_outlet, waves, sorption):
-        del v_outlet, waves, sorption
+    def _linear_c(*, theta_bin_edges, v_outlet, waves, sorption, cin=None, theta_edges_inlet=None):
+        del v_outlet, waves, sorption, cin, theta_edges_inlet
         return (theta_bin_edges[:-1] + theta_bin_edges[1:]) / 2
 
     monkeypatch.setattr(adv_mod, "compute_bin_averaged_concentration_exact", _linear_c)
@@ -3197,6 +3197,7 @@ def test_flow_weighted_front_tracking_output_edge_routing(monkeypatch):
         waves=[],
         sorption=ConstantRetardation(retardation_factor=1.0),
         theta_edges=theta_edges,
+        cin=np.zeros(len(flow)),
     )
 
     # Reference: explicit half-open bin assignment, with c_fine computed in θ

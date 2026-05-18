@@ -12,8 +12,8 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import pytest
 
-from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
-from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
+from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption, LangmuirSorption
+from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWave, RarefactionWave, ShockWave
 
 
 class TestCharacteristicWave:
@@ -381,3 +381,387 @@ class TestRarefactionWave:
 
         with pytest.raises(ValueError, match="Not a rarefaction"):
             RarefactionWave(theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption)
+
+
+class TestDecayingShockWave:
+    """Phase 2 step 1 analytical acceptance tests for ``DecayingShockWave``.
+
+    Hand-derived against the closed forms for Freundlich n=2 c_R=0 (fast
+    quadratic path) and Freundlich n=3 c_R=0 (brentq path) — the latter
+    independently exercises the inversion code so the n=2 specialization
+    doesn't mask brentq bugs. Math derivations live in the plan document
+    `check-out-the-main-wondrous-alpaca.md` §"Closed-form derivations".
+
+    Parametric coverage (Langmuir, n=0.5 mirrored, c_R>0, mass balance,
+    pointwise breakthrough, entropy, multi-pulse, flow-change) is deferred
+    to Phase 2 steps 5+ per the plan: those tests would all assert
+    closed-form numbers that derive from un-reviewed math here, so the
+    plan defers them until ``bas-physics-math-reviewer`` signs off on the
+    math-interim pass.
+    """
+
+    def test_freundlich_n2_cr_zero_closed_form(self):
+        """Closed-form values for Freundlich n=2, c_R=0, hand-computed.
+
+        Sorption: k_f=0.01, n=2, bulk_density=1500, porosity=0.3, so
+        alpha = bulk_density * k_f / porosity = 50.
+
+        Collision IC: rarefaction apex at (V=0, theta=1000); shock formed at
+        (V=1000/27, theta=1500) with decaying-side c_decay_initial=4 (so
+        u_c=2) and c_fixed=0.
+
+        Invariant constant: K = (theta_c - theta_R) * u_c^2 / (2*u_c + alpha)
+        = 500 * 4 / 54 = 1000/27.
+
+        Hand-derived "future" state at u_target=1 (c_decay=1):
+        theta_local = K*(2u + alpha)/u^2 = (1000/27)*52 = 52000/27, so
+        theta = theta_origin + theta_local = 79000/27. Position
+        V_s - V_origin = n*K/u = 2*(1000/27)/1 = 2000/27.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        alpha_expected = 50.0
+        alpha_actual = sorption.bulk_density * sorption.k_f / sorption.porosity
+        assert alpha_actual == alpha_expected
+
+        k_expected = 1000.0 / 27.0
+        v_collision = 1000.0 / 27.0  # = n*K/u_c = 2*(1000/27)/2
+
+        wave = DecayingShockWave(
+            theta_start=1500.0,
+            v_start=v_collision,
+            c_decay_initial=4.0,
+            c_fixed=0.0,
+            decay_side="left",
+            v_origin=0.0,
+            theta_origin=1000.0,
+            sorption=sorption,
+        )
+
+        # 1. K from collision IC.
+        assert pytest.approx(k_expected, rel=1e-14) == wave.K
+
+        # 2. Consistency at theta=theta_start: position and c_decay reproduce inputs.
+        assert pytest.approx(v_collision, rel=1e-14) == wave.position_at_theta(1500.0)
+        assert pytest.approx(4.0, rel=1e-14) == wave.c_decay_at_theta(1500.0)
+
+        # 3. Hand-derived "future" state at u=1, c_decay=1.
+        theta_test = 79000.0 / 27.0
+        v_test = 2000.0 / 27.0
+
+        assert pytest.approx(1.0, rel=1e-14) == wave.c_decay_at_theta(theta_test)
+        assert pytest.approx(v_test, rel=1e-14) == wave.position_at_theta(theta_test)
+
+        # 4. outlet_crossing_theta inverts V_s(theta) -> theta at v_outlet=v_test.
+        theta_at_v = wave.outlet_crossing_theta(v_outlet=v_test)
+        assert theta_at_v is not None
+        assert pytest.approx(theta_test, rel=1e-13) == theta_at_v
+
+        # 5. The invariant theta_local * u^n = K * (n*u^(n-1) + alpha) holds at
+        # both checked points.
+        for theta, c in [(1500.0, 4.0), (theta_test, 1.0)]:
+            theta_local = theta - 1000.0
+            u = c**0.5
+            lhs = theta_local * u**2
+            rhs = wave.K * (2.0 * u + alpha_expected)
+            assert pytest.approx(rhs, rel=1e-14) == lhs
+
+        # 6. concentration_left/right reflect decay_side='left' convention.
+        assert wave.concentration_left() == 4.0
+        assert wave.concentration_right() == 0.0
+
+    def test_freundlich_n3_cr_zero_brentq_path_invariant(self):
+        """For n=3 c_R=0, c_decay_at_theta uses brentq; verify the invariant.
+
+        The n=2 closed-form path bypasses brentq entirely, so the previous
+        test does NOT exercise the transcendental inverter. This test picks
+        n=3 with the same sorption family and asserts that the invariant
+        ``theta_local * u^n = K * (n*u^(n-1) + alpha)`` holds at both the
+        collision and a non-trivial later point — independent of how the
+        inversion is implemented. A silent bug in the brentq bracket or in
+        the n != 2 closed-form K formula would surface here.
+
+        Also uses ``v_origin != 0`` so a v_origin-coefficient bug in the
+        c_R=0 position formula (``V_s = v_origin + n*K/u``) is detected.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=3.0, bulk_density=1500.0, porosity=0.3)
+        alpha_expected = sorption.bulk_density * sorption.k_f / sorption.porosity
+
+        # Construct a fan-consistent collision point. With n=3, u_c = c^(1/3).
+        c_decay_initial = 8.0  # u_c = 2
+        u_c = 2.0
+        # theta_local at collision is free; pick 270 for cleaner numbers.
+        theta_local_collision = 270.0
+        # K = theta_local * u^n / (n*u^(n-1) + alpha) = 270 * 8 / (3*4 + 50) = 2160 / 62
+        k_expected = theta_local_collision * u_c**3 / (3.0 * u_c**2 + alpha_expected)
+        v_origin = 50.0  # nonzero to detect v_origin-coefficient bugs
+        # V_s = v_origin + n*K/u_c
+        v_collision = v_origin + 3.0 * k_expected / u_c
+
+        wave = DecayingShockWave(
+            theta_start=270.0 + 1000.0,
+            v_start=v_collision,
+            c_decay_initial=c_decay_initial,
+            c_fixed=0.0,
+            decay_side="left",
+            v_origin=v_origin,
+            theta_origin=1000.0,
+            sorption=sorption,
+        )
+
+        assert pytest.approx(k_expected, rel=1e-14) == wave.K
+
+        # Pick a later theta where brentq must run. theta_local = 1080 (4x collision).
+        theta_later = 1000.0 + 1080.0
+        c_later = wave.c_decay_at_theta(theta_later)
+        assert c_later is not None
+        # Invariant must hold to machine precision.
+        u_later = c_later ** (1.0 / 3.0)
+        lhs = 1080.0 * c_later  # theta_local * u^n
+        rhs = wave.K * (3.0 * u_later**2 + alpha_expected)
+        assert pytest.approx(rhs, rel=1e-12) == lhs
+
+        # And position is v_origin + n*K/u_later.
+        v_later = wave.position_at_theta(theta_later)
+        assert v_later is not None
+        assert pytest.approx(v_origin + 3.0 * wave.K / u_later, rel=1e-12) == v_later
+
+        # Round-trip: outlet_crossing_theta(v_later) returns theta_later.
+        theta_recovered = wave.outlet_crossing_theta(v_outlet=v_later)
+        assert theta_recovered is not None
+        assert pytest.approx(theta_later, rel=1e-12) == theta_recovered
+
+    def test_post_init_rejects_invalid_inputs(self):
+        """``__post_init__`` validates decay_side, theta_origin, c_decay_initial."""
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        common = {
+            "theta_start": 1500.0,
+            "v_start": 1000.0 / 27.0,
+            "c_decay_initial": 4.0,
+            "c_fixed": 0.0,
+            "v_origin": 0.0,
+            "theta_origin": 1000.0,
+            "sorption": sorption,
+        }
+
+        with pytest.raises(ValueError, match="decay_side"):
+            DecayingShockWave(decay_side="middle", **common)
+
+        with pytest.raises(ValueError, match="c_decay_initial"):
+            DecayingShockWave(**{**common, "decay_side": "left", "c_decay_initial": 0.0})
+
+        with pytest.raises(ValueError, match="c_fixed"):
+            DecayingShockWave(**{**common, "decay_side": "left", "c_fixed": -1.0})
+
+        with pytest.raises(ValueError, match="theta_origin"):
+            DecayingShockWave(**{**common, "decay_side": "left", "theta_origin": 1500.0})
+
+        with pytest.raises(TypeError, match="FreundlichSorption or LangmuirSorption"):
+            DecayingShockWave(**{
+                **common,
+                "decay_side": "left",
+                "sorption": ConstantRetardation(retardation_factor=2.0),
+            })
+
+    def test_post_init_rejects_freundlich_n_not_2_with_c_fixed_positive(self):
+        """Freundlich with c_fixed>0 currently supports only n=2; other n raises."""
+        sorption = FreundlichSorption(k_f=0.01, n=1.5, bulk_density=1500.0, porosity=0.3)
+        with pytest.raises(NotImplementedError, match="c_fixed > 0"):
+            DecayingShockWave(
+                theta_start=1500.0,
+                v_start=20.0,
+                c_decay_initial=4.0,
+                c_fixed=1.0,
+                decay_side="left",
+                v_origin=0.0,
+                theta_origin=1000.0,
+                sorption=sorption,
+            )
+
+    def test_freundlich_n2_cr_positive_closed_form(self):
+        """Closed-form values for Freundlich n=2, c_R>0, hand-computed.
+
+        Setup uses ``v_origin != 0`` to also catch v_origin-coefficient bugs
+        in the position and outlet-crossing formulas.
+
+        Sorption: k_f=0.01, n=2, bulk_density=1500, porosity=0.3, so
+        alpha = bulk_density * k_f / porosity = 50.
+
+        Collision IC: rarefaction apex at (V=20, theta=1000); c_decay_initial=9
+        (u_c=3), c_fixed=1 (u_R=1).
+
+        Invariant constant: K = theta_local_collision * (u_c - u_R)^2 / (2*u_c + alpha).
+        Pick theta_local_collision = 56 to get K = 56*4/56 = 4. Collision V_s:
+        V_s - v_origin = 2*K*u_c/(u_c - u_R)^2 = 2*4*3/4 = 6, so v_start = 26.
+
+        Hand-derived later state at u=2 (c_decay=4):
+        theta_local = K*(2u + alpha)/(u - u_R)^2 = 4*54/1 = 216, so theta=1216.
+        Position: V_s - v_origin = 2*K*u/(u-u_R)^2 = 2*4*2/1 = 16, so V_s=36.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        alpha_expected = 50.0
+        k_expected = 4.0
+        v_origin = 20.0
+        theta_origin = 1000.0
+        v_collision = v_origin + 6.0  # = 26
+        theta_collision = theta_origin + 56.0  # = 1056
+
+        wave = DecayingShockWave(
+            theta_start=theta_collision,
+            v_start=v_collision,
+            c_decay_initial=9.0,  # u_c = 3
+            c_fixed=1.0,  # u_R = 1
+            decay_side="left",
+            v_origin=v_origin,
+            theta_origin=theta_origin,
+            sorption=sorption,
+        )
+
+        # 1. K from collision IC.
+        assert pytest.approx(k_expected, rel=1e-14) == wave.K
+
+        # 2. Consistency at theta=theta_start.
+        assert pytest.approx(v_collision, rel=1e-14) == wave.position_at_theta(theta_collision)
+        assert pytest.approx(9.0, rel=1e-14) == wave.c_decay_at_theta(theta_collision)
+
+        # 3. Hand-derived later state at u=2, c_decay=4.
+        theta_test = theta_origin + 216.0  # = 1216
+        v_test = v_origin + 16.0  # = 36
+
+        assert pytest.approx(4.0, rel=1e-14) == wave.c_decay_at_theta(theta_test)
+        assert pytest.approx(v_test, rel=1e-14) == wave.position_at_theta(theta_test)
+
+        # 4. Outlet-crossing round-trip.
+        theta_at_v = wave.outlet_crossing_theta(v_outlet=v_test)
+        assert theta_at_v is not None
+        assert pytest.approx(theta_test, rel=1e-13) == theta_at_v
+
+        # 5. Invariant (u_d - u_R)^2 * theta_local = K * (2*u_d + alpha) at both
+        # checked points.
+        u_r = 1.0
+        for theta, c in [(theta_collision, 9.0), (theta_test, 4.0)]:
+            theta_local = theta - theta_origin
+            u_d = c**0.5
+            lhs = (u_d - u_r) ** 2 * theta_local
+            rhs = wave.K * (2.0 * u_d + alpha_expected)
+            assert pytest.approx(rhs, rel=1e-14) == lhs
+
+    def test_langmuir_closed_form_with_later_theta_and_outlet_roundtrip(self):
+        """Closed-form values for Langmuir c_R=0, hand-computed.
+
+        Setup uses ``v_origin != 0`` and a later-theta invariant check (the
+        previous smoke test only verified self-consistency at theta_start,
+        which allowed K-scale mutations to pass silently).
+
+        Sorption: s_max=0.5, k_l=10, bulk_density=1500, porosity=0.3.
+        a_coeff = bulk_density * s_max * k_l / porosity = 1500 * 0.5 * 10 / 0.3 = 25000.
+
+        Collision IC: apex at (V=200, theta=1000); c_decay_initial=10
+        (so K_L + c = 20).
+
+        K = theta_local_collision * c_d^2 / ((K_L + c_d)^2 + a_coeff)
+          = theta_local_collision * 100 / (400 + 25000) = theta_local_collision / 254.
+        Pick theta_local_collision = 254 to get K=1. Collision V_s:
+        V_s - v_origin = K * (K_L + c)^2 / c^2 = 1 * 400 / 100 = 4, so v_start=204.
+
+        Later state at c=5:
+        theta_local = K * ((K_L + c)^2 + a_coeff) / c^2 = 1 * (225 + 25000) / 25 = 1009,
+        so theta=2009. Position: V_s - v_origin = 1 * 225 / 25 = 9, so V_s=209.
+        """
+        sorption = LangmuirSorption(s_max=0.5, k_l=10.0, bulk_density=1500.0, porosity=0.3)
+        a_expected = 25000.0
+        assert sorption.a_coeff == a_expected
+
+        k_expected = 1.0
+        v_origin = 200.0
+        theta_origin = 1000.0
+        v_collision = v_origin + 4.0  # = 204
+        theta_collision = theta_origin + 254.0  # = 1254
+        k_l = 10.0
+
+        wave = DecayingShockWave(
+            theta_start=theta_collision,
+            v_start=v_collision,
+            c_decay_initial=10.0,
+            c_fixed=0.0,
+            decay_side="left",
+            v_origin=v_origin,
+            theta_origin=theta_origin,
+            sorption=sorption,
+        )
+
+        # 1. K from collision IC.
+        assert pytest.approx(k_expected, rel=1e-14) == wave.K
+
+        # 2. Consistency at theta=theta_start.
+        assert pytest.approx(v_collision, rel=1e-14) == wave.position_at_theta(theta_collision)
+        assert pytest.approx(10.0, rel=1e-14) == wave.c_decay_at_theta(theta_collision)
+
+        # 3. Hand-derived later state at c=5.
+        theta_test = theta_origin + 1009.0  # = 2009
+        v_test = v_origin + 9.0  # = 209
+
+        assert pytest.approx(5.0, rel=1e-14) == wave.c_decay_at_theta(theta_test)
+        assert pytest.approx(v_test, rel=1e-14) == wave.position_at_theta(theta_test)
+
+        # 4. Outlet-crossing round-trip.
+        theta_at_v = wave.outlet_crossing_theta(v_outlet=v_test)
+        assert theta_at_v is not None
+        assert pytest.approx(theta_test, rel=1e-13) == theta_at_v
+
+        # 5. Invariant theta_local * c^2 = K * ((K_L + c)^2 + a_coeff) at both checked points.
+        for theta, c in [(theta_collision, 10.0), (theta_test, 5.0)]:
+            theta_local = theta - theta_origin
+            lhs = theta_local * c * c
+            rhs = wave.K * ((k_l + c) ** 2 + a_expected)
+            assert pytest.approx(rhs, rel=1e-14) == lhs
+
+    def test_concentration_at_point_three_region_branching(self):
+        """concentration_at_point dispatches correctly across the shock, fan, and downstream.
+
+        Reuses the c_R>0 setup (v_origin=20, c_fixed=1) so the test catches
+        v_origin-coefficient bugs in the fan-branch r_target and c_fixed-sign
+        bugs in the at-shock average. Hand-derived state at theta_test=1216:
+        V_s=36, c_decay=4 (u=2), so the fan spans R in [R(4), R(1)] = [13.5, 26].
+
+        Three regions checked:
+
+        - v > V_s(theta) + tol: downstream, returns c_fixed=1.
+        - |v - V_s(theta)| within tol: returns 0.5*(c_decay + c_fixed) = 2.5.
+        - v_fan = v_origin + 12 = 32 (R = 216/12 = 18, inside [13.5, 26]):
+          fan-interior c = concentration_from_retardation(18) = (25/17)^2 =
+          625/289 for Freundlich n=2 with alpha=50.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        v_origin = 20.0
+        theta_origin = 1000.0
+        v_collision = v_origin + 6.0  # = 26
+
+        wave = DecayingShockWave(
+            theta_start=theta_origin + 56.0,  # = 1056
+            v_start=v_collision,
+            c_decay_initial=9.0,  # u_c = 3
+            c_fixed=1.0,  # u_R = 1
+            decay_side="left",
+            v_origin=v_origin,
+            theta_origin=theta_origin,
+            sorption=sorption,
+        )
+
+        theta_test = theta_origin + 216.0  # = 1216
+        v_s_test = v_origin + 16.0  # = 36
+
+        # At the shock face: 0.5 * (c_decay + c_fixed) = 0.5 * (4 + 1) = 2.5.
+        c_at_shock = wave.concentration_at_point(v=v_s_test, theta=theta_test)
+        assert c_at_shock is not None
+        assert pytest.approx(2.5, rel=1e-14) == c_at_shock
+
+        # Downstream of the shock: c_fixed = 1.
+        c_downstream = wave.concentration_at_point(v=v_s_test + 1.0, theta=theta_test)
+        assert c_downstream == 1.0
+
+        # Inside the fan at v_fan = 32 (R = 18, in [13.5, 26]): c = (25/17)^2.
+        v_fan = v_origin + 12.0  # = 32
+        c_fan_expected = (25.0 / 17.0) ** 2
+        c_fan = wave.concentration_at_point(v=v_fan, theta=theta_test)
+        assert c_fan is not None
+        assert pytest.approx(c_fan_expected, rel=1e-13) == c_fan

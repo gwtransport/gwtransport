@@ -450,7 +450,7 @@ def freundlich_retardation(
     See Also
     --------
     residence_time : Compute residence times with retardation
-    gwtransport.advection.infiltration_to_extraction_front_tracking : Transport with nonlinear sorption
+    gwtransport.advection.infiltration_to_extraction_nonlinear_sorption : Transport with nonlinear sorption
     :ref:`concept-nonlinear-sorption` : Freundlich isotherm and concentration-dependent retardation
 
     Examples

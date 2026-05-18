@@ -298,26 +298,18 @@ class FreundlichSorption(NonlinearSorption):
         The flux term only includes dissolved concentration because sorbed mass
         is immobile.
 
-        ``c`` is clamped to ``c_min`` before evaluating the isotherm so that
-        :meth:`retardation` and :meth:`total_concentration` agree on the same
-        ``c_eff`` (P1.4 Option A). For ``c < c_min`` both methods yield
-        ``c_min``-dependent constants; ``dC_tot/dC`` is 0 there, but no shock
-        forms entirely within that regime in practice (default ``c_min`` is
-        ``1e-12``).
+        For ``c = 0``, ``c^(1/n) = 0`` exactly (no singularity for any
+        ``n > 0``), so ``C_T(0) = 0`` is physically correct and no ``c_min``
+        clamp is needed here. ``c_min`` is only required to keep
+        :meth:`retardation` finite as ``c -> 0`` for ``n > 1``; clamping
+        ``total_concentration`` to ``c_min`` would bias Rankine-Hugoniot
+        shock speeds when ``c_R = 0`` (e.g. the canonical 0->c->0 pulse).
+        Negative ``c`` is clamped to ``0`` defensively.
         """
         is_array = isinstance(c, np.ndarray)
-        c_arr = np.asarray(c)
-
-        if self.c_min == 0 and self.n < 1.0:
-            sorbed = np.where(
-                c_arr <= 0, 0.0, (self.bulk_density / self.porosity) * self.k_f * (c_arr ** (1.0 / self.n))
-            )
-            result = c_arr + sorbed
-        else:
-            c_eff = np.maximum(c_arr, self.c_min)
-            sorbed = (self.bulk_density / self.porosity) * self.k_f * (c_eff ** (1.0 / self.n))
-            result = c_eff + sorbed
-
+        c_arr = np.maximum(np.asarray(c), 0.0)
+        sorbed = (self.bulk_density / self.porosity) * self.k_f * (c_arr ** (1.0 / self.n))
+        result = c_arr + sorbed
         return result if is_array else float(result)
 
     def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
@@ -806,10 +798,9 @@ def compute_first_front_arrival_theta(
        :class:`RarefactionWave` whose head (``c = c_min ≈ 0``) reaches the
        outlet at θ ≈ ``V·R(c_min) ≈ V`` — *much* earlier than the value this
        function returns (which is the *tail* arrival ``V·R(c_first)``).
-       The function preserves the legacy "tail arrival" semantics intentionally,
-       so the returned θ is a conservative end-of-spin-up: c is ≤ c_first
-       everywhere before it. Consult the solver event log for the true rarefaction
-       head crossing.
+       The function returns "tail arrival" semantics: the returned θ is a
+       conservative end-of-spin-up where c ≤ c_first everywhere before it.
+       Consult the solver event log for the true rarefaction head crossing.
 
     Parameters
     ----------

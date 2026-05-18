@@ -22,7 +22,7 @@ from gwtransport.fronttracking.output import (
     identify_outlet_segments,
     integrate_rarefaction_exact,
 )
-from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
+from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWave, RarefactionWave, ShockWave
 
 
 class TestConcentrationAtPoint:
@@ -118,6 +118,45 @@ class TestConcentrationAtPoint:
 
         c = concentration_at_point(v=100.0, theta=500.0, waves=waves, sorption=sorption)
         assert c == 0.0
+
+    def test_dispatch_prefers_decaying_shock_over_rarefaction(self):
+        """DecayingShockWave must win over a co-active RarefactionWave at the same point.
+
+        Phase 2 step 4 puts DecayingShockWave first in the wave-priority loop
+        in ``concentration_at_point``. End-to-end simulations rarely surface
+        this dispatch order because the parent rarefaction is deactivated
+        post-collision; this test keeps both active to exercise the priority
+        directly.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=8.0, c_tail=1e-12, sorption=sorption)
+        v_start_dsw = raref.head_position_at_theta(10.0)
+        assert v_start_dsw is not None
+        decaying = DecayingShockWave(
+            theta_start=10.0,
+            v_start=v_start_dsw,
+            c_decay_initial=raref.c_head,
+            c_fixed=0.0,
+            decay_side="left",
+            v_origin=0.0,
+            theta_origin=0.0,
+            sorption=sorption,
+        )
+
+        theta_q = 20.0
+        v_q = decaying.position_at_theta(theta_q)
+        assert v_q is not None
+
+        c_decay_at_q = decaying.c_decay_at_theta(theta_q)
+        assert c_decay_at_q is not None
+        c_dsw_expected = 0.5 * (c_decay_at_q + decaying.c_fixed)
+
+        # Both orderings must return the DSW value (priority is by type,
+        # not list position).
+        c1 = concentration_at_point(v=v_q, theta=theta_q, waves=[raref, decaying], sorption=sorption)
+        c2 = concentration_at_point(v=v_q, theta=theta_q, waves=[decaying, raref], sorption=sorption)
+        assert np.isclose(c1, c_dsw_expected, rtol=1e-12)
+        assert np.isclose(c2, c_dsw_expected, rtol=1e-12)
 
 
 class TestComputeBreakthroughCurve:
@@ -573,7 +612,11 @@ class TestMassBalanceFunctions:
         theta_cross = v_outlet * sorption.retardation_factor  # 1000
         theta_query = 1900.0  # well past crossing
 
-        mass = compute_cumulative_outlet_mass(theta_query, v_outlet, waves, sorption)
+        # Synthetic inlet history matching the wave list: sustained c=10 over
+        # the entire theta range.
+        cin = np.array([c])
+        theta_edges = np.array([0.0, theta_query])
+        mass = compute_cumulative_outlet_mass(theta_query, v_outlet, waves, sorption, cin=cin, theta_edges=theta_edges)
 
         # Closed form: ∫_θ_cross^θ_query c dθ' = c · (θ_query - θ_cross) = 10 · 900 = 9000.
         expected = c * (theta_query - theta_cross)

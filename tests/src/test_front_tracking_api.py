@@ -1,22 +1,10 @@
-"""Front-tracking public API integration tests.
-
-These tests cover the public front-tracking API functions in ``gwtransport.advection``:
-
-- ``infiltration_to_extraction_front_tracking``
-- ``infiltration_to_extraction_front_tracking_detailed``
-
-They were originally developed as Phase 7 of the front-tracking rebuild plan but are
-named independently of implementation order.
-"""
+"""Integration tests for ``gwtransport.advection.infiltration_to_extraction_nonlinear_sorption``."""
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport.advection import (
-    infiltration_to_extraction_front_tracking,
-    infiltration_to_extraction_front_tracking_detailed,
-)
+from gwtransport.advection import infiltration_to_extraction_nonlinear_sorption
 from gwtransport.fronttracking.math import FreundlichSorption, LangmuirSorption, compute_first_front_arrival_theta
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.utils import compute_time_edges
@@ -46,7 +34,7 @@ class TestFrontTrackingAPI:
             number_of_bins=len(cout_dates),
         )
 
-        cout = infiltration_to_extraction_front_tracking(
+        cout, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -84,7 +72,7 @@ class TestFrontTrackingAPI:
             number_of_bins=len(cout_dates),
         )
 
-        cout = infiltration_to_extraction_front_tracking(
+        cout, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -118,7 +106,7 @@ class TestFrontTrackingAPI:
             number_of_bins=len(cout_dates),
         )
 
-        cout = infiltration_to_extraction_front_tracking(
+        cout, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -152,7 +140,7 @@ class TestFrontTrackingAPI:
         )
 
         with pytest.raises(ValueError, match="Must provide one of"):
-            infiltration_to_extraction_front_tracking(
+            infiltration_to_extraction_nonlinear_sorption(
                 cin=cin,
                 flow=flow,
                 tedges=tedges,
@@ -181,7 +169,7 @@ class TestFrontTrackingAPI:
             number_of_bins=len(cout_dates),
         )
 
-        cout, structures = infiltration_to_extraction_front_tracking_detailed(
+        cout, structures = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -255,7 +243,7 @@ class TestFrontTrackingAPI:
             number_of_bins=len(cout_dates),
         )
 
-        cout, structures = infiltration_to_extraction_front_tracking_detailed(
+        cout, structures = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -300,7 +288,7 @@ class TestFrontTrackingAPI:
             number_of_bins=len(cout_dates),
         )
 
-        cout = infiltration_to_extraction_front_tracking(
+        cout, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -338,7 +326,7 @@ class TestFrontTrackingAPI:
             number_of_bins=len(cout_dates),
         )
 
-        cout = infiltration_to_extraction_front_tracking(
+        cout, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -366,7 +354,7 @@ class TestFrontTrackingAPI:
         cout_dates = pd.date_range(start=dates[0], periods=20, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        cout = infiltration_to_extraction_front_tracking(
+        cout, _ = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -394,7 +382,7 @@ class TestFrontTrackingAPI:
         cout_dates = pd.date_range(start=dates[0], periods=20, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        cout, structures = infiltration_to_extraction_front_tracking_detailed(
+        cout, structures = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -422,7 +410,7 @@ class TestFrontTrackingAPI:
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
         with pytest.raises(ValueError, match="Only one sorption model"):
-            infiltration_to_extraction_front_tracking(
+            infiltration_to_extraction_nonlinear_sorption(
                 cin=cin,
                 flow=flow,
                 tedges=tedges,
@@ -448,7 +436,7 @@ class TestFrontTrackingAPI:
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
         with pytest.raises(ValueError, match="All Langmuir parameters required"):
-            infiltration_to_extraction_front_tracking(
+            infiltration_to_extraction_nonlinear_sorption(
                 cin=cin,
                 flow=flow,
                 tedges=tedges,

@@ -54,16 +54,12 @@ the correction procedure.
   gamma_infiltration_to_extraction. Use case: Calibrating infiltration conditions from
   extraction measurements.
 
-- :func:`infiltration_to_extraction_front_tracking` - Exact front tracking with nonlinear sorption.
+- :func:`infiltration_to_extraction_nonlinear_sorption` - Exact front tracking with nonlinear sorption.
   Event-driven algorithm that solves 1D advective transport with Freundlich or Langmuir isotherm
   using analytical integration of shock and rarefaction waves. Machine-precision physics (no
-  numerical dispersion). Returns bin-averaged concentrations. Use case: Sharp concentration fronts
-  with exact mass balance required, single deterministic flow path.
-
-- :func:`infiltration_to_extraction_front_tracking_detailed` - Front tracking with piecewise structure.
-  Same as infiltration_to_extraction_front_tracking but also returns complete piecewise analytical
-  structure including all events, segments, and callable analytical forms C(t). Use case: Detailed
-  analysis of shock and rarefaction wave dynamics.
+  numerical dispersion). Returns bin-averaged concentrations together with the full piecewise
+  analytical structure (events, segments, wave list) for downstream analysis. Use case: Sharp
+  concentration fronts with exact mass balance required, single deterministic flow path.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -894,7 +890,7 @@ def infiltration_to_extraction(
     ... )
 
     Note: For concentration-dependent retardation (nonlinear sorption),
-    use `infiltration_to_extraction_front_tracking_detailed` instead, as this
+    use `infiltration_to_extraction_nonlinear_sorption` instead, as this
     function only supports constant (float) retardation factors.
 
     Using single pore volume:
@@ -1328,6 +1324,7 @@ def _flow_weighted_front_tracking_output(
     waves: list,
     sorption: SorptionModel,
     theta_edges: npt.NDArray[np.floating],
+    cin: npt.NDArray[np.floating],
 ) -> npt.NDArray[np.floating]:
     """Compute flow-weighted bin-averaged concentration from front-tracking output.
 
@@ -1380,6 +1377,8 @@ def _flow_weighted_front_tracking_output(
         v_outlet=v_outlet,
         waves=waves,
         sorption=sorption,
+        cin=cin,
+        theta_edges_inlet=theta_edges,
     )
 
     # Map each fine sub-bin to its flow value. side="right" enforces the
@@ -1410,163 +1409,7 @@ def _flow_weighted_front_tracking_output(
     return c_out
 
 
-def infiltration_to_extraction_front_tracking(
-    *,
-    cin: npt.ArrayLike,
-    flow: npt.ArrayLike,
-    tedges: pd.DatetimeIndex,
-    cout_tedges: pd.DatetimeIndex,
-    aquifer_pore_volumes: npt.ArrayLike,
-    freundlich_k: float | None = None,
-    freundlich_n: float | None = None,
-    bulk_density: float | None = None,
-    porosity: float | None = None,
-    retardation_factor: float | None = None,
-    langmuir_s_max: float | None = None,
-    langmuir_k_l: float | None = None,
-    max_iterations: int = 10000,
-) -> npt.NDArray[np.floating]:
-    """
-    Compute extracted concentration using exact front tracking with nonlinear sorption.
-
-    Uses event-driven analytical algorithm that tracks shock waves, rarefaction waves,
-    and characteristics with machine precision. No numerical dispersion, exact mass
-    balance to floating-point precision.
-
-    Exactly one sorption model must be specified:
-
-    - ``retardation_factor`` for constant (linear) retardation.
-    - ``freundlich_k`` + ``freundlich_n`` + ``bulk_density`` + ``porosity`` for
-      Freundlich isotherm.
-    - ``langmuir_s_max`` + ``langmuir_k_l`` + ``bulk_density`` + ``porosity`` for
-      Langmuir isotherm.
-
-    Parameters
-    ----------
-    cin : array-like
-        Infiltration concentration [mg/L or any units].
-        Length = len(tedges) - 1. The model assumes this value is constant over each
-        interval ``[tedges[i], tedges[i+1])``.
-    flow : array-like
-        Flow rate [m³/day]. Must be positive.
-        Length = len(tedges) - 1. The model assumes this value is constant over each
-        interval ``[tedges[i], tedges[i+1])``.
-    tedges : pandas.DatetimeIndex
-        Time bin edges. Length = len(cin) + 1.
-    cout_tedges : pandas.DatetimeIndex
-        Output time bin edges. Can be different from tedges.
-        Length determines output array size.
-    aquifer_pore_volumes : array-like
-        Array of aquifer pore volumes [m³] representing the distribution
-        of residence times in the aquifer system. Each pore volume must be positive.
-    freundlich_k : float, optional
-        Freundlich coefficient [(m³/kg)^(1/n)]. Must be positive.
-    freundlich_n : float, optional
-        Freundlich exponent [-]. Must be positive and != 1.
-    bulk_density : float, optional
-        Bulk density [kg/m³]. Must be positive.
-        Shared by Freundlich and Langmuir models.
-    porosity : float, optional
-        Porosity [-]. Must be in (0, 1).
-        Shared by Freundlich and Langmuir models.
-    retardation_factor : float, optional
-        Constant retardation factor [-]. Must be >= 1.0.
-    langmuir_s_max : float, optional
-        Langmuir maximum sorption capacity [mg/kg]. Must be positive.
-    langmuir_k_l : float, optional
-        Langmuir half-saturation constant [mg/L]. Must be positive.
-    max_iterations : int, optional
-        Maximum number of events. Default 10000.
-
-    Returns
-    -------
-    cout : numpy.ndarray
-        Flow-weighted extraction concentration averaged across all pore volumes.
-        Length = len(cout_tedges) - 1.
-
-    See Also
-    --------
-    infiltration_to_extraction_front_tracking_detailed : Returns detailed structure
-    infiltration_to_extraction : Convolution-based approach for linear case
-    gamma_infiltration_to_extraction : For distributions of pore volumes
-    :ref:`concept-nonlinear-sorption` : Freundlich isotherm and front-tracking theory
-    :ref:`assumption-advection-dominated` : When diffusion/dispersion is negligible
-
-    Notes
-    -----
-    **Spin-up Period**:
-    The function computes the first arrival time t_first. Concentrations
-    before t_first are affected by unknown initial conditions and should
-    not be used for analysis. Use `infiltration_to_extraction_front_tracking_detailed`
-    to access t_first.
-
-    **Machine Precision**:
-    All calculations use exact analytical formulas. Mass balance is conserved
-    to floating-point precision (~1e-14 relative error). No numerical tolerances
-    are used for time/position calculations.
-
-    **Physical Correctness**:
-    - All shocks satisfy Lax entropy condition
-    - Rarefaction waves use self-similar solutions
-    - Causality is strictly enforced
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import pandas as pd
-    >>>
-    >>> # Pulse injection with single pore volume
-    >>> tedges = pd.date_range("2020-01-01", periods=4, freq="10D")
-    >>> cin = np.array([0.0, 10.0, 0.0])
-    >>> flow = np.array([100.0, 100.0, 100.0])
-    >>> cout_tedges = pd.date_range("2020-01-01", periods=10, freq="5D")
-    >>>
-    >>> cout = infiltration_to_extraction_front_tracking(
-    ...     cin=cin,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volumes=np.array([500.0]),
-    ...     freundlich_k=0.01,
-    ...     freundlich_n=2.0,
-    ...     bulk_density=1500.0,
-    ...     porosity=0.3,
-    ... )
-
-    With multiple pore volumes (distribution):
-
-    >>> aquifer_pore_volumes = np.array([400.0, 500.0, 600.0])
-    >>> cout = infiltration_to_extraction_front_tracking(
-    ...     cin=cin,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volumes=aquifer_pore_volumes,
-    ...     freundlich_k=0.01,
-    ...     freundlich_n=2.0,
-    ...     bulk_density=1500.0,
-    ...     porosity=0.3,
-    ... )
-    """
-    cout, _ = infiltration_to_extraction_front_tracking_detailed(
-        cin=cin,
-        flow=flow,
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        freundlich_k=freundlich_k,
-        freundlich_n=freundlich_n,
-        bulk_density=bulk_density,
-        porosity=porosity,
-        retardation_factor=retardation_factor,
-        langmuir_s_max=langmuir_s_max,
-        langmuir_k_l=langmuir_k_l,
-        max_iterations=max_iterations,
-    )
-    return cout
-
-
-def infiltration_to_extraction_front_tracking_detailed(
+def infiltration_to_extraction_nonlinear_sorption(
     *,
     cin: npt.ArrayLike,
     flow: npt.ArrayLike,
@@ -1656,7 +1499,8 @@ def infiltration_to_extraction_front_tracking_detailed(
 
     See Also
     --------
-    infiltration_to_extraction_front_tracking : Returns concentrations only (simpler interface)
+    infiltration_to_extraction : Convolution-based approach for linear retardation
+    gamma_infiltration_to_extraction : For distributions of pore volumes
     :ref:`concept-nonlinear-sorption` : Freundlich isotherm and front-tracking theory
     :ref:`assumption-advection-dominated` : When diffusion/dispersion is negligible
 
@@ -1664,7 +1508,7 @@ def infiltration_to_extraction_front_tracking_detailed(
     --------
     ::
 
-        cout, structures = infiltration_to_extraction_front_tracking_detailed(
+        cout, structures = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -1728,6 +1572,7 @@ def infiltration_to_extraction_front_tracking_detailed(
             waves=tracker.state.waves,
             sorption=sorption,
             theta_edges=tracker.state.theta_edges,
+            cin=cin,
         )
 
         structure = {

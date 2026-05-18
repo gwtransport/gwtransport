@@ -19,7 +19,7 @@ Module Reference
    * - Module
      - Primary Functions
    * - ``advection``
-     - :py:func:`~gwtransport.advection.gamma_infiltration_to_extraction`, :py:func:`~gwtransport.advection.infiltration_to_extraction`, :py:func:`~gwtransport.advection.infiltration_to_extraction_front_tracking`
+     - :py:func:`~gwtransport.advection.gamma_infiltration_to_extraction`, :py:func:`~gwtransport.advection.infiltration_to_extraction`, :py:func:`~gwtransport.advection.infiltration_to_extraction_nonlinear_sorption`
    * - ``residence_time``
      - :py:func:`~gwtransport.residence_time.residence_time`, :py:func:`~gwtransport.residence_time.residence_time_mean`, :py:func:`~gwtransport.residence_time.freundlich_retardation`
    * - ``deposition``
@@ -264,7 +264,7 @@ Model Parameterization Assumptions
 **Does NOT apply to:**
 
 - :py:func:`~gwtransport.advection.infiltration_to_extraction` — accepts explicit pore volumes
-- :py:func:`~gwtransport.advection.infiltration_to_extraction_front_tracking` — accepts explicit pore volumes
+- :py:func:`~gwtransport.advection.infiltration_to_extraction_nonlinear_sorption` — accepts explicit pore volumes
 
 **What this means:** The shape of the pore volume distribution can be captured by specifying only mean and standard deviation. The gamma distribution is unimodal and right-skewed. See :ref:`concept-gamma-distribution` for background on this parameterization.
 
@@ -304,7 +304,7 @@ Model Parameterization Assumptions
 
 **Does NOT apply to:**
 
-- :py:func:`~gwtransport.advection.infiltration_to_extraction_front_tracking` — supports Freundlich and Langmuir (non-linear) sorption
+- :py:func:`~gwtransport.advection.infiltration_to_extraction_nonlinear_sorption` — supports Freundlich and Langmuir (non-linear) sorption
 - :py:func:`~gwtransport.residence_time.freundlich_retardation` — computes concentration-dependent R
 
 **What this means:** All concentrations travel at the same retarded velocity. The sorption isotherm is linear. See :ref:`concept-retardation-factor` for background on retardation.
@@ -322,7 +322,7 @@ Model Parameterization Assumptions
 - High concentrations approaching sorption capacity
 - Concentration-dependent retardation
 
-**Testable:** Yes - compare predictions with constant R vs. concentration-dependent R (Freundlich or Langmuir). The package supports non-linear sorption via :py:func:`~gwtransport.advection.infiltration_to_extraction_front_tracking`.
+**Testable:** Yes - compare predictions with constant R vs. concentration-dependent R (Freundlich or Langmuir). The package supports non-linear sorption via :py:func:`~gwtransport.advection.infiltration_to_extraction_nonlinear_sorption`.
 
 .. note::
 

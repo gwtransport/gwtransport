@@ -18,10 +18,18 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from gwtransport.fronttracking.math import SorptionModel
+import numpy as np
+from scipy.optimize import brentq
+
+from gwtransport.fronttracking.math import (
+    FreundlichSorption,
+    LangmuirSorption,
+    SorptionModel,
+)
 
 # Numerical tolerance constants
 EPSILON_POSITION = 1e-15  # Tolerance for checking if two positions are equal
+DECAYING_SHOCK_U_FLOOR = 1e-300  # Lower bracket bound for brentq on Freundlich u-invariant
 
 
 @dataclass
@@ -48,7 +56,60 @@ class Wave(ABC):
     v_start: float
     """Position at which the wave forms [m³]."""
     is_active: bool = field(default=True, kw_only=True)
-    """Whether wave is currently active."""
+    """Whether wave is currently active (in the solver's event-loop sense)."""
+    theta_deactivation: float = field(default=float("inf"), kw_only=True)
+    """Cumulative flow at which the wave was deactivated (default ``+∞``).
+
+    Historical record set by collision handlers when a wave is replaced
+    (e.g., a parent rarefaction superseded by a ``DecayingShockWave``).
+    ``is_active = False`` is the "current state" flag the solver uses for
+    its event loop; ``theta_deactivation`` is the moment in θ-history when
+    the wave stopped contributing. Retrospective queries (any θ in the
+    past) must use ``was_active_at(theta)`` instead of ``is_active`` so
+    that ``compute_domain_mass`` etc. correctly attribute c at v_outlet
+    during the wave's lifetime even after later events have deactivated
+    the wave.
+    """
+
+    def was_active_at(self, theta: float) -> bool:
+        """Whether the wave was active at cumulative flow ``theta`` (geometric truth).
+
+        Use for retrospective queries — ``is_active`` reflects only the
+        wave's *current* (post-simulation) state, which is wrong for
+        ``compute_domain_mass`` and similar at θ before a deactivation event.
+
+        Parameters
+        ----------
+        theta : float
+            Cumulative flow at which to query historical activity [m³].
+
+        Returns
+        -------
+        bool
+            ``True`` for ``theta_start <= theta < theta_deactivation``.
+            A wave constructed with ``is_active=False`` and no recorded
+            ``theta_deactivation`` (default ``+∞``) is treated as
+            never-active — e.g., synthetic test fixtures that want the
+            wave excluded from dispatch entirely.
+        """
+        if not self.is_active and self.theta_deactivation == float("inf"):
+            return False
+        return self.theta_start <= theta < self.theta_deactivation
+
+    def deactivate(self, theta: float) -> None:
+        """Mark the wave inactive at cumulative flow ``theta`` (collision handler API).
+
+        Sets both ``is_active = False`` (solver event-loop flag) and
+        ``theta_deactivation = theta`` (historical record for retrospective
+        ``was_active_at`` queries).
+
+        Parameters
+        ----------
+        theta : float
+            Cumulative flow at which the wave is deactivated [m³].
+        """
+        self.is_active = False
+        self.theta_deactivation = theta
 
     @abstractmethod
     def position_at_theta(self, theta: float) -> float | None:
@@ -62,7 +123,10 @@ class Wave(ABC):
         Returns
         -------
         position : float or None
-            Position [m³], or None if θ < θ_start or the wave is inactive.
+            Position [m³], or None if θ < θ_start or θ >= theta_deactivation.
+            (Past-θ queries respect the wave's historical lifetime; current-state
+            queries before deactivation behave identically to the ``is_active``
+            check.)
         """
 
     @abstractmethod
@@ -133,7 +197,7 @@ class CharacteristicWave(Wave):
 
         ``V(θ) = v_start + speed * (θ - θ_start)``.
         """
-        if theta < self.theta_start or not self.is_active:
+        if not self.was_active_at(theta):
             return None
         return self.v_start + self.speed() * (theta - self.theta_start)
 
@@ -217,7 +281,7 @@ class ShockWave(Wave):
 
     def position_at_theta(self, theta: float) -> float | None:
         """Position at cumulative flow θ. Shock propagates linearly in θ."""
-        if theta < self.theta_start or not self.is_active:
+        if not self.was_active_at(theta):
             return None
         return self.v_start + self.speed * (theta - self.theta_start)
 
@@ -332,13 +396,13 @@ class RarefactionWave(Wave):
 
     def head_position_at_theta(self, theta: float) -> float | None:
         """Position of rarefaction head at cumulative flow θ."""
-        if theta < self.theta_start or not self.is_active:
+        if not self.was_active_at(theta):
             return None
         return self.v_start + self.head_speed() * (theta - self.theta_start)
 
     def tail_position_at_theta(self, theta: float) -> float | None:
         """Position of rarefaction tail at cumulative flow θ."""
-        if theta < self.theta_start or not self.is_active:
+        if not self.was_active_at(theta):
             return None
         return self.v_start + self.tail_speed() * (theta - self.theta_start)
 
@@ -348,7 +412,7 @@ class RarefactionWave(Wave):
 
     def contains_point(self, v: float, theta: float) -> bool:
         """Return ``True`` if ``(v, θ)`` lies between the fan's tail and head."""
-        if theta <= self.theta_start or not self.is_active:
+        if theta <= self.theta_start or theta >= self.theta_deactivation:
             return False
 
         v_head = self.head_position_at_theta(theta)
@@ -410,3 +474,577 @@ class RarefactionWave(Wave):
         c_lo = min(self.c_tail, self.c_head)
         c_hi = max(self.c_tail, self.c_head)
         return min(max(float(c), c_lo), c_hi)
+
+
+@dataclass
+class DecayingShockWave(Wave):
+    r"""Merging shock with closed-form trajectory in θ-space.
+
+    Formed when a rarefaction fan and a shock collide. The shock then has
+    one side fed by the fan's self-similar profile (the "decay" side) and
+    the other side at the original outer state (the "fixed" side).
+
+    Two collision regimes are supported via ``decay_side``:
+
+    - ``'left'`` (favorable head-collision): Freundlich ``n > 1`` or Langmuir.
+      The rarefaction's head (faster) catches a leading shock. After
+      collision, the shock's ``c_left`` decays from the rarefaction head
+      value toward ``c_fixed`` (the unchanged downstream c_right).
+    - ``'right'`` (unfavorable tail-collision, n<1 mirrored): Freundlich
+      ``n < 1``. A trailing shock catches the rarefaction's tail. After
+      collision, the shock's ``c_right`` decays from the rarefaction tail
+      value toward ``c_fixed`` (the unchanged upstream c_left).
+
+    **Closed forms** (``θ_local := θ - theta_origin`` measured from the
+    rarefaction apex, ``α := ρ_b · k_f / n_por`` for Freundlich,
+    ``u_d := c_decay^(1/n)``):
+
+    - Freundlich, ``c_fixed = 0`` (general ``n > 0``, ``n ≠ 1``):
+        invariant ``θ_local · u_d^n = K · (n · u_d^(n-1) + α)``,
+        position ``V_s(θ) = v_origin + n · K / u_d(θ)``.
+    - Freundlich, ``c_fixed > 0`` and ``n = 2``:
+        invariant ``(u_d - u_R)² · θ_local = K · (2 u_d + α)``
+        with ``u_R := c_fixed^(1/2)``,
+        position ``V_s(θ) = v_origin + 2 K · u_d(θ) / (u_d - u_R)²``.
+    - Langmuir, ``c_fixed = 0``:
+        invariant ``θ_local · c_d² = K · ((K_L + c_d)² + a)`` with
+        ``a := ρ_b · s_max · K_L / n_por``,
+        position ``V_s(θ) = v_origin + K · (K_L + c_d)² / c_d²``.
+
+    The invariant constant ``K`` is set in ``__post_init__`` from the
+    collision IC ``(theta_start, c_decay_initial)``.
+
+    Parameters
+    ----------
+    theta_start : float
+        Cumulative flow at which the merged wave forms (collision θ) [m³].
+    v_start : float
+        Position at which the merged wave forms [m³]. Should equal
+        ``v_origin + (V_s) at θ=theta_start`` for a fan-consistent
+        construction.
+    c_decay_initial : float
+        Concentration on the decaying side at θ=theta_start [mass/volume].
+        Must be strictly positive.
+    c_fixed : float
+        Concentration on the non-decaying side [mass/volume]. Constant in θ.
+        Non-negative.
+    decay_side : str
+        ``'left'`` or ``'right'``. See class docstring.
+    v_origin : float
+        Position of the rarefaction apex [m³].
+    theta_origin : float
+        Cumulative flow at the rarefaction apex [m³]. Must satisfy
+        ``theta_origin < theta_start``.
+    sorption : FreundlichSorption or LangmuirSorption
+        Sorption model.
+    is_active : bool, optional
+        Activity flag. Default True.
+
+    Attributes
+    ----------
+    K : float
+        Invariant constant set in ``__post_init__``.
+
+    See Also
+    --------
+    ShockWave : Linear-θ shock (no decaying side).
+    RarefactionWave : Self-similar expansion fan.
+    """
+
+    c_decay_initial: float
+    """Concentration on the decaying side at θ=theta_start [mass/volume]."""
+    c_fixed: float
+    """Concentration on the non-decaying side [mass/volume]."""
+    decay_side: str
+    """``'left'`` (favorable head-collision) or ``'right'`` (n<1 mirrored)."""
+    v_origin: float
+    """Position of the rarefaction apex [m³]."""
+    theta_origin: float
+    """Cumulative flow at the rarefaction apex [m³]."""
+    sorption: FreundlichSorption | LangmuirSorption
+    """Sorption model (Freundlich or Langmuir; nonlinear-only)."""
+    K: float = field(init=False)
+    """Invariant constant from collision IC; set in ``__post_init__``."""
+
+    def __post_init__(self) -> None:
+        """Validate inputs and compute the invariant constant K."""
+        if self.decay_side not in {"left", "right"}:
+            msg = f"decay_side must be 'left' or 'right', got {self.decay_side!r}"
+            raise ValueError(msg)
+        if self.c_decay_initial <= 0.0:
+            msg = f"c_decay_initial must be positive, got {self.c_decay_initial}"
+            raise ValueError(msg)
+        if self.c_fixed < 0.0:
+            msg = f"c_fixed must be non-negative, got {self.c_fixed}"
+            raise ValueError(msg)
+        if self.theta_origin >= self.theta_start:
+            msg = (
+                f"theta_origin ({self.theta_origin}) must be strictly less than "
+                f"theta_start ({self.theta_start}); rarefaction apex precedes collision"
+            )
+            raise ValueError(msg)
+
+        if isinstance(self.sorption, FreundlichSorption):
+            # Freundlich c_fixed>0 closed form is currently derived only for n=2.
+            if self.c_fixed > 0.0 and not np.isclose(self.sorption.n, 2.0, rtol=1e-12):
+                msg = (
+                    f"DecayingShockWave with c_fixed > 0 currently supports only Freundlich n=2 "
+                    f"and Langmuir; got Freundlich n={self.sorption.n}"
+                )
+                raise NotImplementedError(msg)
+            self.K = _compute_k_freundlich(
+                self.sorption,
+                self.theta_start - self.theta_origin,
+                self.c_decay_initial,
+                self.c_fixed,
+            )
+        elif isinstance(self.sorption, LangmuirSorption):
+            if self.c_fixed > 0.0:
+                # The Langmuir closed form for c_fixed > 0 has not been derived;
+                # _compute_k_langmuir's signature omits c_fixed, so silently
+                # accepting c_fixed > 0 would compute the wrong K. Mirrors the
+                # Freundlich c_fixed > 0 / n != 2 guard above.
+                msg = f"DecayingShockWave with c_fixed > 0 is not implemented for Langmuir; got c_fixed={self.c_fixed}"
+                raise NotImplementedError(msg)
+            self.K = _compute_k_langmuir(
+                self.sorption,
+                self.theta_start - self.theta_origin,
+                self.c_decay_initial,
+            )
+        else:
+            msg = (
+                f"DecayingShockWave requires FreundlichSorption or LangmuirSorption, got {type(self.sorption).__name__}"
+            )
+            raise TypeError(msg)
+
+    def c_decay_at_theta(self, theta: float) -> float | None:
+        """Concentration on the decaying side at cumulative flow θ.
+
+        Returns ``None`` for ``θ < theta_start`` or when the wave is inactive.
+        """
+        if not self.was_active_at(theta):
+            return None
+
+        theta_local = theta - self.theta_origin
+
+        if isinstance(self.sorption, FreundlichSorption):
+            return _c_decay_freundlich(
+                self.sorption,
+                self.K,
+                self.c_decay_initial,
+                self.c_fixed,
+                self.theta_start - self.theta_origin,
+                theta_local,
+            )
+
+        if isinstance(self.sorption, LangmuirSorption):
+            return _c_decay_langmuir(self.sorption, self.K, theta_local)
+
+        return None
+
+    def position_at_theta(self, theta: float) -> float | None:
+        """Shock position ``V_s(θ)`` via closed form.
+
+        Returns ``None`` for ``θ < theta_start`` or when inactive.
+        """
+        if not self.was_active_at(theta):
+            return None
+
+        c_d = self.c_decay_at_theta(theta)
+        if c_d is None:
+            return None
+
+        if isinstance(self.sorption, FreundlichSorption):
+            n = self.sorption.n
+            u_d = c_d ** (1.0 / n)
+            if self.c_fixed == 0.0:
+                return float(self.v_origin + n * self.K / u_d)
+            u_r = self.c_fixed**0.5
+            return float(self.v_origin + 2.0 * self.K * u_d / (u_d - u_r) ** 2)
+
+        if isinstance(self.sorption, LangmuirSorption):
+            k_l = self.sorption.k_l
+            return float(self.v_origin + self.K * (k_l + c_d) ** 2 / (c_d * c_d))
+
+        return None
+
+    def outlet_crossing_theta(self, v_outlet: float) -> float | None:
+        """Cumulative flow at which ``V_s = v_outlet``.
+
+        Returns ``None`` if the outlet is upstream of the wave's birth
+        position or no crossing exists in ``(theta_start, +∞)``. The wave's
+        current activity flag is not consulted — callers asking
+        retrospectively about a historical crossing need the closed-form
+        answer regardless of subsequent deactivation.
+        """
+        if v_outlet <= self.v_start:
+            return None
+
+        # V_s is monotonically increasing in θ (positive shock speed); invert
+        # via the fan-continuity identity V_s - v_origin = θ_local / R(c_decay)
+        # combined with the invariant to eliminate u, then solve for θ.
+        if isinstance(self.sorption, FreundlichSorption):
+            return _outlet_crossing_freundlich(
+                self.sorption,
+                self.K,
+                self.c_fixed,
+                self.v_origin,
+                self.theta_origin,
+                v_outlet,
+            )
+        if isinstance(self.sorption, LangmuirSorption):
+            return _outlet_crossing_langmuir(
+                self.sorption,
+                self.K,
+                self.v_origin,
+                self.theta_origin,
+                v_outlet,
+            )
+        return None
+
+    def mass_after_outlet_arrival(self, v_outlet: float) -> float:
+        """Mass exiting at ``v_outlet`` from the wave's outlet arrival to ``θ=+∞``.
+
+        Semantics depend on ``decay_side``:
+
+        - ``'left'`` (favorable n>1, Langmuir): after ``V_s`` reaches
+          ``v_outlet``, ``v_outlet`` falls *inside* the fan; c at ``v_outlet``
+          follows the fan's self-similar profile and asymptotes to
+          ``c_fixed``. For ``c_fixed=0`` the +∞ integral converges.
+        - ``'right'`` (n<1 mirror): after ``V_s`` reaches ``v_outlet``,
+          ``v_outlet`` is *upstream* of the shock; c at ``v_outlet`` jumps to
+          ``c_fixed`` and stays there. For ``c_fixed=0`` the +∞ contribution
+          is zero.
+
+        Parameters
+        ----------
+        v_outlet : float
+            Outlet position [m³].
+
+        Returns
+        -------
+        float
+            Total mass exiting at v_outlet from theta_arrival to +∞.
+
+        Raises
+        ------
+        ValueError
+            If ``c_fixed > 0`` (mass integral diverges; use segment-based
+            mass functions over a finite upper bound instead).
+        """
+        if self.c_fixed > 0.0:
+            msg = (
+                f"mass_after_outlet_arrival requires c_fixed=0 for the +∞ integral to converge; "
+                f"got c_fixed={self.c_fixed}"
+            )
+            raise ValueError(msg)
+        if self.decay_side == "right":
+            return 0.0
+        theta_arrival = self.outlet_crossing_theta(v_outlet)
+        if theta_arrival is None:
+            return 0.0
+        from gwtransport.fronttracking.output import integrate_fan_exact  # noqa: PLC0415
+
+        return integrate_fan_exact(
+            theta_origin=self.theta_origin,
+            v_origin=self.v_origin,
+            v_outlet=v_outlet,
+            theta_start=theta_arrival,
+            theta_end=float("inf"),
+            sorption=self.sorption,
+        )
+
+    def concentration_left(self) -> float:
+        """Concentration on the left (upstream) side at θ=theta_start.
+
+        For ``decay_side='left'`` returns the decaying c at the collision
+        moment; for ``decay_side='right'`` returns the fixed side.
+        """
+        return self.c_decay_initial if self.decay_side == "left" else self.c_fixed
+
+    def concentration_right(self) -> float:
+        """Concentration on the right (downstream) side at θ=theta_start.
+
+        For ``decay_side='right'`` returns the decaying c at the collision
+        moment; for ``decay_side='left'`` returns the fixed side.
+        """
+        return self.c_decay_initial if self.decay_side == "right" else self.c_fixed
+
+    def concentration_at_point(self, v: float, theta: float) -> float | None:
+        """Concentration at ``(v, θ)`` if controlled by this decaying shock.
+
+        Three regions:
+
+        1. ``v == V_s(θ)`` (within FP): average of decay-side and fixed-side c.
+        2. ``v > V_s(θ)`` (downstream): fixed-side c if ``decay_side='left'``;
+           decay-side c at θ if ``decay_side='right'``.
+        3. ``v < V_s(θ)`` (upstream, inside the fan): the fan's self-similar
+           concentration ``R(c) = (θ − theta_origin)/(v − v_origin)``. Outside
+           the fan (i.e., the decay-side characteristic from the apex hasn't
+           reached v yet at θ), returns ``None``.
+
+        Returns ``None`` for ``θ < theta_start`` or inactive waves.
+        """
+        if not self.was_active_at(theta):
+            return None
+
+        v_s = self.position_at_theta(theta)
+        if v_s is None:
+            return None
+
+        tol = 1e-15 * max(abs(v_s), 1.0)
+
+        if abs(v - v_s) < tol:
+            c_decay = self.c_decay_at_theta(theta)
+            if c_decay is None:
+                return None
+            return 0.5 * (c_decay + self.c_fixed)
+
+        # Region selection depends on decay_side:
+        # 'left'  (favorable n>1, Langmuir): fan extends upstream of V_s
+        #         (v < V_s), c_fixed downstream (v > V_s).
+        # 'right' (n<1 mirror): fan extends downstream of V_s (v > V_s),
+        #         c_fixed upstream (v < V_s).
+        if self.decay_side == "left":
+            v_fan_side = v < v_s - tol
+            v_fixed_side = v > v_s + tol
+        else:
+            v_fan_side = v > v_s + tol
+            v_fixed_side = v < v_s - tol
+
+        if v_fixed_side:
+            return self.c_fixed
+
+        if not v_fan_side:
+            return None  # within tol of shock face — handled above
+
+        # Fan-interior: self-similar profile with apex at (v_origin, theta_origin).
+        if v == self.v_origin:
+            return None
+        r_target = (theta - self.theta_origin) / (v - self.v_origin)
+        if r_target <= 1.0:
+            return None
+        try:
+            c_fan = self.sorption.concentration_from_retardation(r_target)
+        except NotImplementedError:
+            return None
+        return float(c_fan)
+
+
+def _compute_k_freundlich(
+    sorption: FreundlichSorption,
+    theta_local: float,
+    c_decay_initial: float,
+    c_fixed: float,
+) -> float:
+    """Closed-form invariant K for Freundlich DecayingShockWave.
+
+    Derivation: see plan §"Closed-form derivations". For c_fixed=0,
+    K = θ_local · u_c^n / (n · u_c^(n-1) + α); for c_fixed>0 (n=2 only),
+    K = θ_local · (u_c - u_r)^2 / (2 · u_c + α). Here α = ρ_b · k_f / n_por.
+
+    Parameters
+    ----------
+    sorption : FreundlichSorption
+        Sorption model.
+    theta_local : float
+        Cumulative flow from rarefaction apex to collision [m³].
+    c_decay_initial : float
+        Decaying-side concentration at the collision [mass/volume].
+    c_fixed : float
+        Non-decaying-side concentration [mass/volume].
+
+    Returns
+    -------
+    float
+        Invariant constant K.
+    """
+    n = sorption.n
+    alpha = sorption.bulk_density * sorption.k_f / sorption.porosity
+    u_d = c_decay_initial ** (1.0 / n)
+
+    if c_fixed == 0.0:
+        return float(theta_local * u_d**n / (n * u_d ** (n - 1.0) + alpha))
+
+    # c_fixed > 0, n=2
+    u_r = c_fixed**0.5
+    return float(theta_local * (u_d - u_r) ** 2 / (2.0 * u_d + alpha))
+
+
+def _compute_k_langmuir(
+    sorption: LangmuirSorption,
+    theta_local: float,
+    c_decay_initial: float,
+) -> float:
+    """Closed-form invariant K for Langmuir DecayingShockWave (c_fixed=0).
+
+    K = θ_local · c_d^2 / ((K_L + c_d)^2 + a) with a = ρ_b · s_max · K_L / n_por.
+
+    Parameters
+    ----------
+    sorption : LangmuirSorption
+        Sorption model.
+    theta_local : float
+        Cumulative flow from rarefaction apex to collision [m³].
+    c_decay_initial : float
+        Decaying-side concentration at the collision [mass/volume].
+
+    Returns
+    -------
+    float
+        Invariant constant K.
+    """
+    return float(theta_local * c_decay_initial**2 / ((sorption.k_l + c_decay_initial) ** 2 + sorption.a_coeff))
+
+
+def _c_decay_freundlich(
+    sorption: FreundlichSorption,
+    k_invariant: float,
+    c_decay_initial: float,
+    c_fixed: float,
+    theta_local_collision: float,
+    theta_local: float,
+) -> float:
+    """Invert the Freundlich invariant to get c on the decaying side at θ_local.
+
+    For n=2 c_fixed=0 (quadratic in u): closed form
+    ``u = (K + sqrt(K^2 + K·θ_local·α)) / θ_local``. For general n with
+    c_fixed=0 (transcendental): brentq on the monotone bracket
+    ``(tiny, c_decay_initial^(1/n)]``. For n=2 c_fixed>0 (quadratic in u with u_r):
+    closed form with positive sign chosen to give u > u_r as θ_local → ∞.
+
+    Returns
+    -------
+    float
+        Decaying-side concentration c at θ_local.
+    """
+    n = sorption.n
+    alpha = sorption.bulk_density * sorption.k_f / sorption.porosity
+
+    if c_fixed == 0.0:
+        if np.isclose(n, 2.0, rtol=1e-12):
+            disc = k_invariant * k_invariant + theta_local * k_invariant * alpha
+            u = (k_invariant + np.sqrt(disc)) / theta_local
+            return float(u * u)
+        u_root = _invert_freundlich_cr_zero(k_invariant, c_decay_initial, n, alpha, theta_local_collision, theta_local)
+        return float(u_root**n)
+
+    # n=2, c_fixed > 0
+    u_r = c_fixed**0.5
+    disc = k_invariant * (theta_local * (2.0 * u_r + alpha) + k_invariant)
+    u = (u_r * theta_local + k_invariant + np.sqrt(disc)) / theta_local
+    return float(u * u)
+
+
+def _invert_freundlich_cr_zero(
+    k_invariant: float,
+    c_decay_initial: float,
+    n: float,
+    alpha: float,
+    theta_local_collision: float,
+    theta_local: float,
+) -> float:
+    """Invert ``θ_local · u^n = K · (n·u^(n-1) + α)`` for u via brentq.
+
+    Returns
+    -------
+    float
+        Root u of the invariant at θ_local.
+    """
+    u_collision = c_decay_initial ** (1.0 / n)
+
+    def f(u: float) -> float:
+        return theta_local * u**n - k_invariant * (n * u ** (n - 1.0) + alpha)
+
+    if theta_local <= theta_local_collision:
+        # Earlier than (or at) collision: c_decay equals c_decay_initial.
+        return u_collision
+
+    u_root = brentq(f, DECAYING_SHOCK_U_FLOOR, u_collision, xtol=1e-15)
+    return float(u_root)  # type: ignore[arg-type]
+
+
+def _c_decay_langmuir(sorption: LangmuirSorption, k_invariant: float, theta_local: float) -> float:
+    """Invert the Langmuir invariant ``θ_local · c^2 = K · ((K_L+c)^2 + a)`` for c.
+
+    Expanded: ``(θ_local - K)·c^2 - 2·K·K_L·c - K·(K_L^2 + a) = 0`` (quadratic
+    in c). Positive root chosen for c > 0.
+
+    Returns
+    -------
+    float
+        Decaying-side concentration c at θ_local.
+    """
+    k_l = sorption.k_l
+    a_coeff = sorption.a_coeff
+    denom = theta_local - k_invariant
+    disc = k_invariant * (k_invariant * k_l * k_l + denom * (k_l * k_l + a_coeff))
+    return float((k_invariant * k_l + np.sqrt(disc)) / denom)
+
+
+def _outlet_crossing_freundlich(
+    sorption: FreundlichSorption,
+    k_invariant: float,
+    c_fixed: float,
+    v_origin: float,
+    theta_origin: float,
+    v_outlet: float,
+) -> float | None:
+    """θ at which a Freundlich DecayingShockWave reaches v_outlet.
+
+    Returns
+    -------
+    float or None
+        Cumulative flow at crossing, or None if no crossing.
+    """
+    n = sorption.n
+    alpha = sorption.bulk_density * sorption.k_f / sorption.porosity
+    delta_v = v_outlet - v_origin
+
+    if c_fixed == 0.0:
+        u_target = n * k_invariant / delta_v
+        if u_target <= 0.0:
+            return None
+        theta_local = k_invariant * (n * u_target ** (n - 1.0) + alpha) / u_target**n
+        return float(theta_origin + theta_local)
+
+    # n=2, c_fixed > 0: V_s - v_origin = 2·K·u / (u - u_r)^2 ⇒ quadratic in u.
+    # The plus-sqrt root always satisfies u > u_r for K, alpha, delta_v > 0:
+    # the quadratic's roots multiply to u_r² and sum to 2u_r + 2K/delta_v > 2u_r,
+    # so exactly one root exceeds u_r and it is the plus-sqrt branch. The
+    # minus-sqrt root is the unphysical companion.
+    u_r = c_fixed**0.5
+    b_coef = -(2.0 * delta_v * u_r + 2.0 * k_invariant)
+    c_coef = delta_v * u_r * u_r
+    disc = b_coef * b_coef - 4.0 * delta_v * c_coef
+    if disc < 0:
+        return None
+    u_target = (-b_coef + np.sqrt(disc)) / (2.0 * delta_v)
+    theta_local = k_invariant * (2.0 * u_target + alpha) / (u_target - u_r) ** 2
+    return float(theta_origin + theta_local)
+
+
+def _outlet_crossing_langmuir(
+    sorption: LangmuirSorption,
+    k_invariant: float,
+    v_origin: float,
+    theta_origin: float,
+    v_outlet: float,
+) -> float | None:
+    """θ at which a Langmuir DecayingShockWave reaches v_outlet.
+
+    From V_s - v_origin = K·(K_L + c)^2 / c^2 ⇒ (K_L + c)/c = sqrt(Δv/K) =: ratio,
+    so c = K_L/(ratio - 1). Substitute into the invariant for θ_local.
+
+    Returns
+    -------
+    float or None
+        Cumulative flow at crossing, or None if no crossing exists.
+    """
+    delta_v = v_outlet - v_origin
+    ratio = np.sqrt(delta_v / k_invariant)
+    if ratio <= 1.0:
+        return None
+    c_target = sorption.k_l / (ratio - 1.0)
+    theta_local = k_invariant * ((sorption.k_l + c_target) ** 2 + sorption.a_coeff) / (c_target * c_target)
+    return float(theta_origin + theta_local)

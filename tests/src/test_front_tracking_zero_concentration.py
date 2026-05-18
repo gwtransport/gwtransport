@@ -14,7 +14,7 @@ These tests ensure that Example 1 scenarios work correctly.
 import numpy as np
 import pandas as pd
 
-from gwtransport.advection import infiltration_to_extraction_front_tracking_detailed
+from gwtransport.advection import infiltration_to_extraction_nonlinear_sorption
 from gwtransport.fronttracking.handlers import create_inlet_waves_at_theta
 from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
@@ -119,7 +119,7 @@ class TestFirstArrivalTime:
         cout_dates = pd.date_range(start=dates[0], periods=150, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-        cout, structure = infiltration_to_extraction_front_tracking_detailed(
+        cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
