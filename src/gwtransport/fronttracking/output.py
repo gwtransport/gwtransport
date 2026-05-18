@@ -701,20 +701,33 @@ def _integrate_fan_exact_freundlich(
 
     In (V, θ), self-similar concentration inside the fan is::
 
-        c(θ) = [((θ - θ_origin)/(v_outlet - v_origin) - 1) / α]^(1/β)
+        c(θ) = (base(θ) / α)^(1/β)
 
-    with ``α = ρ_b·k_f/(n_por·n)`` and ``β = 1/n - 1``. The antiderivative is
-    ``F(θ) = coeff · base(θ)^(1/β + 1)`` where
-    ``base(θ) = κ_θ·θ + μ_θ - 1`` with ``κ_θ = 1/(v_outlet - v_origin)``
-    and ``μ_θ = -θ_origin/(v_outlet - v_origin)``.
+    with ``α = ρ_b·k_f/(n_por·n)``, ``β = 1/n - 1``,
+    ``base(θ) = κ_θ·θ + μ_θ - 1 = R(c(θ)) - 1``,
+    ``κ_θ = 1/(v_outlet - v_origin)`` and
+    ``μ_θ = -θ_origin/(v_outlet - v_origin)``. The antiderivative
+    ``F(θ) = ∫ c dθ`` admits three algebraically equivalent forms::
 
-    For ``n > 1`` the antiderivative naturally vanishes at +∞ (exponent < 0).
-    For ``n < 1`` (exponent > 0) the antiderivative grows without bound at +∞;
-    callers must pass a finite ``theta_end``. The n<1 mirror DecayingShockWave
-    mass-to-+∞ semantics are different (c = c_fixed downstream of the shock
-    after arrival, so the +∞ contribution is 0) and are handled at the
-    ``mass_after_outlet_arrival`` / ``compute_total_outlet_mass`` level, not
-    here — see those functions for the dispatch.
+        F(θ) = base^(1/β+1) / [κ_θ · α^(1/β) · (1/β + 1)]   (1)
+             = base · (base/α)^(1/β) / [κ_θ · (1/β + 1)]    (2)
+             = (1 − n) · base · c(θ) / κ_θ                  (3)
+
+    using ``1 + β = 1/n`` so ``β/(1+β) = (1/n − 1)·n = 1 − n``. Form (1)
+    factors as ``α^(-1/β) · base^(1/β+1)``; near ``n = 1`` both factors
+    individually saturate (``|1/β|`` grows without bound — at ``n = 1.001``
+    e.g. ``49.95^(-1001)`` underflows to 0), and their finite product is
+    swamped by float noise. Form (3) keeps every factor at the physical
+    scale: ``base`` is ``R(c) − 1``, ``c`` is the bounded physical
+    concentration ``(base/α)^(1/β)``, and ``(1 − n)/κ_θ`` is ``O(1)``.
+
+    For ``n > 1`` the antiderivative naturally vanishes at +∞ (``c → 0``
+    fast enough that ``base · c → 0``). For ``n < 1`` it grows without
+    bound at +∞; callers must pass a finite ``theta_end``. The n<1 mirror
+    DecayingShockWave mass-to-+∞ semantics are different (c = c_fixed
+    downstream of the shock after arrival, so the +∞ contribution is 0)
+    and are handled at the ``mass_after_outlet_arrival`` /
+    ``compute_total_outlet_mass`` level, not here.
 
     When ``c_apex > 0`` the fan formula extrapolates to ``c < c_apex`` for
     ``θ > θ_tail = θ_origin + (v_outlet - v_origin) · R(c_apex)``; the
@@ -730,15 +743,14 @@ def _integrate_fan_exact_freundlich(
     kappa_theta = 1.0 / (v_outlet - v_origin)
     mu_theta = -theta_origin / (v_outlet - v_origin)
 
-    alpha = sorption.bulk_density * sorption.k_f / (sorption.porosity * sorption.n)
-    beta = 1.0 / sorption.n - 1.0
-
+    n = sorption.n
+    beta = 1.0 / n - 1.0
     if abs(beta) < EPSILON_BETA:
         msg = "integrate_fan_exact requires nonlinear sorption (n != 1)"
         raise ValueError(msg)
 
-    exponent = 1.0 / beta + 1.0
-    coeff = 1.0 / (alpha ** (1.0 / beta) * kappa_theta * exponent)
+    alpha = sorption.bulk_density * sorption.k_f / (sorption.porosity * n)
+    one_minus_n = 1.0 - n
 
     # Clamp the upper bound at θ_tail where the fan c(θ) reaches c_apex; beyond
     # θ_tail the formula is unphysical (gives c < c_apex). The constant-c_apex
@@ -753,16 +765,18 @@ def _integrate_fan_exact_freundlich(
     def antiderivative(theta: float) -> float:
         if np.isinf(theta):
             if theta > 0:
-                if exponent < 0:
+                # n > 1 (β < 0): ``c → 0`` fast enough that ``base · c → 0``.
+                if beta < 0:
                     return 0.0
-                msg = f"Integral diverges at θ=+∞ with exponent={exponent} > 0"
+                msg = f"Integral diverges at θ=+∞ for n<1 (β={beta} > 0)"
                 raise ValueError(msg)
             return 0.0
 
         base = kappa_theta * theta + mu_theta - 1.0
         if base <= 0:
             return 0.0
-        return coeff * base**exponent
+        c = (base / alpha) ** (1.0 / beta)
+        return one_minus_n * base * c / kappa_theta
 
     fan_integral = antiderivative(theta_end_fan) - antiderivative(theta_start)
     constant_contrib = c_apex * max(theta_end - theta_tail, 0.0) if c_apex > 0.0 else 0.0
