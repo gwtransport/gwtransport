@@ -486,38 +486,42 @@ def test_pointwise_breakthrough_match_freundlich_n2_canonical():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "n=1.001 outlet breakthrough shape disagrees with the n→1 constant-velocity-"
-        "shock limit (observed relative_spread≈1.5, expected <0.1). The DSW's "
-        "closed-form invariant solver remains numerically stable here, but the "
-        "outlet c profile is dominated by a slowly-varying tail that violates the "
-        "near-constant-c expectation. Investigation deferred to follow-up PR; "
-        "n=1 itself is handled by ConstantRetardation."
-    ),
-)
-def test_freundlich_n_just_above_1_reduces_to_constant_velocity_shock():
-    """Freundlich n=1.001: the DSW closed-form should reduce to a constant-velocity shock.
+def test_freundlich_n_just_above_1_plateau_holds_inlet_c():
+    """Freundlich n=1.001 limit: between leading-shock and rarefaction-head arrival
+    at v_outlet, c at v_outlet equals c_inlet exactly.
 
-    The closed-form invariant ``θ·u^n = K·(n·u^(n−1) + α)`` has a smooth
-    limit as n→1⁺ (K → θ_c·u_c/(1+α), DSW velocity → 1/(1+α)). At n=1 the
-    Freundlich isotherm is linear, so the rarefaction collapses to a single
-    characteristic and the DSW degenerates to a regular constant-velocity
-    shock. The test verifies (a) mass balance holds and (b) the outlet
-    concentration varies slowly past DSW arrival.
+    At n=1 exactly the Freundlich isotherm collapses to linear retardation
+    and the trailing rarefaction degenerates to a single characteristic
+    carrying ``c = c_inlet``. For finite ``n > 1`` close to 1 the
+    rarefaction still has finite width but moves so slightly faster than
+    the leading shock that any DSW collision occurs well past a typical
+    ``v_outlet``. At ``v_outlet`` the breakthrough therefore consists of:
 
-    Currently XFAILs with ZeroDivisionError in
-    ``_integrate_fan_exact_freundlich``: the formula uses
-    ``alpha ** (1/beta) * kappa_theta * exponent`` with
-    ``beta = 1/n − 1`` and ``exponent = 1/n − 1`` — both zero at n=1.
-    Physics-math reviewer (round 2) confirmed the math has a smooth limit;
-    this is a numerical-implementation limitation, not a math problem.
+    1. ``c = 0`` until the leading shock arrives.
+    2. ``c = c_inlet`` while ``v_outlet`` sits between the leading shock
+       and the rarefaction head — this is the n→1 "constant-velocity
+       shock" plateau.
+    3. A narrow self-similar fan as the rarefaction passes ``v_outlet``,
+       collapsing to a step in the strict ``n → 1`` limit.
+
+    This test asserts (1) mass balance at machine precision and (2)
+    ``c(v_outlet, θ) = c_inlet`` to machine precision for ``θ`` strictly
+    inside the plateau window ``(θ_shock_arrival, θ_raref_head_arrival)``.
+    The plateau-window endpoints are computed from Rankine-Hugoniot
+    (shock) and ``1/R(c_inlet)`` (rarefaction-head characteristic speed),
+    not read out of the wave list — so a regression that shifts either
+    boundary breaks the assertion.
+
+    Replaces a previous xfail whose ``relative_spread < 0.1`` premise was
+    wrong: at n=1.001 the breakthrough at v_outlet is a step (no smooth
+    fan reaches v_outlet before the integration window ends), so any wide
+    sampling window sees both 0s and ``c_inlet``s and a large std.
     """
+    c_inlet = 4.0
     sorption = FreundlichSorption(k_f=0.01, n=1.001, bulk_density=1500.0, porosity=0.3)
     v_outlet = 200.0
     cin = np.zeros(500)
-    cin[5:15] = 4.0
+    cin[5:15] = c_inlet
     flow = np.full(500, 100.0)
     tedges = pd.date_range("2020-01-01", periods=501, freq="D")
 
@@ -531,19 +535,35 @@ def test_freundlich_n_just_above_1_reduces_to_constant_velocity_shock():
         cin=cin,
         theta_edges=tr.state.theta_edges,
     )
-    rel_err = abs(mass_out - mass_in) / max(mass_in, 1.0)
-    assert rel_err < 1e-12, f"n=1.001 mass balance: rel_err={rel_err:.3e}"
+    np.testing.assert_allclose(mass_out, mass_in, rtol=1e-12)
 
-    t_samples = np.linspace(85.0, 120.0, 10)
-    theta_samples = np.array([tr.state.theta_at_t(float(t)) for t in t_samples])
-    c_out = compute_breakthrough_curve(theta_samples, v_outlet, tr.state.waves, sorption)
-    c_mean = float(np.mean(c_out))
-    c_std = float(np.std(c_out))
-    relative_spread = c_std / max(abs(c_mean), 1e-10)
-    assert relative_spread < 0.1, (
-        f"n=1.001 outlet c should be near-constant past DSW arrival; got mean={c_mean:.6f}, "
-        f"std={c_std:.6f}, relative_spread={relative_spread:.6f}"
+    # Plateau-window endpoints: in (V, θ) the leading 0 → c_inlet shock
+    # leaves the inlet at ``theta_edges[5]`` with Rankine-Hugoniot speed
+    # ``s_shock = c_inlet / C_T(c_inlet)``; the trailing rarefaction's head
+    # (the ``c = c_inlet`` characteristic) leaves at ``theta_edges[15]``
+    # with speed ``1/R(c_inlet)``. Both travel a θ-distance ``v_outlet``
+    # to reach the outlet.
+    theta_shock_emit = float(tr.state.theta_edges[5])
+    theta_raref_emit = float(tr.state.theta_edges[15])
+    s_shock = c_inlet / float(sorption.total_concentration(c_inlet))
+    r_head = float(sorption.retardation(c_inlet))
+    theta_shock_at_outlet = theta_shock_emit + v_outlet / s_shock
+    theta_raref_head_at_outlet = theta_raref_emit + v_outlet * r_head
+    assert theta_shock_at_outlet < theta_raref_head_at_outlet, (
+        "test premise violated: at n=1.001 the rarefaction head must trail the "
+        f"leading shock at v_outlet (got θ_shock={theta_shock_at_outlet}, "
+        f"θ_raref={theta_raref_head_at_outlet})"
     )
+
+    # Sample strictly inside the plateau; 1% margin avoids FP brushing of the boundaries.
+    margin = 0.01 * (theta_raref_head_at_outlet - theta_shock_at_outlet)
+    theta_samples = np.linspace(
+        theta_shock_at_outlet + margin,
+        theta_raref_head_at_outlet - margin,
+        5,
+    )
+    c_out = compute_breakthrough_curve(theta_samples, v_outlet, tr.state.waves, sorption)
+    np.testing.assert_allclose(c_out, c_inlet, rtol=1e-12)
 
 
 def test_mass_balance_freundlich_n2_c_fixed_gt_0_pre_filled_aquifer():
