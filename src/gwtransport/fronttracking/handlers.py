@@ -227,8 +227,7 @@ def handle_shock_rarefaction_collision(
     whose closed-form trajectory subsumes the fan + shock together. The
     fallback for non-canonical cases (e.g. n>1 tail-collision corner-case
     triggered by multi-pulse inlets) retains the Phase-1 piecewise-constant
-    overlay; Phase-2 step 5+ adds parametric tests that will surface any
-    remaining defects here.
+    overlay (approximately mass-conserving, not closed-form).
 
     Returns
     -------
@@ -276,8 +275,8 @@ def handle_shock_rarefaction_collision(
                 sorption=sorption,
             )
         except NotImplementedError:
-            # Closed form not derived yet (e.g. Freundlich n!=2 with c_fixed>0).
-            # Fall through to Phase-1 overlay below; step 5+ extends coverage.
+            # Closed form not derived yet (e.g. Langmuir + c_fixed>0). Fall
+            # through to Phase-1 overlay below.
             pass
         else:
             shock.deactivate(theta_event)
@@ -369,8 +368,8 @@ def handle_shock_rarefaction_collision(
     # constant-velocity new shock does not capture. The overlay is the
     # P1.8 bug pattern with approximately-conserved mass; the canonical paths
     # above replace it with an exact DecayingShockWave when the closed form
-    # applies. Phase 2 step 5+ extends closed-form coverage to multi-pulse
-    # / c_fixed>0 cases that currently fall through here.
+    # applies. Non-canonical head_collision (raref.c_tail != shock.c_right)
+    # still uses this overlay.
     s_raref_head = characteristic_speed(raref.c_head, raref.sorption)
 
     if s_raref_head > shock.speed:

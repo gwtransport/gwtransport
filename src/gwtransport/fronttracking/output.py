@@ -15,14 +15,16 @@ compute_cumulative_outlet_mass(theta, v_outlet, waves, sorption, *, cin, theta_e
 compute_total_outlet_mass(v_outlet, sorption, *, cin, theta_edges) -> (mass, theta_integration_end)
 
 Step 5b note: outlet-mass functions use the PDE conservation identity
-``m_out(θ) = m_in(θ) − m_dom(θ)`` (Bear & Cheng 2010, §3.5). m_dom honors
-historical wave activity via ``wave.was_active_at(theta)`` so retrospective
-queries at θ before a collision event correctly attribute c at v_outlet.
+``m_out(θ) = m_in(θ) − m_dom(θ)`` (Bear & Cheng 2010, Ch. 3: mass
+conservation for transport with sorption). m_dom honors historical wave
+activity via ``wave.was_active_at(theta)`` so retrospective queries at θ
+before a collision event correctly attribute c at v_outlet.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+import warnings
 from collections.abc import Sequence
 from operator import itemgetter
 
@@ -824,16 +826,33 @@ def compute_bin_averaged_concentration_exact(
             for i in range(len(theta_edges_out))
         ])
         result = np.diff(m_out_at_edges) / np.diff(theta_edges_out)
-        # FP-noise + extrapolation clamp: m_in − m_dom subtracts nearly-equal
-        # large numbers, leaving ~1 ULP residuals on either sign. Also, for
-        # queries past theta_edges_inlet[-1] the simulator's wave list has
-        # not been extended with new inlet emissions, so m_dom and m_in are
-        # mutually inconsistent and the conservation form gives unphysical
-        # values. Clamp negative concentrations to 0 (physical non-negativity)
-        # and clamp tiny positive FP-noise residuals to 0 too.
+        # FP-noise clamp: m_in − m_dom subtracts nearly-equal large numbers,
+        # leaving ~1 ULP residuals on either sign. Clamp those to 0.
         max_c = float(np.max(np.abs(result))) if result.size else 0.0
         eps_clamp = 1e-12 * max(max_c, 1.0)
         result = np.where(np.abs(result) < eps_clamp, 0.0, result)
+        # Large-negative diagnostic: residuals beyond the FP-noise band signal
+        # a real conservation-form violation. Most commonly this is the
+        # post-inlet model artifact (plan Step 5h): when output edges exceed
+        # ``theta_edges_inlet[-1]``, m_in caps at the last injected mass
+        # while the simulator's wave list continues to evolve, so m_in − m_dom
+        # produces FP-cancellation residuals from the inconsistent θ ranges
+        # between the inlet integral and the wave-list-derived domain mass.
+        # Surface as a UserWarning so users see it; clamp to 0 (physical
+        # non-negativity) to preserve API contract (``cout >= 0``).
+        if result.size:
+            min_val = float(np.min(result))
+            if min_val < -eps_clamp:
+                msg = (
+                    f"compute_bin_averaged_concentration_exact produced concentrations "
+                    f"as negative as {min_val:.3e} (clamp threshold -{eps_clamp:.3e}); "
+                    f"likely caused by output θ-bin edges exceeding "
+                    f"theta_edges_inlet[-1]={float(np.asarray(theta_edges_inlet)[-1]):.3f}, "
+                    "putting the inlet integral and the wave list on inconsistent θ ranges. "
+                    "Extend cin with trailing zeros to cover the output range, "
+                    "or restrict output bins to within the inlet window."
+                )
+                warnings.warn(msg, UserWarning, stacklevel=2)
         return np.maximum(result, 0.0)
 
     # Legacy outlet-segment integration (compatible with hand-constructed
@@ -1320,8 +1339,8 @@ def compute_cumulative_outlet_mass(
         m_out(θ) = m_in(θ) − m_dom(θ)
 
     derived from integrating the PDE ``∂_θ C_T + ∂_V c = 0`` over the spatial
-    domain ``[0, v_outlet]`` (Bear & Cheng 2010, §3.5; standard form for
-    advection with sorption). This sidesteps the multi-fan dispatch problem
+    domain ``[0, v_outlet]`` (Bear & Cheng 2010, Ch. 3: mass conservation
+    for advection with sorption). This sidesteps the multi-fan dispatch problem
     that the outlet-segment integration faces when several DSWs cover
     v_outlet simultaneously — every term on the right is purely spatial or a
     closed-form inlet sum, no ownership priority needed.

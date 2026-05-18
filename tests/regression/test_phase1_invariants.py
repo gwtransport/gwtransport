@@ -294,24 +294,49 @@ def test_integrate_fan_spatial_langmuir_clamps_below_u_zero():
         )
 
 
-def test_mass_balance_freundlich_nhalf_mirror_canonical_pulse():
-    """n=0.5 mirror canonical pulse: per-checkpoint m_in = m_dom + m_out at machine precision.
+@pytest.mark.parametrize("n", [0.25, 0.5])
+def test_mass_balance_freundlich_nhalf_mirror_pointwise_breakthrough(n):
+    """n<1 mirror canonical pulse: pointwise breakthrough matches analytical fan.
 
     Step 5b (conservation-law pivot): outlet mass derived from
-    ``m_out = m_in - m_dom``, sidestepping the multi-fan outlet dispatch
-    that the original identify_outlet_segments + integrate_fan_exact path
-    couldn't handle for the n<1 mirror geometry (parent rarefaction
-    deactivated at DSW formation, deactivated wave's history lost).
+    ``m_out = m_in - m_dom``. The original identify_outlet_segments +
+    integrate_fan_exact path couldn't handle the n<1 mirror geometry
+    (parent rarefaction deactivated at DSW formation, deactivated wave's
+    history lost). The pivot to retrospective ``was_active_at`` queries in
+    ``compute_domain_mass`` (round 2 fix) is required for correct m_dom at
+    intermediate θ.
+
+    Step 5b round 5: rewritten after round-4 reviewer flagged the original
+    per-checkpoint ``(m_dom + m_out) - m_in`` identity as tautological —
+    ``compute_cumulative_outlet_mass`` returns ``m_in - m_dom`` literally,
+    so the assertion is algebraically zero regardless of mutations. The
+    new assertion compares ``compute_breakthrough_curve`` against an
+    analytical rarefaction fan formula at θ-values spanning pre-DSW
+    (rarefaction dispatch) and immediately-post-DSW (DSW closed-form
+    fan-lookup) regimes. The analytical c is computed directly from the
+    Freundlich isotherm parameters; mutations to either
+    ``RarefactionWave.concentration_at_point`` or to the DSW's
+    ``concentration_at_point`` fan-interior branch surface as a numerical
+    mismatch (verified: a 0.5% rarefaction-formula mutation produces
+    rel_err≈5e-3, well above the test's 1e-10 rtol). This test does NOT
+    catch ``was_active_at → is_active`` reverts — that mutation is caught
+    by ``test_compute_domain_mass_matches_inlet_pre_outlet_arrival``,
+    which exercises a different dispatch path.
+
+    Parameter range restricted to n ∈ {0.25, 0.5} — these are the n<1
+    values that actually exercise the DSW closed-form solver. For
+    n ∈ {0.75, 0.9} the simulator either falls through to the
+    non-canonical Phase-1 overlay (no DSW formed; the wave list explodes
+    to >200000 entries for n=0.75) or produces only regular shocks.
 
     Asserts:
-    1. Per-checkpoint identity at rtol=1e-13 across mid-transit + asymptotic
-       θ values.
+    1. Pointwise breakthrough match against analytical fan at pre-DSW θ.
     2. Asymptotic total outlet mass: ``m_out_total = m_in_total -
        C_T(c_∞)·V_outlet`` where ``c_∞ = cin[-1] = 4`` is the sustained
-       ambient. For canonical n=0.5 mirror this is NOT equal to mass_in —
+       ambient. For canonical n<1 mirror this is NOT equal to mass_in —
        the aquifer fills to steady state at c=4 and never empties.
     """
-    sorption = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3)
+    sorption = FreundlichSorption(k_f=0.01, n=n, bulk_density=1500.0, porosity=0.3)
     v_outlet = 200.0
     # Mirrored canonical pulse: ambient c=4, dip to c=0 in pulse bins.
     cin = np.full(500, 4.0)
@@ -322,25 +347,50 @@ def test_mass_balance_freundlich_nhalf_mirror_canonical_pulse():
     tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
     tr.run(max_iterations=100000)
 
-    # Per-checkpoint identity at machine precision.
-    theta_max = float(tr.state.theta_edges[-1])
-    for frac in (0.1, 0.25, 0.5, 0.75, 0.99):
-        theta = frac * theta_max
-        m_in = compute_cumulative_inlet_mass(theta=theta, cin=cin, theta_edges=tr.state.theta_edges)
-        m_dom = compute_domain_mass(theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
-        m_out = compute_cumulative_outlet_mass(
-            theta=theta,
-            v_outlet=v_outlet,
-            waves=tr.state.waves,
-            sorption=sorption,
-            cin=cin,
-            theta_edges=tr.state.theta_edges,
-        )
-        err = abs((m_dom + m_out) - m_in)
-        tol = 1e-13 * max(m_in, 1.0)
-        assert err <= tol, f"n=0.5 mirror at θ={theta}: err={err:.6e} > tol={tol:.6e}"
+    # Pointwise breakthrough match: the rarefaction from the cin=0→cin=4
+    # step at θ=0 (apex at V=0, θ=0) has self-similar profile
+    # ``R(c) = θ / V``. Solving for c at v=v_outlet: c is the value
+    # satisfying ``retardation(c) = θ_query / v_outlet``. For Freundlich:
+    # ``1 + α · c^(1/n - 1) = θ/V``  →  ``c = ((θ/V - 1) / α)^(1/(1/n - 1))``
+    # where α = (bulk_density · k_f) / (porosity · n).
+    # The rarefaction head (c=0) reaches v_outlet at θ = v_outlet.
+    # Sample θ values past head-arrival but before DSW formation. DSW
+    # formation θ is determined by shock vs raref tail collision.
+    alpha = sorption.bulk_density * sorption.k_f / (sorption.porosity * sorption.n)
+    exponent = (1.0 / sorption.n) - 1.0
+
+    # The DSW inherits the parent rarefaction's apex (V=0, θ=0), so the
+    # self-similar profile ``R(c) = θ/V`` continues to hold at v_outlet
+    # AFTER DSW formation — UNTIL the DSW's shock interface (V_s) propagates
+    # past v_outlet and v_outlet falls onto the c_fixed=0 side. For the
+    # n=0.25 case this happens around θ ≈ 2000, for n=0.5 around θ ≈ 3000.
+    # We sample both pre- and immediately-post-DSW θ values to exercise
+    # both the rarefaction dispatch and the DSW closed-form fan lookup.
+    # DSW forms at θ_dsw — n=0.25 ≈ 667, n=0.5 ≈ 1003.
+    theta_samples = np.array([
+        v_outlet + 100.0,  # pre-DSW (rarefaction dispatch)
+        500.0,  # pre-DSW
+        800.0 if n == 0.25 else 1100.0,  # just after DSW formation
+        1200.0 if n == 0.25 else 1500.0,  # post-DSW, fan still covers v_outlet
+        2000.0 if n == 0.25 else 2500.0,  # latest post-DSW where fan still active
+    ])
+    c_numerical = compute_breakthrough_curve(theta_samples, v_outlet, tr.state.waves, sorption)
+    c_analytical = ((theta_samples / v_outlet - 1.0) / alpha) ** (1.0 / exponent)
+
+    # rtol=1e-10 gives ~1000× headroom past the analytical formula's FP
+    # noise. Tighter values trip on the DSW's brentq inversion (closed-form
+    # invariant solver) which converges to ~1e-12 in practice.
+    np.testing.assert_allclose(
+        c_numerical,
+        c_analytical,
+        rtol=1e-10,
+        err_msg=f"n={n} pointwise breakthrough mismatch:\nθ={theta_samples}\nnum={c_numerical}\nana={c_analytical}",
+    )
 
     # Asymptotic total: m_out_total = m_in - C_T(c_∞) · V_outlet (c_∞=4 here).
+    # NOTE: compute_total_outlet_mass uses the asymptotic formula directly
+    # (no wave list), so this is a smoke test for the formula wiring — it
+    # catches sign flips or missing c_∞ retrieval but not wave-list bugs.
     mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
     mass_out, _ = compute_total_outlet_mass(
         v_outlet=v_outlet,
@@ -348,11 +398,10 @@ def test_mass_balance_freundlich_nhalf_mirror_canonical_pulse():
         cin=cin,
         theta_edges=tr.state.theta_edges,
     )
-    # Asymptotic m_out_total = m_in - C_T(c_∞)·V_outlet (≠ mass_in for c_∞ > 0).
     c_inf = float(cin[-1])
     expected_m_out = mass_in - float(sorption.total_concentration(c_inf)) * v_outlet
     assert np.isclose(mass_out, expected_m_out, rtol=1e-12), (
-        f"n=0.5 mirror asymptotic: mass_out={mass_out:.4f}, expected={expected_m_out:.4f}"
+        f"n={n} mirror asymptotic: mass_out={mass_out:.4f}, expected={expected_m_out:.4f}"
     )
 
 
@@ -437,7 +486,17 @@ def test_pointwise_breakthrough_match_freundlich_n2_canonical():
     )
 
 
-@pytest.mark.xfail(strict=True, reason="n≈1 limitation in _integrate_fan_exact_freundlich; fix deferred to Step 5c.")
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "n=1.001 outlet breakthrough shape disagrees with the n→1 constant-velocity-"
+        "shock limit (observed relative_spread≈1.5, expected <0.1). The DSW's "
+        "closed-form invariant solver remains numerically stable here, but the "
+        "outlet c profile is dominated by a slowly-varying tail that violates the "
+        "near-constant-c expectation. Investigation deferred to follow-up PR; "
+        "n=1 itself is handled by ConstantRetardation."
+    ),
+)
 def test_freundlich_n_just_above_1_reduces_to_constant_velocity_shock():
     """Freundlich n=1.001: the DSW closed-form should reduce to a constant-velocity shock.
 
