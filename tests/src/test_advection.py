@@ -3183,8 +3183,8 @@ def test_flow_weighted_front_tracking_output_edge_routing(monkeypatch):
 
     # Patch C(θ) to be the θ-midpoint of each fine sub-bin so the flow-weighted
     # average is strictly routing-dependent.
-    def _linear_c(*, theta_bin_edges, v_outlet, waves, sorption):
-        del v_outlet, waves, sorption
+    def _linear_c(*, theta_bin_edges, v_outlet, waves, sorption, cin=None, theta_edges_inlet=None):
+        del v_outlet, waves, sorption, cin, theta_edges_inlet
         return (theta_bin_edges[:-1] + theta_bin_edges[1:]) / 2
 
     monkeypatch.setattr(adv_mod, "compute_bin_averaged_concentration_exact", _linear_c)
@@ -3197,6 +3197,7 @@ def test_flow_weighted_front_tracking_output_edge_routing(monkeypatch):
         waves=[],
         sorption=ConstantRetardation(retardation_factor=1.0),
         theta_edges=theta_edges,
+        cin=np.zeros(len(flow)),
     )
 
     # Reference: explicit half-open bin assignment, with c_fine computed in θ

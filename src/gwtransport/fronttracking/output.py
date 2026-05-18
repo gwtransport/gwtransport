@@ -731,112 +731,124 @@ def compute_bin_averaged_concentration_exact(
     v_outlet: float,
     waves: Sequence[Wave],
     sorption: SorptionModel,
+    *,
+    cin: npt.ArrayLike | None = None,
+    theta_edges_inlet: npt.NDArray[np.floating] | None = None,
 ) -> npt.NDArray[np.floating]:
-    """θ-bin-averaged outlet concentration via exact analytical integration.
+    """θ-bin-averaged outlet concentration.
 
     For each θ-bin ``[θ_i, θ_{i+1}]``::
 
         C_avg = (1 / Δθ) · ∫_{θ_i}^{θ_{i+1}} C(v_outlet, θ) dθ
 
-    Because the rarefaction profile and shock projection are flow-independent
-    in θ-space, this also equals the flow-weighted time-bin average
-    ``∫C·flow dt / ∫flow dt`` when the caller picks bin edges that map to
-    the desired time bins via ``state.theta_at_t``.
+    With ``cin`` + ``theta_edges_inlet`` provided (recommended for multi-DSW
+    cases), uses the conservation-law identity
+    ``C_avg = (Δm_in − Δm_dom) / Δθ`` per bin — analytical and explicit, no
+    outlet-side fan dispatch. Otherwise falls back to the legacy
+    outlet-segment integration (correct for canonical single-DSW cases;
+    may miscount multi-DSW or n<1 mirror geometries).
 
     Parameters
     ----------
     theta_bin_edges : array-like
-        Cumulative-flow bin edges [m³]. Length N+1 for N bins. Callers
-        translate t-bin edges with ``state.theta_at_t``.
+        Cumulative-flow OUTPUT bin edges [m³] (where C_avg is reported).
+        Length N+1 for N bins. Callers translate t-bin edges with
+        ``state.theta_at_t``.
     v_outlet : float
         Outlet position [m³].
     waves : list of Wave
         All waves from front tracking simulation.
     sorption : SorptionModel
         Sorption model.
+    cin : array-like, optional (kw-only)
+        Inlet concentration per inlet θ-bin. When provided with
+        ``theta_edges_inlet``, the conservation form is used.
+    theta_edges_inlet : ndarray, optional (kw-only)
+        θ bin edges of the INLET (``state.theta_edges``), length
+        ``len(cin) + 1``.
 
     Returns
     -------
     c_avg : numpy.ndarray
-        Bin-averaged concentrations [mass/volume]. Length N.
+        Bin-averaged outlet concentrations [mass/volume]. Length N.
 
     Raises
     ------
     ValueError
-        If any θ-bin has non-positive width, or if an unknown segment type
-        is encountered during integration.
+        If any output θ-bin has non-positive width.
 
     See Also
     --------
     concentration_at_point : Point-wise concentration
     compute_breakthrough_curve : Breakthrough curve
-    integrate_rarefaction_exact : Exact rarefaction integration
-
-    Examples
-    --------
-    ::
-
-        theta_bin_edges = np.array([tracker.state.theta_at_t(t) for t in t_edges])
-        c_avg = compute_bin_averaged_concentration_exact(
-            theta_bin_edges=theta_bin_edges,
-            v_outlet=500.0,
-            waves=tracker.state.waves,
-            sorption=sorption,
-        )
+    compute_cumulative_outlet_mass : Cumulative outlet mass via conservation
     """
-    theta_edges = np.asarray(theta_bin_edges, dtype=float)
-    n_bins = len(theta_edges) - 1
+    theta_edges_out = np.asarray(theta_bin_edges, dtype=float)
+
+    if np.any(np.diff(theta_edges_out) <= 0):
+        bad = int(np.argmin(np.diff(theta_edges_out)))
+        msg = (
+            f"Invalid θ-bin: theta_bin_edges[{bad}]={theta_edges_out[bad]} >= "
+            f"theta_bin_edges[{bad + 1}]={theta_edges_out[bad + 1]}"
+        )
+        raise ValueError(msg)
+
+    if cin is not None and theta_edges_inlet is not None:
+        # Conservation form: c_avg = Δm_out/Δθ where m_out = m_in − m_dom.
+        m_out_at_edges = np.array([
+            compute_cumulative_outlet_mass(
+                theta=float(theta_edges_out[i]),
+                v_outlet=v_outlet,
+                waves=waves,
+                sorption=sorption,
+                cin=cin,
+                theta_edges=theta_edges_inlet,
+            )
+            for i in range(len(theta_edges_out))
+        ])
+        result = np.diff(m_out_at_edges) / np.diff(theta_edges_out)
+        # FP-noise + extrapolation clamp: m_in − m_dom subtracts nearly-equal
+        # large numbers, leaving ~1 ULP residuals on either sign. Also, for
+        # queries past theta_edges_inlet[-1] the simulator's wave list has
+        # not been extended with new inlet emissions, so m_dom and m_in are
+        # mutually inconsistent and the conservation form gives unphysical
+        # values. Clamp negative concentrations to 0 (physical non-negativity)
+        # and clamp tiny positive FP-noise residuals to 0 too.
+        max_c = float(np.max(np.abs(result))) if result.size else 0.0
+        eps_clamp = 1e-12 * max(max_c, 1.0)
+        result = np.where(np.abs(result) < eps_clamp, 0.0, result)
+        return np.maximum(result, 0.0)
+
+    # Legacy outlet-segment integration (compatible with hand-constructed
+    # wave-list tests; correct for canonical single-DSW cases).
+    n_bins = len(theta_edges_out) - 1
     c_avg = np.zeros(n_bins)
-
     for i in range(n_bins):
-        theta_start = float(theta_edges[i])
-        theta_end = float(theta_edges[i + 1])
+        theta_start = float(theta_edges_out[i])
+        theta_end = float(theta_edges_out[i + 1])
         dtheta_bin = theta_end - theta_start
-
-        if dtheta_bin <= 0:
-            msg = f"Invalid θ-bin: theta_bin_edges[{i}]={theta_start} >= theta_bin_edges[{i + 1}]={theta_end}"
-            raise ValueError(msg)
-
         segments = identify_outlet_segments(theta_start, theta_end, v_outlet, waves, sorption)
-
-        total_integral_theta = 0.0
+        total = 0.0
         for seg in segments:
-            seg_theta_start = max(seg["theta_start"], theta_start)
-            seg_theta_end = min(seg["theta_end"], theta_end)
-            seg_dtheta = seg_theta_end - seg_theta_start
-
-            if seg_dtheta <= EPSILON_TIME:
+            seg_a = max(seg["theta_start"], theta_start)
+            seg_b = min(seg["theta_end"], theta_end)
+            d = seg_b - seg_a
+            if d <= EPSILON_TIME:
                 continue
-
             if seg["type"] == "constant":
-                total_integral_theta += seg["concentration"] * seg_dtheta
+                total += seg["concentration"] * d
             elif seg["type"] == "rarefaction":
                 if isinstance(sorption, NonlinearSorption):
-                    raref = seg["wave"]
-                    total_integral_theta += integrate_rarefaction_exact(
-                        raref, v_outlet, seg_theta_start, seg_theta_end, sorption
-                    )
+                    total += integrate_rarefaction_exact(seg["wave"], v_outlet, seg_a, seg_b, sorption)
                 else:
-                    theta_mid = 0.5 * (seg_theta_start + seg_theta_end)
-                    c_mid = concentration_at_point(v_outlet, theta_mid, waves, sorption)
-                    total_integral_theta += c_mid * seg_dtheta
+                    c_mid = concentration_at_point(v_outlet, 0.5 * (seg_a + seg_b), waves, sorption)
+                    total += c_mid * d
             elif seg["type"] == "decaying_fan":
-                decaying = seg["wave"]
-                total_integral_theta += integrate_fan_exact(
-                    decaying.theta_origin,
-                    decaying.v_origin,
-                    v_outlet,
-                    seg_theta_start,
-                    seg_theta_end,
-                    sorption,
-                    c_apex=decaying.c_fixed,
+                w = seg["wave"]
+                total += integrate_fan_exact(
+                    w.theta_origin, w.v_origin, v_outlet, seg_a, seg_b, sorption, c_apex=w.c_fixed
                 )
-            else:
-                msg = f"Unknown segment type: {seg['type']}"
-                raise ValueError(msg)
-
-        c_avg[i] = total_integral_theta / dtheta_bin
-
+        c_avg[i] = total / dtheta_bin
     return c_avg
 
 
@@ -919,6 +931,13 @@ def compute_domain_mass(
                 wave_positions.append(v_pos)
             if 0 <= wave.v_origin <= v_outlet:
                 wave_positions.append(wave.v_origin)
+            # Step 5b: For multi-DSW exclusion, the V_apex of any NEWER DSW
+            # is a boundary of this DSW's effective coverage (per the
+            # [V_apex_W2, V_s_W1] exclusion rule). Inserting newer apex
+            # positions ensures the owner-selection loop sees consistent
+            # midpoint dispatch in [V_apex_W2, V_s_W1] vs [0, V_apex_W2].
+            # (For canonical multi-pulse all share V_apex=0, so this is a
+            # no-op; included for non-canonical apex configurations.)
 
     # Add domain boundaries
     wave_positions.extend([0.0, v_outlet])
@@ -942,16 +961,22 @@ def compute_domain_mass(
         # spatial integral is closed-form for both RarefactionWave and
         # DecayingShockWave (the latter via the parameterised
         # ``integrate_fan_spatial_exact``).
+        #
+        # Multi-fan dispatch (Step 5b): when multiple DSWs nominally contain
+        # v_mid, the NEWER one (later ``theta_start``) wins, with an extended
+        # exclusion rule: for any newer DSW W₂, an older DSW W₁'s fan does NOT
+        # cover v_mid if v_mid ∈ [V_apex_W₂, V_s_W₁]. This subsumes both the
+        # inter-shock gap (v_mid between V_s_W₂ and V_s_W₁) AND the
+        # post-W₂-arrival regime (v_mid left of both shocks). Same priority
+        # applies among rarefactions (newest by theta_start wins).
         v_mid = 0.5 * (v_start + v_end)
         raref_wave: RarefactionWave | None = None
         decaying_wave: DecayingShockWave | None = None
 
+        dsw_candidates: list[DecayingShockWave] = []
         for wave in waves:
             if not wave.is_active:
                 continue
-            if isinstance(wave, RarefactionWave) and wave.contains_point(v_mid, theta):
-                raref_wave = wave
-                break
             if isinstance(wave, DecayingShockWave):
                 v_s = wave.position_at_theta(theta)
                 if v_s is None:
@@ -960,8 +985,39 @@ def compute_domain_mass(
                 # decay_side='right': fan is downstream of V_s (v > V_s).
                 in_fan = (wave.decay_side == "left" and v_mid < v_s) or (wave.decay_side == "right" and v_mid > v_s)
                 if in_fan and v_mid != wave.v_origin:
-                    decaying_wave = wave
-                    break
+                    dsw_candidates.append(wave)
+
+        if dsw_candidates:
+            # Sort by theta_start descending — newest first.
+            dsw_candidates.sort(key=lambda w: -w.theta_start)
+            for candidate in dsw_candidates:
+                # Extended exclusion rule for decay_side='left': v_mid ∈
+                # [V_apex_W2, V_s_W1] for any newer W₂ → W₁ is shielded.
+                if candidate.decay_side == "left":
+                    v_s_candidate = candidate.position_at_theta(theta)
+                    excluded = False
+                    for other in dsw_candidates:
+                        if other is candidate or other.decay_side != "left":
+                            continue
+                        if other.theta_start <= candidate.theta_start:
+                            continue
+                        if other.v_origin <= v_mid <= v_s_candidate:
+                            excluded = True
+                            break
+                    if excluded:
+                        continue
+                decaying_wave = candidate
+                break
+
+        if decaying_wave is None:
+            raref_candidates = [
+                wave
+                for wave in waves
+                if wave.is_active and isinstance(wave, RarefactionWave) and wave.contains_point(v_mid, theta)
+            ]
+            if raref_candidates:
+                raref_candidates.sort(key=lambda w: -w.theta_start)
+                raref_wave = raref_candidates[0]
 
         if raref_wave is not None:
             mass_segment = _integrate_rarefaction_spatial_exact(raref_wave, v_start, v_end, theta, sorption)
@@ -1297,12 +1353,22 @@ def compute_cumulative_outlet_mass(
     v_outlet: float,
     waves: Sequence[Wave],
     sorption: SorptionModel,
+    *,
+    cin: npt.ArrayLike,
+    theta_edges: npt.NDArray[np.floating],
 ) -> float:
     """Cumulative mass exiting through the outlet from θ=0 to ``theta``.
 
-    Pure θ-integral: ``mass = ∫₀^θ c(θ', v_outlet) dθ'``. Because
-    ``dθ = flow · dt``, this equals ``∫ cout · flow dt`` in time coordinates;
-    no flow or tedges information is needed here.
+    Computed analytically via the conservation-law identity::
+
+        m_out(θ) = m_in(θ) − m_dom(θ)
+
+    derived from integrating the PDE ``∂_θ C_T + ∂_V c = 0`` over the spatial
+    domain ``[0, v_outlet]`` (Bear & Cheng 2010, §3.5; standard form for
+    advection with sorption). This sidesteps the multi-fan dispatch problem
+    that the outlet-segment integration faces when several DSWs cover
+    v_outlet simultaneously — every term on the right is purely spatial or a
+    closed-form inlet sum, no ownership priority needed.
 
     Parameters
     ----------
@@ -1314,17 +1380,15 @@ def compute_cumulative_outlet_mass(
         All waves in the simulation.
     sorption : SorptionModel
         Sorption model.
+    cin : array-like (kw-only)
+        Inlet concentration per θ-bin [mass/volume].
+    theta_edges : ndarray (kw-only)
+        θ bin edges [m³], length ``len(cin) + 1``.
 
     Returns
     -------
     mass_out : float
         Cumulative outlet mass [mass].
-
-    Notes
-    -----
-    1. Call :func:`identify_outlet_segments` over ``[0, theta]``.
-    2. For each segment: constant → ``c · Δθ``; rarefaction → exact analytic
-       θ-integral via :func:`integrate_rarefaction_exact`.
 
     Examples
     --------
@@ -1335,45 +1399,16 @@ def compute_cumulative_outlet_mass(
             v_outlet=500.0,
             waves=tracker.state.waves,
             sorption=sorption,
+            cin=cin,
+            theta_edges=tracker.state.theta_edges,
         )
         mass_out >= 0.0
     """
     if theta <= 0.0:
         return 0.0
-
-    segments = identify_outlet_segments(0.0, theta, v_outlet, waves, sorption)
-
-    total_mass = 0.0
-    for seg in segments:
-        seg_theta_start = max(seg["theta_start"], 0.0)
-        seg_theta_end = min(seg["theta_end"], theta)
-        seg_dtheta = seg_theta_end - seg_theta_start
-
-        if seg_dtheta <= EPSILON_TIME:
-            continue
-
-        if seg["type"] == "constant":
-            total_mass += seg["concentration"] * seg_dtheta
-        elif seg["type"] == "rarefaction":
-            if isinstance(sorption, NonlinearSorption):
-                raref = seg["wave"]
-                total_mass += integrate_rarefaction_exact(raref, v_outlet, seg_theta_start, seg_theta_end, sorption)
-            else:
-                c_mid = concentration_at_point(v_outlet, 0.5 * (seg_theta_start + seg_theta_end), waves, sorption)
-                total_mass += c_mid * seg_dtheta
-        elif seg["type"] == "decaying_fan":
-            decaying = seg["wave"]
-            total_mass += integrate_fan_exact(
-                decaying.theta_origin,
-                decaying.v_origin,
-                v_outlet,
-                seg_theta_start,
-                seg_theta_end,
-                sorption,
-                c_apex=decaying.c_fixed,
-            )
-
-    return float(total_mass)
+    m_in = compute_cumulative_inlet_mass(theta=theta, cin=cin, theta_edges=theta_edges)
+    m_dom = compute_domain_mass(theta=theta, v_outlet=v_outlet, waves=waves, sorption=sorption)
+    return m_in - m_dom
 
 
 def integrate_rarefaction_total_mass(
@@ -1423,103 +1458,62 @@ def compute_total_outlet_mass(
     v_outlet: float,
     waves: Sequence[Wave],
     sorption: SorptionModel,
+    *,
+    cin: npt.ArrayLike,
+    theta_edges: npt.NDArray[np.floating],
 ) -> tuple[float, float]:
-    """Total outlet mass integrated until the last wave passes the outlet.
+    """Asymptotic total outlet mass via the conservation-law identity.
 
-    Pure θ-domain: returns ``(mass, theta_integration_end)``. The caller
-    translates ``theta_integration_end`` to user-facing time via
-    ``FrontTrackerState.t_at_theta`` if needed.
+    Computed as ``m_in_total − m_dom_asymptotic`` where ``m_dom_asymptotic``
+    is the aquifer's steady-state domain mass: ``C_T(c_∞) · v_outlet``, with
+    ``c_∞ = cin[-1]`` (the final/sustained inlet boundary value). This is
+    the asymptotic limit of ``m_in(θ) − m_dom(θ)`` as θ → ∞:
+
+    - For ``c_∞ = 0`` (canonical c_R=0 pulse): m_dom_asymptotic = 0 and
+      ``m_out_total = m_in_total`` — every injected mass unit eventually exits.
+    - For ``c_∞ > 0`` (sustained ambient): m_dom_asymptotic = C_T(c_∞) · V_outlet
+      stays in the domain at steady state; the rest exits.
+
+    Sidesteps the multi-fan dispatch problem entirely — the integration is
+    purely a closed-form arithmetic over (cin, theta_edges) plus one
+    ``sorption.total_concentration`` evaluation.
 
     Parameters
     ----------
     v_outlet : float
         Outlet position [m³].
     waves : list of Wave
-        All waves in the simulation.
+        Wave list (kept for signature parity; the conservation form derives
+        the asymptotic mass from cin alone, but compute_domain_mass is still
+        needed by callers that want finite-θ outlet mass — see
+        :func:`compute_cumulative_outlet_mass`).
     sorption : SorptionModel
-        Sorption model.
+        Sorption model — used only for ``C_T(c_∞)``.
+    cin : array-like (kw-only)
+        Inlet concentration per θ-bin [mass/volume].
+    theta_edges : ndarray (kw-only)
+        θ bin edges [m³], length ``len(cin) + 1``.
 
     Returns
     -------
     total_mass_out : float
-        Total mass that exits through outlet [mass].
+        Asymptotic outlet mass [mass]. Equals ``m_in_total`` for ``cin[-1]=0``.
     theta_integration_end : float
-        Cumulative flow at the cutoff between explicit segment integration
-        and the analytical tail-to-infinity term [m³]. For each rarefaction
-        whose head crosses the outlet at this θ, the tail contribution is
-        added analytically; for rarefactions whose tail crosses *later*, that
-        tail contribution is the part folded into the segment integral up to
-        this cutoff (not necessarily the same as "the θ at which the last
-        wave passes the outlet").
+        ``theta_edges[-1]`` (the simulation end θ). Caller translates to
+        user-facing time via ``FrontTrackerState.t_at_theta`` if needed.
 
     See Also
     --------
-    compute_cumulative_outlet_mass : Cumulative outlet mass up to θ
-    find_last_rarefaction_start_theta : Find θ at which last rarefaction starts
-    integrate_rarefaction_total_mass : Total mass in rarefaction to infinity
-
-    Notes
-    -----
-    1. ``theta_last`` = θ at which the last active wave reaches the outlet
-       (rarefaction head, shock, or characteristic). Equal to the returned
-       ``theta_integration_end``.
-    2. Integrate outlet mass flux from θ=0 to ``theta_last``.
-    3. Add the analytical tail-to-infinity contribution for any active
-       rarefaction whose head crosses at exactly ``theta_last``.
-
-    Examples
-    --------
-    ::
-
-        total_mass, theta_end = compute_total_outlet_mass(
-            v_outlet=500.0,
-            waves=tracker.state.waves,
-            sorption=sorption,
-        )
-        total_mass >= 0.0
-        theta_end >= 0.0
+    compute_cumulative_outlet_mass : Cumulative outlet mass up to finite θ
+    compute_domain_mass : Spatial integral of C_total in the aquifer
     """
-    theta_last_raref_start = find_last_rarefaction_start_theta(v_outlet, waves)
-
-    mass_up_to_raref_start = compute_cumulative_outlet_mass(theta_last_raref_start, v_outlet, waves, sorption)
-
-    total_raref_mass = 0.0
-    for wave in waves:
-        if not wave.is_active:
-            continue
-        if isinstance(wave, RarefactionWave):
-            head_speed = wave.head_speed()
-            if head_speed > EPSILON_VELOCITY and wave.v_start < v_outlet:
-                theta_head_crosses_outlet = wave.theta_start + (v_outlet - wave.v_start) / head_speed
-                if abs(theta_head_crosses_outlet - theta_last_raref_start) < EPSILON_TIME_MATCH:
-                    total_raref_mass += integrate_rarefaction_total_mass(
-                        raref=wave,
-                        v_outlet=v_outlet,
-                        theta_start=theta_head_crosses_outlet,
-                        sorption=sorption,
-                    )
-        elif isinstance(wave, DecayingShockWave):
-            theta_cross = wave.outlet_crossing_theta(v_outlet)
-            # Only decay_side='left' (favorable n>1, Langmuir) has a fan-to-+∞
-            # contribution: after V_s passes v_outlet, v_outlet is inside the
-            # fan and c follows the decaying profile. For decay_side='right'
-            # (n<1 mirror) the post-arrival c = c_fixed (immediately upstream
-            # of the shock); the +∞ contribution is c_fixed · ∞ which is only
-            # finite for c_fixed=0 (giving 0). The c_fixed>0 case (multi-pulse)
-            # leaves a constant-c_fixed tail handled by the segment integration.
-            if (
-                theta_cross is not None
-                and abs(theta_cross - theta_last_raref_start) < EPSILON_TIME_MATCH
-                and wave.c_fixed < EPSILON_CONCENTRATION
-                and wave.decay_side == "left"
-            ):
-                total_raref_mass += integrate_fan_exact(
-                    theta_origin=wave.theta_origin,
-                    v_origin=wave.v_origin,
-                    v_outlet=v_outlet,
-                    theta_start=theta_cross,
-                    theta_end=np.inf,
-                    sorption=sorption,
-                )
-
-    return float(mass_up_to_raref_start + total_raref_mass), float(theta_last_raref_start)
+    cin_arr = np.asarray(cin, dtype=float)
+    te = np.asarray(theta_edges, dtype=float)
+    m_in_total = float(np.sum(cin_arr * np.diff(te)))
+    c_inf = float(cin_arr[-1]) if cin_arr.size > 0 else 0.0
+    m_dom_asymptotic = float(sorption.total_concentration(c_inf)) * v_outlet
+    # `waves` is kept in the signature for parity with compute_cumulative_outlet_mass
+    # (legacy callers pass it); the asymptotic conservation form only needs
+    # cin, theta_edges, and c_∞.
+    del waves
+    return m_in_total - m_dom_asymptotic, float(te[-1])

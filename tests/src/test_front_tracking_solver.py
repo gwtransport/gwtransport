@@ -776,7 +776,11 @@ class TestRiemannProblems:
         mass_in = float(np.sum(cin * np.diff(tracker.state.theta_edges)))
 
         mass_out, _theta_end = compute_total_outlet_mass(
-            v_outlet=v_pore, waves=tracker.state.waves, sorption=freundlich_sorption
+            v_outlet=v_pore,
+            waves=tracker.state.waves,
+            sorption=freundlich_sorption,
+            cin=cin,
+            theta_edges=tracker.state.theta_edges,
         )
 
         assert np.isclose(mass_out, mass_in, rtol=1e-12)
@@ -802,7 +806,13 @@ class TestRiemannProblems:
         tracker.run(max_iterations=10000, verbose=False)
 
         mass_in = float(np.sum(cin * np.diff(tracker.state.theta_edges)))
-        mass_out, _ = compute_total_outlet_mass(v_outlet=v_pore, waves=tracker.state.waves, sorption=sorption)
+        mass_out, _ = compute_total_outlet_mass(
+            v_outlet=v_pore,
+            waves=tracker.state.waves,
+            sorption=sorption,
+            cin=cin,
+            theta_edges=tracker.state.theta_edges,
+        )
         assert np.isclose(mass_out, mass_in, rtol=1e-12)
 
     def test_two_step_increase_merges_into_single_shock(self, freundlich_sorption):
@@ -905,7 +915,12 @@ class TestParametricMassBalance:
             m_in = compute_cumulative_inlet_mass(theta=theta, cin=cin, theta_edges=tr.state.theta_edges)
             m_dom = compute_domain_mass(theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
             m_out = compute_cumulative_outlet_mass(
-                theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption
+                theta=theta,
+                v_outlet=v_outlet,
+                waves=tr.state.waves,
+                sorption=sorption,
+                cin=cin,
+                theta_edges=tr.state.theta_edges,
             )
             if m_dom > 1.0:
                 saw_dom = True
@@ -941,7 +956,13 @@ class TestParametricMassBalance:
         tr.run(max_iterations=100000)
 
         mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
-        mass_out, _ = compute_total_outlet_mass(v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
+        mass_out, _ = compute_total_outlet_mass(
+            v_outlet=v_outlet,
+            waves=tr.state.waves,
+            sorption=sorption,
+            cin=cin,
+            theta_edges=tr.state.theta_edges,
+        )
         # Empirical rel_err ≤ 7e-15 across the parameter sweep (worst at s_max=0.2, k_l=10); 1e-13 leaves 14× headroom.
         assert np.isclose(mass_out, mass_in, rtol=1e-13), (
             f"Langmuir s={s_max}, k_l={k_l}: total mass mass_in={mass_in:.4f} mass_out={mass_out:.4f}"
@@ -955,7 +976,12 @@ class TestParametricMassBalance:
             m_in = compute_cumulative_inlet_mass(theta=theta, cin=cin, theta_edges=tr.state.theta_edges)
             m_dom = compute_domain_mass(theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
             m_out = compute_cumulative_outlet_mass(
-                theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption
+                theta=theta,
+                v_outlet=v_outlet,
+                waves=tr.state.waves,
+                sorption=sorption,
+                cin=cin,
+                theta_edges=tr.state.theta_edges,
             )
             if m_dom > 1.0:
                 saw_dom = True
@@ -987,7 +1013,13 @@ class TestParametricMassBalance:
         tr.run(max_iterations=100000)
 
         mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
-        mass_out, _ = compute_total_outlet_mass(v_outlet=v_outlet, waves=tr.state.waves, sorption=freundlich_sorption)
+        mass_out, _ = compute_total_outlet_mass(
+            v_outlet=v_outlet,
+            waves=tr.state.waves,
+            sorption=freundlich_sorption,
+            cin=cin,
+            theta_edges=tr.state.theta_edges,
+        )
         assert np.isclose(mass_out, mass_in, rtol=1e-13), f"flow-change: mass_in={mass_in:.4f}, mass_out={mass_out:.4f}"
 
     def test_zero_flow_interval_n2_mass_balance(self, freundlich_sorption):
@@ -1010,7 +1042,13 @@ class TestParametricMassBalance:
         tr.run(max_iterations=100000)
 
         mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
-        mass_out, _ = compute_total_outlet_mass(v_outlet=v_outlet, waves=tr.state.waves, sorption=freundlich_sorption)
+        mass_out, _ = compute_total_outlet_mass(
+            v_outlet=v_outlet,
+            waves=tr.state.waves,
+            sorption=freundlich_sorption,
+            cin=cin,
+            theta_edges=tr.state.theta_edges,
+        )
         assert np.isclose(mass_out, mass_in, rtol=1e-13), (
             f"zero-flow interval: mass_in={mass_in:.4f}, mass_out={mass_out:.4f}"
         )

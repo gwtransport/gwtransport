@@ -543,6 +543,13 @@ class DecayingShockWave(Wave):
                 self.c_fixed,
             )
         elif isinstance(self.sorption, LangmuirSorption):
+            if self.c_fixed > 0.0:
+                # The Langmuir closed form for c_fixed > 0 has not been derived;
+                # _compute_k_langmuir's signature omits c_fixed, so silently
+                # accepting c_fixed > 0 would compute the wrong K. Mirrors the
+                # Freundlich c_fixed > 0 / n != 2 guard above.
+                msg = f"DecayingShockWave with c_fixed > 0 is not implemented for Langmuir; got c_fixed={self.c_fixed}"
+                raise NotImplementedError(msg)
             self.K = _compute_k_langmuir(
                 self.sorption,
                 self.theta_start - self.theta_origin,

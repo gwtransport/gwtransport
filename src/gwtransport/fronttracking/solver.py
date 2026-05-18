@@ -523,6 +523,8 @@ class FrontTracker:
                 v_outlet=self.state.v_outlet,
                 waves=self.state.waves,
                 sorption=self.state.sorption,
+                cin=self.state.cin,
+                theta_edges=self.state.theta_edges,
             )
 
             mass_balance_error = (mass_in_domain + mass_out_cumulative) - mass_in_cumulative

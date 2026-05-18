@@ -204,7 +204,7 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
         )
 
         total_mass_out, theta_integration_end = compute_total_outlet_mass(
-            v_outlet=v_outlet, waves=waves, sorption=sorption
+            v_outlet=v_outlet, waves=waves, sorption=sorption, cin=cin, theta_edges=theta_edges_arr
         )
 
         epsilon_conc_zero = 1e-10

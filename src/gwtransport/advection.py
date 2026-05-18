@@ -1328,6 +1328,7 @@ def _flow_weighted_front_tracking_output(
     waves: list,
     sorption: SorptionModel,
     theta_edges: npt.NDArray[np.floating],
+    cin: npt.NDArray[np.floating],
 ) -> npt.NDArray[np.floating]:
     """Compute flow-weighted bin-averaged concentration from front-tracking output.
 
@@ -1380,6 +1381,8 @@ def _flow_weighted_front_tracking_output(
         v_outlet=v_outlet,
         waves=waves,
         sorption=sorption,
+        cin=cin,
+        theta_edges_inlet=theta_edges,
     )
 
     # Map each fine sub-bin to its flow value. side="right" enforces the
@@ -1728,6 +1731,7 @@ def infiltration_to_extraction_front_tracking_detailed(
             waves=tracker.state.waves,
             sorption=sorption,
             theta_edges=tracker.state.theta_edges,
+            cin=cin,
         )
 
         structure = {

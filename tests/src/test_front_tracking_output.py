@@ -612,7 +612,11 @@ class TestMassBalanceFunctions:
         theta_cross = v_outlet * sorption.retardation_factor  # 1000
         theta_query = 1900.0  # well past crossing
 
-        mass = compute_cumulative_outlet_mass(theta_query, v_outlet, waves, sorption)
+        # Synthetic inlet history matching the wave list: sustained c=10 over
+        # the entire theta range.
+        cin = np.array([c])
+        theta_edges = np.array([0.0, theta_query])
+        mass = compute_cumulative_outlet_mass(theta_query, v_outlet, waves, sorption, cin=cin, theta_edges=theta_edges)
 
         # Closed form: ∫_θ_cross^θ_query c dθ' = c · (θ_query - θ_cross) = 10 · 900 = 9000.
         expected = c * (theta_query - theta_cross)
