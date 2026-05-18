@@ -123,3 +123,59 @@ def test_stacked_shocks_right_side_uses_v_shock_tiebreaker():
     # c_right of the leading (rightmost-V) shock = 0.
     # Pre-fix would have returned 3 (c_right of the second-cascade shock).
     assert c == 0.0, f"v=100 right of all shocks at θ=250: expected c=0 (IC), got {c}"
+
+
+def test_multi_rarefaction_overlap_no_overcount_in_domain_mass():
+    """Round-5c fix: ``concentration_at_point`` shock c_R only applies in the
+    immediate-right zone, not past intervening rarefactions.
+
+    For an n<1 ramp ``cin=[0,3,6,9,12,0]`` (Freundlich n=0.5), the simulator
+    produces 4 stacked rarefactions from the upramp PLUS a closing shock
+    from the trailing zero. At θ=500 (just after the closing shock forms at
+    V=0), 4 active rarefactions sit in the V-range [0.083, 400] with c
+    plateaus between them (c=9, 6, 3 at the gaps). Pre-fix, the shock's
+    c_R=12 propagated through ALL constant regions — including [400, 500]
+    where c should be 0 (IC, past the outermost rarefaction's head). The
+    overcount made m_dom=727694 vs the physically-injected 3000 (240×
+    overcount). Post-fix, the _intervening_wave_between obstruction check
+    correctly stops the shock c_R's reach at the next downstream wave.
+
+    This test asserts the c profile is geometrically correct across all
+    intermediate-V positions of the padded n=0.5 ramp at θ=500.
+    """
+    sorption = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3)
+    v_outlet = 500.0
+    cin = np.array([0.0, 3.0, 6.0, 9.0, 12.0, 0.0])
+    flow = np.full(6, 100.0)
+    tedges = pd.DatetimeIndex(
+        pd.date_range("2020-01-01", periods=6, freq="D").append(pd.DatetimeIndex([pd.Timestamp("2020-01-11")]))
+    )
+    tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
+    tr.run(max_iterations=200000)
+
+    theta_query = 500.0
+
+    # Probe v at the midpoints of each constant region. Expected c at each
+    # midpoint corresponds to the plateau value between rarefactions.
+    expectations = [
+        (0.0417, 12.0),  # just past closing shock at V=0, in c=12 plateau
+        (0.1665, 9.0),  # between r#3 head and r#2 tail (c=9 plateau)
+        (0.4160, 6.0),  # between r#2 head and r#1 tail (c=6 plateau)
+        (1.1628, 3.0),  # between r#1 head and r#0 tail (c=3 plateau)
+        (450.0, 0.0),  # past all rarefactions (c=0 IC)
+    ]
+    for v, c_expected in expectations:
+        c = concentration_at_point(v=v, theta=theta_query, waves=tr.state.waves, sorption=sorption)
+        assert c == c_expected, (
+            f"n=0.5 ramp at θ=500, v={v}: expected c={c_expected}, got {c} "
+            f"(pre-round-5c shock c_R=12 would propagate to all constant regions)"
+        )
+
+    # Sanity: m_dom should match m_in (no mass has reached v_outlet=500 yet).
+    from gwtransport.fronttracking.output import compute_cumulative_inlet_mass, compute_domain_mass
+
+    m_in = compute_cumulative_inlet_mass(theta=theta_query, cin=cin, theta_edges=tr.state.theta_edges)
+    m_dom = compute_domain_mass(theta=theta_query, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
+    rel_err = abs(m_dom - m_in) / max(m_in, 1.0)
+    # Pre-round-5c: m_dom=727694, rel_err ≈ 240. Post-fix: rel_err ≤ 1e-12.
+    assert rel_err < 1e-12, f"m_dom={m_dom}, m_in={m_in}, rel_err={rel_err:.3e}"

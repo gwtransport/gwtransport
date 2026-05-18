@@ -106,8 +106,32 @@ def concentration_at_point(
     # of the shock CLOSEST to v from the left (largest V_shock with V_shock < v).
     # ``theta_start`` would mis-rank stacked shocks (youngest = innermost ≠
     # closest-to-v), so we track V_shock directly.
+    # OBSTRUCTION CHECK: a shock's c_R applies at v only when no other active
+    # wave (rarefaction tail/head, DSW V_s, other shock) sits between V_shock
+    # and v. Otherwise the c_R is the c in the IMMEDIATE-right-of-shock zone,
+    # not at v. Without this check, the c=12 plateau past V_shock=0 would
+    # incorrectly extend through all downstream rarefactions to v_outlet
+    # (Phase 2 Step 5b round 5c).
     rightmost_passed_v_shock = -np.inf
     rightmost_passed_c_right: float | None = None
+
+    def _intervening_wave_between(v_a: float, v_b: float) -> bool:
+        """Return True if any other active wave has a boundary V in (v_a, v_b)."""
+        for other in waves:
+            if not other.was_active_at(theta):
+                continue
+            if isinstance(other, RarefactionWave):
+                v_t = other.tail_position_at_theta(theta)
+                v_h = other.head_position_at_theta(theta)
+                if v_t is not None and v_a < v_t < v_b:
+                    return True
+                if v_h is not None and v_a < v_h < v_b:
+                    return True
+            else:
+                v_o = other.position_at_theta(theta)
+                if v_o is not None and v_a < v_o < v_b:
+                    return True
+        return False
 
     for wave in waves:
         if isinstance(wave, ShockWave) and wave.was_active_at(theta):
@@ -125,7 +149,7 @@ def concentration_at_point(
                         if theta_cross > latest_wave_theta:
                             latest_wave_theta = theta_cross
                             latest_wave_c = wave.c_left
-                    elif v > v_shock > rightmost_passed_v_shock:
+                    elif v > v_shock > rightmost_passed_v_shock and not _intervening_wave_between(v_shock, v):
                         rightmost_passed_v_shock = v_shock
                         rightmost_passed_c_right = wave.c_right
 
@@ -140,10 +164,20 @@ def concentration_at_point(
                         latest_wave_theta = theta_pass
                         latest_wave_c = wave.c_tail
 
-    if rightmost_passed_c_right is not None:
-        return rightmost_passed_c_right
+    # Priority: latest_wave_c is set by the IF-shock branch (theta_cross <=
+    # theta -> c_L of closest-passing shock) or by the rarefaction-tail loop
+    # (rarefaction tail downstream of v passed v at theta_pass -> c_tail).
+    # rightmost_passed_c_right is set by the elif-shock branch (v > V_shock,
+    # shock upstream of v, c_R of closest-from-left shock). The two represent
+    # different geometric truths: latest_wave_c is "most recent event AT v",
+    # rightmost_passed_c_right is "c just past the upstream shock". When a
+    # rarefaction tail is downstream of the shock AND right of v, that
+    # rarefaction's c_tail wins (the tail's passage at v is more recent than
+    # the shock's contribution at v, geometrically). Prefer latest_wave_c.
     if latest_wave_c is not None:
         return latest_wave_c
+    if rightmost_passed_c_right is not None:
+        return rightmost_passed_c_right
 
     latest_c = 0.0
     latest_theta = -np.inf
