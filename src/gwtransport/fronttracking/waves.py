@@ -184,7 +184,7 @@ class CharacteristicWave(Wave):
 
         ``V(θ) = v_start + speed * (θ - θ_start)``.
         """
-        if theta < self.theta_start or theta >= self.theta_deactivation:
+        if not self.was_active_at(theta):
             return None
         return self.v_start + self.speed() * (theta - self.theta_start)
 
@@ -268,7 +268,7 @@ class ShockWave(Wave):
 
     def position_at_theta(self, theta: float) -> float | None:
         """Position at cumulative flow θ. Shock propagates linearly in θ."""
-        if theta < self.theta_start or theta >= self.theta_deactivation:
+        if not self.was_active_at(theta):
             return None
         return self.v_start + self.speed * (theta - self.theta_start)
 
@@ -383,13 +383,13 @@ class RarefactionWave(Wave):
 
     def head_position_at_theta(self, theta: float) -> float | None:
         """Position of rarefaction head at cumulative flow θ."""
-        if theta < self.theta_start or theta >= self.theta_deactivation:
+        if not self.was_active_at(theta):
             return None
         return self.v_start + self.head_speed() * (theta - self.theta_start)
 
     def tail_position_at_theta(self, theta: float) -> float | None:
         """Position of rarefaction tail at cumulative flow θ."""
-        if theta < self.theta_start or theta >= self.theta_deactivation:
+        if not self.was_active_at(theta):
             return None
         return self.v_start + self.tail_speed() * (theta - self.theta_start)
 
@@ -609,7 +609,7 @@ class DecayingShockWave(Wave):
 
         Returns ``None`` for ``θ < theta_start`` or when the wave is inactive.
         """
-        if theta < self.theta_start or theta >= self.theta_deactivation:
+        if not self.was_active_at(theta):
             return None
 
         theta_local = theta - self.theta_origin
@@ -634,7 +634,7 @@ class DecayingShockWave(Wave):
 
         Returns ``None`` for ``θ < theta_start`` or when inactive.
         """
-        if theta < self.theta_start or theta >= self.theta_deactivation:
+        if not self.was_active_at(theta):
             return None
 
         c_d = self.c_decay_at_theta(theta)
@@ -772,7 +772,7 @@ class DecayingShockWave(Wave):
 
         Returns ``None`` for ``θ < theta_start`` or inactive waves.
         """
-        if theta < self.theta_start or theta >= self.theta_deactivation:
+        if not self.was_active_at(theta):
             return None
 
         v_s = self.position_at_theta(theta)
