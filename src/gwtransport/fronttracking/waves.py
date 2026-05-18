@@ -74,15 +74,24 @@ class Wave(ABC):
     def was_active_at(self, theta: float) -> bool:
         """Whether the wave was active at cumulative flow ``theta`` (geometric truth).
 
-        Returns ``True`` for ``theta_start <= theta < theta_deactivation``.
-        Use this for retrospective queries — ``is_active`` reflects only
-        the wave's *current* (post-simulation) state and is wrong for
-        ``compute_domain_mass`` etc. at θ before any deactivation event.
 
-        A wave constructed with ``is_active=False`` but no recorded
-        ``theta_deactivation`` (default ``+∞``) is treated as never-active —
-        e.g., synthetic test fixtures that want the wave excluded from
-        dispatch entirely.
+                Use for retrospective queries — ``is_active`` reflects only the
+        wave's *current* (post-simulation) state, which is wrong for
+        ``compute_domain_mass`` and similar at θ before a deactivation event.
+
+        Parameters
+        ----------
+        theta : float
+            Cumulative flow at which to query historical activity [m³].
+
+        Returns
+        -------
+        bool
+            ``True`` for ``theta_start <= theta < theta_deactivation``.
+            A wave constructed with ``is_active=False`` and no recorded
+            ``theta_deactivation`` (default ``+∞``) is treated as
+            never-active — e.g., synthetic test fixtures that want the
+            wave excluded from dispatch entirely.
         """
         if not self.is_active and self.theta_deactivation == float("inf"):
             return False
@@ -94,6 +103,11 @@ class Wave(ABC):
         Sets both ``is_active = False`` (solver event-loop flag) and
         ``theta_deactivation = theta`` (historical record for retrospective
         ``was_active_at`` queries).
+
+        Parameters
+        ----------
+        theta : float
+            Cumulative flow at which the wave is deactivated [m³].
         """
         self.is_active = False
         self.theta_deactivation = theta
