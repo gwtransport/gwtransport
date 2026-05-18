@@ -1109,7 +1109,7 @@ def _integrate_rarefaction_spatial_langmuir(
     Returns
     -------
     float
-        Exact mass in segment.
+        Exact mass in segment [mass].
 
     Notes
     -----
@@ -1120,6 +1120,14 @@ def _integrate_rarefaction_spatial_langmuir(
     Since K_L + C = sqrt(a_coeff*u/(kappa-u)):
         C/(K_L+C) = 1 - K_L*sqrt((kappa-u)/(a_coeff*u))
 
+    The Langmuir fan has finite extent in u: C(u) ≥ 0 only for
+    u ≥ u_zero = K_L²·κ/(a_coeff + K_L²). The integrand is unphysical
+    (c<0, giving a negative C_total) for u < u_zero, so BOTH bounds are
+    clamped at u_zero before evaluating the antiderivative. Spatial
+    counterpart of the upper-bound θ_zero clamp in
+    :func:`_integrate_fan_exact_langmuir`: there the fan has c=0 for
+    θ ≥ θ_zero; here c=0 for u ≤ u_zero.
+
     The integral simplifies to:
         integral C_total du = -2*sqrt(a_coeff)*[sqrt(u*(kappa-u))]_start^end
                               + (rho_b*s_max/n_por - K_L)*(u_end - u_start)
@@ -1127,6 +1135,12 @@ def _integrate_rarefaction_spatial_langmuir(
     a_coeff = sorption.a_coeff
     k_l = sorption.k_l
     sorbed_max = sorption.bulk_density * sorption.s_max / sorption.porosity
+
+    u_zero = k_l * k_l * kappa / (a_coeff + k_l * k_l)
+    # Clamp into the physical fan range [u_zero, kappa]: below u_zero, c<0;
+    # at kappa, c diverges (NaN under sqrt for u_end > kappa).
+    u_start = min(max(u_start, u_zero), kappa)
+    u_end = min(max(u_end, u_zero), kappa)
 
     term_sqrt_end = np.sqrt(u_end * (kappa - u_end))
     term_sqrt_start = np.sqrt(u_start * (kappa - u_start))

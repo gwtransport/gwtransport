@@ -17,6 +17,9 @@ import pytest
 from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption, LangmuirSorption
 from gwtransport.fronttracking.output import (
     compute_breakthrough_curve,
+    compute_cumulative_inlet_mass,
+    compute_cumulative_outlet_mass,
+    compute_domain_mass,
     compute_total_outlet_mass,
     concentration_at_point,
 )
@@ -857,3 +860,157 @@ class TestRiemannProblems:
             t_in = t - delay
             bin_idx = int(np.floor(t_in))
             assert np.isclose(c_out, cin[bin_idx], rtol=1e-14, atol=1e-14)
+
+
+class TestParametricMassBalance:
+    """Parametric mass-balance suite for confirmed-working scenarios at machine precision.
+
+    Each test asserts both the closed-form total at θ_max
+    (``compute_total_outlet_mass ≈ mass_in``) and (where applicable) the
+    per-checkpoint identity ``m_in(θ) = m_dom(θ) + m_out(θ)`` at four
+    characteristic regimes: pre-breakthrough, at breakthrough, mid-drain,
+    and asymptotic.
+    """
+
+    @pytest.mark.parametrize("n", [1.5, 2.0, 2.5, 3.0])
+    def test_freundlich_parameter_sweep_mass_balance(self, n):
+        """Freundlich n sweep with c_R=0: m_in = m_dom + m_out at machine precision.
+
+        Exercises the full Phase 2 step 4 closed-form chain: DecayingShockWave
+        trajectory + ``integrate_fan_exact`` (temporal) + ``integrate_fan_spatial_exact``
+        (spatial in ``compute_domain_mass``). The n=2 case uses the closed-form
+        quadratic inversion for ``c_decay_at_theta``; n∈{1.5, 2.5, 3.0} use
+        the brentq path (Abel-Ruffini rules out radicals for general n).
+
+        Mutation guard: a hard-coded n=2 in the closed-form path would be
+        invisible to the n=2 case alone; the n∈{1.5, 2.5, 3.0} variants
+        surface it.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=n, bulk_density=1500.0, porosity=0.3)
+        v_outlet = 200.0
+        cin = np.zeros(500)
+        cin[5:15] = 4.0
+        flow = np.full(500, 100.0)
+        tedges = pd.date_range("2020-01-01", periods=501, freq="D")
+
+        tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
+        tr.run(max_iterations=100000)
+
+        # Theta checkpoints span pre-arrival (m_out=0), breakthrough,
+        # mid-drainage, and asymptotic regimes for the canonical-pulse geometry.
+        checkpoints = [4000.0, 6000.0, 9000.0, 15000.0, 25000.0]
+        saw_dom = False
+        saw_out = False
+        for theta in checkpoints:
+            m_in = compute_cumulative_inlet_mass(theta=theta, cin=cin, theta_edges=tr.state.theta_edges)
+            m_dom = compute_domain_mass(theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
+            m_out = compute_cumulative_outlet_mass(
+                theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption
+            )
+            if m_dom > 1.0:
+                saw_dom = True
+            if m_out > 1.0:
+                saw_out = True
+            err = abs((m_dom + m_out) - m_in)
+            tol = 1e-14 * max(m_in, 1.0)
+            assert err <= tol, f"mass-balance violation at n={n}, θ={theta}: err={err:.6e} > tol={tol:.6e}"
+
+        assert saw_dom, f"n={n}: checkpoints must include θ where m_dom > 1 to exercise the closed-form fan integral"
+        assert saw_out, f"n={n}: checkpoints must include θ where m_out > 1 to exercise compute_cumulative_outlet_mass"
+
+    @pytest.mark.parametrize(
+        ("s_max", "k_l"),
+        [(0.05, 2.0), (0.1, 5.0), (0.2, 10.0)],
+    )
+    def test_langmuir_parameter_sweep_mass_balance(self, s_max, k_l):
+        """Langmuir parameter sweep: per-checkpoint m_in = m_dom + m_out at machine precision.
+
+        After the Step 5a Langmuir spatial-integral clamp at u_zero, the
+        per-checkpoint identity holds. Without the clamp this fails by
+        22-105× (m_dom goes negative); the fix is mutation-resistant
+        across the parameter sweep.
+        """
+        sorption = LangmuirSorption(s_max=s_max, k_l=k_l, bulk_density=1500.0, porosity=0.3)
+        v_outlet = 200.0
+        cin = np.zeros(500)
+        cin[5:15] = 4.0
+        flow = np.full(500, 100.0)
+        tedges = pd.date_range("2020-01-01", periods=501, freq="D")
+
+        tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
+        tr.run(max_iterations=100000)
+
+        mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
+        mass_out, _ = compute_total_outlet_mass(v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
+        # Empirical rel_err ≤ 7e-15 across the parameter sweep (worst at s_max=0.2, k_l=10); 1e-13 leaves 14× headroom.
+        assert np.isclose(mass_out, mass_in, rtol=1e-13), (
+            f"Langmuir s={s_max}, k_l={k_l}: total mass mass_in={mass_in:.4f} mass_out={mass_out:.4f}"
+        )
+
+        theta_max = float(tr.state.theta_edges[-1])
+        checkpoints = [theta_max * f for f in (0.1, 0.25, 0.5, 0.75, 0.99)]
+        saw_dom = False
+        saw_out = False
+        for theta in checkpoints:
+            m_in = compute_cumulative_inlet_mass(theta=theta, cin=cin, theta_edges=tr.state.theta_edges)
+            m_dom = compute_domain_mass(theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
+            m_out = compute_cumulative_outlet_mass(
+                theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption
+            )
+            if m_dom > 1.0:
+                saw_dom = True
+            if m_out > 1.0:
+                saw_out = True
+            err = abs((m_dom + m_out) - m_in)
+            tol = 1e-14 * max(m_in, 1.0)
+            assert err <= tol, f"Langmuir s={s_max}, k_l={k_l} at θ={theta}: err={err:.6e} > tol={tol:.6e}"
+
+        assert saw_dom, f"Langmuir s={s_max}, k_l={k_l}: checkpoints must include θ where m_dom > 1"
+        assert saw_out, f"Langmuir s={s_max}, k_l={k_l}: checkpoints must include θ where m_out > 1"
+
+    def test_flow_change_during_pulse_n2_mass_balance(self, freundlich_sorption):
+        """Time-varying flow does not perturb mass balance — the (V, θ) refactor's central claim.
+
+        In (V, θ) coordinates the wave dynamics are flow-independent;
+        flow enters only via the precomputed ``theta_edges`` array. A
+        regression that re-introduces flow into a wave method would
+        break this scenario but pass the constant-flow tests.
+        """
+        v_outlet = 200.0
+        cin = np.zeros(500)
+        cin[5:15] = 4.0
+        # Three flow regimes during the simulation, including a doubling AFTER the pulse.
+        flow = np.concatenate([np.full(100, 100.0), np.full(100, 50.0), np.full(100, 200.0), np.full(200, 100.0)])
+        tedges = pd.date_range("2020-01-01", periods=501, freq="D")
+
+        tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=freundlich_sorption)
+        tr.run(max_iterations=100000)
+
+        mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
+        mass_out, _ = compute_total_outlet_mass(v_outlet=v_outlet, waves=tr.state.waves, sorption=freundlich_sorption)
+        assert np.isclose(mass_out, mass_in, rtol=1e-13), f"flow-change: mass_in={mass_in:.4f}, mass_out={mass_out:.4f}"
+
+    def test_zero_flow_interval_n2_mass_balance(self, freundlich_sorption):
+        """A zero-flow bin in the middle of the simulation does not perturb mass balance.
+
+        In (V, θ) the zero-flow interval is a zero-width segment of
+        ``theta_edges``; wave dynamics are simply paused for that interval
+        without modification. Companion test to
+        ``test_theta_constant_across_zero_flow_bin`` in
+        tests/regression/test_phase1_invariants.py.
+        """
+        v_outlet = 200.0
+        cin = np.zeros(500)
+        cin[5:15] = 4.0
+        # Pulse, then a zero-flow gap, then resumed flow.
+        flow = np.concatenate([np.full(100, 100.0), np.full(100, 0.0), np.full(300, 100.0)])
+        tedges = pd.date_range("2020-01-01", periods=501, freq="D")
+
+        tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=freundlich_sorption)
+        tr.run(max_iterations=100000)
+
+        mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
+        mass_out, _ = compute_total_outlet_mass(v_outlet=v_outlet, waves=tr.state.waves, sorption=freundlich_sorption)
+        assert np.isclose(mass_out, mass_in, rtol=1e-13), (
+            f"zero-flow interval: mass_in={mass_in:.4f}, mass_out={mass_out:.4f}"
+        )
