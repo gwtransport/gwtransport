@@ -172,8 +172,6 @@ def test_multi_rarefaction_overlap_no_overcount_in_domain_mass():
         )
 
     # Sanity: m_dom should match m_in (no mass has reached v_outlet=500 yet).
-    from gwtransport.fronttracking.output import compute_cumulative_inlet_mass, compute_domain_mass
-
     m_in = compute_cumulative_inlet_mass(theta=theta_query, cin=cin, theta_edges=tr.state.theta_edges)
     m_dom = compute_domain_mass(theta=theta_query, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
     rel_err = abs(m_dom - m_in) / max(m_in, 1.0)
