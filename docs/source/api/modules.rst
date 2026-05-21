@@ -126,6 +126,14 @@ logremoval
    :undoc-members:
    :show-inheritance:
 
+percolation
+===========
+
+.. automodule:: gwtransport.percolation
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 residence_time
 ==============
 

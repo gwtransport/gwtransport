@@ -349,6 +349,44 @@ The solver tracks these waves analytically, eliminating numerical artifacts. Use
 
 See :doc:`/examples/10_Advection_with_non_linear_sorption` for a complete example.
 
+.. _concept-kinematic-wave:
+
+Kinematic-Wave Percolation Through Thick Unsaturated Zones
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The :mod:`gwtransport.percolation` module computes the percolation flux from the bottom of the root zone to the water table in a thick unsaturated zone. It drops the capillary-suction term from Richards' equation, retaining gravity-driven flow only — the Kinematic-Wave (KW) approximation studied by Olsthoorn (2026, *Stromingen* 32(1)) and Charbeneau (2000):
+
+.. math::
+
+   \frac{\partial \theta_m}{\partial t} + \frac{\partial K(\theta_m)}{\partial z} = 0,
+
+where :math:`\theta_m(z, t)` is volumetric moisture content and :math:`K(\theta_m)` is the unsaturated hydraulic conductivity (Brooks-Corey or van Genuchten-Mualem).
+
+**Mapping to the front-tracking framework.** The KW equation is structurally identical to the nonlinear advection-with-sorption PDE that the front-tracking solver already integrates, under the identification
+
+- :math:`C \equiv K(\theta_m)` (flux variable)
+- :math:`C_T \equiv \theta_m - \theta_r` (conserved storage, with residual offset)
+- :math:`V(z) = \int_0^z n_p(z')\,dz' = \theta_s \cdot z` (cumulative pore volume per unit cross-sectional area, units of length)
+- ``flow_solver(t) = θ_s · f(t)`` where :math:`f(t)` is an optional time-only K-scaling.
+
+The mapping turns the soil's unsaturated conductivity curve into a "sorption" object (:class:`gwtransport.fronttracking.math.BrooksCoreyConductivity`, :class:`gwtransport.fronttracking.math.VanGenuchtenMualemConductivity`), and the existing wave kernel solves the full KW dynamics exactly: sharp wetting-front shocks via Rankine-Hugoniot, drying-tail rarefaction fans, decaying-shock collisions, machine-precision mass balance.
+
+**K-scaling for viscosity.** Water viscosity ``μ(T)`` varies with temperature; since ``K_s ∝ 1/μ``, a seasonal 10 ± 5 °C swing produces roughly 30-50% variation in effective ``K_s``. The cumulative-flow trick in the front-tracking solver absorbs an arbitrary positive time-only scaling ``f(t)`` of the conductivity curve exactly:
+
+.. math::
+
+   \frac{\partial \theta_m}{\partial t} + n_p \cdot f(t) \cdot \frac{\partial K_{\rm ref}(\theta_m)}{\partial V} = 0
+   \qquad\Longleftrightarrow\qquad
+   \frac{\partial C_T}{\partial \theta_V} + \frac{\partial C}{\partial V} = 0,
+   \qquad
+   \theta_V(t) = \int_0^t n_p\,f(\tau)\,d\tau.
+
+The boundary inversion ``cin_solver(t) = q_root_zone(t) / f(t)`` and back-transform ``q_water_table(t) = f(t) · cout(t)`` recover the physical flux from the reference-frame solver state.
+
+**Forward-only.** No inverse mapping ``water_table_to_root_zone`` is provided: KW unsaturated percolation is one-way under gravity, and multiple ``q_root_zone(t)`` series produce indistinguishable ``q_water_table(t)`` after the column's intrinsic low-pass response.
+
+See :py:func:`gwtransport.percolation.root_zone_to_water_table_kinematic_wave` and :doc:`/examples/11_Percolation_Unsaturated_Zone` for a complete walkthrough.
+
 Comparison to Complex Transport Models
 --------------------------------------
 

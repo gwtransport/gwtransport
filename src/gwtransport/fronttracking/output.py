@@ -36,11 +36,13 @@ from scipy.special import betainc
 
 from gwtransport.fronttracking.events import find_outlet_crossing
 from gwtransport.fronttracking.math import (
+    BrooksCoreyConductivity,
     ConstantRetardation,
     FreundlichSorption,
     LangmuirSorption,
     NonlinearSorption,
     SorptionModel,
+    VanGenuchtenMualemConductivity,
 )
 from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWave, RarefactionWave, ShockWave, Wave
 
@@ -684,8 +686,78 @@ def integrate_fan_exact(
             msg = f"integrate_fan_exact: c_apex > 0 not supported for Langmuir (got {c_apex})"
             raise NotImplementedError(msg)
         return _integrate_fan_exact_langmuir(theta_origin, v_origin, v_outlet, theta_start, theta_end, sorption)
+    if isinstance(sorption, (BrooksCoreyConductivity, VanGenuchtenMualemConductivity)):
+        return _integrate_fan_exact_universal(
+            theta_origin, v_origin, v_outlet, theta_start, theta_end, sorption, c_apex
+        )
+
     msg = f"Exact fan integration not supported for {type(sorption).__name__}"
     raise TypeError(msg)
+
+
+def _integrate_fan_exact_universal(
+    theta_origin: float,
+    v_origin: float,
+    v_outlet: float,
+    theta_start: float,
+    theta_end: float,
+    sorption: NonlinearSorption,
+    c_apex: float = 0.0,
+) -> float:
+    r"""Exact θ-integral ``∫ c(θ) dθ`` via the universal IBP antiderivative.
+
+    For any ``NonlinearSorption`` (with ``R = dC_T/dC``), integration by
+    parts on the self-similar fan ``R(c(θ)) = (θ − θ_origin)/Δv`` gives the
+    closed-form antiderivative
+
+    .. math::
+        F(\\theta) = c(\\theta)\\,(\\theta - \\theta_{\\rm origin})
+            - \\Delta v \\cdot C_T(c(\\theta)).
+
+    The derivation uses ``∫ c\\,d\\theta = c·(\\theta-\\theta_0) − ∫(\\theta-\\theta_0)·dc
+    = c·(\\theta-\\theta_0) − \\Delta v · ∫ R(c)\\,dc = c·(\\theta-\\theta_0) − \\Delta v · C_T(c)``,
+    where the last equality is the definition of ``C_T`` as the antiderivative
+    of ``R`` (``R = dC_T/dC``).
+
+    This formula is exact for any sorption (Brooks-Corey, van Genuchten-Mualem,
+    Freundlich, Langmuir). The only sorption-specific call is
+    ``sorption.concentration_from_retardation`` at the two endpoints — for
+    Brooks-Corey this is closed form; for van Genuchten-Mualem it is one
+    ``brentq`` call per endpoint. No quadrature, no integration loop.
+
+    Convergence at θ → ∞ for ``c_apex = 0``: for any monotone sorption with
+    ``R(0) = ∞`` (BC, vG, Freundlich n > 1), ``c(∞) = 0`` and ``c·θ → 0``
+    faster than ``Δv·C_T → 0`` (verified termwise from the closed-form
+    asymptotic ``c ~ R^{-α}`` for some ``α > 1``), so ``F(∞) = 0``.
+
+    For ``c_apex > 0`` the fan formula extrapolates to ``c < c_apex`` past
+    ``θ_tail = θ_origin + Δv·R(c_apex)``; clamp the fan portion at
+    ``θ_tail`` and add ``c_apex·(θ_end − θ_tail)`` for any ``θ_end > θ_tail``.
+    """
+    delta_v = v_outlet - v_origin
+    if delta_v <= 0 or theta_end <= theta_start:
+        return 0.0
+
+    if c_apex > 0.0:
+        theta_tail = theta_origin + delta_v * float(sorption.retardation(c_apex))
+        theta_end_fan = min(theta_end, theta_tail)
+    else:
+        theta_tail = float("inf")
+        theta_end_fan = theta_end
+
+    def antiderivative(theta: float) -> float:
+        if theta == float("inf"):
+            # F(∞) = 0 for any monotone sorption with c → 0 fast enough.
+            return 0.0
+        base = (theta - theta_origin) / delta_v
+        if base <= 0.0:
+            return 0.0
+        c, ct = sorption.c_and_total_from_retardation(base)
+        return c * (theta - theta_origin) - delta_v * ct
+
+    fan_integral = antiderivative(theta_end_fan) - antiderivative(theta_start)
+    constant_contrib = c_apex * max(theta_end - theta_tail, 0.0) if c_apex > 0.0 else 0.0
+    return fan_integral + constant_contrib
 
 
 def _integrate_fan_exact_freundlich(
@@ -1254,8 +1326,43 @@ def integrate_fan_spatial_exact(
     if isinstance(sorption, FreundlichSorption):
         return constant_contrib + _integrate_rarefaction_spatial_freundlich(sorption, kappa, u_start, u_end)
 
+    if isinstance(sorption, (BrooksCoreyConductivity, VanGenuchtenMualemConductivity)):
+        return constant_contrib + _integrate_rarefaction_spatial_universal(sorption, kappa, u_start, u_end)
+
     msg = f"Exact spatial fan integration not supported for {type(sorption).__name__}"
     raise TypeError(msg)
+
+
+def _integrate_rarefaction_spatial_universal(
+    sorption: NonlinearSorption,
+    kappa: float,
+    u_start: float,
+    u_end: float,
+) -> float:
+    r"""Exact spatial integral ``∫ C_T(c(u)) du`` via the universal IBP antiderivative.
+
+    For any ``NonlinearSorption`` with ``R = dC_T/dC``, integration by parts
+    on the self-similar fan ``R(c(u)) = κ/u`` gives the closed-form
+    antiderivative
+
+    .. math::
+        G(u) = C_T(c(u))\\cdot u - \\kappa\\cdot c(u).
+
+    Derivation: ``∫ C_T\\,du = C_T·u − ∫ u\\,dC_T = C_T·u − ∫ (κ/R)·R\\,dc =
+    C_T·u − κ·c`` (the second equality uses ``u = κ/R`` and the third uses
+    ``dC_T = R\\,dc``).
+
+    Sorption-specific calls limited to ``concentration_from_retardation`` and
+    ``total_concentration`` at the two endpoints. For Brooks-Corey both are
+    closed form; for van Genuchten-Mualem ``concentration_from_retardation`` is
+    one ``brentq`` per endpoint and ``total_concentration`` is also one
+    ``brentq`` per endpoint (chained internally). No quadrature.
+    """
+    if u_start <= 0.0 or u_end <= u_start or kappa <= 0.0:
+        return 0.0
+    c_start, ct_start = sorption.c_and_total_from_retardation(kappa / u_start)
+    c_end, ct_end = sorption.c_and_total_from_retardation(kappa / u_end)
+    return (ct_end * u_end - ct_start * u_start) - kappa * (c_end - c_start)
 
 
 def _integrate_rarefaction_spatial_freundlich(
