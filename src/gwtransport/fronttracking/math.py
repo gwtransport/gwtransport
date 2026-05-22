@@ -109,6 +109,17 @@ class NonlinearSorption(ABC):
         ct = float(self.total_concentration(c))
         return c, ct
 
+    def fan_converges_at_infinity(self) -> bool:  # noqa: PLR6301
+        """Whether a ``c_apex=0`` fan's ``∫ c dθ`` converges as ``θ → +∞``.
+
+        True when ``c → 0`` as ``R → ∞`` (so ``base·c → 0`` faster than ``base → ∞``):
+        Brooks-Corey, van Genuchten-Mualem, Langmuir, and Freundlich ``n > 1``. The
+        only divergent case is Freundlich ``n < 1`` (``c → ∞`` as ``R → ∞``), which
+        overrides this to ``False``. Used by the universal temporal fan integrator to
+        reject a ``+∞`` upper bound when the integral diverges.
+        """
+        return True
+
     def check_entropy_condition(self, c_left: float, c_right: float, shock_speed: float) -> bool:
         """Verify Lax entropy condition in (V, θ) coordinates.
 
@@ -388,6 +399,10 @@ class FreundlichSorption(NonlinearSorption):
         result = np.where(base > 0, np.maximum(c, self.c_min), self.c_min)
 
         return result if is_array else float(result)
+
+    def fan_converges_at_infinity(self) -> bool:
+        """Freundlich ``n > 1``: ``c → 0`` as ``R → ∞`` (converges). ``n < 1``: ``c → ∞`` (diverges)."""
+        return self.n > 1.0
 
 
 @dataclass

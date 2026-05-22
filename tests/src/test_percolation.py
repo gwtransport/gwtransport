@@ -24,7 +24,7 @@ import pandas as pd
 import pytest
 
 from gwtransport.fronttracking.math import BrooksCoreyConductivity, VanGenuchtenMualemConductivity
-from gwtransport.fronttracking.output import compute_domain_mass
+from gwtransport.fronttracking.output import compute_domain_mass, concentration_at_point
 from gwtransport.fronttracking.waves import RarefactionWave
 from gwtransport.percolation import root_zone_to_water_table_kinematic_wave
 
@@ -621,3 +621,49 @@ class TestMissingCoverage:
         assert not np.isclose(actual, char_speed_2, rtol=1e-3)
         # Lax entropy: c_left = c2 (upstream wetter) should satisfy admissibility.
         assert sorption.check_entropy_condition(c2, c1, sorption.shock_speed(c2, c1))
+
+
+class TestPlottingClaim:
+    """Anchors the notebook's plotting claim in a unit test (independent of the notebook)."""
+
+    def test_t2_bin_average_is_flow_weighted_mean_of_exact_curve(self):
+        """T2: each ``q_water_table`` bin equals the flow-weighted mean of the exact outlet curve.
+
+        The notebook plots the bin-averaged output as steps and the exact breakthrough as a
+        continuous line; the step value over a bin must equal the flow-weighted mean of the
+        exact ``concentration_at_point`` curve across that bin. With constant ``flow_solver``
+        (no K-scaling), flow-weighting reduces to a time average. Sampling a fine grid and
+        comparing to the solver's reported bin value pins this claim at ``rtol=1e-3``
+        (trapezoid error across the wetting-front jump inside the chosen bin).
+        """
+        tedges = _make_tedges(300)
+        q0 = 0.002
+        q_root = np.full(300, q0)
+        v_out_val = O05["theta_s"] * 0.4
+        # Coarse 5-day output bins so each bin spans several solver days (non-trivial average).
+        out_tedges = pd.date_range("2020-01-01", periods=61, freq="5D")
+        q_wt, structures = root_zone_to_water_table_kinematic_wave(
+            q_root_zone=q_root,
+            tedges=tedges,
+            q_water_table_tedges=out_tedges,
+            cumulative_pore_volumes_outlet=np.array([v_out_val]),
+            **O05,
+        )
+        state = structures[0]["tracker_state"]
+        out_days = ((out_tedges - out_tedges[0]) / pd.Timedelta(days=1)).to_numpy()
+
+        # Find the output bin straddling the wetting-front arrival: 0 < q_wt[k] < q0
+        # (a partial average — the exact curve jumps from 0 to q0 inside the bin).
+        partial = np.where((q_wt > 1e-9) & (q_wt < q0 * (1.0 - 1e-9)))[0]
+        assert partial.size > 0, "expected an output bin straddling the arrival shock"
+        k = int(partial[0])
+
+        # Flow-weighted mean of the exact outlet curve over bin k. flow_solver is constant
+        # (no scaling) so flow-weighting == time-weighting: mean = (1/Δt)∫ c_exact(t) dt.
+        t_lo, t_hi = out_days[k], out_days[k + 1]
+        tt = np.linspace(t_lo, t_hi, 20001)
+        c_exact = np.array([
+            concentration_at_point(v_out_val, state.theta_at_t(float(t)), state.waves, state.sorption) for t in tt
+        ])
+        mean_exact = np.trapezoid(c_exact, tt) / (t_hi - t_lo)
+        np.testing.assert_allclose(q_wt[k], mean_exact, rtol=1e-3)

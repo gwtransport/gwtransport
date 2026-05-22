@@ -785,10 +785,10 @@ class TestRiemannProblems:
         """Langmuir canonical pulse: total outlet mass == inlet mass at machine precision.
 
         Langmuir is favorable like n>1 Freundlich; the same head-collision
-        DecayingShockWave path is exercised. Closed-form fan integral converges
-        because the Langmuir fan c reaches 0 at finite θ. The finite-θ clamp in
-        ``_integrate_fan_exact_langmuir`` is load-bearing — removing it raises
-        ``ValueError: Langmuir fan integral diverges at θ=+∞``.
+        DecayingShockWave path is exercised. The +∞ fan integral converges
+        because the Langmuir fan c reaches 0 at finite ``θ_zero``: beyond it
+        ``concentration_from_retardation`` returns 0, so the universal
+        antiderivative ``F`` is constant and ``F(+∞) = F(θ_zero)``.
         """
         sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
         v_pore = 200.0

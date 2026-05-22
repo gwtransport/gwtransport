@@ -384,13 +384,11 @@ def root_zone_to_water_table_kinematic_wave(
             cin=cin_solver,
         )
 
-        # Back-transform: q_wt = f · cout_ref. Grid-equality validation above ensures
-        # f is on the same bin grid as cout_ref when k_scaling is set; when k_scaling
-        # is None, f ≡ 1 so the back-transform is trivial regardless of grid.
-        if k_scaling is None:
-            q_wt_all[i, :] = cout_ref
-        else:
-            q_wt_all[i, :] = f * cout_ref
+        # Back-transform to physical flux: q_wt = f · cout_ref. When k_scaling is set the
+        # validator requires q_water_table_tedges == tedges, so f aligns with cout_ref. When
+        # k_scaling is None, f ≡ 1 and the output grid may be coarser than the input, so
+        # cout_ref is used directly (multiplying by the input-length f would mis-broadcast).
+        q_wt_all[i, :] = cout_ref if k_scaling is None else f * cout_ref
 
         structures.append({
             "waves": tracker.state.waves,

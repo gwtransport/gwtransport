@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from itertools import pairwise
 
+import mpmath as mp
 import numpy as np
 import pandas as pd
 import pytest
@@ -225,10 +226,10 @@ def test_integrate_fan_spatial_langmuir_clamps_below_u_zero():
 
     The Langmuir fan has finite extent in u: ``C(u) = sqrt(a·u/(κ−u)) − K_L``
     is non-negative only for ``u ≥ u_zero = K_L²·κ/(a + K_L²)``. Below
-    ``u_zero`` the closed-form antiderivative would evaluate at negative
-    c (unphysical). The function must clamp both bounds at ``u_zero``
-    before evaluating; mirrors the upper-bound ``θ_zero`` clamp in the
-    temporal counterpart ``_integrate_fan_exact_langmuir``.
+    ``u_zero`` the retardation ``R = κ/u`` exceeds the maximal ``R(0)``, so
+    ``concentration_from_retardation`` returns 0 and the universal
+    antiderivative ``G = C_total·u − κ·c`` is identically 0 there; pulling the
+    lower bound below ``u_zero`` therefore adds nothing to the integral.
 
     Two invariants are asserted:
 
@@ -803,3 +804,109 @@ def test_integrate_rarefaction_exact_passes_c_tail_as_c_apex():
     assert wrapper_result - default_result > 100.0, (
         f"wrapper-vs-default diff too small to confirm c_apex wiring; got {wrapper_result - default_result}"
     )
+
+
+@pytest.mark.parametrize(
+    "sorption",
+    [
+        FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3),
+        FreundlichSorption(k_f=0.05, n=0.5, bulk_density=1200.0, porosity=0.35),
+        LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3),
+    ],
+)
+def test_universal_fan_integrators_match_mpmath(sorption):
+    """The single universal IBP integrator equals high-precision quadrature for every isotherm.
+
+    All sorptions route through ``_integrate_fan_exact_universal`` /
+    ``_integrate_rarefaction_spatial_universal``. This pins the unified path against an
+    independent ``mpmath`` (50-digit) reference for Freundlich (n>1 and n<1) and Langmuir,
+    so a regression in the universal kernel ``R·c − C_T`` is caught directly (not only via
+    downstream mass-balance tests).
+    """
+    mp.mp.dps = 50
+    v_outlet, v_origin, theta_origin = 10.0, 0.0, 0.0
+    dv = v_outlet - v_origin
+
+    # Fan concentration bounds chosen well inside each isotherm's range; derive the θ window
+    # from the bounds so the geometry is valid for n<1 and Langmuir alike.
+    c_head, c_tail = 8.0, 0.5
+    r_head = float(sorption.retardation(c_head))
+    r_tail = float(sorption.retardation(c_tail))
+    theta_a = theta_origin + dv * min(r_head, r_tail)
+    theta_b = theta_origin + dv * max(r_head, r_tail)
+
+    # mpmath reference: ∫ c(θ) dθ via 50-digit quadrature of the self-similar fan,
+    # c(θ) = concentration_from_retardation((θ − θ_origin)/Δv).
+    def c_of_theta(theta):
+        r = (float(theta) - theta_origin) / dv
+        return mp.mpf(float(sorption.concentration_from_retardation(r)))
+
+    ref_temporal = mp.quad(c_of_theta, [theta_a, theta_b])
+    got_temporal = integrate_fan_exact(theta_origin, v_origin, v_outlet, theta_a, theta_b, sorption)
+    assert abs(got_temporal - float(ref_temporal)) <= 1e-11 * abs(float(ref_temporal)), (
+        f"temporal: universal={got_temporal}, mpmath={float(ref_temporal)}"
+    )
+
+    # Spatial fan integral at fixed θ: ∫ C_T(c(u)) du, u from κ/r_tail to κ/r_head.
+    theta_fixed = theta_b
+    kappa = theta_fixed - theta_origin
+    u_lo = kappa / max(r_head, r_tail)
+    u_hi = kappa / min(r_head, r_tail)
+
+    def ct_of_u(u):
+        c = float(sorption.concentration_from_retardation(kappa / float(u)))
+        return mp.mpf(float(sorption.total_concentration(c)))
+
+    ref_spatial = mp.quad(ct_of_u, [u_lo, u_hi])
+    got_spatial = integrate_fan_spatial_exact(theta_origin, v_origin, u_lo, u_hi, theta_fixed, sorption)
+    assert abs(got_spatial - float(ref_spatial)) <= 1e-11 * abs(float(ref_spatial)), (
+        f"spatial: universal={got_spatial}, mpmath={float(ref_spatial)}"
+    )
+
+
+@pytest.mark.parametrize(
+    "sorption",
+    [
+        FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3),
+        LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3),
+    ],
+)
+def test_universal_spatial_fan_apex_matches_mpmath(sorption):
+    """Spatial fan integral from the apex (u_start=0) equals high-precision quadrature.
+
+    A fan segment whose lower bound is the apex (``v_start = v_origin``, so
+    ``u_start = 0``) contributes ``G(u_end) − G(0)`` with ``G(0) = 0`` (the apex
+    carries ``c = 0`` hence ``C_total = 0``). This pins that boundary value
+    directly for both Freundlich (n>1) and Langmuir against an independent
+    ``mpmath`` reference, so a regression in the apex handling is caught without
+    relying on the Langmuir lower-bound clamp invariant.
+    """
+    mp.mp.dps = 50
+    kappa = 4500.0
+    # Fan spans c=0 at the apex (u→0, R→∞) to c_head at u_end = κ/R(c_head).
+    u_end = kappa / float(sorption.retardation(2.0))
+    # c clamps to 0 below u_zero = κ/R(0) where R(0) is the maximal retardation;
+    # pass it as a quadrature breakpoint when interior so mpmath resolves the kink.
+    u_zero = kappa / float(sorption.retardation(0.0))
+    breakpoints = [0.0, u_zero, u_end] if 0.0 < u_zero < u_end else [0.0, u_end]
+
+    def ct_of_u(u):
+        c = float(sorption.concentration_from_retardation(kappa / float(u)))
+        return mp.mpf(float(sorption.total_concentration(c)))
+
+    ref = mp.quad(ct_of_u, breakpoints)
+    # v_start = v_origin = 0 routes through the u_start ≤ 0 apex branch.
+    got = integrate_fan_spatial_exact(0.0, 0.0, 0.0, u_end, kappa, sorption)
+    assert abs(got - float(ref)) <= 1e-11 * abs(float(ref)), f"spatial apex: integrator={got}, mpmath={float(ref)}"
+
+
+def test_freundlich_n_below_1_plus_inf_fan_integral_raises():
+    """Freundlich n<1 fan integral diverges at θ=+∞; the universal integrator rejects it.
+
+    Preserves the divergence guard that the dedicated integrator enforced. (Production never
+    hits this path — DecayingShockWave.mass_after_outlet_arrival returns 0 for the n<1 mirror
+    before calling — but the guard protects a direct caller.)
+    """
+    sorption = FreundlichSorption(k_f=0.05, n=0.5, bulk_density=1200.0, porosity=0.35)
+    with pytest.raises(ValueError, match="diverges"):
+        integrate_fan_exact(0.0, 0.0, 10.0, 100.0, float("inf"), sorption)
