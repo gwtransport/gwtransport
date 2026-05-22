@@ -339,7 +339,7 @@ For contaminants with concentration-dependent retardation, ``gwtransport`` provi
 
 - **Shocks** form when faster concentrations overtake slower ones.
 - **Rarefaction waves** form when concentrations spread apart.
-- **Decaying shocks** form when a rarefaction fan catches up to a shock — the shock keeps moving but its strength decreases as the fan feeds into its trailing side. ``gwtransport`` integrates the decay in closed form (Freundlich and Langmuir), so a long-running simulation does not lose accuracy as the shock weakens.
+- **Decaying shocks** form when a rarefaction fan catches up to a shock — the shock keeps moving but its strength decreases as the fan feeds into its trailing side. ``gwtransport`` resolves the decay exactly — closed form for Freundlich, Langmuir, and Brooks-Corey; quadrature for van Genuchten — so a long-running simulation does not lose accuracy as the shock weakens.
 
 The solver tracks these waves analytically, eliminating numerical artifacts. Use :py:func:`gwtransport.advection.infiltration_to_extraction_nonlinear_sorption` for non-linear sorption (pass Freundlich or Langmuir parameters).
 

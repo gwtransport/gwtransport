@@ -40,6 +40,8 @@ class EventType(Enum):
     """Shock intersects with rarefaction boundary."""
     RAREF_RAREF_COLLISION = "rarefaction_rarefaction_collision"
     """Rarefaction boundary intersects with another rarefaction boundary."""
+    DSW_FAN_EXHAUSTED = "decaying_shock_fan_exhausted"
+    """A decaying shock's fan is exhausted (c_decay reached c_fan_tail)."""
     OUTLET_CROSSING = "outlet_crossing"
     """Wave crosses outlet boundary."""
 

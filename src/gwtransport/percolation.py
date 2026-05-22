@@ -97,6 +97,8 @@ def root_zone_to_water_table_kinematic_wave(
         Output time bin edges. Free monotone index when ``k_scaling`` is
         None; **must equal** ``tedges`` when ``k_scaling`` is set (the
         back-transform ``q_wt = f · cout`` is exact only on the input grid).
+        Must lie within the input window ``[tedges[0], tedges[-1]]`` (the flow
+        series defines the system only there); querying beyond it raises.
     cumulative_pore_volumes_outlet : array-like
         Cumulative pore volume per unit cross-sectional area at the water
         table [length]. For a soil of constant porosity (``n_p ≡ θ_s``)
@@ -291,6 +293,13 @@ def root_zone_to_water_table_kinematic_wave(
     n_bins = len(q_root_zone_arr)
     if len(tedges) != n_bins + 1:
         msg = f"tedges must have length len(q_root_zone) + 1, got {len(tedges)} vs {n_bins + 1}"
+        raise ValueError(msg)
+    if q_water_table_tedges[0] < tedges[0] or q_water_table_tedges[-1] > tedges[-1]:
+        msg = (
+            f"q_water_table_tedges must lie within the input window [{tedges[0]}, {tedges[-1]}], got "
+            f"[{q_water_table_tedges[0]}, {q_water_table_tedges[-1]}]. The flow series defines the "
+            "system only over the input window; querying beyond it is ill-posed (extend q_root_zone instead)."
+        )
         raise ValueError(msg)
     if np.any(q_root_zone_arr < 0):
         msg = "q_root_zone must be non-negative"

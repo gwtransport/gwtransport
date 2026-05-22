@@ -17,6 +17,7 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+import logging
 import time
 
 import numpy as np
@@ -25,7 +26,7 @@ import pytest
 
 from gwtransport.fronttracking.math import BrooksCoreyConductivity, VanGenuchtenMualemConductivity
 from gwtransport.fronttracking.output import compute_domain_mass, concentration_at_point
-from gwtransport.fronttracking.waves import RarefactionWave
+from gwtransport.fronttracking.waves import DecayingShockWave
 from gwtransport.percolation import root_zone_to_water_table_kinematic_wave
 
 # Soil O05 (coarse sand) parameters — used as the default test fixture.
@@ -116,11 +117,17 @@ class TestEndToEnd:
         np.testing.assert_allclose(structures[0]["theta_first_arrival"], theta_v_arrival, rtol=1e-12)
 
     def test_b4_rarefaction_self_similar_profile(self):
-        """B4: drying step emits a rarefaction whose interior matches the self-similar law ``R(c) = κ/u``.
+        """B4: the drying-step fan's interior matches the self-similar law ``R(c) = κ/u``.
 
-        After a wetting-then-drying sequence, sample concentrations inside the rarefaction at
-        a known θ via ``RarefactionWave.concentration_at_point(v, θ)`` and verify
-        ``sorption.retardation(c) * (v - v_origin) == θ - θ_origin`` to machine precision.
+        After a wetting-then-drying sequence the drying rarefaction is caught
+        by the leading wetting shock and consumed into a ``DecayingShockWave``
+        (the exact post-collision behaviour — the parent ``RarefactionWave`` is
+        deactivated at the collision). The DSW inherits the rarefaction's apex
+        ``(v_origin, theta_origin)`` and exposes the identical self-similar fan
+        profile via ``DecayingShockWave.concentration_at_point``. Sampling its
+        fan-interior at a θ inside the DSW's active lifetime, verify
+        ``sorption.retardation(c) * (v - v_origin) == θ - θ_origin`` to machine
+        precision.
         """
         n = 150
         tedges = _make_tedges(n)
@@ -138,23 +145,32 @@ class TestEndToEnd:
         )
         state = structures[0]["tracker_state"]
         sorption = state.sorption
-        # Find the first active rarefaction.
-        rarefs = [w for w in state.waves if isinstance(w, RarefactionWave) and w.is_active]
-        assert rarefs, "Expected at least one active RarefactionWave after drying step"
-        raref = rarefs[0]
-        # Pick a θ well after the rarefaction's birth so it has spatial extent.
-        theta_probe = max(raref.theta_start * 2.0, raref.theta_start + 5.0)
-        # Sample 8 interior points (excluding tight head/tail endpoints to avoid edge clipping).
-        v_head = raref.head_position_at_theta(theta_probe)
-        v_tail = raref.tail_position_at_theta(theta_probe)
-        assert v_head is not None, "Rarefaction head position is None at probe θ"
-        assert v_tail is not None, "Rarefaction tail position is None at probe θ"
-        v_samples = np.linspace(v_tail + 0.05 * (v_head - v_tail), v_head - 0.05 * (v_head - v_tail), 8)
+        # The drying rarefaction is consumed into a DecayingShockWave that
+        # carries the self-similar profile. Its parent rarefaction is
+        # deactivated at the collision.
+        dsws = [w for w in state.waves if isinstance(w, DecayingShockWave)]
+        assert dsws, "Expected a DecayingShockWave subsuming the drying-step rarefaction"
+        dsw = dsws[0]
+        assert dsw.decay_side == "left"
+        # Probe a θ strictly inside the DSW's active lifetime so its fan has
+        # spatial extent and concentration_at_point queries are live.
+        theta_lo = dsw.theta_start
+        theta_hi = dsw.theta_deactivation if np.isfinite(dsw.theta_deactivation) else dsw.theta_start * 2.0
+        theta_probe = theta_lo + 0.5 * (theta_hi - theta_lo)
+        # Fan-interior spans (upstream of V_s) from the shock face (c_decay) to
+        # the fan's far boundary (c_fan_tail). Sample between the corresponding
+        # self-similar positions, excluding the tight endpoints to avoid clipping.
+        c_decay = dsw.c_decay_at_theta(theta_probe)
+        assert c_decay is not None
+        v_face = dsw.v_origin + (theta_probe - dsw.theta_origin) / float(sorption.retardation(c_decay))
+        v_tail = dsw.v_origin + (theta_probe - dsw.theta_origin) / float(sorption.retardation(dsw.c_fan_tail))
+        v_lo, v_hi = min(v_face, v_tail), max(v_face, v_tail)
+        v_samples = np.linspace(v_lo + 0.05 * (v_hi - v_lo), v_hi - 0.05 * (v_hi - v_lo), 8)
         for v in v_samples:
-            c = raref.concentration_at_point(float(v), theta_probe)
-            assert c is not None, f"Rarefaction did not return c at interior point v={v}"
+            c = dsw.concentration_at_point(float(v), theta_probe)
+            assert c is not None, f"DSW fan did not return c at interior point v={v}"
             r_from_sorption = float(sorption.retardation(c))
-            r_from_self_similar = (theta_probe - raref.theta_start) / (v - raref.v_start)
+            r_from_self_similar = (theta_probe - dsw.theta_origin) / (v - dsw.v_origin)
             # Self-similar relation R(c) = (θ - θ_origin) / (v - v_origin) — machine precision for BC closed form.
             np.testing.assert_allclose(r_from_sorption, r_from_self_similar, rtol=1e-13)
 
@@ -667,3 +683,124 @@ class TestPlottingClaim:
         ])
         mean_exact = np.trapezoid(c_exact, tt) / (t_hi - t_lo)
         np.testing.assert_allclose(q_wt[k], mean_exact, rtol=1e-3)
+
+
+# =============================================================================
+# Section R — Regressions for the shipped fan-shock collision bug
+# =============================================================================
+#
+# Before the DecayingShockWave fix, a Brooks-Corey wetting-then-drying run
+# routed every shock<->rarefaction collision through an approximate piecewise
+# overlay that never terminated cleanly: the solver chewed through ~10000
+# events (hitting max_iterations) and the bin-averaged output overshot the
+# exact breakthrough by ~500%. The tests below pin the exact post-fix
+# behaviour so the bug cannot silently return.
+
+# Canonical wetting-then-drying Brooks-Corey forcing that drives a
+# shock<->rarefaction collision (a DecayingShockWave). 40 wet days then a long
+# drying tail; the tail is long enough that the breakthrough at v_out lands
+# inside the inlet θ-window so the exact pointwise curve is well-defined there.
+_R_Q_ROOT = np.array([0.003] * 40 + [0.0005] * 1200)
+
+
+class TestShippedCollisionBugRegression:
+    """R-series: regressions that would have caught the shipped collision bug."""
+
+    def _run_canonical(self, q_root=None):
+        q = _R_Q_ROOT if q_root is None else q_root
+        n = len(q)
+        tedges = _make_tedges(n)
+        v_out = np.array([O05["theta_s"]])  # 0.337
+        return root_zone_to_water_table_kinematic_wave(
+            q_root_zone=q,
+            tedges=tedges,
+            q_water_table_tedges=tedges,
+            cumulative_pore_volumes_outlet=v_out,
+            **O05,
+        )
+
+    def test_r1_solver_converges_no_max_iterations_warning(self, caplog):
+        """R1: the canonical BC wetting-then-drying run converges (no max_iterations warning).
+
+        The shipped bug logged ``logging.warning("Reached max_iterations=...")``
+        from ``gwtransport.fronttracking.solver`` because the approximate
+        overlay produced an unterminating cascade of collision events. The
+        exact DecayingShockWave path converges in a handful of events, so the
+        warning must NOT fire. caplog (NOT recwarn) is required because this is
+        a ``logging`` warning, not a ``warnings.warn`` record.
+        """
+        with caplog.at_level(logging.WARNING, logger="gwtransport.fronttracking.solver"):
+            self._run_canonical()
+        assert not any("max_iterations" in r.getMessage() for r in caplog.records), (
+            "solver hit max_iterations — the unterminating-collision bug has returned: "
+            f"{[r.getMessage() for r in caplog.records]}"
+        )
+
+    def test_r2_hard_event_bound(self):
+        """R2: the canonical run produces fewer than 100 solver events.
+
+        Literal bound, not relative: the exact path produces a single
+        collision (DSW) plus a fan-exhaustion and a few outlet crossings —
+        well under 100. The bug produced ~10000 (capped at max_iterations).
+        """
+        _, structures = self._run_canonical()
+        n_events = structures[0]["n_events"]
+        assert n_events < 100, f"expected < 100 solver events, got {n_events} (collision-cascade bug signature)"
+        # The scenario must actually exercise the collision path, else the
+        # bound is vacuous.
+        n_dsw = sum(1 for w in structures[0]["tracker_state"].waves if isinstance(w, DecayingShockWave))
+        assert n_dsw >= 1, "scenario did not form a DecayingShockWave; the regression target is not exercised"
+
+    def test_r5_bin_average_matches_flow_weighted_exact_on_colliding_run(self):
+        """R5: bin-averaged ``q_water_table`` equals the flow-weighted mean of the exact curve.
+
+        This is the 500%-error symptom: on the colliding (DSW) run the
+        bin-averaged output must equal the flow-weighted (== time-weighted, no
+        K-scaling) mean of the pointwise ``concentration_at_point`` curve over
+        each bin. Checked across several bins — including the arrival bin that
+        straddles the wetting-front jump (trapezoid error ≈ 2e-4 there) — at
+        ``rtol <= 1e-3``.
+        """
+        q_wt, structures = self._run_canonical()
+        state = structures[0]["tracker_state"]
+        v_out_val = float(O05["theta_s"])
+        theta_max_inlet = float(state.theta_edges[-1])
+
+        out_tedges = _make_tedges(len(_R_Q_ROOT))
+        out_days = ((out_tedges - out_tedges[0]) / pd.Timedelta(days=1)).to_numpy()
+        theta_out_edges = np.array([state.theta_at_t(float(t)) for t in out_days])
+
+        # The DSW-controlled outlet response begins when the wetting front
+        # reaches v_out (the single outlet_crossing of this run). Compare bins
+        # at/after that arrival time: pre-arrival bins sit in the early
+        # transient where the inlet-integral back-transform and the pointwise
+        # wave query are not expected to agree (and are not the regression
+        # target). Also require bins fully inside the inlet θ-window (beyond it
+        # the inlet integral and the wave list live on inconsistent θ ranges).
+        outlet_crossings = [ev["theta"] for ev in state.events if ev["type"] == "outlet_crossing"]
+        assert outlet_crossings, "expected an outlet crossing on the colliding run"
+        t_arrival = state.t_at_theta(float(min(outlet_crossings)))
+
+        inside = theta_out_edges[1:] <= theta_max_inlet + 1e-9
+        post_arrival = out_days[:-1] >= t_arrival - 1e-9
+        nonzero = q_wt > 1e-9
+        eligible = np.where(nonzero & inside & post_arrival)[0]
+        assert eligible.size >= 5, f"expected several eligible bins, got {eligible.size}"
+
+        # Sample the arrival bin (straddles the front jump → largest trapezoid
+        # error) plus four spread-out bins covering the DSW-controlled and
+        # steady regimes.
+        idx = [int(eligible[0]), *(int(eligible[j]) for j in np.linspace(1, eligible.size - 1, 4).astype(int))]
+        for k in idx:
+            t_lo, t_hi = out_days[k], out_days[k + 1]
+            tt = np.linspace(t_lo, t_hi, 20001)
+            c_exact = np.array([
+                concentration_at_point(v_out_val, state.theta_at_t(float(t)), state.waves, state.sorption) for t in tt
+            ])
+            mean_exact = np.trapezoid(c_exact, tt) / (t_hi - t_lo)
+            np.testing.assert_allclose(
+                q_wt[k],
+                mean_exact,
+                rtol=1e-3,
+                err_msg=f"bin {k}: bin-average {q_wt[k]:.6e} vs flow-weighted exact {mean_exact:.6e}",
+            )
