@@ -137,6 +137,7 @@ class TestConcentrationAtPoint:
             v_start=v_start_dsw,
             c_decay_initial=raref.c_head,
             c_fixed=0.0,
+            c_fan_tail=raref.c_tail,
             decay_side="left",
             v_origin=0.0,
             theta_origin=0.0,

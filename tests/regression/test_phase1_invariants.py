@@ -21,15 +21,18 @@ from __future__ import annotations
 
 from itertools import pairwise
 
+import mpmath as mp
 import numpy as np
 import pandas as pd
 import pytest
 import scipy.integrate
 
 from gwtransport.fronttracking.math import (
+    BrooksCoreyConductivity,
     ConstantRetardation,
     FreundlichSorption,
     LangmuirSorption,
+    VanGenuchtenMualemConductivity,
     compute_first_front_arrival_theta,
 )
 from gwtransport.fronttracking.output import (
@@ -43,7 +46,7 @@ from gwtransport.fronttracking.output import (
     integrate_rarefaction_exact,
 )
 from gwtransport.fronttracking.solver import FrontTracker
-from gwtransport.fronttracking.waves import DecayingShockWave, RarefactionWave
+from gwtransport.fronttracking.waves import DecayingShockWave, RarefactionWave, ShockWave
 
 
 def test_rarefaction_concentration_at_point_clamps_at_tail_boundary():
@@ -225,10 +228,10 @@ def test_integrate_fan_spatial_langmuir_clamps_below_u_zero():
 
     The Langmuir fan has finite extent in u: ``C(u) = sqrt(a·u/(κ−u)) − K_L``
     is non-negative only for ``u ≥ u_zero = K_L²·κ/(a + K_L²)``. Below
-    ``u_zero`` the closed-form antiderivative would evaluate at negative
-    c (unphysical). The function must clamp both bounds at ``u_zero``
-    before evaluating; mirrors the upper-bound ``θ_zero`` clamp in the
-    temporal counterpart ``_integrate_fan_exact_langmuir``.
+    ``u_zero`` the retardation ``R = κ/u`` exceeds the maximal ``R(0)``, so
+    ``concentration_from_retardation`` returns 0 and the universal
+    antiderivative ``G = C_total·u − κ·c`` is identically 0 there; pulling the
+    lower bound below ``u_zero`` therefore adds nothing to the integral.
 
     Two invariants are asserted:
 
@@ -324,10 +327,9 @@ def test_mass_balance_freundlich_nhalf_mirror_pointwise_breakthrough(n):
     which exercises a different dispatch path.
 
     Parameter range restricted to n ∈ {0.25, 0.5} — these are the n<1
-    values that actually exercise the DSW closed-form solver. For
-    n ∈ {0.75, 0.9} the simulator either falls through to the
-    non-canonical Phase-1 overlay (no DSW formed; the wave list explodes
-    to >200000 entries for n=0.75) or produces only regular shocks.
+    values that actually exercise the DSW closed-form solver. n ∈ {0.75,
+    0.9} produce only regular shocks for this pulse geometry and do not
+    exercise the DSW path, so they are excluded.
 
     Asserts:
     1. Pointwise breakthrough match against analytical fan at pre-DSW θ.
@@ -803,3 +805,377 @@ def test_integrate_rarefaction_exact_passes_c_tail_as_c_apex():
     assert wrapper_result - default_result > 100.0, (
         f"wrapper-vs-default diff too small to confirm c_apex wiring; got {wrapper_result - default_result}"
     )
+
+
+@pytest.mark.parametrize(
+    "sorption",
+    [
+        FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3),
+        FreundlichSorption(k_f=0.05, n=0.5, bulk_density=1200.0, porosity=0.35),
+        LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3),
+    ],
+)
+def test_universal_fan_integrators_match_mpmath(sorption):
+    """The single universal IBP integrator equals high-precision quadrature for every isotherm.
+
+    All sorptions route through ``_integrate_fan_exact_universal`` /
+    ``_integrate_rarefaction_spatial_universal``. This pins the unified path against an
+    independent ``mpmath`` (50-digit) reference for Freundlich (n>1 and n<1) and Langmuir,
+    so a regression in the universal kernel ``R·c − C_T`` is caught directly (not only via
+    downstream mass-balance tests).
+    """
+    mp.mp.dps = 50
+    v_outlet, v_origin, theta_origin = 10.0, 0.0, 0.0
+    dv = v_outlet - v_origin
+
+    # Fan concentration bounds chosen well inside each isotherm's range; derive the θ window
+    # from the bounds so the geometry is valid for n<1 and Langmuir alike.
+    c_head, c_tail = 8.0, 0.5
+    r_head = float(sorption.retardation(c_head))
+    r_tail = float(sorption.retardation(c_tail))
+    theta_a = theta_origin + dv * min(r_head, r_tail)
+    theta_b = theta_origin + dv * max(r_head, r_tail)
+
+    # mpmath reference: ∫ c(θ) dθ via 50-digit quadrature of the self-similar fan,
+    # c(θ) = concentration_from_retardation((θ − θ_origin)/Δv).
+    def c_of_theta(theta):
+        r = (float(theta) - theta_origin) / dv
+        return mp.mpf(float(sorption.concentration_from_retardation(r)))
+
+    ref_temporal = mp.quad(c_of_theta, [theta_a, theta_b])
+    got_temporal = integrate_fan_exact(theta_origin, v_origin, v_outlet, theta_a, theta_b, sorption)
+    assert abs(got_temporal - float(ref_temporal)) <= 1e-11 * abs(float(ref_temporal)), (
+        f"temporal: universal={got_temporal}, mpmath={float(ref_temporal)}"
+    )
+
+    # Spatial fan integral at fixed θ: ∫ C_T(c(u)) du, u from κ/r_tail to κ/r_head.
+    theta_fixed = theta_b
+    kappa = theta_fixed - theta_origin
+    u_lo = kappa / max(r_head, r_tail)
+    u_hi = kappa / min(r_head, r_tail)
+
+    def ct_of_u(u):
+        c = float(sorption.concentration_from_retardation(kappa / float(u)))
+        return mp.mpf(float(sorption.total_concentration(c)))
+
+    ref_spatial = mp.quad(ct_of_u, [u_lo, u_hi])
+    got_spatial = integrate_fan_spatial_exact(theta_origin, v_origin, u_lo, u_hi, theta_fixed, sorption)
+    assert abs(got_spatial - float(ref_spatial)) <= 1e-11 * abs(float(ref_spatial)), (
+        f"spatial: universal={got_spatial}, mpmath={float(ref_spatial)}"
+    )
+
+
+@pytest.mark.parametrize(
+    "sorption",
+    [
+        FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3),
+        LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3),
+    ],
+)
+def test_universal_spatial_fan_apex_matches_mpmath(sorption):
+    """Spatial fan integral from the apex (u_start=0) equals high-precision quadrature.
+
+    A fan segment whose lower bound is the apex (``v_start = v_origin``, so
+    ``u_start = 0``) contributes ``G(u_end) − G(0)`` with ``G(0) = 0`` (the apex
+    carries ``c = 0`` hence ``C_total = 0``). This pins that boundary value
+    directly for both Freundlich (n>1) and Langmuir against an independent
+    ``mpmath`` reference, so a regression in the apex handling is caught without
+    relying on the Langmuir lower-bound clamp invariant.
+    """
+    mp.mp.dps = 50
+    kappa = 4500.0
+    # Fan spans c=0 at the apex (u→0, R→∞) to c_head at u_end = κ/R(c_head).
+    u_end = kappa / float(sorption.retardation(2.0))
+    # c clamps to 0 below u_zero = κ/R(0) where R(0) is the maximal retardation;
+    # pass it as a quadrature breakpoint when interior so mpmath resolves the kink.
+    u_zero = kappa / float(sorption.retardation(0.0))
+    breakpoints = [0.0, u_zero, u_end] if 0.0 < u_zero < u_end else [0.0, u_end]
+
+    def ct_of_u(u):
+        c = float(sorption.concentration_from_retardation(kappa / float(u)))
+        return mp.mpf(float(sorption.total_concentration(c)))
+
+    ref = mp.quad(ct_of_u, breakpoints)
+    # v_start = v_origin = 0 routes through the u_start ≤ 0 apex branch.
+    got = integrate_fan_spatial_exact(0.0, 0.0, 0.0, u_end, kappa, sorption)
+    assert abs(got - float(ref)) <= 1e-11 * abs(float(ref)), f"spatial apex: integrator={got}, mpmath={float(ref)}"
+
+
+def test_freundlich_n_below_1_plus_inf_fan_integral_raises():
+    """Freundlich n<1 fan integral diverges at θ=+∞; the universal integrator rejects it.
+
+    Preserves the divergence guard that the dedicated integrator enforced. (Production never
+    hits this path — DecayingShockWave.mass_after_outlet_arrival returns 0 for the n<1 mirror
+    before calling — but the guard protects a direct caller.)
+    """
+    sorption = FreundlichSorption(k_f=0.05, n=0.5, bulk_density=1200.0, porosity=0.35)
+    with pytest.raises(ValueError, match="diverges"):
+        integrate_fan_exact(0.0, 0.0, 10.0, 100.0, float("inf"), sorption)
+
+
+# =============================================================================
+# DecayingShockWave dedicated isotherm paths (Brooks-Corey, van Genuchten)
+# =============================================================================
+#
+# These would have caught the shipped percolation collision bug at the engine
+# level: before the fix, percolation's Brooks-Corey/van Genuchten isotherms had
+# no DecayingShockWave path at all (collisions fell through to an approximate
+# overlay that never converged). The tests below pin the closed-form (BC) and
+# quadrature (vG) DSW paths directly, independent of the percolation wrapper.
+
+
+def _make_fan_consistent_dsw(
+    sorption, *, c0, c_fan_tail, c_fixed=0.0, theta_origin=100.0, v_origin=5.0, theta_local_collision=50.0
+):
+    """Build a fan-consistent ``DecayingShockWave`` (``decay_side='left'``).
+
+    The collision position is placed exactly on the fan-continuity locus
+    ``V_s = v_origin + θ_local / R(c0)`` so ``position_at_theta(theta_start)``
+    reproduces ``v_start``.
+    """
+    theta_start = theta_origin + theta_local_collision
+    v_start = v_origin + theta_local_collision / float(sorption.retardation(c0))
+    return DecayingShockWave(
+        theta_start=theta_start,
+        v_start=v_start,
+        c_decay_initial=c0,
+        c_fixed=c_fixed,
+        c_fan_tail=c_fan_tail,
+        decay_side="left",
+        v_origin=v_origin,
+        theta_origin=theta_origin,
+        sorption=sorption,
+    )
+
+
+@pytest.mark.parametrize(
+    "sorption",
+    [
+        BrooksCoreyConductivity(theta_r=0.01, theta_s=0.337, k_s=0.174, brooks_corey_lambda=0.25),
+        VanGenuchtenMualemConductivity(theta_r=0.01, theta_s=0.337, k_s=0.174, van_genuchten_n=2.28),
+    ],
+    ids=["brooks_corey", "van_genuchten"],
+)
+def test_dsw_bc_vg_fan_continuity_and_rankine_hugoniot(sorption):
+    """BC/vG DSW (c_fixed=0): fan-continuity and Rankine-Hugoniot hold along the wave.
+
+    For both dedicated paths assert, at several θ past the collision:
+
+    1. Fan-continuity ``(V_s − v_origin) == θ_local / R(c_decay)`` to 1e-12.
+    2. Rankine-Hugoniot ``dV_s/dθ == (c_decay − c_fixed)/(C_T(c_decay) −
+       C_T(c_fixed))`` via central difference, tolerance 1e-5 for the FD.
+
+    A moderate step ``h=0.1`` (a fifth of the smallest θ_local offset) is used:
+    vG's ``c_decay`` comes from a ``brentq`` inversion of a ``quad`` integral
+    whose ~1e-12 residual is amplified by ``1/(2h)`` in the difference quotient,
+    so the spec's nominal ``h≈1e-3`` leaves the vG FD at ~2e-5 (above 1e-5).
+    At ``h=0.1`` the truncation error and the inversion noise balance and both
+    isotherms land at ≤1.2e-7. BC is closed-form and tight at any ``h``.
+
+    The closed-form Brooks-Corey relation
+    ``R(c) = R0·(θ_local/θ_local_coll)^{(a−1)/a}`` is checked separately to
+    1e-12 in ``test_dsw_brooks_corey_closed_form_retardation``.
+    """
+    c0 = 0.05
+    wave = _make_fan_consistent_dsw(sorption, c0=c0, c_fan_tail=0.0)
+    ct_fixed = float(sorption.total_concentration(0.0))
+
+    for theta_local in (60.0, 120.0, 300.0, 800.0):
+        theta = wave.theta_origin + theta_local
+        v_s = wave.position_at_theta(theta)
+        c_d = wave.c_decay_at_theta(theta)
+        assert v_s is not None
+        assert c_d is not None
+
+        # 1. Fan-continuity.
+        fan_residual = abs((v_s - wave.v_origin) - theta_local / float(sorption.retardation(c_d)))
+        assert fan_residual <= 1e-12, f"fan-continuity residual {fan_residual:.3e} at θ_local={theta_local}"
+
+        # 2. Rankine-Hugoniot via central difference (see docstring for h choice).
+        h = 0.1
+        v_plus = wave.position_at_theta(theta + h)
+        v_minus = wave.position_at_theta(theta - h)
+        assert v_plus is not None
+        assert v_minus is not None
+        dvs_dtheta = (v_plus - v_minus) / (2.0 * h)
+        rh_speed = (c_d - 0.0) / (float(sorption.total_concentration(c_d)) - ct_fixed)
+        assert abs(dvs_dtheta - rh_speed) <= 1e-5 * max(abs(rh_speed), 1.0), (
+            f"Rankine-Hugoniot mismatch at θ_local={theta_local}: FD dV/dθ={dvs_dtheta:.8g}, RH={rh_speed:.8g}"
+        )
+
+
+def test_dsw_numerical_rankine_hugoniot_c_fixed_positive():
+    """Numerical DSW path pins Rankine-Hugoniot for ``c_fixed > 0`` (Freundlich n=1.5).
+
+    Freundlich ``n ≠ 2`` with ``c_fixed > 0`` has no closed form, so it routes
+    through ``_c_decay_numerical``. The secant speed ``S = (c − c_fixed)/(C_T(c)
+    − C_T(c_fixed))`` must carry the NONZERO ``c_fixed``: a solver that dropped
+    it (used ``c/(C_T(c) − C_T(0))``) would satisfy the wrong invariant and fail
+    this RH check while passing every ``c_fixed = 0`` test. The ``c_fixed = 0``
+    coverage cannot catch that bug; this case can.
+    """
+    sorption = FreundlichSorption(k_f=0.01, n=1.5, bulk_density=1500.0, porosity=0.3)
+    c_fixed = 1.0
+    wave = _make_fan_consistent_dsw(sorption, c0=8.0, c_fan_tail=2.0, c_fixed=c_fixed)
+    ct_fixed = float(sorption.total_concentration(c_fixed))
+
+    for theta_local in (60.0, 90.0, 150.0):
+        theta = wave.theta_origin + theta_local
+        c_d = wave.c_decay_at_theta(theta)
+        assert c_d is not None
+        h = 0.1
+        v_plus = wave.position_at_theta(theta + h)
+        v_minus = wave.position_at_theta(theta - h)
+        assert v_plus is not None
+        assert v_minus is not None
+        dvs_dtheta = (v_plus - v_minus) / (2.0 * h)
+        rh_speed = (c_d - c_fixed) / (float(sorption.total_concentration(c_d)) - ct_fixed)
+        assert abs(dvs_dtheta - rh_speed) <= 1e-5 * max(abs(rh_speed), 1.0), (
+            f"RH mismatch (c_fixed={c_fixed}) at θ_local={theta_local}: FD={dvs_dtheta:.8g}, RH={rh_speed:.8g}"
+        )
+
+
+def test_dsw_brooks_corey_closed_form_retardation():
+    """Brooks-Corey DSW (c_fixed=0): ``R(c_decay) = R0·(θ_local/θ_local_coll)^{(a−1)/a}`` to 1e-12.
+
+    The Brooks-Corey closed form for the decaying side is exact (no brentq);
+    this pins it against the analytic invariant directly so a regression in
+    ``_c_decay_brooks_corey`` surfaces immediately.
+    """
+    sorption = BrooksCoreyConductivity(theta_r=0.01, theta_s=0.337, k_s=0.174, brooks_corey_lambda=0.25)
+    c0 = 0.05
+    theta_local_collision = 50.0
+    wave = _make_fan_consistent_dsw(sorption, c0=c0, c_fan_tail=0.0, theta_local_collision=theta_local_collision)
+    a = sorption.a
+    r0 = float(sorption.retardation(c0))
+
+    for theta_local in (60.0, 150.0, 500.0):
+        theta = wave.theta_origin + theta_local
+        c_d = wave.c_decay_at_theta(theta)
+        assert c_d is not None
+        r_closed = r0 * (theta_local / theta_local_collision) ** ((a - 1.0) / a)
+        c_closed = float(sorption.concentration_from_retardation(r_closed))
+        np.testing.assert_allclose(c_d, c_closed, rtol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "sorption",
+    [
+        BrooksCoreyConductivity(theta_r=0.01, theta_s=0.337, k_s=0.174, brooks_corey_lambda=0.25),
+        VanGenuchtenMualemConductivity(theta_r=0.01, theta_s=0.337, k_s=0.174, van_genuchten_n=2.28),
+    ],
+    ids=["brooks_corey", "van_genuchten"],
+)
+def test_dsw_bc_vg_c_fixed_positive_uses_numerical(sorption):
+    """BC and vG DSW with ``c_fixed > 0`` use the numerical fallback (no raise).
+
+    Neither the Brooks-Corey closed form nor any van Genuchten case has a
+    closed form for ``c_fixed > 0``; both route through ``_c_decay_numerical``.
+    The wave constructs without raising, leaves ``K`` as NaN, honours the
+    collision IC exactly, and relaxes monotonically toward the fixed state.
+    """
+    dsw = DecayingShockWave(
+        theta_start=150.0,
+        v_start=10.0,
+        c_decay_initial=0.1,
+        c_fixed=0.05,
+        c_fan_tail=0.05,
+        decay_side="left",
+        v_origin=5.0,
+        theta_origin=100.0,
+        sorption=sorption,
+    )
+    assert np.isnan(dsw.K)
+    assert dsw.c_decay_at_theta(dsw.theta_start) == pytest.approx(dsw.c_decay_initial)
+    c_later = dsw.c_decay_at_theta(dsw.theta_start + 400.0)
+    assert c_later is not None
+    assert dsw.c_fixed < c_later < dsw.c_decay_initial
+
+
+def test_dsw_fan_exhaustion_theta_brooks_corey():
+    """Partial-drying BC DSW: ``theta_at_fan_exhaustion`` returns θ where ``c_decay == c_fan_tail``.
+
+    For ``0 < c_fan_tail < c_decay_initial`` (partial drying) the decaying side
+    runs from ``c_decay_initial`` down to ``c_fan_tail`` and stops; the
+    exhaustion θ is the unique point where ``c_decay`` equals ``c_fan_tail``.
+    """
+    sorption = BrooksCoreyConductivity(theta_r=0.01, theta_s=0.337, k_s=0.174, brooks_corey_lambda=0.25)
+    c0 = 0.05
+    c_fan_tail = 0.02
+    wave = _make_fan_consistent_dsw(sorption, c0=c0, c_fan_tail=c_fan_tail)
+
+    theta_exhaust = wave.theta_at_fan_exhaustion()
+    assert theta_exhaust is not None
+    assert np.isfinite(theta_exhaust)
+    assert theta_exhaust > wave.theta_start
+    c_at_exhaust = wave.c_decay_at_theta(theta_exhaust)
+    assert c_at_exhaust is not None
+    np.testing.assert_allclose(c_at_exhaust, c_fan_tail, rtol=0.0, atol=1e-12)
+
+
+def test_dsw_fan_exhaustion_mass_conserved_across_continuation_shock_brooks_corey():
+    """End-to-end BC partial drying: domain mass through the spawned continuation shock is exact.
+
+    A high wetting pulse (c_hi) onto a dry column followed by a sustained lower
+    ambient (c_mid > 0) forms a head-collision DSW with ``c_fixed = 0`` and
+    ``c_fan_tail = c_mid``. When the decaying side reaches ``c_mid`` the fan is
+    exhausted: the DSW deactivates and a regular ``ShockWave(c_mid, 0)``
+    continuation shock is spawned (verified explicitly).
+
+    The non-tautological mass check: ``compute_domain_mass`` integrates the
+    *wave list* spatially — so it routes through the spawned continuation shock
+    and the deactivated DSW's retrospective ``was_active_at`` history. Once the
+    column has filled to the steady ambient ``c_mid``, that integral must equal
+    the analytic steady-state domain mass ``C_T(c_mid) · v_outlet`` to ~1e-9.
+    """
+    sorption = BrooksCoreyConductivity(theta_r=0.01, theta_s=0.337, k_s=0.174, brooks_corey_lambda=0.25)
+    v_outlet = 2.0
+    c_hi, c_mid = 0.10, 0.03
+    n = 600
+    cin = np.zeros(n)
+    cin[:15] = c_hi  # wetting pulse
+    cin[15:] = c_mid  # sustained ambient (>0): the c_hi→c_mid drop is a rarefaction
+    flow = np.full(n, 0.337)
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+
+    tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
+    tr.run(max_iterations=10000)
+
+    # A fan-exhaustion event fired and spawned exactly one continuation shock.
+    assert any("FAN_EXHAUST" in str(ev.get("type", "")).upper() for ev in tr.state.events), (
+        "expected a DSW_FAN_EXHAUSTED event for the partial-drying run"
+    )
+    dsws = [w for w in tr.state.waves if isinstance(w, DecayingShockWave)]
+    assert len(dsws) == 1, f"expected exactly one DSW; got {len(dsws)}"
+    assert not dsws[0].is_active, "the DSW must be deactivated after exhaustion"
+    assert np.isclose(dsws[0].c_fan_tail, c_mid)
+    assert dsws[0].c_fixed == 0.0
+    continuation = [
+        w for w in tr.state.waves if isinstance(w, ShockWave) and w.theta_start > 0.0 and np.isclose(w.c_left, c_mid)
+    ]
+    assert len(continuation) == 1, f"expected one continuation ShockWave(c_mid, 0); got {len(continuation)}"
+    assert np.isclose(continuation[0].c_right, 0.0)
+
+    # Non-tautological mass check: wave-list domain mass at the final θ equals
+    # the analytic steady-state C_T(c_mid)·V_outlet.
+    theta_final = float(tr.state.theta_edges[-1])
+    m_dom = compute_domain_mass(theta=theta_final, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
+    m_dom_analytic = float(sorption.total_concentration(c_mid)) * v_outlet
+    np.testing.assert_allclose(m_dom, m_dom_analytic, rtol=0.0, atol=1e-9)
+
+    # Per-θ conservation across the transition: m_in == m_dom + m_out at several θ.
+    theta_edges = tr.state.theta_edges
+    for frac in (0.25, 0.5, 0.75, 0.99):
+        theta = float(frac * theta_final)
+        m_in = compute_cumulative_inlet_mass(theta=theta, cin=cin, theta_edges=theta_edges)
+        m_dom_t = compute_domain_mass(theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
+        m_out_t = compute_cumulative_outlet_mass(
+            theta=theta,
+            v_outlet=v_outlet,
+            waves=tr.state.waves,
+            sorption=sorption,
+            cin=cin,
+            theta_edges=theta_edges,
+        )
+        err = abs((m_dom_t + m_out_t) - m_in)
+        assert err <= 1e-9 * max(m_in, 1.0), f"mass balance at θ={theta}: err={err:.3e}"

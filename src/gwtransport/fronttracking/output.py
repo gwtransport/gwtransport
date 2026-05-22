@@ -28,17 +28,12 @@ import warnings
 from collections.abc import Sequence
 from operator import itemgetter
 
-import mpmath as mp
 import numpy as np
 import numpy.typing as npt
-from scipy.special import beta as beta_func
-from scipy.special import betainc
 
 from gwtransport.fronttracking.events import find_outlet_crossing
 from gwtransport.fronttracking.math import (
     ConstantRetardation,
-    FreundlichSorption,
-    LangmuirSorption,
     NonlinearSorption,
     SorptionModel,
 )
@@ -46,7 +41,6 @@ from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWav
 
 # Numerical tolerance constants
 EPSILON_VELOCITY = 1e-15  # Tolerance for checking if velocity is effectively zero
-EPSILON_BETA = 1e-15  # Tolerance for checking if beta is effectively zero (linear case)
 EPSILON_TIME = 1e-15  # Tolerance for negligible time segments
 
 
@@ -614,7 +608,7 @@ def integrate_rarefaction_exact(
     theta_start, theta_end : float
         Integration range in cumulative flow [m³]. Either can be ``±np.inf``.
     sorption : SorptionModel
-        Sorption model (``FreundlichSorption`` or ``LangmuirSorption``).
+        Sorption model (any NonlinearSorption subclass).
 
     Returns
     -------
@@ -651,7 +645,7 @@ def integrate_fan_exact(
         Integration range in cumulative flow [m³]. ``theta_end`` may be
         ``+np.inf``; ``theta_start`` must be finite.
     sorption : SorptionModel
-        Sorption model (``FreundlichSorption`` or ``LangmuirSorption``).
+        Sorption model (any NonlinearSorption subclass).
     c_apex : float, optional
         Concentration on the constant side at the fan apex. For
         ``RarefactionWave`` this is ``raref.c_tail``; for
@@ -672,155 +666,88 @@ def integrate_fan_exact(
     TypeError
         If the sorption model does not support exact fan integration.
     """
-    if isinstance(sorption, FreundlichSorption):
-        return _integrate_fan_exact_freundlich(
+    # Every NonlinearSorption uses one universal IBP antiderivative, which evaluates the fan
+    # kernel k = R·c − C_T at the segment endpoints via c_and_total_from_retardation.
+    if isinstance(sorption, NonlinearSorption):
+        return _integrate_fan_exact_universal(
             theta_origin, v_origin, v_outlet, theta_start, theta_end, sorption, c_apex
         )
-    if isinstance(sorption, LangmuirSorption):
-        if c_apex > 0.0:
-            # Langmuir DSW c_fixed>0 is not currently constructible (handlers.py only
-            # creates Langmuir DSW with c_fixed=0). Defensive guard so a future caller
-            # bypassing the constructor doesn't silently get a wrong answer.
-            msg = f"integrate_fan_exact: c_apex > 0 not supported for Langmuir (got {c_apex})"
-            raise NotImplementedError(msg)
-        return _integrate_fan_exact_langmuir(theta_origin, v_origin, v_outlet, theta_start, theta_end, sorption)
+
     msg = f"Exact fan integration not supported for {type(sorption).__name__}"
     raise TypeError(msg)
 
 
-def _integrate_fan_exact_freundlich(
+def _integrate_fan_exact_universal(
     theta_origin: float,
     v_origin: float,
     v_outlet: float,
     theta_start: float,
     theta_end: float,
-    sorption: FreundlichSorption,
+    sorption: NonlinearSorption,
     c_apex: float = 0.0,
 ) -> float:
-    """Exact θ-integral ``∫ c(θ) dθ`` for a Freundlich fan with given apex.
+    r"""Exact θ-integral ``∫ c(θ) dθ`` via the universal IBP antiderivative.
 
-    In (V, θ), self-similar concentration inside the fan is::
+    For any ``NonlinearSorption`` (with ``R = dC_T/dC``), integration by
+    parts on the self-similar fan ``R(c(θ)) = (θ − θ_origin)/Δv`` gives the
+    closed-form antiderivative
 
-        c(θ) = (base(θ) / α)^(1/β)
+    .. math::
+        F(\\theta) = c(\\theta)\\,(\\theta - \\theta_{\\rm origin})
+            - \\Delta v \\cdot C_T(c(\\theta)).
 
-    with ``α = ρ_b·k_f/(n_por·n)``, ``β = 1/n - 1``,
-    ``base(θ) = κ_θ·θ + μ_θ - 1 = R(c(θ)) - 1``,
-    ``κ_θ = 1/(v_outlet - v_origin)`` and
-    ``μ_θ = -θ_origin/(v_outlet - v_origin)``. The antiderivative
-    ``F(θ) = ∫ c dθ`` admits three algebraically equivalent forms::
+    The derivation uses ``∫ c\\,d\\theta = c·(\\theta-\\theta_0) − ∫(\\theta-\\theta_0)·dc
+    = c·(\\theta-\\theta_0) − \\Delta v · ∫ R(c)\\,dc = c·(\\theta-\\theta_0) − \\Delta v · C_T(c)``,
+    where the last equality is the definition of ``C_T`` as the antiderivative
+    of ``R`` (``R = dC_T/dC``).
 
-        F(θ) = base^(1/β+1) / [κ_θ · α^(1/β) · (1/β + 1)]   (1)
-             = base · (base/α)^(1/β) / [κ_θ · (1/β + 1)]    (2)
-             = (1 − n) · base · c(θ) / κ_θ                  (3)
+    This formula is exact for any sorption (Brooks-Corey, van Genuchten-Mualem,
+    Freundlich, Langmuir). The only sorption-specific call is
+    ``sorption.concentration_from_retardation`` at the two endpoints — for
+    Brooks-Corey this is closed form; for van Genuchten-Mualem it is one
+    ``brentq`` call per endpoint. No quadrature, no integration loop.
 
-    using ``1 + β = 1/n`` so ``β/(1+β) = (1/n − 1)·n = 1 − n``. Form (1)
-    factors as ``α^(-1/β) · base^(1/β+1)``; near ``n = 1`` both factors
-    individually saturate (``|1/β|`` grows without bound — at ``n = 1.001``
-    e.g. ``49.95^(-1001)`` underflows to 0), and their finite product is
-    swamped by float noise. Form (3) keeps every factor at the physical
-    scale: ``base`` is ``R(c) − 1``, ``c`` is the bounded physical
-    concentration ``(base/α)^(1/β)``, and ``(1 − n)/κ_θ`` is ``O(1)``.
+    Convergence at θ → ∞ for ``c_apex = 0``: for any monotone sorption with
+    ``R(0) = ∞`` (BC, vG, Freundlich n > 1), ``c(∞) = 0`` and ``c·θ → 0``
+    faster than ``Δv·C_T → 0`` (verified termwise from the closed-form
+    asymptotic ``c ~ R^{-α}`` for some ``α > 1``), so ``F(∞) = 0``.
 
-    For ``n > 1`` the antiderivative naturally vanishes at +∞ (``c → 0``
-    fast enough that ``base · c → 0``). For ``n < 1`` it grows without
-    bound at +∞; callers must pass a finite ``theta_end``. The n<1 mirror
-    DecayingShockWave mass-to-+∞ semantics are different (c = c_fixed
-    downstream of the shock after arrival, so the +∞ contribution is 0)
-    and are handled at the ``mass_after_outlet_arrival`` /
-    ``compute_total_outlet_mass`` level, not here.
-
-    When ``c_apex > 0`` the fan formula extrapolates to ``c < c_apex`` for
-    ``θ > θ_tail = θ_origin + (v_outlet - v_origin) · R(c_apex)``; the
-    integration is split into the fan portion ``[θ_start, min(θ_end, θ_tail)]``
-    via the antiderivative, plus a constant-c_apex contribution
-    ``c_apex · (θ_end - θ_tail)`` for any ``θ_end > θ_tail``.
-
-    Raises
-    ------
-    ValueError
-        If sorption is linear (n = 1), or if ``theta_end = +∞`` with n < 1.
+    For ``c_apex > 0`` the fan formula extrapolates to ``c < c_apex`` past
+    ``θ_tail = θ_origin + Δv·R(c_apex)``; clamp the fan portion at
+    ``θ_tail`` and add ``c_apex·(θ_end − θ_tail)`` for any ``θ_end > θ_tail``.
     """
-    kappa_theta = 1.0 / (v_outlet - v_origin)
-    mu_theta = -theta_origin / (v_outlet - v_origin)
+    delta_v = v_outlet - v_origin
+    if delta_v <= 0 or theta_end <= theta_start:
+        return 0.0
 
-    n = sorption.n
-    beta = 1.0 / n - 1.0
-    if abs(beta) < EPSILON_BETA:
-        msg = "integrate_fan_exact requires nonlinear sorption (n != 1)"
-        raise ValueError(msg)
-
-    alpha = sorption.bulk_density * sorption.k_f / (sorption.porosity * n)
-    one_minus_n = 1.0 - n
-
-    # Clamp the upper bound at θ_tail where the fan c(θ) reaches c_apex; beyond
-    # θ_tail the formula is unphysical (gives c < c_apex). The constant-c_apex
-    # region's contribution is added back at the bottom.
     if c_apex > 0.0:
-        theta_tail = theta_origin + (v_outlet - v_origin) * float(sorption.retardation(c_apex))
+        theta_tail = theta_origin + delta_v * float(sorption.retardation(c_apex))
         theta_end_fan = min(theta_end, theta_tail)
     else:
         theta_tail = float("inf")
         theta_end_fan = theta_end
 
-    def antiderivative(theta: float) -> float:
-        if np.isinf(theta):
-            if theta > 0:
-                # n > 1 (β < 0): ``c → 0`` fast enough that ``base · c → 0``.
-                if beta < 0:
-                    return 0.0
-                msg = f"Integral diverges at θ=+∞ for n<1 (β={beta} > 0)"
-                raise ValueError(msg)
-            return 0.0
+    # For a c_apex=0 fan the upper bound may be +∞. The integral converges only when
+    # c → 0 as R → ∞ (so base·c → 0). Freundlich n<1 (c → ∞ as R → ∞) diverges — reject it
+    # explicitly. (DecayingShockWave.mass_after_outlet_arrival returns 0 for the n<1 mirror
+    # before reaching here, so this is a defensive guard for direct callers.)
+    if theta_end_fan == float("inf") and not sorption.fan_converges_at_infinity():
+        msg = "Fan integral diverges at θ=+∞ for this sorption (e.g. Freundlich n<1); pass a finite theta_end"
+        raise ValueError(msg)
 
-        base = kappa_theta * theta + mu_theta - 1.0
-        if base <= 0:
+    def antiderivative(theta: float) -> float:
+        if theta == float("inf"):
+            # F(∞) = 0 for any sorption with c → 0 as R → ∞ (guarded above for divergent cases).
             return 0.0
-        c = (base / alpha) ** (1.0 / beta)
-        return one_minus_n * base * c / kappa_theta
+        base = (theta - theta_origin) / delta_v
+        if base <= 0.0:
+            return 0.0
+        c, ct = sorption.c_and_total_from_retardation(base)
+        return c * (theta - theta_origin) - delta_v * ct
 
     fan_integral = antiderivative(theta_end_fan) - antiderivative(theta_start)
     constant_contrib = c_apex * max(theta_end - theta_tail, 0.0) if c_apex > 0.0 else 0.0
     return fan_integral + constant_contrib
-
-
-def _integrate_fan_exact_langmuir(
-    theta_origin: float,
-    v_origin: float,
-    v_outlet: float,
-    theta_start: float,
-    theta_end: float,
-    sorption: LangmuirSorption,
-) -> float:
-    """Exact θ-integral ``∫ c(θ) dθ`` for a Langmuir fan with given apex.
-
-    Inside the fan, ``c(θ) = sqrt(A / B(θ)) - K_L`` with
-    ``B(θ) = κ_θ·θ + μ_θ - 1``, ``κ_θ = 1/(v_outlet - v_origin)``,
-    ``μ_θ = -θ_origin/(v_outlet - v_origin)``, and
-    ``A = ρ_b·s_max·K_L/n_por``.
-
-    Antiderivative: ``F(θ) = (2·sqrt(A)/κ_θ)·sqrt(B(θ)) - K_L·θ``. The Langmuir
-    fan c reaches 0 at a finite θ_zero (when ``B = A/K_L²``); the antiderivative
-    is only physically meaningful while ``c ≥ 0``. For ``theta_end = +∞`` the
-    upper bound is clamped to ``theta_zero`` since c=0 beyond that point.
-    """
-    kappa_theta = 1.0 / (v_outlet - v_origin)
-    mu_theta = -theta_origin / (v_outlet - v_origin)
-    a_coeff = sorption.a_coeff
-    k_l = sorption.k_l
-
-    coeff_sqrt = 2.0 * np.sqrt(a_coeff) / kappa_theta
-
-    # c(θ) = 0 when B(θ) = A/K_L², i.e. κ_θ·θ + μ_θ - 1 = A/K_L².
-    theta_zero = (a_coeff / (k_l * k_l) + 1.0 - mu_theta) / kappa_theta
-    theta_end = theta_zero if (np.isinf(theta_end) and theta_end > 0) else min(theta_end, theta_zero)
-
-    def antiderivative(theta: float) -> float:
-        base = kappa_theta * theta + mu_theta - 1.0
-        if base <= 0:
-            return 0.0
-        return coeff_sqrt * np.sqrt(base) - k_l * theta
-
-    return antiderivative(theta_end) - antiderivative(theta_start)
 
 
 def compute_bin_averaged_concentration_exact(
@@ -1122,7 +1049,7 @@ def compute_domain_mass(
 
         total_mass += mass_segment
 
-    return total_mass
+    return float(total_mass)
 
 
 def _integrate_rarefaction_spatial_exact(
@@ -1196,7 +1123,7 @@ def integrate_fan_spatial_exact(
     theta : float
         Cumulative flow at which to evaluate [m³].
     sorption : SorptionModel
-        Sorption model (``FreundlichSorption`` or ``LangmuirSorption``).
+        Sorption model (any NonlinearSorption subclass).
     c_apex : float, optional
         Concentration on the constant side at the fan apex (typically the
         parent rarefaction's ``c_tail`` or the DSW's ``c_fixed`` for
@@ -1237,7 +1164,7 @@ def integrate_fan_spatial_exact(
     # The fan formula is only valid for u ≥ u_tail = kappa / R(c_apex);
     # below u_tail, c is clamped to c_apex (the parent's tail / DSW's fixed
     # concentration). Spatial counterpart of the temporal θ_tail clamp in
-    # _integrate_fan_exact_freundlich.
+    # _integrate_fan_exact_universal.
     constant_contrib = 0.0
     if c_apex > 0.0:
         u_tail = kappa / float(sorption.retardation(c_apex))
@@ -1248,111 +1175,55 @@ def integrate_fan_spatial_exact(
         if u_end <= u_start:
             return constant_contrib
 
-    if isinstance(sorption, LangmuirSorption):
-        return constant_contrib + _integrate_rarefaction_spatial_langmuir(sorption, kappa, u_start, u_end)
-
-    if isinstance(sorption, FreundlichSorption):
-        return constant_contrib + _integrate_rarefaction_spatial_freundlich(sorption, kappa, u_start, u_end)
+    # One universal IBP antiderivative for every NonlinearSorption (see the rationale in
+    # ``integrate_fan_exact``, the temporal counterpart).
+    if isinstance(sorption, NonlinearSorption):
+        return constant_contrib + _integrate_rarefaction_spatial_universal(sorption, kappa, u_start, u_end)
 
     msg = f"Exact spatial fan integration not supported for {type(sorption).__name__}"
     raise TypeError(msg)
 
 
-def _integrate_rarefaction_spatial_freundlich(
-    sorption: FreundlichSorption, kappa: float, u_start: float, u_end: float
+def _integrate_rarefaction_spatial_universal(
+    sorption: NonlinearSorption,
+    kappa: float,
+    u_start: float,
+    u_end: float,
 ) -> float:
-    """Exact spatial integral for Freundlich rarefaction using beta functions.
+    r"""Exact spatial integral ``∫ C_T(c(u)) du`` via the universal IBP antiderivative.
 
-    Returns
-    -------
-    float
-        Exact mass in segment.
+    For any ``NonlinearSorption`` with ``R = dC_T/dC``, integration by parts
+    on the self-similar fan ``R(c(u)) = κ/u`` gives the closed-form
+    antiderivative
+
+    .. math::
+        G(u) = C_T(c(u))\\cdot u - \\kappa\\cdot c(u).
+
+    Derivation: ``∫ C_T\\,du = C_T·u − ∫ u\\,dC_T = C_T·u − ∫ (κ/R)·R\\,dc =
+    C_T·u − κ·c`` (the second equality uses ``u = κ/R`` and the third uses
+    ``dC_T = R\\,dc``).
+
+    Sorption-specific calls limited to ``concentration_from_retardation`` and
+    ``total_concentration`` at the two endpoints. For Brooks-Corey both are
+    closed form; for van Genuchten-Mualem ``concentration_from_retardation`` is
+    one ``brentq`` per endpoint and ``total_concentration`` is also one
+    ``brentq`` per endpoint (chained internally). No quadrature.
+
+    At the apex (``u → 0``, ``R → ∞``) ``c → 0`` and ``C_T → 0`` so ``G(0) = 0``;
+    a segment whose lower bound is at (or below, for a bounded-``R`` sorption like
+    Langmuir where ``c = 0`` for ``u`` below the fan tail) the apex contributes
+    ``G(u_end) − 0``.
     """
-    alpha = sorption.bulk_density * sorption.k_f / (sorption.porosity * sorption.n)
-    rho_b = sorption.bulk_density
-    n_por = sorption.porosity
-    k_f = sorption.k_f
-    n = sorption.n
-
-    beta = 1 / n - 1
-    t_start_norm = u_start / kappa
-    t_end_norm = u_end / kappa
-
-    # Dissolved: ∫ C(u) du via incomplete beta function
-    a_diss = 1 - 1 / beta
-    b_diss = 1 + 1 / beta
-
-    if a_diss > 0 and b_diss > 0:
-        beta_diss = betainc(a_diss, b_diss, t_end_norm) - betainc(a_diss, b_diss, t_start_norm)
-        beta_diss *= beta_func(a_diss, b_diss)
+    if u_end <= 0.0 or u_end <= u_start or kappa <= 0.0:
+        return 0.0
+    if u_start <= 0.0:
+        g_start = 0.0  # G(0) = C_T(0)·0 − κ·0 = 0 (apex)
     else:
-        beta_diss = float(mp.betainc(a_diss, b_diss, t_start_norm, t_end_norm, regularized=False))
-
-    coeff_diss = (1 / alpha) ** (1 / beta)
-    mass_dissolved = coeff_diss * kappa * beta_diss
-
-    # Sorbed: ∫ (rho_b/n_por)*k_f*C^(1/n) du
-    exponent_sorb = 1 / (1 - n)
-    a_sorb = 1 - exponent_sorb
-    b_sorb = 1 + exponent_sorb
-
-    if a_sorb > 0 and b_sorb > 0:
-        beta_sorb = betainc(a_sorb, b_sorb, t_end_norm) - betainc(a_sorb, b_sorb, t_start_norm)
-        beta_sorb *= beta_func(a_sorb, b_sorb)
-    else:
-        beta_sorb = float(mp.betainc(a_sorb, b_sorb, t_start_norm, t_end_norm, regularized=False))
-
-    coeff_sorb = (rho_b / n_por) * k_f / (alpha**exponent_sorb)
-    mass_sorbed = coeff_sorb * kappa * beta_sorb
-
-    return mass_dissolved + mass_sorbed
-
-
-def _integrate_rarefaction_spatial_langmuir(
-    sorption: LangmuirSorption, kappa: float, u_start: float, u_end: float
-) -> float:
-    """Exact spatial integral of C_total(v) for Langmuir rarefaction.
-
-    Returns
-    -------
-    float
-        Exact mass in segment [mass].
-
-    Notes
-    -----
-    With u = v - v_origin, kappa = flow*(t - t_origin):
-        C(u) = sqrt(a_coeff*u/(kappa-u)) - K_L
-        C_total = C + (rho_b/n_por) * s_max * C/(K_L + C)
-
-    Since K_L + C = sqrt(a_coeff*u/(kappa-u)):
-        C/(K_L+C) = 1 - K_L*sqrt((kappa-u)/(a_coeff*u))
-
-    The Langmuir fan has finite extent in u: C(u) ≥ 0 only for
-    u ≥ u_zero = K_L²·κ/(a_coeff + K_L²). The integrand is unphysical
-    (c<0, giving a negative C_total) for u < u_zero, so BOTH bounds are
-    clamped at u_zero before evaluating the antiderivative. Spatial
-    counterpart of the upper-bound θ_zero clamp in
-    :func:`_integrate_fan_exact_langmuir`: there the fan has c=0 for
-    θ ≥ θ_zero; here c=0 for u ≤ u_zero.
-
-    The integral simplifies to:
-        integral C_total du = -2*sqrt(a_coeff)*[sqrt(u*(kappa-u))]_start^end
-                              + (rho_b*s_max/n_por - K_L)*(u_end - u_start)
-    """
-    a_coeff = sorption.a_coeff
-    k_l = sorption.k_l
-    sorbed_max = sorption.bulk_density * sorption.s_max / sorption.porosity
-
-    u_zero = k_l * k_l * kappa / (a_coeff + k_l * k_l)
-    # Clamp into the physical fan range [u_zero, kappa]: below u_zero, c<0;
-    # at kappa, c diverges (NaN under sqrt for u_end > kappa).
-    u_start = min(max(u_start, u_zero), kappa)
-    u_end = min(max(u_end, u_zero), kappa)
-
-    term_sqrt_end = np.sqrt(u_end * (kappa - u_end))
-    term_sqrt_start = np.sqrt(u_start * (kappa - u_start))
-
-    return -2.0 * np.sqrt(a_coeff) * (term_sqrt_end - term_sqrt_start) + (sorbed_max - k_l) * (u_end - u_start)
+        c_start, ct_start = sorption.c_and_total_from_retardation(kappa / u_start)
+        g_start = ct_start * u_start - kappa * c_start
+    c_end, ct_end = sorption.c_and_total_from_retardation(kappa / u_end)
+    g_end = ct_end * u_end - kappa * c_end
+    return g_end - g_start
 
 
 def compute_cumulative_inlet_mass(

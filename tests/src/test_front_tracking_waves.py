@@ -431,6 +431,7 @@ class TestDecayingShockWave:
             v_start=v_collision,
             c_decay_initial=4.0,
             c_fixed=0.0,
+            c_fan_tail=0.0,
             decay_side="left",
             v_origin=0.0,
             theta_origin=1000.0,
@@ -502,6 +503,7 @@ class TestDecayingShockWave:
             v_start=v_collision,
             c_decay_initial=c_decay_initial,
             c_fixed=0.0,
+            c_fan_tail=0.0,
             decay_side="left",
             v_origin=v_origin,
             theta_origin=1000.0,
@@ -538,6 +540,7 @@ class TestDecayingShockWave:
             "v_start": 1000.0 / 27.0,
             "c_decay_initial": 4.0,
             "c_fixed": 0.0,
+            "c_fan_tail": 0.0,
             "v_origin": 0.0,
             "theta_origin": 1000.0,
             "sorption": sorption,
@@ -552,30 +555,46 @@ class TestDecayingShockWave:
         with pytest.raises(ValueError, match="c_fixed"):
             DecayingShockWave(**{**common, "decay_side": "left", "c_fixed": -1.0})
 
+        with pytest.raises(ValueError, match="c_fan_tail"):
+            DecayingShockWave(**{**common, "decay_side": "left", "c_fan_tail": -1.0})
+
         with pytest.raises(ValueError, match="theta_origin"):
             DecayingShockWave(**{**common, "decay_side": "left", "theta_origin": 1500.0})
 
-        with pytest.raises(TypeError, match="FreundlichSorption or LangmuirSorption"):
+        with pytest.raises(TypeError, match="NonlinearSorption"):
             DecayingShockWave(**{
                 **common,
                 "decay_side": "left",
                 "sorption": ConstantRetardation(retardation_factor=2.0),
             })
 
-    def test_post_init_rejects_freundlich_n_not_2_with_c_fixed_positive(self):
-        """Freundlich with c_fixed>0 currently supports only n=2; other n raises."""
+    def test_freundlich_n_not_2_with_c_fixed_positive_uses_numerical(self):
+        """Freundlich c_fixed>0 with n≠2 has no closed form: numerical fallback (no raise).
+
+        ``K`` is left NaN (numerical case), the collision IC is honoured exactly
+        (``c_decay`` at the collision equals ``c_decay_initial``), and the
+        decaying side relaxes monotonically from ``c_decay_initial`` toward the
+        fixed state.
+        """
         sorption = FreundlichSorption(k_f=0.01, n=1.5, bulk_density=1500.0, porosity=0.3)
-        with pytest.raises(NotImplementedError, match="c_fixed > 0"):
-            DecayingShockWave(
-                theta_start=1500.0,
-                v_start=20.0,
-                c_decay_initial=4.0,
-                c_fixed=1.0,
-                decay_side="left",
-                v_origin=0.0,
-                theta_origin=1000.0,
-                sorption=sorption,
-            )
+        dsw = DecayingShockWave(
+            theta_start=1500.0,
+            v_start=20.0,
+            c_decay_initial=4.0,
+            c_fixed=1.0,
+            c_fan_tail=1.0,
+            decay_side="left",
+            v_origin=0.0,
+            theta_origin=1000.0,
+            sorption=sorption,
+        )
+        assert np.isnan(dsw.K)
+        # Definitional IC at the collision θ: decaying side starts at c_decay_initial.
+        assert dsw.c_decay_at_theta(dsw.theta_start) == pytest.approx(dsw.c_decay_initial)
+        # Decaying side relaxes from c_decay_initial toward c_fixed (4 -> 1).
+        c_later = dsw.c_decay_at_theta(dsw.theta_start + 2000.0)
+        assert c_later is not None
+        assert dsw.c_fixed < c_later < dsw.c_decay_initial
 
     def test_freundlich_n2_cr_positive_closed_form(self):
         """Closed-form values for Freundlich n=2, c_R>0, hand-computed.
@@ -610,6 +629,7 @@ class TestDecayingShockWave:
             v_start=v_collision,
             c_decay_initial=9.0,  # u_c = 3
             c_fixed=1.0,  # u_R = 1
+            c_fan_tail=1.0,  # drying toward c_fixed
             decay_side="left",
             v_origin=v_origin,
             theta_origin=theta_origin,
@@ -683,6 +703,7 @@ class TestDecayingShockWave:
             v_start=v_collision,
             c_decay_initial=10.0,
             c_fixed=0.0,
+            c_fan_tail=0.0,
             decay_side="left",
             v_origin=v_origin,
             theta_origin=theta_origin,
@@ -741,6 +762,7 @@ class TestDecayingShockWave:
             v_start=v_collision,
             c_decay_initial=9.0,  # u_c = 3
             c_fixed=1.0,  # u_R = 1
+            c_fan_tail=1.0,  # drying toward c_fixed
             decay_side="left",
             v_origin=v_origin,
             theta_origin=theta_origin,

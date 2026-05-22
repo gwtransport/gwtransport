@@ -55,6 +55,7 @@ from gwtransport.fronttracking.output import (
 )
 from gwtransport.fronttracking.waves import (
     CharacteristicWave,
+    DecayingShockWave,
     RarefactionWave,
     ShockWave,
     Wave,
@@ -264,15 +265,30 @@ class FrontTracker:
         active_waves = [w for w in self.state.waves if w.is_active]
         theta_current = self.state.theta_current
 
+        # Defense-in-depth loop guard: reject collision candidates at or below
+        # θ_current + tol so a degenerate geometry cannot re-fire the identical
+        # event forever (same FP-tolerance scale as the outlet-crossing guard
+        # below). The structural fix is routing all shock↔rarefaction collisions
+        # through DecayingShockWave; this backstops any future near-coincident
+        # event from looping the solver.
+        collision_tol = 1e-12 * max(abs(theta_current), 1.0)
+
+        def push_collision(theta, event_type, waves, v, boundary):
+            nonlocal counter
+            if not (0 <= v <= self.state.v_outlet):
+                return
+            if theta <= theta_current + collision_tol:
+                return
+            heappush(candidates, (theta, counter, event_type, waves, v, boundary))
+            counter += 1
+
         chars = [w for w in active_waves if isinstance(w, CharacteristicWave)]
         for i, w1 in enumerate(chars):
             for w2 in chars[i + 1 :]:
                 result = find_characteristic_intersection(w1, w2, theta_current)
                 if result:
                     theta, v = result
-                    if 0 <= v <= self.state.v_outlet:
-                        heappush(candidates, (theta, counter, EventType.CHAR_CHAR_COLLISION, [w1, w2], v, None))
-                        counter += 1
+                    push_collision(theta, EventType.CHAR_CHAR_COLLISION, [w1, w2], v, None)
 
         shocks = [w for w in active_waves if isinstance(w, ShockWave)]
         for i, w1 in enumerate(shocks):
@@ -280,52 +296,50 @@ class FrontTracker:
                 result = find_shock_shock_intersection(w1, w2, theta_current)
                 if result:
                     theta, v = result
-                    if 0 <= v <= self.state.v_outlet:
-                        heappush(candidates, (theta, counter, EventType.SHOCK_SHOCK_COLLISION, [w1, w2], v, None))
-                        counter += 1
+                    push_collision(theta, EventType.SHOCK_SHOCK_COLLISION, [w1, w2], v, None)
 
         for shock in shocks:
             for char in chars:
                 result = find_shock_characteristic_intersection(shock, char, theta_current)
                 if result:
                     theta, v = result
-                    if 0 <= v <= self.state.v_outlet:
-                        heappush(candidates, (theta, counter, EventType.SHOCK_CHAR_COLLISION, [shock, char], v, None))
-                        counter += 1
+                    push_collision(theta, EventType.SHOCK_CHAR_COLLISION, [shock, char], v, None)
 
         rarefs = [w for w in active_waves if isinstance(w, RarefactionWave)]
         for raref in rarefs:
             for char in chars:
                 intersections = find_rarefaction_boundary_intersections(raref, char, theta_current)
                 for theta, v, boundary in intersections:
-                    if 0 <= v <= self.state.v_outlet:
-                        heappush(
-                            candidates,
-                            (theta, counter, EventType.RAREF_CHAR_COLLISION, [raref, char], v, boundary),
-                        )
-                        counter += 1
+                    push_collision(theta, EventType.RAREF_CHAR_COLLISION, [raref, char], v, boundary)
 
         for shock in shocks:
             for raref in rarefs:
                 intersections = find_rarefaction_boundary_intersections(raref, shock, theta_current)
                 for theta, v, boundary in intersections:
-                    if 0 <= v <= self.state.v_outlet:
-                        heappush(
-                            candidates,
-                            (theta, counter, EventType.SHOCK_RAREF_COLLISION, [shock, raref], v, boundary),
-                        )
-                        counter += 1
+                    push_collision(theta, EventType.SHOCK_RAREF_COLLISION, [shock, raref], v, boundary)
 
         for i, raref1 in enumerate(rarefs):
             for raref2 in rarefs[i + 1 :]:
                 intersections = find_rarefaction_boundary_intersections(raref1, raref2, theta_current)
                 for theta, v, boundary in intersections:
-                    if 0 <= v <= self.state.v_outlet:
-                        heappush(
-                            candidates,
-                            (theta, counter, EventType.RAREF_RAREF_COLLISION, [raref1, raref2], v, boundary),
-                        )
-                        counter += 1
+                    push_collision(theta, EventType.RAREF_RAREF_COLLISION, [raref1, raref2], v, boundary)
+
+        # Fan-exhaustion: a DecayingShockWave is valid only while c_decay stays
+        # above c_fan_tail. When c_decay reaches c_fan_tail the fan is spent and
+        # the wave hands off to a regular ShockWave(c_fan_tail, c_fixed).
+        for wave in active_waves:
+            if isinstance(wave, DecayingShockWave):
+                theta_exhaust = wave.theta_at_fan_exhaustion()
+                if theta_exhaust is None or theta_exhaust <= theta_current + collision_tol:
+                    continue
+                v_exhaust = wave.position_at_theta(theta_exhaust)
+                if v_exhaust is None or not (0 <= v_exhaust <= self.state.v_outlet):
+                    continue
+                heappush(
+                    candidates,
+                    (theta_exhaust, counter, EventType.DSW_FAN_EXHAUSTED, [wave], v_exhaust, None),
+                )
+                counter += 1
 
         v_outlet = self.state.v_outlet
         # Same FP-tolerance discipline as events.find_outlet_crossing — prevents
@@ -423,6 +437,9 @@ class FrontTracker:
             # but makes no topology change. Both rarefactions remain active.
             new_waves = []
 
+        elif event.event_type == EventType.DSW_FAN_EXHAUSTED:
+            new_waves = self._handle_fan_exhaustion(event.waves_involved[0], event.theta, event.location)
+
         elif event.event_type == EventType.OUTLET_CROSSING:
             event_record = handle_outlet_crossing(event.waves_involved[0], event.theta, event.location)
             self.state.events.append(event_record)
@@ -437,6 +454,42 @@ class FrontTracker:
             "waves_before": event.waves_involved,
             "waves_after": new_waves,
         })
+
+    def _handle_fan_exhaustion(self, dsw: DecayingShockWave, theta_event: float, v_event: float) -> list[Wave]:
+        """Hand a fan-exhausted decaying shock off to a regular shock.
+
+        When ``c_decay`` reaches ``c_fan_tail`` the decaying side is no longer
+        fed by the fan; the wave continues as a constant-speed
+        ``ShockWave(c_fan_tail, c_fixed)`` (sides assigned per ``decay_side``).
+        The handoff is C1-continuous (``dV_s/dθ → S(c_fan_tail, c_fixed)`` = the
+        spawned shock's speed). The decaying shock is deactivated.
+
+        Returns
+        -------
+        list of Wave
+            ``[ShockWave]`` for the continuation, or ``[]`` if it fails entropy.
+        """
+        if dsw.decay_side == "left":
+            c_left, c_right = dsw.c_fan_tail, dsw.c_fixed
+        else:
+            c_left, c_right = dsw.c_fixed, dsw.c_fan_tail
+
+        dsw.deactivate(theta_event)
+
+        if abs(c_left - c_right) < EPSILON_CONCENTRATION:
+            # Fan decayed onto the fixed state — no discontinuity remains.
+            return []
+
+        shock = ShockWave(
+            theta_start=theta_event,
+            v_start=v_event,
+            c_left=c_left,
+            c_right=c_right,
+            sorption=self.state.sorption,
+        )
+        if not shock.satisfies_entropy():
+            return []
+        return [shock]
 
     def run(self, max_iterations: int = 10000, *, verbose: bool = False):
         """Process events in θ-order until the queue is empty or ``max_iterations`` is reached."""

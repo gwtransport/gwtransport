@@ -31,6 +31,7 @@ Base URL: `https://gwtransport.github.io/gwtransport/`
 | `concept-gamma-distribution`       | Two-parameter pore volume model                 |
 | `concept-gamma-loc`                | Shifted gamma with minimum pore volume (loc)    |
 | `concept-nonlinear-sorption`       | Freundlich & Langmuir isotherms, front-tracking |
+| `concept-kinematic-wave`           | KW percolation through thick unsaturated zones  |
 
 ### Assumptions (`docs/source/user_guide/assumptions.rst`)
 

@@ -14,9 +14,11 @@ import pandas as pd
 import pytest
 
 from gwtransport.fronttracking.math import (
+    BrooksCoreyConductivity,
     ConstantRetardation,
     FreundlichSorption,
     LangmuirSorption,
+    VanGenuchtenMualemConductivity,
     characteristic_position,
     characteristic_speed,
     compute_first_front_arrival_theta,
@@ -714,3 +716,147 @@ class TestRegressionsForIssue168:
         assert runtime_warnings == [], (
             f"Expected no RuntimeWarning, got {[(w.category.__name__, str(w.message)) for w in runtime_warnings]}"
         )
+
+
+# Staringreeks-like soils used to parametrise tests across exponent regimes.
+# Each entry is (theta_r, theta_s, k_s, lam) for BC or (theta_r, theta_s, k_s, n_vG) for vG.
+# IDs name the soil class for readable failure reports.
+_STARINGREEKS_BC = [
+    pytest.param(0.01, 0.337, 0.174, 0.25, id="O05_coarse_sand_a11"),
+    pytest.param(0.02, 0.45, 0.05, 0.5, id="B02_loam_a7"),
+    pytest.param(0.01, 0.43, 0.005, 5.0, id="C03_clay_a3p4"),
+]
+_STARINGREEKS_VG = [
+    pytest.param(0.01, 0.337, 0.174, 2.28, id="O05_sand_like"),
+    pytest.param(0.02, 0.45, 0.05, 1.8, id="B02_loam_like"),
+    pytest.param(0.01, 0.43, 0.005, 1.15, id="C03_clay_like"),
+]
+
+
+@pytest.mark.parametrize(("theta_r", "theta_s", "k_s", "lam"), _STARINGREEKS_BC)
+class TestBrooksCoreyConductivity:
+    """Brooks-Corey closed-form unsaturated-conductivity sorption (BC = Mualem variant)."""
+
+    def test_constructor_derives_a_and_delta_theta(self, theta_r, theta_s, k_s, lam):
+        """``a = 3 + 2/λ`` and ``Δθ = θ_s − θ_r`` set in ``__post_init__``."""
+        sorption = BrooksCoreyConductivity(theta_r=theta_r, theta_s=theta_s, k_s=k_s, brooks_corey_lambda=lam)
+        assert sorption.a == pytest.approx(3.0 + 2.0 / lam)
+        assert sorption.delta_theta == pytest.approx(theta_s - theta_r)
+
+    def test_round_trip_concentration_machine_precision(self, theta_r, theta_s, k_s, lam):
+        """``C → R → C`` round-trips at machine precision for the closed-form BC."""
+        sorption = BrooksCoreyConductivity(theta_r=theta_r, theta_s=theta_s, k_s=k_s, brooks_corey_lambda=lam)
+        # Grid avoids the dry-soil singularity (clamped at _C_MIN).
+        c_grid = np.geomspace(1e-8 * k_s, 0.99 * k_s, 25)
+        r_grid = sorption.retardation(c_grid)
+        c_back = sorption.concentration_from_retardation(r_grid)
+        np.testing.assert_allclose(c_back, c_grid, rtol=1e-13)
+
+    def test_saturation_limit_exact(self, theta_r, theta_s, k_s, lam):
+        """``C_T(K_s) = Δθ`` and ``C_T(0) = 0`` exactly."""
+        sorption = BrooksCoreyConductivity(theta_r=theta_r, theta_s=theta_s, k_s=k_s, brooks_corey_lambda=lam)
+        assert sorption.total_concentration(k_s) == pytest.approx(theta_s - theta_r, rel=1e-15)
+        assert sorption.total_concentration(0.0) == 0.0
+
+    def test_retardation_strictly_positive(self, theta_r, theta_s, k_s, lam):
+        """``R(C) > 0`` for ``C ∈ [_C_MIN, K_s]`` (catches sign-flip in inversion exponent)."""
+        sorption = BrooksCoreyConductivity(theta_r=theta_r, theta_s=theta_s, k_s=k_s, brooks_corey_lambda=lam)
+        c_grid = np.geomspace(1e-10 * k_s, k_s, 20)
+        assert np.all(sorption.retardation(c_grid) > 0)
+
+    def test_shock_speed_matches_finite_difference(self, theta_r, theta_s, k_s, lam):
+        """Inherited ``shock_speed`` = ``(K_R−K_L)/(θ_R−θ_L)`` (Rankine-Hugoniot)."""
+        sorption = BrooksCoreyConductivity(theta_r=theta_r, theta_s=theta_s, k_s=k_s, brooks_corey_lambda=lam)
+        a = sorption.a
+        theta1, theta2 = theta_r + 0.6 * (theta_s - theta_r), theta_r + 0.1 * (theta_s - theta_r)
+        k1 = k_s * ((theta1 - theta_r) / (theta_s - theta_r)) ** a
+        k2 = k_s * ((theta2 - theta_r) / (theta_s - theta_r)) ** a
+        expected = (k1 - k2) / (theta1 - theta2)
+        # Pass K (= C) values as c_left and c_right (framework convention).
+        np.testing.assert_allclose(sorption.shock_speed(k1, k2), expected, rtol=1e-13)
+
+    def test_entropy_wetting_vs_drying(self, theta_r, theta_s, k_s, lam):
+        """Wetting front (θ_1 > θ_2) is entropy-admissible; drying is not."""
+        sorption = BrooksCoreyConductivity(theta_r=theta_r, theta_s=theta_s, k_s=k_s, brooks_corey_lambda=lam)
+        a = sorption.a
+        theta_high, theta_low = theta_r + 0.7 * (theta_s - theta_r), theta_r + 0.2 * (theta_s - theta_r)
+        k_high = k_s * ((theta_high - theta_r) / (theta_s - theta_r)) ** a
+        k_low = k_s * ((theta_low - theta_r) / (theta_s - theta_r)) ** a
+        # Wetting: c_left = K_high (upstream), c_right = K_low.
+        s_wet = sorption.shock_speed(k_high, k_low)
+        assert sorption.check_entropy_condition(k_high, k_low, s_wet)
+        # Drying: reverse roles; shock speed sign-flips but Lax fails.
+        s_dry = sorption.shock_speed(k_low, k_high)
+        assert not sorption.check_entropy_condition(k_low, k_high, s_dry)
+
+
+@pytest.mark.parametrize(
+    "invalid_kwargs",
+    [
+        {"theta_r": -0.1, "theta_s": 0.337, "k_s": 0.174, "brooks_corey_lambda": 0.25},
+        {"theta_r": 0.4, "theta_s": 0.337, "k_s": 0.174, "brooks_corey_lambda": 0.25},  # θ_r >= θ_s
+        {"theta_r": 0.01, "theta_s": 1.5, "k_s": 0.174, "brooks_corey_lambda": 0.25},
+        {"theta_r": 0.01, "theta_s": 0.337, "k_s": -0.1, "brooks_corey_lambda": 0.25},
+        {"theta_r": 0.01, "theta_s": 0.337, "k_s": 0.174, "brooks_corey_lambda": -0.5},
+    ],
+)
+def test_brooks_corey_validation_rejects_invalid(invalid_kwargs):
+    """Coverage-only parametrised validation. Each invalid input raises ``ValueError``."""
+    with pytest.raises(ValueError):
+        BrooksCoreyConductivity(**invalid_kwargs)
+
+
+@pytest.mark.parametrize(("theta_r", "theta_s", "k_s", "n_vg"), _STARINGREEKS_VG)
+class TestVanGenuchtenMualemConductivity:
+    """Van Genuchten-Mualem K(θ) sorption with brentq inversions."""
+
+    def test_constructor_derives_m_and_delta_theta(self, theta_r, theta_s, k_s, n_vg):
+        """``m = 1 − 1/n_vG`` and ``Δθ = θ_s − θ_r`` set in ``__post_init__``."""
+        sorption = VanGenuchtenMualemConductivity(theta_r=theta_r, theta_s=theta_s, k_s=k_s, van_genuchten_n=n_vg)
+        assert sorption.m == pytest.approx(1.0 - 1.0 / n_vg)
+        assert sorption.delta_theta == pytest.approx(theta_s - theta_r)
+
+    def test_round_trip_concentration_brentq_bounded(self, theta_r, theta_s, k_s, n_vg):
+        """``C → R → C`` round-trips within brentq xtol (1e-14) headroom.
+
+        Grid stays below ``0.3·k_s`` so the inversion is well-conditioned for
+        all Staringreeks soils, including clay (``n_vG ≈ 1.15``). Near
+        saturation, the ``K_M(S_e)`` curve becomes nearly vertical and the
+        round-trip's ULP precision is dominated by the conditioning of the
+        forward function, not by any algebraic error. Well-conditioned regime:
+        tolerance is brentq-bounded (``1e-12``), one ULP above ``BRENTQ_XTOL``.
+        """
+        sorption = VanGenuchtenMualemConductivity(theta_r=theta_r, theta_s=theta_s, k_s=k_s, van_genuchten_n=n_vg)
+        c_grid = np.geomspace(1e-6 * k_s, 0.3 * k_s, 12)
+        r_grid = sorption.retardation(c_grid)
+        c_back = sorption.concentration_from_retardation(r_grid)
+        np.testing.assert_allclose(c_back, c_grid, rtol=1e-12)
+
+    def test_saturation_limit_exact(self, theta_r, theta_s, k_s, n_vg):
+        """``C_T(K_s) = Δθ`` exactly (the ``_se_from_c`` early-return at saturation)."""
+        sorption = VanGenuchtenMualemConductivity(theta_r=theta_r, theta_s=theta_s, k_s=k_s, van_genuchten_n=n_vg)
+        assert sorption.total_concentration(k_s) == pytest.approx(theta_s - theta_r, rel=1e-15)
+        assert sorption.total_concentration(0.0) == 0.0
+
+    def test_retardation_strictly_positive(self, theta_r, theta_s, k_s, n_vg):
+        """``R(C) > 0`` for ``C ∈ [_C_MIN, 0.9·K_s]`` (avoid the s→1 dK/dS singularity edge)."""
+        sorption = VanGenuchtenMualemConductivity(theta_r=theta_r, theta_s=theta_s, k_s=k_s, van_genuchten_n=n_vg)
+        c_grid = np.geomspace(1e-8 * k_s, 0.9 * k_s, 12)
+        assert np.all(sorption.retardation(c_grid) > 0)
+
+
+@pytest.mark.parametrize(
+    "invalid_kwargs",
+    [
+        {"theta_r": -0.1, "theta_s": 0.337, "k_s": 0.174, "van_genuchten_n": 2.28},
+        {"theta_r": 0.4, "theta_s": 0.337, "k_s": 0.174, "van_genuchten_n": 2.28},  # θ_r >= θ_s
+        {"theta_r": 0.01, "theta_s": 1.5, "k_s": 0.174, "van_genuchten_n": 2.28},
+        {"theta_r": 0.01, "theta_s": 0.337, "k_s": -0.1, "van_genuchten_n": 2.28},
+        {"theta_r": 0.01, "theta_s": 0.337, "k_s": 0.174, "van_genuchten_n": 1.0},  # n_vG <= 1
+        {"theta_r": 0.01, "theta_s": 0.337, "k_s": 0.174, "van_genuchten_n": 2.28, "mualem_l": -0.1},
+    ],
+)
+def test_van_genuchten_validation_rejects_invalid(invalid_kwargs):
+    """Coverage-only parametrised validation. Each invalid input raises ``ValueError``."""
+    with pytest.raises(ValueError):
+        VanGenuchtenMualemConductivity(**invalid_kwargs)

@@ -26,6 +26,7 @@ from gwtransport.fronttracking.math import (
 )
 from gwtransport.fronttracking.waves import (
     CharacteristicWave,
+    DecayingShockWave,
     RarefactionWave,
     ShockWave,
 )
@@ -218,7 +219,13 @@ class TestShockRarefactionCollisionHandler:
     """Test handle_shock_rarefaction_collision function."""
 
     def test_shock_catches_tail(self, freundlich_sorption):
-        """Test shock catching rarefaction tail."""
+        """Shock catching rarefaction tail is resolved by a single DecayingShockWave.
+
+        The old approximate piecewise-overlay handler returned one or more
+        plain ShockWaves; the exact handler now returns exactly one
+        DecayingShockWave whose decaying side is the rarefaction tail
+        (``decay_side='right'``) and fixed side is the shock's upstream state.
+        """
         shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=0.0, sorption=freundlich_sorption)
 
         raref = RarefactionWave(theta_start=5.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
@@ -227,9 +234,17 @@ class TestShockRarefactionCollisionHandler:
             shock, raref, theta_event=20.0, v_event=150.0, boundary_type="tail"
         )
 
-        # MUST create new shocks
-        assert len(new_waves) > 0, "Expected at least one new wave"
-        assert all(isinstance(w, ShockWave) for w in new_waves), "All new waves must be shocks"
+        # Exactly one DecayingShockWave subsumes the fan + shock.
+        assert len(new_waves) == 1
+        dsw = new_waves[0]
+        assert isinstance(dsw, DecayingShockWave)
+        assert dsw.decay_side == "right"
+        assert dsw.c_decay_initial == raref.c_tail
+        assert dsw.c_fixed == shock.c_left
+        assert dsw.c_fan_tail == raref.c_head
+        # Both parents deactivated at the collision.
+        assert not shock.is_active
+        assert not raref.is_active
 
     def test_head_catches_shock(self, freundlich_sorption):
         """Test rarefaction head catching shock."""
@@ -752,11 +767,12 @@ class TestShockRarefactionTailCollisionPhysics:
         assert not raref.is_active, "Original rarefaction should be deactivated"
 
     def test_physics_shock_overtakes_rarefaction_completely(self, freundlich_n_gt_1):
-        """Test shock completely overtaking a small rarefaction.
+        """Shock overtaking a small rarefaction yields one exact DecayingShockWave.
 
-        Physics: If the shock is fast enough and the rarefaction is small,
-        the shock may completely overtake the rarefaction, leaving only
-        the continuing shock.
+        Physics: a fast shock catching a small rarefaction tail merges into a
+        single decaying shock. The old overlay returned a plain ShockWave;
+        the exact handler returns one DecayingShockWave that asymptotes to the
+        fixed (upstream) state as the fan is consumed.
         """
         # Very fast shock
         shock = ShockWave(
@@ -780,9 +796,12 @@ class TestShockRarefactionTailCollisionPhysics:
             shock, raref, theta_event=20.0, v_event=150.0, boundary_type="tail"
         )
 
-        # May create only shock (rarefaction completely overtaken)
-        assert len(new_waves) >= 1
-        assert any(isinstance(w, ShockWave) for w in new_waves), "Should have at least a shock"
+        # Exactly one DecayingShockWave; both parents deactivated.
+        assert len(new_waves) == 1
+        assert isinstance(new_waves[0], DecayingShockWave)
+        assert new_waves[0].decay_side == "right"
+        assert not shock.is_active
+        assert not raref.is_active
 
     def test_physics_wave_splitting_creates_modified_rarefaction(self, freundlich_n_gt_1):
         """Test that wave splitting can create modified rarefaction.
@@ -1372,10 +1391,12 @@ class TestShockRarefactionTailEdgeCases:
         return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
     def test_tail_collision_standard_wave_splitting(self, freundlich_sorption):
-        """Test standard wave splitting at rarefaction tail.
+        """Tail collision is resolved by one exact DecayingShockWave.
 
-        When shock catches rarefaction tail, it penetrates into the fan,
-        creating a new shock and possibly a modified rarefaction.
+        The old overlay split the interaction into a continuing ShockWave (and
+        possibly a modified rarefaction). The exact handler returns a single
+        DecayingShockWave whose self-similar fan profile already encodes the
+        full interaction, so no separate ShockWave is emitted.
         """
         # Create shock
         shock = ShockWave(
@@ -1408,20 +1429,32 @@ class TestShockRarefactionTailEdgeCases:
         assert not shock.is_active
         assert not raref.is_active
 
-        # Should get at least a shock
-        assert len(new_waves) >= 1
-        shocks = [w for w in new_waves if isinstance(w, ShockWave)]
-        assert len(shocks) >= 1
+        # Exactly one DecayingShockWave subsumes the split, with the
+        # rarefaction tail as the decaying side and the shock's upstream
+        # state held fixed.
+        assert len(new_waves) == 1
+        dsw = new_waves[0]
+        assert isinstance(dsw, DecayingShockWave)
+        assert dsw.decay_side == "right"
+        assert dsw.c_decay_initial == raref.c_tail
+        assert dsw.c_fixed == shock.c_left
+        assert dsw.c_fan_tail == raref.c_head
+        assert dsw.v_start == v_tail
 
-        # All created shocks must satisfy entropy
-        for s in shocks:
-            assert s.satisfies_entropy()
+        # Definitional initial conditions at the collision θ: the decaying side
+        # starts at c_decay_initial and the shock sits exactly at v_start. These
+        # hold for the numerical decay path as well as the closed forms.
+        assert dsw.c_decay_at_theta(dsw.theta_start) == pytest.approx(dsw.c_decay_initial)
+        assert dsw.position_at_theta(dsw.theta_start) == pytest.approx(dsw.v_start)
 
     def test_tail_collision_rarefaction_completely_overtaken(self, freundlich_sorption):
-        """Test lines 527-531: rarefaction completely overtaken by shock.
+        """A small fully-overtaken rarefaction still yields one DecayingShockWave.
 
-        When head_vel <= tail_vel after modification, rarefaction is completely
-        overtaken and only shock continues.
+        The old overlay reduced a fully-overtaken fan to a plain continuing
+        ShockWave. The exact handler always returns a single DecayingShockWave;
+        as the small fan is consumed it asymptotes to the fixed (upstream)
+        state, which the solver's DSW_FAN_EXHAUSTED event then promotes to a
+        regular shock.
         """
         # Very fast shock
         shock = ShockWave(
@@ -1450,12 +1483,9 @@ class TestShockRarefactionTailEdgeCases:
             shock, raref, theta_event=t_event, v_event=v_event, boundary_type="tail"
         )
 
-        # Should have at least the shock
-        assert len(new_waves) >= 1
-        shocks = [w for w in new_waves if isinstance(w, ShockWave)]
-        assert len(shocks) >= 1
-
-        # Both parents deactivated
+        # Exactly one DecayingShockWave; both parents deactivated.
+        assert len(new_waves) == 1
+        assert isinstance(new_waves[0], DecayingShockWave)
         assert not shock.is_active
         assert not raref.is_active
 

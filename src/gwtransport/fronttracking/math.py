@@ -3,26 +3,33 @@ Mathematical Foundation for Front Tracking with Nonlinear Sorption.
 
 This module provides exact analytical computations for:
 - Freundlich, Langmuir, and constant retardation models
+- Brooks-Corey and van Genuchten-Mualem unsaturated conductivity models
+  (for Kinematic-Wave percolation, see :mod:`gwtransport.percolation`)
 - Shock velocities via Rankine-Hugoniot condition
 - Characteristic velocities and positions
 - First arrival time calculations
 - Entropy condition verification
 
-All computations are exact analytical formulas with no numerical tolerances.
+All sorption-class computations are exact analytical formulas; the
+van Genuchten-Mualem class uses ``scipy.optimize.brentq`` for the two
+inversions that have no closed form.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import numpy.typing as npt
+from scipy.optimize import brentq
 
 # Numerical tolerance constants
 EPSILON_FREUNDLICH_N = 1e-10  # Tolerance for checking if n ≈ 1.0 (Freundlich constructor rejects this)
 EPSILON_DENOMINATOR = 1e-15  # Tolerance for near-zero denominators in shock velocity
+_C_MIN = 1e-12  # Shared dry-soil singularity floor for Freundlich n>1, Brooks-Corey, vG-Mualem.
+BRENTQ_XTOL = 1e-14  # brentq absolute tolerance for vG-Mualem inversions; matches _invert_freundlich_cr_zero.
 
 
 class NonlinearSorption(ABC):
@@ -87,6 +94,31 @@ class NonlinearSorption(ABC):
             return float(1.0 / avg_retardation)
 
         return float((c_right - c_left) / denom)
+
+    def c_and_total_from_retardation(self, r: float) -> tuple[float, float]:
+        """Return ``(c, C_T(c))`` at a given retardation ``r``.
+
+        Default implementation calls ``concentration_from_retardation(r)`` then
+        ``total_concentration(c)`` — two independent root-finds for sorptions
+        where both routes back-solve the same equation (e.g. vG-Mualem with
+        ``L ≠ 0``). Subclasses for which both can be computed from a single
+        root-find should override this for ~2× speedup of the IBP fan
+        integrators.
+        """
+        c = float(self.concentration_from_retardation(r))
+        ct = float(self.total_concentration(c))
+        return c, ct
+
+    def fan_converges_at_infinity(self) -> bool:  # noqa: PLR6301
+        """Whether a ``c_apex=0`` fan's ``∫ c dθ`` converges as ``θ → +∞``.
+
+        True when ``c → 0`` as ``R → ∞`` (so ``base·c → 0`` faster than ``base → ∞``):
+        Brooks-Corey, van Genuchten-Mualem, Langmuir, and Freundlich ``n > 1``. The
+        only divergent case is Freundlich ``n < 1`` (``c → ∞`` as ``R → ∞``), which
+        overrides this to ``False``. Used by the universal temporal fan integrator to
+        reject a ``+∞`` upper bound when the integral diverges.
+        """
+        return True
 
     def check_entropy_condition(self, c_left: float, c_right: float, shock_speed: float) -> bool:
         """Verify Lax entropy condition in (V, θ) coordinates.
@@ -367,6 +399,10 @@ class FreundlichSorption(NonlinearSorption):
         result = np.where(base > 0, np.maximum(c, self.c_min), self.c_min)
 
         return result if is_array else float(result)
+
+    def fan_converges_at_infinity(self) -> bool:
+        """Freundlich ``n > 1``: ``c → 0`` as ``R → ∞`` (converges). ``n < 1``: ``c → ∞`` (diverges)."""
+        return self.n > 1.0
 
 
 @dataclass
@@ -696,6 +732,371 @@ class LangmuirSorption(NonlinearSorption):
         result = np.maximum(c, 0.0)
 
         return result if is_array else float(result)
+
+
+@dataclass
+class BrooksCoreyConductivity(NonlinearSorption):
+    r"""Brooks-Corey unsaturated conductivity recast as a NonlinearSorption.
+
+    Used by :mod:`gwtransport.percolation` to model gravity-driven percolation
+    through a thick unsaturated zone via the Kinematic-Wave method. The
+    closed-form conductivity curve
+
+    .. math::
+        K(\\theta) = K_s \\cdot \\Theta^a, \\qquad
+        \\Theta = (\\theta - \\theta_r)/(\\theta_s - \\theta_r), \\qquad
+        a = 3 + 2/\\lambda \\;(\\text{Mualem})
+
+    is recast in the framework's ``(C, C_T)`` variables by identifying
+    ``C ≡ K`` (the flux variable) and ``C_T ≡ θ - θ_r`` (the conserved
+    storage). All three abstract methods have closed forms; ``shock_speed``
+    and ``check_entropy_condition`` are inherited unchanged from
+    :class:`NonlinearSorption`.
+
+    Parameters
+    ----------
+    theta_r : float
+        Residual volumetric moisture content [-]. Must satisfy
+        ``0 <= theta_r < theta_s``.
+    theta_s : float
+        Saturated volumetric moisture content [-]. Equal to the porosity
+        for typical soils. Must satisfy ``theta_r < theta_s < 1``.
+    k_s : float
+        Saturated hydraulic conductivity [length/time]. Positive.
+    brooks_corey_lambda : float
+        Pore-size distribution index ``λ`` [-]. Positive. The exponent
+        ``a = 3 + 2/λ`` (Mualem variant; Burdine's ``a = 2 + 3/λ`` is not
+        implemented in v1, but a user wanting it can re-derive ``λ`` so the
+        Mualem ``a`` matches the desired Burdine exponent).
+
+    See Also
+    --------
+    VanGenuchtenMualemConductivity : Van Genuchten variant with brentq inversions.
+    FreundlichSorption : Power-law sorption isotherm (closed form, analogous shape).
+    gwtransport.percolation.root_zone_to_water_table_kinematic_wave : The public wrapper.
+
+    Notes
+    -----
+    The retardation factor and total-concentration relation are:
+
+    .. math::
+        C_T(C) = \\Delta\\theta \\cdot (C/K_s)^{1/a}, \\qquad
+        R(C) = (\\Delta\\theta / (a K_s)) \\cdot (C/K_s)^{1/a - 1},
+
+    with ``Δθ = θ_s − θ_r``. Since ``1/a − 1 < 0`` always (``a > 3``),
+    ``R(C) → ∞`` as ``C → 0`` (dry-soil singularity). The class clamps ``C``
+    to a small floor in ``retardation`` and ``concentration_from_retardation``
+    (the same pattern as :class:`FreundlichSorption` with ``n > 1``);
+    ``total_concentration`` and the inherited ``shock_speed`` do **not**
+    clamp, so the canonical wetting-front shock ``c_R = 0`` produces the
+    correct Rankine-Hugoniot velocity.
+
+    Examples
+    --------
+    >>> sorption = BrooksCoreyConductivity(
+    ...     theta_r=0.01, theta_s=0.337, k_s=0.174, brooks_corey_lambda=0.25
+    ... )
+    >>> r = sorption.retardation(0.05)
+    >>> c = sorption.concentration_from_retardation(r)
+    >>> bool(np.isclose(c, 0.05, rtol=1e-13))
+    True
+    """
+
+    theta_r: float
+    """Residual volumetric moisture content [-]."""
+    theta_s: float
+    """Saturated volumetric moisture content [-]."""
+    k_s: float
+    """Saturated hydraulic conductivity [length/time]."""
+    brooks_corey_lambda: float
+    """Pore-size distribution index λ [-]."""
+    a: float = field(init=False)
+    """Exponent ``a = 3 + 2/λ`` (Mualem); set in ``__post_init__``."""
+    delta_theta: float = field(init=False)
+    """``θ_s − θ_r``; set in ``__post_init__``."""
+
+    def __post_init__(self) -> None:
+        """Validate parameters and derive ``a``, ``delta_theta``.
+
+        Raises
+        ------
+        ValueError
+            If any parameter is outside its valid range.
+        """
+        if not 0.0 <= self.theta_r < self.theta_s:
+            msg = f"theta_r must satisfy 0 <= theta_r < theta_s, got theta_r={self.theta_r}, theta_s={self.theta_s}"
+            raise ValueError(msg)
+        if not self.theta_s < 1.0:
+            msg = f"theta_s must be < 1, got {self.theta_s}"
+            raise ValueError(msg)
+        if self.k_s <= 0.0:
+            msg = f"k_s must be positive, got {self.k_s}"
+            raise ValueError(msg)
+        if self.brooks_corey_lambda <= 0.0:
+            msg = f"brooks_corey_lambda must be positive, got {self.brooks_corey_lambda}"
+            raise ValueError(msg)
+        self.a = 3.0 + 2.0 / self.brooks_corey_lambda
+        self.delta_theta = self.theta_s - self.theta_r
+
+    def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
+        """``C_T(C) = Δθ · (C/K_s)^(1/a)``. Returns 0 at C=0 (no clamp)."""
+        is_array = isinstance(c, np.ndarray)
+        c_arr = np.maximum(np.asarray(c, dtype=float), 0.0)
+        result = self.delta_theta * (c_arr / self.k_s) ** (1.0 / self.a)
+        return result if is_array else float(result)
+
+    def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
+        """``R(C) = (Δθ / (a·K_s)) · (C/K_s)^(1/a − 1)``. Clamped at ``_C_MIN``."""
+        is_array = isinstance(c, np.ndarray)
+        c_eff = np.maximum(np.asarray(c, dtype=float), _C_MIN)
+        result = (self.delta_theta / (self.a * self.k_s)) * (c_eff / self.k_s) ** (1.0 / self.a - 1.0)
+        return result if is_array else float(result)
+
+    def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
+        """``C = K_s · (R · a · K_s / Δθ)^{−a/(a−1)}``. Result clamped at ``_C_MIN``."""
+        is_array = isinstance(r, np.ndarray)
+        r_arr = np.asarray(r, dtype=float)
+        base = r_arr * self.a * self.k_s / self.delta_theta
+        safe_base = np.where(base > 0, base, 1.0)
+        ratio = safe_base ** (-self.a / (self.a - 1.0))
+        c = self.k_s * ratio
+        result = np.where(base > 0, np.maximum(c, _C_MIN), _C_MIN)
+        return result if is_array else float(result)
+
+
+@dataclass
+class VanGenuchtenMualemConductivity(NonlinearSorption):
+    r"""Mualem prediction for the van Genuchten retention curve, recast as NonlinearSorption.
+
+    Used by :mod:`gwtransport.percolation` for Kinematic-Wave percolation
+    with the standard Mualem-van Genuchten conductivity curve
+
+    .. math::
+        K(\\theta) = K_s \\cdot S_e^L \\cdot
+        \\left[1 - \\left(1 - S_e^{1/m}\\right)^m\\right]^2, \\qquad
+        S_e = (\\theta - \\theta_r)/(\\theta_s - \\theta_r), \\qquad
+        m = 1 - 1/n_\\text{vG}.
+
+    The retention parameter ``α_vG`` is *not* needed for ``K(θ)`` — the
+    Kinematic-Wave approximation drops capillary suction, so only the
+    ``K(S_e)`` curve matters. The two inversions ``S_e(C)`` and
+    ``S_e(R)`` have no closed form; both use ``scipy.optimize.brentq``
+    with ``xtol = BRENTQ_XTOL = 1e-14``.
+
+    Parameters
+    ----------
+    theta_r : float
+        Residual volumetric moisture content [-].
+    theta_s : float
+        Saturated volumetric moisture content [-].
+    k_s : float
+        Saturated hydraulic conductivity [length/time].
+    van_genuchten_n : float
+        Shape parameter ``n_vG > 1``. ``m = 1 − 1/n_vG`` is derived.
+    mualem_l : float, optional
+        Pore-connectivity parameter ``L``. Default 0.5 (standard Mualem).
+        Must satisfy ``L >= 0``. Setting ``L = 0`` (Burdine variant) gives
+        a closed-form ``S_e(C)`` inverse; ``L != 0`` requires ``brentq``.
+
+    See Also
+    --------
+    BrooksCoreyConductivity : Brooks-Corey closed-form variant.
+    gwtransport.percolation.root_zone_to_water_table_kinematic_wave : The public wrapper.
+
+    Notes
+    -----
+    The closed-form derivative is
+
+    .. math::
+        \\frac{dK_M}{dS_e} = K_s \\cdot S_e^{L-1} \\cdot U \\cdot
+        \\left[L \\cdot U + 2 \\cdot S_e^{1/m} \\cdot T^{m-1}\\right],
+
+    with ``T = 1 - S_e^{1/m}`` and ``U = 1 - T^m``. Used for
+    ``retardation(C)`` (after solving ``S_e(C)``) and for the brentq
+    objective in ``concentration_from_retardation(R)``. The formula is
+    inlined at both call sites, not exposed as a separate method.
+
+    The class checks monotonicity of ``dK_M/dS_e`` at a single pair of
+    sample points in ``__post_init__`` (cheap directional check). Truly
+    pathological parameter combinations that yield a non-monotone curve
+    surface as a ``brentq`` ValueError at the first inversion call.
+
+    Examples
+    --------
+    >>> sorption = VanGenuchtenMualemConductivity(
+    ...     theta_r=0.01, theta_s=0.337, k_s=0.174, van_genuchten_n=2.28
+    ... )
+    >>> r = sorption.retardation(0.05)
+    >>> c = sorption.concentration_from_retardation(r)
+    >>> bool(np.isclose(c, 0.05, rtol=1e-12))
+    True
+    """
+
+    theta_r: float
+    """Residual volumetric moisture content [-]."""
+    theta_s: float
+    """Saturated volumetric moisture content [-]."""
+    k_s: float
+    """Saturated hydraulic conductivity [length/time]."""
+    van_genuchten_n: float
+    """vG shape parameter ``n_vG > 1``."""
+    mualem_l: float = 0.5
+    """Mualem pore-connectivity ``L``. Default 0.5."""
+    m: float = field(init=False)
+    """Derived ``m = 1 − 1/n_vG``; set in ``__post_init__``."""
+    delta_theta: float = field(init=False)
+    """``θ_s − θ_r``; set in ``__post_init__``."""
+
+    def __post_init__(self) -> None:
+        """Validate parameters and run a single-sample monotonicity check.
+
+        Raises
+        ------
+        ValueError
+            If parameters are outside their valid range, or if the cheap
+            monotonicity sample at ``S_e = 0.5`` vs ``0.99`` indicates
+            ``dK_M/dS_e`` is non-monotone (pathological).
+        """
+        if not 0.0 <= self.theta_r < self.theta_s:
+            msg = f"theta_r must satisfy 0 <= theta_r < theta_s, got theta_r={self.theta_r}, theta_s={self.theta_s}"
+            raise ValueError(msg)
+        if not self.theta_s < 1.0:
+            msg = f"theta_s must be < 1, got {self.theta_s}"
+            raise ValueError(msg)
+        if self.k_s <= 0.0:
+            msg = f"k_s must be positive, got {self.k_s}"
+            raise ValueError(msg)
+        if self.van_genuchten_n <= 1.0:
+            msg = f"van_genuchten_n must be > 1, got {self.van_genuchten_n}"
+            raise ValueError(msg)
+        if self.mualem_l < 0.0:
+            msg = f"mualem_l must be >= 0, got {self.mualem_l}"
+            raise ValueError(msg)
+        self.m = 1.0 - 1.0 / self.van_genuchten_n
+        self.delta_theta = self.theta_s - self.theta_r
+        # Cheap monotonicity sanity check on dK_M/dS_e.
+        s_low, s_high = 0.5, 0.99
+        if self._dk_dse(s_low) >= self._dk_dse(s_high):
+            msg = (
+                f"Non-monotone dK_M/dS_e detected at the sanity-check samples for "
+                f"van_genuchten_n={self.van_genuchten_n}, mualem_l={self.mualem_l}: "
+                f"dK_M/dS_e({s_low})={self._dk_dse(s_low):.6g} should be < "
+                f"dK_M/dS_e({s_high})={self._dk_dse(s_high):.6g}. "
+                f"Brentq inversions in this class assume monotone-increasing dK_M/dS_e."
+            )
+            raise ValueError(msg)
+
+    def _k_se(self, s: float) -> float:
+        """``K_M(S_e)`` evaluated at a scalar ``S_e``. Returns 0 at ``S_e = 0``."""
+        if s <= 0.0:
+            return 0.0
+        if s >= 1.0:
+            return self.k_s
+        t = 1.0 - s ** (1.0 / self.m)
+        u = 1.0 - t**self.m
+        return self.k_s * s**self.mualem_l * u * u
+
+    def _dk_dse(self, s: float) -> float:
+        """Closed-form ``dK_M/dS_e`` at scalar ``S_e``. Inlined at call sites.
+
+        At ``s → 1`` (saturation), ``dK/dS_e`` diverges because ``t^(m-1) → ∞``
+        for ``m < 1``. The function returns ``+∞`` at and above ``s = 1`` so that
+        ``brentq`` can use ``s = 1`` as a closed upper bracket endpoint.
+        """
+        if s <= 0.0:
+            # Limit form: K vanishes as S^(L + 2/m), so derivative is 0 at S=0.
+            return 0.0
+        s_pow_inv_m = s ** (1.0 / self.m)
+        t = 1.0 - s_pow_inv_m
+        if t <= 0.0:
+            # Numerical underflow or s ≥ 1 — the dK/dS_e singularity at saturation.
+            return float("inf")
+        u = 1.0 - t**self.m
+        return self.k_s * s ** (self.mualem_l - 1.0) * u * (self.mualem_l * u + 2.0 * s_pow_inv_m * t ** (self.m - 1.0))
+
+    def _se_from_c(self, c: float) -> float:
+        """Invert ``K_M(S_e) = c`` for ``S_e``. Closed form for ``mualem_l = 0``; brentq otherwise.
+
+        For the Burdine variant (``L = 0``), ``K_M(S_e) = K_s · [1 − (1 − S_e^{1/m})^m]^2``
+        is invertible as ``S_e = (1 − (1 − √(K/K_s))^{1/m})^m`` — completely closed
+        form. For ``L ≠ 0`` (default Mualem ``L = 0.5``), no closed-form inverse
+        exists; ``scipy.optimize.brentq`` with ``xtol = BRENTQ_XTOL = 1e-14`` is
+        used. The brentq call is unavoidable in the Mualem case because the
+        ``K_M(S_e)`` function is transcendental.
+        """
+        c_eff = max(float(c), _C_MIN)
+        if c_eff >= self.k_s:
+            return 1.0
+        if self.mualem_l == 0.0:
+            u = (c_eff / self.k_s) ** 0.5  # U = 1 − (1−S_e^{1/m})^m
+            one_minus_u = 1.0 - u
+            one_minus_q_to_inv_m = one_minus_u ** (1.0 / self.m)
+            q = 1.0 - one_minus_q_to_inv_m
+            return float(q**self.m)
+        return float(brentq(lambda s: self._k_se(s) - c_eff, _C_MIN, 1.0, xtol=BRENTQ_XTOL))  # type: ignore[arg-type]
+
+    def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
+        """``C_T = Δθ · S_e(C)``. Returns 0 at C=0 (no clamp)."""
+        is_array = isinstance(c, np.ndarray)
+        c_arr = np.maximum(np.asarray(c, dtype=float), 0.0)
+        flat = c_arr.ravel()
+        se = np.fromiter(
+            (self._se_from_c(ci) if ci > 0.0 else 0.0 for ci in flat), dtype=float, count=flat.size
+        ).reshape(c_arr.shape)
+        result = self.delta_theta * se
+        return result if is_array else float(result)
+
+    def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
+        """``R = Δθ / (dK_M/dS_e)|_{S_e(C)}``. Uses inlined derivative; clamps C at ``_C_MIN``."""
+        is_array = isinstance(c, np.ndarray)
+        c_arr = np.maximum(np.asarray(c, dtype=float), _C_MIN)
+        flat = c_arr.ravel()
+        out = np.empty(flat.size, dtype=float)
+        for i, ci in enumerate(flat):
+            s = self._se_from_c(ci)
+            out[i] = self.delta_theta / self._dk_dse(s)
+        result = out.reshape(c_arr.shape)
+        return result if is_array else float(result)
+
+    def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
+        """Invert ``R(C) = r``. Solve ``dK_M/dS_e(S_e) = Δθ/r`` via brentq, then ``C = K_M(S_e)``."""
+        is_array = isinstance(r, np.ndarray)
+        r_arr = np.asarray(r, dtype=float)
+        flat = r_arr.ravel()
+        out = np.empty(flat.size, dtype=float)
+        for i, ri in enumerate(flat):
+            s = self._se_from_retardation(float(ri))
+            out[i] = max(self._k_se(s), _C_MIN)
+        result = out.reshape(r_arr.shape)
+        return result if is_array else float(result)
+
+    def _se_from_retardation(self, r: float) -> float:
+        """Invert ``dK_M/dS_e(S_e) = Δθ/r`` for ``S_e`` via brentq.
+
+        Single root-find for vG-Mualem; shared by ``concentration_from_retardation``
+        and ``c_and_total_from_retardation`` to avoid duplicate brentq calls.
+        """
+        if r <= 0.0:
+            return _C_MIN
+        target = self.delta_theta / r
+        try:
+            return float(brentq(lambda s, tgt=target: self._dk_dse(s) - tgt, _C_MIN, 1.0, xtol=BRENTQ_XTOL))  # type: ignore[arg-type]
+        except ValueError:
+            return _C_MIN
+
+    def c_and_total_from_retardation(self, r: float) -> tuple[float, float]:
+        """Return ``(c, C_T)`` at retardation ``r`` from a SINGLE brentq call.
+
+        Overrides the default base-class implementation (which calls
+        ``concentration_from_retardation`` and ``total_concentration``
+        separately and ends up doing two independent brentq solves on the same
+        underlying equation). Halves the iterative-solver cost in the IBP fan
+        integrators.
+        """
+        s = self._se_from_retardation(r)
+        c = max(self._k_se(s), _C_MIN)
+        ct = self.delta_theta * s
+        return c, ct
 
 
 SorptionModel = NonlinearSorption | ConstantRetardation
