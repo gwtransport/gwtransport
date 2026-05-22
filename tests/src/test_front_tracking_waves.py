@@ -593,6 +593,7 @@ class TestDecayingShockWave:
         assert dsw.c_decay_at_theta(dsw.theta_start) == pytest.approx(dsw.c_decay_initial)
         # Decaying side relaxes from c_decay_initial toward c_fixed (4 -> 1).
         c_later = dsw.c_decay_at_theta(dsw.theta_start + 2000.0)
+        assert c_later is not None
         assert dsw.c_fixed < c_later < dsw.c_decay_initial
 
     def test_freundlich_n2_cr_positive_closed_form(self):

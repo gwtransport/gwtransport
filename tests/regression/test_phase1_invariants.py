@@ -1088,6 +1088,7 @@ def test_dsw_bc_vg_c_fixed_positive_uses_numerical(sorption):
     assert np.isnan(dsw.K)
     assert dsw.c_decay_at_theta(dsw.theta_start) == pytest.approx(dsw.c_decay_initial)
     c_later = dsw.c_decay_at_theta(dsw.theta_start + 400.0)
+    assert c_later is not None
     assert dsw.c_fixed < c_later < dsw.c_decay_initial
 
 

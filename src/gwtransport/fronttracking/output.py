@@ -1049,7 +1049,7 @@ def compute_domain_mass(
 
         total_mass += mass_segment
 
-    return total_mass
+    return float(total_mass)
 
 
 def _integrate_rarefaction_spatial_exact(
