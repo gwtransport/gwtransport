@@ -8,10 +8,12 @@ import pandas as pd
 import pytest
 import requests.exceptions
 
+from gwtransport._time import dt_to_days, tedges_to_days
 from gwtransport.examples import generate_example_data, generate_example_deposition_timeseries
 from gwtransport.utils import (
     _make_strictly_monotone,
     combine_bin_series,
+    cumulative_flow_volume,
     get_soil_temperature,
     linear_average,
     linear_interpolate,
@@ -1336,3 +1338,124 @@ def test_generate_example_deposition_timeseries_seed_changes_output():
     s_a, _ = generate_example_deposition_timeseries(rng=1)
     s_b, _ = generate_example_deposition_timeseries(rng=2)
     assert not np.array_equal(s_a.to_numpy(), s_b.to_numpy())
+
+
+# ---------------------------------------------------------------------------
+# #186 guard: cumulative_flow_volume reproduces the consolidated inline idiom
+# ---------------------------------------------------------------------------
+
+
+def test_cumulative_flow_volume_matches_inline_form():
+    """The helper must reproduce ``concatenate([0], cumsum(flow*dt))`` bit-for-bit.
+
+    Uses non-uniform bin widths so the Δt-weighting (not just a bare cumsum) is
+    exercised: dropping the ``dt_days`` factor would change every value.
+    """
+    flow = np.array([2.0, 0.0, 5.0, 3.5, 1.25])
+    dt_days = np.array([1.0, 2.0, 0.5, 4.0, 1.0])
+    expected = np.concatenate(([0.0], np.cumsum(flow * dt_days)))
+    result = cumulative_flow_volume(flow, dt_days)
+    np.testing.assert_array_equal(result, expected)
+    # Leading zero and one value per edge (n+1 for n bins).
+    assert result[0] == 0.0
+    assert result.shape == (flow.size + 1,)
+
+
+def test_cumulative_flow_volume_strictly_monotone_matches_helper():
+    """``strictly_monotone=True`` must equal ``_make_strictly_monotone`` of the inline form.
+
+    The flow contains a ``Q = 0`` bin, so the inline cumulative volume has a
+    plateau; the helper must bump it identically to the standalone routine.
+    """
+    flow = np.array([3.0, 0.0, 0.0, 4.0, 1.0])
+    dt_days = np.array([1.0, 2.0, 1.5, 0.5, 3.0])
+    inline = np.concatenate(([0.0], np.cumsum(flow * dt_days)))
+    expected = _make_strictly_monotone(inline)
+    result = cumulative_flow_volume(flow, dt_days, strictly_monotone=True)
+    np.testing.assert_array_equal(result, expected)
+    # The plateau-bumping must actually have changed the array (otherwise the
+    # monotone branch is a no-op and the guard is vacuous).
+    assert not np.array_equal(inline, expected)
+
+
+# ---------------------------------------------------------------------------
+# #185 guard: tedges_to_days / dt_to_days are the single conversion idiom
+# ---------------------------------------------------------------------------
+
+
+def test_tedges_to_days_matches_reference_days():
+    """Calling the helper must yield the exact float64 days-since-ref array.
+
+    This is the #185 contract: the helper (not a re-spelling of pandas) maps
+    bin edges to days relative to the first edge.
+    """
+    tedges = pd.DatetimeIndex([
+        "2020-01-01",
+        "2020-01-02",
+        "2020-01-04",
+        "2020-02-01",
+        "2021-01-01",
+    ])
+    # Days from 2020-01-01: 0, 1, 3, 31, 366 (2020 is a leap year).
+    expected = np.array([0.0, 1.0, 3.0, 31.0, 366.0])
+    result = tedges_to_days(tedges)
+    np.testing.assert_array_equal(result, expected)
+    assert result.dtype == np.float64
+
+
+def test_tedges_to_days_ref_kwarg_shifts_origin():
+    """A shared ``ref`` re-bases the conversion; default ref is ``tedges[0]``."""
+    tedges = pd.DatetimeIndex(["2020-01-10", "2020-01-12", "2020-01-15"])
+    ref = pd.Timestamp("2020-01-01")
+    np.testing.assert_array_equal(tedges_to_days(tedges, ref=ref), np.array([9.0, 11.0, 14.0]))
+    # ref=None must equal ref=tedges[0].
+    np.testing.assert_array_equal(tedges_to_days(tedges), tedges_to_days(tedges, ref=tedges[0]))
+
+
+def test_tedges_to_days_dtype_contract_snapshot():
+    """The four pre-change spellings must all equal the helper bit-for-bit.
+
+    Locks the object-dtype-on-old-pandas contract #185 cites: ``.values``,
+    ``.to_numpy(dtype=float)``, ``.astype(float)``, ``.values.astype(float)``.
+    """
+    tedges = pd.DatetimeIndex(["2019-06-01", "2019-06-02", "2019-06-05", "2019-07-01"])
+    ref = tedges[0]
+    delta = (tedges - ref) / pd.Timedelta(days=1)
+    spellings = {
+        "values": delta.values,
+        "to_numpy(dtype=float)": delta.to_numpy(dtype=float),
+        "astype(float)": delta.astype(float),
+        "values.astype(float)": delta.values.astype(float),
+        "asarray/timedelta64": np.asarray((tedges - ref) / np.timedelta64(1, "D")),
+    }
+    helper = tedges_to_days(tedges)
+    for name, arr in spellings.items():
+        np.testing.assert_allclose(helper, arr, rtol=0, atol=0, err_msg=name)
+
+
+def test_tedges_to_days_timezone_invariance():
+    """tz-naive, UTC, and non-UTC edges must give bit-identical day arrays.
+
+    The package emits UTC-aware indices, so tz invariance is a real user path;
+    a ``tz_localize(None)`` slip inside the conversion would diverge here. The
+    span stays within a single DST regime (November, after the EU autumn
+    transition) so the local offset is constant and elapsed days are tz-label
+    independent.
+    """
+    naive = pd.DatetimeIndex(["2020-11-02", "2020-11-03", "2020-11-06", "2020-12-01"])
+    utc = naive.tz_localize("UTC")
+    other = naive.tz_localize("Europe/Amsterdam")
+    base = tedges_to_days(naive)
+    np.testing.assert_array_equal(tedges_to_days(utc), base)
+    np.testing.assert_array_equal(tedges_to_days(other), base)
+
+
+def test_dt_to_days_matches_reference_widths():
+    """``dt_to_days`` must return the exact float64 bin widths in days."""
+    tedges = pd.DatetimeIndex(["2020-01-01", "2020-01-02", "2020-01-04", "2020-02-01"])
+    expected = np.array([1.0, 2.0, 28.0])  # widths in days (Jan -> Feb 1 = 28 days)
+    result = dt_to_days(tedges)
+    np.testing.assert_array_equal(result, expected)
+    assert result.dtype == np.float64
+    # Consistency with tedges_to_days: widths are the successive differences.
+    np.testing.assert_array_equal(result, np.diff(tedges_to_days(tedges)))

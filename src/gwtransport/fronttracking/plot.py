@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from gwtransport._time import tedges_to_days
 from gwtransport.fronttracking.output import concentration_at_point, identify_outlet_segments
 from gwtransport.fronttracking.solver import FrontTrackerState
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
@@ -791,7 +792,7 @@ def plot_front_tracking_summary(
         )
 
     if show_bin_averaged:
-        t_edges_days = ((cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)).values
+        t_edges_days = tedges_to_days(cout_tedges)
         xstep_cout, ystep_cout = step_plot_coords(t_edges_days, cout)
         ax_outlet.plot(
             xstep_cout,

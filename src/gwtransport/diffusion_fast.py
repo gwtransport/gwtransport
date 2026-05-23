@@ -77,6 +77,7 @@ from scipy import sparse
 from scipy.special import erf
 
 from gwtransport import gamma
+from gwtransport._time import dt_to_days, tedges_to_days
 from gwtransport.advection_utils import (
     _infiltration_to_extraction_weights,
     _resolve_spinup_inputs_wide_edges,
@@ -115,9 +116,9 @@ def _prepare_v_grid(
     tuple of ndarray
         ``(tedges_days, v_in_widedge_edges, v_in_natural_edges)``.
     """
-    weight_dt_days = (np.diff(weight_tedges) / pd.Timedelta("1D")).astype(float)
-    natural_dt_days = (np.diff(tedges) / pd.Timedelta("1D")).astype(float)
-    tedges_days = ((weight_tedges - weight_tedges[0]) / pd.Timedelta("1D")).to_numpy(dtype=float)
+    weight_dt_days = dt_to_days(weight_tedges)
+    natural_dt_days = dt_to_days(tedges)
+    tedges_days = tedges_to_days(weight_tedges)
     v_in_widedge_edges = np.concatenate(([0.0], np.cumsum(flow * weight_dt_days)))
     v_in_natural_edges = np.concatenate(([0.0], np.cumsum(flow * natural_dt_days)))
     return tedges_days, v_in_widedge_edges, v_in_natural_edges
@@ -306,7 +307,7 @@ def infiltration_to_extraction(
         # Advect-then-smooth: pure advection produces ``cout_unsmoothed`` on
         # the output grid, then V-coord smoothing applies the dispersive
         # spread. The output-side V-grid and sigma_V are only needed here.
-        cout_tedges_days = ((cout_tedges - weight_tedges[0]) / pd.Timedelta("1D")).to_numpy(dtype=float)
+        cout_tedges_days = tedges_to_days(cout_tedges, ref=weight_tedges[0])
         v_out_edges = np.interp(cout_tedges_days, tedges_days, v_in_widedge_edges)
         sigma_v_out = _compute_sigma_v(
             flow=np.asarray(flow_out, dtype=float),
@@ -544,7 +545,7 @@ def extraction_to_infiltration(
         w_forward = np.asarray(w_adv @ m_v_in)
     else:
         # Advect-then-smooth: W_forward = M_v_out @ w_adv
-        cout_tedges_days = ((cout_tedges - weight_tedges[0]) / pd.Timedelta("1D")).to_numpy(dtype=float)
+        cout_tedges_days = tedges_to_days(cout_tedges, ref=weight_tedges[0])
         v_out_edges = np.interp(cout_tedges_days, tedges_days, v_in_widedge_edges)
         sigma_v_out = _compute_sigma_v(
             flow=np.asarray(flow_out, dtype=float),

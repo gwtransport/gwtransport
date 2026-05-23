@@ -99,6 +99,7 @@ import pandas as pd
 from scipy import special
 
 from gwtransport import gamma
+from gwtransport._time import dt_to_days, tedges_to_days
 from gwtransport._validation import (
     _validate_no_nan,
     _validate_non_negative_array,
@@ -121,7 +122,7 @@ def _cfrac_mean_volume(
     step_widths: npt.NDArray[np.float64],
     cumulative_volume_at_cout_tedges: npt.NDArray[np.float64],
     cumulative_volume_at_cin_tedges: npt.NDArray[np.float64],
-    tedges_days: npt.NDArray[np.float64],
+    tedges_days: npt.NDArray[np.floating],
     molecular_diffusivity: float,
     longitudinal_dispersivity: float,
     r_vpv: float,
@@ -517,7 +518,7 @@ def _infiltration_to_extraction_coeff_matrix(
         ])
 
     # Compute the cumulative flow at tedges
-    infiltration_volume = flow * (np.diff(tedges) / pd.Timedelta("1D"))  # m3
+    infiltration_volume = flow * dt_to_days(tedges)  # m3
     cumulative_volume_at_cin_tedges = np.concatenate(([0], np.cumsum(infiltration_volume)))
 
     # Compute the cumulative flow at cout_tedges
@@ -545,7 +546,7 @@ def _infiltration_to_extraction_coeff_matrix(
     isactive = cout_tedges.to_numpy()[:, None] >= tedges.to_numpy()[None, :]
 
     # Convert tedges to days for volume→time interpolation
-    tedges_days_arr = ((tedges - tedges[0]) / pd.Timedelta("1D")).values.astype(float)
+    tedges_days_arr = tedges_to_days(tedges)
 
     # Loop over each pore volume
     for i_pv in range(len(aquifer_pore_volumes)):

@@ -54,6 +54,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from gwtransport._time import tedges_to_days
 from gwtransport._validation import (
     _validate_no_nan,
     _validate_non_negative_array,
@@ -64,8 +65,8 @@ from gwtransport.advection_utils import _resolve_spinup_inputs
 from gwtransport.deposition_utils import compute_average_heights
 from gwtransport.residence_time import residence_time
 from gwtransport.utils import (
-    _make_strictly_monotone,
     compute_reverse_target,
+    cumulative_flow_volume,
     linear_interpolate,
     solve_tikhonov,
     solve_underdetermined_system,
@@ -184,8 +185,8 @@ def compute_deposition_weights(
     """
     # Convert to days relative to first time edge
     t0 = tedges[0]
-    tedges_days = ((tedges - t0) / pd.Timedelta(days=1)).values
-    cout_tedges_days = ((cout_tedges - t0) / pd.Timedelta(days=1)).values
+    tedges_days = tedges_to_days(tedges, ref=t0)
+    cout_tedges_days = tedges_to_days(cout_tedges, ref=t0)
 
     # Compute residence times and cumulative flow
     flow_values = np.asarray(flow)
@@ -199,7 +200,7 @@ def compute_deposition_weights(
     )
     cout_tedges_days_infiltration = cout_tedges_days - cout_rt_at_edges.squeeze(axis=0)
 
-    flow_cum = np.concatenate(([0.0], np.cumsum(flow_values * np.diff(tedges_days))))
+    flow_cum = cumulative_flow_volume(flow_values, np.diff(tedges_days))
 
     # Interpolate volumes at concentration time edges
     start_vol = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days_infiltration)
@@ -773,15 +774,14 @@ def spinup_duration(
     # exactly (no quantisation to flow_tedges spacing). Under constant flow
     # this matches V*R/Q.
     flow_arr = np.asarray(flow)
-    flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
-    flow_cum = np.concatenate(([0.0], np.cumsum(flow_arr * np.diff(flow_tedges_days))))
+    flow_tedges_days = tedges_to_days(flow_tedges)
+    # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
+    # by the smallest representable amount so np.interp resolves consistently at plateau levels.
+    flow_cum = cumulative_flow_volume(flow_arr, np.diff(flow_tedges_days), strictly_monotone=True)
     target_cum = retardation_factor * float(aquifer_pore_volume)
     if not flow_cum[-1] >= target_cum:
         msg = "Residence time at the first time step is NaN. This indicates that the aquifer is not fully informed: flow timeseries too short."
         raise ValueError(msg)
-    # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
-    # by the smallest representable amount so np.interp resolves consistently at plateau levels.
-    flow_cum = _make_strictly_monotone(flow_cum)
     rt_value = float(linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=target_cum))
     if np.isnan(rt_value):
         msg = "Residence time at the first time step is NaN. This indicates that the aquifer is not fully informed: flow timeseries too short."

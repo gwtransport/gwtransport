@@ -26,6 +26,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from gwtransport._time import tedges_to_days
 from gwtransport.fronttracking.events import (
     Event,
     EventType,
@@ -214,7 +215,7 @@ class FrontTracker:
             msg = "aquifer_pore_volume must be positive"
             raise ValueError(msg)
 
-        tedges_days = np.asarray((tedges - tedges[0]) / pd.Timedelta(days=1), dtype=float)
+        tedges_days = tedges_to_days(tedges)
         dt_days = np.diff(tedges_days)
         bin_volumes = flow * dt_days
         theta_edges = np.concatenate(([0.0], np.cumsum(bin_volumes)))
