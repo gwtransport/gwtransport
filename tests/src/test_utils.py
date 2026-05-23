@@ -1161,6 +1161,12 @@ def test_solve_tikhonov_resolution_underdetermined():
     assert np.all(fraction_data <= 1.0 + 1e-10), f"fraction_data has values > 1: {fraction_data}"
     # Some elements should be pulled toward target (fraction_data < 1)
     assert np.any(fraction_data < 0.99), "Expected some target-driven elements in underdetermined system"
+    # Pin the resolution scale. For this symmetric block system the model resolution
+    # diagonal is analytically 10/21: each block has inverse-gram diagonal
+    # (G^T G + 0.1 I)^-1[j, j] = 1.1/0.21, so
+    # R[j, j] = 1 - 0.1 * (1.1/0.21) = 0.10/0.21 = 10/21. A 0.5 or 0.3 rescaling of the
+    # regularization coefficient (R = 1 - c*lambda*d*G_inv) would shift this value.
+    np.testing.assert_allclose(fraction_data, 10 / 21, rtol=1e-12)
 
 
 def test_solve_tikhonov_resolution_bounds():

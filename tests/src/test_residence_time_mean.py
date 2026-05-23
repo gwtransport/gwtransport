@@ -89,8 +89,10 @@ def test_varying_extraction(constant_flow_data):
         direction="extraction_to_infiltration",
     )
 
-    # Check that the mean values are consistent
-    assert np.allclose(df_lowres.values, result_lowres[0], equal_nan=True)
+    # Check that the mean values are consistent. Resampling the high-res result and
+    # computing the low-res result directly are bit-identical here, so pin to machine
+    # precision rather than the loose np.allclose default (rtol=1e-5).
+    np.testing.assert_allclose(df_lowres.values, result_lowres[0], atol=0, rtol=1e-12, equal_nan=True)
 
 
 def test_retardation_factor(constant_flow_data):
