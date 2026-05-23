@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import requests.exceptions
+from scipy.linalg import null_space
 
 from gwtransport.examples import generate_example_data, generate_example_deposition_timeseries
 from gwtransport.utils import (
@@ -17,6 +18,7 @@ from gwtransport.utils import (
     linear_interpolate,
     partial_isin,
     solve_tikhonov,
+    solve_underdetermined_system,
     time_bin_overlap,
 )
 
@@ -1336,3 +1338,58 @@ def test_generate_example_deposition_timeseries_seed_changes_output():
     s_a, _ = generate_example_deposition_timeseries(rng=1)
     s_b, _ = generate_example_deposition_timeseries(rng=2)
     assert not np.array_equal(s_a.to_numpy(), s_b.to_numpy())
+
+
+# =============================================================================
+# Tests for solve_underdetermined_system nullspace regularization
+# =============================================================================
+
+
+def test_solve_underdetermined_system_minimizes_squared_differences():
+    """The ``squared_differences`` solution must be the true constrained minimizer.
+
+    For an underdetermined system the solution is the affine set
+    ``{x_ls + N c}`` where ``N`` spans the nullspace. The
+    ``squared_differences`` objective ``Σ (x[i+1] - x[i])^2`` is convex, so its
+    unique minimizer over that affine set is characterized by the first-order
+    optimality condition ``N^T D^T D x = 0`` (the objective gradient projected
+    onto the nullspace vanishes). A solver that merely returned *some* feasible
+    point — the prior "finite and reasonable" smoke check — would not satisfy
+    this. We assert (1) feasibility ``A x = b``, (2) nullspace-projected
+    stationarity, and (3) that no nullspace perturbation lowers the objective.
+    """
+    matrix = np.array([[1.0, 2.0, 1.0, 0.0], [0.0, 1.0, 2.0, 1.0]])
+    rhs = np.array([5.0, 4.0])
+
+    result = solve_underdetermined_system(
+        coefficient_matrix=matrix, rhs_vector=rhs, nullspace_objective="squared_differences"
+    )
+
+    # (1) Feasibility: the solution must satisfy the original equations.
+    np.testing.assert_allclose(matrix @ result, rhs, atol=1e-12)
+
+    # (2) First-order optimality: D maps x to its adjacent differences, so the
+    # objective is ||D x||^2 and its gradient is 2 D^T D x. At the constrained
+    # minimum this gradient is orthogonal to the feasible directions (the
+    # nullspace of the matrix), i.e. its projection onto N is zero.
+    diff_op = np.diff(np.eye(result.size), axis=0)
+    nullspace = null_space(matrix)
+    projected_gradient = nullspace.T @ (diff_op.T @ diff_op @ result)
+    np.testing.assert_allclose(projected_gradient, 0.0, atol=1e-12)
+
+    def objective(x):
+        return float(np.sum(np.diff(x) ** 2))
+
+    obj_result = objective(result)
+
+    # (3) Global check on the convex objective: every nullspace perturbation
+    # must have an objective at least as large as the returned solution, and
+    # the bare least-squares point (no smoothing) must be strictly worse.
+    rng = np.random.default_rng(0)
+    coeffs = rng.standard_normal((nullspace.shape[1], 500))
+    candidates = result[:, None] + nullspace @ coeffs
+    candidate_objectives = np.sum(np.diff(candidates, axis=0) ** 2, axis=0)
+    assert np.all(candidate_objectives >= obj_result - 1e-9)
+
+    x_ls = np.linalg.pinv(matrix) @ rhs
+    assert obj_result < objective(x_ls)
