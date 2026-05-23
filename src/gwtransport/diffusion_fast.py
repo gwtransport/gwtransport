@@ -1307,7 +1307,7 @@ def _validate_inputs(
         msg = "mean_streamline_length must be positive"
         raise ValueError(msg)
     if retardation_factor < 1.0:
-        msg = "retardation_factor must be >= 1.0 (anti-retardation is not physical)"
+        msg = "retardation_factor must be >= 1.0"
         raise ValueError(msg)
     if flow_out is not None:
         n_cout = len(cout_tedges) - 1
