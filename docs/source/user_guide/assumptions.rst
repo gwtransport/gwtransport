@@ -408,6 +408,7 @@ Data and Input Assumptions
 - :py:func:`~gwtransport.diffusion_fast.infiltration_to_extraction`
 - :py:func:`~gwtransport.deposition.deposition_to_extraction`
 - ``logremoval`` module (log-removal averaged across flow paths)
+- :py:func:`~gwtransport.rainfall.rainfall_to_extracted_temperature`
 
 **What this means:** The extraction well integrates flow from all contributing streamlines. There is no vertical stratification or preferential flow to specific screen intervals.
 

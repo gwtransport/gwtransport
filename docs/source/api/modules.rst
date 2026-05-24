@@ -134,6 +134,14 @@ percolation
    :undoc-members:
    :show-inheritance:
 
+rainfall
+========
+
+.. automodule:: gwtransport.rainfall
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 residence_time
 ==============
 

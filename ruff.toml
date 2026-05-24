@@ -74,6 +74,9 @@ convention = "numpy"
 "src/gwtransport/advection.py" = [
     "DOC502",  # Public entry points document ValueError; the raises happen inside _validate_advection_inputs
 ]
+"src/gwtransport/rainfall.py" = [
+    "DOC502",  # Public entry points document ValueError; the raises happen inside _validate_rainfall_inputs
+]
 "src/gwtransport/fronttracking/*.py" = [
     # Physics module: docstrings intentionally use unicode symbols (θ, α, ρ, ×, ≤, ≥) for math notation.
     "RUF002",  # Ambiguous unicode in docstrings (greek letters / math symbols are intentional)
