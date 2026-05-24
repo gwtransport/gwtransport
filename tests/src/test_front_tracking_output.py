@@ -10,6 +10,7 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 
 import numpy as np
 import pytest
+import scipy.integrate
 
 from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
 from gwtransport.fronttracking.output import (
@@ -314,7 +315,12 @@ class TestIntegrateRarefactionExact:
         assert np.isclose(integral_ac, integral_ab + integral_bc, rtol=1e-14)
 
     def test_integration_matches_numerical_quadrature(self):
-        """Exact integral matches high-order numerical quadrature."""
+        """Exact integral matches high-accuracy adaptive quadrature.
+
+        Validates the closed form itself (not a trapezoid rule's truncation): scipy's adaptive
+        Gauss-Kronrod quadrature of the pointwise concentration converges far tighter than a
+        fixed grid, so a sign/factor error in the antiderivative would surface here.
+        """
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         raref = RarefactionWave(
             theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
@@ -327,12 +333,13 @@ class TestIntegrateRarefactionExact:
         theta_end = theta_tail - 10.0
 
         integral_exact = integrate_rarefaction_exact(raref, v_outlet, theta_start, theta_end, sorption)
+        integral_quad, _ = scipy.integrate.quad(
+            lambda t: raref.concentration_at_point(v_outlet, t), theta_start, theta_end, epsabs=1e-12, epsrel=1e-12
+        )
 
-        theta_grid = np.linspace(theta_start, theta_end, 10000)
-        c_grid = np.array([raref.concentration_at_point(v_outlet, t) or 0.0 for t in theta_grid])
-        integral_numerical = float(np.trapezoid(c_grid, theta_grid))
-
-        assert np.isclose(integral_exact, integral_numerical, rtol=1e-4)
+        # The closed form matches adaptive quadrature to ~machine precision (measured ~2e-16);
+        # rtol=1e-12 keeps a safe margin while still pinning the antiderivative tightly.
+        np.testing.assert_allclose(integral_exact, integral_quad, rtol=1e-12)
 
     def test_zero_interval_returns_zero(self):
         """Integration over zero-width interval is zero."""
