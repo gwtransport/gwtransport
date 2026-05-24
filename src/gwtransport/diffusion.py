@@ -108,7 +108,7 @@ from gwtransport._validation import (
     _validate_tedges_parity,
 )
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import solve_inverse_transport
+from gwtransport.utils import cumulative_flow_volume, solve_inverse_transport
 
 # Numerical tolerance for coefficient sum to determine valid output bins
 EPSILON_COEFF_SUM = 1e-10
@@ -121,7 +121,7 @@ def _cfrac_mean_volume(
     *,
     step_widths: npt.NDArray[np.float64],
     cumulative_volume_at_cout_tedges: npt.NDArray[np.float64],
-    cumulative_volume_at_cin_tedges: npt.NDArray[np.float64],
+    cumulative_volume_at_cin_tedges: npt.NDArray[np.floating],
     tedges_days: npt.NDArray[np.floating],
     molecular_diffusivity: float,
     longitudinal_dispersivity: float,
@@ -518,8 +518,7 @@ def _infiltration_to_extraction_coeff_matrix(
         ])
 
     # Compute the cumulative flow at tedges
-    infiltration_volume = flow * dt_to_days(tedges)  # m3
-    cumulative_volume_at_cin_tedges = np.concatenate(([0], np.cumsum(infiltration_volume)))
+    cumulative_volume_at_cin_tedges = cumulative_flow_volume(flow, dt_to_days(tedges))  # m3
 
     # Compute the cumulative flow at cout_tedges
     cumulative_volume_at_cout_tedges = np.interp(cout_tedges, tedges, cumulative_volume_at_cin_tedges).astype(float)
