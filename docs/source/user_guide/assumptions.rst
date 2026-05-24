@@ -77,8 +77,6 @@ When using the ``advection`` module alone, only macrodispersion (spreading from 
 - :mod:`gwtransport.diffusion_fast` for approximate but fast Gaussian smoothing
 - :mod:`gwtransport.diffusion` for analytical advection-dispersion solutions
 
-Alternatively, use the "equivalent APVD std" approach described in :doc:`/examples/05_Diffusion_Dispersion` to convert microdispersion to equivalent APVD spreading, allowing continued use of the fast advection module.
-
 .. _assumption-steady-streamlines:
 
 2. Steady Streamlines

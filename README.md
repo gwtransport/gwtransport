@@ -53,7 +53,7 @@ cout = infiltration_to_extraction(
 # Note: Initial output values are NaN until the first cin value has fully passed the aquifer
 ```
 
-This efficiently computes `cout` with 1D transport for every aquifer pore volume and then averages over the aquifer pore volumes. Diffusion is demonstrated in [example notebook 5](https://gwtransport.github.io/gwtransport/examples/05_Diffusion_Dispersion.html).
+This efficiently computes `cout` with 1D transport for every aquifer pore volume and then averages over the aquifer pore volumes.
 
 ### 2. Temperature/Electrical conductivity Tracer Test
 
@@ -100,9 +100,8 @@ Examples:
 2. [Estimate the residence time distribution](https://gwtransport.github.io/gwtransport/examples/02_Residence_Time_Analysis.html)
 3. [Log removal efficiency analysis](https://gwtransport.github.io/gwtransport/examples/03_Pathogen_Removal_Bank_Filtration.html)
 4. [Deposition analysis](https://gwtransport.github.io/gwtransport/examples/04_Deposition_Analysis_Bank_Filtration.html)
-5. [Diffusion and dispersion in solute transport](https://gwtransport.github.io/gwtransport/examples/05_Diffusion_Dispersion.html)
-6. [Bank filtration with TIMFlow: streamtubes to APVD](https://gwtransport.github.io/gwtransport/examples/08_bank_filtration_timflow.html)
-7. [Advection with non-linear sorption](https://gwtransport.github.io/gwtransport/examples/10_Advection_with_non_linear_sorption.html)
+5. [Bank filtration with TIMFlow: streamtubes to APVD](https://gwtransport.github.io/gwtransport/examples/08_bank_filtration_timflow.html)
+6. [Advection with non-linear sorption](https://gwtransport.github.io/gwtransport/examples/10_Advection_with_non_linear_sorption.html)
 
 Full documentation: [gwtransport.github.io/gwtransport](https://gwtransport.github.io/gwtransport/)
 
