@@ -104,7 +104,7 @@ class TestAnalyticalCorrectness:
             porosity=porosity,
         )
 
-        # Verify shock was created and has correct velocity to machine precision
+        # Verify shock was created and has correct velocity to machine precision.
         sorption = FreundlichSorption(k_f=freundlich_k, n=freundlich_n, bulk_density=bulk_density, porosity=porosity)
 
         shocks = [w for w in structure[0]["waves"] if isinstance(w, ShockWave)]
@@ -112,7 +112,14 @@ class TestAnalyticalCorrectness:
 
         for shock in shocks:
             assert shock.speed is not None
-            v_expected = sorption.shock_speed(shock.c_left, shock.c_right)
+            # Independent Rankine-Hugoniot speed in (V, θ): the shock dV/dθ is
+            # (c_R − c_L) / (C_T(c_R) − C_T(c_L)). Computing it directly from
+            # total_concentration (rather than re-calling sorption.shock_speed,
+            # which sets ShockWave.speed) makes this a real cross-check, so a
+            # systematic shock-speed error is caught.
+            ct_left = float(sorption.total_concentration(shock.c_left))
+            ct_right = float(sorption.total_concentration(shock.c_right))
+            v_expected = (shock.c_right - shock.c_left) / (ct_right - ct_left)
             np.testing.assert_allclose(
                 shock.speed,
                 v_expected,

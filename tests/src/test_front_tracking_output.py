@@ -441,6 +441,116 @@ class TestComputeBinAveragedConcentrationExact:
         assert np.allclose(c_avg, c_breakthrough, rtol=1e-3)
 
 
+class TestConservationFormBinAverage:
+    """Test the conservation-form branch of ``compute_bin_averaged_concentration_exact``.
+
+    Passing ``cin`` + ``theta_edges_inlet`` switches the function to the
+    ``c_avg = (Δm_in − Δm_dom) / Δθ`` identity (the recommended multi-DSW
+    path, carrying the FP-cancellation clamp and the post-inlet ``UserWarning``).
+    Tests without those kwargs only exercise the legacy segment path.
+    """
+
+    def test_conservation_form_bin_average_matches_legacy(self):
+        """Conservation form agrees with the legacy segment path for a single shock.
+
+        For a canonical single ShockWave (``c_right = 0``) crossing the outlet,
+        both paths are valid. They must agree to the floating-point
+        cancellation bound of the ``m_in − m_dom`` subtraction, which is
+        ``atol ≈ k · ε_machine · max(m_in) / min(Δθ)`` (the two cumulative-mass
+        endpoint evaluations each carry ~``ε·m`` rounding, amplified by
+        ``1/Δθ``). This bound is derived from the inputs, not assumed.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        c_left = 10.0
+        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=c_left, c_right=0.0, sorption=sorption, is_active=True)
+        waves = [shock]
+        v_outlet = 300.0
+
+        assert shock.speed is not None
+        theta_cross = v_outlet / shock.speed
+
+        # Offset the edges so none lands exactly on the crossing (a coarse edge
+        # exactly at the crossing would expose the legacy path's arrival-bin
+        # discretization, not an FP effect) and use fine bins.
+        theta_edges_out = np.linspace(7.0, theta_cross * 2.0 + 7.0, 200)
+        # Inlet history consistent with the wave: sustained c_left, window
+        # comfortably covering the output range.
+        theta_edges_inlet = np.array([0.0, theta_edges_out[-1] * 3.0])
+        cin = np.array([c_left])
+
+        c_legacy = compute_bin_averaged_concentration_exact(theta_edges_out, v_outlet, waves, sorption)
+        c_cons = compute_bin_averaged_concentration_exact(
+            theta_edges_out, v_outlet, waves, sorption, cin=cin, theta_edges_inlet=theta_edges_inlet
+        )
+
+        # Derived FP-cancellation bound (factor 8 covers both endpoint evals
+        # plus the final difference).
+        eps = np.finfo(float).eps
+        m_in_max = compute_cumulative_inlet_mass(float(theta_edges_out[-1]), cin, theta_edges_inlet)
+        dtheta_min = float(np.min(np.diff(theta_edges_out)))
+        atol = 8.0 * eps * m_in_max / dtheta_min
+
+        assert np.max(np.abs(c_cons - c_legacy)) <= atol
+
+    def test_conservation_form_no_warning_for_in_window_output(self, recwarn):
+        """In-window output range emits no UserWarning under the conservation form.
+
+        When every output θ-edge lies inside ``[0, theta_edges_inlet[-1]]`` the
+        inlet integral and the wave list share a consistent θ range, so the
+        FP-cancellation diagnostic must stay silent.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        c_left = 10.0
+        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=c_left, c_right=0.0, sorption=sorption, is_active=True)
+        waves = [shock]
+        v_outlet = 300.0
+
+        assert shock.speed is not None
+        theta_cross = v_outlet / shock.speed
+
+        theta_edges_out = np.linspace(7.0, theta_cross * 2.0 + 7.0, 50)
+        # Inlet window strictly past the largest output edge.
+        theta_edges_inlet = np.array([0.0, theta_edges_out[-1] * 3.0])
+        cin = np.array([c_left])
+
+        compute_bin_averaged_concentration_exact(
+            theta_edges_out, v_outlet, waves, sorption, cin=cin, theta_edges_inlet=theta_edges_inlet
+        )
+
+        assert len(recwarn.list) == 0, "No warning expected for output bins inside the inlet window"
+
+    def test_conservation_form_warns_when_output_exceeds_inlet_window(self):
+        """Driving output edges past ``theta_edges_inlet[-1]`` fires the UserWarning.
+
+        Once the output range exceeds the inlet window, ``m_in`` saturates at
+        the last injected mass while the wave list keeps evolving, producing
+        FP-cancellation residuals on inconsistent θ ranges. The function must
+        surface this as a ``UserWarning`` (and still clamp the result to the
+        ``cout >= 0`` contract).
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        c_left = 10.0
+        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=c_left, c_right=0.0, sorption=sorption, is_active=True)
+        waves = [shock]
+        v_outlet = 300.0
+
+        assert shock.speed is not None
+        theta_cross = v_outlet / shock.speed
+
+        theta_edges_out = np.linspace(7.0, theta_cross * 2.0 + 7.0, 50)
+        # Inlet window ends BEFORE the output range — output edges exceed it.
+        theta_edges_inlet = np.array([0.0, theta_cross * 0.5])
+        cin = np.array([c_left])
+
+        with pytest.warns(UserWarning, match="exceeding"):
+            result = compute_bin_averaged_concentration_exact(
+                theta_edges_out, v_outlet, waves, sorption, cin=cin, theta_edges_inlet=theta_edges_inlet
+            )
+
+        # The clamp preserves the non-negativity contract despite the warning.
+        assert np.all(result >= 0.0)
+
+
 class TestMachinePrecision:
     """Test that all functions maintain machine precision."""
 

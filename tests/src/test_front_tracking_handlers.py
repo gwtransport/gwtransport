@@ -421,19 +421,32 @@ class TestPhysicsCorrectness:
         assert new_waves[0].satisfies_entropy(), "Shock must satisfy entropy"
 
     def test_mass_conservation_in_shock_merger(self, freundlich_sorption):
-        """Test that shock merger conserves mass (Rankine-Hugoniot)."""
-        shock1 = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=5.0, sorption=freundlich_sorption)
+        """Merged shock connects the outer states of the two parent shocks.
 
+        Entropy admissibility alone does not pin the merge: a shock connecting
+        the *wrong* outer pair can still be entropy-admissible. The
+        Rankine-Hugoniot product requires the merged shock to inherit
+        ``c_left`` from the faster (upstream) parent and ``c_right`` from the
+        slower (downstream) parent. Speeds are verified distinct in setup.
+        """
+        # n>1: higher C is faster. The two shocks have distinct speeds.
+        shock1 = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=5.0, sorption=freundlich_sorption)
         shock2 = ShockWave(theta_start=5.0, v_start=0.0, c_left=8.0, c_right=2.0, sorption=freundlich_sorption)
+
+        assert shock1.speed is not None
+        assert shock2.speed is not None
+        assert shock1.speed != shock2.speed, "Setup requires distinct shock speeds to pin the merge product"
+
+        faster, slower = (shock1, shock2) if shock1.speed > shock2.speed else (shock2, shock1)
 
         new_waves = handle_shock_collision(shock1, shock2, theta_event=25.0, v_event=200.0)
 
-        # MUST create merged shock
         assert len(new_waves) == 1, "Expected exactly one merged shock"
         merged = new_waves[0]
-        # Merged shock should satisfy Rankine-Hugoniot
-        # (already verified by satisfies_entropy which checks RH)
         assert merged.satisfies_entropy(), "Merged shock must satisfy entropy and Rankine-Hugoniot"
+        # Outer-state product: faster parent's c_left, slower parent's c_right.
+        assert merged.c_left == faster.c_left
+        assert merged.c_right == slower.c_right
 
 
 class TestRarefactionCharacteristicCollisionHandler:
@@ -897,6 +910,42 @@ class TestShockRarefactionHeadCollisionPhysics:
         # Original shock should be deactivated
         assert not shock.is_active, "Original shock should be deactivated"
 
+    def test_head_collision_creates_left_decay_dsw(self, freundlich_n_gt_1):
+        """Head collision is resolved by one left-decay DecayingShockWave.
+
+        Mirror of the tail-collision DSW test (``decay_side='right'``) for the
+        head geometry. When the rarefaction head is faster than the leading
+        shock (so the degenerate ``return []`` branch is NOT taken), the exact
+        handler emits a single DecayingShockWave whose decaying side is the
+        left: ``c_decay_initial = raref.c_head``, ``c_fixed = shock.c_right``,
+        ``c_fan_tail = raref.c_tail``. Returning ``[]`` (dropping the DSW) is
+        caught here.
+        """
+        # n>1: higher C is faster. A high-C rarefaction head (fast) catches a
+        # small slow leading shock; head speed must exceed the shock speed.
+        shock = ShockWave(theta_start=0.0, v_start=50.0, c_left=4.0, c_right=2.0, sorption=freundlich_n_gt_1)
+        raref = RarefactionWave(theta_start=5.0, v_start=0.0, c_head=12.0, c_tail=6.0, sorption=freundlich_n_gt_1)
+
+        # Verify the head is faster than the shock so the DSW branch is taken
+        # (otherwise the handler hits the degenerate ``return []``).
+        assert shock.speed is not None
+        assert characteristic_speed(raref.c_head, freundlich_n_gt_1) > shock.speed
+
+        new_waves = handle_shock_rarefaction_collision(
+            shock, raref, theta_event=20.0, v_event=150.0, boundary_type="head"
+        )
+
+        assert len(new_waves) == 1
+        dsw = new_waves[0]
+        assert isinstance(dsw, DecayingShockWave)
+        assert dsw.decay_side == "left"
+        assert dsw.c_decay_initial == raref.c_head
+        assert dsw.c_fixed == shock.c_right
+        assert dsw.c_fan_tail == raref.c_tail
+        # Both parents deactivated at the collision.
+        assert not shock.is_active
+        assert not raref.is_active
+
 
 # =============================================================================
 # Physics tests for handle_flow_change (lines 901-967)
@@ -1089,41 +1138,50 @@ class TestShockCollisionEdgeCases:
         """Standard Freundlich sorption for testing."""
         return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-    def test_shock_collision_velocity_ordering(self, freundlich_sorption):
-        """Test lines 230-235: second shock faster than first.
+    def test_shock_merger_connects_outer_states(self, freundlich_sorption):
+        """Merged shock connects the outer states regardless of argument order.
 
-        When shock2.speed > shock1.speed, the merged shock takes
-        c_left from shock2 and c_right from shock1.
+        The merged shock inherits ``c_left`` from the faster (upstream) parent
+        and ``c_right`` from the slower (downstream) parent (Rankine-Hugoniot
+        product). This must hold for BOTH argument orderings; the merge is a
+        property of the physical pair, not of the call order. The two shocks
+        are constructed with verified-distinct speeds so the product is
+        unambiguous.
         """
-        # Create shock1 that is SLOWER
-        shock1 = ShockWave(
-            theta_start=0.0,
-            v_start=0.0,
-            c_left=12.0,  # High C upstream
-            c_right=10.0,  # Moderate C downstream - small jump, slower
-            sorption=freundlich_sorption,
-        )
+        # n>1: higher C is faster. shock_a and shock_b have distinct speeds.
+        shock_a = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=5.0, sorption=freundlich_sorption)
+        shock_b = ShockWave(theta_start=5.0, v_start=0.0, c_left=8.0, c_right=2.0, sorption=freundlich_sorption)
 
-        # Create shock2 that is FASTER
-        shock2 = ShockWave(
-            theta_start=5.0,
-            v_start=0.0,
-            c_left=15.0,  # Very high C upstream
-            c_right=5.0,  # Low C downstream - large jump, faster
-            sorption=freundlich_sorption,
-        )
+        assert shock_a.speed is not None
+        assert shock_b.speed is not None
+        assert shock_a.speed != shock_b.speed, "Setup requires distinct shock speeds"
 
-        # Check velocity ordering
-        assert shock1.speed is not None
-        assert shock2.speed is not None
-        if shock2.speed > shock1.speed:
-            # Lines 233-235 will execute
-            new_waves = handle_shock_collision(shock1, shock2, theta_event=30.0, v_event=200.0)
+        faster, slower = (shock_a, shock_b) if shock_a.speed > shock_b.speed else (shock_b, shock_a)
+        expected_c_left = faster.c_left
+        expected_c_right = slower.c_right
 
+        for first, second in ((shock_a, shock_b), (shock_b, shock_a)):
+            s1 = ShockWave(
+                theta_start=first.theta_start,
+                v_start=0.0,
+                c_left=first.c_left,
+                c_right=first.c_right,
+                sorption=freundlich_sorption,
+            )
+            s2 = ShockWave(
+                theta_start=second.theta_start,
+                v_start=0.0,
+                c_left=second.c_left,
+                c_right=second.c_right,
+                sorption=freundlich_sorption,
+            )
+
+            new_waves = handle_shock_collision(s1, s2, theta_event=30.0, v_event=200.0)
+
+            assert len(new_waves) == 1
             merged = new_waves[0]
-            # shock2 (faster) provides c_left, shock1 (slower) provides c_right
-            assert merged.c_left == shock2.c_left
-            assert merged.c_right == shock1.c_right
+            assert merged.c_left == expected_c_left
+            assert merged.c_right == expected_c_right
 
 
 class TestShockCharacteristicEdgeCases:
