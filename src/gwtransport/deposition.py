@@ -775,13 +775,18 @@ def spinup_duration(
     # this matches V*R/Q.
     flow_arr = np.asarray(flow)
     flow_tedges_days = tedges_to_days(flow_tedges)
-    # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
-    # by the smallest representable amount so np.interp resolves consistently at plateau levels.
-    flow_cum = cumulative_flow_volume(flow_arr, np.diff(flow_tedges_days), strictly_monotone=True)
+    dt_days = np.diff(flow_tedges_days)
     target_cum = retardation_factor * float(aquifer_pore_volume)
-    if not flow_cum[-1] >= target_cum:
+    # Feasibility guard on the *un-bumped* cumulative total: the request is infeasible iff
+    # R*V_pore exceeds the true total infiltrated volume. (The monotone bump below would
+    # otherwise lift a trailing Q=0 plateau above target_cum and admit an infeasible request.)
+    flow_cum_raw = cumulative_flow_volume(flow_arr, dt_days)
+    if not flow_cum_raw[-1] >= target_cum:
         msg = "Residence time at the first time step is NaN. This indicates that the aquifer is not fully informed: flow timeseries too short."
         raise ValueError(msg)
+    # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
+    # by the smallest representable amount so np.interp resolves consistently at plateau levels.
+    flow_cum = cumulative_flow_volume(flow_arr, dt_days, strictly_monotone=True)
     rt_value = float(linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=target_cum))
     if np.isnan(rt_value):
         msg = "Residence time at the first time step is NaN. This indicates that the aquifer is not fully informed: flow timeseries too short."
