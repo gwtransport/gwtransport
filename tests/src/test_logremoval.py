@@ -16,6 +16,7 @@ from gwtransport.logremoval import (
     log10_decay_rate_to_decay_rate,
     parallel_mean,
     residence_time_to_log_removal,
+    time_until_log_removal_breach,
 )
 from gwtransport.residence_time import residence_time as compute_residence_time
 
@@ -913,3 +914,109 @@ def test_residence_time_to_log_removal_negative_residence_time():
     """Negative residence time returns negative log removal; no validation is performed."""
     result = residence_time_to_log_removal(residence_times=-5.0, log10_decay_rate=0.2)
     assert_allclose(result, -1.0, rtol=1e-15)
+
+
+_PR6_APV = {"apv_alpha": 2.0, "apv_beta": 100.0, "log10_decay_rate": 0.5}
+_PR6_TARGET = 2.0
+
+
+def _pr6_q_star():
+    """Threshold flow Q* (effective LR == target) for the #92 test parameters."""
+    return gamma_find_flow_for_target_mean(target_mean=_PR6_TARGET, **_PR6_APV)
+
+
+class TestTimeUntilLogRemovalBreach:
+    """Tests for ``time_until_log_removal_breach`` (#92, margin-to-target-flow semantics)."""
+
+    def test_threshold_flow_yields_target_log_removal(self):
+        """Q* is exactly the flow at which the effective gamma-mean LR equals the target.
+
+        Pins the threshold semantics: at Q* the residence-time gamma has scale ``apv_beta/Q*``,
+        so :func:`gamma_mean` returns the target to machine precision.
+        """
+        q_star = _pr6_q_star()
+        lr_at_q_star = gamma_mean(
+            rt_alpha=_PR6_APV["apv_alpha"],
+            rt_beta=_PR6_APV["apv_beta"] / q_star,
+            log10_decay_rate=_PR6_APV["log10_decay_rate"],
+        )
+        assert_allclose(lr_at_q_star, _PR6_TARGET, rtol=1e-12)
+
+    def test_breach_detected_at_first_bin_above_threshold(self):
+        """Headroom counts days from each bin's start to the first future bin with flow > Q*."""
+        q_star = _pr6_q_star()  # ~12.79 for these parameters
+        tedges = pd.date_range("2025-01-01", periods=5, freq="D")  # daily edges 0..4
+        # Two bins safely below Q*, then two above: the breach starts at bin index 2.
+        flow = np.array([q_star * 0.5, q_star * 0.9, q_star * 1.2, q_star * 1.3])
+
+        headroom = time_until_log_removal_breach(flow=flow, tedges=tedges, target_log_removal=_PR6_TARGET, **_PR6_APV)
+        # Breach at day 2: headroom = [2-0, 2-1, 0, 0], exact edge arithmetic.
+        assert_allclose(headroom, [2.0, 1.0, 0.0, 0.0], rtol=0, atol=0)
+
+    def test_never_breaches_returns_nan(self):
+        """A flow series always at or below Q* never breaches: all-NaN headroom."""
+        q_star = _pr6_q_star()
+        tedges = pd.date_range("2025-01-01", periods=4, freq="D")
+        flow = np.full(3, q_star * 0.5)
+        headroom = time_until_log_removal_breach(flow=flow, tedges=tedges, target_log_removal=_PR6_TARGET, **_PR6_APV)
+        assert np.all(np.isnan(headroom))
+
+    def test_already_breaching_is_zero_headroom(self):
+        """A flow series entirely above Q* is in breach everywhere: zero headroom."""
+        q_star = _pr6_q_star()
+        tedges = pd.date_range("2025-01-01", periods=4, freq="D")
+        flow = np.full(3, q_star * 1.5)
+        headroom = time_until_log_removal_breach(flow=flow, tedges=tedges, target_log_removal=_PR6_TARGET, **_PR6_APV)
+        assert_allclose(headroom, 0.0, rtol=0, atol=0)
+
+    def test_analytic_ramp_crossing_time(self):
+        """A linearly ramping flow gives headroom equal to the exact edge-grid crossing gap."""
+        q_star = _pr6_q_star()
+        tedges = pd.date_range("2025-01-01", periods=11, freq="D")  # daily edges 0..10
+        flow = np.linspace(q_star * 0.6, q_star * 1.4, 10)  # monotone, crosses Q* once
+
+        headroom = time_until_log_removal_breach(flow=flow, tedges=tedges, target_log_removal=_PR6_TARGET, **_PR6_APV)
+
+        first_breach = int(np.flatnonzero(flow > q_star)[0])
+        edge_days = np.arange(11.0)
+        idx = np.arange(10)
+        # Bins before the crossing count days to the first breaching edge; from the crossing on, 0.
+        expected = np.where(idx < first_breach, edge_days[first_breach] - edge_days[:10], 0.0)
+        assert_allclose(headroom, expected, rtol=0, atol=0)
+
+    def test_validation_rejects_bad_inputs(self):
+        """tedges/flow parity, NaN, and negative flow are rejected at the boundary."""
+        tedges = pd.date_range("2025-01-01", periods=4, freq="D")  # needs 3 flow bins
+        common = {"target_log_removal": _PR6_TARGET, **_PR6_APV}
+        with pytest.raises(ValueError, match="tedges"):
+            time_until_log_removal_breach(flow=np.ones(2), tedges=tedges, **common)
+        with pytest.raises(ValueError, match="non-negative"):
+            time_until_log_removal_breach(flow=np.array([1.0, -1.0, 1.0]), tedges=tedges, **common)
+        with pytest.raises(ValueError, match="NaN"):
+            time_until_log_removal_breach(flow=np.array([1.0, np.nan, 1.0]), tedges=tedges, **common)
+
+    def test_exact_threshold_flow_is_not_a_breach(self):
+        """Flow exactly equal to Q* is not a breach (strict ``>``); such bins return NaN.
+
+        Pins the boundary so a future change of ``>`` to ``>=`` would fail this test.
+        """
+        q_star = _pr6_q_star()
+        tedges = pd.date_range("2025-01-01", periods=4, freq="D")
+        flow = np.full(3, q_star)  # exactly at the threshold
+        headroom = time_until_log_removal_breach(flow=flow, tedges=tedges, target_log_removal=_PR6_TARGET, **_PR6_APV)
+        assert np.all(np.isnan(headroom))
+
+    def test_non_uniform_edges_and_positive_loc(self):
+        """Headroom counts day-offsets (not bin indices) and handles apv_loc > 0 (numerical Q*).
+
+        A 5-day-wide middle bin makes the day-offset headroom (6, 5, 0) differ from a naive
+        bin-count (2, 1, 0), pinning that ``edge_days`` -- not the bin index -- drives the result.
+        A positive ``apv_loc`` exercises the brentq branch of ``gamma_find_flow_for_target_mean``.
+        """
+        apv = {"apv_alpha": 2.0, "apv_beta": 100.0, "apv_loc": 5.0, "log10_decay_rate": 0.5}
+        q_star = gamma_find_flow_for_target_mean(target_mean=_PR6_TARGET, **apv)
+        # Edges at days [0, 1, 6, 7]: breach starts at the wide bin's left edge (day 6).
+        tedges = pd.DatetimeIndex(["2025-01-01", "2025-01-02", "2025-01-07", "2025-01-08"])
+        flow = np.array([q_star * 0.5, q_star * 0.5, q_star * 1.5])
+        headroom = time_until_log_removal_breach(flow=flow, tedges=tedges, target_log_removal=_PR6_TARGET, **apv)
+        assert_allclose(headroom, [6.0, 5.0, 0.0], rtol=0, atol=0)
