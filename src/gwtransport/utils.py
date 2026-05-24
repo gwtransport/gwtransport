@@ -16,6 +16,10 @@ Available functions:
   array by ``k * ulp(max)`` so it becomes strictly monotone. Used before V → t inversions to
   prevent ``np.interp`` from silently picking one limit at plateau levels.
 
+- :func:`cumulative_flow_volume` - Cumulative infiltrated/extracted volume from per-bin flow
+  rates and bin widths, prepended with a leading zero. Optionally bumped to strict
+  monotonicity for V → t inversions.
+
 - :func:`linear_interpolate` - Linear interpolation using numpy's optimized interp function.
   Automatically handles unsorted data with configurable extrapolation (None for clamping,
   float for constant values). Handles multi-dimensional query arrays.
@@ -170,6 +174,41 @@ def _make_strictly_monotone(arr: npt.ArrayLike) -> npt.NDArray[np.floating]:
     last_nondup = np.maximum.accumulate(np.where(is_dup, -1, idx))
     cumcount = np.where(is_dup, idx - last_nondup, 0)
     return arr + cumcount * (_DUP_BUMP_ULPS * ulp_max)
+
+
+def cumulative_flow_volume(
+    flow: npt.ArrayLike, dt_days: npt.ArrayLike, *, strictly_monotone: bool = False
+) -> npt.NDArray[np.floating]:
+    """Cumulative infiltrated/extracted volume from per-bin flow rates.
+
+    Multiplies each per-bin flow rate by its bin width and accumulates, with a
+    leading zero prepended so the result has one entry per bin edge (n+1 values
+    for n bins). The result is the cumulative volume ``V`` at each time edge.
+
+    Parameters
+    ----------
+    flow : array-like
+        Flow rate per bin (m³/day), length n.
+    dt_days : array-like
+        Bin widths in days, length n (e.g. ``numpy.diff`` of edge days).
+    strictly_monotone : bool, optional
+        When ``True``, bump consecutive duplicates (plateaus from ``Q = 0``
+        bins) via :func:`_make_strictly_monotone` so the cumulative volume is
+        strictly increasing. Required before a V → t inversion; leave ``False``
+        when the plateaus must be preserved. Default is ``False``.
+
+    Returns
+    -------
+    ndarray
+        Cumulative volume at each edge (length ``len(flow) + 1``), starting at
+        zero.
+
+    See Also
+    --------
+    _make_strictly_monotone : Bump duplicates before V → t inversion.
+    """
+    flow_cum = np.concatenate(([0.0], np.cumsum(np.asarray(flow) * np.asarray(dt_days))))
+    return _make_strictly_monotone(flow_cum) if strictly_monotone else flow_cum
 
 
 def linear_interpolate(
