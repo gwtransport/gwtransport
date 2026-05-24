@@ -24,7 +24,7 @@ from gwtransport.fronttracking.output import (
     concentration_at_point,
 )
 from gwtransport.fronttracking.solver import FrontTracker
-from gwtransport.fronttracking.waves import RarefactionWave, ShockWave
+from gwtransport.fronttracking.waves import DecayingShockWave, RarefactionWave, ShockWave
 
 freundlich_sorptions = [
     FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3),
@@ -1044,3 +1044,146 @@ class TestParametricMassBalance:
         assert np.isclose(mass_out, mass_in, rtol=1e-13), (
             f"zero-flow interval: mass_in={mass_in:.4f}, mass_out={mass_out:.4f}"
         )
+
+
+class TestIndependentDomainMass:
+    """De-tautologized domain-mass checks (FT-C1).
+
+    Existing mass-balance tests assert ``m_dom + m_out == m_in`` where
+    ``m_out = m_in - m_dom`` *by definition* (output.py), so the residual is
+    algebraically zero regardless of any bug in ``compute_domain_mass``. These
+    tests instead reconstruct the domain mass by an INDEPENDENT route:
+    ``c(v, θ)`` pointwise via ``concentration_at_point`` on a fine v-grid,
+    mapped through ``sorption.total_concentration`` and integrated with
+    ``np.trapezoid``. They catch the ×1.5 domain-mass mutation the existing
+    suite misses.
+    """
+
+    @pytest.mark.parametrize(
+        ("sorption", "rtol"),
+        [
+            (FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3), 3e-3),
+            (LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3), 3e-3),
+        ],
+    )
+    def test_domain_mass_matches_independent_trapezoid(self, sorption, rtol):
+        """``compute_domain_mass(θ)`` == ∫₀^{v_outlet} C_T(c(v, θ)) dv at a mid-transit θ.
+
+        The reference integrates a pointwise concentration reconstruction, a route
+        that shares no algebra with the ``m_in − m_dom`` identity. The rarefaction/decaying
+        fan has kinks, so ``np.trapezoid`` converges at first order; the measured worst-case
+        relative error at 2000 points is ~1.5e-3 (Langmuir), so rtol=3e-3 leaves ~2× headroom.
+        """
+        v_outlet = 200.0
+        n_bins = 80
+        cin = np.zeros(n_bins)
+        cin[5:15] = 4.0  # canonical 0→4→0 pulse; mass_in = 4·10·100 = 4000
+        flow = np.full(n_bins, 100.0)
+        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="D")
+
+        tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
+        tr.run(max_iterations=100000)
+        waves = tr.state.waves
+
+        # Mid-transit θ where the domain holds mass and a self-similar fan is active.
+        theta = 5000.0
+        assert any(isinstance(w, (DecayingShockWave, RarefactionWave)) and w.was_active_at(theta) for w in waves), (
+            "test setup invalid: expected an active fan in the domain at θ"
+        )
+
+        m_dom = compute_domain_mass(theta=theta, v_outlet=v_outlet, waves=waves, sorption=sorption)
+        assert m_dom > 1.0, "test setup invalid: domain must hold mass at θ"
+
+        # Independent reference: reconstruct c(v, θ) on a fine v-grid → C_T → trapezoid.
+        v_grid = np.linspace(0.0, v_outlet, 2000)
+        c_values = np.array([concentration_at_point(float(v), float(theta), waves, sorption) for v in v_grid])
+        c_total = sorption.total_concentration(c_values)
+        m_dom_independent = float(np.trapezoid(c_total, v_grid))
+
+        np.testing.assert_allclose(m_dom, m_dom_independent, rtol=rtol)
+
+    def test_domain_mass_exact_steady_state_plateau(self):
+        """At steady state ``compute_domain_mass`` == C_T(c_∞)·v_outlet to machine precision.
+
+        For a sustained input ending in ``c_∞ > 0`` the domain fills to the uniform plateau
+        ``c = c_∞``; the spatial mass is then the exact closed form ``C_T(c_∞)·v_outlet``. This
+        reference is independent of the ``m_in − m_dom`` identity and exact (~1e-14), so it pins
+        ``compute_domain_mass`` far more tightly than the first-order trapezoid route.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        v_outlet = 200.0
+        c_inf = 5.0
+        n_bins = 80
+        cin = np.full(n_bins, c_inf)  # sustained input → domain saturates to c_∞
+        flow = np.full(n_bins, 100.0)
+        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="D")
+
+        tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
+        tr.run(max_iterations=100000)
+
+        # θ well past full saturation (front transit ≪ θ_max for this geometry).
+        theta = float(tr.state.theta_edges[-1])
+        m_dom = compute_domain_mass(theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
+        m_dom_exact = float(sorption.total_concentration(c_inf)) * v_outlet
+
+        np.testing.assert_allclose(m_dom, m_dom_exact, rtol=1e-12)
+
+
+class TestEndToEndConservation:
+    """End-to-end conservation via an independently-integrated breakthrough curve (FT-M1).
+
+    The ``test_square_pulse_*`` / ``test_flow_change_*`` / ``test_zero_flow_*`` checks compute
+    outlet mass through ``compute_total_outlet_mass``, which for ``cin[-1]=0`` collapses to
+    ``Σcin·Δθ`` — the same expression as ``mass_in`` — and never touches the breakthrough
+    machinery. Here outlet mass is obtained by integrating ``compute_breakthrough_curve`` over
+    θ (which exercises ``concentration_at_point`` at the outlet and the θ-map) and adding
+    ``compute_domain_mass(θ_max)``; the total is compared to ``Σcin·Δθ``. A bug in the outlet
+    concentration route (invisible to the analytic-total tests) breaks this; verified by
+    mutation. Time-varying flow makes the θ-map non-trivial, but a *uniform* θ-rescaling is
+    conservation-invariant, so this test does not catch a uniform θ-scale factor — only
+    outlet-concentration-route bugs and gross θ-map corruption (the latter via the setup guard).
+    """
+
+    @pytest.mark.parametrize(
+        "sorption",
+        [
+            FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3),
+            LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3),
+        ],
+    )
+    def test_breakthrough_integral_plus_domain_mass_conserves(self, sorption):
+        """∫ c_out dθ + m_dom(θ_max) == Σ cin·Δθ under time-varying flow.
+
+        v_outlet is small enough that breakthrough is nearly complete by θ_max, so the
+        breakthrough integral (not the residual domain mass) carries the conservation weight
+        and genuinely exercises the outlet concentration route. The measured trapezoid defect
+        on the 2000-pt θ-grid is ~1.6e-3; rtol=5e-3 sits at ~3× that floor (per-plan: 3–5×).
+        """
+        v_outlet = 50.0  # breakthrough completes within θ_max
+        n_bins = 80
+        cin = np.zeros(n_bins)
+        cin[5:15] = 4.0
+        # Three flow regimes, including a doubling AFTER the pulse: in (V, θ) the wave
+        # dynamics are flow-independent and flow enters only via theta_edges.
+        flow = np.concatenate([np.full(20, 100.0), np.full(20, 50.0), np.full(20, 200.0), np.full(20, 100.0)])
+        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="D")
+
+        tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
+        tr.run(max_iterations=100000)
+
+        theta_edges = tr.state.theta_edges
+        theta_max = float(theta_edges[-1])
+        mass_in = float(np.sum(cin * np.diff(theta_edges)))
+
+        # Independently integrate the breakthrough curve over θ (exercises concentration_at_point).
+        theta_grid = np.linspace(0.0, theta_max, 2000)
+        cout = compute_breakthrough_curve(theta_grid, v_outlet, tr.state.waves, sorption)
+        m_out = float(np.trapezoid(cout, theta_grid))
+
+        m_dom_end = compute_domain_mass(theta=theta_max, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
+
+        # Most of the pulse must have exited so the breakthrough integral carries the weight.
+        assert m_out > 0.5 * mass_in, "test setup invalid: breakthrough barely progressed; outlet route untested"
+
+        total = m_out + m_dom_end
+        np.testing.assert_allclose(total, mass_in, rtol=5e-3)

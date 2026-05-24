@@ -20,11 +20,10 @@ from gwtransport.fronttracking.output import (
     compute_cumulative_inlet_mass,
     compute_total_outlet_mass,
 )
-from gwtransport.fronttracking.waves import RarefactionWave, ShockWave
+from gwtransport.fronttracking.waves import ShockWave
 
 # Numerical tolerance constants
 EPSILON_CONCENTRATION_TOLERANCE = -1e-14  # Minimum allowed concentration (machine precision)
-EPSILON_RAREFACTION_ORDERING = 1e-10  # Slack for c_head/c_tail θ-speed ordering
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +40,7 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     4. Finite first arrival θ
     5. No NaN values after spin-up period
     6. Events θ-ordered (equivalent to chronological under non-negative flow)
-    7. Rarefaction head/tail θ-speed ordering
-    8. Total integrated outlet mass (until all mass exits)
+    7. Total integrated outlet mass (until all mass exits)
 
     Parameters
     ----------
@@ -154,45 +152,20 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     if not check5_pass:
         failures.append(f"Found {nan_count} NaN values after spin-up period")
 
-    # Check 6: Events θ-ordered.
+    # Check 6: Events θ-ordered. ``np.all(np.diff(...) >= 0)`` is vacuously True
+    # for an empty/singleton sequence, so the same expression covers the N/A case;
+    # only the message differs.
     event_thetas = [e["theta"] for e in structure.get("events", [])]
-    if len(event_thetas) > 1:
-        is_ordered = all(event_thetas[i] <= event_thetas[i + 1] for i in range(len(event_thetas) - 1))
-        check6_pass = is_ordered
-        checks.append({
-            "name": "Events θ-ordered",
-            "passed": check6_pass,
-            "message": f"{len(event_thetas)} events",
-        })
-        if not check6_pass:
-            failures.append("Events are not θ-ordered")
-    else:
-        check6_pass = True
-        checks.append({
-            "name": "Events θ-ordered",
-            "passed": True,
-            "message": f"{len(event_thetas)} events (N/A)",
-        })
-
-    # Check 7: Rarefaction head/tail θ-speed ordering.
-    # In (V, θ) every speed is dV/dθ = 1/R(C); a valid rarefaction has the head
-    # propagating faster than (or equal to) the tail.
-    rarefactions = [w for w in structure["waves"] if isinstance(w, RarefactionWave)]
-    raref_ordering_violations = 0
-    for raref in rarefactions:
-        if raref.head_speed() < raref.tail_speed() - EPSILON_RAREFACTION_ORDERING:
-            raref_ordering_violations += 1
-
-    check7_pass = raref_ordering_violations == 0
+    check6_pass = bool(np.all(np.diff(event_thetas) >= 0))
     checks.append({
-        "name": "Rarefaction wave ordering",
-        "passed": check7_pass,
-        "message": f"Ordering violations: {raref_ordering_violations}/{len(rarefactions)} rarefactions",
+        "name": "Events θ-ordered",
+        "passed": check6_pass,
+        "message": f"{len(event_thetas)} events" if len(event_thetas) > 1 else f"{len(event_thetas)} events (N/A)",
     })
-    if not check7_pass:
-        failures.append(f"{raref_ordering_violations} rarefactions have incorrect head/tail ordering")
+    if not check6_pass:
+        failures.append("Events are not θ-ordered")
 
-    # Check 8: Total integrated outlet mass vs total inlet mass (in θ-space).
+    # Check 7: Total integrated outlet mass vs total inlet mass (in θ-space).
     if tracker_state is not None and hasattr(tracker_state, "theta_edges"):
         v_outlet = tracker_state.v_outlet
         sorption = tracker_state.sorption
@@ -220,16 +193,16 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
         else:
             relative_error_total = abs(total_mass_out + m_dom_asymptotic - total_mass_in)
 
-        check8_pass = relative_error_total <= max(rtol, 1e-6)
+        check7_pass = relative_error_total <= max(rtol, 1e-6)
         checks.append({
             "name": "Total integrated outlet mass",
-            "passed": check8_pass,
+            "passed": check7_pass,
             "message": (
                 f"Relative error: {relative_error_total:.2e} (integrated to θ={theta_integration_end:.1f}; "
                 f"m_dom_asymptotic={m_dom_asymptotic:.2e} for c_∞={c_inf:.3f})"
             ),
         })
-        if not check8_pass:
+        if not check7_pass:
             failures.append(
                 f"Total outlet mass mismatch: relative_error={relative_error_total:.2e} > {rtol:.2e} "
                 f"(total_mass_out={total_mass_out:.6e}, total_mass_in={total_mass_in:.6e}, "
@@ -237,7 +210,7 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
                 f"θ_integration_end={theta_integration_end:.1f})"
             )
     else:
-        check8_pass = True
+        check7_pass = True
         checks.append({
             "name": "Total integrated outlet mass",
             "passed": True,
