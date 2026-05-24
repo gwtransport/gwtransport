@@ -12,20 +12,85 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
+import numpy.typing as npt
 
 from gwtransport.fronttracking.output import (
+    compute_breakthrough_curve,
     compute_cumulative_inlet_mass,
-    compute_total_outlet_mass,
+    compute_domain_mass,
 )
 from gwtransport.fronttracking.waves import ShockWave
+
+if TYPE_CHECKING:
+    from gwtransport.fronttracking.solver import FrontTrackerState
 
 # Numerical tolerance constants
 EPSILON_CONCENTRATION_TOLERANCE = -1e-14  # Minimum allowed concentration (machine precision)
 
+# Mass-balance check (7) tolerance and grid.
+#
+# The independent outlet mass integrates the breakthrough curve with the trapezoid
+# rule (see ``_independent_outlet_mass``). For a shock-bearing, sharply-curved
+# breakthrough this is only first-order accurate: the measured relative error for the
+# canonical favorable-sorption pulse oscillates at ~5e-4 across a modest grid band
+# (2000-4000 points; it only falls reliably below 1e-4 above ~20000 points). The grid is
+# deliberately kept modest because a numerical DecayingShockWave makes
+# ``compute_breakthrough_curve`` slow (seconds to minutes for large grids), so we cannot
+# refine the integral to machine precision. ``_MASS_BALANCE_RTOL`` therefore bounds that
+# ~5e-4 grid noise with ~16x margin; a physical 30% inlet-mass error yields a relative
+# error of ~0.23 (= 1 - 1/1.3) to ~0.43 (= 1/0.7 - 1), i.e. ~20-40x this floor, so the
+# check still has strong teeth against a genuine conservation failure.
+_MASS_BALANCE_RTOL = 1e-2
+_MASS_BALANCE_GRID_POINTS = 3000
+
 logger = logging.getLogger(__name__)
+
+
+def _independent_outlet_mass(tracker_state: FrontTrackerState, *, n_grid: int = _MASS_BALANCE_GRID_POINTS) -> float:
+    """Outlet-side mass total computed independently of the ``m_in - m_dom`` identity.
+
+    Integrated to θ_max (the last θ-bin edge). Sums the mass that has already left through
+    the outlet, ``∫₀^θ_max c_out(τ) dτ``, and the mass still in the domain, ``m_dom(θ_max)``.
+    The breakthrough integral uses :func:`compute_breakthrough_curve`, which dispatches
+    :func:`concentration_at_point` directly (pure wave evaluation), so this total never
+    references the conservation identity ``m_out = m_in − m_dom`` that the mass-balance
+    check is meant to test. Comparing it to :func:`compute_cumulative_inlet_mass` at θ_max
+    is therefore a genuine, non-tautological conservation check: for a pulse that has not
+    fully broken through by θ_max, the partial breakthrough integral plus the residual
+    domain mass still equals the cumulative inlet mass.
+
+    Parameters
+    ----------
+    tracker_state : FrontTrackerState
+        Solver state; must expose ``v_outlet``, ``sorption``, ``waves`` and
+        ``theta_edges``.
+    n_grid : int, optional
+        Number of trapezoid nodes for the breakthrough integral over ``[0, θ_max]``.
+
+    Returns
+    -------
+    float
+        Independent outlet-side mass total [mass].
+    """
+    v_outlet = tracker_state.v_outlet
+    sorption = tracker_state.sorption
+    waves = tracker_state.waves
+    theta_max = float(np.asarray(tracker_state.theta_edges, dtype=float)[-1])
+
+    if theta_max <= 0.0:
+        return compute_domain_mass(theta=theta_max, v_outlet=v_outlet, waves=waves, sorption=sorption)
+
+    theta_grid: npt.NDArray[np.floating] = np.linspace(0.0, theta_max, n_grid)
+    breakthrough = compute_breakthrough_curve(theta_grid, v_outlet, waves, sorption)
+    mass_out = float(np.trapezoid(breakthrough, theta_grid))
+    mass_dom = compute_domain_mass(theta=theta_max, v_outlet=v_outlet, waves=waves, sorption=sorption)
+    return mass_out + mass_dom
 
 
 def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-10):
@@ -40,7 +105,7 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     4. Finite first arrival θ
     5. No NaN values after spin-up period
     6. Events θ-ordered (equivalent to chronological under non-negative flow)
-    7. Total integrated outlet mass (until all mass exits)
+    7. Mass conservation: independent outlet integral + domain mass == inlet mass at θ_max
 
     Parameters
     ----------
@@ -57,7 +122,10 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     verbose : bool, optional
         If True, print detailed results. If False, only return summary. Default True.
     rtol : float, optional
-        Relative tolerance for numerical checks. Default 1e-10.
+        Relative tolerance for numerical checks. Default 1e-10. For the mass-balance
+        check (7) the effective tolerance is ``max(rtol, _MASS_BALANCE_RTOL)`` because
+        that check integrates a shock-bearing breakthrough curve and is only first-order
+        accurate (see ``_MASS_BALANCE_RTOL``).
 
     Returns
     -------
@@ -166,48 +234,42 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
         failures.append("Events are not θ-ordered")
 
     # Check 7: Total integrated outlet mass vs total inlet mass (in θ-space).
+    #
+    # The outlet-side total is computed *independently* of the conservation identity
+    # ``m_out = m_in − m_dom`` (which the old check used on both sides, making it an
+    # algebraic tautology that passed for any input). ``_independent_outlet_mass``
+    # integrates the breakthrough curve and adds the spatial domain mass; both come from
+    # direct wave evaluation, so a mismatch with the cumulative inlet mass signals a real
+    # conservation failure. Integrated to θ_max (the last θ-bin edge); for pulses that
+    # have not fully broken through there, the partial breakthrough integral plus the
+    # residual domain mass still equals the cumulative inlet mass.
     if tracker_state is not None and hasattr(tracker_state, "theta_edges"):
-        v_outlet = tracker_state.v_outlet
-        sorption = tracker_state.sorption
         theta_edges_arr = np.asarray(tracker_state.theta_edges, dtype=float)
-
-        total_mass_in = compute_cumulative_inlet_mass(
-            theta=float(theta_edges_arr[-1]), cin=cin, theta_edges=theta_edges_arr
-        )
-
-        total_mass_out = compute_total_outlet_mass(
-            v_outlet=v_outlet, sorption=sorption, cin=cin, theta_edges=theta_edges_arr
-        )
         theta_integration_end = float(theta_edges_arr[-1])
 
-        # ``compute_total_outlet_mass`` returns the asymptotic m_out = m_in − C_T(c_∞)·V_outlet
-        # where c_∞ = cin[-1]. For the conservation identity at θ→∞ to hold, the
-        # validation check must add back the steady-state aquifer mass that stays
-        # in the domain for c_∞ > 0. Equivalent invariant: m_in_total ≈ m_out_total +
-        # m_dom_asymptotic, where m_dom_asymptotic = C_T(c_∞)·V_outlet.
-        c_inf = float(cin[-1]) if len(cin) > 0 else 0.0
-        m_dom_asymptotic = float(sorption.total_concentration(c_inf)) * v_outlet
+        total_mass_in = compute_cumulative_inlet_mass(theta=theta_integration_end, cin=cin, theta_edges=theta_edges_arr)
+        independent_mass_out = _independent_outlet_mass(tracker_state)
 
         if total_mass_in > 0:
-            relative_error_total = abs(total_mass_out + m_dom_asymptotic - total_mass_in) / total_mass_in
+            relative_error_total = abs(independent_mass_out - total_mass_in) / total_mass_in
         else:
-            relative_error_total = abs(total_mass_out + m_dom_asymptotic - total_mass_in)
+            relative_error_total = abs(independent_mass_out - total_mass_in)
 
-        check7_pass = relative_error_total <= max(rtol, 1e-6)
+        mass_balance_threshold = max(rtol, _MASS_BALANCE_RTOL)
+        check7_pass = relative_error_total <= mass_balance_threshold
         checks.append({
             "name": "Total integrated outlet mass",
             "passed": check7_pass,
             "message": (
-                f"Relative error: {relative_error_total:.2e} (integrated to θ={theta_integration_end:.1f}; "
-                f"m_dom_asymptotic={m_dom_asymptotic:.2e} for c_∞={c_inf:.3f})"
+                f"Relative error: {relative_error_total:.2e} (independent outlet integral to "
+                f"θ={theta_integration_end:.1f}; threshold {mass_balance_threshold:.2e})"
             ),
         })
         if not check7_pass:
             failures.append(
-                f"Total outlet mass mismatch: relative_error={relative_error_total:.2e} > {rtol:.2e} "
-                f"(total_mass_out={total_mass_out:.6e}, total_mass_in={total_mass_in:.6e}, "
-                f"m_dom_asymptotic={m_dom_asymptotic:.6e}, "
-                f"θ_integration_end={theta_integration_end:.1f})"
+                f"Total outlet mass mismatch: relative_error={relative_error_total:.2e} > "
+                f"{mass_balance_threshold:.2e} (independent_mass_out={independent_mass_out:.6e}, "
+                f"total_mass_in={total_mass_in:.6e}, θ_integration_end={theta_integration_end:.1f})"
             )
     else:
         check7_pass = True

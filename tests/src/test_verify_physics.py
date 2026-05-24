@@ -5,70 +5,65 @@ These tests are based on Example 1 from notebook 09_Front_Tracking_Rarefaction_W
 which demonstrates a concentration pulse with favorable sorption (n>1).
 """
 
-from unittest.mock import MagicMock
-
 import numpy as np
 import pandas as pd
 import pytest
 
 from gwtransport.advection import infiltration_to_extraction_nonlinear_sorption
-from gwtransport.fronttracking.math import FreundlichSorption
-from gwtransport.fronttracking.validation import verify_physics
+from gwtransport.fronttracking.output import compute_cumulative_inlet_mass
+from gwtransport.fronttracking.validation import _MASS_BALANCE_RTOL, _independent_outlet_mass, verify_physics
 from gwtransport.fronttracking.waves import ShockWave
 
 
 def _make_check7_structure(*, target_rel: float):
-    """Build a synthetic structure whose mass-balance check (7) has a chosen relative error.
+    """Build a real simulation whose mass-balance check (7) has a chosen relative error.
 
-    Check 7 is tautological in its physical inputs: ``compute_total_outlet_mass`` returns
-    ``m_in - C_T(c_inf)*V`` and validation re-adds ``C_T(c_inf)*V``, so the residual is
-    algebraically zero for any real ``(cin, theta_edges, v_outlet, sorption)``. To exercise the
-    gate's *comparison* we decouple the two ``C_T(c_inf)`` evaluations with a sequenced stub:
-    validation calls ``sorption.total_concentration`` twice for c_inf -- first inside
-    ``compute_total_outlet_mass`` (line ~178), then in the ``m_dom_asymptotic`` recompute
-    (line ~189). Returning the correct value first and an inflated value second yields a
-    residual ``|C_T_inflated - C_T_correct| * V / m_in`` equal to ``target_rel``. This is the
-    inconsistency check 7 exists to catch (e.g. a stale c_inf or a mismatched sorption object).
+    Check 7 now compares an *independent* outlet-mass integral
+    (``_independent_outlet_mass``, which evaluates the breakthrough curve directly) to the
+    cumulative inlet mass. The integral depends only on the simulated waves, not on
+    ``cin``; the inlet mass depends only on ``cin``. So scaling the ``cin`` that is passed
+    to ``verify_physics`` by ``(1 + target_rel)`` -- while the waves come from the
+    unscaled run -- makes the independent outlet total diverge from the (scaled) inlet
+    mass by a controllable relative error ``≈ target_rel`` (exactly ``target_rel /
+    (1 + target_rel)`` plus the small first-order grid error of the clean integral). This
+    is the genuine conservation inconsistency check 7 exists to catch, exercised through
+    the real integral rather than a stubbed identity.
+
+    The unscaled run is a small ``n>1`` pulse (favorable sorption) chosen so the clean
+    integral error sits well below ``_MASS_BALANCE_RTOL`` (~3e-4 << 1e-2), so the injected
+    ``target_rel`` dominates the residual.
 
     Parameters
     ----------
     target_rel : float
-        Desired relative mass-balance error for check 7.
+        Desired (approximate) relative mass-balance error for check 7.
 
     Returns
     -------
     tuple
-        ``(structure, cout, cout_tedges, cin)`` ready to pass to ``verify_physics``.
+        ``(structure, cout, cout_tedges, cin_scaled)`` ready to pass to ``verify_physics``.
     """
-    real = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-    theta_edges = np.array([0.0, 100.0, 200.0, 300.0])
-    cin = np.array([5.0, 5.0, 5.0])  # c_inf = 5 > 0 so m_dom_asymptotic > 0
-    v_outlet = 200.0
-    c_inf = float(cin[-1])
-    ct_correct = float(real.total_concentration(c_inf))
-    m_in = float(np.sum(cin * np.diff(theta_edges)))
-    # residual = |C_T_inflated - C_T_correct| * V; rel = residual / m_in
-    ct_inflated = ct_correct + target_rel * m_in / v_outlet
+    tedges = pd.date_range(start="2020-01-01", periods=40, freq="D")
+    cin = np.zeros(len(tedges) - 1)
+    cin[5:20] = 8.0  # c_inf = 0 pulse; breakthrough integral is the independent outlet mass
+    flow = np.full(len(tedges) - 1, 100.0)
+    cout_tedges = pd.date_range(start=tedges[0], periods=400, freq="D")
 
-    sorption_stub = MagicMock()
-    sorption_stub.total_concentration = MagicMock(side_effect=[ct_correct, ct_inflated])
+    cout, structure = infiltration_to_extraction_nonlinear_sorption(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=[150.0],
+        freundlich_k=0.01,
+        freundlich_n=2.0,
+        bulk_density=1500.0,
+        porosity=0.3,
+    )
 
-    tracker_state = MagicMock()
-    tracker_state.theta_edges = theta_edges
-    tracker_state.v_outlet = v_outlet
-    tracker_state.sorption = sorption_stub
-    # Spin-up mask: every output edge maps after theta_first_arrival (no NaN to flag).
-    tracker_state.theta_at_t = MagicMock(return_value=0.0)
-
-    structure = {
-        "waves": [],
-        "theta_first_arrival": 50.0,
-        "events": [],
-        "tracker_state": tracker_state,
-    }
-    cout = np.array([5.0, 5.0, 5.0])
-    cout_tedges = pd.date_range("2020-01-01", periods=4, freq="D")
-    return structure, cout, cout_tedges, cin
+    # Scaling cin (not the waves) injects a controllable inlet/outlet mismatch into check 7.
+    cin_scaled = cin * (1.0 + target_rel)
+    return structure[0], cout, cout_tedges, cin_scaled
 
 
 class TestVerifyPhysicsPassingChecks:
@@ -354,13 +349,6 @@ class TestVerifyPhysicsFailingChecks:
         check6 = next(c for c in results["checks"] if c["name"] == "Events θ-ordered")
         assert not check6["passed"]
 
-    # NOTE: check 7 (mass balance) has no positive-violation test here. It is tautological in
-    # its physical inputs (compute_total_outlet_mass = m_in - C_T(c_inf)*V, which validation
-    # re-adds), so no real input can violate it; only a stubbed-sorption mock could, which
-    # tests mock arithmetic rather than reachable behaviour. test_custom_rtol_gates_mass_balance_check
-    # below pins the rtol wiring against a real total_concentration evaluation. Redesigning check 7
-    # (and solver.py FrontTracker.verify_physics) to compare against an independent outlet-mass
-    # integral is tracked as a follow-up.
     def test_mass_balance_skipped_without_tracker_state(self):
         """Check 7 takes the skip path (passes with the exact 'Skipped' message) when tracker_state is None.
 
@@ -428,28 +416,82 @@ class TestVerifyPhysicsFailingChecks:
         assert results["n_passed"] == results["n_checks"] - 3
 
     def test_custom_rtol_gates_mass_balance_check(self):
-        """rtol must gate the mass-balance check (7): a 5e-4 error fails at rtol<=1e-6 but passes at 1e-3.
+        """rtol must gate the mass-balance check (7): a ~5e-2 error fails at the floor but passes at 1e-1.
 
-        Check 7's threshold is ``max(rtol, 1e-6)``, so a residual sized at 5e-4 (between the
-        1e-6 floor and 1e-3) straddles the two tolerances. Confirms rtol is wired into the gate
-        rather than merely accepted.
+        Check 7's threshold is ``max(rtol, _MASS_BALANCE_RTOL)`` with the floor at 1e-2, so an
+        injected ~5e-2 residual (between the 1e-2 floor and 1e-1) straddles the two tolerances.
+        Confirms rtol is wired into the gate rather than merely accepted, and that the floor
+        bounds the first-order grid noise of the breakthrough integral.
         """
-        target_rel = 5e-4
+        target_rel = 5e-2
+        assert _MASS_BALANCE_RTOL < target_rel < 1e-1, "test setup invalid: target_rel must straddle floor and 1e-1"
 
-        # rtol below the 1e-6 floor -> threshold is 1e-6 -> 5e-4 residual fails check 7.
+        # rtol below the floor -> threshold is _MASS_BALANCE_RTOL (1e-2) -> ~5e-2 residual fails check 7.
         structure, cout, cout_tedges, cin = _make_check7_structure(target_rel=target_rel)
         results_strict = verify_physics(structure, cout, cout_tedges, cin, verbose=False, rtol=1e-7)
         check7_strict = next(c for c in results_strict["checks"] if c["name"] == "Total integrated outlet mass")
         assert not check7_strict["passed"]
         assert any("Total outlet mass mismatch" in f for f in results_strict["failures"])
 
-        # rtol above the residual -> threshold is 1e-3 -> 5e-4 residual passes check 7.
+        # rtol above the residual -> threshold is 1e-1 -> ~5e-2 residual passes check 7.
         structure, cout, cout_tedges, cin = _make_check7_structure(target_rel=target_rel)
-        results_relaxed = verify_physics(structure, cout, cout_tedges, cin, verbose=False, rtol=1e-3)
+        results_relaxed = verify_physics(structure, cout, cout_tedges, cin, verbose=False, rtol=1e-1)
         check7_relaxed = next(c for c in results_relaxed["checks"] if c["name"] == "Total integrated outlet mass")
         assert check7_relaxed["passed"]
 
         assert results_strict["n_checks"] == results_relaxed["n_checks"]
+
+    def test_mass_balance_violation_detected(self, pulse_simulation_base):
+        """Check 7 fails when a real ~30% inlet-mass error is injected (closes #220, #199).
+
+        The unperturbed pulse passes check 7: the independent outlet integral
+        (``∫ breakthrough dθ + m_dom``) matches the cumulative inlet mass. Inflating the inlet
+        accounting by 30% -- by scaling ``cin`` by 1.3 before passing it to ``verify_physics``,
+        while the simulated waves (hence the outlet integral) stay fixed -- makes the relative
+        error ~0.23 (= 1 - 1/1.3), far above the 1e-2 floor, so *only* check 7 fails. Inflating
+        (rather than shrinking) keeps the inlet maximum above ``cout`` so the output<=input
+        check is not collaterally tripped. This is the genuine teeth the old tautological check
+        (``m_out := m_in - m_dom``, re-added) could never have: its residual was identically
+        zero for any input.
+        """
+        cin, cout, cout_tedges, structure = pulse_simulation_base
+
+        # Baseline: the unperturbed simulation passes check 7.
+        results_clean = verify_physics(structure, cout, cout_tedges, cin, verbose=False)
+        check7_clean = next(c for c in results_clean["checks"] if c["name"] == "Total integrated outlet mass")
+        assert check7_clean["passed"], "test setup invalid: clean simulation must pass check 7"
+
+        # Sanity: the injected error is ~0.23, well above the 1e-2 floor (independent of the gate).
+        tracker_state = structure["tracker_state"]
+        theta_end = float(np.asarray(tracker_state.theta_edges, dtype=float)[-1])
+        cin_perturbed = cin * 1.3
+        m_in_perturbed = compute_cumulative_inlet_mass(
+            theta=theta_end, cin=cin_perturbed, theta_edges=tracker_state.theta_edges
+        )
+        indep_out = _independent_outlet_mass(tracker_state)
+        injected_rel = abs(indep_out - m_in_perturbed) / m_in_perturbed
+        assert injected_rel > _MASS_BALANCE_RTOL, (
+            f"injected error {injected_rel:.2e} must exceed floor {_MASS_BALANCE_RTOL:.0e}"
+        )
+
+        # Perturbed: a ~30% inlet-mass mismatch trips check 7.
+        results = verify_physics(structure, cout, cout_tedges, cin_perturbed, verbose=False)
+
+        check7 = next(c for c in results["checks"] if c["name"] == "Total integrated outlet mass")
+        assert not check7["passed"]
+        assert any("Total outlet mass mismatch" in f for f in results["failures"])
+
+        # Cross-talk guard: perturbing only cin's inlet accounting must not trip the other checks.
+        check_by_name = {c["name"]: c for c in results["checks"]}
+        for unaffected in (
+            "Shock entropy condition",
+            "Non-negative concentrations",
+            "Output <= input maximum",
+            "Finite first arrival θ",
+            "No NaN after spin-up",
+            "Events θ-ordered",
+        ):
+            assert check_by_name[unaffected]["passed"], f"{unaffected} spuriously failed"
 
 
 class TestVerifyPhysicsEdgeCases:
