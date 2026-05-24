@@ -1418,11 +1418,21 @@ def test_tedges_to_days_ref_kwarg_shifts_origin():
     np.testing.assert_array_equal(tedges_to_days(tedges), tedges_to_days(tedges, ref=tedges[0]))
 
 
-def test_tedges_to_days_dtype_contract_snapshot():
-    """The four pre-change spellings must all equal the helper bit-for-bit.
+def test_tedges_to_days_cross_array_ref_aligns_origins():
+    """A second edge array converted with ``ref=A[0]`` shares A's origin (the cin/cout pairing)."""
+    a = pd.DatetimeIndex(["2020-01-01", "2020-01-03"])
+    b = pd.DatetimeIndex(["2020-01-05", "2020-01-09"])
+    # b measured against a's origin: 4 and 8 days after a[0].
+    np.testing.assert_array_equal(tedges_to_days(b, ref=a[0]), np.array([4.0, 8.0]))
 
-    Locks the object-dtype-on-old-pandas contract #185 cites: ``.values``,
-    ``.to_numpy(dtype=float)``, ``.astype(float)``, ``.values.astype(float)``.
+
+def test_tedges_to_days_dtype_contract_snapshot():
+    """The five pre-change spellings must all equal the helper bit-for-bit.
+
+    A divisor/origin regression in the helper diverges from these independent spellings (a
+    days=1 -> days=2 swap is caught). The float64 cast in the helper is a no-op on modern
+    pandas but is a forward guard for the minimum-deps CI leg, where the timedelta quotient
+    could surface as object dtype (#185).
     """
     tedges = pd.DatetimeIndex(["2019-06-01", "2019-06-02", "2019-06-05", "2019-07-01"])
     ref = tedges[0]
@@ -1440,13 +1450,13 @@ def test_tedges_to_days_dtype_contract_snapshot():
 
 
 def test_tedges_to_days_timezone_invariance():
-    """tz-naive, UTC, and non-UTC edges must give bit-identical day arrays.
+    """tz-naive, UTC, and non-UTC edges give bit-identical day arrays on a no-DST span.
 
-    The package emits UTC-aware indices, so tz invariance is a real user path;
-    a ``tz_localize(None)`` slip inside the conversion would diverge here. The
-    span stays within a single DST regime (November, after the EU autumn
-    transition) so the local offset is constant and elapsed days are tz-label
-    independent.
+    The helper measures *absolute elapsed* days (instant differences over Timedelta), so it is
+    origin-relative but NOT wall-clock/tz-invariant across a DST boundary. This guard locks the
+    narrower realistic property: for a span with no DST transition (November) the local offset is
+    constant, so tz-naive, UTC, and the package's UTC-aware indices give identical elapsed days.
+    (It does not catch a ``tz_localize(None)`` slip, which preserves the elapsed-day spacing.)
     """
     naive = pd.DatetimeIndex(["2020-11-02", "2020-11-03", "2020-11-06", "2020-12-01"])
     utc = naive.tz_localize("UTC")
