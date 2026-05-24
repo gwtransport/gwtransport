@@ -2114,15 +2114,19 @@ def test_gamma_roundtrip_constant_concentration():
         retardation_factor=1.0,
     )
 
-    # Verify roundtrip recovers approximately original (within regularization tolerance)
-    valid_mask = ~np.isnan(cin_recovered)
-    valid_recovered = cin_recovered[valid_mask]
+    # For a constant input the roundtrip must recover the exact value in the
+    # data-dominated interior, not merely stay within loose bounds. The
+    # boundary bins absorb the Tikhonov bias of the ill-posed inverse, so they
+    # are clipped with the same valid_indices[50:-50] interior slice used by
+    # the loc>0 roundtrip (test_gamma_roundtrip_with_loc). The measured
+    # interior recovery floor on this loc=0 path is ~4e-12, so atol=1e-6 is a
+    # ~2e5x margin while still failing any percent-level reverse-solve bias.
+    valid_indices = np.where(~np.isnan(cin_recovered))[0]
+    assert len(valid_indices) >= 101, f"need >=101 valid bins for the [50:-50] interior slice, got {len(valid_indices)}"
 
-    # Note: Roundtrip is not exact due to regularization and the ill-posed nature of the inverse problem
-    # After mass conservation fix, we verify basic properties rather than exact recovery
-    assert len(valid_recovered) > 0  # Should have some valid values
-    assert np.min(valid_recovered) >= 0  # Physical constraint: non-negative
-    assert np.max(valid_recovered) <= 20.0  # Should not amplify input by more than 2x
+    interior_indices = valid_indices[50:-50]
+    interior = slice(interior_indices[0], interior_indices[-1] + 1)
+    np.testing.assert_allclose(cin_recovered[interior], 10.0, atol=1e-6)
 
 
 @pytest.mark.roundtrip
@@ -2573,6 +2577,68 @@ class TestFlowWeightedFrontTracking:
         mass_out = np.sum(cout * flow[0] * dt_out)
         np.testing.assert_allclose(mass_out, mass_in, rtol=1e-13)
 
+    def test_varying_flow_mass_conservation_is_flow_weighted(self):
+        """Flow-weighted output mass balance under genuinely varying flow.
+
+        This is the only test that combines a *varying* flow with a *varying*
+        cin and a cout grid coarser than the flow grid (several flow values per
+        cout bin). The bin-averaging in :func:`infiltration_to_extraction_nonlinear_sorption`
+        is flow-weighted: ``cout[k] = Σ_i Q_i c_i Δt_i / Σ_i Q_i Δt_i`` over the
+        fine sub-bins ``i`` falling in cout bin ``k`` (advection.py). Multiplying
+        each ``cout[k]`` by its true flow integral ``∫_bin Q dt`` and summing must
+        recover the total injected mass ``Σ_i cin_i Q_i Δt_i`` exactly.
+
+        Because flow varies *within* each cout bin, the flow-weighted average
+        differs from the plain time-average: dropping the ``q_fine`` factor from
+        the weight (so ``cout`` becomes a time-average) breaks this identity at
+        the percent level even though every NaN/shape check still passes.
+
+        The ``∫_bin Q dt`` weight is computed from the *same* piecewise-constant
+        flow the advection uses: the integral of flow over a cout bin equals the
+        flow-bin-overlap sum, identical to the internal fine-grid ``Σ q_fine·dt``
+        since the fine grid is built from the union of the cout and flow edges.
+        """
+
+        n = 60
+        tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+        t = np.arange(n)
+        flow = 100.0 + 40.0 * np.sin(2 * np.pi * t / 7.0)
+
+        # Finite cin pulse so the injected mass is finite and fully captured.
+        cin = np.zeros(n)
+        cin[5:12] = 10.0
+
+        # cout grid coarser than the daily flow grid: 3-day bins put several
+        # distinct flow values inside each cout bin (the regime that
+        # distinguishes flow-weighting from time-averaging).
+        cout_tedges = pd.date_range("2020-01-01", periods=21, freq="3D")
+
+        cout, _ = infiltration_to_extraction_nonlinear_sorption(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([300.0]),
+            retardation_factor=1.0,
+        )
+
+        # Mass in = Σ_i cin_i Q_i Δt_i.
+        dt_in = np.diff(((tedges - tedges[0]) / pd.Timedelta(days=1)).values)
+        mass_in = np.sum(cin * flow * dt_in)
+
+        # ∫_bin Q dt for each cout bin: overlap of the cout bin with each
+        # (piecewise-constant) flow bin, summed. Vectorized, no Python loop.
+        flow_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
+        cout_days = ((cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)).values
+        lo = np.maximum(cout_days[:-1, None], flow_days[None, :-1])
+        hi = np.minimum(cout_days[1:, None], flow_days[None, 1:])
+        overlap = np.clip(hi - lo, 0.0, None)
+        int_q_dt = (overlap * flow[None, :]).sum(axis=1)
+
+        valid = ~np.isnan(cout)
+        mass_out = np.sum(cout[valid] * int_q_dt[valid])
+        np.testing.assert_allclose(mass_out, mass_in, rtol=1e-13)
+
 
 # =============================================================================
 # Negative-flow rejection and zero-flow invariance
@@ -2974,6 +3040,55 @@ def test_spinup_constant_eliminates_left_edge_nan():
 
     assert np.all(np.isnan(cout_strict[:15]))
     assert not np.any(np.isnan(cout_warm)), "constant warm-start should leave no left-edge NaN"
+    valid = ~np.isnan(cout_strict)
+    np.testing.assert_array_equal(cout_warm[valid], cout_strict[valid])
+
+
+@pytest.mark.parametrize("retardation_factor", [2.0, 3.0])
+def test_spinup_constant_eliminates_left_edge_nan_with_retardation(retardation_factor):
+    """warm-start pad must scale with the retardation factor, not just pore volume.
+
+    The warm-start pad length is ``R · v_max / q0`` (advection_utils.py): the
+    longest streamtube's *retarded* residence time. With ``apv=[100,500,1500]``
+    and ``flow=100`` the longest unretarded RT is 15 days, so at ``R=2``/``R=3``
+    the strict-validity left edge extends to 30/45 days. ``spinup="constant"``
+    must still warm-start every cout bin at or after ``tedges[0]``.
+
+    Mirrors :func:`test_spinup_constant_eliminates_left_edge_nan` at ``R>1``.
+    Dropping the ``R·`` factor from the pad (so it degenerates to the ``R=1``
+    length of 15 days) silently re-introduces left-edge NaN bins in
+    ``[15, R·15)`` — this test fails on that mutation while the ``R=1`` test
+    still passes.
+    """
+    n = 80
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    apv = np.array([100.0, 500.0, 1500.0])
+    cin = 1.0 + 0.5 * np.sin(2 * np.pi * np.arange(n) / 10.0)
+
+    cout_strict = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=apv,
+        retardation_factor=retardation_factor,
+        spinup=None,
+    )
+    cout_warm = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=apv,
+        retardation_factor=retardation_factor,
+        spinup="constant",
+    )
+
+    # Strict validity blanks the left edge up to the longest retarded RT.
+    longest_rt_days = int(retardation_factor * 1500.0 / 100.0)
+    assert np.all(np.isnan(cout_strict[:longest_rt_days]))
+    assert not np.any(np.isnan(cout_warm)), "constant warm-start should leave no left-edge NaN at R>1"
     valid = ~np.isnan(cout_strict)
     np.testing.assert_array_equal(cout_warm[valid], cout_strict[valid])
 

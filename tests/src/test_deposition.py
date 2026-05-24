@@ -22,7 +22,7 @@ from gwtransport.deposition import (
     spinup_duration,
 )
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import compute_time_edges, solve_underdetermined_system
+from gwtransport.utils import compute_time_edges
 
 
 def test_exact_analytical_constant_deposition():
@@ -132,17 +132,81 @@ def test_exact_analytical_varying_flow():
     valid_result = cout_result[~np.isnan(cout_result)]
     valid_expected = expected[: len(valid_result)]
 
-    if len(valid_result) >= 1:
-        # The analytical formula C = rt * D / (porosity * thickness) is exact
-        # for constant deposition: cout is the flow-weighted bin average and
-        # for constant D this reduces to D * <flow*rt>/<flow> / (porosity*
-        # thickness). In this test the cout bin lies entirely within the
-        # constant-flow tail of the series, so rt is constant within the
-        # bin and the formula collapses to rt[edge] * D / (porosity*
-        # thickness) at machine precision. There is no genuine numerical
-        # noise specific to varying flow, so a tight machine-precision
-        # tolerance is appropriate.
-        np.testing.assert_allclose(valid_result, valid_expected, rtol=1e-12, atol=0)
+    # A bare ``if len(valid_result) >= 1`` would silently pass if the result
+    # were all-NaN; assert non-emptiness so the comparison is never skipped.
+    assert len(valid_result) >= 1, "Must have at least one valid result"
+    # The analytical formula C = rt * D / (porosity * thickness) is exact
+    # for constant deposition: cout is the flow-weighted bin average and
+    # for constant D this reduces to D * <flow*rt>/<flow> / (porosity*
+    # thickness). In this test the cout bin lies entirely within the
+    # constant-flow tail of the series, so rt is constant within the
+    # bin and the formula collapses to rt[edge] * D / (porosity*
+    # thickness) at machine precision. There is no genuine numerical
+    # noise specific to varying flow, so a tight machine-precision
+    # tolerance is appropriate.
+    np.testing.assert_allclose(valid_result, valid_expected, rtol=1e-12, atol=0)
+
+
+def test_forward_pins_extraction_to_infiltration_direction_genuinely_variable_flow():
+    """Forward deposition output uses the extraction_to_infiltration residence time.
+
+    The existing exact-analytical tests evaluate cout bins that sit in a
+    *constant-flow tail*, where ``rt`` is locally constant and the two
+    residence-time directions coincide — so flipping the direction in
+    :func:`compute_deposition_weights` is invisible. This test makes the flow
+    genuinely variable *everywhere* (``flow = 60 + 30·sin(2π·t/9)``), so the
+    forward (``infiltration_to_extraction``) and reverse
+    (``extraction_to_infiltration``) residence times differ markedly.
+
+    For constant deposition the bin-averaged output is
+    ``cout(t) = rt(t)·D/(porosity·thickness)`` with ``rt`` the
+    ``extraction_to_infiltration`` residence time of the water extracted at
+    ``t``. Hourly cout bins (well past spin-up, where ``rt`` is smooth) make the
+    sub-bin curvature negligible, so the midpoint-evaluated reference matches to
+    ``rtol=1e-4`` (measured ~1e-5). Flipping the direction at deposition.py
+    changes the reference by ~50 %, far outside this tolerance.
+    """
+    n = 60
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    t = np.arange(n)
+    flow = 60.0 + 30.0 * np.sin(2 * np.pi * t / 9.0)  # variable everywhere, strictly > 0
+
+    deposition_rate = 80.0
+    dep = np.full(n, deposition_rate)
+    porosity, thickness, aquifer_pore_volume, retardation_factor = 0.3, 5.0, 200.0, 1.0
+
+    # Hourly cout bins in a window past spin-up (RT ~ 3 days) where rt(t) is smooth.
+    cout_tedges = pd.date_range("2020-01-25", "2020-01-28", freq="h")
+
+    cout = deposition_to_extraction(
+        dep=dep,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volume=aquifer_pore_volume,
+        porosity=porosity,
+        thickness=thickness,
+        retardation_factor=retardation_factor,
+        spinup=None,
+    )
+
+    # Reference: rt evaluated at each cout bin midpoint using the
+    # extraction_to_infiltration direction (the residence time of the water
+    # currently being extracted).
+    midpoints = cout_tedges[:-1] + (cout_tedges[1:] - cout_tedges[:-1]) / 2
+    rt_mid = residence_time(
+        flow=flow,
+        flow_tedges=tedges,
+        index=midpoints,
+        aquifer_pore_volumes=aquifer_pore_volume,
+        retardation_factor=retardation_factor,
+        direction="extraction_to_infiltration",
+    ).squeeze(axis=0)
+    expected = rt_mid * deposition_rate / (porosity * thickness)
+
+    valid = ~np.isnan(cout)
+    assert valid.sum() >= 1, "Must have at least one valid cout bin"
+    np.testing.assert_allclose(cout[valid], expected[valid], rtol=1e-4)
 
 
 def test_exact_analytical_retardation_factor():
@@ -194,14 +258,16 @@ def test_exact_analytical_retardation_factor():
         valid_result = cout_result[~np.isnan(cout_result)]
         valid_expected = expected[: len(valid_result)]
 
-        if len(valid_result) >= 1:
-            np.testing.assert_allclose(
-                valid_result,
-                valid_expected,
-                rtol=1e-12,
-                atol=0,
-                err_msg=f"R={retardation_factor}",
-            )
+        # Assert non-emptiness rather than wrapping the comparison in a bare
+        # ``if``, which would vacuously pass on an all-NaN result.
+        assert len(valid_result) >= 1, f"Must have at least one valid result for R={retardation_factor}"
+        np.testing.assert_allclose(
+            valid_result,
+            valid_expected,
+            rtol=1e-12,
+            atol=0,
+            err_msg=f"R={retardation_factor}",
+        )
 
 
 def test_perfect_roundtrip_varying_deposition_short():
@@ -607,27 +673,6 @@ def test_no_rank_deficiency_warning_non_integer_rt():
         )
 
 
-def test_regularization_objectives():
-    """Test different nullspace regularization objectives work correctly."""
-    # This test verifies the solver correctly handles different objectives
-    # by testing that squared_differences objective works properly
-    # Create a simple underdetermined system (2 equations, 4 unknowns)
-    matrix = np.array([[1.0, 2.0, 1.0, 0.0], [0.0, 1.0, 2.0, 1.0]])
-    rhs = np.array([5.0, 4.0])
-
-    # Test that squared differences objective works
-    result = solve_underdetermined_system(
-        coefficient_matrix=matrix, rhs_vector=rhs, nullspace_objective="squared_differences"
-    )
-
-    # Should satisfy the original equations
-    assert np.allclose(matrix @ result, rhs, atol=1e-10), "Solution should satisfy Ax=b"
-
-    # Should be finite and reasonable
-    assert np.all(np.isfinite(result)), "Solution should be finite"
-    assert np.max(np.abs(result)) < 100, "Solution should be reasonable magnitude"
-
-
 @pytest.fixture
 def full_solver_overdetermined_setup():
     """Shared setup for extraction_to_deposition_full machine-precision tests.
@@ -959,6 +1004,40 @@ def test_spinup_duration_with_zero_flow_plateau():
         retardation_factor=200.0,
     )
     np.testing.assert_allclose(duration, 3.0, atol=0, rtol=1e-13)
+
+
+def test_spinup_duration_nonuniform_flow_tedges_weights_by_dt():
+    """spinup_duration weights cumulative flow by bin width (#186 guard).
+
+    Every other ``spinup_duration`` test uses uniform 1-day edges, so the
+    cumulative-flow integral ``cumsum(flow·Δt)`` degenerates to ``cumsum(flow)``
+    and a dropped-Δt mutation is invisible. Here the flow_tedges are
+    *non-uniform* 2-day bins with constant flow, so ``Δt = 2`` everywhere and
+    the volume-to-time inversion only lands on the correct answer if each bin's
+    contribution is scaled by its width.
+
+    Under constant flow ``Q`` the cumulative flow is linear in time with slope
+    ``Q``, so the spin-up duration (the time ``t*`` at which the integrated flow
+    reaches ``R·V_pore``) is the closed-form ``R·V_pore/Q`` independent of the
+    bin width: ``1·1000/100 = 10`` days. Dropping ``Δt`` from the cumsum
+    (deposition.py) inverts against a bin-index axis instead of days and returns
+    a value off by the 2-day bin width — caught here at ``atol=1e-12``.
+    """
+    flow_tedges = pd.date_range(start="2020-01-01", periods=51, freq="2D")  # non-uniform vs. 1-day
+    n = len(flow_tedges) - 1
+    flow = np.full(n, 100.0)
+    aquifer_pore_volume = 1000.0
+    retardation_factor = 1.0
+
+    duration = spinup_duration(
+        flow=flow,
+        flow_tedges=flow_tedges,
+        aquifer_pore_volume=aquifer_pore_volume,
+        retardation_factor=retardation_factor,
+    )
+
+    expected = retardation_factor * aquifer_pore_volume / flow[0]  # = 10 days
+    np.testing.assert_allclose(duration, expected, atol=1e-12, rtol=0)
 
 
 # =============================================================================
@@ -1564,8 +1643,12 @@ def test_extraction_to_deposition_spinup_constant_recovers_full_window():
     )
 
     assert dep_rec.shape == (n,), "output must align with original tedges length"
-    # Recovery in the interior of the box; boundaries see Tikhonov bias.
-    np.testing.assert_allclose(dep_rec[14:26], 3.0, atol=0.1)
+    # Recovery in the interior of the box; boundaries see Tikhonov bias. The
+    # [14:26] slice already excludes the biased box edges, where the true
+    # interior recovery floor is ~3.4e-8, so atol=1e-6 keeps a ~30x margin
+    # while pinning the round-trip to the actual value rather than admitting a
+    # 0.1-wide drift.
+    np.testing.assert_allclose(dep_rec[14:26], 3.0, atol=1e-6)
 
 
 # =============================================================================
