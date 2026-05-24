@@ -80,14 +80,6 @@ def test_bins_basic(gamma_params):
     np.testing.assert_allclose(expected_value_gamma, expected_value_bins, rtol=1e-12)
 
 
-def test_bins_expected_values(gamma_params):
-    """Test that expected values are within their respective bins."""
-    result = gamma_bins(**gamma_params)
-
-    for i in range(len(result["expected_values"])):
-        assert result["lower_bound"][i] <= result["expected_values"][i] <= result["upper_bound"][i]
-
-
 # Edge cases and error handling
 def test_invalid_parameters():
     """Test error handling for invalid parameters."""

@@ -41,6 +41,7 @@ from gwtransport.fronttracking.output import (
     compute_cumulative_outlet_mass,
     compute_domain_mass,
     compute_total_outlet_mass,
+    concentration_at_point,
     integrate_fan_exact,
     integrate_fan_spatial_exact,
     integrate_rarefaction_exact,
@@ -116,8 +117,13 @@ def test_compute_first_front_arrival_theta_constant_retardation_analytic():
 def test_mass_balance_constant_retardation_machine_precision():
     """Mass balance holds to machine precision for the linear (conservative) case.
 
-    Samples include θ values **mid-transit** (where m_dom > 0) so that a
-    silent mutation of ``compute_domain_mass`` cannot pass the invariant.
+    Samples include θ values **mid-transit** (where m_dom > 0). The
+    ``m_dom + m_out == m_in`` identity is tautological (``m_out = m_in − m_dom``
+    by definition), so it is paired with an INDEPENDENT domain-mass reference:
+    ``∫₀^{v_outlet} C_T(c(v, θ)) dv`` reconstructed pointwise via
+    ``concentration_at_point``. For ConstantRetardation the domain is a square
+    pulse (flat plateaus, no fan), so the trapezoid reference is exact and a
+    silent mutation of ``compute_domain_mass`` cannot pass.
     """
     sorption = ConstantRetardation(retardation_factor=2.0)
     v_outlet = 200.0
@@ -153,6 +159,17 @@ def test_mass_balance_constant_retardation_machine_precision():
         err = abs((m_dom + m_out) - m_in)
         tol = 1e-14 * max(m_in, 1.0)
         assert err <= tol, f"mass-balance violation at θ={theta}: err={err:.6e} > tol={tol:.6e}"
+
+        # Independent reference (de-tautologizes the identity above): reconstruct the
+        # spatial concentration profile and integrate C_T(c) — a route that shares no
+        # algebra with m_in − m_dom. Exact for the square-pulse (no-fan) ConstantRetardation case.
+        # npts=2000 (even) places the c=4→0 step on a cell midpoint, so the trapezoid of this
+        # piecewise-constant ConstantRetardation profile is exact — the count is load-bearing
+        # (an odd npts straddles the step and loses ~1e-1 accuracy).
+        v_grid = np.linspace(0.0, v_outlet, 2000)
+        c_profile = np.array([concentration_at_point(float(v), float(theta), tr.state.waves, sorption) for v in v_grid])
+        m_dom_independent = float(np.trapezoid(sorption.total_concentration(c_profile), v_grid))
+        np.testing.assert_allclose(m_dom, m_dom_independent, rtol=1e-12, atol=1e-12)
 
     assert saw_nonzero_domain, "Sample window must include θ where m_dom > 0 to exercise compute_domain_mass"
 

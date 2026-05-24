@@ -8,6 +8,7 @@ from scipy.special import erf
 
 from gwtransport import gamma as gamma_utils
 from gwtransport.advection import infiltration_to_extraction as advection_i2e
+from gwtransport.diffusion import gamma_infiltration_to_extraction as diffusion_gamma_i2e
 from gwtransport.diffusion import infiltration_to_extraction as diffusion_exact
 from gwtransport.diffusion_fast import (
     _build_gaussian_matrix,
@@ -628,6 +629,159 @@ def test_diffusion_fast_vs_diffusion_same_grid():
 
     both_valid_step = ~np.isnan(cout_fast_step) & ~np.isnan(cout_exact_step)
     assert_allclose(cout_fast_step[both_valid_step], cout_exact_step[both_valid_step], atol=0.02)
+
+
+def _breakthrough_centre_idx(*, flow, dt, j_in, retarded_volume):
+    """Index of the breakthrough front for a pulse injected at bin ``j_in``.
+
+    The parcel reaches the outlet when the cumulative through-flow volume
+    since injection equals ``retarded_volume = R * V_pore``. Using cumulative
+    flow (rather than ``R*V/Q``) locates the front correctly even when ``flow``
+    contains zero-flow plateaus, where wall-clock travel time stretches.
+    """
+    cum = np.cumsum(np.asarray(flow, dtype=float) * np.asarray(dt, dtype=float))
+    return int(np.searchsorted(cum - cum[j_in], retarded_volume))
+
+
+@pytest.mark.parametrize("zero_flow", [False, True], ids=["constant_flow", "zero_flow"])
+@pytest.mark.parametrize("retardation", [1.0, 2.7])
+@pytest.mark.parametrize("n_bins", [1, 5, 25], ids=["single_pv", "gamma_5bin", "gamma_25bin"])
+def test_diffusion_fast_vs_diffusion_parity_sweep(zero_flow, retardation, n_bins):
+    """Cross-module parity at a well-resolved breakthrough front (mutation gate).
+
+    The single-point parity test above runs at sigma << 1 output bin, where the
+    Gaussian smoothing kernel is nearly the identity and a x2 error in sigma_V
+    slips through. Here sigma_V spans several output bins, so the kernel shape
+    (and hence its width) is load-bearing: a x2 sigma_V mutation in
+    :func:`gwtransport.diffusion_fast._compute_sigma_v` broadens the front and
+    fails the test at every R (including R=2.7).
+
+    The sweep covers variable flow including explicit zero-flow plateaus
+    (``flow=[100,100,0,0,100,100]`` tiled), ``R in {1.0, 2.7}``, and single /
+    5-bin / 25-bin gamma pore-volume distributions, with ``D_m=0`` so the
+    spreading is pure mechanical dispersion (``Pe = L/alpha_L`` exactly).
+
+    Tolerance (peak-relative, R-independent)
+    ----------------------------------------
+    The two modules report different concentration measures: ``diffusion``
+    integrates the Kreft-Zuber flux concentration ``C_F``, while
+    ``diffusion_fast`` approximates the Bear resident concentration ``C_R``
+    with a Gaussian kernel. Their difference at the breakthrough front is the
+    sum of two leading-order terms (the K-Z flux-vs-resident correction
+    ``C_F - C_R = (D_L/v)*N_x`` and the fast module's Gaussian-vs-erfc shape
+    correction), each ``O(1/sqrt(Pe))``.
+
+    A *fixed* absolute tolerance is vacuous here: the breakthrough peak
+    amplitude falls ~1/R because the same injected mass spreads over an R-times
+    wider front, so the absolute front discrepancy under a x2-sigma_V error
+    shrinks with R and slips under any R-independent ``atol`` at R=2.7. The
+    *peak-relative* discrepancy ``max|C_F - C_R| / max(C_F)`` over the front
+    window is, by contrast, R-independent: it measures ~18% at baseline and
+    ~43% under a x2-sigma_V mutation at both R=1 and R=2.7. ``peak_rel_tol``
+    is set to 0.30, between those two, so the mutation fails at every R while
+    the baseline passes with margin. Pe is held at 25 (well within the regime
+    where both modules are intended to agree) so the grid stays small
+    (n=120, n_bins<=25, < 2 s) while the front is resolved. The comparison is
+    restricted to a window from the breakthrough onset to ``+4*R*sigma`` to
+    exclude the left-edge warm-start region, where the fast module's
+    ``spinup="constant"`` echo and the exact module's zero-fill differ by an
+    unrelated, R-dependent boundary convention.
+    """
+    n = 120
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
+    flow_active = 100.0
+    flow = np.tile([100.0, 100.0, 0.0, 0.0, 100.0, 100.0], n // 6 + 1)[:n] if zero_flow else np.full(n, flow_active)
+
+    streamline_length = 50.0
+    d_m = 0.0
+    alpha_l = 2.0  # Pe = L / alpha_L = 25 (D_m = 0)
+    mean_apv = 1800.0
+    std_apv = 240.0
+
+    # Peak-relative tolerance (R-independent, see docstring). The fixed-atol form
+    # used previously was vacuous at R=2.7: the breakthrough peak amplitude falls
+    # ~1/R (mass spreads over an R-wider front), so a x2-sigma_V error produced an
+    # absolute discrepancy that slipped under any R-independent atol. Comparing
+    # the discrepancy to the local peak amplitude restores an R-independent gate.
+    peak_rel_tol = 0.30
+    # sigma_V in output-bin-index units carries the retardation factor (the front
+    # spreads as R*sigma_x), so the +4*sigma window must include R to keep the full
+    # smoothing kernel in-window at R=2.7.
+    sigma_idx = retardation * (mean_apv / streamline_length) * np.sqrt(2.0 * alpha_l * streamline_length) / flow_active
+
+    j_in = 12
+    cin = np.zeros(n)
+    cin[10:15] = 1.0  # cin[0] = 0 so the warm-start constant is 0
+
+    with warn_module.catch_warnings():
+        warn_module.simplefilter("ignore")
+        if n_bins == 1:
+            cout_fast = infiltration_to_extraction(
+                cin=cin,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=cout_tedges,
+                aquifer_pore_volumes=np.array([mean_apv]),
+                mean_streamline_length=streamline_length,
+                mean_molecular_diffusivity=d_m,
+                mean_longitudinal_dispersivity=alpha_l,
+                retardation_factor=retardation,
+            )
+            cout_exact = diffusion_exact(
+                cin=cin,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=cout_tedges,
+                aquifer_pore_volumes=np.array([mean_apv]),
+                streamline_length=np.array([streamline_length]),
+                molecular_diffusivity=d_m,
+                longitudinal_dispersivity=alpha_l,
+                retardation_factor=retardation,
+            )
+        else:
+            cout_fast = gamma_infiltration_to_extraction(
+                cin=cin,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=cout_tedges,
+                mean=mean_apv,
+                std=std_apv,
+                n_bins=n_bins,
+                mean_streamline_length=streamline_length,
+                mean_molecular_diffusivity=d_m,
+                mean_longitudinal_dispersivity=alpha_l,
+                retardation_factor=retardation,
+                suppress_dispersion_warning=True,
+            )
+            cout_exact = diffusion_gamma_i2e(
+                cin=cin,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=cout_tedges,
+                mean=mean_apv,
+                std=std_apv,
+                n_bins=n_bins,
+                streamline_length=streamline_length,
+                molecular_diffusivity=d_m,
+                longitudinal_dispersivity=alpha_l,
+                retardation_factor=retardation,
+                suppress_dispersion_warning=True,
+            )
+
+    dt = np.diff(tedges) / pd.Timedelta("1D")
+    centre = _breakthrough_centre_idx(flow=flow, dt=dt, j_in=j_in, retarded_volume=retardation * mean_apv)
+    i_arr = np.arange(n)
+    both_valid = ~np.isnan(cout_fast) & ~np.isnan(cout_exact)
+    window = both_valid & (i_arr >= centre - 1) & (i_arr <= centre + int(4 * sigma_idx))
+    assert window.sum() >= 10
+    # Gate on the discrepancy relative to the local breakthrough peak. At Pe=25 the
+    # two modules agree to <=~18% of the peak (combined K-Z flux-vs-resident and
+    # Gaussian-vs-erfc shape error, R-independent); a x2-sigma_V kernel error
+    # broadens the front and drives this to >=~43%. peak_rel_tol=0.30 sits between
+    # the two and fails the mutation at every R (including R=2.7).
+    peak = np.nanmax(cout_exact[window])
+    assert_allclose(cout_fast[window], cout_exact[window], atol=float(peak_rel_tol * peak), rtol=0)
 
 
 # =============================================================================
@@ -1708,6 +1862,92 @@ def test_column_mass_conservation_multipv(d_m, alpha_l, seed, atol):
     assert_allclose(ratios, 1.0, atol=atol, rtol=0)
 
 
+@pytest.mark.parametrize(
+    "mechanism", ["zero_flow_plateau", "cout_precedes_cin"], ids=["zero_flow_plateau", "cout_precedes_cin"]
+)
+def test_edge_pulse_with_uninformed_region_conserves_mass_without_warning(mechanism):
+    """A pulse with an un-informed output region conserves mass and emits no warning.
+
+    The ``flow_out`` (advect-then-smooth) branch produces output bins that no
+    input bin can reach: bins inside an early zero-flow plateau, or output bins
+    that pre-date the earliest input. The operator clamps the un-informed
+    pre-smoothing values to zero (``diffusion_fast.py``: ``cout_unsmoothed[
+    zero_row_mask] = 0.0``) and validity-normalises the smoothed result, with an
+    ``np.errstate(invalid="ignore")`` guard around the ``smoothed / validity``
+    division because ``smoothed_validity`` is exactly zero in the fully
+    un-informed core.
+
+    Both inputs here *do* exercise that branch (unlike a single matched-grid
+    pulse, where ``spinup="constant"`` zero-fills every output bin so the clamp
+    and the 0/0 division never fire), and this is a regression gate on two
+    finite-precision guards:
+
+    - The clamp must set the un-informed core to **zero**, not NaN: a NaN there
+      propagates through the smoothing matmul into the informed breakthrough
+      limb (turning a finite ``cavg`` into NaN and silently losing its mass), so
+      the breakthrough peak and its rising limb are asserted to stay finite.
+    - The ``errstate`` guard must stay: removing it lets the 0/0 in the
+      un-informed core raise ``RuntimeWarning: invalid value encountered in
+      divide``, which the ``simplefilter("error")`` context turns into a failure.
+
+    The pulse sits two bins past the start of the informed region so its full
+    breakthrough is captured and mass is conserved to machine precision, while
+    the un-informed core is wide enough that ``smoothed_validity`` is exactly
+    zero there. ``D_m=0.5`` gives a kernel wide enough that a re-introduced NaN
+    clamp reaches the breakthrough rising limb.
+    """
+    n = 120
+    v_pore = 500.0  # breakthrough centre ~ 5 bins past injection at Q=100
+    streamline_length = 80.0
+    d_m = 0.5
+
+    if mechanism == "zero_flow_plateau":
+        # Early zero-flow plateau leaves the leading output bins un-informed.
+        tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+        cout_tedges = tedges
+        flow = np.full(n, 100.0)
+        flow[:20] = 0.0
+        j_pulse = 22  # two bins after flow resumes
+        spinup = "constant"
+    else:
+        # Output window starts 30 days before the input window; spinup=None so
+        # there is no warm-start echo to fill the leading output bins.
+        tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D") + pd.Timedelta(days=30)
+        cout_tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+        flow = np.full(n, 100.0)
+        j_pulse = 2  # two bins into the input window
+        spinup = None
+
+    flow_out = flow.copy()
+    cin = np.zeros(n)
+    cin[j_pulse] = 1.0
+
+    with warn_module.catch_warnings():
+        warn_module.simplefilter("error")
+        cout = infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([v_pore]),
+            mean_streamline_length=streamline_length,
+            mean_molecular_diffusivity=d_m,
+            mean_longitudinal_dispersivity=0.0,
+            flow_out=flow_out,
+            spinup=spinup,
+        )
+
+    # The un-informed core is genuinely present (some bins are NaN).
+    assert np.any(np.isnan(cout)), "test input must exercise the un-informed (clamped) branch"
+    # Exact mass conservation: the full pulse breakthrough lies in the informed
+    # region (matched cout/tedges resolution, flow_out == flow -> V_out == V_in).
+    assert_allclose(np.nansum(cout), cin.sum(), atol=1e-12, rtol=0)
+    # The breakthrough peak and its rising limb must be finite: the clamp fills
+    # the un-informed core with zero, so no NaN bleeds into the informed front.
+    peak_bin = int(np.nanargmax(cout))
+    assert not np.any(np.isnan(cout[peak_bin - 2 : peak_bin + 1]))
+
+
 # =============================================================================
 # Sigma-sensitivity: tests that fail if sigma_V is wrong by a constant factor
 #
@@ -1798,6 +2038,81 @@ def test_delta_input_matches_analytical_gaussian_constant_flow(retardation):
     expected_peak_idx = int(np.argmax(expected[valid]))
     assert abs(peak_idx - expected_peak_idx) <= 1
     assert abs(cout[valid][peak_idx] - expected[valid][expected_peak_idx]) < 1e-2
+
+
+@pytest.mark.parametrize(
+    ("retardation", "d_m", "alpha_l"),
+    [
+        # Pure-dispersion legs (D_m=0) isolate the alpha_L variance term, which
+        # the D_m-only delta tests above never exercise: there sigma_V is set
+        # entirely by 2*alpha_L*L, so the R coupling lives ONLY inside the
+        # alpha_L term of _compute_sigma_v.
+        (1.0, 0.0, 2.0),
+        (2.7, 0.0, 2.0),
+        # Mixed leg pins the relative weight of the two variance terms when
+        # both D_m and alpha_L are active at R != 1.
+        (2.7, 1.0, 2.0),
+    ],
+)
+def test_delta_input_alpha_l_matches_analytical_gaussian_constant_flow(retardation, d_m, alpha_l):
+    """Delta pulse with dispersivity (alpha_L>0) matches the analytical Gaussian.
+
+    Companion to :func:`test_delta_input_matches_analytical_gaussian_constant_flow`,
+    which hard-codes ``alpha_l=0`` and therefore probes the R coupling only
+    through the molecular-diffusion (``2*D_m*tau``) variance term. Here the
+    pure-dispersion legs set ``d_m=0``, so the V-coordinate sigma is
+
+        sigma_idx = (R*V_pore/L) * sqrt(2*alpha_L*L) / (Q*dt)
+
+    and the R factor enters *exclusively* via the ``2*alpha_L*L`` term of
+    :func:`gwtransport.diffusion_fast._compute_sigma_v`. Pulling R out of that
+    term (so R multiplies only the D_m term) leaves the R=1 leg unchanged but
+    inflates sigma at R=2.7 by R, breaking the kernel match (mutation: max
+    error 6.8e-2 at R=2.7 vs 5e-4 on baseline).
+
+    The mixed ``(d_m>0, alpha_l>0, R=2.7)`` leg additionally pins the relative
+    weight of the two variance terms.
+    """
+    n = 300
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
+    flow_rate = 100.0
+    flow = np.full(n, flow_rate)
+    v_pore = 1000.0
+    streamline_length = 30.0
+
+    j_in = 80
+    cin = np.zeros(n)
+    cin[j_in] = 1.0
+
+    cout = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([v_pore]),
+        mean_streamline_length=streamline_length,
+        mean_molecular_diffusivity=d_m,
+        mean_longitudinal_dispersivity=alpha_l,
+        retardation_factor=retardation,
+        flow_out=flow,
+    )
+
+    tau = retardation * v_pore / flow_rate
+    sigma_x = np.sqrt(2.0 * d_m * tau + 2.0 * alpha_l * streamline_length)
+    sigma_v = (retardation * v_pore / streamline_length) * sigma_x
+    sigma_idx = sigma_v / (flow_rate * 1.0)
+    centre = j_in + tau / 1.0
+
+    i_arr = np.arange(n)
+    sqrt2 = np.sqrt(2.0)
+    expected = 0.5 * (
+        erf((i_arr - centre + 0.5) / (sigma_idx * sqrt2)) - erf((i_arr - centre - 0.5) / (sigma_idx * sqrt2))
+    )
+
+    valid = ~np.isnan(cout)
+    window = (i_arr > centre - 8 * sigma_idx) & (i_arr < centre + 8 * sigma_idx) & valid
+    assert_allclose(cout[window], expected[window], atol=2e-3, rtol=0)
 
 
 def test_delta_input_multipv_matches_moment_averaged_gaussian():
@@ -2029,7 +2344,7 @@ def _good_diffusion_fast_inputs():
         ),
         (
             lambda k: {**k, "retardation_factor": 0.5},
-            r"retardation_factor must be >= 1\.0 \(anti-retardation is not physical\)",
+            r"retardation_factor must be >= 1\.0",
         ),
     ],
 )
@@ -2044,24 +2359,77 @@ def test_validate_diffusion_fast_inputs_raises_on_bad_input(mutate, match_regex)
         _validate_inputs(**bad)
 
 
-@pytest.mark.parametrize("bad_r", [0.0, 0.5, 0.99])
-def test_diffusion_fast_rejects_retardation_below_one(bad_r):
-    """The public infiltration_to_extraction surface raises on R < 1 (mirrors diffusion.py)."""
-    tedges, cout_tedges, flow = _make_transport_data(n_days=50)
-    cin = np.ones(len(flow))
+def _call_diffusion_fast_entry(entry, *, retardation_factor, tedges, cout_tedges, flow):
+    """Invoke one of the four public entry points with R < 1 inputs.
 
+    Centralises the forward/reverse + single-PV/gamma parametrization so the
+    R<1 rejection (and other shared-validator) tests cover every public
+    surface, mirroring the paired forward/reverse convention.
+    """
+    n = len(flow)
+    common = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "mean_streamline_length": 80.0,
+        "mean_molecular_diffusivity": 0.01,
+        "mean_longitudinal_dispersivity": 0.5,
+        "retardation_factor": retardation_factor,
+        "suppress_dispersion_warning": True,
+    }
+    if entry == "infiltration_to_extraction":
+        return infiltration_to_extraction(cin=np.ones(n), aquifer_pore_volumes=np.array([500.0]), **common)
+    if entry == "extraction_to_infiltration":
+        return extraction_to_infiltration(cout=np.ones(n), aquifer_pore_volumes=np.array([500.0]), **common)
+    if entry == "gamma_infiltration_to_extraction":
+        return gamma_infiltration_to_extraction(cin=np.ones(n), mean=500.0, std=100.0, n_bins=5, **common)
+    if entry == "gamma_extraction_to_infiltration":
+        return gamma_extraction_to_infiltration(cout=np.ones(n), mean=500.0, std=100.0, n_bins=5, **common)
+    msg = f"unknown entry {entry}"
+    raise AssertionError(msg)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "infiltration_to_extraction",
+        "extraction_to_infiltration",
+        "gamma_infiltration_to_extraction",
+        "gamma_extraction_to_infiltration",
+    ],
+)
+@pytest.mark.parametrize("bad_r", [0.0, 0.5, 0.99])
+def test_diffusion_fast_rejects_retardation_below_one(entry, bad_r):
+    """Every public surface (forward + reverse, single-PV + gamma) raises on R < 1.
+
+    The forward and reverse entry points share ``_validate_inputs``; this pins
+    that the R>=1 contract fires identically on both directions (mirrors
+    diffusion.py's paired forward/reverse validator coverage), not only on the
+    forward ``infiltration_to_extraction`` path that was previously tested.
+    """
+    tedges, cout_tedges, flow = _make_transport_data(n_days=50)
     with pytest.raises(ValueError, match=r"retardation_factor must be >= 1\.0"):
-        infiltration_to_extraction(
-            cin=cin,
-            flow=flow,
-            tedges=tedges,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volumes=np.array([500.0]),
-            mean_streamline_length=80.0,
-            mean_molecular_diffusivity=0.01,
-            mean_longitudinal_dispersivity=0.5,
-            retardation_factor=bad_r,
-        )
+        _call_diffusion_fast_entry(entry, retardation_factor=bad_r, tedges=tedges, cout_tedges=cout_tedges, flow=flow)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    ["extraction_to_infiltration", "gamma_extraction_to_infiltration"],
+)
+def test_diffusion_fast_reverse_rejects_mismatched_cout_tedges(entry):
+    """Reverse surfaces raise when ``cout_tedges`` length does not match ``cout``.
+
+    Exercises the reverse-only ``len(cout_tedges) != len(cout) + 1`` branch of
+    :func:`gwtransport.diffusion_fast._validate_inputs`, which the forward
+    direction never reaches. ``cout`` has ``len(flow)`` entries, so a
+    ``cout_tedges`` of length ``len(flow)`` (one too short) is invalid.
+    """
+    tedges, _cout_tedges, flow = _make_transport_data(n_days=50)
+    # cout_tedges one element too short for the supplied cout (len == len(flow)).
+    bad_cout_tedges = tedges[:-1]
+
+    with pytest.raises(ValueError, match=r"cout_tedges must have one more element than cout"):
+        _call_diffusion_fast_entry(entry, retardation_factor=1.0, tedges=tedges, cout_tedges=bad_cout_tedges, flow=flow)
 
 
 def test_streamline_length_zero_rejected():

@@ -182,18 +182,6 @@ class TestSimplifyBinsFlowSimplification:
         volume_after = np.sum(new_flow * new_widths)
         assert_array_equal(volume_after, volume_before)
 
-    def test_flow_mass_conservation(self):
-        """Total mass (flow x width x value) should be conserved."""
-        edges = np.array([0.0, 2.0, 3.0, 5.0, 6.0])
-        values = np.array([3.0, 3.0, 7.0, 7.0])
-        flow = np.array([2.0, 4.0, 1.0, 3.0])
-        widths = np.diff(edges)
-        mass_before = np.sum(flow * widths * values)
-        new_edges, new_values, new_flow = simplify_bins(edges=edges, values=values, flow=flow)
-        new_widths = np.diff(new_edges)
-        mass_after = np.sum(new_flow * new_widths * new_values)
-        assert_array_equal(mass_after, mass_before)
-
 
 class TestSimplifyBinsMassConservation:
     """Test that total mass is conserved after simplification."""
@@ -210,13 +198,23 @@ class TestSimplifyBinsMassConservation:
         assert_array_equal(mass_after, mass_before)
 
     def test_mass_conservation_with_flow(self):
-        """Total flowxwidthxvalue (= mass) should be conserved."""
-        edges = np.array([0.0, 1.0, 2.0, 5.0, 6.0])
-        values = np.array([3.0, 3.0, 7.0, 7.0])
-        flow = np.array([2.0, 4.0, 1.0, 3.0])
+        """Total flowxwidthxvalue (= mass) is conserved when a merge group mixes values.
+
+        Values differ within the (tol-merged) group and flow vs width pull the weighting
+        in opposite directions: volumes are 6*1=6 and 1*2=2, so the flow-weighted merged
+        value is (6*2 + 2*8)/(6+2) = 3.5, distinct from the width-only weighting (6.0) and
+        the unweighted mean (5.0). Mass conservation therefore exercises the flow-vs-width
+        value-weighting rather than merging only identical values.
+        """
+        edges = np.array([0.0, 1.0, 3.0])  # widths: 1, 2
+        values = np.array([2.0, 8.0])
+        flow = np.array([6.0, 1.0])
         widths = np.diff(edges)
         mass_before = np.sum(flow * widths * values)
-        new_edges, new_values, new_flow = simplify_bins(edges=edges, values=values, flow=flow)
+        new_edges, new_values, new_flow = simplify_bins(edges=edges, values=values, flow=flow, tol=10.0)
+        # Single merged bin with the flow-volume-weighted value.
+        assert_array_equal(new_edges, [0.0, 3.0])
+        assert_array_equal(new_values, [3.5])
         new_widths = np.diff(new_edges)
         mass_after = np.sum(new_flow * new_widths * new_values)
         assert_array_equal(mass_after, mass_before)

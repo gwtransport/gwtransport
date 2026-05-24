@@ -13,6 +13,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from gwtransport._time import tedges_to_days
 from gwtransport.residence_time import residence_time
 from gwtransport.utils import partial_isin
 
@@ -70,8 +71,8 @@ def _infiltration_to_extraction_weights(
         time-averaged extraction flow over their interval.
     """
     # Convert time edges to days
-    cin_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
-    cout_tedges_days = ((cout_tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    cin_tedges_days = tedges_to_days(tedges)
+    cout_tedges_days = tedges_to_days(cout_tedges, ref=tedges[0])
 
     # Detect zero-flow cout bins: a cout bin is "zero-flow" when the time-
     # averaged extraction flow over its interval is zero. Compute via the

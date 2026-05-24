@@ -70,6 +70,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from gwtransport import gamma
+from gwtransport._time import tedges_to_days
 from gwtransport._validation import (
     _validate_no_nan,
     _validate_non_negative_array,
@@ -1204,7 +1205,7 @@ def _validate_front_tracking_inputs(
     pd.DatetimeIndex,
     npt.NDArray[np.float64],
     SorptionModel,
-    npt.NDArray[np.float64],
+    npt.NDArray[np.floating],
 ]:
     """Validate inputs and create sorption object for front tracking functions.
 
@@ -1249,7 +1250,7 @@ def _validate_front_tracking_inputs(
         raise ValueError(msg)
 
     # Convert cout_tedges to days (relative to tedges[0]) for output computation
-    cout_tedges_days = ((cout_tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    cout_tedges_days = tedges_to_days(cout_tedges, ref=tedges[0])
 
     # Determine which sorption model is requested
     has_retardation = retardation_factor is not None
@@ -1545,7 +1546,7 @@ def infiltration_to_extraction_nonlinear_sorption(
     )
 
     # Flow time edges in days (same reference as cout_tedges_days)
-    flow_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    flow_tedges_days = tedges_to_days(tedges)
 
     # Each pore-volume bin from the gamma distribution is an equal-mass streamtube,
     # so all streamtubes carry equal flow at the outlet. The bundle outlet

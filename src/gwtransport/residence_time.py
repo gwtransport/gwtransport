@@ -35,7 +35,8 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from gwtransport.utils import _make_strictly_monotone, linear_average, linear_interpolate
+from gwtransport._time import tedges_to_days
+from gwtransport.utils import cumulative_flow_volume, linear_average, linear_interpolate
 
 
 def residence_time(
@@ -111,11 +112,10 @@ def residence_time(
         msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
         raise ValueError(msg)
 
-    flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
-    flow_cum = np.concatenate(([0.0], np.cumsum(flow * np.diff(flow_tedges_days))))
+    flow_tedges_days = tedges_to_days(flow_tedges)
     # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
     # by the smallest representable amount so downstream np.interp resolves consistently.
-    flow_cum = _make_strictly_monotone(flow_cum)
+    flow_cum = cumulative_flow_volume(flow, np.diff(flow_tedges_days), strictly_monotone=True)
 
     if index is None:
         # Bin-center evaluation; for piecewise-linear V the midpoint of cumulative values
@@ -123,7 +123,7 @@ def residence_time(
         index_days = (flow_tedges_days[:-1] + flow_tedges_days[1:]) / 2
         flow_cum_at_index = (flow_cum[:-1] + flow_cum[1:]) / 2
     else:
-        index_days = np.asarray((index - flow_tedges[0]) / np.timedelta64(1, "D"))
+        index_days = tedges_to_days(pd.DatetimeIndex(index), ref=flow_tedges[0])
         flow_cum_at_index = linear_interpolate(
             x_ref=flow_tedges_days, y_ref=flow_cum, x_query=index_days, left=np.nan, right=np.nan
         )
@@ -279,16 +279,14 @@ def residence_time_mean(
         n_output_bins = len(tedges_out) - 1
         return np.full((n_pore_volumes, n_output_bins), np.nan)
 
-    flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
-    tedges_out_days = np.asarray((tedges_out - flow_tedges[0]) / np.timedelta64(1, "D"))
-
-    flow_cum = np.concatenate(([0.0], np.cumsum(flow * np.diff(flow_tedges_days))))
+    flow_tedges_days = tedges_to_days(flow_tedges)
+    tedges_out_days = tedges_to_days(tedges_out, ref=flow_tedges[0])
 
     # Q = 0 produces plateaus in flow_cum that np.unique would collapse to a single grid point
     # in the augmented trapezoidal grid, smearing tau's step discontinuity at the kink. The
     # ulp-scale bump restores strict monotonicity; trapezoidal integration over the resulting
     # steep ramp recovers the underlying step exactly.
-    flow_cum = _make_strictly_monotone(flow_cum)
+    flow_cum = cumulative_flow_volume(flow, np.diff(flow_tedges_days), strictly_monotone=True)
 
     # Sign convention: with sign = -1 for extraction_to_infiltration and +1 for
     # infiltration_to_extraction, the look-back/forward target volume is
