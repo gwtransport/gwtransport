@@ -624,8 +624,14 @@ class TestDiffusionMatchesApvdCombined:
         # capturing the full tail, the high-dispersion case loses mass at the
         # finite-window boundary and mass-conservation across the two cases
         # would not hold at the 1e-10 level we are testing for.
+        #
+        # 600-day cout window x 50 gamma bins keeps the baseline mass defect at
+        # machine precision (~6e-16, well inside rtol=1e-10) while remaining
+        # sensitive to the kernel width: the window is tuned so the high-D tail
+        # only just fits, so a x2-sigma error leaks high-D mass past the boundary
+        # (mass defect jumps to ~3e-6) and fails the test.
         n_days_cin = 60
-        n_days_cout = 4000
+        n_days_cout = 600
         tedges = pd.date_range("2020-01-01", periods=n_days_cin + 1, freq="D")
         cout_tedges = pd.date_range("2020-01-01", periods=n_days_cout + 1, freq="D")
 
@@ -633,7 +639,7 @@ class TestDiffusionMatchesApvdCombined:
         cin[20] = 100.0  # Pulse input
         flow = np.full(n_days_cin, mean_flow)
 
-        nbins = 1000
+        nbins = 50
         gbins = gamma_utils.bins(mean=mean_apv, std=std_apv, n_bins=nbins)
         streamline_lengths = np.full(nbins, streamline_length)
 
@@ -717,7 +723,9 @@ class TestDiffusionMatchesApvdCombined:
             retardation_factor=retardation,
         )
 
-        # APVD with combined std (using gamma distribution)
+        # APVD with combined std (using gamma distribution). n_bins=500 already
+        # resolves the gamma to a 0.9% peak match (vs 0.05 tolerance); 5000 bins
+        # gave the same match at ~14x the cost.
         cout_apvd = gamma_i2e(
             cin=cin,
             flow=flow,
@@ -725,7 +733,7 @@ class TestDiffusionMatchesApvdCombined:
             cout_tedges=cout_tedges,
             mean=mean_apv,
             std=sigma_diff_disp,
-            n_bins=5000,
+            n_bins=500,
             retardation_factor=retardation,
         )
 
@@ -755,6 +763,67 @@ class TestDiffusionMatchesApvdCombined:
         # the integrated mass during the spin-up window.
         mass_apvd = np.nansum(cout_apvd)
         np.testing.assert_allclose(mass_apvd, 100.0, rtol=0.10)
+
+    @pytest.mark.parametrize("d_m", [1.0, 2.0, 3.0])
+    def test_single_pv_molecular_diffusion_variance_magnitude(self, d_m):
+        """Molecular-diffusion spreading magnitude matches the analytical sigma.
+
+        Companion to ``test_single_pv_matches_apvd_with_combined_std``, which
+        probes the *dispersivity* (alpha_L) variance term with ``D_m`` set
+        negligible (1e-4). Here the spreading is driven entirely by molecular
+        diffusion (``alpha_L = 0``), so this pins the magnitude of the
+        ``2 * D_m * tau`` variance term that the dispersivity test never
+        exercises.
+
+        For a delta pulse under constant flow and a single pore volume, the
+        outlet breakthrough is a near-Gaussian in time whose standard
+        deviation, expressed in days, is
+
+            sigma_t = (V / L) * sqrt(2 * D_m * tau) / Q,  tau = R * V / Q.
+
+        The test injects a unit pulse, measures the second central moment of
+        the breakthrough, and checks it against this analytical sigma. R is held
+        at 1.0: the moment match is then exact to ~1% (the residual is the
+        Kreft-Zuber flux-correction skew, not a width error). Doubling the
+        variance accumulator in ``diffusion.py`` doubles the measured sigma and
+        fails the 3% tolerance.
+        """
+        streamline_length = 100.0
+        mean_apv = 6000.0
+        mean_flow = 100.0
+        retardation = 1.0
+
+        n_days = 300
+        tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+        cout_tedges = tedges.copy()
+        flow = np.full(n_days, mean_flow)
+        cin = np.zeros(n_days)
+        cin[20] = 1.0
+
+        cout = infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=np.array([mean_apv]),
+            streamline_length=np.array([streamline_length]),
+            molecular_diffusivity=d_m,
+            longitudinal_dispersivity=0.0,
+            retardation_factor=retardation,
+        )
+
+        c = np.nan_to_num(cout)
+        t_centres = np.arange(n_days) + 0.5
+        m0 = c.sum()
+        # Full mass recovered (pulse fully captured in the window).
+        np.testing.assert_allclose(m0, 1.0, atol=1e-6)
+        mean_t = (t_centres * c).sum() / m0
+        sigma_numerical = np.sqrt(((t_centres - mean_t) ** 2 * c).sum() / m0)
+
+        tau = retardation * mean_apv / mean_flow
+        sigma_analytical = (mean_apv / streamline_length) * np.sqrt(2.0 * d_m * tau) / mean_flow
+
+        np.testing.assert_allclose(sigma_numerical, sigma_analytical, rtol=0.03)
 
 
 class TestExtractionToInfiltrationDiffusion:
@@ -960,8 +1029,17 @@ class TestExtractionToInfiltrationDiffusionPhysics:
         # Mass out = sum of cin (excluding NaN)
         mass_out = np.nansum(cin)
 
-        # Mass is approximately conserved through the pseudoinverse
-        assert abs(mass_out - mass_in) / mass_in < 1e-6
+        # The reverse direction is a Tikhonov-regularized deconvolution, so the
+        # round-trip mass defect is the irreducible deconvolution ringing
+        # (~2.0e-7 here), NOT machine precision -- the forward I->E twin at
+        # ``TestInfiltrationToExtractionDiffusionPhysics.test_mass_approximately_conserved``
+        # is correctly pinned at 1e-10. A two-sided window pins the defect from
+        # both ends: it must not regress upward (a one-sided ``< 1e-6`` would
+        # silently tolerate that) and must not collapse toward zero (which would
+        # signal the ringing was spuriously altered), while still leaving
+        # headroom above the 2.0e-7 floor so the test does not flake.
+        relative_defect = abs(mass_out - mass_in) / mass_in
+        assert 1.5e-7 < relative_defect < 3e-7
 
     def test_retardation_shifts_reconstruction(self):
         """Test that retardation factor shifts the reconstruction timing."""
