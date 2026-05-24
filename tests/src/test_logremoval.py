@@ -344,6 +344,24 @@ def test_gamma_cdf_approaches_one():
     assert_allclose(result, 0.0, atol=1e-10)
 
 
+def test_gamma_cdf_is_scaled_gamma():
+    """Test that the log removal CDF matches a scaled gamma distribution.
+
+    R = mu * T, so R ~ Gamma(rt_alpha, scale=mu*rt_beta). This pins the scale factor
+    mu * rt_beta: dropping the decay-rate factor (scale=mu*beta -> beta) would shift
+    the CDF and fail this assertion. Mirrors ``test_gamma_pdf_is_scaled_gamma``.
+    """
+    rt_alpha = 4.0
+    rt_beta = 5.0
+    log10_decay_rate = 0.3
+
+    r_values = np.linspace(0.1, 20.0, 50)
+    cdf_values = gamma_cdf(r=r_values, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
+
+    expected = stats.gamma.cdf(r_values, a=rt_alpha, scale=log10_decay_rate * rt_beta)
+    assert_allclose(cdf_values, expected, rtol=1e-12)
+
+
 @pytest.mark.parametrize(
     ("rt_alpha", "rt_beta", "log10_decay_rate"),
     [

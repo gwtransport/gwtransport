@@ -728,17 +728,23 @@ def test_monotonicity_under_increasing_flow():
     assert np.all(np.diff(tau[valid]) < 0)
 
 
-def test_nan_flow_returns_nan():
+@pytest.mark.parametrize("nan_index", [0, 1, -1])
+def test_nan_flow_returns_nan(nan_index):
     """A single NaN in flow makes the result all-NaN with the right shape.
 
     ``np.any(flow < 0)`` evaluates ``False`` for NaN under IEEE 754; the gate at
-    residence_time.py:107 must therefore also catch NaN explicitly, otherwise NaN propagates
+    residence_time.py:105 must therefore also catch NaN explicitly, otherwise NaN propagates
     through ``cumsum`` into ``flow_cum`` and ``residence_time_mean`` (which calls
     ``linear_average``, requiring strictly-ascending ``x_data``) fails noisily. This test pins
     the symmetric NaN-return behavior across both functions.
+
+    The NaN position is parametrized: an early NaN (index 0 or 1) poisons everything
+    downstream of ``cumsum`` and would pass even without the gate, but a late NaN (index -1)
+    leaves the leading entries finite, exposing a partial-NaN result if the gate is removed.
     """
     flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    flow_values = np.array([100.0, np.nan, 100.0, 100.0, 100.0])
+    flow_values = np.array([100.0, 100.0, 100.0, 100.0, 100.0])
+    flow_values[nan_index] = np.nan
     pore_volume = 100.0
 
     rt = residence_time(
@@ -759,3 +765,53 @@ def test_nan_flow_returns_nan():
     )
     assert rt_mean.shape == (1, len(flow_tedges) - 1)
     assert np.all(np.isnan(rt_mean))
+
+
+@pytest.mark.parametrize("tz", ["UTC", "America/New_York"])
+def test_timezone_invariance(tz):
+    """A tz-aware ``flow_tedges`` (no DST in-window) matches the tz-naive result.
+
+    Both functions reduce time edges to days relative to ``flow_tedges[0]``, so the result
+    is origin-invariant: any constant shift -- including a tz strip or UTC-normalize --
+    cancels by construction. This guard therefore does NOT lock origin-preservation. It
+    locks the narrower, still-useful contract that a tz-aware index with the same
+    wall-clock spacing as its naive counterpart (no DST transition in the window) yields
+    bit-identical days, which is the realistic path for the package's UTC-aware
+    ``get_soil_temperature``/``generate_example_data`` indices. (Across a DST boundary the
+    localized day-spacing is not constant, so the equality holds only for DST-free windows
+    such as the January one used here.)
+    """
+    flow_values = np.array([100.0, 110.0, 105.0, 95.0, 98.0, 102.0, 107.0, 103.0, 96.0])
+    naive = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
+    aware = naive.tz_localize(tz)
+    pore_volume = 200.0
+
+    rt_naive = residence_time(
+        flow=flow_values,
+        flow_tedges=naive,
+        aquifer_pore_volumes=pore_volume,
+        direction="extraction_to_infiltration",
+    )
+    rt_aware = residence_time(
+        flow=flow_values,
+        flow_tedges=aware,
+        aquifer_pore_volumes=pore_volume,
+        direction="extraction_to_infiltration",
+    )
+    np.testing.assert_array_equal(rt_aware, rt_naive)
+
+    rt_mean_naive = residence_time_mean(
+        flow=flow_values,
+        flow_tedges=naive,
+        tedges_out=naive,
+        aquifer_pore_volumes=pore_volume,
+        direction="extraction_to_infiltration",
+    )
+    rt_mean_aware = residence_time_mean(
+        flow=flow_values,
+        flow_tedges=aware,
+        tedges_out=aware,
+        aquifer_pore_volumes=pore_volume,
+        direction="extraction_to_infiltration",
+    )
+    np.testing.assert_array_equal(rt_mean_aware, rt_mean_naive)
