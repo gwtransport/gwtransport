@@ -24,6 +24,7 @@ from scipy.integrate import IntegrationWarning, quad
 from scipy.optimize import brentq
 
 from gwtransport.fronttracking.math import (
+    _C_MIN,
     BrooksCoreyConductivity,
     FreundlichSorption,
     LangmuirSorption,
@@ -554,7 +555,9 @@ class DecayingShockWave(Wave):
         construction.
     c_decay_initial : float
         Concentration on the decaying side at θ=theta_start [mass/volume].
-        Must be strictly positive.
+        Must be non-negative; a fully-drained collision value of ``0`` is
+        floored to the shared dry-soil singularity floor ``_C_MIN`` so the
+        retardation and secant-speed evaluations stay finite (issue #222).
     c_fixed : float
         Concentration on the non-decaying side [mass/volume]. Constant in θ.
         Non-negative.
@@ -609,9 +612,12 @@ class DecayingShockWave(Wave):
         if self.decay_side not in {"left", "right"}:
             msg = f"decay_side must be 'left' or 'right', got {self.decay_side!r}"
             raise ValueError(msg)
-        if self.c_decay_initial <= 0.0:
-            msg = f"c_decay_initial must be positive, got {self.c_decay_initial}"
+        if self.c_decay_initial < 0.0:
+            msg = f"c_decay_initial must be non-negative, got {self.c_decay_initial}"
             raise ValueError(msg)
+        # Floor a fully-drained fan tail (c_decay_initial == 0, #222) to _C_MIN so the
+        # retardation and secant-speed evaluations stay finite (package floor convention).
+        self.c_decay_initial = max(self.c_decay_initial, _C_MIN)
         if self.c_fixed < 0.0:
             msg = f"c_fixed must be non-negative, got {self.c_fixed}"
             raise ValueError(msg)
@@ -702,21 +708,26 @@ class DecayingShockWave(Wave):
         """Cumulative flow θ at which ``c_decay`` reaches ``c_fan_tail``.
 
         ``c_decay(θ)`` is strictly monotone from ``c_decay_initial`` toward
-        ``c_fan_tail``, so the exhaustion θ is well-defined. Returns ``None``
-        if the fan tail is at (or beyond) the collision concentration — i.e.
-        the fan never decays past it, so no exhaustion event occurs.
+        ``c_fan_tail``, so the exhaustion θ is well-defined. The crossing test is
+        orientation-agnostic: it holds for both the shrinking decay
+        (``c_decay_initial > c_fan_tail``) and the growing decay
+        (``c_decay_initial < c_fan_tail``). Returns ``None`` when ``c_fan_tail``
+        is not strictly between ``c_fixed`` and ``c_decay_initial`` — e.g. full drying
+        (``c_fan_tail == c_fixed``), where the decay asymptotically merges with
+        the fixed state and no finite exhaustion event occurs.
 
         Returns
         -------
         float or None
             Cumulative flow θ at exhaustion, or ``None`` if not reached.
         """
-        # The decaying side runs from c_decay_initial toward c_fan_tail. Only a
-        # tail STRICTLY between c_fixed and c_decay_initial gives an interior
-        # exhaustion. Full drying (c_fan_tail == c_fixed) decays asymptotically
-        # toward the floor with no finite crossing, so return None rather than
-        # growing the bracket forever (van Genuchten would otherwise hang).
-        if not (self.c_fixed < self.c_fan_tail < self.c_decay_initial):
+        # An interior exhaustion needs c_fan_tail strictly between c_fixed and
+        # c_decay_initial (orientation-agnostic via min/max). Full drying
+        # (c_fan_tail == c_fixed) merges asymptotically with no finite crossing —
+        # return None rather than grow the bracket forever (van Genuchten would hang).
+        c_lo = min(self.c_fixed, self.c_decay_initial)
+        c_hi = max(self.c_fixed, self.c_decay_initial)
+        if not (c_lo < self.c_fan_tail < c_hi):
             return None
 
         theta_local_collision = self.theta_start - self.theta_origin
@@ -724,7 +735,7 @@ class DecayingShockWave(Wave):
         def f(theta_local: float) -> float:
             return self._c_decay_at_theta_local(theta_local) - self.c_fan_tail
 
-        # c_decay decreases with θ_local; find where it crosses c_fan_tail.
+        # c_decay is monotone in θ_local; find where it crosses c_fan_tail.
         f_lo = f(theta_local_collision)
         if f_lo <= 0.0:
             # Already at/below the tail at collision — exhausted immediately.
