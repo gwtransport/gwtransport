@@ -772,6 +772,19 @@ def compute_bin_averaged_concentration_exact(
     integration (correct for canonical single-DSW cases; may miscount
     multi-DSW or n<1 mirror geometries).
 
+    **NaN-masking (conservation form only):** a raw residual
+    ``Δm_out / Δθ < −eps_clamp`` signals a genuinely un-informed bin —
+    the inlet integral and the wave list are on inconsistent θ ranges —
+    and is returned as ``numpy.nan``.  Residuals with
+    ``|Δm_out / Δθ| ≤ eps_clamp`` are benign floating-point cancellation
+    noise and are clamped to 0.  Positive residuals (including correct
+    late-breakthrough bins that extend past the inlet window) are returned
+    unchanged.  The threshold is ``eps_clamp = 1e-12 · max|m_in| / min Δθ``,
+    where ``max|m_in|`` is the cumulative-inlet-mass scale and ``min Δθ`` is
+    the narrowest output bin; this covers the ~400-ULP quadrature noise in
+    ``m_in − m_dom`` while remaining well below any physically meaningful
+    negative (which equals a full concentration times Δθ).
+
     Parameters
     ----------
     theta_bin_edges : array-like
@@ -795,6 +808,10 @@ def compute_bin_averaged_concentration_exact(
     -------
     c_avg : numpy.ndarray
         Bin-averaged outlet concentrations [mass/volume]. Length N.
+        Bins whose raw conservation-form residual is genuinely negative
+        (``< −eps_clamp``) are returned as ``numpy.nan`` (un-informed);
+        positive bins, including correct late-breakthrough bins past the
+        inlet window, are returned as-is.
 
     Raises
     ------
@@ -831,32 +848,40 @@ def compute_bin_averaged_concentration_exact(
             for i in range(len(theta_edges_out))
         ])
         result = np.diff(m_out_at_edges) / np.diff(theta_edges_out)
-        # FP-noise clamp: m_in − m_dom subtracts nearly-equal large numbers,
-        # leaving ~1 ULP residuals on either sign. Clamp those to 0.
-        max_c = float(np.max(np.abs(result))) if result.size else 0.0
-        eps_clamp = 1e-12 * max(max_c, 1.0)
-        result = np.where(np.abs(result) < eps_clamp, 0.0, result)
-        # Large-negative diagnostic: residuals beyond the FP-noise band signal
-        # a real conservation-form violation, most commonly the post-inlet
-        # artifact — output edges exceed ``theta_edges_inlet[-1]``, m_in
-        # caps at the last injected mass while the simulator's wave list
-        # continues to evolve, producing FP-cancellation residuals from
-        # inconsistent θ ranges. Surface as a UserWarning; clamp to 0 to
-        # preserve the ``cout >= 0`` API contract.
-        if result.size:
-            min_val = float(np.min(result))
-            if min_val < -eps_clamp:
-                msg = (
-                    f"compute_bin_averaged_concentration_exact produced concentrations "
-                    f"as negative as {min_val:.3e} (clamp threshold -{eps_clamp:.3e}); "
-                    f"likely caused by output θ-bin edges exceeding "
-                    f"theta_edges_inlet[-1]={float(np.asarray(theta_edges_inlet)[-1]):.3f}, "
-                    "putting the inlet integral and the wave list on inconsistent θ ranges. "
-                    "Extend cin with trailing zeros to cover the output range, "
-                    "or restrict output bins to within the inlet window."
-                )
-                warnings.warn(msg, UserWarning, stacklevel=2)
-        return np.maximum(result, 0.0)
+        # FP-noise bound: m_in − m_dom subtracts nearly-equal numbers of
+        # magnitude max|m_in|, leaving ~400-ULP residuals per edge; after
+        # differencing two adjacent edges and dividing by Δθ, the noise
+        # floor in raw concentration is ~1e-12 · max|m_in| / min(Δθ).
+        # Cumulative inlet mass is monotone non-decreasing (cin ≥ 0), so its max over the
+        # output edges is its value at the largest edge — one evaluation, not a per-edge loop.
+        max_m_in = float(compute_cumulative_inlet_mass(float(theta_edges_out[-1]), cin, theta_edges_inlet))
+        dtheta_min = float(np.min(np.diff(theta_edges_out)))
+        eps_clamp = 1e-12 * max(max_m_in, 1.0) / dtheta_min
+        # Three-way rule:
+        #   result < −eps_clamp  →  NaN  (un-informed: inconsistent θ ranges)
+        #   |result| ≤ eps_clamp →  0    (benign FP cancellation noise)
+        #   result > eps_clamp   →  keep (correct, incl. late-breakthrough bins)
+        nan_mask = result < -eps_clamp
+        zero_mask = np.abs(result) <= eps_clamp
+        result = np.where(nan_mask, np.nan, np.where(zero_mask, 0.0, result))
+        # Warn when genuinely un-informed bins appear: output θ-bin edges
+        # exceed ``theta_edges_inlet[-1]``, so m_in caps while the wave
+        # list continues to evolve, producing negative conservation residuals
+        # from inconsistent θ ranges. Those bins are returned as NaN.
+        if nan_mask.any():
+            n_nan = int(nan_mask.sum())
+            min_val = float(np.nanmin(np.diff(m_out_at_edges)[nan_mask] / np.diff(theta_edges_out)[nan_mask]))
+            msg = (
+                f"compute_bin_averaged_concentration_exact: {n_nan} output bin(s) have "
+                f"genuinely negative conservation residuals (most negative: {min_val:.3e}); "
+                f"returned as NaN.  Likely caused by output θ-bin edges exceeding "
+                f"theta_edges_inlet[-1]={float(np.asarray(theta_edges_inlet)[-1]):.3f}, "
+                "putting the inlet integral and the wave list on inconsistent θ ranges. "
+                "Extend cin with trailing zeros to cover the output range, "
+                "or restrict output bins to within the inlet window."
+            )
+            warnings.warn(msg, UserWarning, stacklevel=2)
+        return result
 
     # Legacy outlet-segment integration (compatible with hand-constructed
     # wave-list tests; correct for canonical single-DSW cases).
