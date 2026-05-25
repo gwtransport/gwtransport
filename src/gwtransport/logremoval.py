@@ -81,13 +81,25 @@ Available functions:
   effective mean log removal given gamma-distributed aquifer pore volume. Solves inverse problem:
   flow = apv_beta * mu * ln(10) / (10^(target_mean / apv_alpha) - 1).
 
+- :func:`time_until_log_removal_breach` - For a flow time series, the days at each step until the
+  flow first rises past the threshold flow Q* (where the effective mean log removal equals a
+  target), i.e. the headroom before the target is breached. NaN where it never breaches.
+
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 from scipy import optimize, stats
+
+from gwtransport._time import tedges_to_days
+from gwtransport._validation import (
+    _validate_no_nan,
+    _validate_non_negative_array,
+    _validate_tedges_parity,
+)
 
 
 def residence_time_to_log_removal(
@@ -594,3 +606,112 @@ def gamma_find_flow_for_target_mean(
 
     u_root = optimize.brentq(residual, 0.0, u_upper)
     return 1.0 / float(u_root)  # type: ignore[arg-type]
+
+
+def time_until_log_removal_breach(
+    *,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
+    apv_alpha: float,
+    apv_beta: float,
+    apv_loc: float = 0.0,
+    log10_decay_rate: float,
+    target_log_removal: float,
+) -> npt.NDArray[np.floating]:
+    """Days until the flow series breaches a target effective log removal.
+
+    For a (shifted) gamma-distributed aquifer pore volume, the effective parallel-mean log
+    removal decreases monotonically with flow: faster extraction shortens residence time and
+    removes fewer pathogens. The threshold flow ``Q*`` at which the effective mean equals
+    ``target_log_removal`` is given in closed form by :func:`gamma_find_flow_for_target_mean`;
+    the target is met while ``flow <= Q*`` and breached once ``flow > Q*``.
+
+    For each input bin this returns the headroom -- the number of days from the start of the
+    bin until the flow series first rises above ``Q*`` (the first breaching bin). A bin already
+    above ``Q*`` has zero headroom; a bin from which the flow never breaches again returns
+    ``NaN``. This is a *snapshot* evaluation of the effective mean at the instantaneous flow;
+    it does not integrate the transient residence-time evolution that follows a flow change.
+
+    Parameters
+    ----------
+    flow : array-like
+        Extraction flow rate, constant over each ``[tedges[i], tedges[i+1])`` bin (same volume
+        units as ``apv_beta`` per day). Non-negative. Length ``len(tedges) - 1``.
+    tedges : pandas.DatetimeIndex
+        Time bin edges. Length ``n + 1`` for ``n`` flow bins.
+    apv_alpha : float
+        Shape parameter of the gamma aquifer-pore-volume distribution. Positive.
+    apv_beta : float
+        Scale parameter of the gamma aquifer-pore-volume distribution (volume). Positive.
+    apv_loc : float, optional
+        Minimum aquifer pore volume (gamma location). Non-negative. Default ``0.0``.
+    log10_decay_rate : float
+        Log10 decay rate mu (log10/day). Positive.
+    target_log_removal : float
+        Target effective mean log removal to stay at or above. Positive.
+
+    Returns
+    -------
+    ndarray
+        Headroom in days for each flow bin (length ``len(tedges) - 1``). ``0.0`` for a bin
+        already in breach; ``NaN`` for a bin from which no later bin breaches the target.
+
+    Raises
+    ------
+    ValueError
+        If ``tedges`` does not have one more element than ``flow``, if ``flow`` contains NaN or
+        negative values, or (via :func:`gamma_find_flow_for_target_mean`) if the gamma
+        parameters, ``log10_decay_rate``, or ``target_log_removal`` are out of range.
+
+    See Also
+    --------
+    gamma_find_flow_for_target_mean : Closed-form threshold flow ``Q*``.
+    gamma_mean : Effective mean log removal for gamma-distributed residence time.
+    :ref:`concept-pore-volume-distribution` : Why residence times are distributed.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import pandas as pd
+    >>> tedges = pd.date_range("2025-01-01", periods=5, freq="D")
+    >>> flow = np.array([10.0, 11.0, 15.0, 16.0])  # rises past Q* (~12.8) at bin 2
+    >>> headroom = time_until_log_removal_breach(
+    ...     flow=flow,
+    ...     tedges=tedges,
+    ...     apv_alpha=2.0,
+    ...     apv_beta=100.0,
+    ...     log10_decay_rate=0.5,
+    ...     target_log_removal=2.0,
+    ... )
+    >>> headroom.tolist()
+    [2.0, 1.0, 0.0, 0.0]
+    """
+    flow_arr = np.asarray(flow, dtype=float)
+    _validate_tedges_parity(tedges, flow_arr, tedges_name="tedges", values_name="flow")
+    _validate_no_nan(flow_arr, name="flow")
+    _validate_non_negative_array(flow_arr, name="flow")
+
+    # Threshold flow Q*: gamma_find_flow_for_target_mean validates apv_*, log10_decay_rate and
+    # target_log_removal. The effective mean LR decreases with flow, so the target is met while
+    # flow <= Q* and breached once flow > Q*.
+    q_star = gamma_find_flow_for_target_mean(
+        target_mean=target_log_removal,
+        apv_alpha=apv_alpha,
+        apv_beta=apv_beta,
+        apv_loc=apv_loc,
+        log10_decay_rate=log10_decay_rate,
+    )
+
+    edge_days = tedges_to_days(tedges)
+    n = flow_arr.size
+    breach_idx = np.flatnonzero(flow_arr > q_star)
+    if breach_idx.size == 0:
+        return np.full(n, np.nan)
+
+    # First breaching bin at or after each bin i, via the sorted breach indices (no Python loop).
+    pos = np.searchsorted(breach_idx, np.arange(n), side="left")
+    has_future_breach = pos < breach_idx.size
+    first_breach = breach_idx[np.clip(pos, 0, breach_idx.size - 1)]
+    # first_breach >= i and edge_days is non-decreasing, so headroom is always >= 0.
+    headroom = edge_days[first_breach] - edge_days[:n]
+    return np.where(has_future_breach, headroom, np.nan)
