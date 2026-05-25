@@ -50,7 +50,7 @@ cout = infiltration_to_extraction(
     retardation_factor=1.0,
 )  # [g/l] same units as cin
 
-# Note: Initial output values are NaN until the first cin value has fully passed the aquifer
+# Note: Initial output values are NaN until the first cin value has fully passed the smallest aquifer pore volume.
 ```
 
 This efficiently computes `cout` with 1D transport for every aquifer pore volume and then averages over the aquifer pore volumes.

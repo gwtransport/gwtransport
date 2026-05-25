@@ -368,7 +368,6 @@ def _validate_diffusion_inputs(
     molecular_diffusivity: np.ndarray,
     longitudinal_dispersivity: np.ndarray,
     retardation_factor: float,
-    suppress_dispersion_warning: bool,
     cin_values: np.ndarray | None = None,
     cout_values: np.ndarray | None = None,
     cout_tedges: pd.DatetimeIndex | None = None,
@@ -387,21 +386,10 @@ def _validate_diffusion_inputs(
     verbatim from the prior duplicated prologue so that ``match=`` regex tests do
     not break.
 
-    The dispersion warning (``UserWarning``) is emitted here as well since the
-    same precondition is checked alongside the validations; it is physically
-    motivated guidance about double-counting velocity heterogeneity, not an
-    input-validation rule.
-
     Raises
     ------
     ValueError
         If any check fails. The message identifies which invariant was violated.
-
-    Warns
-    -----
-    UserWarning
-        If ``n_pore_volumes > 1`` and any ``longitudinal_dispersivity > 0``
-        and ``suppress_dispersion_warning is False``.
     """
     n_pore_volumes = len(aquifer_pore_volumes)
 
@@ -442,19 +430,6 @@ def _validate_diffusion_inputs(
     if retardation_factor < 1.0:
         msg = "retardation_factor must be >= 1.0"
         raise ValueError(msg)
-
-    if n_pore_volumes > 1 and np.any(longitudinal_dispersivity > 0) and not suppress_dispersion_warning:
-        msg = (
-            "Using multiple aquifer_pore_volumes with non-zero longitudinal_dispersivity. "
-            "Both represent spreading from velocity heterogeneity at different scales.\n\n"
-            "This is appropriate when:\n"
-            "  - APVD comes from streamline analysis (explicit geometry)\n"
-            "  - You want to add unresolved microdispersion and molecular diffusion\n\n"
-            "This may double-count spreading when:\n"
-            "  - APVD was calibrated from measurements (microdispersion already included)\n\n"
-            "Suppress this warning with suppress_dispersion_warning=True."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=3)
 
 
 def _infiltration_to_extraction_coeff_matrix(
@@ -588,7 +563,6 @@ def infiltration_to_extraction(
     molecular_diffusivity: npt.ArrayLike,
     longitudinal_dispersivity: npt.ArrayLike,
     retardation_factor: float = 1.0,
-    suppress_dispersion_warning: bool = False,
     spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
@@ -668,9 +642,6 @@ def infiltration_to_extraction(
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
         Values > 1.0 indicate slower transport due to sorption.
-    suppress_dispersion_warning : bool, optional
-        If True, suppress the warning when using multiple pore volumes with
-        non-zero longitudinal_dispersivity. Default is False.
 
     Returns
     -------
@@ -808,7 +779,6 @@ def infiltration_to_extraction(
         molecular_diffusivity=molecular_diffusivity,
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
-        suppress_dispersion_warning=suppress_dispersion_warning,
         cin_values=cin,
     )
 
@@ -849,7 +819,6 @@ def extraction_to_infiltration(
     molecular_diffusivity: npt.ArrayLike,
     longitudinal_dispersivity: npt.ArrayLike,
     retardation_factor: float = 1.0,
-    suppress_dispersion_warning: bool = False,
     regularization_strength: float = 1e-10,
     spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
@@ -897,9 +866,6 @@ def extraction_to_infiltration(
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
         Values > 1.0 indicate slower transport due to sorption.
-    suppress_dispersion_warning : bool, optional
-        If True, suppress the warning when using multiple pore volumes with
-        non-zero longitudinal_dispersivity. Default is False.
     regularization_strength : float, optional
         Tikhonov regularization parameter λ. See
         :func:`gwtransport.advection.extraction_to_infiltration` for details.
@@ -1005,7 +971,6 @@ def extraction_to_infiltration(
         molecular_diffusivity=molecular_diffusivity,
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
-        suppress_dispersion_warning=suppress_dispersion_warning,
         cout_values=cout,
         cout_tedges=cout_tedges,
     )
@@ -1051,7 +1016,6 @@ def gamma_infiltration_to_extraction(
     molecular_diffusivity: float,
     longitudinal_dispersivity: float,
     retardation_factor: float = 1.0,
-    suppress_dispersion_warning: bool = False,
     spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
@@ -1100,9 +1064,6 @@ def gamma_infiltration_to_extraction(
         Longitudinal dispersivity [m]. Must be non-negative.
     retardation_factor : float, optional
         Retardation factor (default 1.0). Values > 1.0 indicate slower transport.
-    suppress_dispersion_warning : bool, optional
-        Suppress warning about combining multiple pore volumes with dispersivity.
-        Default is False.
 
     Returns
     -------
@@ -1169,7 +1130,6 @@ def gamma_infiltration_to_extraction(
         molecular_diffusivity=molecular_diffusivity,
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
-        suppress_dispersion_warning=suppress_dispersion_warning,
         spinup=spinup,
     )
 
@@ -1190,7 +1150,6 @@ def gamma_extraction_to_infiltration(
     molecular_diffusivity: float,
     longitudinal_dispersivity: float,
     retardation_factor: float = 1.0,
-    suppress_dispersion_warning: bool = False,
     regularization_strength: float = 1e-10,
     spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
@@ -1240,9 +1199,6 @@ def gamma_extraction_to_infiltration(
         Longitudinal dispersivity [m]. Must be non-negative.
     retardation_factor : float, optional
         Retardation factor (default 1.0). Values > 1.0 indicate slower transport.
-    suppress_dispersion_warning : bool, optional
-        Suppress warning about combining multiple pore volumes with dispersivity.
-        Default is False.
     regularization_strength : float, optional
         Tikhonov regularization parameter. Default is 1e-10.
 
@@ -1311,7 +1267,6 @@ def gamma_extraction_to_infiltration(
         molecular_diffusivity=molecular_diffusivity,
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
-        suppress_dispersion_warning=suppress_dispersion_warning,
         regularization_strength=regularization_strength,
         spinup=spinup,
     )

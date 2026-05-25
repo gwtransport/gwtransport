@@ -27,17 +27,15 @@ Available functions:
 
 Note on dispersion: The spreading from the pore volume distribution (APVD) represents
 macrodispersion—aquifer-scale velocity heterogeneity that depends on both aquifer
-properties and hydrological boundary conditions. If APVD was calibrated from
-measurements, this spreading already includes microdispersion and molecular diffusion.
-To add microdispersion and molecular diffusion separately (when APVD comes from
-streamline analysis), use :mod:`gwtransport.diffusion`.
+properties and hydrological boundary conditions. To add microdispersion and molecular 
+diffusion separately (when APVD comes from streamline analysis), use :mod:`gwtransport.diffusion`.
 See :ref:`concept-dispersion-scales` for details.
 
-Note on cross-compound calibration: the retardation factor and molecular diffusivity are
-solute-specific, so a std calibrated from measurements of one compound (e.g., temperature
-with D_m ~ 0.1 m²/day) bakes in that compound's retardation and diffusion and is not
-directly transferable to another (e.g., a solute with D_m ~ 1e-4 m²/day). See
-:ref:`concept-variance-components` for the variance breakdown.
+Note on cross-compound calibration: When APVD is calibrated from measurements of one
+compound (e.g., temperature with D_m ~ 0.1 m²/day) and used to predict another (e.g., a
+solute with D_m ~ 1e-4 m²/day), the molecular diffusion contribution is baked into the
+calibrated std. The cleanest fix is to calibrate with :mod:`gwtransport.diffusion_fast`
+instead, which keeps the three contributions separate.
 
 - :func:`extraction_to_infiltration_series` - Single pore volume, time-shift only
   (deconvolution). Shifts extraction time edges backward by residence time. Concentration
@@ -471,14 +469,12 @@ def gamma_infiltration_to_extraction(
     diffusion contribution. When calibrating with the diffusion module, these three
     components are taken into account separately. When ``std`` comes from streamline
     analysis, it represents macrodispersion only; microdispersion and molecular diffusion
-    can be added via the :mod:`gwtransport.diffusion_fast` or :mod:`gwtransport.diffusion`
-    modules.
+    can be added via :mod:`gwtransport.diffusion_fast` or :mod:`gwtransport.diffusion`.
 
-    If calibrating with one compound (e.g., temperature) and predicting for another
-    (e.g., a solute), the baked-in molecular diffusion contribution may need
-    correction — see :ref:`concept-variance-components`.
-    See :ref:`concept-dispersion-scales` for guidance on when to add microdispersion
-    using the diffusion module.
+    For cross-compound prediction (calibrating on temperature and predicting a solute),
+    calibrate with :mod:`gwtransport.diffusion_fast` so the three contributions are
+    tracked separately rather than lumped into a single calibrated ``std``.
+    See :ref:`concept-dispersion-scales` for background.
 
     Examples
     --------
@@ -648,14 +644,12 @@ def gamma_extraction_to_infiltration(
     diffusion contribution. When calibrating with the diffusion module, these three
     components are taken into account separately. When ``std`` comes from streamline
     analysis, it represents macrodispersion only; microdispersion and molecular diffusion
-    can be added via the :mod:`gwtransport.diffusion_fast` or :mod:`gwtransport.diffusion`
-    modules.
+    can be added via :mod:`gwtransport.diffusion_fast` or :mod:`gwtransport.diffusion`.
 
-    If calibrating with one compound (e.g., temperature) and predicting for another
-    (e.g., a solute), the baked-in molecular diffusion contribution may need
-    correction — see :ref:`concept-variance-components`.
-    See :ref:`concept-dispersion-scales` for guidance on when to add microdispersion
-    using the diffusion module.
+    For cross-compound prediction (calibrating on temperature and predicting a solute),
+    calibrate with :mod:`gwtransport.diffusion_fast` so the three contributions are
+    tracked separately rather than lumped into a single calibrated ``std``.
+    See :ref:`concept-dispersion-scales` for background.
 
     Examples
     --------
