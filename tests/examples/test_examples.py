@@ -83,7 +83,12 @@ def test_ipynb(ipynb_path):
 
 def test_notebook_cells_executed(ipynb_path):
     """
-    Test that notebook cells have been executed by checking execution numbers.
+    Test that the notebook ran top-to-bottom and its output is committed.
+
+    Every code cell must have a non-null integer ``execution_count`` (an unexecuted cell has
+    ``None``), and the notebook must retain at least one committed cell output. The pre-commit
+    hook strips only the volatile ``metadata.execution`` timestamps, so ``execution_count`` and
+    cell outputs survive in version control and remain checkable here.
 
     Parameters
     ----------
@@ -93,11 +98,12 @@ def test_notebook_cells_executed(ipynb_path):
     Raises
     ------
     AssertionError
-        If any code cell lacks an execution number.
+        If any code cell lacks an execution number, or the notebook has no committed output.
     """
     with open(ipynb_path, encoding="utf-8") as f:
         nb = nbformat.read(f, as_version=nbformat.NO_CONVERT)
 
+    has_output = False
     for i, cell in enumerate(nb.cells):
         if cell.cell_type == "code":
             execution_count = cell.get("execution_count")
@@ -107,6 +113,10 @@ def test_notebook_cells_executed(ipynb_path):
             assert isinstance(execution_count, int), (
                 f"Cell {i} in {ipynb_path} has invalid execution_count: {execution_count}"
             )
+            if cell.get("outputs"):
+                has_output = True
+
+    assert has_output, f"{ipynb_path} has no committed cell outputs; run the notebook and commit its output"
 
 
 @pytest.mark.xfail(reason="This notebook is expected to fail during execution")
