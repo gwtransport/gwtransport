@@ -78,3 +78,39 @@ for src in sorted(src_dir.glob("*.md")):
 PY
 
 git add .github/agents/
+
+# Strip the volatile per-cell execution timestamps (metadata.execution -- the dates a cell
+# last ran) from staged example notebooks so they never appear in version control.
+# execution_count and cell outputs are intentionally kept: they record that the notebook ran
+# and what it produced, which the example tests verify.
+python3 - <<'PY'
+import json
+import pathlib
+import subprocess
+
+result = subprocess.run(
+    ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+    capture_output=True,
+    text=True,
+)
+staged = [p for p in result.stdout.splitlines() if p.startswith("examples/") and p.endswith(".ipynb")]
+
+for rel_path in staged:
+    nb_path = pathlib.Path(rel_path)
+    if not nb_path.exists():
+        continue
+    with nb_path.open(encoding="utf-8") as f:
+        nb = json.load(f)
+    changed = False
+    for cell in nb.get("cells", []):
+        if cell.get("cell_type") != "code":
+            continue
+        if "execution" in cell.get("metadata", {}):
+            del cell["metadata"]["execution"]
+            changed = True
+    if changed:
+        with nb_path.open("w", encoding="utf-8") as f:
+            json.dump(nb, f, indent=1, ensure_ascii=False)
+            f.write("\n")
+        subprocess.run(["git", "add", rel_path], check=True)
+PY
