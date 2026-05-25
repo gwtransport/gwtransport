@@ -33,11 +33,11 @@ To add microdispersion and molecular diffusion separately (when APVD comes from
 streamline analysis), use :mod:`gwtransport.diffusion`.
 See :ref:`concept-dispersion-scales` for details.
 
-Note on cross-compound calibration: When APVD is calibrated from measurements of one
-compound (e.g., temperature with D_m ~ 0.1 m²/day) and used to predict another (e.g., a
-solute with D_m ~ 1e-4 m²/day), the molecular diffusion contribution baked into the
-calibrated std may need correction. See :doc:`/examples/05_Diffusion_Dispersion` for
-the correction procedure.
+Note on cross-compound calibration: the retardation factor and molecular diffusivity are
+solute-specific, so a std calibrated from measurements of one compound (e.g., temperature
+with D_m ~ 0.1 m²/day) bakes in that compound's retardation and diffusion and is not
+directly transferable to another (e.g., a solute with D_m ~ 1e-4 m²/day). See
+:ref:`concept-variance-components` for the variance breakdown.
 
 - :func:`extraction_to_infiltration_series` - Single pore volume, time-shift only
   (deconvolution). Shifts extraction time edges backward by residence time. Concentration
@@ -471,12 +471,12 @@ def gamma_infiltration_to_extraction(
     diffusion contribution. When calibrating with the diffusion module, these three
     components are taken into account separately. When ``std`` comes from streamline
     analysis, it represents macrodispersion only; microdispersion and molecular diffusion
-    can be added via the diffusion module or by combining variances
-    (see :doc:`/examples/05_Diffusion_Dispersion`).
+    can be added via the :mod:`gwtransport.diffusion_fast` or :mod:`gwtransport.diffusion`
+    modules.
 
     If calibrating with one compound (e.g., temperature) and predicting for another
     (e.g., a solute), the baked-in molecular diffusion contribution may need
-    correction — see :doc:`/examples/05_Diffusion_Dispersion`.
+    correction — see :ref:`concept-variance-components`.
     See :ref:`concept-dispersion-scales` for guidance on when to add microdispersion
     using the diffusion module.
 
@@ -648,12 +648,12 @@ def gamma_extraction_to_infiltration(
     diffusion contribution. When calibrating with the diffusion module, these three
     components are taken into account separately. When ``std`` comes from streamline
     analysis, it represents macrodispersion only; microdispersion and molecular diffusion
-    can be added via the diffusion module or by combining variances
-    (see :doc:`/examples/05_Diffusion_Dispersion`).
+    can be added via the :mod:`gwtransport.diffusion_fast` or :mod:`gwtransport.diffusion`
+    modules.
 
     If calibrating with one compound (e.g., temperature) and predicting for another
     (e.g., a solute), the baked-in molecular diffusion contribution may need
-    correction — see :doc:`/examples/05_Diffusion_Dispersion`.
+    correction — see :ref:`concept-variance-components`.
     See :ref:`concept-dispersion-scales` for guidance on when to add microdispersion
     using the diffusion module.
 

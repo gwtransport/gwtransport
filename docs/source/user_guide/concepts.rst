@@ -132,7 +132,7 @@ A key advantage of ``gwtransport`` is how it handles dispersion by distinguishin
 
 **Molecular diffusion** (:math:`D_m`) is a separate process (Brownian motion), distinct from both macro- and microdispersion.
 
-Both microdispersion and molecular diffusion can be added via the :mod:`gwtransport.diffusion` or :mod:`gwtransport.diffusion_fast` modules, or represented as an equivalent increase of the gamma distribution's ``std`` parameter (variance addition).
+Both microdispersion and molecular diffusion can be added via the :mod:`gwtransport.diffusion` or :mod:`gwtransport.diffusion_fast` modules.
 
 **No numerical dispersion** because:
 
@@ -171,22 +171,14 @@ The longitudinal dispersion coefficient :math:`D_L = D_m + \alpha_L \cdot v` inc
 
 In pore volume units, :math:`\sigma_{V,disp}` is flow-independent, while :math:`\sigma_{V,diff}` decreases with higher flow (proportional to :math:`1/\sqrt{Q}`).
 
-**When calibrating APVD from measurements**, the fitted :math:`\sigma_{apv}` is an *effective* parameter: it already lumps together macrodispersion, microdispersion, and an average molecular diffusion contribution from the calibration window, so downstream calculations treat it as the total. When calibrating with the diffusion module, these three components are tracked separately. Note: if calibrating with one compound (e.g., temperature, :math:`D_m \approx 0.1` m²/day) and predicting for another (e.g., a solute, :math:`D_m \approx 10^{-4}` m²/day), the baked-in diffusion contribution may need correction — see :doc:`/examples/05_Diffusion_Dispersion`.
+**When calibrating APVD from measurements**, the fitted :math:`\sigma_{apv}` is an *effective* parameter: it already lumps together macrodispersion, microdispersion, and an average molecular diffusion contribution from the calibration window, so downstream calculations treat it as the total. When calibrating with the diffusion module, these three components are tracked separately.
 
-**Re-using a calibrated** :math:`\sigma_V` **for a different compound (gamma-parameterised APVDs only):**
+**Some parameters are solute-specific.** The retardation factor :math:`R` and the molecular diffusivity :math:`D_m` are properties of the transported compound, not of the aquifer geometry. A :math:`\sigma_{apv}` calibrated from measurements of one compound (e.g. temperature, :math:`R \approx 2`, :math:`D_m \approx 0.1` m²/day) therefore bakes in *that* compound's retardation and diffusion, and is not directly transferable to another (e.g. a solute, :math:`D_m \approx 10^{-4}` m²/day). For a different compound, recalibrate or re-derive its molecular-diffusion contribution :math:`\sigma_{V,\mathrm{diff}}` with the target :math:`R` and :math:`D_m`; the mechanical-dispersion term :math:`\sigma_{V,\mathrm{disp}}` depends only on geometry (:math:`\alpha_L`, :math:`L`) and carries over unchanged. For discrete-volume APVDs, apply :mod:`gwtransport.diffusion` on top of advection instead. See :ref:`theory-variance-derivations` for the :math:`\sigma_{V,\mathrm{diff}}` derivation.
 
-1. Estimate :math:`\sigma_{V,\mathrm{diff}}^{\mathrm{cal}}` for the calibration compound (e.g. temperature) from its :math:`D_m` and :math:`R` using :math:`\sigma_{V,\mathrm{diff}} = (\bar V/L)\sqrt{2 D_m R \bar V / Q}`.
-2. Subtract its variance to recover the geometric APVD variance: :math:`\sigma_{V,\mathrm{geom}}^2 = \sigma_{V,\mathrm{cal}}^2 - (\sigma_{V,\mathrm{diff}}^{\mathrm{cal}})^{2}`.
-3. Add the (typically much smaller) diffusion variance for the target compound: :math:`\sigma_{V,\mathrm{tgt}}^2 = \sigma_{V,\mathrm{geom}}^2 + (\sigma_{V,\mathrm{diff}}^{\mathrm{tgt}})^{2}`.
+**When computing APVD from streamline analysis**, only macrodispersion (aquifer-scale path length variation) is captured. Microdispersion (:math:`\alpha_L`) and molecular diffusion (:math:`D_m`) must be added using the :mod:`gwtransport.diffusion_fast` or :mod:`gwtransport.diffusion` modules:
 
-Discrete-volume APVDs do not admit this transformation — apply :mod:`gwtransport.diffusion` on top of advection instead. See :ref:`theory-variance-derivations` for the derivation of :math:`\sigma_{V,\mathrm{diff}}`.
-
-**When computing APVD from streamline analysis**, only macrodispersion (aquifer-scale path length variation) is captured. Microdispersion (:math:`\alpha_L`) and molecular diffusion (:math:`D_m`) can be meaningfully added:
-
-- **Gamma-parameterized APVD**: Combine variances by adjusting the standard deviation parameter: :math:`\sigma_{total} = \sqrt{\sigma_{apv}^2 + \sigma_{disp}^2 + \sigma_{diff}^2}`
-- **Discrete streamline volumes**: Variance addition is **not** meaningful for an array of specific geometric measurements. Use the :mod:`gwtransport.diffusion` module to apply microdispersion on top of the advective transport.
-
-See :doc:`/examples/05_Diffusion_Dispersion` for quantitative guidance on comparing these contributions and formulas to convert microdispersion effects to equivalent APVD standard deviation.
+- **Gamma-parameterized APVD**: Use :mod:`gwtransport.diffusion_fast` (standard approach).
+- **Discrete streamline volumes**: Use :mod:`gwtransport.diffusion_fast` or :mod:`gwtransport.diffusion`.
 
 .. _concept-variance-components:
 
