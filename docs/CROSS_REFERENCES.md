@@ -61,5 +61,4 @@ Base URL: `https://gwtransport.github.io/gwtransport/`
 | `examples/02_Residence_Time_Analysis`              | Residence time calculations    |
 | `examples/03_Pathogen_Removal_Bank_Filtration`     | Log removal efficiency         |
 | `examples/04_Deposition_Analysis_Bank_Filtration`  | Deposition analysis            |
-| `examples/05_Diffusion_Dispersion`                 | Dispersion vs APVD             |
 | `examples/10_Advection_with_non_linear_sorption`   | Freundlich sorption            |

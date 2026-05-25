@@ -543,6 +543,16 @@ class FrontTracker:
 
             mass_in_domain(θ) + mass_out_cumulative(θ) = mass_in_cumulative(θ)
 
+        This runtime check runs at the *current* simulation θ (possibly beyond the last
+        θ-bin edge, while the solver drains outlet crossings) and uses the closed-form
+        conservation identity ``m_out(θ) = m_in(θ) − m_dom(θ)`` to machine precision.
+        The non-tautological, integral-based conservation check (an independent
+        breakthrough integral compared to the inlet mass) lives in
+        :func:`gwtransport.fronttracking.validation.verify_physics` check 7, which is
+        evaluated at the well-defined θ_max boundary; that route is intentionally not
+        reused here because its first-order trapezoid would forfeit the machine-precision
+        runtime guarantee and is ill-defined for θ beyond θ_max with a sustained inlet.
+
         Raises
         ------
         RuntimeError

@@ -550,7 +550,7 @@ class TestDecayingShockWave:
             DecayingShockWave(decay_side="middle", **common)
 
         with pytest.raises(ValueError, match="c_decay_initial"):
-            DecayingShockWave(**{**common, "decay_side": "left", "c_decay_initial": 0.0})
+            DecayingShockWave(**{**common, "decay_side": "left", "c_decay_initial": -1.0})
 
         with pytest.raises(ValueError, match="c_fixed"):
             DecayingShockWave(**{**common, "decay_side": "left", "c_fixed": -1.0})
