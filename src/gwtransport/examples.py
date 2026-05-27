@@ -280,7 +280,6 @@ def generate_example_data(
                 mean_molecular_diffusivity=molecular_diffusivity,
                 mean_longitudinal_dispersivity=longitudinal_dispersivity,
                 retardation_factor=retardation_factor,
-                suppress_dispersion_warning=True,
             )
         else:
             cout_values = infiltration_to_extraction(
@@ -305,7 +304,6 @@ def generate_example_data(
             mean_molecular_diffusivity=molecular_diffusivity,
             mean_longitudinal_dispersivity=longitudinal_dispersivity,
             retardation_factor=retardation_factor,
-            suppress_dispersion_warning=True,
         )
     else:
         cout_values = gamma_infiltration_to_extraction(
