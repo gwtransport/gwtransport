@@ -520,11 +520,14 @@ class TestConservationFormBinAverage:
         theta_edges_inlet = np.array([0.0, theta_edges_out[-1] * 3.0])
         cin = np.array([c_left])
 
-        compute_bin_averaged_concentration_exact(
+        result = compute_bin_averaged_concentration_exact(
             theta_edges_out, v_outlet, waves, sorption, cin=cin, theta_edges_inlet=theta_edges_inlet
         )
 
         assert len(recwarn.list) == 0, "No warning expected for output bins inside the inlet window"
+        # In-window bins are fully informed: never NaN, never negative.
+        assert not np.any(np.isnan(result)), "in-window output must not be NaN-masked"
+        assert np.all(result >= 0.0)
 
     def test_conservation_form_warns_when_output_exceeds_inlet_window(self):
         """Driving output edges past ``theta_edges_inlet[-1]`` fires the UserWarning.
@@ -532,8 +535,8 @@ class TestConservationFormBinAverage:
         Once the output range exceeds the inlet window, ``m_in`` saturates at
         the last injected mass while the wave list keeps evolving, producing
         FP-cancellation residuals on inconsistent θ ranges. The function must
-        surface this as a ``UserWarning`` (and still clamp the result to the
-        ``cout >= 0`` contract).
+        surface this as a ``UserWarning`` and NaN-mask the un-informed
+        out-of-window bins; the in-window bins remain non-negative.
         """
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         c_left = 10.0
@@ -554,8 +557,73 @@ class TestConservationFormBinAverage:
                 theta_edges_out, v_outlet, waves, sorption, cin=cin, theta_edges_inlet=theta_edges_inlet
             )
 
-        # The clamp preserves the non-negativity contract despite the warning.
-        assert np.all(result >= 0.0)
+        # Out-of-window (un-informed) bins are NaN-masked (#221); the finite
+        # in-window bins still satisfy the non-negativity contract.
+        assert np.any(np.isnan(result)), "expected un-informed out-of-window bins to be NaN-masked"
+        assert np.all(result[~np.isnan(result)] >= 0.0)
+
+    def test_late_breakthrough_past_inlet_window_stays_finite(self):
+        """Correct positive late breakthrough past the inlet window is KEPT, not NaN-masked.
+
+        A pulse (cin = 10 then 0) injects all its mass by θ=500; the breakthrough reaches the
+        outlet later (θ∈[1000, 1500]). With ``theta_edges_inlet`` ending at 600 those breakthrough
+        bins lie past the inlet window yet carry correct positive concentration — ``m_in`` is
+        already complete and ``m_dom`` drains as the pulse exits. A θ-position NaN rule would
+        wrongly mask them; the raw-residual rule keeps them (#221).
+        """
+        sorption = ConstantRetardation(retardation_factor=2.0)
+        char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=10.0, sorption=sorption, is_active=True)
+        char2 = CharacteristicWave(theta_start=500.0, v_start=0.0, concentration=0.0, sorption=sorption, is_active=True)
+        waves = [char1, char2]
+        v_outlet = 500.0
+        # cin injects 10 over [0, 500] then 0; all mass is in by θ=500, window ends at 600.
+        theta_edges_inlet = np.array([0.0, 500.0, 600.0])
+        cin = np.array([10.0, 0.0])
+        # Output covers the breakthrough pulse (θ∈[1000, 1500]), well past the inlet window.
+        theta_edges_out = np.linspace(900.0, 1600.0, 36)
+
+        c_ref = compute_breakthrough_curve(
+            0.5 * (theta_edges_out[:-1] + theta_edges_out[1:]), v_outlet, waves, sorption
+        )
+        c_avg = compute_bin_averaged_concentration_exact(
+            theta_edges_out, v_outlet, waves, sorption, cin=cin, theta_edges_inlet=theta_edges_inlet
+        )
+
+        assert (c_ref > 1e-9).any(), "test setup invalid: expected a positive out-of-window breakthrough"
+        assert not np.any(np.isnan(c_avg)), "correct out-of-window breakthrough was wrongly NaN-masked"
+        assert np.all(c_avg >= -1e-9)
+        # Mass exiting over the output range equals the injected pulse mass (10 over Δθ=500).
+        mass = float(np.sum(c_avg * np.diff(theta_edges_out)))
+        assert np.isclose(mass, 10.0 * 500.0, rtol=1e-3)
+
+    def test_retained_mass_regime_no_false_nan(self):
+        """Benign sub-ULP residuals in the retained-mass regime stay 0, not NaN (#221).
+
+        With a single sustained shock whose front has not yet reached the outlet, the true
+        breakthrough is identically 0 over the output range while ``m_in`` and ``m_dom`` are both
+        large; their difference carries sub-ULP cancellation noise. The mass-scaled ``eps_clamp``
+        classifies that noise as 0; an output-magnitude-scaled clamp would collapse to its floor
+        here and spuriously NaN-mask a benign zero.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        c_left = 10.0
+        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=c_left, c_right=0.0, sorption=sorption, is_active=True)
+        waves = [shock]
+        v_outlet = 300.0
+        assert shock.speed is not None
+        theta_cross = v_outlet / shock.speed
+        # Output entirely BEFORE the shock reaches the outlet: true breakthrough is 0.
+        theta_edges_out = np.linspace(7.0, theta_cross * 0.8, 60)
+        # Inlet window comfortably covers the output range (consistent θ ranges).
+        theta_edges_inlet = np.array([0.0, theta_cross * 3.0])
+        cin = np.array([c_left])
+
+        result = compute_bin_averaged_concentration_exact(
+            theta_edges_out, v_outlet, waves, sorption, cin=cin, theta_edges_inlet=theta_edges_inlet
+        )
+
+        assert not np.any(np.isnan(result)), "benign retained-mass residuals must not be NaN-masked"
+        assert np.allclose(result, 0.0, atol=1e-9)
 
 
 class TestMachinePrecision:
