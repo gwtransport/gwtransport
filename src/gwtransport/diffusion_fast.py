@@ -27,11 +27,11 @@ dispersion strength.
 Streamtube assumption (no cross-sectional area parameter)
 ---------------------------------------------------------
 
-Each entry in ``aquifer_pore_volumes`` is an independent 1D streamtube sharing the mean
-streamline length ``L``; molecular diffusion enters the V-space variance through
-``D_m * tau`` and mechanical dispersion through ``alpha_L * xi``. Per-streamtube
-``streamline_length`` / ``molecular_diffusivity`` / ``longitudinal_dispersivity`` arrays
-are not supported here -- use :mod:`gwtransport.diffusion` for those.
+Each entry in ``aquifer_pore_volumes`` is an independent 1D streamtube; molecular diffusion
+enters the V-space variance through ``D_m * tau`` and mechanical dispersion through
+``alpha_L * xi``. ``streamline_length`` / ``molecular_diffusivity`` /
+``longitudinal_dispersivity`` may be a scalar (shared by all streamtubes) or an array with
+one value per pore volume, exactly as in :mod:`gwtransport.diffusion`.
 
 When to choose this module vs :mod:`gwtransport.diffusion`
 ----------------------------------------------------------
@@ -42,11 +42,10 @@ concentration on 1D streamtubes, with retardation and the moving-frame variance
 / dispersivity and a cout grid at or finer than the flow grid, this module reproduces
 :mod:`gwtransport.diffusion` to machine precision while being ~80-90x faster (closed form,
 no Gauss-Legendre quadrature, no residence-time inversion) with no penalty as dispersion
-grows -- so it is the right default. Prefer :mod:`gwtransport.diffusion` when you need:
+grows -- so it is the right default. Both modules accept per-streamtube
+``streamline_length`` / ``molecular_diffusivity`` / ``longitudinal_dispersivity`` arrays.
+Prefer :mod:`gwtransport.diffusion` when you need:
 
-- per-streamtube ``streamline_length`` / ``molecular_diffusivity`` /
-  ``longitudinal_dispersivity`` arrays (heterogeneous flow paths -- partially-penetrating
-  wells, wedge-shaped capture zones);
 - a cout grid *coarser* than the flow detail (this module treats ``flow_out`` as constant
   within each cout bin, whereas :mod:`gwtransport.diffusion` integrates the full
   ``tedges``-resolution flow within each cout bin -- a ~0.1%-of-peak difference for a
@@ -227,6 +226,23 @@ def _extend_tedges_flag(spinup: str | float | None) -> bool:
     raise NotImplementedError(msg)
 
 
+def _broadcast_to_pore_volumes(
+    values: npt.NDArray[np.floating] | float, n_pore_volumes: int
+) -> npt.NDArray[np.floating]:
+    """Return a per-pore-volume array: a scalar broadcasts to all streamtubes, an array passes through.
+
+    Length is validated upstream by :func:`_validate_inputs`, so a non-scalar array is
+    returned as-is (assumed length ``n_pore_volumes``).
+
+    Returns
+    -------
+    ndarray, shape (n_pore_volumes,)
+        Per-streamtube values.
+    """
+    arr = np.atleast_1d(np.asarray(values, dtype=float))
+    return np.broadcast_to(arr, (n_pore_volumes,)) if arr.size == 1 else arr
+
+
 def _closed_form_coeff_matrix(
     *,
     flow: npt.NDArray[np.floating],
@@ -234,9 +250,9 @@ def _closed_form_coeff_matrix(
     cout_tedges: pd.DatetimeIndex,
     flow_out: npt.NDArray[np.floating] | None,
     aquifer_pore_volumes: npt.NDArray[np.floating],
-    mean_streamline_length: float,
-    mean_molecular_diffusivity: float,
-    mean_longitudinal_dispersivity: float,
+    streamline_length: npt.NDArray[np.floating],
+    molecular_diffusivity: npt.NDArray[np.floating],
+    longitudinal_dispersivity: npt.NDArray[np.floating],
     retardation_factor: float,
     extend_tedges: bool,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool_]]:
@@ -247,7 +263,8 @@ def _closed_form_coeff_matrix(
     validity) but computes the bin-averaged flux concentration in closed form
     (:func:`_flux_breakthrough_fraction`) instead of 16-point Gauss-Legendre quadrature. The
     result reproduces the slow module's C_F to machine precision when the cout grid aligns
-    with the flow grid.
+    with the flow grid. ``streamline_length``, ``molecular_diffusivity``, and
+    ``longitudinal_dispersivity`` are per-pore-volume arrays (length ``len(aquifer_pore_volumes)``).
 
     Returns
     -------
@@ -307,21 +324,18 @@ def _closed_form_coeff_matrix(
     n_cout_bins = len(cout_tedges) - 1
     n_cin_bins = len(flow)
     accumulated_coeff = np.zeros((n_cout_bins, n_cin_bins))
-    for v_pore in aquifer_pore_volumes:
+    for i_pv, v_pore in enumerate(aquifer_pore_volumes):
         r_vpv = retardation_factor * v_pore
-        step_widths = (
-            (cumulative_volume_at_cout[:, None] - cumulative_volume_at_cin[None, :] - r_vpv)
-            * mean_streamline_length
-            / r_vpv
-        )
+        length = float(streamline_length[i_pv])
+        step_widths = (cumulative_volume_at_cout[:, None] - cumulative_volume_at_cin[None, :] - r_vpv) * length / r_vpv
         frac = _flux_breakthrough_fraction(
             step_widths=step_widths,
             tau=tau,
-            molecular_diffusivity=mean_molecular_diffusivity,
-            longitudinal_dispersivity=mean_longitudinal_dispersivity,
-            streamline_len=mean_streamline_length,
+            molecular_diffusivity=float(molecular_diffusivity[i_pv]),
+            longitudinal_dispersivity=float(longitudinal_dispersivity[i_pv]),
+            streamline_len=length,
             retardation_factor=retardation_factor,
-            velocity=q_cout * mean_streamline_length / v_pore,
+            velocity=q_cout * length / v_pore,
         )
         accumulated_coeff += frac[:, :-1] - frac[:, 1:]
 
@@ -336,9 +350,9 @@ def infiltration_to_extraction(
     tedges: pd.DatetimeIndex,
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
-    mean_streamline_length: float,
-    mean_molecular_diffusivity: float,
-    mean_longitudinal_dispersivity: float,
+    streamline_length: npt.NDArray[np.floating] | float,
+    molecular_diffusivity: npt.NDArray[np.floating] | float,
+    longitudinal_dispersivity: npt.NDArray[np.floating] | float,
     retardation_factor: float = 1.0,
     flow_out: npt.ArrayLike | None = None,
     spinup: str | float | None = "constant",
@@ -361,12 +375,15 @@ def infiltration_to_extraction(
         Time edges for output data bins. Length ``len(output) + 1``.
     aquifer_pore_volumes : array-like
         Aquifer pore volumes [m3] -- one independent streamtube per entry.
-    mean_streamline_length : float
-        Mean travel distance L [m]. Must be positive.
-    mean_molecular_diffusivity : float
-        Mean effective molecular diffusivity D_m [m2/day]. Must be non-negative.
-    mean_longitudinal_dispersivity : float
-        Mean longitudinal dispersivity alpha_L [m]. Must be non-negative.
+    streamline_length : float or ndarray
+        Travel distance L [m]: a scalar (shared by all streamtubes) or an array with one
+        value per aquifer pore volume. Must be positive.
+    molecular_diffusivity : float or ndarray
+        Effective molecular diffusivity D_m [m2/day]: scalar or one value per pore volume.
+        Must be non-negative.
+    longitudinal_dispersivity : float or ndarray
+        Longitudinal dispersivity alpha_L [m]: scalar or one value per pore volume.
+        Must be non-negative.
     retardation_factor : float, optional
         Retardation factor (default 1.0). Values > 1.0 indicate slower transport.
     flow_out : array-like or None, optional
@@ -387,8 +404,8 @@ def infiltration_to_extraction(
 
     See Also
     --------
-    gwtransport.diffusion.infiltration_to_extraction : Quadrature reference; supports
-        per-streamtube streamline_length, molecular_diffusivity, longitudinal_dispersivity.
+    gwtransport.diffusion.infiltration_to_extraction : Quadrature reference; exact for cout
+        grids coarser than the flow detail and for retardation_factor != 1 with D_m > 0.
     extraction_to_infiltration : Inverse operation.
     :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion.
     """
@@ -406,13 +423,18 @@ def infiltration_to_extraction(
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
-        mean_streamline_length=mean_streamline_length,
-        mean_molecular_diffusivity=mean_molecular_diffusivity,
-        mean_longitudinal_dispersivity=mean_longitudinal_dispersivity,
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
         is_forward=True,
         flow_out=flow_out,
     )
+
+    n_pore_volumes = len(aquifer_pore_volumes)
+    streamline_length = _broadcast_to_pore_volumes(streamline_length, n_pore_volumes)
+    molecular_diffusivity = _broadcast_to_pore_volumes(molecular_diffusivity, n_pore_volumes)
+    longitudinal_dispersivity = _broadcast_to_pore_volumes(longitudinal_dispersivity, n_pore_volumes)
 
     coeff_matrix, valid_cout_bins = _closed_form_coeff_matrix(
         flow=flow,
@@ -420,9 +442,9 @@ def infiltration_to_extraction(
         cout_tedges=cout_tedges,
         flow_out=flow_out,
         aquifer_pore_volumes=aquifer_pore_volumes,
-        mean_streamline_length=mean_streamline_length,
-        mean_molecular_diffusivity=mean_molecular_diffusivity,
-        mean_longitudinal_dispersivity=mean_longitudinal_dispersivity,
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
         extend_tedges=_extend_tedges_flag(spinup),
     )
@@ -443,9 +465,9 @@ def extraction_to_infiltration(
     tedges: pd.DatetimeIndex,
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
-    mean_streamline_length: float,
-    mean_molecular_diffusivity: float,
-    mean_longitudinal_dispersivity: float,
+    streamline_length: npt.NDArray[np.floating] | float,
+    molecular_diffusivity: npt.NDArray[np.floating] | float,
+    longitudinal_dispersivity: npt.NDArray[np.floating] | float,
     retardation_factor: float = 1.0,
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
@@ -470,12 +492,15 @@ def extraction_to_infiltration(
         Time edges for cout data bins. Length ``len(cout) + 1``.
     aquifer_pore_volumes : array-like
         Aquifer pore volumes [m3] -- one independent streamtube per entry.
-    mean_streamline_length : float
-        Mean travel distance L [m]. Must be positive.
-    mean_molecular_diffusivity : float
-        Mean effective molecular diffusivity D_m [m2/day]. Must be non-negative.
-    mean_longitudinal_dispersivity : float
-        Mean longitudinal dispersivity alpha_L [m]. Must be non-negative.
+    streamline_length : float or ndarray
+        Travel distance L [m]: a scalar (shared by all streamtubes) or an array with one
+        value per aquifer pore volume. Must be positive.
+    molecular_diffusivity : float or ndarray
+        Effective molecular diffusivity D_m [m2/day]: scalar or one value per pore volume.
+        Must be non-negative.
+    longitudinal_dispersivity : float or ndarray
+        Longitudinal dispersivity alpha_L [m]: scalar or one value per pore volume.
+        Must be non-negative.
     retardation_factor : float, optional
         Retardation factor (default 1.0).
     regularization_strength : float, optional
@@ -519,13 +544,18 @@ def extraction_to_infiltration(
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
-        mean_streamline_length=mean_streamline_length,
-        mean_molecular_diffusivity=mean_molecular_diffusivity,
-        mean_longitudinal_dispersivity=mean_longitudinal_dispersivity,
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
         is_forward=False,
         flow_out=flow_out,
     )
+
+    n_pore_volumes = len(aquifer_pore_volumes)
+    streamline_length = _broadcast_to_pore_volumes(streamline_length, n_pore_volumes)
+    molecular_diffusivity = _broadcast_to_pore_volumes(molecular_diffusivity, n_pore_volumes)
+    longitudinal_dispersivity = _broadcast_to_pore_volumes(longitudinal_dispersivity, n_pore_volumes)
 
     n_cin = len(tedges) - 1
     w_forward, valid_cout_bins = _closed_form_coeff_matrix(
@@ -534,9 +564,9 @@ def extraction_to_infiltration(
         cout_tedges=cout_tedges,
         flow_out=flow_out,
         aquifer_pore_volumes=aquifer_pore_volumes,
-        mean_streamline_length=mean_streamline_length,
-        mean_molecular_diffusivity=mean_molecular_diffusivity,
-        mean_longitudinal_dispersivity=mean_longitudinal_dispersivity,
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
         extend_tedges=_extend_tedges_flag(spinup),
     )
@@ -563,9 +593,9 @@ def gamma_infiltration_to_extraction(
     alpha: float | None = None,
     beta: float | None = None,
     n_bins: int = 100,
-    mean_streamline_length: float,
-    mean_molecular_diffusivity: float,
-    mean_longitudinal_dispersivity: float,
+    streamline_length: float,
+    molecular_diffusivity: float,
+    longitudinal_dispersivity: float,
     retardation_factor: float = 1.0,
     flow_out: npt.ArrayLike | None = None,
     spinup: str | float | None = "constant",
@@ -594,12 +624,14 @@ def gamma_infiltration_to_extraction(
         Shape and scale parameters of the gamma distribution (alternative to mean/std).
     n_bins : int, optional
         Number of equal-probability streamtubes. Default 100.
-    mean_streamline_length : float
-        Mean travel distance L [m]. Must be positive.
-    mean_molecular_diffusivity : float
-        Mean effective molecular diffusivity D_m [m2/day]. Must be non-negative.
-    mean_longitudinal_dispersivity : float
-        Mean longitudinal dispersivity alpha_L [m]. Must be non-negative.
+    streamline_length : float
+        Travel distance L [m], applied to all gamma streamtubes. Must be positive.
+    molecular_diffusivity : float
+        Effective molecular diffusivity D_m [m2/day], applied to all streamtubes. Must be
+        non-negative.
+    longitudinal_dispersivity : float
+        Longitudinal dispersivity alpha_L [m], applied to all streamtubes. Must be
+        non-negative.
     retardation_factor : float, optional
         Retardation factor (default 1.0).
     flow_out : array-like or None, optional
@@ -627,9 +659,9 @@ def gamma_infiltration_to_extraction(
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=bins["expected_values"],
-        mean_streamline_length=mean_streamline_length,
-        mean_molecular_diffusivity=mean_molecular_diffusivity,
-        mean_longitudinal_dispersivity=mean_longitudinal_dispersivity,
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
         flow_out=flow_out,
         spinup=spinup,
@@ -648,9 +680,9 @@ def gamma_extraction_to_infiltration(
     alpha: float | None = None,
     beta: float | None = None,
     n_bins: int = 100,
-    mean_streamline_length: float,
-    mean_molecular_diffusivity: float,
-    mean_longitudinal_dispersivity: float,
+    streamline_length: float,
+    molecular_diffusivity: float,
+    longitudinal_dispersivity: float,
     retardation_factor: float = 1.0,
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
@@ -680,12 +712,14 @@ def gamma_extraction_to_infiltration(
         Shape and scale parameters of the gamma distribution (alternative to mean/std).
     n_bins : int, optional
         Number of equal-probability streamtubes. Default 100.
-    mean_streamline_length : float
-        Mean travel distance L [m]. Must be positive.
-    mean_molecular_diffusivity : float
-        Mean effective molecular diffusivity D_m [m2/day]. Must be non-negative.
-    mean_longitudinal_dispersivity : float
-        Mean longitudinal dispersivity alpha_L [m]. Must be non-negative.
+    streamline_length : float
+        Travel distance L [m], applied to all gamma streamtubes. Must be positive.
+    molecular_diffusivity : float
+        Effective molecular diffusivity D_m [m2/day], applied to all streamtubes. Must be
+        non-negative.
+    longitudinal_dispersivity : float
+        Longitudinal dispersivity alpha_L [m], applied to all streamtubes. Must be
+        non-negative.
     retardation_factor : float, optional
         Retardation factor (default 1.0).
     regularization_strength : float, optional
@@ -715,9 +749,9 @@ def gamma_extraction_to_infiltration(
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=bins["expected_values"],
-        mean_streamline_length=mean_streamline_length,
-        mean_molecular_diffusivity=mean_molecular_diffusivity,
-        mean_longitudinal_dispersivity=mean_longitudinal_dispersivity,
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
         regularization_strength=regularization_strength,
         flow_out=flow_out,
@@ -732,21 +766,24 @@ def _validate_inputs(
     tedges: pd.DatetimeIndex,
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: np.ndarray,
-    mean_streamline_length: float,
-    mean_molecular_diffusivity: float,
-    mean_longitudinal_dispersivity: float,
+    streamline_length: npt.NDArray[np.floating] | float,
+    molecular_diffusivity: npt.NDArray[np.floating] | float,
+    longitudinal_dispersivity: npt.NDArray[np.floating] | float,
     retardation_factor: float,
     is_forward: bool,
     flow_out: np.ndarray | None = None,
 ) -> None:
     """Validate inputs for infiltration_to_extraction and extraction_to_infiltration.
 
+    ``streamline_length`` / ``molecular_diffusivity`` / ``longitudinal_dispersivity`` may be
+    a scalar or an array of length ``len(aquifer_pore_volumes)`` (one value per streamtube).
+
     Raises
     ------
     ValueError
-        If array lengths are inconsistent, mean_molecular_diffusivity or
-        mean_longitudinal_dispersivity are negative, cin or cout or flow contain NaN values,
-        aquifer_pore_volumes contains non-positive values, mean_streamline_length is
+        If array lengths are inconsistent, molecular_diffusivity or
+        longitudinal_dispersivity are negative, cin or cout or flow contain NaN values,
+        aquifer_pore_volumes contains non-positive values, streamline_length is
         non-positive, or retardation_factor is below 1 (anti-retardation is not physical for
         the supported sorption isotherms).
     """
@@ -760,11 +797,20 @@ def _validate_inputs(
     if len(tedges) != len(flow) + 1:
         msg = "tedges must have one more element than flow"
         raise ValueError(msg)
-    if mean_molecular_diffusivity < 0:
-        msg = "mean_molecular_diffusivity must be non-negative"
+    n_pore_volumes = len(aquifer_pore_volumes)
+    for name, arr in (
+        ("streamline_length", streamline_length),
+        ("molecular_diffusivity", molecular_diffusivity),
+        ("longitudinal_dispersivity", longitudinal_dispersivity),
+    ):
+        if np.size(arr) not in {1, n_pore_volumes}:
+            msg = f"{name} must be a scalar or have length len(aquifer_pore_volumes) = {n_pore_volumes}"
+            raise ValueError(msg)
+    if np.any(np.asarray(molecular_diffusivity) < 0):
+        msg = "molecular_diffusivity must be non-negative"
         raise ValueError(msg)
-    if mean_longitudinal_dispersivity < 0:
-        msg = "mean_longitudinal_dispersivity must be non-negative"
+    if np.any(np.asarray(longitudinal_dispersivity) < 0):
+        msg = "longitudinal_dispersivity must be non-negative"
         raise ValueError(msg)
     if np.any(np.isnan(cin_or_cout)):
         msg = f"{'cin' if is_forward else 'cout'} contains NaN values, which are not allowed"
@@ -778,8 +824,8 @@ def _validate_inputs(
     if np.any(aquifer_pore_volumes <= 0):
         msg = "aquifer_pore_volumes must be positive"
         raise ValueError(msg)
-    if mean_streamline_length <= 0:
-        msg = "mean_streamline_length must be positive"
+    if np.any(np.asarray(streamline_length) <= 0):
+        msg = "streamline_length must be positive"
         raise ValueError(msg)
     if retardation_factor < 1.0:
         msg = "retardation_factor must be >= 1.0"

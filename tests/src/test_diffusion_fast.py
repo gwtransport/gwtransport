@@ -8,6 +8,7 @@ from numpy.testing import assert_allclose
 from gwtransport import gamma as gamma_utils
 from gwtransport._time import tedges_to_days
 from gwtransport.advection import infiltration_to_extraction as advection_i2e
+from gwtransport.diffusion import extraction_to_infiltration as diffusion_exact_reverse
 from gwtransport.diffusion import gamma_infiltration_to_extraction as diffusion_gamma_i2e
 from gwtransport.diffusion import infiltration_to_extraction as diffusion_exact
 from gwtransport.diffusion_fast import (
@@ -52,9 +53,9 @@ def test_infiltration_to_extraction_zero_diffusion_matches_advection():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.0,
-        mean_longitudinal_dispersivity=0.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.0,
+        longitudinal_dispersivity=0.0,
     )
 
     cout_adv = advection_i2e(
@@ -82,9 +83,9 @@ def test_infiltration_to_extraction_constant_input():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.03,
-        mean_longitudinal_dispersivity=0.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.03,
+        longitudinal_dispersivity=0.0,
     )
 
     valid = ~np.isnan(cout)
@@ -104,9 +105,9 @@ def test_infiltration_to_extraction_output_bounded_by_input():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.05,
-        mean_longitudinal_dispersivity=1.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.05,
+        longitudinal_dispersivity=1.0,
     )
 
     valid = ~np.isnan(cout)
@@ -134,9 +135,9 @@ def test_infiltration_to_extraction_multiple_pore_volumes():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([400.0, 500.0, 600.0]),
-        mean_streamline_length=100.0,
-        mean_molecular_diffusivity=0.03,
-        mean_longitudinal_dispersivity=0.0,
+        streamline_length=100.0,
+        molecular_diffusivity=0.03,
+        longitudinal_dispersivity=0.0,
     )
 
     assert len(cout) == n_days
@@ -160,9 +161,9 @@ def test_infiltration_to_extraction_cout_tedges_different_resolution():
         cout_tedges=cout_tedges,
         flow_out=np.full(len(cout_tedges) - 1, 100.0),
         aquifer_pore_volumes=np.array([500.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.03,
-        mean_longitudinal_dispersivity=0.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.03,
+        longitudinal_dispersivity=0.0,
     )
 
     assert len(cout) == len(cout_tedges) - 1
@@ -187,9 +188,9 @@ def test_infiltration_to_extraction_with_retardation(retardation_factor):
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([1000.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.03,
-        mean_longitudinal_dispersivity=0.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.03,
+        longitudinal_dispersivity=0.0,
         retardation_factor=retardation_factor,
     )
 
@@ -211,9 +212,9 @@ def test_infiltration_to_extraction_with_various_diffusivity(molecular_diffusivi
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=molecular_diffusivity,
-        mean_longitudinal_dispersivity=0.0,
+        streamline_length=80.0,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=0.0,
     )
 
     valid = ~np.isnan(cout)
@@ -235,9 +236,9 @@ def test_infiltration_to_extraction_with_variable_flow():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.03,
-        mean_longitudinal_dispersivity=0.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.03,
+        longitudinal_dispersivity=0.0,
     )
 
     valid = ~np.isnan(cout)
@@ -270,9 +271,9 @@ def test_retardation_constant_input(retardation_factor):
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.05,
-        mean_longitudinal_dispersivity=1.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.05,
+        longitudinal_dispersivity=1.0,
         retardation_factor=retardation_factor,
     )
 
@@ -303,9 +304,9 @@ def test_retardation_zero_diffusion_matches_advection(retardation_factor):
 
     cout_fast = infiltration_to_extraction(
         **kwargs,
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.0,
-        mean_longitudinal_dispersivity=0.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.0,
+        longitudinal_dispersivity=0.0,
     )
 
     cout_adv = advection_i2e(**kwargs)
@@ -336,9 +337,9 @@ def test_retardation_zero_diffusion_matches_advection_variable_flow(retardation_
 
     cout_fast = infiltration_to_extraction(
         **kwargs,
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.0,
-        mean_longitudinal_dispersivity=0.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.0,
+        longitudinal_dispersivity=0.0,
     )
     cout_adv = advection_i2e(**kwargs)
 
@@ -360,9 +361,9 @@ def test_retardation_output_bounded_by_input(retardation_factor):
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.05,
-        mean_longitudinal_dispersivity=1.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.05,
+        longitudinal_dispersivity=1.0,
         retardation_factor=retardation_factor,
     )
 
@@ -395,9 +396,9 @@ def test_retardation_compressed_matches_uncompressed(retardation_factor):
     kwargs = {
         "cout_tedges": cout_tedges,
         "aquifer_pore_volumes": np.array([10000.0]),
-        "mean_streamline_length": 100.0,
-        "mean_molecular_diffusivity": 1e-4,
-        "mean_longitudinal_dispersivity": 1.0,
+        "streamline_length": 100.0,
+        "molecular_diffusivity": 1e-4,
+        "longitudinal_dispersivity": 1.0,
         "retardation_factor": retardation_factor,
         "flow_out": flow_out,
     }
@@ -442,9 +443,9 @@ def test_retardation_nonuniform_cout_tedges_constant_input(retardation_factor):
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.05,
-        mean_longitudinal_dispersivity=1.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.05,
+        longitudinal_dispersivity=1.0,
         retardation_factor=retardation_factor,
         flow_out=flow_out,
     )
@@ -471,9 +472,9 @@ def test_extraction_to_infiltration_constant_input():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.03,
-        mean_longitudinal_dispersivity=0.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.03,
+        longitudinal_dispersivity=0.0,
     )
 
     valid = ~np.isnan(cin)
@@ -505,9 +506,9 @@ def test_round_trip():
         "tedges": tedges,
         "cout_tedges": cout_tedges,
         "aquifer_pore_volumes": np.array([517.0]),
-        "mean_streamline_length": 80.0,
-        "mean_molecular_diffusivity": 0.01,
-        "mean_longitudinal_dispersivity": 0.0,
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.01,
+        "longitudinal_dispersivity": 0.0,
     }
 
     cout = infiltration_to_extraction(cin=cin_original, **kwargs)
@@ -550,9 +551,9 @@ def test_diffusion_fast_vs_diffusion_same_grid():
     }
     fast_kwargs = {
         **common_kwargs,
-        "mean_streamline_length": 80.0,
-        "mean_molecular_diffusivity": 0.05,
-        "mean_longitudinal_dispersivity": 0.0,
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.05,
+        "longitudinal_dispersivity": 0.0,
     }
     exact_kwargs = {
         **common_kwargs,
@@ -647,9 +648,9 @@ def test_diffusion_fast_vs_diffusion_parity_sweep(zero_flow, retardation, n_bins
                 tedges=tedges,
                 cout_tedges=cout_tedges,
                 aquifer_pore_volumes=np.array([mean_apv]),
-                mean_streamline_length=streamline_length,
-                mean_molecular_diffusivity=d_m,
-                mean_longitudinal_dispersivity=alpha_l,
+                streamline_length=streamline_length,
+                molecular_diffusivity=d_m,
+                longitudinal_dispersivity=alpha_l,
                 retardation_factor=retardation,
             )
             cout_exact = diffusion_exact(
@@ -672,9 +673,9 @@ def test_diffusion_fast_vs_diffusion_parity_sweep(zero_flow, retardation, n_bins
                 mean=mean_apv,
                 std=std_apv,
                 n_bins=n_bins,
-                mean_streamline_length=streamline_length,
-                mean_molecular_diffusivity=d_m,
-                mean_longitudinal_dispersivity=alpha_l,
+                streamline_length=streamline_length,
+                molecular_diffusivity=d_m,
+                longitudinal_dispersivity=alpha_l,
                 retardation_factor=retardation,
             )
             cout_exact = diffusion_gamma_i2e(
@@ -724,9 +725,9 @@ def test_flow_out_constant_input():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.05,
-        mean_longitudinal_dispersivity=1.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.05,
+        longitudinal_dispersivity=1.0,
         flow_out=flow_out,
     )
 
@@ -755,9 +756,9 @@ def test_flow_out_constant_input_variable_flow():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.05,
-        mean_longitudinal_dispersivity=1.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.05,
+        longitudinal_dispersivity=1.0,
         flow_out=flow_out,
     )
 
@@ -797,9 +798,9 @@ def test_flow_out_zero_diffusion_matches_advection():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.0,
-        mean_longitudinal_dispersivity=0.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.0,
+        longitudinal_dispersivity=0.0,
         flow_out=flow_out,
     )
 
@@ -829,9 +830,9 @@ def test_flow_out_uniform_bins_matches_default():
         "tedges": tedges,
         "cout_tedges": cout_tedges,
         "aquifer_pore_volumes": np.array([500.0]),
-        "mean_streamline_length": 80.0,
-        "mean_molecular_diffusivity": 0.03,
-        "mean_longitudinal_dispersivity": 0.0,
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.03,
+        "longitudinal_dispersivity": 0.0,
     }
 
     cout_default = infiltration_to_extraction(**common_kwargs)
@@ -862,9 +863,9 @@ def test_flow_out_output_bounded_by_input():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([500.0]),
-        mean_streamline_length=80.0,
-        mean_molecular_diffusivity=0.05,
-        mean_longitudinal_dispersivity=1.0,
+        streamline_length=80.0,
+        molecular_diffusivity=0.05,
+        longitudinal_dispersivity=1.0,
         flow_out=flow_out,
     )
 
@@ -896,9 +897,9 @@ def test_flow_out_nonuniform_bins_pulse():
     kwargs = {
         "cout_tedges": cout_tedges,
         "aquifer_pore_volumes": np.array([10000.0]),
-        "mean_streamline_length": 100.0,
-        "mean_molecular_diffusivity": 1e-4,
-        "mean_longitudinal_dispersivity": 1.0,
+        "streamline_length": 100.0,
+        "molecular_diffusivity": 1e-4,
+        "longitudinal_dispersivity": 1.0,
         "retardation_factor": 2.0,
         "flow_out": flow_out,
     }
@@ -929,9 +930,9 @@ def test_flow_out_validation_wrong_length():
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=np.array([500.0]),
-            mean_streamline_length=80.0,
-            mean_molecular_diffusivity=0.03,
-            mean_longitudinal_dispersivity=0.0,
+            streamline_length=80.0,
+            molecular_diffusivity=0.03,
+            longitudinal_dispersivity=0.0,
             flow_out=flow_out,
         )
 
@@ -950,9 +951,9 @@ def test_flow_out_validation_nan():
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=np.array([500.0]),
-            mean_streamline_length=80.0,
-            mean_molecular_diffusivity=0.03,
-            mean_longitudinal_dispersivity=0.0,
+            streamline_length=80.0,
+            molecular_diffusivity=0.03,
+            longitudinal_dispersivity=0.0,
             flow_out=flow_out,
         )
 
@@ -971,9 +972,9 @@ def test_flow_out_validation_negative():
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=np.array([500.0]),
-            mean_streamline_length=80.0,
-            mean_molecular_diffusivity=0.03,
-            mean_longitudinal_dispersivity=0.0,
+            streamline_length=80.0,
+            molecular_diffusivity=0.03,
+            longitudinal_dispersivity=0.0,
             flow_out=flow_out,
         )
 
@@ -995,9 +996,9 @@ def test_flow_out_required_when_cout_tedges_differ():
         "flow": flow,
         "tedges": tedges,
         "aquifer_pore_volumes": np.array([500.0]),
-        "mean_streamline_length": 80.0,
-        "mean_molecular_diffusivity": 0.03,
-        "mean_longitudinal_dispersivity": 0.0,
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.03,
+        "longitudinal_dispersivity": 0.0,
     }
     with pytest.raises(ValueError, match="flow_out is required when cout_tedges differs from tedges"):
         infiltration_to_extraction(cout_tedges=cout_tedges, **common)
@@ -1024,9 +1025,9 @@ def test_extraction_to_infiltration_flow_out_round_trip():
         "tedges": tedges,
         "cout_tedges": cout_tedges,
         "aquifer_pore_volumes": np.array([517.0]),
-        "mean_streamline_length": 80.0,
-        "mean_molecular_diffusivity": 0.01,
-        "mean_longitudinal_dispersivity": 0.0,
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.01,
+        "longitudinal_dispersivity": 0.0,
         "flow_out": flow_out,
     }
 
@@ -1072,9 +1073,9 @@ class TestGammaExtractionToInfiltrationFast:
             "mean": 500.0,
             "std": 100.0,
             "n_bins": 20,
-            "mean_streamline_length": 80.0,
-            "mean_molecular_diffusivity": 0.03,
-            "mean_longitudinal_dispersivity": 0.0,
+            "streamline_length": 80.0,
+            "molecular_diffusivity": 0.03,
+            "longitudinal_dispersivity": 0.0,
         }
 
     def test_zero_cout_gives_zero_cin(self):
@@ -1090,9 +1091,9 @@ class TestGammaExtractionToInfiltrationFast:
             mean=500.0,
             std=100.0,
             n_bins=10,
-            mean_streamline_length=80.0,
-            mean_molecular_diffusivity=0.03,
-            mean_longitudinal_dispersivity=0.0,
+            streamline_length=80.0,
+            molecular_diffusivity=0.03,
+            longitudinal_dispersivity=0.0,
         )
 
         valid = ~np.isnan(cin)
@@ -1113,9 +1114,9 @@ class TestGammaExtractionToInfiltrationFast:
             mean=gamma_setup["mean"],
             std=gamma_setup["std"],
             n_bins=gamma_setup["n_bins"],
-            mean_streamline_length=gamma_setup["mean_streamline_length"],
-            mean_molecular_diffusivity=gamma_setup["mean_molecular_diffusivity"],
-            mean_longitudinal_dispersivity=gamma_setup["mean_longitudinal_dispersivity"],
+            streamline_length=gamma_setup["streamline_length"],
+            molecular_diffusivity=gamma_setup["molecular_diffusivity"],
+            longitudinal_dispersivity=gamma_setup["longitudinal_dispersivity"],
         )
 
         valid = ~np.isnan(cin)
@@ -1141,9 +1142,9 @@ class TestGammaExtractionToInfiltrationFast:
             "mean": 501.3,
             "std": 100.0,
             "n_bins": 20,
-            "mean_streamline_length": 80.0,
-            "mean_molecular_diffusivity": 0.03,
-            "mean_longitudinal_dispersivity": 0.0,
+            "streamline_length": 80.0,
+            "molecular_diffusivity": 0.03,
+            "longitudinal_dispersivity": 0.0,
         }
 
         cout = gamma_infiltration_to_extraction(
@@ -1202,9 +1203,9 @@ class TestGammaExtractionToInfiltrationFast:
             "mean": 489.2,
             "std": 100.0,
             "n_bins": 20,
-            "mean_streamline_length": 80.0,
-            "mean_molecular_diffusivity": 0.03,
-            "mean_longitudinal_dispersivity": 0.0,
+            "streamline_length": 80.0,
+            "molecular_diffusivity": 0.03,
+            "longitudinal_dispersivity": 0.0,
             "retardation_factor": retardation,
         }
 
@@ -1250,9 +1251,9 @@ class TestGammaExtractionToInfiltrationFast:
             "cout_tedges": gamma_setup["cout_tedges"],
             "flow_out": gamma_setup["flow_out"],
             "n_bins": gamma_setup["n_bins"],
-            "mean_streamline_length": gamma_setup["mean_streamline_length"],
-            "mean_molecular_diffusivity": gamma_setup["mean_molecular_diffusivity"],
-            "mean_longitudinal_dispersivity": gamma_setup["mean_longitudinal_dispersivity"],
+            "streamline_length": gamma_setup["streamline_length"],
+            "molecular_diffusivity": gamma_setup["molecular_diffusivity"],
+            "longitudinal_dispersivity": gamma_setup["longitudinal_dispersivity"],
         }
 
         cin_mean_std = gamma_extraction_to_infiltration(
@@ -1291,9 +1292,9 @@ class TestGammaExtractionToInfiltrationFast:
             mean=gamma_setup["mean"],
             std=gamma_setup["std"],
             n_bins=gamma_setup["n_bins"],
-            mean_streamline_length=gamma_setup["mean_streamline_length"],
-            mean_molecular_diffusivity=gamma_setup["mean_molecular_diffusivity"],
-            mean_longitudinal_dispersivity=gamma_setup["mean_longitudinal_dispersivity"],
+            streamline_length=gamma_setup["streamline_length"],
+            molecular_diffusivity=gamma_setup["molecular_diffusivity"],
+            longitudinal_dispersivity=gamma_setup["longitudinal_dispersivity"],
         )
 
         cin_explicit = extraction_to_infiltration(
@@ -1303,9 +1304,9 @@ class TestGammaExtractionToInfiltrationFast:
             cout_tedges=gamma_setup["cout_tedges"],
             flow_out=gamma_setup["flow_out"],
             aquifer_pore_volumes=bins["expected_values"],
-            mean_streamline_length=gamma_setup["mean_streamline_length"],
-            mean_molecular_diffusivity=gamma_setup["mean_molecular_diffusivity"],
-            mean_longitudinal_dispersivity=gamma_setup["mean_longitudinal_dispersivity"],
+            streamline_length=gamma_setup["streamline_length"],
+            molecular_diffusivity=gamma_setup["molecular_diffusivity"],
+            longitudinal_dispersivity=gamma_setup["longitudinal_dispersivity"],
         )
 
         valid = ~np.isnan(cin_gamma) & ~np.isnan(cin_explicit)
@@ -1327,9 +1328,9 @@ class TestGammaExtractionToInfiltrationFast:
             "mean": gamma_setup["mean"],
             "std": gamma_setup["std"],
             "n_bins": gamma_setup["n_bins"],
-            "mean_streamline_length": gamma_setup["mean_streamline_length"],
-            "mean_molecular_diffusivity": gamma_setup["mean_molecular_diffusivity"],
-            "mean_longitudinal_dispersivity": gamma_setup["mean_longitudinal_dispersivity"],
+            "streamline_length": gamma_setup["streamline_length"],
+            "molecular_diffusivity": gamma_setup["molecular_diffusivity"],
+            "longitudinal_dispersivity": gamma_setup["longitudinal_dispersivity"],
         }
 
         cin_default = gamma_extraction_to_infiltration(**common_kwargs)
@@ -1351,9 +1352,9 @@ class TestGammaExtractionToInfiltrationFast:
             "std": 100.0,
             "loc": 200.0,
             "n_bins": 20,
-            "mean_streamline_length": 80.0,
-            "mean_molecular_diffusivity": 0.03,
-            "mean_longitudinal_dispersivity": 0.0,
+            "streamline_length": 80.0,
+            "molecular_diffusivity": 0.03,
+            "longitudinal_dispersivity": 0.0,
         }
 
         cout = gamma_infiltration_to_extraction(
@@ -1397,9 +1398,9 @@ class TestGammaExtractionToInfiltrationFast:
             "mean": 501.3,
             "std": 100.0,
             "n_bins": 20,
-            "mean_streamline_length": 80.0,
-            "mean_molecular_diffusivity": 0.03,
-            "mean_longitudinal_dispersivity": 1.0,
+            "streamline_length": 80.0,
+            "molecular_diffusivity": 0.03,
+            "longitudinal_dispersivity": 1.0,
         }
 
         cout = gamma_infiltration_to_extraction(
@@ -1445,9 +1446,9 @@ class TestGammaExtractionToInfiltrationFast:
             "mean": 501.3,
             "std": 100.0,
             "n_bins": 20,
-            "mean_streamline_length": 80.0,
-            "mean_molecular_diffusivity": 0.03,
-            "mean_longitudinal_dispersivity": 0.0,
+            "streamline_length": 80.0,
+            "molecular_diffusivity": 0.03,
+            "longitudinal_dispersivity": 0.0,
             "flow_out": flow_out,
         }
 
@@ -1496,9 +1497,9 @@ def test_infiltration_to_extraction_rejects_negative_flow():
             tedges=tedges,
             cout_tedges=tedges,
             aquifer_pore_volumes=np.array([500.0]),
-            mean_streamline_length=80.0,
-            mean_molecular_diffusivity=0.03,
-            mean_longitudinal_dispersivity=0.0,
+            streamline_length=80.0,
+            molecular_diffusivity=0.03,
+            longitudinal_dispersivity=0.0,
         )
 
 
@@ -1517,9 +1518,9 @@ def test_infiltration_to_extraction_accepts_zero_flow_without_warnings():
             tedges=tedges,
             cout_tedges=tedges,
             aquifer_pore_volumes=np.array([500.0]),
-            mean_streamline_length=80.0,
-            mean_molecular_diffusivity=0.03,
-            mean_longitudinal_dispersivity=0.0,
+            streamline_length=80.0,
+            molecular_diffusivity=0.03,
+            longitudinal_dispersivity=0.0,
         )
 
 
@@ -1537,9 +1538,9 @@ def test_infiltration_to_extraction_zero_flow_insertion_invariance():
 
     common_kwargs = {
         "aquifer_pore_volumes": np.array([500.0]),
-        "mean_streamline_length": 80.0,
-        "mean_molecular_diffusivity": 0.03,
-        "mean_longitudinal_dispersivity": 5.0,
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.03,
+        "longitudinal_dispersivity": 5.0,
     }
 
     cout_base = infiltration_to_extraction(
@@ -1626,9 +1627,9 @@ def test_column_mass_conservation_variable_flow_dispersion_flow_out(d_m, alpha_l
                 tedges=tedges,
                 cout_tedges=cout_tedges,
                 aquifer_pore_volumes=np.array([1000.0]),
-                mean_streamline_length=100.0,
-                mean_molecular_diffusivity=d_m,
-                mean_longitudinal_dispersivity=alpha_l,
+                streamline_length=100.0,
+                molecular_diffusivity=d_m,
+                longitudinal_dispersivity=alpha_l,
                 flow_out=flow_out,
             )
 
@@ -1671,9 +1672,9 @@ def test_column_mass_conservation_variable_flow_dispersion_default(d_m, alpha_l,
                 tedges=tedges,
                 cout_tedges=cout_tedges,
                 aquifer_pore_volumes=np.array([1000.0]),
-                mean_streamline_length=100.0,
-                mean_molecular_diffusivity=d_m,
-                mean_longitudinal_dispersivity=alpha_l,
+                streamline_length=100.0,
+                molecular_diffusivity=d_m,
+                longitudinal_dispersivity=alpha_l,
             )
 
     w = _build_w_via_probes(call, n=n)
@@ -1714,9 +1715,9 @@ def test_column_mass_conservation_constant_flow_control(d_m, alpha_l):
                 tedges=tedges,
                 cout_tedges=cout_tedges,
                 aquifer_pore_volumes=np.array([1000.0]),
-                mean_streamline_length=100.0,
-                mean_molecular_diffusivity=d_m,
-                mean_longitudinal_dispersivity=alpha_l,
+                streamline_length=100.0,
+                molecular_diffusivity=d_m,
+                longitudinal_dispersivity=alpha_l,
                 flow_out=flow,
             )
 
@@ -1760,9 +1761,9 @@ def test_column_mass_conservation_multipv(d_m, alpha_l, seed):
                 tedges=tedges,
                 cout_tedges=cout_tedges,
                 aquifer_pore_volumes=np.array([600.0, 1000.0, 1400.0]),
-                mean_streamline_length=100.0,
-                mean_molecular_diffusivity=d_m,
-                mean_longitudinal_dispersivity=alpha_l,
+                streamline_length=100.0,
+                molecular_diffusivity=d_m,
+                longitudinal_dispersivity=alpha_l,
                 flow_out=flow,
             )
 
@@ -1832,9 +1833,9 @@ def test_edge_pulse_with_uninformed_region_conserves_mass_without_warning(mechan
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=np.array([v_pore]),
-            mean_streamline_length=streamline_length,
-            mean_molecular_diffusivity=d_m,
-            mean_longitudinal_dispersivity=0.0,
+            streamline_length=streamline_length,
+            molecular_diffusivity=d_m,
+            longitudinal_dispersivity=0.0,
             flow_out=flow_out,
             spinup=spinup,
         )
@@ -1922,9 +1923,9 @@ def test_delta_input_single_pv_matches_diffusion_exact_constant_flow(retardation
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=np.array([v_pore]),
-        mean_streamline_length=streamline_length,
-        mean_molecular_diffusivity=d_m,
-        mean_longitudinal_dispersivity=alpha_l,
+        streamline_length=streamline_length,
+        molecular_diffusivity=d_m,
+        longitudinal_dispersivity=alpha_l,
         retardation_factor=retardation,
         flow_out=flow,
     )
@@ -1975,9 +1976,9 @@ def test_step_input_single_pv_variable_flow_matches_diffusion_exact():
     }
     cout_fast = infiltration_to_extraction(
         **common,
-        mean_streamline_length=30.0,
-        mean_molecular_diffusivity=0.5,
-        mean_longitudinal_dispersivity=1.0,
+        streamline_length=30.0,
+        molecular_diffusivity=0.5,
+        longitudinal_dispersivity=1.0,
         flow_out=flow,
     )
     cout_exact = diffusion_exact(
@@ -2021,9 +2022,9 @@ def test_step_input_retardation_diffusion_variable_flow_matches_diffusion_exact(
     }
     cout_fast = infiltration_to_extraction(
         **common,
-        mean_streamline_length=30.0,
-        mean_molecular_diffusivity=2.0,
-        mean_longitudinal_dispersivity=0.0,
+        streamline_length=30.0,
+        molecular_diffusivity=2.0,
+        longitudinal_dispersivity=0.0,
         retardation_factor=2.7,
         flow_out=flow,
     )
@@ -2069,9 +2070,9 @@ def test_step_input_gamma_multipv_matches_diffusion_gamma():
     }
     cout_fast = gamma_infiltration_to_extraction(
         **common,
-        mean_streamline_length=30.0,
-        mean_molecular_diffusivity=1.0,
-        mean_longitudinal_dispersivity=1.0,
+        streamline_length=30.0,
+        molecular_diffusivity=1.0,
+        longitudinal_dispersivity=1.0,
     )
     cout_exact = diffusion_gamma_i2e(
         **common,
@@ -2085,6 +2086,95 @@ def test_step_input_gamma_multipv_matches_diffusion_gamma():
     assert_allclose(cout_fast[valid], cout_exact[valid], atol=1e-11, rtol=0)
 
 
+def test_per_pv_arrays_match_diffusion_exact():
+    """Per-streamtube ``streamline_length`` / ``molecular_diffusivity`` /
+    ``longitudinal_dispersivity`` arrays reproduce ``gwtransport.diffusion`` exactly.
+
+    The closed form indexes each of the three dispersion parameters per pore
+    volume (``..._length[i_pv]`` etc.); the slow module does the same in its
+    quadrature. Here every streamtube carries a *distinct* L, D_m and alpha_L,
+    so a bug that collapsed any of them to a single value (first entry, or a
+    mean) would shift that tube's breakthrough and break the match. ``R=1`` keeps
+    all tubes in the machine-precision regime, and ``flow_out=flow`` aligns the
+    cout grid to the flow grid, so the two implementations agree to the
+    floating-point floor across the whole superposed breakthrough.
+    """
+    n = 250
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
+    t = np.arange(n)
+    flow = 100.0 * (1.0 + 0.3 * np.sin(2 * np.pi * t / 30))
+    cin = np.zeros(n)
+    cin[50:] = 1.0
+
+    # Three genuinely heterogeneous streamtubes (longer paths drain the larger pores).
+    common = {
+        "cin": cin,
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([400.0, 700.0, 1100.0]),
+        "streamline_length": np.array([60.0, 90.0, 130.0]),
+        "molecular_diffusivity": np.array([0.2, 0.5, 1.0]),
+        "longitudinal_dispersivity": np.array([0.5, 1.5, 3.0]),
+    }
+    cout_fast = infiltration_to_extraction(**common, flow_out=flow)
+    cout_exact = diffusion_exact(**common)
+
+    valid = ~np.isnan(cout_fast) & ~np.isnan(cout_exact)
+    assert np.sum(valid) > 50
+    assert_allclose(cout_fast[valid], cout_exact[valid], atol=1e-11, rtol=0)
+
+
+def test_per_pv_arrays_reverse_matches_diffusion_exact():
+    """Per-streamtube arrays through the REVERSE direction match ``gwtransport.diffusion``.
+
+    The reverse function carries its own ``_broadcast_to_pore_volumes`` call-sites
+    (distinct from the forward function's), so a regression that collapsed a per-PV
+    parameter to its first entry on only the reverse path would slip past
+    :func:`test_per_pv_arrays_match_diffusion_exact`. Every other reverse test uses scalar
+    / single-element parameters, where such a collapse is a no-op. This drives the same
+    three heterogeneous tubes through both inverse solvers.
+
+    The inverse is ill-conditioned (a step ``cout`` leaves a few late ``cin`` modes
+    underdetermined), so comparing recovered ``cin`` directly would be dominated by
+    conditioning, not by the per-PV physics. Two choices keep the comparison about the
+    physics: pore volumes off integer-residence multiples, and a moderate
+    ``regularization_strength=1e-6``. The fast closed form and the slow quadrature then
+    build forward matrices agreeing to ~1e-12, the shared Tikhonov solve amplifies that to
+    ~7e-11, and a 1e-9 gate clears that floor with margin while still catching a per-PV
+    collapse (which shifts the recovered ``cin`` by 1e-2 to 4 -- 7+ orders above the gate).
+    """
+    n = 250
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
+    t = np.arange(n)
+    flow = 100.0 * (1.0 + 0.3 * np.sin(2 * np.pi * t / 30))
+    cout = np.zeros(n)
+    cout[50:] = 1.0
+
+    common = {
+        "cout": cout,
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        # Off integer-residence multiples so the inverse is not needlessly degenerate.
+        "aquifer_pore_volumes": np.array([437.3, 712.9, 1063.1]),
+        "streamline_length": np.array([60.0, 90.0, 130.0]),
+        "molecular_diffusivity": np.array([0.2, 0.5, 1.0]),
+        "longitudinal_dispersivity": np.array([0.5, 1.5, 3.0]),
+        "regularization_strength": 1e-6,
+    }
+    with warn_module.catch_warnings():
+        warn_module.simplefilter("ignore")  # underdetermined late-cin modes (expected for a step inverse)
+        cin_fast = extraction_to_infiltration(**common)
+        cin_exact = diffusion_exact_reverse(**common)
+
+    valid = ~np.isnan(cin_fast) & ~np.isnan(cin_exact)
+    assert np.sum(valid) > 50
+    assert_allclose(cin_fast[valid], cin_exact[valid], atol=1e-9, rtol=0)
+
+
 def _good_diffusion_fast_inputs():
     """Baseline known-valid inputs for _validate_inputs (mirrors the diffusion.py snapshot)."""
     return {
@@ -2093,9 +2183,9 @@ def _good_diffusion_fast_inputs():
         "tedges": pd.date_range("2023-01-01", periods=6, freq="D"),
         "cout_tedges": pd.date_range("2023-01-01", periods=6, freq="D"),
         "aquifer_pore_volumes": np.array([300.0]),
-        "mean_streamline_length": 80.0,
-        "mean_molecular_diffusivity": 0.01,
-        "mean_longitudinal_dispersivity": 0.5,
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.01,
+        "longitudinal_dispersivity": 0.5,
         "retardation_factor": 1.0,
         "is_forward": True,
     }
@@ -2113,12 +2203,12 @@ def _good_diffusion_fast_inputs():
             r"tedges must have one more element than flow",
         ),
         (
-            lambda k: {**k, "mean_molecular_diffusivity": -0.1},
-            r"mean_molecular_diffusivity must be non-negative",
+            lambda k: {**k, "molecular_diffusivity": -0.1},
+            r"molecular_diffusivity must be non-negative",
         ),
         (
-            lambda k: {**k, "mean_longitudinal_dispersivity": -0.1},
-            r"mean_longitudinal_dispersivity must be non-negative",
+            lambda k: {**k, "longitudinal_dispersivity": -0.1},
+            r"longitudinal_dispersivity must be non-negative",
         ),
         (
             lambda k: {**k, "cin_or_cout": np.array([1.0, np.nan, 3.0, 4.0, 5.0])},
@@ -2137,8 +2227,20 @@ def _good_diffusion_fast_inputs():
             r"aquifer_pore_volumes must be positive",
         ),
         (
-            lambda k: {**k, "mean_streamline_length": 0.0},
-            r"mean_streamline_length must be positive",
+            lambda k: {**k, "streamline_length": 0.0},
+            r"streamline_length must be positive",
+        ),
+        (
+            lambda k: {**k, "streamline_length": np.array([80.0, 90.0])},
+            r"streamline_length must be a scalar or have length len\(aquifer_pore_volumes\)",
+        ),
+        (
+            lambda k: {**k, "molecular_diffusivity": np.array([0.01, 0.02])},
+            r"molecular_diffusivity must be a scalar or have length len\(aquifer_pore_volumes\)",
+        ),
+        (
+            lambda k: {**k, "longitudinal_dispersivity": np.array([0.5, 0.6])},
+            r"longitudinal_dispersivity must be a scalar or have length len\(aquifer_pore_volumes\)",
         ),
         (
             lambda k: {**k, "retardation_factor": 0.5},
@@ -2169,9 +2271,9 @@ def _call_diffusion_fast_entry(entry, *, retardation_factor, tedges, cout_tedges
         "flow": flow,
         "tedges": tedges,
         "cout_tedges": cout_tedges,
-        "mean_streamline_length": 80.0,
-        "mean_molecular_diffusivity": 0.01,
-        "mean_longitudinal_dispersivity": 0.5,
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.01,
+        "longitudinal_dispersivity": 0.5,
         "retardation_factor": retardation_factor,
     }
     if entry == "infiltration_to_extraction":
@@ -2234,14 +2336,14 @@ def test_streamline_length_zero_rejected():
     tedges, cout_tedges, flow = _make_transport_data(n_days=50)
     cin = np.ones(len(flow))
 
-    with pytest.raises(ValueError, match=r"mean_streamline_length must be positive"):
+    with pytest.raises(ValueError, match=r"streamline_length must be positive"):
         infiltration_to_extraction(
             cin=cin,
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=np.array([500.0]),
-            mean_streamline_length=0.0,
-            mean_molecular_diffusivity=0.01,
-            mean_longitudinal_dispersivity=0.5,
+            streamline_length=0.0,
+            molecular_diffusivity=0.01,
+            longitudinal_dispersivity=0.5,
         )

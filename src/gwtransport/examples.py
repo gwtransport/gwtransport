@@ -276,9 +276,9 @@ def generate_example_data(
                 tedges=tedges,
                 cout_tedges=tedges,
                 aquifer_pore_volumes=aquifer_pore_volumes_array,
-                mean_streamline_length=streamline_length,
-                mean_molecular_diffusivity=molecular_diffusivity,
-                mean_longitudinal_dispersivity=longitudinal_dispersivity,
+                streamline_length=streamline_length,
+                molecular_diffusivity=molecular_diffusivity,
+                longitudinal_dispersivity=longitudinal_dispersivity,
                 retardation_factor=retardation_factor,
             )
         else:
@@ -300,9 +300,9 @@ def generate_example_data(
             std=gamma_std,
             loc=gamma_loc,
             n_bins=gamma_nbins,
-            mean_streamline_length=streamline_length,
-            mean_molecular_diffusivity=molecular_diffusivity,
-            mean_longitudinal_dispersivity=longitudinal_dispersivity,
+            streamline_length=streamline_length,
+            molecular_diffusivity=molecular_diffusivity,
+            longitudinal_dispersivity=longitudinal_dispersivity,
             retardation_factor=retardation_factor,
         )
     else:
