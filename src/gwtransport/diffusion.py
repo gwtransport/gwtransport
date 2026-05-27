@@ -18,6 +18,21 @@ Key functions:
 - :func:`gamma_extraction_to_infiltration` - Gamma-distributed pore volumes, deconvolution
   with dispersion. Symmetric inverse of gamma_infiltration_to_extraction.
 
+When to choose this module vs :mod:`gwtransport.diffusion_fast`
+---------------------------------------------------------------
+
+This is the reference implementation: it evaluates the bin-averaged Kreft-Zuber flux
+concentration by 16-point Gauss-Legendre quadrature (splitting at flow-bin boundaries).
+Prefer it only when the output grid is coarser than the flow detail -- it integrates the
+full within-bin flow, which the closed-form :mod:`gwtransport.diffusion_fast` approximates as
+constant per output bin. Otherwise that module computes the same physics to machine
+precision for *every* parameter regime (including ``retardation_factor != 1`` with non-zero
+molecular diffusivity, whose flux correction it also evaluates in closed form) and is
+~80-90x faster (no quadrature, no residence-time inversion). Both modules accept
+per-streamtube ``streamline_length`` / ``molecular_diffusivity`` /
+``longitudinal_dispersivity`` arrays (heterogeneous flow paths -- partially-penetrating
+wells, wedge-shaped capture zones).
+
 Reported outlet concentration: Kreft-Zuber (1978) flux concentration
 ---------------------------------------------------------------------
 
@@ -90,8 +105,6 @@ Chemical Engineering Science, 33(11), 1471-1480. Eq. 2 gives the resident-to-
 flux concentration transformation; Eq. 1 is the mass-balance identity that
 makes the column-sum invariant exact.
 """
-
-import warnings
 
 import numpy as np
 import numpy.typing as npt
@@ -656,18 +669,11 @@ def infiltration_to_extraction(
         If input dimensions are inconsistent, if diffusivity is negative,
         or if aquifer_pore_volumes and streamline_length have different lengths.
 
-    Warns
-    -----
-    UserWarning
-        If multiple pore volumes are used with non-zero longitudinal_dispersivity.
-        This may lead to double-counting of spreading effects. Suppress with
-        ``suppress_dispersion_warning=True`` if this is intentional.
-
     See Also
     --------
     extraction_to_infiltration : Inverse operation (deconvolution)
     gwtransport.advection.infiltration_to_extraction : Pure advection (no dispersion)
-    gwtransport.diffusion_fast.infiltration_to_extraction : Fast Gaussian approximation
+    gwtransport.diffusion_fast.infiltration_to_extraction : Fast closed-form equivalent
     :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion
 
     Notes
@@ -883,11 +889,6 @@ def extraction_to_infiltration(
     ValueError
         If input dimensions are inconsistent, if diffusivity is negative,
         or if aquifer_pore_volumes and streamline_length have different lengths.
-
-    Warns
-    -----
-    UserWarning
-        If multiple pore volumes are used with non-zero longitudinal_dispersivity.
 
     See Also
     --------

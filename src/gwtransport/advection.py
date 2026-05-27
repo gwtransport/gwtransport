@@ -27,7 +27,7 @@ Available functions:
 
 Note on dispersion: The spreading from the pore volume distribution (APVD) represents
 macrodispersion—aquifer-scale velocity heterogeneity that depends on both aquifer
-properties and hydrological boundary conditions. To add microdispersion and molecular 
+properties and hydrological boundary conditions. To add microdispersion and molecular
 diffusion separately (when APVD comes from streamline analysis), use :mod:`gwtransport.diffusion`.
 See :ref:`concept-dispersion-scales` for details.
 

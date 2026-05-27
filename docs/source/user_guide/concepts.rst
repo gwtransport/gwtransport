@@ -214,7 +214,7 @@ The total variance of the output breakthrough curve (in volume units) is the sum
 
 where :math:`\overline{V^k} = \frac{1}{n}\sum_i V_i^k` is the :math:`k`-th sample moment over the discrete pore volume bins. For a gamma distribution, :math:`\mathbb{E}[V^2] = \bar{V}^2 + \sigma_{apv}^2` and :math:`\mathbb{E}[V^3] = (\bar{V}^2 + \sigma_{apv}^2)(\bar{V}^2 + 2\sigma_{apv}^2)/\bar{V}`.
 
-**Mean PV** is the current ``diffusion_fast`` approximation. **Discrete bins** and **Gamma** average the per-streamtube variances, which is more accurate because :math:`\sigma^2(V)` is nonlinear in :math:`V`. The correction is of order :math:`\text{CV}^2 = (\sigma_{apv}/\bar{V})^2`.
+Both ``diffusion_fast`` and ``diffusion`` resolve the per-streamtube breakthrough directly (the **Discrete bins** / **Gamma** treatment); the **Mean PV** column is the cruder moment-averaged alternative, shown for comparison. Per-streamtube resolution is more accurate because :math:`\sigma^2(V)` is nonlinear in :math:`V`; the Mean PV correction is of order :math:`\text{CV}^2 = (\sigma_{apv}/\bar{V})^2`.
 
 Calibration Approaches
 ----------------------
