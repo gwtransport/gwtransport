@@ -91,8 +91,6 @@ flux concentration transformation; Eq. 1 is the mass-balance identity that
 makes the column-sum invariant exact.
 """
 
-import warnings
-
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -656,18 +654,11 @@ def infiltration_to_extraction(
         If input dimensions are inconsistent, if diffusivity is negative,
         or if aquifer_pore_volumes and streamline_length have different lengths.
 
-    Warns
-    -----
-    UserWarning
-        If multiple pore volumes are used with non-zero longitudinal_dispersivity.
-        This may lead to double-counting of spreading effects. Suppress with
-        ``suppress_dispersion_warning=True`` if this is intentional.
-
     See Also
     --------
     extraction_to_infiltration : Inverse operation (deconvolution)
     gwtransport.advection.infiltration_to_extraction : Pure advection (no dispersion)
-    gwtransport.diffusion_fast.infiltration_to_extraction : Fast Gaussian approximation
+    gwtransport.diffusion_fast.infiltration_to_extraction : Fast closed-form equivalent
     :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion
 
     Notes
@@ -883,11 +874,6 @@ def extraction_to_infiltration(
     ValueError
         If input dimensions are inconsistent, if diffusivity is negative,
         or if aquifer_pore_volumes and streamline_length have different lengths.
-
-    Warns
-    -----
-    UserWarning
-        If multiple pore volumes are used with non-zero longitudinal_dispersivity.
 
     See Also
     --------

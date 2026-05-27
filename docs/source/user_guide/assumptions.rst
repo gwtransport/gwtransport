@@ -74,8 +74,8 @@ What appears as "dispersion" at one scale becomes "advection through heterogenei
 
 When using the ``advection`` module alone, only macrodispersion (spreading from the pore volume distribution) is modeled. To add microdispersion and molecular diffusion, use:
 
-- :mod:`gwtransport.diffusion_fast` for approximate but fast Gaussian smoothing
-- :mod:`gwtransport.diffusion` for analytical advection-dispersion solutions
+- :mod:`gwtransport.diffusion_fast` for a fast closed-form computation of the flux concentration
+- :mod:`gwtransport.diffusion` for the quadrature-based analytical advection-dispersion solution
 
 .. _assumption-steady-streamlines:
 

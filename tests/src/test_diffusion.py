@@ -2010,49 +2010,6 @@ class TestGammaExtractionToInfiltrationDiffusion:
         assert np.sum(valid) > 50
         np.testing.assert_allclose(cin_gamma[valid], cin_explicit[valid], atol=0.0)
 
-    def test_dispersion_warning_with_multiple_bins(self, gamma_setup):
-        """Multiple pore volumes with dispersivity emits UserWarning."""
-        n_cout = len(gamma_setup["cout_tedges"]) - 1
-        cout = np.ones(n_cout) * 5.0
-
-        with pytest.warns(
-            UserWarning,
-            match=r"Using multiple aquifer_pore_volumes with non-zero longitudinal_dispersivity",
-        ):
-            gamma_extraction_to_infiltration(
-                cout=cout,
-                flow=gamma_setup["flow"],
-                tedges=gamma_setup["tedges"],
-                cout_tedges=gamma_setup["cout_tedges"],
-                mean=gamma_setup["mean"],
-                std=gamma_setup["std"],
-                n_bins=gamma_setup["n_bins"],
-                streamline_length=gamma_setup["streamline_length"],
-                molecular_diffusivity=0.0,
-                longitudinal_dispersivity=1.0,
-            )
-
-    def test_suppress_dispersion_warning(self, gamma_setup):
-        """suppress_dispersion_warning=True silences the warning."""
-        n_cout = len(gamma_setup["cout_tedges"]) - 1
-        cout = np.ones(n_cout) * 5.0
-
-        with warn_module.catch_warnings():
-            warn_module.simplefilter("error")
-            gamma_extraction_to_infiltration(
-                cout=cout,
-                flow=gamma_setup["flow"],
-                tedges=gamma_setup["tedges"],
-                cout_tedges=gamma_setup["cout_tedges"],
-                mean=gamma_setup["mean"],
-                std=gamma_setup["std"],
-                n_bins=gamma_setup["n_bins"],
-                streamline_length=gamma_setup["streamline_length"],
-                molecular_diffusivity=0.0,
-                longitudinal_dispersivity=1.0,
-                suppress_dispersion_warning=True,
-            )
-
     def test_loc_zero_matches_legacy(self, gamma_setup):
         """With loc=0 the gamma wrapper must exactly match the legacy (mean, std) call."""
         n_cout = len(gamma_setup["cout_tedges"]) - 1
@@ -2126,7 +2083,6 @@ class TestGammaExtractionToInfiltrationDiffusion:
             "streamline_length": gamma_setup["streamline_length"],
             "molecular_diffusivity": 1e-4,
             "longitudinal_dispersivity": 1.0,
-            "suppress_dispersion_warning": True,
         }
 
         cout = diffusion_gamma_i2e(
@@ -2268,7 +2224,6 @@ def _good_diffusion_inputs():
         "molecular_diffusivity": np.full(n_pv, 0.0),
         "longitudinal_dispersivity": np.full(n_pv, 0.0),
         "retardation_factor": 1.0,
-        "suppress_dispersion_warning": True,
     }
 
 
