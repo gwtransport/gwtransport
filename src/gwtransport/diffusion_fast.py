@@ -186,9 +186,11 @@ def _flux_breakthrough_fraction(
     # D_t is linear in x, so <g> is closed form: substituting w = D_t in int g dx gives
     # int w^{-1/2} e^{-w/(4 m^2) - c^2/(4 m^2 w)} dw -- a pair of error functions -- with slope
     # m = dD_t/dx and intercept c = D_t(x=0). Reusing the antiderivative's gaussian G = e^{-x^2/(4
-    # D_t)} = c_+- e^{-u_+-^2}, erfcx keeps the (always non-negative) u+ branch overflow-free; the
-    # u- branch uses erfcx where u- >= 0 and erf otherwise. The slope->0 (constant-D_t) limit is
-    # the exact [C_R(x_hi) - C_R(x_lo)] / dx.
+    # D_t)} = c_+- e^{-u_+-^2}, erfcx keeps the (always non-negative) u+ branch overflow-free.
+    # erfcx is overflow-safe for u- only where u- >= 0, so the u- branch splits: erfcx where
+    # u- >= 0, erf elsewhere. Each transcendental is evaluated on its own subset (fancy indexing)
+    # rather than computing both branches over the full array and discarding half. The slope->0
+    # (constant-D_t) limit is the exact [C_R(x_hi) - C_R(x_lo)] / dx, applied only on that subset.
     if retardation_factor != 1.0 and molecular_diffusivity > 0.0:
         d_lo, d_hi = dt_var[:-1], dt_var[1:]
         g_lo, g_hi = gaussian[:-1], gaussian[1:]
@@ -204,17 +206,17 @@ def _flux_breakthrough_fraction(
             up_lo = (d_lo + abs_int) / two_m_sqrt_lo
             up_hi = (d_hi + abs_int) / two_m_sqrt_hi
             t_plus = g_lo * erfcx(up_lo) - g_hi * erfcx(up_hi)
-            c_minus = np.exp((intercept - abs_int) / (2.0 * slope * slope))
-            t_minus = np.where(
-                um_lo >= 0.0,
-                g_lo * erfcx(um_lo) - g_hi * erfcx(um_hi),
-                c_minus * (erf(um_hi) - erf(um_lo)),
-            )
-            gbar_closed = (t_minus + t_plus) / (2.0 * dx)
-            d_bar_s = 2.0 * np.sqrt(0.5 * (d_lo + d_hi))
-            gbar_const = 0.5 * (erf(x_hi / d_bar_s) - erf(x_lo / d_bar_s)) / dx
-            density_binavg = np.where(np.abs(d_hi - d_lo) > 1e-9 * np.maximum(d_lo, d_hi), gbar_closed, gbar_const)
-            density_binavg = np.where(dx > 0.0, density_binavg, 0.0)
+            t_minus = np.empty_like(t_plus)
+            pos = um_lo >= 0.0
+            neg = ~pos
+            t_minus[pos] = g_lo[pos] * erfcx(um_lo[pos]) - g_hi[pos] * erfcx(um_hi[pos])
+            c_minus = np.exp((intercept[neg] - abs_int[neg]) / (2.0 * slope[neg] ** 2))
+            t_minus[neg] = c_minus * (erf(um_hi[neg]) - erf(um_lo[neg]))
+            density_binavg = (t_minus + t_plus) / (2.0 * dx)
+            flat = np.abs(d_hi - d_lo) <= 1e-9 * np.maximum(d_lo, d_hi)
+            d_bar_s = 2.0 * np.sqrt(0.5 * (d_lo[flat] + d_hi[flat]))
+            density_binavg[flat] = 0.5 * (erf(x_hi[flat] / d_bar_s) - erf(x_lo[flat] / d_bar_s)) / dx[flat]
+            density_binavg[dx <= 0.0] = 0.0
             excess = np.where(velocity > 0.0, (retardation_factor - 1.0) * molecular_diffusivity / velocity, 0.0)
         frac -= excess[:, None] * density_binavg
     return frac
