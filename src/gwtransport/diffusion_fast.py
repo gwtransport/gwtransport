@@ -38,20 +38,18 @@ When to choose this module vs :mod:`gwtransport.diffusion`
 
 Both modules implement the *same* physics (Bear resident concentration + Kreft-Zuber flux
 concentration on 1D streamtubes, with retardation and the moving-frame variance
-``D_t = D_m*tau + alpha_L*xi``). For a single representative streamline length / diffusivity
-/ dispersivity and a cout grid at or finer than the flow grid, this module reproduces
-:mod:`gwtransport.diffusion` to machine precision while being ~80-90x faster (closed form,
-no Gauss-Legendre quadrature, no residence-time inversion) with no penalty as dispersion
-grows -- so it is the right default. Both modules accept per-streamtube
-``streamline_length`` / ``molecular_diffusivity`` / ``longitudinal_dispersivity`` arrays.
-Prefer :mod:`gwtransport.diffusion` when you need:
-
-- a cout grid *coarser* than the flow detail (this module treats ``flow_out`` as constant
-  within each cout bin, whereas :mod:`gwtransport.diffusion` integrates the full
-  ``tedges``-resolution flow within each cout bin -- a ~0.1%-of-peak difference for a
-  rapidly-varying ``cin`` over wide cout bins under variable flow);
-- exactness when ``retardation_factor != 1`` and ``molecular_diffusivity > 0`` (here the
-  flux correction carries an ``O(dx^2)`` trapezoidal residual, ~1e-4 of peak).
+``D_t = D_m*tau + alpha_L*xi``), and both accept per-streamtube ``streamline_length`` /
+``molecular_diffusivity`` / ``longitudinal_dispersivity`` arrays. Whenever the cout grid is
+at or finer than the flow grid, this module reproduces :mod:`gwtransport.diffusion` to
+machine precision for *every* parameter regime -- including ``retardation_factor != 1`` with
+``molecular_diffusivity > 0``, whose flux correction is itself evaluated in closed form
+(its Gaussian-density bin-average has an exact erf/erfcx form) -- while being ~80-90x faster
+(closed form, no Gauss-Legendre quadrature, no residence-time inversion) with no penalty as
+dispersion grows. So it is the right default. The only case that favours
+:mod:`gwtransport.diffusion` is a cout grid *coarser* than the flow detail: this module
+treats ``flow_out`` as constant within each cout bin, whereas :mod:`gwtransport.diffusion`
+integrates the full ``tedges``-resolution flow within each cout bin -- a ~0.1%-of-peak
+difference for a rapidly-varying ``cin`` over wide cout bins under variable flow.
 
 Available functions:
 
@@ -73,7 +71,7 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from scipy.special import erf
+from scipy.special import erf, erfcx
 
 from gwtransport import gamma
 from gwtransport._time import dt_to_days, tedges_to_days
@@ -181,16 +179,42 @@ def _flux_breakthrough_fraction(
     with np.errstate(divide="ignore", invalid="ignore"):
         frac = np.where(dx > 0.0, np.diff(antideriv, axis=0) / dx, 0.0)
 
-    # Retardation correction. The per-edge antiderivative generates an effective flux
-    # coefficient dD_t/dx = R*D_m/v + alpha_L (since d(tau)/dx = R/v under retardation), but
-    # the Kreft-Zuber coefficient is D_L/v = D_m/v + alpha_L. Remove the excess
-    # (R-1)*D_m/v times the bin-averaged Gaussian density dC_R/dx|_{D_t} = e^{-u^2}/(s*sqrt(pi)).
-    # This term is identically zero when R == 1 or D_m == 0, so the exact per-edge result is
-    # preserved there; elsewhere it restores agreement with the rigorous module.
+    # Retardation correction. The per-edge antiderivative bakes in an effective flux coefficient
+    # dD_t/dx = R*D_m/v + alpha_L (d(tau)/dx = R/v under retardation); Kreft-Zuber wants D_L/v =
+    # D_m/v + alpha_L. Subtract the excess (R-1)*D_m/v times <g>, the bin-average of the Gaussian
+    # density g = e^{-x^2/(4 D_t)} / (2 sqrt(pi D_t)) (zero when R == 1 or D_m == 0). Within a bin
+    # D_t is linear in x, so <g> is closed form: substituting w = D_t in int g dx gives
+    # int w^{-1/2} e^{-w/(4 m^2) - c^2/(4 m^2 w)} dw -- a pair of error functions -- with slope
+    # m = dD_t/dx and intercept c = D_t(x=0). Reusing the antiderivative's gaussian G = e^{-x^2/(4
+    # D_t)} = c_+- e^{-u_+-^2}, erfcx keeps the (always non-negative) u+ branch overflow-free; the
+    # u- branch uses erfcx where u- >= 0 and erf otherwise. The slope->0 (constant-D_t) limit is
+    # the exact [C_R(x_hi) - C_R(x_lo)] / dx.
     if retardation_factor != 1.0 and molecular_diffusivity > 0.0:
-        density = gaussian / (s * _SQRT_PI)
-        density_binavg = 0.5 * (density[:-1] + density[1:])
-        with np.errstate(divide="ignore", invalid="ignore"):
+        d_lo, d_hi = dt_var[:-1], dt_var[1:]
+        g_lo, g_hi = gaussian[:-1], gaussian[1:]
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            slope = (d_hi - d_lo) / dx
+            intercept = d_lo - slope * x_lo
+            abs_int = np.abs(intercept)
+            # s = 2*sqrt(dt_var) is already computed, so slope*s = 2*slope*sqrt(D_t).
+            two_m_sqrt_lo = slope * s[:-1]
+            two_m_sqrt_hi = slope * s[1:]
+            um_lo = (d_lo - abs_int) / two_m_sqrt_lo
+            um_hi = (d_hi - abs_int) / two_m_sqrt_hi
+            up_lo = (d_lo + abs_int) / two_m_sqrt_lo
+            up_hi = (d_hi + abs_int) / two_m_sqrt_hi
+            t_plus = g_lo * erfcx(up_lo) - g_hi * erfcx(up_hi)
+            c_minus = np.exp((intercept - abs_int) / (2.0 * slope * slope))
+            t_minus = np.where(
+                um_lo >= 0.0,
+                g_lo * erfcx(um_lo) - g_hi * erfcx(um_hi),
+                c_minus * (erf(um_hi) - erf(um_lo)),
+            )
+            gbar_closed = (t_minus + t_plus) / (2.0 * dx)
+            d_bar_s = 2.0 * np.sqrt(0.5 * (d_lo + d_hi))
+            gbar_const = 0.5 * (erf(x_hi / d_bar_s) - erf(x_lo / d_bar_s)) / dx
+            density_binavg = np.where(np.abs(d_hi - d_lo) > 1e-9 * np.maximum(d_lo, d_hi), gbar_closed, gbar_const)
+            density_binavg = np.where(dx > 0.0, density_binavg, 0.0)
             excess = np.where(velocity > 0.0, (retardation_factor - 1.0) * molecular_diffusivity / velocity, 0.0)
         frac -= excess[:, None] * density_binavg
     return frac
@@ -404,8 +428,8 @@ def infiltration_to_extraction(
 
     See Also
     --------
-    gwtransport.diffusion.infiltration_to_extraction : Quadrature reference; exact for cout
-        grids coarser than the flow detail and for retardation_factor != 1 with D_m > 0.
+    gwtransport.diffusion.infiltration_to_extraction : Quadrature reference; prefer for cout
+        grids coarser than the flow detail.
     extraction_to_infiltration : Inverse operation.
     :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion.
     """

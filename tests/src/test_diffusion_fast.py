@@ -1865,31 +1865,29 @@ def test_edge_pulse_with_uninformed_region_conserves_mass_without_warning(mechan
 # mechanical dispersion (D_m=0) at any R, where the closed form equals the slow module's
 # C_F exactly. For R != 1 AND D_m > 0 the closed form applies a retardation correction to
 # the Kreft-Zuber flux coefficient (the per-edge mechanism would otherwise weight the
-# molecular-diffusion flux by R); the residual is then the trapezoidal O(dx^2)
-# discretisation of that correction, ~1e-5 of the breakthrough peak for a sharp delta.
+# molecular-diffusion flux by R); the correction's bin-average of the Gaussian density is
+# itself evaluated in closed form (erf/erfcx), so this regime is machine precision too.
 # =============================================================================
 
 
 @pytest.mark.parametrize(
-    ("retardation", "d_m", "alpha_l", "atol"),
+    ("retardation", "d_m", "alpha_l"),
     [
         # R=1: the flux-vs-resident advective correction is identical in both
-        # discretisations, so molecular diffusion and dispersion both reproduce
-        # the slow module exactly (measured residual ~1e-14; atol set 100x over).
-        (1.0, 2.0, 0.0, 1e-12),
-        (1.0, 0.0, 2.0, 1e-12),
-        (1.0, 1.0, 2.0, 1e-12),
-        # Pure mechanical dispersion (D_m=0): no tau-dependent term, so R does
-        # not perturb the agreement -- exact at R=2.7 too.
-        (2.7, 0.0, 2.0, 1e-12),
-        # R != 1 with D_m > 0: the retardation correction holds the agreement to the
-        # trapezoidal discretisation floor (~2e-5 of peak here), not machine precision.
-        (2.7, 2.0, 0.0, 1e-4),
-        (2.7, 1.0, 2.0, 1e-4),
-        (5.0, 1.0, 0.0, 1e-4),
+        # discretisations, so molecular diffusion and dispersion both reproduce the slow module.
+        (1.0, 2.0, 0.0),
+        (1.0, 0.0, 2.0),
+        (1.0, 1.0, 2.0),
+        # Pure mechanical dispersion (D_m=0): no tau-dependent term, so R does not perturb it.
+        (2.7, 0.0, 2.0),
+        # R != 1 with D_m > 0: the closed-form retardation correction (exact bin-average of
+        # the Gaussian density via erf/erfcx) restores machine precision here too.
+        (2.7, 2.0, 0.0),
+        (2.7, 1.0, 2.0),
+        (5.0, 1.0, 0.0),
     ],
 )
-def test_delta_input_single_pv_matches_diffusion_exact_constant_flow(retardation, d_m, alpha_l, atol):
+def test_delta_input_single_pv_matches_diffusion_exact_constant_flow(retardation, d_m, alpha_l):
     """Single delta pulse reproduces ``gwtransport.diffusion`` to machine precision.
 
     A delta input is the hardest equivalence case: its breakthrough is the full
@@ -1901,9 +1899,9 @@ def test_delta_input_single_pv_matches_diffusion_exact_constant_flow(retardation
     16-point Gauss-Legendre quadrature of the same C_F.
 
     The parametrisation spans both variance terms (``2*D_m*tau`` and ``2*alpha_L*L``)
-    and the retardation factor. The exact legs (R=1, or D_m=0) hold to machine
-    precision; the ``R != 1 with D_m > 0`` legs hold to the trapezoidal discretisation
-    floor of the retardation correction (``atol`` set per case).
+    and the retardation factor. Every leg holds to machine precision: the R=1 and D_m=0
+    legs need no retardation correction, and the ``R != 1 with D_m > 0`` legs evaluate the
+    correction's Gaussian-density bin-average in closed form (measured residual ~3e-14).
     """
     n = 200
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
@@ -1944,9 +1942,9 @@ def test_delta_input_single_pv_matches_diffusion_exact_constant_flow(retardation
     valid = ~np.isnan(cout_fast) & ~np.isnan(cout_exact)
     assert np.sum(valid) > 50
     # Both modules report C_F; the residual is the floating-point floor of the closed form
-    # vs the 16-point quadrature (exact legs), or the trapezoidal retardation-correction
-    # floor for the R != 1 with D_m > 0 legs.
-    assert_allclose(cout_fast[valid], cout_exact[valid], atol=atol, rtol=0)
+    # vs the 16-point quadrature -- machine precision for every leg, including R != 1 with
+    # D_m > 0 now that the retardation correction is evaluated in closed form.
+    assert_allclose(cout_fast[valid], cout_exact[valid], atol=1e-12, rtol=0)
 
 
 def test_step_input_single_pv_variable_flow_matches_diffusion_exact():
@@ -2003,7 +2001,8 @@ def test_step_input_retardation_diffusion_variable_flow_matches_diffusion_exact(
     velocity instead of the per-bin ``q_cout`` would be invisible. Variable flow makes
     ``q_cout`` vary across the front, so this is the regression guard for that term: a
     mean-velocity (or dropped) correction drives the front error to >1e-2, far above the
-    1e-3 gate (the correct trapezoidal discretisation floor here is ~7e-5 of peak).
+    1e-11 gate. The correction's Gaussian-density bin-average is evaluated in closed form
+    (erf/erfcx), so the agreement is machine precision (~6e-13) under variable flow too.
     """
     n = 200
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
@@ -2038,7 +2037,7 @@ def test_step_input_retardation_diffusion_variable_flow_matches_diffusion_exact(
 
     valid = ~np.isnan(cout_fast) & ~np.isnan(cout_exact)
     assert np.sum(valid) > 50
-    assert_allclose(cout_fast[valid], cout_exact[valid], atol=1e-3, rtol=0)
+    assert_allclose(cout_fast[valid], cout_exact[valid], atol=1e-11, rtol=0)
 
 
 def test_step_input_gamma_multipv_matches_diffusion_gamma():

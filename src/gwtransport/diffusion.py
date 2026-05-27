@@ -23,13 +23,15 @@ When to choose this module vs :mod:`gwtransport.diffusion_fast`
 
 This is the reference implementation: it evaluates the bin-averaged Kreft-Zuber flux
 concentration by 16-point Gauss-Legendre quadrature (splitting at flow-bin boundaries).
-Prefer it when the output grid is coarser than the flow detail, or when
-``retardation_factor != 1`` together with non-zero molecular diffusivity -- the two regimes
-where the closed-form :mod:`gwtransport.diffusion_fast` is approximate rather than exact.
-Otherwise that module computes the same physics to machine precision and is ~80-90x faster
-(no quadrature, no residence-time inversion). Both modules accept per-streamtube
-``streamline_length`` / ``molecular_diffusivity`` / ``longitudinal_dispersivity`` arrays
-(heterogeneous flow paths -- partially-penetrating wells, wedge-shaped capture zones).
+Prefer it only when the output grid is coarser than the flow detail -- it integrates the
+full within-bin flow, which the closed-form :mod:`gwtransport.diffusion_fast` approximates as
+constant per output bin. Otherwise that module computes the same physics to machine
+precision for *every* parameter regime (including ``retardation_factor != 1`` with non-zero
+molecular diffusivity, whose flux correction it also evaluates in closed form) and is
+~80-90x faster (no quadrature, no residence-time inversion). Both modules accept
+per-streamtube ``streamline_length`` / ``molecular_diffusivity`` /
+``longitudinal_dispersivity`` arrays (heterogeneous flow paths -- partially-penetrating
+wells, wedge-shaped capture zones).
 
 Reported outlet concentration: Kreft-Zuber (1978) flux concentration
 ---------------------------------------------------------------------
