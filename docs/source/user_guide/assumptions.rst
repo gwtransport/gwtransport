@@ -28,6 +28,8 @@ Module Reference
      - :py:func:`~gwtransport.logremoval.residence_time_to_log_removal`, :py:func:`~gwtransport.logremoval.gamma_mean`, :py:func:`~gwtransport.logremoval.parallel_mean`
    * - ``diffusion_fast``
      - :py:func:`~gwtransport.diffusion_fast.infiltration_to_extraction`
+   * - ``diffusion``
+     - :py:func:`~gwtransport.diffusion.infiltration_to_extraction`
    * - ``gamma``
      - :py:func:`~gwtransport.gamma.bins`, :py:func:`~gwtransport.gamma.mean_std_loc_to_alpha_beta`
 
@@ -72,10 +74,10 @@ What appears as "dispersion" at one scale becomes "advection through heterogenei
 
 **Relationship to the diffusion module:**
 
-When using the ``advection`` module alone, only macrodispersion (spreading from the pore volume distribution) is modeled. To add microdispersion and molecular diffusion, use:
+When using the ``advection`` module alone, only macrodispersion (spreading from the pore volume distribution) is modeled. To add microdispersion (:math:`\alpha_L`) and molecular diffusion (:math:`D_m`), use either :mod:`gwtransport.diffusion_fast` or :mod:`gwtransport.diffusion`. Both implement the *same* physics — the Kreft-Zuber flux concentration on a bundle of 1D streamtubes, with retardation and the moving-frame variance :math:`D_t = D_m \tau + \alpha_L \xi` — and both accept per-streamtube :math:`L`, :math:`D_m` and :math:`\alpha_L` arrays (one value per aquifer pore volume). They differ only in how the bin-averaged breakthrough is evaluated:
 
-- :mod:`gwtransport.diffusion_fast` for a fast closed-form computation of the flux concentration
-- :mod:`gwtransport.diffusion` for the quadrature-based analytical advection-dispersion solution
+- **Choose** :mod:`gwtransport.diffusion_fast` **by default.** It evaluates the breakthrough in closed form, is roughly 80–90× faster, has no penalty as dispersion grows, and reproduces :mod:`gwtransport.diffusion` to machine precision when the output (``cout``) grid is at or finer than the flow grid.
+- **Choose** :mod:`gwtransport.diffusion` **when you need either:** an output grid *coarser* than the flow detail (it integrates the full ``tedges``-resolution flow within each output bin, whereas ``diffusion_fast`` treats the through-flow as constant within each output bin — a ~0.1%-of-peak difference for a rapidly-varying ``cin`` over wide output bins under variable flow); or exactness with *both* retardation (:math:`R \neq 1`) and molecular diffusion (:math:`D_m > 0`), where ``diffusion_fast`` carries a small :math:`O(\Delta x^2)` residual (~1e-4 of peak).
 
 .. _assumption-steady-streamlines:
 
@@ -592,7 +594,7 @@ Quick Reference: Assumptions by Module
      - — (adds empirical decay)
    * - ``diffusion_fast``
      - :ref:`Steady streamlines <assumption-steady-streamlines>`
-     - — (fast approximation, relaxes advection-only assumption)
+     - — (fast closed form, relaxes advection-only assumption)
    * - ``diffusion``
      - :ref:`Steady streamlines <assumption-steady-streamlines>`
-     - — (analytical solution, relaxes advection-only assumption)
+     - — (quadrature, relaxes advection-only assumption)
