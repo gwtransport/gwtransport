@@ -21,8 +21,10 @@ The elapsed time ``tau`` and travel distance ``xi`` are read directly from the t
 cumulative-volume edges (``tau_ij = t_cout_i - t_cin_j``, ``xi`` geometric), so no per-cell
 quadrature and no residence-time inversion is needed. The result reproduces
 :mod:`gwtransport.diffusion` to machine precision when the cout grid aligns with the flow
-grid (supply ``flow_out`` on the output grid), and the build cost is independent of the
-dispersion strength.
+grid (supply ``flow_out`` on the output grid). The coefficient matrix is built only on the
+breakthrough band -- the cumulative-volume band where the bin-averaged ``C_F`` is unsaturated,
+the only region with non-zero coefficients -- so the build cost scales with the band width
+(a few percent of the matrix at realistic dispersion) rather than with the full grid.
 
 Streamtube assumption (no cross-sectional area parameter)
 ---------------------------------------------------------
@@ -44,8 +46,9 @@ at or finer than the flow grid, this module reproduces :mod:`gwtransport.diffusi
 machine precision for *every* parameter regime -- including ``retardation_factor != 1`` with
 ``molecular_diffusivity > 0``, whose flux correction is itself evaluated in closed form
 (its Gaussian-density bin-average has an exact erf/erfcx form) -- while being ~80-90x faster
-(closed form, no Gauss-Legendre quadrature, no residence-time inversion) with no penalty as
-dispersion grows. So it is the right default. The only case that favours
+even before banding (closed form, no Gauss-Legendre quadrature, no residence-time inversion),
+and the banded build computes only the non-zero breakthrough band -- faster still at the
+weak-to-moderate dispersion of realistic problems. So it is the right default. The only case that favours
 :mod:`gwtransport.diffusion` is a cout grid *coarser* than the flow detail: this module
 treats ``flow_out`` as constant within each cout bin, whereas :mod:`gwtransport.diffusion`
 integrates the full ``tedges``-resolution flow within each cout bin -- a ~0.1%-of-peak
@@ -87,6 +90,113 @@ _SQRT_PI = np.sqrt(np.pi)
 # Floor on the moving-frame dispersion product D_t [m^2] to keep the erf argument finite
 # for pre-breakthrough / zero-dispersion edges (where D_t -> 0).
 _DT_FLOOR = 1e-30
+
+# Default saturation threshold U for the banded build: a cout/cin pair is only evaluated
+# while the breakthrough |x|/(2*sqrt(D_t)) <= U; beyond it the bin-averaged C_F is saturated
+# to 0 or 1. At U >= ~6 the dense kernel itself already rounds the dropped tail to exactly 0
+# or 1 (the Gaussian term underflows below the ulp of x), so the banded matrix is bit-identical
+# to the dense one. Smaller U narrows the band -> faster, at the cost of dropping breakthrough
+# tails of order exp(-U^2).
+_DEFAULT_SATURATION_THRESHOLD = 7.0
+
+
+def _breakthrough_antideriv(
+    step_widths: npt.NDArray[np.floating], dt_var: npt.NDArray[np.floating]
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+    r"""Closed-form antiderivative of the resident concentration, evaluated per edge.
+
+    Returns :math:`I(x) = \tfrac12 x + \tfrac12[x\,\operatorname{erf}(x/s) + (s/\sqrt\pi)e^{-(x/s)^2}]`
+    with :math:`s = 2\sqrt{D_t}`, alongside ``s`` and the Gaussian factor ``exp(-(x/s)^2)`` (both
+    reused by the retardation correction). Shared by the dense kernel
+    (:func:`_flux_breakthrough_fraction`) and the banded build, so both compute identical
+    floating-point results for the same inputs.
+
+    Returns
+    -------
+    antideriv : ndarray
+        The antiderivative :math:`I(x)`.
+    s : ndarray
+        ``2 * sqrt(D_t)``.
+    gaussian : ndarray
+        ``exp(-(x/s)^2)``.
+    """
+    s = 2.0 * np.sqrt(dt_var)
+    with np.errstate(over="ignore", invalid="ignore"):
+        u = step_widths / s
+        gaussian = np.exp(-(u * u))
+        antideriv = 0.5 * step_widths + 0.5 * (step_widths * erf(u) + (s / _SQRT_PI) * gaussian)
+    return antideriv, s, gaussian
+
+
+def _retardation_excess_density(
+    *,
+    x_lo: npt.NDArray[np.floating],
+    x_hi: npt.NDArray[np.floating],
+    dx: npt.NDArray[np.floating],
+    d_lo: npt.NDArray[np.floating],
+    d_hi: npt.NDArray[np.floating],
+    s_lo: npt.NDArray[np.floating],
+    s_hi: npt.NDArray[np.floating],
+    g_lo: npt.NDArray[np.floating],
+    g_hi: npt.NDArray[np.floating],
+) -> npt.NDArray[np.floating]:
+    r"""Closed-form bin-average of the Gaussian density ``<g>`` for the retardation correction.
+
+    When ``R != 1`` and ``D_m > 0`` the per-edge antiderivative bakes in an effective flux
+    coefficient ``dD_t/dx = R*D_m/v + alpha_L`` (because ``d(tau)/dx = R/v`` under retardation),
+    whereas Kreft-Zuber wants ``D_L/v = D_m/v + alpha_L``. The excess ``(R-1)*D_m/v`` is removed
+    by subtracting it times ``<g>``, the bin-average of the Gaussian density
+    ``g = e^{-x^2/(4 D_t)} / (2 sqrt(pi D_t))``. Within a bin ``D_t`` is linear in ``x``, so ``<g>``
+    is closed form: substituting ``w = D_t`` in ``int g dx`` gives
+    ``int w^{-1/2} e^{-w/(4 m^2) - c^2/(4 m^2 w)} dw`` -- a pair of error functions -- with slope
+    ``m = dD_t/dx`` and intercept ``c = D_t(x=0)``. Reusing the antiderivative's Gaussian factor
+    ``G = e^{-x^2/(4 D_t)}``, ``erfcx`` keeps the (always non-negative) ``u+`` branch overflow-free;
+    the ``u-`` branch splits: ``erfcx`` where ``u- >= 0``, ``erf`` elsewhere. Each transcendental is
+    evaluated on its own subset (fancy indexing) rather than over the full array. The slope->0
+    (constant-``D_t``) limit is the exact ``[C_R(x_hi) - C_R(x_lo)] / dx``, applied only on that subset.
+
+    Parameters
+    ----------
+    x_lo, x_hi : ndarray
+        Breakthrough coordinate ``step_widths`` at the lower / upper cout edge of each bin.
+    dx : ndarray
+        ``x_hi - x_lo``.
+    d_lo, d_hi : ndarray
+        Moving-frame dispersion product ``D_t`` at the lower / upper edge.
+    s_lo, s_hi : ndarray
+        ``2 * sqrt(D_t)`` at the lower / upper edge.
+    g_lo, g_hi : ndarray
+        Gaussian factor ``exp(-(x/s)^2)`` at the lower / upper edge.
+
+    Returns
+    -------
+    ndarray
+        Bin-averaged Gaussian density ``<g>``.
+    """
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        slope = (d_hi - d_lo) / dx
+        intercept = d_lo - slope * x_lo
+        abs_int = np.abs(intercept)
+        # s = 2*sqrt(D_t) is already computed, so slope*s = 2*slope*sqrt(D_t).
+        two_m_sqrt_lo = slope * s_lo
+        two_m_sqrt_hi = slope * s_hi
+        um_lo = (d_lo - abs_int) / two_m_sqrt_lo
+        um_hi = (d_hi - abs_int) / two_m_sqrt_hi
+        up_lo = (d_lo + abs_int) / two_m_sqrt_lo
+        up_hi = (d_hi + abs_int) / two_m_sqrt_hi
+        t_plus = g_lo * erfcx(up_lo) - g_hi * erfcx(up_hi)
+        t_minus = np.empty_like(t_plus)
+        pos = um_lo >= 0.0
+        neg = ~pos
+        t_minus[pos] = g_lo[pos] * erfcx(um_lo[pos]) - g_hi[pos] * erfcx(um_hi[pos])
+        c_minus = np.exp((intercept[neg] - abs_int[neg]) / (2.0 * slope[neg] ** 2))
+        t_minus[neg] = c_minus * (erf(um_hi[neg]) - erf(um_lo[neg]))
+        density_binavg = (t_minus + t_plus) / (2.0 * dx)
+        flat = np.abs(d_hi - d_lo) <= 1e-9 * np.maximum(d_lo, d_hi)
+        d_bar_s = 2.0 * np.sqrt(0.5 * (d_lo[flat] + d_hi[flat]))
+        density_binavg[flat] = 0.5 * (erf(x_hi[flat] / d_bar_s) - erf(x_lo[flat] / d_bar_s)) / dx[flat]
+        density_binavg[dx <= 0.0] = 0.0
+    return density_binavg
 
 
 def _flux_breakthrough_fraction(
@@ -169,55 +279,24 @@ def _flux_breakthrough_fraction(
         return np.where(dx > 0.0, frac, 0.5 + 0.5 * np.sign(x_lo))
 
     xi = step_widths + streamline_len
-    dt_var = molecular_diffusivity * tau + longitudinal_dispersivity * np.maximum(xi, 0.0)
-    dt_var = np.maximum(dt_var, _DT_FLOOR)
-    s = 2.0 * np.sqrt(dt_var)
-    with np.errstate(over="ignore", invalid="ignore"):
-        u = step_widths / s
-        gaussian = np.exp(-(u * u))
-        antideriv = 0.5 * step_widths + 0.5 * (step_widths * erf(u) + (s / _SQRT_PI) * gaussian)
+    dt_var = np.maximum(molecular_diffusivity * tau + longitudinal_dispersivity * np.maximum(xi, 0.0), _DT_FLOOR)
+    antideriv, s, gaussian = _breakthrough_antideriv(step_widths, dt_var)
     with np.errstate(divide="ignore", invalid="ignore"):
         frac = np.where(dx > 0.0, np.diff(antideriv, axis=0) / dx, 0.0)
 
-    # Retardation correction. The per-edge antiderivative bakes in an effective flux coefficient
-    # dD_t/dx = R*D_m/v + alpha_L (d(tau)/dx = R/v under retardation); Kreft-Zuber wants D_L/v =
-    # D_m/v + alpha_L. Subtract the excess (R-1)*D_m/v times <g>, the bin-average of the Gaussian
-    # density g = e^{-x^2/(4 D_t)} / (2 sqrt(pi D_t)) (zero when R == 1 or D_m == 0). Within a bin
-    # D_t is linear in x, so <g> is closed form: substituting w = D_t in int g dx gives
-    # int w^{-1/2} e^{-w/(4 m^2) - c^2/(4 m^2 w)} dw -- a pair of error functions -- with slope
-    # m = dD_t/dx and intercept c = D_t(x=0). Reusing the antiderivative's gaussian G = e^{-x^2/(4
-    # D_t)} = c_+- e^{-u_+-^2}, erfcx keeps the (always non-negative) u+ branch overflow-free.
-    # erfcx is overflow-safe for u- only where u- >= 0, so the u- branch splits: erfcx where
-    # u- >= 0, erf elsewhere. Each transcendental is evaluated on its own subset (fancy indexing)
-    # rather than computing both branches over the full array and discarding half. The slope->0
-    # (constant-D_t) limit is the exact [C_R(x_hi) - C_R(x_lo)] / dx, applied only on that subset.
     if retardation_factor != 1.0 and molecular_diffusivity > 0.0:
-        d_lo, d_hi = dt_var[:-1], dt_var[1:]
-        g_lo, g_hi = gaussian[:-1], gaussian[1:]
-        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-            slope = (d_hi - d_lo) / dx
-            intercept = d_lo - slope * x_lo
-            abs_int = np.abs(intercept)
-            # s = 2*sqrt(dt_var) is already computed, so slope*s = 2*slope*sqrt(D_t).
-            two_m_sqrt_lo = slope * s[:-1]
-            two_m_sqrt_hi = slope * s[1:]
-            um_lo = (d_lo - abs_int) / two_m_sqrt_lo
-            um_hi = (d_hi - abs_int) / two_m_sqrt_hi
-            up_lo = (d_lo + abs_int) / two_m_sqrt_lo
-            up_hi = (d_hi + abs_int) / two_m_sqrt_hi
-            t_plus = g_lo * erfcx(up_lo) - g_hi * erfcx(up_hi)
-            t_minus = np.empty_like(t_plus)
-            pos = um_lo >= 0.0
-            neg = ~pos
-            t_minus[pos] = g_lo[pos] * erfcx(um_lo[pos]) - g_hi[pos] * erfcx(um_hi[pos])
-            c_minus = np.exp((intercept[neg] - abs_int[neg]) / (2.0 * slope[neg] ** 2))
-            t_minus[neg] = c_minus * (erf(um_hi[neg]) - erf(um_lo[neg]))
-            density_binavg = (t_minus + t_plus) / (2.0 * dx)
-            flat = np.abs(d_hi - d_lo) <= 1e-9 * np.maximum(d_lo, d_hi)
-            d_bar_s = 2.0 * np.sqrt(0.5 * (d_lo[flat] + d_hi[flat]))
-            density_binavg[flat] = 0.5 * (erf(x_hi[flat] / d_bar_s) - erf(x_lo[flat] / d_bar_s)) / dx[flat]
-            density_binavg[dx <= 0.0] = 0.0
-            excess = np.where(velocity > 0.0, (retardation_factor - 1.0) * molecular_diffusivity / velocity, 0.0)
+        density_binavg = _retardation_excess_density(
+            x_lo=x_lo,
+            x_hi=x_hi,
+            dx=dx,
+            d_lo=dt_var[:-1],
+            d_hi=dt_var[1:],
+            s_lo=s[:-1],
+            s_hi=s[1:],
+            g_lo=gaussian[:-1],
+            g_hi=gaussian[1:],
+        )
+        excess = np.where(velocity > 0.0, (retardation_factor - 1.0) * molecular_diffusivity / velocity, 0.0)
         frac -= excess[:, None] * density_binavg
     return frac
 
@@ -269,6 +348,128 @@ def _broadcast_to_pore_volumes(
     return np.broadcast_to(arr, (n_pore_volumes,)) if arr.size == 1 else arr
 
 
+def _accumulate_pv_banded(
+    *,
+    accumulated_coeff: npt.NDArray[np.floating],
+    cumulative_volume_at_cout: npt.NDArray[np.floating],
+    cumulative_volume_at_cin: npt.NDArray[np.floating],
+    cout_tedges_days: npt.NDArray[np.floating],
+    tedges_days: npt.NDArray[np.floating],
+    r_vpv: float,
+    length: float,
+    molecular_diffusivity: float,
+    longitudinal_dispersivity: float,
+    retardation_factor: float,
+    velocity: npt.NDArray[np.floating],
+    min_cin_flow: float,
+    saturation_threshold: float,
+) -> bool:
+    r"""Scatter one streamtube's banded ``C_F`` contribution into ``accumulated_coeff``.
+
+    Computes the bin-averaged flux concentration only on the narrow cumulative-volume band where
+    the breakthrough transitions between 0 and 1 -- the only cin bins with a non-zero coefficient.
+    Within a streamtube the moving-frame dispersion product is exactly linear in the breakthrough
+    coordinate, ``D_t(x) = A + B*x``, with slope ``B = dD_t/dx = R*D_m/v + alpha_L`` (the per-bin
+    flux coefficient) and intercept ``A`` the front value, so the saturation edge
+    ``|x| = saturation_threshold * 2*sqrt(D_t(x))`` is the root of a quadratic -- the band
+    half-width is closed form, no iteration. The band is centred per cout bin on the front
+    ``V_cin = V_cout - R*V_pore`` and mapped to cin-edge columns with ``searchsorted`` (so
+    non-uniform / variable-flow grids need no special handling).
+
+    At ``saturation_threshold`` around 7 the dropped tail is ``~exp(-threshold**2)``, far below the
+    ulp of the kept entries, so the scattered band reproduces the dense build
+    (:func:`_flux_breakthrough_fraction`) to machine precision; a smaller threshold narrows the
+    band (faster) at the cost of dropping breakthrough tails of that order. ``C_F`` over a cout bin
+    is ``(I(x_hi) - I(x_lo)) / dx`` with the antiderivative ``I`` evaluated at both cout edges over
+    the gathered cin stripe, plus the same closed-form retardation correction as the dense kernel.
+
+    Returns
+    -------
+    bool
+        ``True`` if the contribution was scattered. ``False`` (leaving ``accumulated_coeff``
+        unchanged) when the band would span more than half the cin axis -- the caller then uses
+        the dense kernel for this streamtube, so the cost never exceeds the dense build.
+    """
+    v_cin = cumulative_volume_at_cin
+    n_cin_edges = v_cin.size
+    v_cout_lo, v_cout_hi = cumulative_volume_at_cout[:-1], cumulative_volume_at_cout[1:]
+    t_cout_lo, t_cout_hi = cout_tedges_days[:-1], cout_tedges_days[1:]
+
+    # Front locus per cout bin, then the band half-widths in closed form. In the breakthrough
+    # coordinate x (x > 0 broken through, x < 0 not), the moving-frame dispersion product is
+    # D_t(x) = D_m*tau(x) + alpha_L*xi(x), with intercept A := front D_t. Both bounds below are
+    # conservative -- they never under-cover the unsaturated band, where |x| < U*2*sqrt(D_t):
+    #   PRE side  (x < 0): tau and xi both shrink away from the front, so D_t <= a_pre := front D_t
+    #     and the band reaches |x| = 2U*sqrt(a_pre). Flow-independent, no cancellation.
+    #   POST side (x > 0): D_t grows; bounded by the steepest slope D_t <= A + B*x with
+    #     B = alpha_L + D_m*r_vpv/(L*min_cin_flow) (dtau/dx = r_vpv/(L*flow) <= r_vpv/(L*min_cin_flow)),
+    #     giving the root x_post = 2U^2*B + 2U*sqrt(U^2*B^2 + A). The flow term only matters for strong
+    #     molecular diffusion (already the wide-band regime); the mechanical term is exact.
+    # The post extent anchors at the lower cout edge (smallest V_cin), whose front can sit in slower
+    # flow with larger tau, so it carries its own intercept a_post; max(a_pre, a_post) bounds the front
+    # D_t of both cout edges there. The pre extent anchors at the upper cout edge. a_pre uses the upper
+    # edge time / mid front (conservative for the pre side). +1 absorbs searchsorted rounding;
+    # min_cin_flow == 0 -> B = inf -> the band trips the fallback below.
+    u = saturation_threshold
+    v_front = 0.5 * (v_cout_lo + v_cout_hi) - r_vpv
+    center = np.searchsorted(v_cin, v_front)
+    center_post = np.searchsorted(v_cin, v_cout_lo - r_vpv)  # searchsorted >= 0, so only the high clip binds
+    disp = longitudinal_dispersivity * length
+    a_pre = molecular_diffusivity * np.maximum(t_cout_hi - tedges_days[np.minimum(center, n_cin_edges - 1)], 0.0) + disp
+    a_post = (
+        molecular_diffusivity * np.maximum(t_cout_lo - tedges_days[np.minimum(center_post, n_cin_edges - 1)], 0.0)
+        + disp
+    )
+    a_post = np.maximum(a_post, a_pre)
+    pre_x = 2.0 * u * np.sqrt(a_pre)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        b_max = longitudinal_dispersivity + molecular_diffusivity * r_vpv / (length * min_cin_flow)
+        post_x = 2.0 * u * u * b_max + 2.0 * u * np.sqrt(u * u * b_max * b_max + a_post)
+        col_post = np.searchsorted(v_cin, (v_cout_lo - r_vpv) - r_vpv * post_x / length)  # smallest V_cin
+        col_pre = np.searchsorted(v_cin, (v_cout_hi - r_vpv) + r_vpv * pre_x / length)  # largest V_cin
+    hw_post = max(int(np.max(center - col_post)), 1) + 1
+    hw_pre = max(int(np.max(col_pre - center)), 1) + 1
+    if hw_post + hw_pre >= n_cin_edges // 2:
+        return False
+
+    # Bin-averaged C_F over the stripe: I evaluated at both cout edges. Columns are clipped to the
+    # real data edges, which the warm-start extension makes saturated, so out-of-range columns
+    # carry frac 0/1 and telescope away in the cin-edge difference below.
+    cols = center[:, None] + np.arange(-hw_post, hw_pre + 1)[None, :]
+    cc = np.clip(cols, 0, n_cin_edges - 1)
+    v_c, t_c = v_cin[cc], tedges_days[cc]
+    sw_lo = (v_cout_lo[:, None] - v_c - r_vpv) * length / r_vpv
+    sw_hi = (v_cout_hi[:, None] - v_c - r_vpv) * length / r_vpv
+    dt_lo = np.maximum(
+        molecular_diffusivity * np.maximum(t_cout_lo[:, None] - t_c, 0.0)
+        + longitudinal_dispersivity * np.maximum(sw_lo + length, 0.0),
+        _DT_FLOOR,
+    )
+    dt_hi = np.maximum(
+        molecular_diffusivity * np.maximum(t_cout_hi[:, None] - t_c, 0.0)
+        + longitudinal_dispersivity * np.maximum(sw_hi + length, 0.0),
+        _DT_FLOOR,
+    )
+    i_lo, s_lo, g_lo = _breakthrough_antideriv(sw_lo, dt_lo)
+    i_hi, s_hi, g_hi = _breakthrough_antideriv(sw_hi, dt_hi)
+    dx = sw_hi - sw_lo
+    with np.errstate(divide="ignore", invalid="ignore"):
+        frac = np.where(dx > 0.0, (i_hi - i_lo) / dx, 0.0)
+    if retardation_factor != 1.0 and molecular_diffusivity > 0.0:
+        density_binavg = _retardation_excess_density(
+            x_lo=sw_lo, x_hi=sw_hi, dx=dx, d_lo=dt_lo, d_hi=dt_hi, s_lo=s_lo, s_hi=s_hi, g_lo=g_lo, g_hi=g_hi
+        )
+        excess = np.where(velocity > 0.0, (retardation_factor - 1.0) * molecular_diffusivity / velocity, 0.0)
+        frac -= excess[:, None] * density_binavg
+
+    coeff = frac[:, :-1] - frac[:, 1:]
+    cin_bin = cols[:, :-1]
+    rows = np.broadcast_to(np.arange(center.size)[:, None], coeff.shape)
+    valid = (cin_bin >= 0) & (cin_bin < n_cin_edges - 1)
+    np.add.at(accumulated_coeff, (rows[valid], cin_bin[valid]), coeff[valid])
+    return True
+
+
 def _closed_form_coeff_matrix(
     *,
     flow: npt.NDArray[np.floating],
@@ -281,6 +482,8 @@ def _closed_form_coeff_matrix(
     longitudinal_dispersivity: npt.NDArray[np.floating],
     retardation_factor: float,
     extend_tedges: bool,
+    saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
+    force_dense: bool = False,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool_]]:
     """Build the forward coefficient matrix W (``cout = W @ cin``) via the closed-form C_F.
 
@@ -347,21 +550,55 @@ def _closed_form_coeff_matrix(
     with np.errstate(divide="ignore", invalid="ignore"):
         q_cout = np.where(dt_cout > 0, dv_cout / dt_cout, 0.0)
 
+    # Slowest cin-side flow rate, used by the banded build to bound the broken-through band width
+    # (the slowest flow gives the steepest dD_t/dx). Zero when flow is everywhere zero -> banding
+    # falls back to the dense kernel.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cin_flow = np.diff(cumulative_volume_at_cin) / np.diff(tedges_days)
+    positive_cin_flow = cin_flow[cin_flow > 0.0]
+    min_cin_flow = float(positive_cin_flow.min()) if positive_cin_flow.size else 0.0
+
     n_cout_bins = len(cout_tedges) - 1
     n_cin_bins = len(flow)
     accumulated_coeff = np.zeros((n_cout_bins, n_cin_bins))
     for i_pv, v_pore in enumerate(aquifer_pore_volumes):
         r_vpv = retardation_factor * v_pore
         length = float(streamline_length[i_pv])
+        d_m = float(molecular_diffusivity[i_pv])
+        alpha_l = float(longitudinal_dispersivity[i_pv])
+        velocity = q_cout * length / v_pore
+        # Banded build for the dispersive case. The zero-dispersion step function (no band to
+        # find) and a band wider than half the matrix fall back to the dense kernel, so the cost
+        # never exceeds -- and is bit-identical to -- the dense build.
+        if (
+            not force_dense
+            and (d_m > 0.0 or alpha_l > 0.0)
+            and _accumulate_pv_banded(
+                accumulated_coeff=accumulated_coeff,
+                cumulative_volume_at_cout=cumulative_volume_at_cout,
+                cumulative_volume_at_cin=cumulative_volume_at_cin,
+                cout_tedges_days=cout_tedges_days,
+                tedges_days=tedges_days,
+                r_vpv=r_vpv,
+                length=length,
+                molecular_diffusivity=d_m,
+                longitudinal_dispersivity=alpha_l,
+                retardation_factor=retardation_factor,
+                velocity=velocity,
+                min_cin_flow=min_cin_flow,
+                saturation_threshold=saturation_threshold,
+            )
+        ):
+            continue
         step_widths = (cumulative_volume_at_cout[:, None] - cumulative_volume_at_cin[None, :] - r_vpv) * length / r_vpv
         frac = _flux_breakthrough_fraction(
             step_widths=step_widths,
             tau=tau,
-            molecular_diffusivity=float(molecular_diffusivity[i_pv]),
-            longitudinal_dispersivity=float(longitudinal_dispersivity[i_pv]),
+            molecular_diffusivity=d_m,
+            longitudinal_dispersivity=alpha_l,
             streamline_len=length,
             retardation_factor=retardation_factor,
-            velocity=q_cout * length / v_pore,
+            velocity=velocity,
         )
         accumulated_coeff += frac[:, :-1] - frac[:, 1:]
 
@@ -382,6 +619,7 @@ def infiltration_to_extraction(
     retardation_factor: float = 1.0,
     flow_out: npt.ArrayLike | None = None,
     spinup: str | float | None = "constant",
+    saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Compute extracted concentration with advection and longitudinal dispersion.
 
@@ -421,6 +659,12 @@ def infiltration_to_extraction(
     spinup : {"constant"} | None, optional
         ``"constant"`` (default) extends ``tedges`` by 100 years on each side so a constant
         warm-start fills the left-edge spin-up region; ``None`` leaves spin-up cout as NaN.
+    saturation_threshold : float, optional
+        Breakthrough-band cutoff ``U`` (default 7.0). The coefficient matrix is built only on the
+        cumulative-volume band where the breakthrough is unsaturated (``|x| < U * 2*sqrt(D_t)``),
+        which is the only region with non-zero coefficients. ``U`` around 7 (any value above ~6)
+        reproduces the full dense build to machine precision; a smaller value narrows the band --
+        faster -- at the cost of dropping breakthrough tails of order ``exp(-U**2)``.
 
     Returns
     -------
@@ -473,6 +717,7 @@ def infiltration_to_extraction(
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
         extend_tedges=_extend_tedges_flag(spinup),
+        saturation_threshold=saturation_threshold,
     )
 
     cout = coeff_matrix @ cin
@@ -498,6 +743,7 @@ def extraction_to_infiltration(
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
     spinup: str | float | None = "constant",
+    saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Reconstruct infiltration concentration from extracted water (deconvolution).
 
@@ -536,6 +782,8 @@ def extraction_to_infiltration(
         See :func:`infiltration_to_extraction`. Default None.
     spinup : {"constant"} | None, optional
         See :func:`infiltration_to_extraction`. Default ``"constant"``.
+    saturation_threshold : float, optional
+        See :func:`infiltration_to_extraction`. Default 7.0.
 
     Returns
     -------
@@ -595,6 +843,7 @@ def extraction_to_infiltration(
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
         extend_tedges=_extend_tedges_flag(spinup),
+        saturation_threshold=saturation_threshold,
     )
 
     return solve_inverse_transport(
@@ -625,6 +874,7 @@ def gamma_infiltration_to_extraction(
     retardation_factor: float = 1.0,
     flow_out: npt.ArrayLike | None = None,
     spinup: str | float | None = "constant",
+    saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Compute extracted concentration for a gamma-distributed pore volume distribution.
 
@@ -665,6 +915,8 @@ def gamma_infiltration_to_extraction(
         :func:`infiltration_to_extraction`. Default None.
     spinup : {"constant"} | None, optional
         See :func:`infiltration_to_extraction`. Default ``"constant"``.
+    saturation_threshold : float, optional
+        See :func:`infiltration_to_extraction`. Default 7.0.
 
     Returns
     -------
@@ -691,6 +943,7 @@ def gamma_infiltration_to_extraction(
         retardation_factor=retardation_factor,
         flow_out=flow_out,
         spinup=spinup,
+        saturation_threshold=saturation_threshold,
     )
 
 
@@ -713,6 +966,7 @@ def gamma_extraction_to_infiltration(
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
     spinup: str | float | None = "constant",
+    saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Reconstruct infiltration concentration for a gamma-distributed pore volume distribution.
 
@@ -755,6 +1009,8 @@ def gamma_extraction_to_infiltration(
         :func:`infiltration_to_extraction`. Default None.
     spinup : {"constant"} | None, optional
         See :func:`infiltration_to_extraction`. Default ``"constant"``.
+    saturation_threshold : float, optional
+        See :func:`infiltration_to_extraction`. Default 7.0.
 
     Returns
     -------
@@ -782,6 +1038,7 @@ def gamma_extraction_to_infiltration(
         regularization_strength=regularization_strength,
         flow_out=flow_out,
         spinup=spinup,
+        saturation_threshold=saturation_threshold,
     )
 
 
