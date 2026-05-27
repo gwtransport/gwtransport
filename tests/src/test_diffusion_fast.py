@@ -146,7 +146,7 @@ def test_infiltration_to_extraction_multiple_pore_volumes():
 
 
 def test_infiltration_to_extraction_cout_tedges_different_resolution():
-    """Test with coarser output grid."""
+    """Test with coarser output grid (flow_out required since cout_tedges != tedges)."""
     n_days = 200
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
     cout_tedges = pd.date_range("2020-01-01", periods=n_days // 7 + 1, freq="7D")
@@ -158,6 +158,7 @@ def test_infiltration_to_extraction_cout_tedges_different_resolution():
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
+        flow_out=np.full(len(cout_tedges) - 1, 100.0),
         aquifer_pore_volumes=np.array([500.0]),
         mean_streamline_length=80.0,
         mean_molecular_diffusivity=0.03,
@@ -977,6 +978,34 @@ def test_flow_out_validation_negative():
         )
 
 
+def test_flow_out_required_when_cout_tedges_differ():
+    """Omitting flow_out is rejected when cout_tedges differs from tedges.
+
+    The extraction flow on a distinct output grid is not implied by the input ``flow``
+    (it would have to be guessed by interpolation), so the module requires it. When
+    cout_tedges equals tedges, flow_out may be omitted (it equals ``flow``).
+    """
+    n_days = 200
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    cout_tedges = pd.date_range("2020-01-01", periods=n_days // 7 + 1, freq="7D")
+    flow = np.full(n_days, 100.0)
+    cin = np.full(n_days, 5.0)
+    common = {
+        "cin": cin,
+        "flow": flow,
+        "tedges": tedges,
+        "aquifer_pore_volumes": np.array([500.0]),
+        "mean_streamline_length": 80.0,
+        "mean_molecular_diffusivity": 0.03,
+        "mean_longitudinal_dispersivity": 0.0,
+    }
+    with pytest.raises(ValueError, match="flow_out is required when cout_tedges differs from tedges"):
+        infiltration_to_extraction(cout_tedges=cout_tedges, **common)
+    # cout_tedges == tedges: flow_out may be omitted.
+    out = infiltration_to_extraction(cout_tedges=tedges, **common)
+    assert len(out) == n_days
+
+
 def test_extraction_to_infiltration_flow_out_round_trip():
     """Round-trip with flow_out recovers original signal (machine precision).
 
@@ -1037,6 +1066,9 @@ class TestGammaExtractionToInfiltrationFast:
             "flow": flow,
             "tedges": tedges,
             "cout_tedges": cout_tedges,
+            # cout grid differs from tedges, so the extraction flow on the cout grid is
+            # required (constant 100 here, matching the input flow).
+            "flow_out": np.full(len(cout_tedges) - 1, 100.0),
             "mean": 500.0,
             "std": 100.0,
             "n_bins": 20,
@@ -1077,6 +1109,7 @@ class TestGammaExtractionToInfiltrationFast:
             flow=gamma_setup["flow"],
             tedges=gamma_setup["tedges"],
             cout_tedges=gamma_setup["cout_tedges"],
+            flow_out=gamma_setup["flow_out"],
             mean=gamma_setup["mean"],
             std=gamma_setup["std"],
             n_bins=gamma_setup["n_bins"],
@@ -1215,6 +1248,7 @@ class TestGammaExtractionToInfiltrationFast:
             "flow": gamma_setup["flow"],
             "tedges": gamma_setup["tedges"],
             "cout_tedges": gamma_setup["cout_tedges"],
+            "flow_out": gamma_setup["flow_out"],
             "n_bins": gamma_setup["n_bins"],
             "mean_streamline_length": gamma_setup["mean_streamline_length"],
             "mean_molecular_diffusivity": gamma_setup["mean_molecular_diffusivity"],
@@ -1253,6 +1287,7 @@ class TestGammaExtractionToInfiltrationFast:
             flow=gamma_setup["flow"],
             tedges=gamma_setup["tedges"],
             cout_tedges=gamma_setup["cout_tedges"],
+            flow_out=gamma_setup["flow_out"],
             mean=gamma_setup["mean"],
             std=gamma_setup["std"],
             n_bins=gamma_setup["n_bins"],
@@ -1266,6 +1301,7 @@ class TestGammaExtractionToInfiltrationFast:
             flow=gamma_setup["flow"],
             tedges=gamma_setup["tedges"],
             cout_tedges=gamma_setup["cout_tedges"],
+            flow_out=gamma_setup["flow_out"],
             aquifer_pore_volumes=bins["expected_values"],
             mean_streamline_length=gamma_setup["mean_streamline_length"],
             mean_molecular_diffusivity=gamma_setup["mean_molecular_diffusivity"],
@@ -1287,6 +1323,7 @@ class TestGammaExtractionToInfiltrationFast:
             "flow": gamma_setup["flow"],
             "tedges": gamma_setup["tedges"],
             "cout_tedges": gamma_setup["cout_tedges"],
+            "flow_out": gamma_setup["flow_out"],
             "mean": gamma_setup["mean"],
             "std": gamma_setup["std"],
             "n_bins": gamma_setup["n_bins"],

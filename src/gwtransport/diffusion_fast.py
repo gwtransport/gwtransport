@@ -350,9 +350,10 @@ def infiltration_to_extraction(
         Retardation factor (default 1.0). Values > 1.0 indicate slower transport.
     flow_out : array-like or None, optional
         Extraction flow rate [m3/day] on the output grid (aligned to ``cout_tedges``,
-        length ``len(cout_tedges) - 1``). Defines the cout-edge volumes; supply it for
-        machine-precision agreement with :mod:`gwtransport.diffusion` when ``cout_tedges``
-        differs from ``tedges``. Default None (cout volumes interpolated from ``flow``).
+        length ``len(cout_tedges) - 1``); constant within each cout bin, like ``flow`` is
+        within each ``tedges`` bin. It defines the cout-bin volumes and the outlet velocity.
+        **Required when ``cout_tedges`` differs from ``tedges``**; may be omitted only when
+        ``cout_tedges`` equals ``tedges`` (then it equals ``flow``). Default None.
     spinup : {"constant"} | None, optional
         ``"constant"`` (default) extends ``tedges`` by 100 years on each side so a constant
         warm-start fills the left-edge spin-up region; ``None`` leaves spin-up cout as NaN.
@@ -762,7 +763,14 @@ def _validate_inputs(
     if retardation_factor < 1.0:
         msg = "retardation_factor must be >= 1.0"
         raise ValueError(msg)
-    if flow_out is not None:
+    if flow_out is None:
+        # The output-grid extraction flow is only unambiguous when the cout grid matches
+        # the flow grid; otherwise it must be supplied (it defines the cout-bin volumes and
+        # the outlet velocity used by the retardation correction).
+        if not tedges.equals(cout_tedges):
+            msg = "flow_out is required when cout_tedges differs from tedges"
+            raise ValueError(msg)
+    else:
         n_cout = len(cout_tedges) - 1
         if len(flow_out) != n_cout:
             msg = f"flow_out must have length len(cout_tedges) - 1 = {n_cout}, got {len(flow_out)}"
