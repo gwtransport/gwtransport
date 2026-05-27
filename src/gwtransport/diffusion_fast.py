@@ -33,6 +33,27 @@ streamline length ``L``; molecular diffusion enters the V-space variance through
 ``streamline_length`` / ``molecular_diffusivity`` / ``longitudinal_dispersivity`` arrays
 are not supported here -- use :mod:`gwtransport.diffusion` for those.
 
+When to choose this module vs :mod:`gwtransport.diffusion`
+----------------------------------------------------------
+
+Both modules implement the *same* physics (Bear resident concentration + Kreft-Zuber flux
+concentration on 1D streamtubes, with retardation and the moving-frame variance
+``D_t = D_m*tau + alpha_L*xi``). For a single representative streamline length / diffusivity
+/ dispersivity and a cout grid at or finer than the flow grid, this module reproduces
+:mod:`gwtransport.diffusion` to machine precision while being ~80-90x faster (closed form,
+no Gauss-Legendre quadrature, no residence-time inversion) with no penalty as dispersion
+grows -- so it is the right default. Prefer :mod:`gwtransport.diffusion` when you need:
+
+- per-streamtube ``streamline_length`` / ``molecular_diffusivity`` /
+  ``longitudinal_dispersivity`` arrays (heterogeneous flow paths -- partially-penetrating
+  wells, wedge-shaped capture zones);
+- a cout grid *coarser* than the flow detail (this module treats ``flow_out`` as constant
+  within each cout bin, whereas :mod:`gwtransport.diffusion` integrates the full
+  ``tedges``-resolution flow within each cout bin -- a ~0.1%-of-peak difference for a
+  rapidly-varying ``cin`` over wide cout bins under variable flow);
+- exactness when ``retardation_factor != 1`` and ``molecular_diffusivity > 0`` (here the
+  flux correction carries an ``O(dx^2)`` trapezoidal residual, ~1e-4 of peak).
+
 Available functions:
 
 - :func:`infiltration_to_extraction` -- forward transport.
