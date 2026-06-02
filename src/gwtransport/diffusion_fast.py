@@ -74,22 +74,21 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from scipy.special import erf, erfcx
 
 from gwtransport import gamma
+from gwtransport._diffusion_shared import (
+    _DT_FLOOR,
+    _EPSILON_COEFF_SUM,
+    _breakthrough_antideriv,
+    _broadcast_to_pore_volumes,
+    _cout_cumulative_volume,
+    _extend_tedges_flag,
+    _retardation_excess_density,
+    _validate_inputs,
+)
 from gwtransport._time import dt_to_days, tedges_to_days
 from gwtransport.residence_time import residence_time
 from gwtransport.utils import cumulative_flow_volume, solve_inverse_transport
-
-# Minimum coefficient sum to consider an output bin valid.
-_EPSILON_COEFF_SUM = 1e-10
-
-# sqrt(pi), used in the closed-form breakthrough antiderivative.
-_SQRT_PI = np.sqrt(np.pi)
-
-# Floor on the moving-frame dispersion product D_t [m^2] to keep the erf argument finite
-# for pre-breakthrough / zero-dispersion edges (where D_t -> 0).
-_DT_FLOOR = 1e-30
 
 # Default saturation threshold U for the banded build: a cout/cin pair is only evaluated
 # while the breakthrough |x|/(2*sqrt(D_t)) <= U; beyond it the bin-averaged C_F is saturated
@@ -98,105 +97,6 @@ _DT_FLOOR = 1e-30
 # to the dense one. Smaller U narrows the band -> faster, at the cost of dropping breakthrough
 # tails of order exp(-U^2).
 _DEFAULT_SATURATION_THRESHOLD = 7.0
-
-
-def _breakthrough_antideriv(
-    step_widths: npt.NDArray[np.floating], dt_var: npt.NDArray[np.floating]
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]]:
-    r"""Closed-form antiderivative of the resident concentration, evaluated per edge.
-
-    Returns :math:`I(x) = \tfrac12 x + \tfrac12[x\,\operatorname{erf}(x/s) + (s/\sqrt\pi)e^{-(x/s)^2}]`
-    with :math:`s = 2\sqrt{D_t}`, alongside ``s`` and the Gaussian factor ``exp(-(x/s)^2)`` (both
-    reused by the retardation correction). Shared by the dense kernel
-    (:func:`_flux_breakthrough_fraction`) and the banded build, so both compute identical
-    floating-point results for the same inputs.
-
-    Returns
-    -------
-    antideriv : ndarray
-        The antiderivative :math:`I(x)`.
-    s : ndarray
-        ``2 * sqrt(D_t)``.
-    gaussian : ndarray
-        ``exp(-(x/s)^2)``.
-    """
-    s = 2.0 * np.sqrt(dt_var)
-    with np.errstate(over="ignore", invalid="ignore"):
-        u = step_widths / s
-        gaussian = np.exp(-(u * u))
-        antideriv = 0.5 * step_widths + 0.5 * (step_widths * erf(u) + (s / _SQRT_PI) * gaussian)
-    return antideriv, s, gaussian
-
-
-def _retardation_excess_density(
-    *,
-    x_lo: npt.NDArray[np.floating],
-    x_hi: npt.NDArray[np.floating],
-    dx: npt.NDArray[np.floating],
-    d_lo: npt.NDArray[np.floating],
-    d_hi: npt.NDArray[np.floating],
-    s_lo: npt.NDArray[np.floating],
-    s_hi: npt.NDArray[np.floating],
-    g_lo: npt.NDArray[np.floating],
-    g_hi: npt.NDArray[np.floating],
-) -> npt.NDArray[np.floating]:
-    r"""Closed-form bin-average of the Gaussian density ``<g>`` for the retardation correction.
-
-    When ``R != 1`` and ``D_m > 0`` the per-edge antiderivative bakes in an effective flux
-    coefficient ``dD_t/dx = R*D_m/v + alpha_L`` (because ``d(tau)/dx = R/v`` under retardation),
-    whereas Kreft-Zuber wants ``D_L/v = D_m/v + alpha_L``. The excess ``(R-1)*D_m/v`` is removed
-    by subtracting it times ``<g>``, the bin-average of the Gaussian density
-    ``g = e^{-x^2/(4 D_t)} / (2 sqrt(pi D_t))``. Within a bin ``D_t`` is linear in ``x``, so ``<g>``
-    is closed form: substituting ``w = D_t`` in ``int g dx`` gives
-    ``int w^{-1/2} e^{-w/(4 m^2) - c^2/(4 m^2 w)} dw`` -- a pair of error functions -- with slope
-    ``m = dD_t/dx`` and intercept ``c = D_t(x=0)``. Reusing the antiderivative's Gaussian factor
-    ``G = e^{-x^2/(4 D_t)}``, ``erfcx`` keeps the (always non-negative) ``u+`` branch overflow-free;
-    the ``u-`` branch splits: ``erfcx`` where ``u- >= 0``, ``erf`` elsewhere. Each transcendental is
-    evaluated on its own subset (fancy indexing) rather than over the full array. The slope->0
-    (constant-``D_t``) limit is the exact ``[C_R(x_hi) - C_R(x_lo)] / dx``, applied only on that subset.
-
-    Parameters
-    ----------
-    x_lo, x_hi : ndarray
-        Breakthrough coordinate ``step_widths`` at the lower / upper cout edge of each bin.
-    dx : ndarray
-        ``x_hi - x_lo``.
-    d_lo, d_hi : ndarray
-        Moving-frame dispersion product ``D_t`` at the lower / upper edge.
-    s_lo, s_hi : ndarray
-        ``2 * sqrt(D_t)`` at the lower / upper edge.
-    g_lo, g_hi : ndarray
-        Gaussian factor ``exp(-(x/s)^2)`` at the lower / upper edge.
-
-    Returns
-    -------
-    ndarray
-        Bin-averaged Gaussian density ``<g>``.
-    """
-    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        slope = (d_hi - d_lo) / dx
-        intercept = d_lo - slope * x_lo
-        abs_int = np.abs(intercept)
-        # s = 2*sqrt(D_t) is already computed, so slope*s = 2*slope*sqrt(D_t).
-        two_m_sqrt_lo = slope * s_lo
-        two_m_sqrt_hi = slope * s_hi
-        um_lo = (d_lo - abs_int) / two_m_sqrt_lo
-        um_hi = (d_hi - abs_int) / two_m_sqrt_hi
-        up_lo = (d_lo + abs_int) / two_m_sqrt_lo
-        up_hi = (d_hi + abs_int) / two_m_sqrt_hi
-        t_plus = g_lo * erfcx(up_lo) - g_hi * erfcx(up_hi)
-        t_minus = np.empty_like(t_plus)
-        pos = um_lo >= 0.0
-        neg = ~pos
-        t_minus[pos] = g_lo[pos] * erfcx(um_lo[pos]) - g_hi[pos] * erfcx(um_hi[pos])
-        c_minus = np.exp((intercept[neg] - abs_int[neg]) / (2.0 * slope[neg] ** 2))
-        t_minus[neg] = c_minus * (erf(um_hi[neg]) - erf(um_lo[neg]))
-        density_binavg = (t_minus + t_plus) / (2.0 * dx)
-        flat = np.abs(d_hi - d_lo) <= 1e-9 * np.maximum(d_lo, d_hi)
-        d_bar_s = 2.0 * np.sqrt(0.5 * (d_lo[flat] + d_hi[flat]))
-        density_binavg[flat] = 0.5 * (erf(x_hi[flat] / d_bar_s) - erf(x_lo[flat] / d_bar_s)) / dx[flat]
-        density_binavg[dx <= 0.0] = 0.0
-    return density_binavg
 
 
 def _flux_breakthrough_fraction(
@@ -299,53 +199,6 @@ def _flux_breakthrough_fraction(
         excess = np.where(velocity > 0.0, (retardation_factor - 1.0) * molecular_diffusivity / velocity, 0.0)
         frac -= excess[:, None] * density_binavg
     return frac
-
-
-def _extend_tedges_flag(spinup: str | float | None) -> bool:
-    """Translate the public ``spinup`` parameter to the internal extend flag.
-
-    ``"constant"`` (default) extends ``tedges`` by 100 years on each side so a constant
-    warm-start fills the left-edge spin-up region; ``None`` disables the extension (spin-up
-    cout becomes NaN). Mirrors :func:`gwtransport.diffusion._diffusion_extend_tedges_flag`.
-
-    Returns
-    -------
-    bool
-        True if ``tedges`` should be extended (warm-start), False otherwise.
-
-    Raises
-    ------
-    ValueError
-        If ``spinup`` is a string other than ``"constant"``.
-    NotImplementedError
-        If ``spinup`` is a float (fraction-threshold mode is not implemented).
-    """
-    if spinup is None:
-        return False
-    if isinstance(spinup, str):
-        if spinup != "constant":
-            msg = f"spinup string must be 'constant'; got {spinup!r}"
-            raise ValueError(msg)
-        return True
-    msg = f"diffusion_fast's spinup only supports None or 'constant'; float thresholds are not implemented (got {spinup!r})"
-    raise NotImplementedError(msg)
-
-
-def _broadcast_to_pore_volumes(
-    values: npt.NDArray[np.floating] | float, n_pore_volumes: int
-) -> npt.NDArray[np.floating]:
-    """Return a per-pore-volume array: a scalar broadcasts to all streamtubes, an array passes through.
-
-    Length is validated upstream by :func:`_validate_inputs`, so a non-scalar array is
-    returned as-is (assumed length ``n_pore_volumes``).
-
-    Returns
-    -------
-    ndarray, shape (n_pore_volumes,)
-        Per-streamtube values.
-    """
-    arr = np.atleast_1d(np.asarray(values, dtype=float))
-    return np.broadcast_to(arr, (n_pore_volumes,)) if arr.size == 1 else arr
 
 
 def _accumulate_pv_banded(
@@ -519,14 +372,13 @@ def _closed_form_coeff_matrix(
     # window that starts before the input data stays correctly aligned); otherwise
     # interpolated from the infiltration curve.
     cumulative_volume_at_cin = cumulative_flow_volume(flow, dt_to_days(work_tedges))
-    if flow_out is not None:
-        cumsum_out = np.concatenate(([0.0], np.cumsum(flow_out * dt_to_days(cout_tedges))))
-        in_range = (cout_tedges_days >= tedges_days[0]) & (cout_tedges_days <= tedges_days[-1])
-        i0 = int(np.argmax(in_range)) if np.any(in_range) else 0
-        v_at_i0 = float(np.interp(cout_tedges_days[i0], tedges_days, cumulative_volume_at_cin))
-        cumulative_volume_at_cout = v_at_i0 + (cumsum_out - cumsum_out[i0])
-    else:
-        cumulative_volume_at_cout = np.interp(cout_tedges_days, tedges_days, cumulative_volume_at_cin)
+    cumulative_volume_at_cout = _cout_cumulative_volume(
+        flow_out=flow_out,
+        cout_tedges=cout_tedges,
+        cout_tedges_days=cout_tedges_days,
+        tedges_days=tedges_days,
+        cumulative_volume_at_cin=cumulative_volume_at_cin,
+    )
 
     # Residence time identifies cout bins with complete breakthrough (NaN beyond data).
     rt_at_cout_tedges = residence_time(
@@ -1040,94 +892,3 @@ def gamma_extraction_to_infiltration(
         spinup=spinup,
         saturation_threshold=saturation_threshold,
     )
-
-
-def _validate_inputs(
-    *,
-    cin_or_cout: np.ndarray,
-    flow: np.ndarray,
-    tedges: pd.DatetimeIndex,
-    cout_tedges: pd.DatetimeIndex,
-    aquifer_pore_volumes: np.ndarray,
-    streamline_length: npt.NDArray[np.floating] | float,
-    molecular_diffusivity: npt.NDArray[np.floating] | float,
-    longitudinal_dispersivity: npt.NDArray[np.floating] | float,
-    retardation_factor: float,
-    is_forward: bool,
-    flow_out: np.ndarray | None = None,
-) -> None:
-    """Validate inputs for infiltration_to_extraction and extraction_to_infiltration.
-
-    ``streamline_length`` / ``molecular_diffusivity`` / ``longitudinal_dispersivity`` may be
-    a scalar or an array of length ``len(aquifer_pore_volumes)`` (one value per streamtube).
-
-    Raises
-    ------
-    ValueError
-        If array lengths are inconsistent, molecular_diffusivity or
-        longitudinal_dispersivity are negative, cin or cout or flow contain NaN values,
-        aquifer_pore_volumes contains non-positive values, streamline_length is
-        non-positive, or retardation_factor is below 1 (anti-retardation is not physical for
-        the supported sorption isotherms).
-    """
-    if is_forward:
-        if len(tedges) != len(cin_or_cout) + 1:
-            msg = "tedges must have one more element than cin"
-            raise ValueError(msg)
-    elif len(cout_tedges) != len(cin_or_cout) + 1:
-        msg = "cout_tedges must have one more element than cout"
-        raise ValueError(msg)
-    if len(tedges) != len(flow) + 1:
-        msg = "tedges must have one more element than flow"
-        raise ValueError(msg)
-    n_pore_volumes = len(aquifer_pore_volumes)
-    for name, arr in (
-        ("streamline_length", streamline_length),
-        ("molecular_diffusivity", molecular_diffusivity),
-        ("longitudinal_dispersivity", longitudinal_dispersivity),
-    ):
-        if np.size(arr) not in {1, n_pore_volumes}:
-            msg = f"{name} must be a scalar or have length len(aquifer_pore_volumes) = {n_pore_volumes}"
-            raise ValueError(msg)
-    if np.any(np.asarray(molecular_diffusivity) < 0):
-        msg = "molecular_diffusivity must be non-negative"
-        raise ValueError(msg)
-    if np.any(np.asarray(longitudinal_dispersivity) < 0):
-        msg = "longitudinal_dispersivity must be non-negative"
-        raise ValueError(msg)
-    if np.any(np.isnan(cin_or_cout)):
-        msg = f"{'cin' if is_forward else 'cout'} contains NaN values, which are not allowed"
-        raise ValueError(msg)
-    if np.any(np.isnan(flow)):
-        msg = "flow contains NaN values, which are not allowed"
-        raise ValueError(msg)
-    if np.any(flow < 0):
-        msg = "flow must be non-negative (negative flow not supported)"
-        raise ValueError(msg)
-    if np.any(aquifer_pore_volumes <= 0):
-        msg = "aquifer_pore_volumes must be positive"
-        raise ValueError(msg)
-    if np.any(np.asarray(streamline_length) <= 0):
-        msg = "streamline_length must be positive"
-        raise ValueError(msg)
-    if retardation_factor < 1.0:
-        msg = "retardation_factor must be >= 1.0"
-        raise ValueError(msg)
-    if flow_out is None:
-        # The output-grid extraction flow is only unambiguous when the cout grid matches
-        # the flow grid; otherwise it must be supplied (it defines the cout-bin volumes and
-        # the outlet velocity used by the retardation correction).
-        if not tedges.equals(cout_tedges):
-            msg = "flow_out is required when cout_tedges differs from tedges"
-            raise ValueError(msg)
-    else:
-        n_cout = len(cout_tedges) - 1
-        if len(flow_out) != n_cout:
-            msg = f"flow_out must have length len(cout_tedges) - 1 = {n_cout}, got {len(flow_out)}"
-            raise ValueError(msg)
-        if np.any(np.isnan(flow_out)):
-            msg = "flow_out contains NaN values, which are not allowed"
-            raise ValueError(msg)
-        if np.any(flow_out < 0):
-            msg = "flow_out must be non-negative (negative flow not supported)"
-            raise ValueError(msg)
