@@ -28,6 +28,8 @@ Module Reference
      - :py:func:`~gwtransport.logremoval.residence_time_to_log_removal`, :py:func:`~gwtransport.logremoval.gamma_mean`, :py:func:`~gwtransport.logremoval.parallel_mean`
    * - ``diffusion_fast``
      - :py:func:`~gwtransport.diffusion_fast.infiltration_to_extraction`
+   * - ``diffusion_fast_fast``
+     - :py:func:`~gwtransport.diffusion_fast_fast.infiltration_to_extraction`
    * - ``diffusion``
      - :py:func:`~gwtransport.diffusion.infiltration_to_extraction`
    * - ``gamma``
@@ -77,6 +79,7 @@ What appears as "dispersion" at one scale becomes "advection through heterogenei
 When using the ``advection`` module alone, only macrodispersion (spreading from the pore volume distribution) is modeled. To add microdispersion (:math:`\alpha_L`) and molecular diffusion (:math:`D_m`), use either :mod:`gwtransport.diffusion_fast` or :mod:`gwtransport.diffusion`. Both implement the *same* physics — the Kreft-Zuber flux concentration on a bundle of 1D streamtubes, with retardation and the moving-frame variance :math:`D_t = D_m \tau + \alpha_L \xi` — and both accept per-streamtube :math:`L`, :math:`D_m` and :math:`\alpha_L` arrays (one value per aquifer pore volume). They differ only in how the bin-averaged breakthrough is evaluated:
 
 - **Choose** :mod:`gwtransport.diffusion_fast` **by default.** It evaluates the breakthrough in closed form on only the non-zero breakthrough band, is roughly 80–90× faster (more at the weak-to-moderate dispersion of realistic problems), and reproduces :mod:`gwtransport.diffusion` to machine precision when the output (``cout``) grid is at or finer than the flow grid.
+- **Choose** :mod:`gwtransport.diffusion_fast_fast` **when you want a fast approximate forward result and can tolerate a small error** (regularly-sampled monitoring data, exploratory or ensemble runs). It applies advection, macrodispersion, and microdispersion (:math:`\alpha_L`) *exactly* on the native cumulative-volume grid and treats molecular diffusion (:math:`D_m`) as a time-domain Gaussian, in one fast pass for *any* flow (constant or variable — no fallback). It is accurate to ~3e-4 whenever mechanical dispersion is present (:math:`\alpha_L > 0`, the usual case, and flow-independent), degrading to ~1e-2 for sharp inputs in the molecular-diffusion-dominated regime (:math:`\alpha_L \approx 0`). It is **approximate** — it does *not* reproduce :mod:`gwtransport.diffusion_fast` to machine precision; use :mod:`gwtransport.diffusion_fast` when you need exact results, especially in the molecular-dominated regime. Its reverse (deconvolution) is exact (it builds the :mod:`gwtransport.diffusion_fast` operator).
 - **Choose** :mod:`gwtransport.diffusion` **only when the output (``cout``) grid is coarser than the flow detail:** it integrates the full ``tedges``-resolution flow within each output bin, whereas ``diffusion_fast`` treats the through-flow as constant within each output bin — a ~0.1%-of-peak difference for a rapidly-varying ``cin`` over wide output bins under variable flow. Otherwise the two are machine-precision identical in *every* regime, including retardation (:math:`R \neq 1`) together with molecular diffusion (:math:`D_m > 0`).
 
 .. _assumption-steady-streamlines:
@@ -595,6 +598,9 @@ Quick Reference: Assumptions by Module
    * - ``diffusion_fast``
      - :ref:`Steady streamlines <assumption-steady-streamlines>`
      - — (fast closed form, relaxes advection-only assumption)
+   * - ``diffusion_fast_fast``
+     - :ref:`Steady streamlines <assumption-steady-streamlines>`
+     - — (fast *approximate* all-flow transport; use ``diffusion_fast`` for machine precision)
    * - ``diffusion``
      - :ref:`Steady streamlines <assumption-steady-streamlines>`
      - — (quadrature, relaxes advection-only assumption)
