@@ -15,12 +15,12 @@ Available functions:
   (cout = cin). No support for custom output time edges. Use case: Deterministic transport
   with single flow path.
 
-- :func:`infiltration_to_extraction` - Arbitrary pore volume distribution, convolution.
+- :func:`infiltration_to_extraction` - Arbitrary pore volume distribution, flow-weighted averaging.
   Supports explicit distribution of aquifer pore volumes with flow-weighted averaging.
   Flexible output time resolution via cout_tedges. Use case: Known pore volume distribution
   from streamline analysis.
 
-- :func:`gamma_infiltration_to_extraction` - Gamma-distributed pore volumes, convolution.
+- :func:`gamma_infiltration_to_extraction` - Gamma-distributed pore volumes, flow-weighted averaging.
   Models aquifer heterogeneity with 2-parameter gamma distribution. Parameterizable via
   (alpha, beta) or (mean, std). Discretizes gamma distribution into equal-probability bins.
   Use case: Heterogeneous aquifer with calibrated gamma parameters.
@@ -403,7 +403,7 @@ def gamma_infiltration_to_extraction(
     of the aquifer. The aquifer pore volume is approximated by a (shifted) gamma distribution
     parameterized by either (mean, std, loc) or (alpha, beta, loc).
 
-    This function represents infiltration to extraction modeling (equivalent to convolution).
+    This function represents infiltration to extraction modeling by flow-weighted averaging.
 
     Provide either (mean, std) or (alpha, beta); ``loc`` is optional and defaults to 0.
 
@@ -574,7 +574,7 @@ def gamma_extraction_to_infiltration(
     of the aquifer. The aquifer pore volume is approximated by a (shifted) gamma distribution
     parameterized by either (mean, std, loc) or (alpha, beta, loc).
 
-    This function represents extraction to infiltration modeling (equivalent to deconvolution).
+    This function inverts the forward flow-weighted averaging (deconvolution).
     It is symmetric to gamma_infiltration_to_extraction.
 
     Provide either (mean, std) or (alpha, beta); ``loc`` is optional and defaults to 0.
@@ -627,7 +627,7 @@ def gamma_extraction_to_infiltration(
     See Also
     --------
     extraction_to_infiltration : Deconvolution with explicit pore volume distribution
-    gamma_infiltration_to_extraction : Forward operation (convolution)
+    gamma_infiltration_to_extraction : Forward operation (flow-weighted averaging)
     gwtransport.gamma.bins : Create gamma distribution bins
     gwtransport.diffusion.extraction_to_infiltration : Deconvolution with microdispersion and molecular diffusion
     :ref:`concept-gamma-distribution` : Two-parameter pore volume model
@@ -742,12 +742,16 @@ def infiltration_to_extraction(
     This function implements an infiltration to extraction advection model where cin and flow values
     correspond to the same aligned time bins defined by tedges.
 
-    The algorithm:
-    1. Computes residence times for each pore volume at cout time edges
-    2. Calculates infiltration time edges by subtracting residence times
-    3. Determines temporal overlaps between infiltration and cin time windows
-    4. Creates flow-weighted overlap matrices normalized by total weights
-    5. Computes weighted contributions and averages across pore volumes
+    Pure advection is volume-stationary, so the weights are built on the
+    cumulative-throughflow-volume axis rather than by inverting residence times:
+
+    1. Map the cin and cout time edges to cumulative throughflow volume.
+    2. Back-project each cout bin by every retarded pore volume to its
+       infiltration-time source window. The window spans one cout bin's worth of
+       volume, so it overlaps only a narrow band of cin bins.
+    3. Compute the flow-weighted time overlap of each window with those cin bins,
+       normalize per streamtube (each row sums to 1), and average over the
+       streamtubes whose source window lies fully inside the cin range.
 
 
     Parameters
@@ -1044,7 +1048,7 @@ def extraction_to_infiltration(
     See Also
     --------
     gamma_extraction_to_infiltration : Deconvolution with gamma-distributed pore volumes
-    infiltration_to_extraction : Forward operation (convolution)
+    infiltration_to_extraction : Forward operation (flow-weighted averaging)
     extraction_to_infiltration_series : Simple time-shift for single pore volume
     gwtransport.residence_time.residence_time : Compute residence times from flow and pore volume
     gwtransport.utils.solve_tikhonov : Solver used for inversion
