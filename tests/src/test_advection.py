@@ -1,10 +1,13 @@
 import warnings
+from fractions import Fraction
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from gwtransport import advection as adv_mod
+from gwtransport import gamma
+from gwtransport._time import tedges_to_days
 from gwtransport.advection import (
     _validate_advection_inputs,
     extraction_to_infiltration,
@@ -21,7 +24,8 @@ from gwtransport.advection_utils import (
     _resolve_spinup_mask,
 )
 from gwtransport.fronttracking.math import ConstantRetardation
-from gwtransport.utils import compute_time_edges
+from gwtransport.residence_time import residence_time
+from gwtransport.utils import compute_time_edges, partial_isin, solve_inverse_transport
 
 # ===============================================================================
 # FIXTURES
@@ -3855,3 +3859,564 @@ def test_validate_advection_inputs_raises_on_bad_input(path, mutate, match_regex
     bad = mutate(_good_advection_inputs())
     with pytest.raises(ValueError, match=match_regex):
         _validate_advection_inputs(**bad)
+
+
+# =============================================================================
+# Fast banded builder: dense + rational oracles and the exactness suite.
+#
+# The package builder (advection_utils._infiltration_to_extraction_weights)
+# performs the dense build's exact per-streamtube time-domain arithmetic but
+# only on the nonzero band (the source window overlaps a few cin bins), so it is
+# machine-precision identical to the dense build at O(n_pv * n_cout * band)
+# instead of O(n_pv * n_cout * n_cin). Two independent oracles pin it:
+#
+#   _dense_weights_reference -- the relocated O(n_pv * N^2) dense full-overlap
+#       build (residence_time + partial_isin) the banded builder replaced. The
+#       builder reproduces it to float reordering noise (~1e-14); accumulated
+#       parity uses atol=1e-12 (two independent float paths), structure exactly.
+#   _exact_rational_advection -- fractions.Fraction overlap arithmetic on the
+#       cumulative-volume axis, the absolute truth; the builder matches it to
+#       ~1e-15 (machine precision) on every grid including sub-bin cout.
+#
+# Both encode the drop-not-clip contract: a streamtube contributes to a cout bin
+# only if its source window is fully inside [Vi[0], Vi[-1]].
+# =============================================================================
+
+
+def _dense_weights_reference(*, tedges, cout_tedges, aquifer_pore_volumes, flow, retardation_factor):
+    """Relocated copy of the original dense full-overlap-matrix builder.
+
+    Loops over pore volumes, back-projects the cout edges with ``residence_time``,
+    and accumulates per-streamtube flow-normalized ``partial_isin`` overlap rows.
+    A streamtube whose source window leaves the cin range yields a NaN
+    residence-time edge -> NaN overlap row -> dropped (not counted, not clipped).
+    Returns the same ``(accumulated_weights, contributing_bins, zero_flow_cout)``
+    triple as the package builder.
+    """
+    cin_tedges_days = tedges_to_days(tedges)
+    cout_tedges_days = tedges_to_days(cout_tedges, ref=tedges[0])
+    flow = np.asarray(flow, dtype=float)
+
+    cout_in_cin_overlap = partial_isin(bin_edges_in=cout_tedges_days, bin_edges_out=cin_tedges_days)
+    zero_flow_cout = (cout_in_cin_overlap @ flow) == 0
+
+    rt_edges_2d = residence_time(
+        flow=flow,
+        flow_tedges=tedges,
+        index=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=retardation_factor,
+        direction="extraction_to_infiltration",
+    )
+    infiltration_tedges_2d = cout_tedges_days[None, :] - rt_edges_2d
+    valid_bins_2d = ~(np.isnan(infiltration_tedges_2d[:, :-1]) | np.isnan(infiltration_tedges_2d[:, 1:]))
+    cin_min, cin_max = cin_tedges_days[0], cin_tedges_days[-1]
+
+    n_pv = len(aquifer_pore_volumes)
+    n_cout = len(cout_tedges) - 1
+    n_cin = len(tedges) - 1
+    accumulated = np.zeros((n_cout, n_cin))
+    contributing = np.zeros(n_cout, dtype=np.intp)
+
+    for i in range(n_pv):
+        if not np.any(valid_bins_2d[i, :]):
+            continue
+        infil = infiltration_tedges_2d[i, :]
+        valid_times = infil[~np.isnan(infil)]
+        if len(valid_times) == 0 or not (max(valid_times[0], cin_min) < min(valid_times[-1], cin_max)):
+            continue
+        overlap_matrix = partial_isin(bin_edges_in=infil, bin_edges_out=cin_tedges_days)
+        flow_weighted = overlap_matrix * flow[None, :]
+        row_sums = flow_weighted.sum(axis=1)
+        valid = row_sums > 0
+        normalized = np.zeros_like(flow_weighted)
+        normalized[valid, :] = flow_weighted[valid, :] / row_sums[valid, None]
+        accumulated[valid, :] += normalized[valid, :]
+        contributing[valid] += 1
+
+    return accumulated, contributing, zero_flow_cout
+
+
+def _exact_rational_advection(*, tedges, cout_tedges, aquifer_pore_volumes, flow, retardation_factor):
+    """Exact Fraction overlap arithmetic on the cumulative-volume axis.
+
+    Independent of both the package and the dense reference. Encodes the
+    drop-not-clip contract: only streamtubes whose source window lies fully
+    inside ``[Vi[0], Vi[-1]]`` contribute. Returns ``(accumulated_weights,
+    contributing_bins)`` as float64 arrays converted from exact Fractions.
+    """
+    cin_days = [Fraction(x) for x in tedges_to_days(tedges)]
+    cout_days = [Fraction(x) for x in tedges_to_days(cout_tedges, ref=tedges[0])]
+    flow_f = [Fraction(x) for x in np.asarray(flow, dtype=float)]
+    n_cin = len(cin_days) - 1
+    n_cout = len(cout_days) - 1
+    r = sorted(Fraction(retardation_factor) * Fraction(v) for v in np.asarray(aquifer_pore_volumes, dtype=float))
+
+    vi = [Fraction(0)]
+    for j in range(n_cin):
+        vi.append(vi[-1] + flow_f[j] * (cin_days[j + 1] - cin_days[j]))
+    vi_lo, vi_hi = vi[0], vi[-1]
+
+    def interp_v(t):
+        if t <= cin_days[0]:
+            return vi[0]
+        if t >= cin_days[-1]:
+            return vi[-1]
+        j = 0
+        while cin_days[j + 1] < t:
+            j += 1
+        width = cin_days[j + 1] - cin_days[j]
+        if width == 0:
+            return vi[j]
+        return vi[j] + (t - cin_days[j]) / width * (vi[j + 1] - vi[j])
+
+    vc = [interp_v(t) for t in cout_days]
+    edge_in_range = [cin_days[0] <= t <= cin_days[-1] for t in cout_days]
+
+    accumulated = np.zeros((n_cout, n_cin))
+    contributing = np.zeros(n_cout, dtype=np.intp)
+    for i in range(n_cout):
+        lo_v, hi_v = vc[i], vc[i + 1]
+        w = hi_v - lo_v
+        if w == 0 or not (edge_in_range[i] and edge_in_range[i + 1]):
+            continue
+        row = [Fraction(0)] * n_cin
+        ncontrib = 0
+        for rp in r:
+            a, b = lo_v - rp, hi_v - rp
+            if a < vi_lo or b > vi_hi:  # window not fully contained -> dropped
+                continue
+            ncontrib += 1
+            for m in range(n_cin):
+                overlap = min(b, vi[m + 1]) - max(a, vi[m])
+                if overlap > 0:
+                    row[m] += overlap / w
+        contributing[i] = ncontrib
+        accumulated[i, :] = [float(x) for x in row]
+    return accumulated, contributing
+
+
+def _forward_via(builder, *, cin, flow, tedges, cout_tedges, aquifer_pore_volumes, retardation_factor, spinup):
+    """Drive ``builder`` through the public forward spin-up pipeline.
+
+    Mirrors :func:`infiltration_to_extraction` exactly but lets the weight
+    builder be swapped (package builder vs dense oracle) so the two can be
+    compared through identical spin-up resolution.
+    """
+    weight_tedges, weight_flow, weight_cin, threshold, _ = _resolve_spinup_inputs(
+        spinup,
+        tedges=tedges,
+        flow=flow,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=retardation_factor,
+        cin=cin,
+    )
+    acc, contrib, zero_flow = builder(
+        tedges=weight_tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        flow=weight_flow,
+        retardation_factor=retardation_factor,
+    )
+    w, invalid = _resolve_spinup_mask(
+        accumulated_weights=acc,
+        contributing_bins=contrib,
+        zero_flow_cout=zero_flow,
+        n_pv=len(aquifer_pore_volumes),
+        spinup=threshold,
+    )
+    assert weight_cin is not None  # cin is always supplied in these tests
+    out = w.dot(weight_cin)
+    out[invalid] = np.nan
+    return out, contrib
+
+
+_BANDED_APVD = {
+    "single": np.array([500.0]),
+    "bimodal": np.array([120.0, 130.0, 900.0, 950.0]),
+    "uniform_wide": np.linspace(50.0, 800.0, 12),
+    "heavy_tail": np.array([50.0, 60.0, 70.0, 2000.0]),
+    "gamma": gamma.bins(mean=300.0, std=120.0, n_bins=24)["expected_values"],
+}
+
+
+def _banded_tedges(n, kind, seed):
+    """Return tedges for a regular or irregular cin grid of n bins."""
+    if kind == "regular":
+        return pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    rng = np.random.default_rng(seed)
+    widths = 0.3 + rng.uniform(0.0, 1.7, n)
+    return pd.Timestamp("2020-01-01") + pd.to_timedelta(np.concatenate([[0.0], np.cumsum(widths)]), unit="D")
+
+
+def _banded_cout(tedges, kind):
+    """Return cout_tedges: aligned, coarse (every 3rd edge), or fine (each cin
+    bin split into 3 equal sub-bins -- irregular when ``tedges`` are irregular).
+
+    The fine grid is a clean equal subdivision (no random near-coincident edges)
+    so its smallest bin volume is bounded; pathologically tiny cout bins are
+    exercised separately by the rational-oracle tests at small cumulative volume.
+    """
+    if kind == "same":
+        return tedges
+    if kind == "coarse":
+        return tedges[::3]
+    d = tedges_to_days(tedges)
+    pts = np.unique(np.concatenate([np.linspace(d[i], d[i + 1], 4) for i in range(len(d) - 1)]))
+    return tedges[0] + pd.to_timedelta(pts, unit="D")
+
+
+@pytest.mark.parametrize("apv_name", list(_BANDED_APVD))
+def test_banded_builder_triple_parity_vs_dense(apv_name):
+    """Banded builder reproduces the dense oracle's full triple across
+    {APVD shape} x {const, CV 0.1/0.3/0.6 flow} x {regular, irregular tedges}
+    x {cout=tedges, coarse, fine} x {R = 1, 2.7}.
+
+    contributing_bins and zero_flow_cout match *exactly* (integer / bool);
+    accumulated_weights matches to atol=1e-12 -- the builder runs the dense
+    build's arithmetic on the nonzero band, so the only difference is float
+    reordering between the two paths (np.interp vs residence_time +
+    partial_isin). Sub-bin cout exactness is pinned tighter against the rational
+    oracle in test_banded_builder_exact_vs_rational."""
+    apv = _BANDED_APVD[apv_name]
+    n = 60
+    seed0 = list(_BANDED_APVD).index(apv_name) * 100
+    flows = {
+        "const": np.full(n, 100.0),
+        "cv0.1": 100.0 * (1 + 0.1 * np.sin(np.arange(n) * 2 * np.pi / 17)),
+        "cv0.3": 100.0 * (1 + 0.3 * np.sin(np.arange(n) * 2 * np.pi / 17)),
+        "cv0.6": 100.0 * (1 + 0.6 * np.sin(np.arange(n) * 2 * np.pi / 13)),
+    }
+    for tk in ("regular", "irregular"):
+        tedges = _banded_tedges(n, tk, seed0)
+        for fname, flow in flows.items():
+            for ck in ("same", "coarse", "fine"):
+                cout = _banded_cout(tedges, ck)
+                for r_factor in (1.0, 2.7):
+                    kw = {
+                        "tedges": tedges,
+                        "cout_tedges": cout,
+                        "aquifer_pore_volumes": apv,
+                        "flow": flow,
+                        "retardation_factor": r_factor,
+                    }
+                    acc, contrib, zf = _infiltration_to_extraction_weights(**kw)
+                    acc_d, contrib_d, zf_d = _dense_weights_reference(**kw)
+                    tag = f"{apv_name}/{tk}/{fname}/{ck}/R{r_factor}"
+                    np.testing.assert_array_equal(contrib, contrib_d, err_msg=f"contributing {tag}")
+                    np.testing.assert_array_equal(zf, zf_d, err_msg=f"zero_flow {tag}")
+                    # atol=1e-13: observed worst is ~3e-14 (two independent float paths);
+                    # tighter exactness is pinned by the rational oracle (atol=1e-14).
+                    np.testing.assert_allclose(acc, acc_d, atol=1e-13, rtol=0, err_msg=f"accumulated {tag}")
+
+
+def test_banded_builder_boundary_touch_contributing():
+    """A back-projected window edge landing exactly on Vi[0]/Vi[-1] counts as
+    contained (inclusive), pinning the searchsorted '<' vs '<=' sides.
+
+    Constant flow 100 m3/d, daily bins => Vi = [0, 100, 200, ...]. With apv
+    chosen so r = R*PV is an exact multiple of 100, several cout bins have a
+    source-window edge exactly on a data boundary. The banded contributing
+    count must match the dense oracle bit-for-bit at those touches."""
+    n = 30
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    # r in {100, 500, 1500} m3 -> window edges land exactly on Vi multiples.
+    apv = np.array([100.0, 500.0, 1500.0])
+    for r_factor in (1.0, 2.0):
+        kw = {
+            "tedges": tedges,
+            "cout_tedges": tedges,
+            "aquifer_pore_volumes": apv,
+            "flow": flow,
+            "retardation_factor": r_factor,
+        }
+        _, contrib, _ = _infiltration_to_extraction_weights(**kw)
+        _, contrib_d, _ = _dense_weights_reference(**kw)
+        _, contrib_r = _exact_rational_advection(**kw)
+        np.testing.assert_array_equal(contrib, contrib_d)
+        np.testing.assert_array_equal(contrib, contrib_r)
+
+
+# Small-volume cases where float64 reproduces the exact Fraction truth to a few
+# ULP. atol=1e-14 is the machine-precision floor at these volume scales
+# (ulp of a ~10 m3 cumulative volume is ~1.8e-15); it is NOT a loosened
+# tolerance -- a real overlap/drop bug produces O(0.01-1) errors.
+_RATIONAL_CASES = {
+    "bimodal_const": {"flow": np.full(8, 1.0), "apv": np.array([2.0, 3.0, 5.0]), "R": 1.0, "cout": "same"},
+    "single_noninteger_rt": {"flow": np.full(10, 1.0), "apv": np.array([2.7]), "R": 1.0, "cout": "same"},
+    # general fringe: variable flow, irregular cout, non-integer residence time
+    "variable_flow_fringe": {
+        "flow": 1.0 + 0.4 * np.sin(np.arange(10)),
+        "apv": np.array([1.3, 2.7, 4.1]),
+        "R": 1.4,
+        "cout": "fine",
+    },
+    "retardation": {"flow": np.full(9, 2.0), "apv": np.array([1.5, 4.0]), "R": 2.3, "cout": "coarse"},
+}
+
+
+@pytest.mark.parametrize("case_name", list(_RATIONAL_CASES))
+def test_banded_builder_exact_vs_rational(case_name):
+    """Banded accumulated_weights equals the exact Fraction truth to machine
+    precision (incl. a general fringe case: variable flow + irregular cout +
+    non-integer residence time). Weights are cin-independent, so exactness of
+    the operator implies exactness of every cout = W @ cin."""
+    case = _RATIONAL_CASES[case_name]
+    flow = np.asarray(case["flow"], dtype=float)
+    n = len(flow)
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    if case["cout"] == "same":
+        cout = tedges
+    elif case["cout"] == "coarse":
+        cout = tedges[::2]
+    else:
+        days = np.sort(np.unique(np.concatenate([np.linspace(0.0, n, 3 * n), [0.0, float(n)]])))
+        cout = tedges[0] + pd.to_timedelta(days, unit="D")
+    kw = {
+        "tedges": tedges,
+        "cout_tedges": cout,
+        "aquifer_pore_volumes": case["apv"],
+        "flow": flow,
+        "retardation_factor": case["R"],
+    }
+    acc, contrib, _ = _infiltration_to_extraction_weights(**kw)
+    acc_r, contrib_r = _exact_rational_advection(**kw)
+    np.testing.assert_array_equal(contrib, contrib_r)
+    np.testing.assert_allclose(acc, acc_r, atol=1e-14, rtol=0)
+
+
+def test_banded_builder_degenerate_zero_width_broken_through_bin():
+    """A near-zero-width (w ~ 0.01 m3) but fully broken-through cout bin is exact.
+
+    The weight is overlap/w with overlap ~ w, so the division is well
+    conditioned and the row still sums to the contributing count. Exercises the
+    w != 0 path with a pathological width against the exact rational oracle."""
+    n = 20
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)  # 100 m3 per daily bin
+    apv = np.array([300.0, 700.0])  # RTs 3 d and 7 d -> broken through by day 7
+    # cout: one ordinary bin then a 0.0001-day (=0.01 m3) sliver, deep in the
+    # broken-through interior (day ~12).
+    cout_days = np.array([10.0, 12.0, 12.0001, 15.0])
+    cout = tedges[0] + pd.to_timedelta(cout_days, unit="D")
+    kw = {
+        "tedges": tedges,
+        "cout_tedges": cout,
+        "aquifer_pore_volumes": apv,
+        "flow": flow,
+        "retardation_factor": 1.0,
+    }
+    acc, contrib, zf = _infiltration_to_extraction_weights(**kw)
+    acc_r, contrib_r = _exact_rational_advection(**kw)
+    assert contrib[1] == len(apv)  # sliver bin fully broken through
+    assert not zf[1]
+    np.testing.assert_array_equal(contrib, contrib_r)
+    np.testing.assert_allclose(acc, acc_r, atol=1e-14, rtol=0)
+    # The sliver row, normalized by its contributing count, sums to 1.
+    np.testing.assert_allclose(acc[1].sum() / contrib[1], 1.0, atol=1e-13)
+
+
+@pytest.mark.parametrize("spinup", [None, "constant", 0.5])
+def test_banded_builder_public_forward_parity_spinup_modes(spinup):
+    """Public forward output matches the dense-oracle-driven forward for all
+    three spin-up modes, including bit-identical NaN masks. For spinup=0.5 the
+    fringe (0 < contributing < n_pv on surviving bins) is asserted non-empty, so
+    a broken fringe path would change the float-mode output and fail here."""
+    n = 50
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = 100.0 + 20.0 * np.sin(np.arange(n) * 2 * np.pi / 11)
+    cin = 2.0 + np.cos(np.arange(n) * 2 * np.pi / 9)
+    apv = np.array([100.0, 500.0, 1500.0])  # widely separated RTs => real fringe
+
+    real_out = infiltration_to_extraction(
+        cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=spinup
+    )
+    dense_out, contrib = _forward_via(
+        _dense_weights_reference,
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=apv,
+        retardation_factor=1.0,
+        spinup=spinup,
+    )
+    np.testing.assert_array_equal(np.isnan(real_out), np.isnan(dense_out))
+    valid = ~np.isnan(real_out)
+    np.testing.assert_allclose(real_out[valid], dense_out[valid], atol=1e-12, rtol=0)
+    if spinup == 0.5:
+        assert np.any(valid & (contrib < len(apv))), "fringe path not exercised"
+
+
+def test_banded_builder_fringe_decircularized_vs_rational():
+    """De-circularize the fringe: a surviving fringe bin's spinup=0.5 public
+    value equals the exact rational count-mean (W_rational @ cin / contributing),
+    not just the relocated dense build."""
+    n = 24
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = 1.0 + 0.3 * np.sin(np.arange(n) * 2 * np.pi / 7)  # small-volume, variable
+    cin = 3.0 + np.cos(np.arange(n) * 2 * np.pi / 5)
+    apv = np.array([1.3, 2.7, 4.1])  # non-integer residence times
+
+    out = infiltration_to_extraction(
+        cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=0.5
+    )
+    acc_r, contrib_r = _exact_rational_advection(
+        tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, flow=flow, retardation_factor=1.0
+    )
+    # Exact count-mean reference for the threshold mode (contributing >= 0.5*n_pv).
+    n_pv = len(apv)
+    fringe = (contrib_r > 0) & (contrib_r < n_pv) & (contrib_r >= 0.5 * n_pv)
+    assert np.any(fringe), "no surviving fringe bin in this setup"
+    expected = (acc_r[fringe] @ cin) / contrib_r[fringe]
+    np.testing.assert_allclose(out[fringe], expected, atol=1e-13, rtol=0)
+
+
+def test_banded_builder_sharp_step_and_pulse_exact_vs_rational():
+    """Sharp step and pulse cin produce the exact W @ cin in the broken-through
+    region (W is cin-independent; this checks the cin-contraction too)."""
+    n = 40
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    apv = np.array([200.0, 400.0])  # RTs 2 d, 4 d
+    acc_r, contrib_r = _exact_rational_advection(
+        tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, flow=flow, retardation_factor=1.0
+    )
+    n_pv = len(apv)
+    broken = contrib_r == n_pv
+    step = np.where(np.arange(n) >= 15, 7.0, 1.0)
+    pulse = np.zeros(n)
+    pulse[20:22] = 5.0
+    for cin in (step, pulse):
+        out = infiltration_to_extraction(
+            cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=None
+        )
+        expected = acc_r[broken] @ cin / n_pv
+        np.testing.assert_allclose(out[broken], expected, atol=1e-13, rtol=0)
+
+
+def test_banded_builder_cout_outside_range_masked_like_dense():
+    """cout bins straddling or outside the cin time range are dropped exactly as
+    the dense build drops them (NaN residence-time edge), not clipped."""
+    n = 20
+    tedges = pd.date_range("2020-01-10", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    apv = np.array([150.0, 350.0])
+    # cout extends 5 days before and after the cin range -> straddling + outside.
+    cout = pd.date_range("2020-01-05", periods=n + 11, freq="D")
+    kw = {
+        "tedges": tedges,
+        "cout_tedges": cout,
+        "aquifer_pore_volumes": apv,
+        "flow": flow,
+        "retardation_factor": 1.0,
+    }
+    acc, contrib, zf = _infiltration_to_extraction_weights(**kw)
+    acc_d, contrib_d, zf_d = _dense_weights_reference(**kw)
+    np.testing.assert_array_equal(contrib, contrib_d)
+    np.testing.assert_array_equal(zf, zf_d)
+    np.testing.assert_allclose(acc, acc_d, atol=1e-12, rtol=0)
+
+
+def test_banded_builder_zero_and_tiny_flow_match_dense():
+    """Zero-flow series gives an all-zero operator; tiny flow (band spanning the
+    whole series) still matches the dense oracle."""
+    n = 25
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    apv = np.array([100.0, 300.0])
+
+    zero_kw = {
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "aquifer_pore_volumes": apv,
+        "flow": np.zeros(n),
+        "retardation_factor": 1.0,
+    }
+    acc0, contrib0, zf0 = _infiltration_to_extraction_weights(**zero_kw)
+    assert np.count_nonzero(acc0) == 0
+    assert np.all(contrib0 == 0)
+    assert np.all(zf0)
+
+    # Tiny flow: residence volumes dwarf the per-bin volume, so the band spans
+    # (nearly) the whole series -- the builder degrades gracefully to dense.
+    tiny_kw = {**zero_kw, "flow": np.full(n, 0.5)}
+    acc_t, contrib_t, zf_t = _infiltration_to_extraction_weights(**tiny_kw)
+    acc_d, contrib_d, zf_d = _dense_weights_reference(**tiny_kw)
+    np.testing.assert_array_equal(contrib_t, contrib_d)
+    np.testing.assert_array_equal(zf_t, zf_d)
+    np.testing.assert_allclose(acc_t, acc_d, atol=1e-12, rtol=0)
+
+
+def test_banded_builder_structurally_banded_large_n():
+    """The weight operator is structurally banded at large N: nonzeros per cout
+    row are bounded by the APVD volume span / per-bin volume, independent of N.
+    This is an invariant of the advection operator -- each cout bin draws from
+    one narrow source window -- so it guards against a band/gather bug that
+    smears weights across too many cin bins, not against the build cost itself."""
+    n = 1500
+    tedges = pd.date_range("2018-01-01", periods=n + 1, freq="D")
+    flow = 100.0 + 30.0 * np.sin(np.arange(n) * 2 * np.pi / 365)
+    apv = gamma.bins(mean=250.0, std=90.0, n_bins=60)["expected_values"]
+    acc, _, _ = _infiltration_to_extraction_weights(
+        tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, flow=flow, retardation_factor=1.0
+    )
+    # Per-row band bound: source-volume span / smallest per-bin volume + margin
+    # for the cout bin width and searchsorted rounding.
+    band_bound = int(np.ceil((apv.max() - apv.min()) / flow.min())) + 5
+    nnz = np.count_nonzero(acc)
+    assert nnz <= n * band_bound, f"nnz={nnz} exceeds banded bound {n * band_bound}"
+    assert nnz < 0.05 * n * n, "operator is not sub-dense -- banding failed"
+
+
+def test_banded_builder_reverse_and_gamma_match_dense_driven():
+    """Reverse (extraction_to_infiltration) and gamma wrappers inherit the banded
+    builder: their outputs match the same pipeline driven by the dense oracle."""
+    n = 60
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = 100.0 + 15.0 * np.sin(np.arange(n) * 2 * np.pi / 13)
+    apv = np.array([150.0, 400.0, 700.0])
+    cin_true = 5.0 + 2.0 * np.sin(2 * np.pi * np.arange(n) / 21.0)
+
+    # Forward with the package builder, then invert with both pipelines.
+    cout = infiltration_to_extraction(
+        cin=cin_true, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv
+    )
+    cin_real = extraction_to_infiltration(
+        cout=cout, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv
+    )
+
+    # Dense-driven reverse: rebuild W_forward with the dense oracle and solve the
+    # same Tikhonov system the package uses.
+    weight_tedges, weight_flow, _, threshold, n_pad = _resolve_spinup_inputs(
+        "constant", tedges=tedges, flow=flow, aquifer_pore_volumes=apv, retardation_factor=1.0
+    )
+    acc_d, contrib_d, zf_d = _dense_weights_reference(
+        tedges=weight_tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, flow=weight_flow, retardation_factor=1.0
+    )
+    w_d, _ = _resolve_spinup_mask(
+        accumulated_weights=acc_d, contributing_bins=contrib_d, zero_flow_cout=zf_d, n_pv=len(apv), spinup=threshold
+    )
+    cin_dense = solve_inverse_transport(
+        w_forward=w_d, observed=cout, n_output=len(weight_tedges) - 1, regularization_strength=1e-10
+    )[n_pad:]
+    np.testing.assert_allclose(cin_real, cin_dense, atol=1e-9, rtol=0)
+
+    # Gamma wrapper parity: gamma_* delegates to the same forward builder.
+    cout_gamma_real = gamma_infiltration_to_extraction(
+        cin=cin_true, flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=120.0, n_bins=12
+    )
+    apv_gamma = gamma.bins(mean=300.0, std=120.0, n_bins=12)["expected_values"]
+    cout_gamma_dense, _ = _forward_via(
+        _dense_weights_reference,
+        cin=cin_true,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=apv_gamma,
+        retardation_factor=1.0,
+        spinup="constant",
+    )
+    np.testing.assert_array_equal(np.isnan(cout_gamma_real), np.isnan(cout_gamma_dense))
+    g_valid = ~np.isnan(cout_gamma_real)
+    np.testing.assert_allclose(cout_gamma_real[g_valid], cout_gamma_dense[g_valid], atol=1e-12, rtol=0)

@@ -14,8 +14,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from gwtransport._time import tedges_to_days
-from gwtransport.residence_time import residence_time
-from gwtransport.utils import partial_isin
+from gwtransport.utils import cumulative_flow_volume
 
 
 def _infiltration_to_extraction_weights(
@@ -29,18 +28,37 @@ def _infiltration_to_extraction_weights(
     """
     Compute raw streamtube-bundle weights for infiltration to extraction transformation.
 
-    Builds the per-cout-bin sum of streamtube-normalized overlap matrices,
-    plus the count of contributing streamtubes per cout bin and the
-    zero-flow cout-bin mask. The caller decides how to convert these into
-    final weights (strict-validity, count-mean, or padded "constant"
-    spin-up); see :func:`_resolve_spinup_mask` and
-    :func:`_pad_tedges_for_spinup`.
+    Builds the per-cout-bin sum of streamtube-normalized overlap rows, plus the
+    count of contributing streamtubes per cout bin and the zero-flow cout-bin
+    mask. The caller decides how to convert these into final weights
+    (strict-validity, count-mean, or padded "constant" spin-up); see
+    :func:`_resolve_spinup_mask` and :func:`_resolve_spinup_inputs`.
 
-    The per-streamtube weight is the literal mass-flux / water-flux ratio
-    for that streamtube and cout bin: each row sums to 1 to ULP. Equal-mass
-    pore-volume bins from a gamma APVD discretization carry equal flow at
-    the outlet (steady-streamline assumption), so the bundle output is the
-    arithmetic mean over contributing streamtubes.
+    The per-streamtube weight is the literal mass-flux / water-flux ratio for
+    that streamtube and cout bin: each contributing row sums to 1 to ULP.
+    Equal-mass pore-volume bins from a gamma APVD discretization carry equal
+    flow at the outlet (steady-streamline assumption), so the bundle output is
+    the arithmetic mean over contributing streamtubes.
+
+    Pure advection (``D_m = 0``, ``alpha_L = 0``) is volume-stationary. Let
+    ``Vi`` be the cumulative throughflow volume at the cin edges and ``Vc`` the
+    same cumulative volume sampled at the cout edges. A streamtube of retarded
+    pore volume ``r = R * V_pore`` carries each cout edge back to the
+    infiltration time at cumulative volume ``Vc_edge - r``. The cout bin's
+    source window in infiltration time spans one cout bin's worth of volume, so
+    it overlaps only a few cin bins -- the weights are gathered on that narrow
+    band rather than the full ``O(n_cin)`` row, giving ``O(n_pv * n_cout *
+    band)`` work instead of the dense ``O(n_pv * n_cout * n_cin)``. The overlap
+    is the flow-weighted time overlap normalized by the window's total in-range
+    flow, so each contributing row sums to 1 exactly. It is the exact
+    flow-weighted overlap on the nonzero band -- matching the dense
+    ``residence_time`` + ``partial_isin`` reference to machine precision (and the
+    exact-arithmetic result to ~1e-15), not an approximation.
+
+    A streamtube whose source volume leaves ``[Vi[0], Vi[-1]]`` -- or a cout
+    edge outside the cin time range -- maps to NaN and is **dropped, not
+    clipped**: its whole window for that cout bin is discarded (mirroring the
+    dense build, where a single NaN residence-time edge poisons the row).
 
     Parameters
     ----------
@@ -64,86 +82,73 @@ def _infiltration_to_extraction_weights(
         to ``c`` (not ``n_pv`` and not 1).
     contributing_bins : numpy.ndarray of int
         Shape: (len(cout_tedges) - 1,). Number of streamtubes that
-        actually contributed to each cout bin (had nonzero flow-weighted
-        overlap with the cin range).
+        actually contributed to each cout bin (had a source window fully
+        inside the cin volume range).
     zero_flow_cout : numpy.ndarray of bool
         Shape: (len(cout_tedges) - 1,). True for cout bins with zero
         time-averaged extraction flow over their interval.
     """
-    # Convert time edges to days
     cin_tedges_days = tedges_to_days(tedges)
     cout_tedges_days = tedges_to_days(cout_tedges, ref=tedges[0])
+    flow = np.asarray(flow, dtype=float)
 
-    # Detect zero-flow cout bins: a cout bin is "zero-flow" when the time-
-    # averaged extraction flow over its interval is zero. Compute via the
-    # cout-vs-cin time-overlap matrix.
-    cout_in_cin_overlap = partial_isin(bin_edges_in=cout_tedges_days, bin_edges_out=cin_tedges_days)
-    flow_during_cout = cout_in_cin_overlap @ flow
-    zero_flow_cout = flow_during_cout == 0
-
-    # Pre-compute all residence times and infiltration edges
-    rt_edges_2d = residence_time(
-        flow=flow,
-        flow_tedges=tedges,
-        index=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=retardation_factor,
-        direction="extraction_to_infiltration",
-    )
-    infiltration_tedges_2d = cout_tedges_days[None, :] - rt_edges_2d
-
-    # Pre-compute valid bins
-    valid_bins_2d = ~(np.isnan(infiltration_tedges_2d[:, :-1]) | np.isnan(infiltration_tedges_2d[:, 1:]))
-
-    # Pre-compute cin time range for clip optimization (computed once, used n_bins times)
-    cin_time_min = cin_tedges_days[0]
-    cin_time_max = cin_tedges_days[-1]
-
-    n_pv = len(aquifer_pore_volumes)
     n_cout = len(cout_tedges) - 1
     n_cin = len(tedges) - 1
-    accumulated_weights = np.zeros((n_cout, n_cin))
-    contributing_bins = np.zeros(n_cout, dtype=int)
+    n_pv = len(aquifer_pore_volumes)
 
-    # Loop over each pore volume
-    for i in range(n_pv):
-        if not np.any(valid_bins_2d[i, :]):
-            continue
+    # Cumulative throughflow volume at cin edges (Vi) and sampled at cout edges (Vc).
+    vi = cumulative_flow_volume(flow, np.diff(cin_tedges_days))
+    vc = np.interp(cout_tedges_days, cin_tedges_days, vi)
 
-        # Clip optimization: check for temporal overlap before expensive computation.
-        infiltration_times = infiltration_tedges_2d[i, :]
-        valid_infiltration_times = infiltration_times[~np.isnan(infiltration_times)]
+    # A cout bin's time-averaged extraction flow is zero exactly when no throughflow
+    # volume passes during the bin, i.e. its cumulative-volume width is zero. This is
+    # bit-identical to the dense flow-overlap-matrix product but is O(n_cout), not O(N^2).
+    zero_flow_cout = np.diff(vc) == 0
 
-        if len(valid_infiltration_times) == 0:
-            continue
+    if n_pv == 0:
+        return np.zeros((n_cout, n_cin)), np.zeros(n_cout, dtype=np.intp), zero_flow_cout
 
-        infiltration_min = valid_infiltration_times[0]  # monotonic, first element is min
-        infiltration_max = valid_infiltration_times[-1]  # monotonic, last element is max
+    r = np.sort(np.asarray(aquifer_pore_volumes, dtype=float) * retardation_factor)
 
-        # Two intervals overlap iff max(starts) < min(ends).
-        has_overlap = max(infiltration_min, cin_time_min) < min(infiltration_max, cin_time_max)
-        if not has_overlap:
-            continue
+    # Back-project every cout edge by every streamtube to its infiltration TIME.
+    # Out-of-range cout edges have no source volume; NaN there propagates so the
+    # adjacent windows are dropped (not clipped), matching the dense build.
+    edge_in_range = (cout_tedges_days >= cin_tedges_days[0]) & (cout_tedges_days <= cin_tedges_days[-1])
+    src_volume = np.where(edge_in_range, vc, np.nan)[None, :] - r[:, None]  # (n_pv, n_cout + 1)
+    infil_days = np.interp(src_volume.ravel(), vi, cin_tedges_days, left=np.nan, right=np.nan).reshape(src_volume.shape)
+    win_lo, win_hi = infil_days[:, :-1], infil_days[:, 1:]  # (n_pv, n_cout) infiltration-time window per cout bin
+    contained = np.isfinite(win_lo) & np.isfinite(win_hi)
 
-        # partial_isin returns shape (n_cout, n_cin) here: bin_edges_in has length
-        # n_cout+1 (one infiltration-time edge per cout edge), bin_edges_out has
-        # length n_cin+1 (the cin time edges).
-        overlap_matrix = partial_isin(bin_edges_in=infiltration_tedges_2d[i, :], bin_edges_out=cin_tedges_days)
+    # Each source window spans one cout bin's worth of volume, so it overlaps a
+    # narrow band of cin bins; size the band off the widest contained window.
+    # NaN windows (dropped streamtubes) sort to the array end in searchsorted and
+    # are masked out below (band ignores them, in_cin zeros their flux).
+    j_lo = np.clip(np.searchsorted(cin_tedges_days, win_lo, side="right") - 1, 0, n_cin - 1)
+    j_hi = np.clip(np.searchsorted(cin_tedges_days, win_hi, side="left"), 0, n_cin)
+    band = min(int(np.max(np.where(contained, j_hi - j_lo, 0))) + 1, n_cin)
 
-        # Per-streamtube row sums to 1 by construction (mass-flux / water-flux).
-        # Rows where row_sums == 0 (zero-flow / zero-overlap) are not normalized
-        # and therefore not counted as "contributing" — those bins are deferred
-        # to the policy resolver instead.
-        flow_weighted_overlap = overlap_matrix * flow[None, :]
-        row_sums = np.sum(flow_weighted_overlap, axis=1)
-        valid_rows_pv = row_sums > 0
-        normalized_overlap = np.zeros_like(flow_weighted_overlap)
-        normalized_overlap[valid_rows_pv, :] = flow_weighted_overlap[valid_rows_pv, :] / row_sums[valid_rows_pv, None]
+    cols = j_lo[:, :, None] + np.arange(band)[None, None, :]  # (n_pv, n_cout, band) cin bin index
+    in_cin = contained[:, :, None] & (cols < n_cin)
+    cols = np.clip(cols, 0, n_cin - 1)
+    # Flow-weighted time overlap of each window with each banded cin bin.
+    overlap = np.maximum(
+        0.0,
+        np.minimum(win_hi[:, :, None], cin_tedges_days[cols + 1])
+        - np.maximum(win_lo[:, :, None], cin_tedges_days[cols]),
+    )
+    flux = np.where(in_cin, flow[cols] * overlap, 0.0)
+    window_flux = flux.sum(axis=2)  # (n_pv, n_cout) total in-range flow per window
+    contributes = contained & (window_flux > 0)
+    contributing_bins = contributes.sum(axis=0).astype(np.intp)
 
-        accumulated_weights[valid_rows_pv, :] += normalized_overlap[valid_rows_pv, :]
-        contributing_bins[valid_rows_pv] += 1
+    # Per-streamtube normalized row (sums to 1); scatter-add into the dense matrix.
+    weights = np.zeros(flux.shape)
+    np.divide(flux, window_flux[:, :, None], out=weights, where=contributes[:, :, None])
+    cout_idx = np.broadcast_to(np.arange(n_cout)[None, :, None], cols.shape)
+    flat = (cout_idx * n_cin + cols).ravel()
+    summed = np.bincount(flat, weights=weights.ravel(), minlength=n_cout * n_cin).astype(float, copy=False)
 
-    return accumulated_weights, contributing_bins, zero_flow_cout
+    return summed.reshape(n_cout, n_cin), contributing_bins, zero_flow_cout
 
 
 def _resolve_spinup_mask(
