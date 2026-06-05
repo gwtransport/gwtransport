@@ -16,6 +16,12 @@ import pandas as pd
 from gwtransport._time import tedges_to_days
 from gwtransport.utils import cumulative_flow_volume
 
+# Target number of (streamtube x cout-bin) pairs per tile in the banded weight build. The
+# per-tile working set is O(_WEIGHT_BUILD_BLOCK x band), so peak memory is bounded
+# independent of record length; chosen to keep the build under ~30 MB while spanning most
+# records in one or a few tiles. See _infiltration_to_extraction_weights.
+_WEIGHT_BUILD_BLOCK = 100_000
+
 
 def _infiltration_to_extraction_weights(
     *,
@@ -24,15 +30,16 @@ def _infiltration_to_extraction_weights(
     aquifer_pore_volumes: npt.NDArray[np.floating],
     flow: npt.NDArray[np.floating],
     retardation_factor: float,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp], npt.NDArray[np.bool_]]:
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp], npt.NDArray[np.intp], npt.NDArray[np.bool_]]:
     """
     Compute raw streamtube-bundle weights for infiltration to extraction transformation.
 
-    Builds the per-cout-bin sum of streamtube-normalized overlap rows, plus the
-    count of contributing streamtubes per cout bin and the zero-flow cout-bin
-    mask. The caller decides how to convert these into final weights
-    (strict-validity, count-mean, or padded "constant" spin-up); see
-    :func:`_resolve_spinup_mask` and :func:`_resolve_spinup_inputs`.
+    Builds the per-cout-bin sum of streamtube-normalized overlap rows in a
+    **compact banded layout**, plus the count of contributing streamtubes per
+    cout bin and the zero-flow cout-bin mask. The caller decides how to convert
+    these into final weights (strict-validity, count-mean, or padded "constant"
+    spin-up); see :func:`_resolve_spinup_mask` and :func:`_resolve_spinup_inputs`.
+    Reconstruct the dense ``(n_cout, n_cin)`` matrix with :func:`_densify_weights`.
 
     The per-streamtube weight is the literal mass-flux / water-flux ratio for
     that streamtube and cout bin: each contributing row sums to 1 to ULP.
@@ -46,14 +53,15 @@ def _infiltration_to_extraction_weights(
     pore volume ``r = R * V_pore`` carries each cout edge back to the
     infiltration time at cumulative volume ``Vc_edge - r``. The cout bin's
     source window in infiltration time spans one cout bin's worth of volume, so
-    it overlaps only a few cin bins -- the weights are gathered on that narrow
-    band rather than the full ``O(n_cin)`` row, giving ``O(n_pv * n_cout *
-    band)`` work instead of the dense ``O(n_pv * n_cout * n_cin)``. The overlap
-    is the flow-weighted time overlap normalized by the window's total in-range
-    flow, so each contributing row sums to 1 exactly. It is the exact
-    flow-weighted overlap on the nonzero band -- matching the dense
-    ``residence_time`` + ``partial_isin`` reference to machine precision (and the
-    exact-arithmetic result to ~1e-15), not an approximation.
+    it overlaps only a few cin bins. The nonzeros of cout row ``k`` therefore
+    span only the residence-time spread of the APVD, ``[col_start[k],
+    col_start[k] + full_band)``, and are accumulated into one banded buffer over
+    a **pore-volume loop** -- ``O(n_cout * full_band)`` memory regardless of
+    record length or ``n_pv``. The overlap is the flow-weighted time overlap
+    normalized by the window's total in-range flow, so each contributing row
+    sums to 1 exactly: the exact flow-weighted overlap, matching the dense
+    ``residence_time`` + ``partial_isin`` reference to machine precision, not an
+    approximation.
 
     A streamtube whose source volume leaves ``[Vi[0], Vi[-1]]`` -- or a cout
     edge outside the cin time range -- maps to NaN and is **dropped, not
@@ -75,11 +83,15 @@ def _infiltration_to_extraction_weights(
 
     Returns
     -------
-    accumulated_weights : numpy.ndarray
-        Sum over streamtubes of per-streamtube normalized overlap rows.
-        Shape: (len(cout_tedges) - 1, len(tedges) - 1). For a cout bin
-        ``k`` with ``c`` contributing streamtubes, the row already sums
-        to ``c`` (not ``n_pv`` and not 1).
+    band_vals : numpy.ndarray
+        Sum over streamtubes of per-streamtube normalized overlap rows in
+        banded layout. Shape: (len(cout_tedges) - 1, full_band). Slot
+        ``band_vals[k, b]`` is the weight on cin bin ``col_start[k] + b``;
+        for a cout bin ``k`` with ``c`` contributing streamtubes the row
+        sums to ``c`` (not ``n_pv`` and not 1).
+    col_start : numpy.ndarray of int
+        Shape: (len(cout_tedges) - 1,). First cin bin index of each cout
+        row's band. Defaults to 0 for rows with no contributing streamtube.
     contributing_bins : numpy.ndarray of int
         Shape: (len(cout_tedges) - 1,). Number of streamtubes that
         actually contributed to each cout bin (had a source window fully
@@ -87,6 +99,10 @@ def _infiltration_to_extraction_weights(
     zero_flow_cout : numpy.ndarray of bool
         Shape: (len(cout_tedges) - 1,). True for cout bins with zero
         time-averaged extraction flow over their interval.
+
+    See Also
+    --------
+    _densify_weights : Reconstruct the dense (n_cout, n_cin) matrix.
     """
     cin_tedges_days = tedges_to_days(tedges)
     cout_tedges_days = tedges_to_days(cout_tedges, ref=tedges[0])
@@ -106,66 +122,103 @@ def _infiltration_to_extraction_weights(
     zero_flow_cout = np.diff(vc) == 0
 
     if n_pv == 0:
-        return np.zeros((n_cout, n_cin)), np.zeros(n_cout, dtype=np.intp), zero_flow_cout
+        return np.zeros((n_cout, 1)), np.zeros(n_cout, dtype=np.intp), np.zeros(n_cout, dtype=np.intp), zero_flow_cout
 
     r = np.sort(np.asarray(aquifer_pore_volumes, dtype=float) * retardation_factor)
 
-    # Back-project every cout edge by every streamtube to its infiltration TIME.
-    # Out-of-range cout edges have no source volume; NaN there propagates so the
-    # adjacent windows are dropped (not clipped), matching the dense build.
+    # Cumulative source volume at each cout edge. Out-of-range cout edges have no source
+    # volume; NaN there propagates so the adjacent windows are dropped (not clipped),
+    # matching the dense build.
     edge_in_range = (cout_tedges_days >= cin_tedges_days[0]) & (cout_tedges_days <= cin_tedges_days[-1])
-    src_volume = np.where(edge_in_range, vc, np.nan)[None, :] - r[:, None]  # (n_pv, n_cout + 1)
-    infil_days = np.interp(src_volume.ravel(), vi, cin_tedges_days, left=np.nan, right=np.nan).reshape(src_volume.shape)
-    win_lo, win_hi = infil_days[:, :-1], infil_days[:, 1:]  # (n_pv, n_cout) infiltration-time window per cout bin
-    contained = np.isfinite(win_lo) & np.isfinite(win_hi)
+    src_edge = np.where(edge_in_range, vc, np.nan)
 
-    # Each source window spans one cout bin's worth of volume, so it overlaps a
-    # narrow band of cin bins; size the band off the widest contained window.
-    # NaN windows (dropped streamtubes) sort to the array end in searchsorted and
-    # are masked out below (band ignores them, in_cin zeros their flux).
-    j_lo = np.clip(np.searchsorted(cin_tedges_days, win_lo, side="right") - 1, 0, n_cin - 1)
-    j_hi = np.clip(np.searchsorted(cin_tedges_days, win_hi, side="left"), 0, n_cin)
-    band = min(int(np.max(np.where(contained, j_hi - j_lo, 0))) + 1, n_cin)
+    # Tile the cout axis so the (n_pv, tile, band) overlap tensor never materialises for the
+    # whole record: peak memory stays O(block) regardless of record length, while each tile
+    # stays fully vectorised over its streamtubes. Most records span one or a few tiles. Each
+    # tile sizes its own band independently and is right-padded to the global width at the end.
+    block = max(1, _WEIGHT_BUILD_BLOCK // n_pv)
+    col_start = np.zeros(n_cout, dtype=np.intp)
+    contributing_bins = np.zeros(n_cout, dtype=np.intp)
+    tiles: list[tuple[int, npt.NDArray[np.floating]]] = []
+    full_band = 1
+    for start in range(0, n_cout, block):
+        stop = min(start + block, n_cout)
+        m = stop - start
 
-    cols = j_lo[:, :, None] + np.arange(band)[None, None, :]  # (n_pv, n_cout, band) cin bin index
-    in_cin = contained[:, :, None] & (cols < n_cin)
-    cols = np.clip(cols, 0, n_cin - 1)
-    # Flow-weighted time overlap of each window with each banded cin bin.
-    overlap = np.maximum(
-        0.0,
-        np.minimum(win_hi[:, :, None], cin_tedges_days[cols + 1])
-        - np.maximum(win_lo[:, :, None], cin_tedges_days[cols]),
-    )
-    flux = np.where(in_cin, flow[cols] * overlap, 0.0)
-    window_flux = flux.sum(axis=2)  # (n_pv, n_cout) total in-range flow per window
-    contributes = contained & (window_flux > 0)
-    contributing_bins = contributes.sum(axis=0).astype(np.intp)
+        # Back-project this tile's cout edges by every streamtube to infiltration time.
+        infil = np.interp(
+            (src_edge[start : stop + 1] - r[:, None]).ravel(), vi, cin_tedges_days, left=np.nan, right=np.nan
+        ).reshape(n_pv, m + 1)
+        win_lo, win_hi = infil[:, :-1], infil[:, 1:]  # (n_pv, m) infiltration-time window per cout bin
+        contained = np.isfinite(win_lo) & np.isfinite(win_hi)
+        j_lo = np.clip(np.searchsorted(cin_tedges_days, win_lo, side="right") - 1, 0, n_cin - 1)
+        j_hi = np.clip(np.searchsorted(cin_tedges_days, win_hi, side="left"), 0, n_cin)
 
-    # Per-streamtube normalized row (sums to 1); scatter-add into the dense matrix.
-    weights = np.zeros(flux.shape)
-    np.divide(flux, window_flux[:, :, None], out=weights, where=contributes[:, :, None])
-    cout_idx = np.broadcast_to(np.arange(n_cout)[None, :, None], cols.shape)
-    flat = (cout_idx * n_cin + cols).ravel()
-    summed = np.bincount(flat, weights=weights.ravel(), minlength=n_cout * n_cin).astype(float, copy=False)
+        # Tile band = union of contained streamtube windows; per_band = widest single window.
+        any_contained = contained.any(axis=0)
+        tile_start = np.where(any_contained, np.where(contained, j_lo, n_cin).min(axis=0), 0)
+        row_hi = np.where(contained, j_hi, 0).max(axis=0)
+        tile_band = min(int(np.max(np.where(any_contained, row_hi - tile_start, 0))) + 1, n_cin)
+        per_band = min(int(np.max(np.where(contained, j_hi - j_lo, 0))) + 1, n_cin)
 
-    return summed.reshape(n_cout, n_cin), contributing_bins, zero_flow_cout
+        # Per-streamtube flow-weighted overlap on its own narrow window, normalised so each
+        # contributing row sums to 1, then scatter-summed over streamtubes into the tile's
+        # banded buffer (offset by each row's tile_start).
+        cols = j_lo[:, :, None] + np.arange(per_band)[None, None, :]  # (n_pv, m, per_band)
+        in_cin = contained[:, :, None] & (cols < n_cin)
+        cols_clipped = np.clip(cols, 0, n_cin - 1)
+        overlap = np.maximum(
+            0.0,
+            np.minimum(win_hi[:, :, None], cin_tedges_days[cols_clipped + 1])
+            - np.maximum(win_lo[:, :, None], cin_tedges_days[cols_clipped]),
+        )
+        flux = np.where(in_cin, flow[cols_clipped] * overlap, 0.0)
+        window_flux = flux.sum(axis=2)  # (n_pv, m) total in-range flow per window
+        contributes = contained & (window_flux > 0)
+        np.divide(flux, window_flux[:, :, None], out=flux, where=contributes[:, :, None])
+
+        # Only nonzero in-window slots scatter; their banded offset is < tile_band by
+        # construction (a contributing slot lies in [tile_start, row_hi)).
+        keep = flux > 0
+        offset = cols_clipped - tile_start[None, :, None]
+        row_idx = np.broadcast_to(np.arange(m)[None, :, None], cols.shape)
+        tile_vals = (
+            np
+            .bincount((row_idx * tile_band + offset)[keep], weights=flux[keep], minlength=m * tile_band)
+            .astype(float, copy=False)
+            .reshape(m, tile_band)
+        )
+
+        col_start[start:stop] = tile_start
+        contributing_bins[start:stop] = contributes.sum(axis=0)
+        tiles.append((start, tile_vals))
+        full_band = max(full_band, tile_band)
+
+    band_vals = np.zeros((n_cout, full_band))
+    for start, tile_vals in tiles:
+        band_vals[start : start + tile_vals.shape[0], : tile_vals.shape[1]] = tile_vals
+
+    return band_vals, col_start, contributing_bins, zero_flow_cout
 
 
 def _resolve_spinup_mask(
     *,
-    accumulated_weights: npt.NDArray[np.floating],
+    band_vals: npt.NDArray[np.floating],
+    col_start: npt.NDArray[np.intp],
     contributing_bins: npt.NDArray[np.intp],
     zero_flow_cout: npt.NDArray[np.bool_],
     n_pv: int,
     spinup: float | None,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool_]]:
-    """Convert raw bundle outputs into final weights + invalid mask.
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp], npt.NDArray[np.bool_]]:
+    """Convert raw banded bundle outputs into final banded weights + invalid mask.
 
     Parameters
     ----------
-    accumulated_weights : numpy.ndarray
-        Per-cout-bin sum of streamtube-normalized rows from
-        :func:`_infiltration_to_extraction_weights`.
+    band_vals : numpy.ndarray
+        Per-cout-bin sum of streamtube-normalized rows in banded layout from
+        :func:`_infiltration_to_extraction_weights`. Shape (n_cout, full_band).
+    col_start : numpy.ndarray of int
+        First cin bin index of each cout row's band. Passed through unchanged.
     contributing_bins : numpy.ndarray of int
         Number of streamtubes that contributed to each cout bin.
     zero_flow_cout : numpy.ndarray of bool
@@ -184,8 +237,10 @@ def _resolve_spinup_mask(
     Returns
     -------
     weights : numpy.ndarray
-        Final weight matrix of the same shape as ``accumulated_weights``.
+        Final banded weight matrix of the same shape as ``band_vals``.
         Rows where the policy is not satisfied are zero.
+    col_start : numpy.ndarray of int
+        The input ``col_start``, returned unchanged for caller convenience.
     invalid_mask : numpy.ndarray of bool
         True for cout bins where the policy is not satisfied.
 
@@ -198,23 +253,57 @@ def _resolve_spinup_mask(
     """
     if n_pv == 0:
         # No streamtubes means no transport: every cout bin is invalid.
-        return np.zeros_like(accumulated_weights), np.ones(accumulated_weights.shape[0], dtype=bool)
+        return np.zeros_like(band_vals), col_start, np.ones(band_vals.shape[0], dtype=bool)
 
     if spinup is None:
         valid = (contributing_bins == n_pv) & ~zero_flow_cout
-        weights = np.zeros_like(accumulated_weights)
-        weights[valid, :] = accumulated_weights[valid, :] / n_pv
-        return weights, ~valid
+        weights = np.zeros_like(band_vals)
+        weights[valid, :] = band_vals[valid, :] / n_pv
+        return weights, col_start, ~valid
 
     if not (isinstance(spinup, (int, float)) and not isinstance(spinup, bool) and 0.0 <= spinup <= 1.0):
         msg = f"spinup must be None, 'constant', or float in [0, 1]; got {spinup!r}"
         raise ValueError(msg)
 
     valid = (contributing_bins >= spinup * n_pv) & ~zero_flow_cout & (contributing_bins > 0)
-    weights = np.zeros_like(accumulated_weights)
+    weights = np.zeros_like(band_vals)
     safe_div = np.where(valid, contributing_bins, 1)
-    weights[valid, :] = accumulated_weights[valid, :] / safe_div[valid, None]
-    return weights, ~valid
+    weights[valid, :] = band_vals[valid, :] / safe_div[valid, None]
+    return weights, col_start, ~valid
+
+
+def _densify_weights(
+    band_vals: npt.NDArray[np.floating], col_start: npt.NDArray[np.intp], n_cin: int
+) -> npt.NDArray[np.floating]:
+    """Reconstruct the dense (n_cout, n_cin) weight matrix from the banded layout.
+
+    Inverse of the banded packing produced by
+    :func:`_infiltration_to_extraction_weights` and
+    :func:`_resolve_spinup_mask`: row ``k`` places ``band_vals[k]`` at cin
+    columns ``[col_start[k], col_start[k] + full_band)``, dropping band slots
+    that fall past ``n_cin`` (the right-edge padding).
+
+    Parameters
+    ----------
+    band_vals : numpy.ndarray
+        Banded weights of shape (n_cout, full_band).
+    col_start : numpy.ndarray of int
+        First cin bin index of each row's band, shape (n_cout,).
+    n_cin : int
+        Number of cin bins (dense column count).
+
+    Returns
+    -------
+    numpy.ndarray
+        Dense weight matrix of shape (n_cout, n_cin).
+    """
+    n_cout, full_band = band_vals.shape
+    dense = np.zeros((n_cout, n_cin))
+    cols = col_start[:, None] + np.arange(full_band)[None, :]
+    in_range = cols < n_cin
+    rows = np.broadcast_to(np.arange(n_cout)[:, None], cols.shape)
+    dense[rows[in_range], cols[in_range]] = band_vals[in_range]
+    return dense
 
 
 # Pad duration used by the wide-edges spinup mode. 100 years is overkill for

@@ -18,6 +18,7 @@ import pandas as pd
 
 from gwtransport.advection import extraction_to_infiltration, infiltration_to_extraction
 from gwtransport.advection_utils import (
+    _densify_weights,
     _infiltration_to_extraction_weights,
     _resolve_spinup_mask,
 )
@@ -202,20 +203,22 @@ class TestRoundtripSameGrid:
         # reconstruction error |cin_recovered - cin_original| at each bin is
         # bounded by |P_null(cin_original)| at that bin, since cin_recovered
         # and cin_original agree modulo null(W).
-        accumulated_weights, contributing_bins, zero_flow_cout = _infiltration_to_extraction_weights(
+        band_vals, col_start, contributing_bins, zero_flow_cout = _infiltration_to_extraction_weights(
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=pore_volumes,
             flow=flow,
             retardation_factor=1.0,
         )
-        w_forward, _ = _resolve_spinup_mask(
-            accumulated_weights=accumulated_weights,
+        band_vals, col_start, _ = _resolve_spinup_mask(
+            band_vals=band_vals,
+            col_start=col_start,
             contributing_bins=contributing_bins,
             zero_flow_cout=zero_flow_cout,
             n_pv=len(pore_volumes),
             spinup=None,
         )
+        w_forward = _densify_weights(band_vals, col_start, len(tedges) - 1)
         _, sing_vals, vt = np.linalg.svd(w_forward, full_matrices=True)
         null_basis = vt[len(sing_vals) :]  # rows of Vt past the singular values
         nullspace_proj = null_basis.T @ (null_basis @ cin_original)
