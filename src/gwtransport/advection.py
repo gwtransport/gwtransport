@@ -90,7 +90,7 @@ from gwtransport.fronttracking.output import compute_bin_averaged_concentration_
 from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import solve_inverse_transport
+from gwtransport.utils import solve_inverse_transport_banded
 
 
 def _validate_advection_inputs(
@@ -927,24 +927,30 @@ def infiltration_to_extraction(
         cin=cin,
     )
     assert weight_cin is not None  # noqa: S101 -- narrowed: cin was passed in
-    accumulated_weights, contributing_bins, zero_flow_cout = _infiltration_to_extraction_weights(
+    band_vals, col_start, contributing_bins, zero_flow_cout = _infiltration_to_extraction_weights(
         tedges=weight_tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         flow=weight_flow,
         retardation_factor=retardation_factor,
     )
-    normalized_weights, invalid_mask = _resolve_spinup_mask(
-        accumulated_weights=accumulated_weights,
+    weights, col_start, invalid_mask = _resolve_spinup_mask(
+        band_vals=band_vals,
+        col_start=col_start,
         contributing_bins=contributing_bins,
         zero_flow_cout=zero_flow_cout,
         n_pv=len(aquifer_pore_volumes),
         spinup=threshold,
     )
 
+    # Banded flow-weighted average: row k contributes cin over its narrow band only.
+    # Out-of-range band slots carry zero weight, so the clipped gather is harmless.
+    n_cin = len(weight_cin)
+    cols = np.clip(col_start[:, None] + np.arange(weights.shape[1]), 0, n_cin - 1)
+    out = np.einsum("kb,kb->k", weights, weight_cin[cols])
+
     # Invalid rows (cout bins where the spin-up policy is not satisfied or
     # where extraction flow was zero) become NaN.
-    out = normalized_weights.dot(weight_cin)
     out[invalid_mask] = np.nan
 
     return out
@@ -1157,23 +1163,25 @@ def extraction_to_infiltration(
     )
     n_cin_padded = len(weight_tedges) - 1
 
-    accumulated_weights, contributing_bins, zero_flow_cout = _infiltration_to_extraction_weights(
+    band_vals, col_start, contributing_bins, zero_flow_cout = _infiltration_to_extraction_weights(
         tedges=weight_tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         flow=weight_flow,
         retardation_factor=retardation_factor,
     )
-    w_forward, _ = _resolve_spinup_mask(
-        accumulated_weights=accumulated_weights,
+    band_vals, col_start, _ = _resolve_spinup_mask(
+        band_vals=band_vals,
+        col_start=col_start,
         contributing_bins=contributing_bins,
         zero_flow_cout=zero_flow_cout,
         n_pv=len(aquifer_pore_volumes),
         spinup=threshold,
     )
 
-    cin_padded = solve_inverse_transport(
-        w_forward=w_forward,
+    cin_padded = solve_inverse_transport_banded(
+        band_vals=band_vals,
+        col_start=col_start,
         observed=cout,
         n_output=n_cin_padded,
         regularization_strength=regularization_strength,

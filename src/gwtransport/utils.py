@@ -84,7 +84,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import requests
-from scipy.linalg import null_space
+from scipy.linalg import cho_solve_banded, cholesky_banded, null_space
 from scipy.optimize import minimize
 
 cache_dir = Path(__file__).parent.parent.parent / "cache"
@@ -1607,6 +1607,10 @@ def solve_tikhonov(
 # Numerical tolerance for coefficient sum to determine valid output bins
 _EPSILON_COEFF_SUM = 1e-10
 
+# Corrected semi-normal-equation refinement steps in solve_inverse_transport_banded. One
+# step reaches the QR-accurate solution; a second is a cheap, stable safety margin.
+_BANDED_REFINEMENT_STEPS = 2
+
 
 def solve_inverse_transport(
     *,
@@ -1690,6 +1694,148 @@ def solve_inverse_transport(
     out = np.full(n_output, np.nan)
     idx = np.flatnonzero(col_active)
     out[idx] = x_solved[idx]
+    return out
+
+
+def solve_inverse_transport_banded(
+    *,
+    band_vals: npt.NDArray[np.floating],
+    col_start: npt.NDArray[np.intp],
+    observed: npt.NDArray[np.floating],
+    n_output: int,
+    regularization_strength: float,
+) -> npt.NDArray[np.floating]:
+    """Solve the inverse transport problem from a banded forward operator.
+
+    Memory-light equivalent of :func:`solve_inverse_transport` for a forward
+    weight matrix stored in banded layout: row ``k`` of the dense operator
+    ``W`` is ``band_vals[k]`` placed at columns
+    ``[col_start[k], col_start[k] + full_band)``. The Tikhonov normal
+    equations ``(WᵀW + λ D) x = Wᵀ observed + λ D x_target`` are assembled
+    **directly in banded form** -- ``WᵀW`` is symmetric with half-bandwidth
+    ``full_band - 1`` -- and Cholesky-factored with
+    :func:`scipy.linalg.cholesky_banded`. Forming ``WᵀW`` squares the condition
+    number, so the bare Cholesky solve loses accuracy in the under-determined
+    (spin-up nullspace) directions; **corrected semi-normal equations** restore
+    it by refining with the residual evaluated through ``W`` itself rather than
+    ``WᵀW`` (matching the dense least-squares solution to ~1e-10). Peak memory is
+    ``O(n_output * full_band)``, never the dense ``O(n_obs * n_output)``.
+
+    The regularization target ``x_target`` is the transpose-and-normalize of
+    ``W`` applied to ``observed`` (the banded form of
+    :func:`compute_reverse_target`), matching the dense solver. Columns with no
+    forward contribution are decoupled (unit diagonal) so the system stays
+    symmetric positive definite, and are returned as NaN.
+
+    Parameters
+    ----------
+    band_vals : numpy.ndarray
+        Banded forward weights of shape ``(n_obs, full_band)``. Rows the caller
+        considers invalid must already be zeroed (as :func:`_resolve_spinup_mask`
+        does); zero rows contribute nothing to the normal equations.
+    col_start : numpy.ndarray of int
+        First output-column index of each row's band, shape ``(n_obs,)``.
+    observed : numpy.ndarray
+        Observed values of shape ``(n_obs,)`` (e.g. extraction concentrations).
+        Must not contain NaN.
+    n_output : int
+        Length of the output vector (number of cin bins).
+    regularization_strength : float
+        Tikhonov parameter λ. See :func:`solve_inverse_transport`. Must be
+        strictly positive: deconvolution is generically rank-deficient, and λ
+        is what makes the banded Cholesky factor positive definite (unlike the
+        dense least-squares path, this solver cannot return a λ=0 min-norm
+        solution).
+
+    Returns
+    -------
+    numpy.ndarray
+        Recovered signal of shape ``(n_output,)``. NaN for output bins with no
+        forward contribution (zero column).
+
+    Raises
+    ------
+    ValueError
+        If ``regularization_strength`` is not strictly positive.
+
+    See Also
+    --------
+    solve_inverse_transport : Dense-matrix equivalent.
+    gwtransport.advection_utils._infiltration_to_extraction_weights : Banded builder.
+    """
+    if regularization_strength <= 0:
+        msg = "regularization_strength must be > 0 for the banded inverse (Tikhonov positive-definiteness)"
+        raise ValueError(msg)
+    # Precondition: the caller's valid rows sum to 1 (guaranteed by
+    # _resolve_spinup_mask), so the data equation is W x ≈ observed and the RHS
+    # needs no row_sums scaling -- matching the dense solve_inverse_transport.
+    band_vals = np.asarray(band_vals, dtype=float)
+    observed = np.asarray(observed, dtype=float)
+    full_band = band_vals.shape[1]
+    n_cin = n_output
+    cols = col_start[:, None] + np.arange(full_band)[None, :]  # (n_obs, full_band) output-column index
+    in_range = cols < n_cin
+    cols_clipped = np.clip(cols, 0, n_cin - 1)
+
+    # Column sums and Wᵀ observed (the reverse-target numerator) by scattering the band.
+    col_sum = np.zeros(n_cin)
+    wt_observed = np.zeros(n_cin)
+    np.add.at(col_sum, cols_clipped[in_range], band_vals[in_range])
+    np.add.at(wt_observed, cols_clipped[in_range], (band_vals * observed[:, None])[in_range])
+
+    col_active = col_sum > 0
+    if not np.any(col_active):
+        return np.full(n_output, np.nan)
+
+    # Reverse-target: transpose-and-normalize W applied to observed (banded form of
+    # compute_reverse_target). The sliver 0 < col_sum <= _EPSILON_COEFF_SUM is left
+    # untargeted (filled with 0) as in the dense path.
+    with np.errstate(invalid="ignore", divide="ignore"):
+        x_target = np.where(col_sum > _EPSILON_COEFF_SUM, wt_observed / col_sum, 0.0)
+
+    # Lower-banded WᵀW: band row d is the d-th sub-diagonal. A row's contribution to
+    # (i, j) with i = col_start + b1, j = col_start + b2 lands at offset d = b1 - b2 >= 0
+    # and column j. band_vals is zero outside each window, so off-window pairs add 0.
+    ab = np.zeros((full_band, n_cin))
+    for d in range(full_band):
+        prod = band_vals[:, d:] * band_vals[:, : full_band - d]
+        c = cols_clipped[:, : full_band - d]
+        m = in_range[:, : full_band - d] & in_range[:, d:]
+        np.add.at(ab[d], c[m], prod[m])
+
+    lam = regularization_strength
+    d_reg = lam * col_active
+    ab[0] += d_reg
+    # d_reg is zero off the active columns, so x_target needs no masking here or in
+    # the refinement loop: the product d_reg * x_target vanishes wherever col_active is False.
+    rhs = wt_observed + d_reg * x_target
+
+    # Decouple zero (inactive, unregularized) diagonals so the matrix is SPD.
+    dead = ab[0] <= 0.0
+    ab[0, dead] = 1.0
+    rhs[dead] = 0.0
+
+    factor = cholesky_banded(ab, lower=True)
+    x = cho_solve_banded((factor, True), rhs)
+
+    # Forming WᵀW squares the condition number, so the bare Cholesky solution loses
+    # accuracy in the under-determined (spin-up nullspace) directions. Corrected
+    # semi-normal equations recover it: the residual is evaluated through W itself
+    # (in observation space) rather than through WᵀW, avoiding the cancellation that
+    # makes plain normal-equation refinement stall. One step reaches the QR-accurate
+    # solution; the rest are a safety margin (the iteration's fixed point is stable).
+    for _ in range(_BANDED_REFINEMENT_STEPS):
+        gathered = x[cols_clipped]
+        gathered[~in_range] = 0.0
+        residual = observed - (band_vals * gathered).sum(axis=1)  # b - W x  (n_obs,)
+        gradient = np.zeros(n_cin)
+        np.add.at(gradient, cols_clipped[in_range], (band_vals * residual[:, None])[in_range])  # Wᵀ (b - W x)
+        gradient += d_reg * (x_target - x)
+        gradient[dead] = 0.0
+        x += cho_solve_banded((factor, True), gradient)
+
+    out = np.full(n_output, np.nan)
+    out[col_active] = x[col_active]
     return out
 
 

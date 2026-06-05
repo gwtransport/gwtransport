@@ -864,7 +864,13 @@ class TestExtractionToInfiltrationDiffusion:
         Both modules use comparable strict-validity boundary handling here
         (advection: ``spinup=None``; diffusion: ``spinup=None`` disables
         the 100-year tedge extension), so the comparison restricts to bins
-        valid in both modules and the algebra matches exactly.
+        valid in both modules. The two now use different inverse solvers --
+        advection's banded corrected-semi-normal solve vs diffusion's dense
+        least-squares -- so they agree to machine precision rather than
+        bit-identically; ``atol`` guards the true-zero bins, where the banded
+        solve returns exact 0 and the dense solve leaves roundoff. The max
+        absolute difference is ~4.4e-16 (2 ULP at value 1.0); ``atol=1e-14``
+        (~22x the floor) is a roundoff guard that still discriminates to ~1e-13.
         """
         cin_advection = advection_e2i(
             cout=simple_setup["cout"],
@@ -887,7 +893,7 @@ class TestExtractionToInfiltrationDiffusion:
         )
         # Only compare values where advection is not NaN
         valid_mask = ~np.isnan(cin_advection)
-        np.testing.assert_allclose(cin_advection[valid_mask], cin_diffusion[valid_mask])
+        np.testing.assert_allclose(cin_advection[valid_mask], cin_diffusion[valid_mask], atol=1e-14)
 
     def test_small_diffusivity_close_to_advection(self, simple_setup):
         """Test that small diffusivity produces result close to advection."""

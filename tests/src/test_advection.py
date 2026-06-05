@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from gwtransport import advection as adv_mod
-from gwtransport import gamma
+from gwtransport import advection_utils, gamma
 from gwtransport._time import tedges_to_days
 from gwtransport.advection import (
     _validate_advection_inputs,
@@ -19,13 +19,46 @@ from gwtransport.advection import (
     infiltration_to_extraction_series,
 )
 from gwtransport.advection_utils import (
-    _infiltration_to_extraction_weights,
+    _densify_weights,
     _resolve_spinup_inputs,
-    _resolve_spinup_mask,
+)
+from gwtransport.advection_utils import (
+    _infiltration_to_extraction_weights as _banded_weights,
+)
+from gwtransport.advection_utils import (
+    _resolve_spinup_mask as _banded_mask,
 )
 from gwtransport.fronttracking.math import ConstantRetardation
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import compute_time_edges, partial_isin, solve_inverse_transport
+from gwtransport.utils import (
+    compute_time_edges,
+    partial_isin,
+    solve_inverse_transport,
+    solve_inverse_transport_banded,
+)
+
+
+# The package builder/mask are banded (see advection_utils). These thin adapters present
+# the historical dense (n_cout, n_cin) signatures so the dense-oracle and Fraction-truth
+# comparisons below stay unchanged: the build is densified, and the row-wise mask is applied
+# to the dense matrix (its col_start passthrough is irrelevant when the input is full-width).
+def _infiltration_to_extraction_weights(**kwargs):
+    band_vals, col_start, contributing_bins, zero_flow_cout = _banded_weights(**kwargs)
+    dense = _densify_weights(band_vals, col_start, len(kwargs["tedges"]) - 1)
+    return dense, contributing_bins, zero_flow_cout
+
+
+def _resolve_spinup_mask(*, accumulated_weights, contributing_bins, zero_flow_cout, n_pv, spinup):
+    weights, _, invalid = _banded_mask(
+        band_vals=accumulated_weights,
+        col_start=np.zeros(len(accumulated_weights), dtype=np.intp),
+        contributing_bins=contributing_bins,
+        zero_flow_cout=zero_flow_cout,
+        n_pv=n_pv,
+        spinup=spinup,
+    )
+    return weights, invalid
+
 
 # ===============================================================================
 # FIXTURES
@@ -4420,3 +4453,119 @@ def test_banded_builder_reverse_and_gamma_match_dense_driven():
     np.testing.assert_array_equal(np.isnan(cout_gamma_real), np.isnan(cout_gamma_dense))
     g_valid = ~np.isnan(cout_gamma_real)
     np.testing.assert_allclose(cout_gamma_real[g_valid], cout_gamma_dense[g_valid], atol=1e-12, rtol=0)
+
+
+def test_banded_builder_multi_tile_matches_single_tile(monkeypatch):
+    """Tiling the cout axis must not change the operator: a many-tile build is
+    bit-identical to a single-tile build.
+
+    Variable flow plus a wide APVD make the per-tile band widths differ, so this
+    also guards the global ``full_band`` tracking and per-tile right-padding --
+    a ``full_band = tile_band`` bug (dropping the cross-tile ``max``) is invisible
+    to every single-tile test but corrupts or fails to assemble a multi-tile build.
+    """
+    n = 300
+    tedges = pd.date_range("2018-01-01", periods=n + 1, freq="D")
+    flow = np.linspace(20.0, 400.0, n)
+    apv = np.array([50.0, 2000.0])
+    kw = {
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "aquifer_pore_volumes": apv,
+        "flow": flow,
+        "retardation_factor": 1.0,
+    }
+
+    monkeypatch.setattr(advection_utils, "_WEIGHT_BUILD_BLOCK", 10**9)  # one tile
+    bv1, cs1, cb1, zf1 = _banded_weights(**kw)
+    monkeypatch.setattr(advection_utils, "_WEIGHT_BUILD_BLOCK", 21)  # block = 21 // 2 = 10 -> ~30 tiles
+    bv_n, cs_n, cb_n, zf_n = _banded_weights(**kw)
+
+    np.testing.assert_array_equal(cs1, cs_n)
+    np.testing.assert_array_equal(cb1, cb_n)
+    np.testing.assert_array_equal(zf1, zf_n)
+    np.testing.assert_array_equal(bv1, bv_n)  # same shape (global full_band) and values
+
+
+def test_solve_inverse_transport_banded_matches_dense():
+    """The banded CSNE solver reproduces the dense least-squares solver to the
+    documented ~1e-9, isolated from the forward build.
+
+    The corrected-semi-normal refinement is load-bearing: with
+    ``_BANDED_REFINEMENT_STEPS = 0`` the under-determined (spin-up) directions
+    lose ~1e-6 to the squared condition number, so this comparison pins it.
+    """
+    n = 80
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = 100.0 + 20.0 * np.sin(np.arange(n) * 2 * np.pi / 11)
+    apv = np.array([200.0, 450.0, 700.0])
+    weight_tedges, weight_flow, _, threshold, _ = _resolve_spinup_inputs(
+        "constant", tedges=tedges, flow=flow, aquifer_pore_volumes=apv, retardation_factor=1.0
+    )
+    n_out = len(weight_tedges) - 1
+    band_vals, col_start, contrib, zero_flow = _banded_weights(
+        tedges=weight_tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, flow=weight_flow, retardation_factor=1.0
+    )
+    band_vals, col_start, _ = _banded_mask(
+        band_vals=band_vals,
+        col_start=col_start,
+        contributing_bins=contrib,
+        zero_flow_cout=zero_flow,
+        n_pv=len(apv),
+        spinup=threshold,
+    )
+    w_dense = _densify_weights(band_vals, col_start, n_out)
+    observed = 3.0 + np.sin(np.arange(n) * 2 * np.pi / 17)
+    lam = 1e-10
+    x_banded = solve_inverse_transport_banded(
+        band_vals=band_vals, col_start=col_start, observed=observed, n_output=n_out, regularization_strength=lam
+    )
+    x_dense = solve_inverse_transport(w_forward=w_dense, observed=observed, n_output=n_out, regularization_strength=lam)
+    np.testing.assert_array_equal(np.isnan(x_banded), np.isnan(x_dense))
+    valid = ~np.isnan(x_banded)
+    np.testing.assert_allclose(x_banded[valid], x_dense[valid], atol=1e-9, rtol=0)
+
+
+def test_solve_inverse_transport_banded_degenerate_cases():
+    """Inactive output columns return NaN, an all-zero operator returns all-NaN
+    without raising, and non-positive regularization is rejected."""
+    band_vals = np.array([[0.6, 0.4], [0.5, 0.5], [0.0, 0.0]])
+    col_start = np.array([0, 2, 0], dtype=np.intp)  # contributes to cols {0,1,2,3}; cols 4,5 inactive
+    observed = np.array([1.0, 2.0, 0.0])
+    n_output = 6
+    out = solve_inverse_transport_banded(
+        band_vals=band_vals, col_start=col_start, observed=observed, n_output=n_output, regularization_strength=1e-8
+    )
+    col_sum = _densify_weights(band_vals, col_start, n_output).sum(axis=0)
+    np.testing.assert_array_equal(np.isnan(out), col_sum == 0)
+
+    out_zero = solve_inverse_transport_banded(
+        band_vals=np.zeros((3, 2)),
+        col_start=np.zeros(3, dtype=np.intp),
+        observed=np.ones(3),
+        n_output=4,
+        regularization_strength=1e-8,
+    )
+    assert np.all(np.isnan(out_zero))
+
+    with pytest.raises(ValueError, match="must be > 0"):
+        solve_inverse_transport_banded(
+            band_vals=band_vals, col_start=col_start, observed=observed, n_output=n_output, regularization_strength=0.0
+        )
+
+
+def test_advection_empty_pore_volumes_all_nan():
+    """An empty pore-volume distribution means no transport: both directions
+    return all-NaN through the public API without raising."""
+    n = 20
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    empty = np.array([])
+    cout = infiltration_to_extraction(
+        cin=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=empty
+    )
+    assert np.all(np.isnan(cout))
+    cin_rec = extraction_to_infiltration(
+        cout=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=empty
+    )
+    assert np.all(np.isnan(cin_rec))
