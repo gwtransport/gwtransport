@@ -504,8 +504,15 @@ def _infiltration_to_extraction_coeff_matrix(
     # Compute the cumulative flow at tedges
     cumulative_volume_at_cin_tedges = cumulative_flow_volume(flow, dt_to_days(tedges))  # m3
 
-    # Compute the cumulative flow at cout_tedges
-    cumulative_volume_at_cout_tedges = np.interp(cout_tedges, tedges, cumulative_volume_at_cin_tedges).astype(float)
+    # Compute the cumulative flow at cout_tedges. Both edge arrays are first reduced to a shared
+    # day axis: np.interp coerces each datetime64 operand to int64 in its own resolution, so a
+    # cout_tedges / tedges unit mismatch (e.g. ns vs us) would send every query out of range and
+    # silently return all-NaN.
+    tedges_days_arr = tedges_to_days(tedges)
+    cout_tedges_days = tedges_to_days(cout_tedges, ref=tedges[0])
+    cumulative_volume_at_cout_tedges = np.interp(
+        cout_tedges_days, tedges_days_arr, cumulative_volume_at_cin_tedges
+    ).astype(float)
 
     # Compute residence time at cout_tedges to identify valid output bins
     # RT is NaN for cout_tedges beyond the input data range
@@ -527,9 +534,6 @@ def _infiltration_to_extraction_coeff_matrix(
 
     # Determine when infiltration has occurred: cout_tedge must be >= tedge (infiltration time)
     isactive = cout_tedges.to_numpy()[:, None] >= tedges.to_numpy()[None, :]
-
-    # Convert tedges to days for volume→time interpolation
-    tedges_days_arr = tedges_to_days(tedges)
 
     # Loop over each pore volume
     for i_pv in range(len(aquifer_pore_volumes)):
