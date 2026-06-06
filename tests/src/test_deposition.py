@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from gwtransport.advection_utils import _densify_weights
 from gwtransport.deposition import (
     _validate_deposition_inputs,
     compute_deposition_weights,
@@ -22,7 +23,23 @@ from gwtransport.deposition import (
     spinup_duration,
 )
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import compute_time_edges
+from gwtransport.utils import compute_reverse_target, compute_time_edges, solve_tikhonov
+
+
+def _dense_weights(**kwargs):
+    """Densify the banded deposition operator into the historical dense matrix.
+
+    Calls :func:`~gwtransport.deposition.compute_deposition_weights` (which now
+    returns a banded tuple) and reconstructs the dense ``(n_cout, n_cin)`` matrix
+    via :func:`~gwtransport.advection_utils._densify_weights`, setting spin-up rows
+    to NaN to match the historical dense build. Tests that need the dense operator
+    use this helper; the densified band equals the old dense matrix on its support.
+    """
+    band_vals, col_start, _, _, spinup_row = compute_deposition_weights(**kwargs)
+    n_cin = len(kwargs["tedges"]) - 1
+    dense = _densify_weights(band_vals, col_start, n_cin)
+    dense[spinup_row] = np.nan
+    return dense
 
 
 def test_exact_analytical_constant_deposition():
@@ -606,13 +623,21 @@ def test_input_validation():
         )
 
 
-def test_rank_deficiency_warning():
-    """Warning is raised when weight matrix is rank-deficient (integer RT/dt)."""
+def test_rank_deficient_integer_rt_no_warning_regularized_solution():
+    """Rank-deficient operator (integer RT/dt) solves silently via regularization.
+
+    The dense path emitted a UserWarning here (computed with an O(N^3)
+    ``np.linalg.matrix_rank`` SVD). The banded Tikhonov solve has no banded
+    rank analogue and is well-defined via ``regularization_strength`` even when
+    the operator is rank-deficient, so the warning was intentionally dropped.
+    This test pins the new behavior: no warning, and a finite regularized
+    solution.
+    """
     dates = pd.date_range("2020-01-01", "2020-01-08", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     params = {
-        "aquifer_pore_volume": 400.0,  # RT = 400/100 = 4.0 days (integer)
+        "aquifer_pore_volume": 400.0,  # RT = 400/100 = 4.0 days (integer => rank-deficient)
         "porosity": 0.25,
         "thickness": 4.0,
         "retardation_factor": 1.0,
@@ -628,14 +653,16 @@ def test_rank_deficiency_warning():
         **params,
     )
 
-    with pytest.warns(UserWarning, match="rank-deficient"):
-        extraction_to_deposition(
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        recovered = extraction_to_deposition(
             cout=cout,
             flow=flow_values,
             tedges=tedges,
             cout_tedges=cout_tedges,
             **params,
         )
+    assert np.all(np.isfinite(recovered))
 
 
 def test_no_rank_deficiency_warning_non_integer_rt():
@@ -825,14 +852,16 @@ def test_roundtrip_varying_deposition():
     )
 
 
-def test_extraction_to_deposition_sparse_sampling_rank_deficient_warning():
-    """Inverse on weekly cout with weekly flow tedges fires the rank-deficient warning.
+def test_extraction_to_deposition_sparse_sampling_rank_deficient_no_warning():
+    """Inverse on weekly cout with integer RT/dt solves silently (no rank warning).
 
-    Replaces a heavy notebook-data setup with a synthetic 28-day weekly grid
-    that reproduces the same integer-RT condition: APV * R = N * Q * dt_week
-    makes the deposition weight matrix a uniform moving average with exact
-    zeros in its transfer function. The warning must fire here; sibling tests
-    assert it does NOT fire for non-integer-RT setups.
+    Synthetic 28-day weekly grid with ``APV * R = N * Q * dt_week`` makes the
+    deposition weight matrix a uniform moving average with exact transfer-function
+    zeros -- a rank-deficient operator. The dense path emitted a UserWarning
+    (O(N^3) ``matrix_rank`` SVD); the banded Tikhonov solve has no banded rank
+    analogue and stays well-defined via regularization, so the warning was
+    intentionally dropped. This pins that the rank-deficient solve runs silently
+    and returns a finite regularized solution.
     """
     weekly_tedges = pd.date_range("2020-01-01", periods=5, freq="7D")  # 4 weekly bins
     flow = np.full(4, 100.0)
@@ -845,8 +874,12 @@ def test_extraction_to_deposition_sparse_sampling_rank_deficient_warning():
     }
 
     cout = deposition_to_extraction(dep=dep, flow=flow, tedges=weekly_tedges, cout_tedges=weekly_tedges, **params)
-    with pytest.warns(UserWarning, match="rank-deficient"):
-        extraction_to_deposition(cout=cout, flow=flow, tedges=weekly_tedges, cout_tedges=weekly_tedges, **params)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        recovered = extraction_to_deposition(
+            cout=cout, flow=flow, tedges=weekly_tedges, cout_tedges=weekly_tedges, **params
+        )
+    assert np.all(np.isfinite(recovered))
 
 
 # =============================================================================
@@ -1065,7 +1098,7 @@ def test_compute_deposition_weights_structure():
     thickness = 3.0
     retardation_factor = 1.0
 
-    weights = compute_deposition_weights(
+    weights = _dense_weights(
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
@@ -1113,7 +1146,7 @@ def test_compute_deposition_weights_causality():
     cout_tedges = pd.date_range(start="2020-01-08", periods=31, freq="D")
     flow = np.ones(len(dates)) * 100.0
 
-    weights = compute_deposition_weights(
+    weights = _dense_weights(
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
@@ -1154,7 +1187,7 @@ def test_compute_deposition_weights_with_retardation():
     thickness = 3.0
 
     for retardation_factor in (1.0, 2.0):
-        weights = compute_deposition_weights(
+        weights = _dense_weights(
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
@@ -1186,7 +1219,7 @@ def test_compute_deposition_weights_porosity_effect():
 
     Replaces the prior `not np.allclose(weights_a, weights_b)` diff-only
     assertion. The invariant `weights * porosity` is porosity-independent
-    follows from `area_array = volume_array / (porosity * thickness)` in
+    follows from `areas / (porosity * thickness)` in
     `compute_deposition_weights` -- the volume integration itself does not
     depend on porosity.
     """
@@ -1208,10 +1241,147 @@ def test_compute_deposition_weights_porosity_effect():
         "thickness": thickness,
         "retardation_factor": retardation_factor,
     }
-    weights_low = compute_deposition_weights(porosity=porosity_low, **common)
-    weights_high = compute_deposition_weights(porosity=porosity_high, **common)
+    weights_low = _dense_weights(porosity=porosity_low, **common)
+    weights_high = _dense_weights(porosity=porosity_high, **common)
 
     np.testing.assert_allclose(weights_low * porosity_low, weights_high * porosity_high, rtol=0, atol=1e-12)
+
+
+# =============================================================================
+# Banded operator parity tests (memory/speed refactor)
+# =============================================================================
+
+
+def _dense_extraction_to_deposition_reference(*, cout, flow, tedges, cout_tedges, regularization_strength, **params):
+    """Independent dense Tikhonov inverse (pre-banded math) for parity checks.
+
+    Mirrors the historical dense ``extraction_to_deposition`` body: normalize valid
+    rows of the dense weight matrix to sum 1, rescale ``cout`` by the same row sums,
+    and solve with :func:`~gwtransport.utils.solve_tikhonov` toward the
+    transpose-and-normalize target. Used as an oracle the banded solver must match
+    in the well-determined region.
+    """
+    w = _dense_weights(flow=flow, tedges=tedges, cout_tedges=cout_tedges, **params)
+    cout = np.asarray(cout, dtype=float)
+    valid_rows = ~np.isnan(w).any(axis=1) & (np.abs(w).sum(axis=1) > 0)
+    vw = w[valid_rows]
+    row_sums = vw.sum(axis=1, keepdims=True)
+    col_active = np.sum(np.abs(vw), axis=0) > 0
+    if not np.any(col_active):
+        return np.full(w.shape[1], np.nan)
+    w_norm = vw / row_sums
+    cout_norm = cout[valid_rows] / row_sums.ravel()
+    x_target = compute_reverse_target(coeff_matrix=w_norm, rhs_vector=cout_norm)
+    dep = solve_tikhonov(
+        coefficient_matrix=w_norm,
+        rhs_vector=cout_norm,
+        x_target=x_target,
+        regularization_strength=regularization_strength,
+    )
+    out = np.full(w.shape[1], np.nan)
+    out[col_active] = dep[col_active]
+    return out
+
+
+def test_forward_banded_equals_dense_dot_variable_flow_nonuniform_cout():
+    """deposition_to_extraction (banded forward) matches a dense W.dot(dep) to ~1e-13.
+
+    Variable flow + non-uniform cout. The banded forward is an einsum over each
+    row's residence-time band; densifying the same banded operator (via
+    ``_dense_weights``) and applying ``W.dot(dep)`` must agree to a few ULP, and
+    spin-up NaN rows must propagate identically.
+    """
+    rng = np.random.default_rng(11)
+    n = 50
+    tedges = pd.date_range("2019-12-31 12:00", periods=n + 1, freq="D")
+    flow = rng.lognormal(mean=4.0, sigma=0.4, size=n)
+    # Non-uniform cout tedges.
+    offs = np.cumsum(rng.uniform(0.4, 1.6, 2 * n))
+    cout_tedges = pd.DatetimeIndex(
+        pd.Timestamp("2020-01-03") + pd.to_timedelta(np.concatenate(([0.0], offs)), unit="D")
+    )
+    params = {"aquifer_pore_volume": 600.0, "porosity": 0.28, "thickness": 8.0, "retardation_factor": 1.5}
+    dep = rng.normal(20.0, 5.0, n)
+
+    cout_banded = deposition_to_extraction(
+        dep=dep, flow=flow, tedges=tedges, cout_tedges=cout_tedges, spinup=None, **params
+    )
+    dense = _dense_weights(flow=flow, tedges=tedges, cout_tedges=cout_tedges, **params)
+    cout_dense = dense.dot(dep)  # NaN rows (spin-up) propagate, matching the banded NaN
+
+    finite = np.isfinite(cout_dense)
+    assert np.array_equal(np.isnan(cout_dense), np.isnan(cout_banded))
+    # einsum over the band vs dense matmul differ only by floating-point summation
+    # order; on cout ~ 150 this is a few ULP.
+    np.testing.assert_allclose(cout_banded[finite], cout_dense[finite], rtol=0, atol=5e-13)
+
+
+def test_inverse_banded_equals_dense_well_determined_nonuniform_cin_and_cout():
+    """extraction_to_deposition (banded) matches the dense Tikhonov inverse to <1e-8.
+
+    Well-determined, full-rank setup (non-integer RT, overdetermined sub-bin cout)
+    with non-uniform cin AND cout tedges. In the data-determined region the banded
+    Cholesky-with-semi-normal-refinement solution must agree with the dense lstsq
+    solution; both must recover the true deposition.
+    """
+    rng = np.random.default_rng(3)
+    n = 40
+    # Non-uniform cin tedges.
+    cin_offs = np.cumsum(rng.uniform(0.7, 1.4, n))
+    tedges = pd.DatetimeIndex(pd.Timestamp("2020-01-01") + pd.to_timedelta(np.concatenate(([0.0], cin_offs)), unit="D"))
+    flow = np.full(n, 100.0)
+    # Non-uniform, overdetermined cout tedges (roughly twice as many bins).
+    cout_offs = np.cumsum(rng.uniform(0.3, 0.7, 2 * n))
+    cout_tedges = pd.DatetimeIndex(
+        pd.Timestamp("2020-01-01") + pd.to_timedelta(np.concatenate(([0.0], cout_offs)), unit="D")
+    )
+    params = {"aquifer_pore_volume": 350.0, "porosity": 0.25, "thickness": 4.0, "retardation_factor": 1.0}
+    dep_true = 20.0 + 8.0 * np.sin(2 * np.pi * np.arange(n) / n)
+
+    cout = deposition_to_extraction(dep=dep_true, flow=flow, tedges=tedges, cout_tedges=cout_tedges, **params)
+    lam = 1e-16
+    dep_banded = extraction_to_deposition(
+        cout=cout, flow=flow, tedges=tedges, cout_tedges=cout_tedges, regularization_strength=lam, **params
+    )
+    dep_dense = _dense_extraction_to_deposition_reference(
+        cout=cout, flow=flow, tedges=tedges, cout_tedges=cout_tedges, regularization_strength=lam, **params
+    )
+
+    # The first/last few cin bins are only weakly constrained by the cout coverage
+    # (the residence window of an edge bin extends beyond the observed cout grid), so
+    # the banded Cholesky-with-semi-normal solution and the dense lstsq solution
+    # differ there in nullspace directions -- exactly as in the advection banded
+    # inverse. Compare the data-determined interior, where both solvers agree and
+    # recover the true deposition to machine precision.
+    interior = np.zeros(n, dtype=bool)
+    interior[4 : n - 4] = True
+    finite = np.isfinite(dep_banded) & np.isfinite(dep_dense) & interior
+    assert finite.sum() >= n - 12
+    # Banded Cholesky-with-semi-normal-refinement vs dense lstsq Tikhonov: the solver
+    # difference is ~1e-12 in the data-determined interior, so pin it tightly.
+    np.testing.assert_allclose(dep_banded[finite], dep_dense[finite], rtol=0, atol=1e-10)
+    np.testing.assert_allclose(dep_banded[finite], dep_true[finite], rtol=0, atol=1e-8)
+
+
+def test_banded_full_band_independent_of_record_length():
+    """full_band is bounded by R*apv in volume, not by record length N."""
+    bands = []
+    for n in (200, 800, 3200):
+        tedges = pd.date_range("2019-12-31 12:00", periods=n + 1, freq="D")
+        flow = np.full(n, 100.0)
+        band_vals, _, _, _, _ = compute_deposition_weights(
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volume=500.0,
+            porosity=0.3,
+            thickness=10.0,
+            retardation_factor=2.0,
+        )
+        bands.append(band_vals.shape[1])
+    # Constant flow: the residence window R*apv = 1000 m3 spans R*apv/(Q*dt) = 10 cin bins,
+    # plus one partial edge bin -> full_band == 11, independent of N.
+    assert bands == [11, 11, 11]
 
 
 # =============================================================================
@@ -1718,7 +1888,7 @@ def test_roundtrip_variable_retardation(retardation_factor):
     All prior roundtrip tests use R=1.0. With R=2 (RT_eff=10 days) and R=3.5
     (RT_eff=17.5 days) the residence-time-dependent code paths
     (``residence_time(direction="extraction_to_infiltration")``, the
-    ``y_upper=R*V_pore`` clip in ``compute_average_heights``) are exercised
+    ``y_upper=R*V_pore`` clip in the banded weight builder) are exercised
     end-to-end with a per-element machine-precision recovery check.
     """
     # Need tedges long enough to cover RT_eff * 3 for proper spin-up + pulse + decay.
@@ -1794,14 +1964,22 @@ def test_zero_flow_spill_then_recovery_roundtrip():
     # starting at cout_tedges[39]=2020-01-20 00:00 to cout_tedges[43]=2020-01-22 00:00.
     np.testing.assert_array_equal(cout[39:43], 0.0)
 
+    # The zero-flow gap makes the operator rank-deficient (the gap removes the
+    # information that would constrain the deposition inside it). The banded
+    # Cholesky needs the regularization strength large enough to lift that
+    # nullspace into positive-definiteness; 1e-16 is the smallest value that
+    # factorizes here and still recovers the data-determined region to machine
+    # precision (the dense lstsq path tolerated 1e-20 only because it returns a
+    # min-norm solution rather than factorizing W^T W). No rank-deficiency
+    # warning is emitted anymore (the dense matrix_rank warning was dropped).
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)  # rank-deficiency suppression
+        warnings.simplefilter("error")
         dep_rec = extraction_to_deposition(
             cout=cout,
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
-            regularization_strength=1e-20,
+            regularization_strength=1e-16,
             spinup=None,
             **params,
         )
@@ -1910,7 +2088,7 @@ def test_row_normalization_pre_norm_row_sum_equals_rt_over_nb():
         "retardation_factor": 1.0,
     }
 
-    weights = compute_deposition_weights(flow=flow, tedges=tedges, cout_tedges=cout_tedges, **params)
+    weights = _dense_weights(flow=flow, tedges=tedges, cout_tedges=cout_tedges, **params)
     rt = residence_time(
         flow=flow,
         flow_tedges=tedges,
@@ -1949,7 +2127,7 @@ def test_row_normalization_zero_flow_row_excluded_not_nan():
         "thickness": 4.0,
         "retardation_factor": 1.0,
     }
-    weights = compute_deposition_weights(flow=flow, tedges=tedges, cout_tedges=cout_tedges, **params)
+    weights = _dense_weights(flow=flow, tedges=tedges, cout_tedges=cout_tedges, **params)
 
     # Row 15 corresponds to the zero-flow cout bin.
     row_is_all_zero = bool(np.all(weights[15] == 0.0))
