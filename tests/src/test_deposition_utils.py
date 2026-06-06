@@ -1,221 +1,77 @@
+"""Direct unit tests for the deposition clipped-trapezoid integral helpers.
+
+``_clipped_linear_integral`` and ``_positive_part_integral`` are the load-bearing math of the
+deposition banded weight builder (:func:`gwtransport.deposition.compute_deposition_weights`). Each
+closed-form integral is checked against an independent fine-grid trapezoid reference, covering the
+clip-crossing and full-clip geometries (formerly exercised through ``compute_average_heights``).
+"""
+
 import numpy as np
+import pytest
 
-from gwtransport.deposition_utils import compute_average_heights
+from gwtransport.deposition_utils import _clipped_linear_integral, _positive_part_integral
 
-
-def test_rectangle_no_clipping():
-    """Test rectangle with no clipping - analytical solution."""
-    # Rectangle: width=2, height=3
-    x_edges = np.array([0, 2])
-    y_edges = np.array([[3, 3], [0, 0]])
-
-    # No clipping bounds
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=-1, y_upper=4)
-
-    # Analytical: area = width * height = 2 * 3 = 6, avg_height = area/width = 3
-    np.testing.assert_allclose(avg_heights[0, 0], 3.0, rtol=0, atol=1e-12)
+_N = 200_001
 
 
-def test_rectangle_full_clipping():
-    """Test rectangle completely clipped out."""
-    x_edges = np.array([0, 2])
-    y_edges = np.array([[3, 3], [0, 0]])
-
-    # Clip completely above
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=4, y_upper=5)
-    np.testing.assert_allclose(avg_heights[0, 0], 0.0, rtol=0, atol=1e-12)
-
-    # Clip completely below
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=-2, y_upper=-1)
-    np.testing.assert_allclose(avg_heights[0, 0], 0.0, rtol=0, atol=1e-12)
+def _trapezoid(y: np.ndarray, dx: float) -> float:
+    return float(dx * (y.sum() - 0.5 * (y[0] + y[-1])))
 
 
-def test_rectangle_partial_clipping():
-    """Test rectangle with partial clipping - analytical solution."""
-    # Rectangle: width=2, height=4 (y from 0 to 4)
-    x_edges = np.array([0, 2])
-    y_edges = np.array([[4, 4], [0, 0]])
-
-    # Clip bottom half: keep y from 2 to 4
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=2, y_upper=5)
-
-    # Analytical: clipped area = width * clipped_height = 2 * 2 = 4
-    # avg_height = area/width = 4/2 = 2
-    np.testing.assert_allclose(avg_heights[0, 0], 2.0, rtol=0, atol=1e-12)
-
-    # Clip top half: keep y from 0 to 2
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=-1, y_upper=2)
-    np.testing.assert_allclose(avg_heights[0, 0], 2.0, rtol=0, atol=1e-12)
+def _clip_integral_reference(a: float, b: float, w: float, lo: float, hi: float) -> float:
+    """Fine-grid trapezoid integral of ``clip(linear(a->b), lo, hi)`` over ``[0, w]``."""
+    if w <= 0.0:
+        return 0.0
+    t = np.linspace(0.0, w, _N)
+    return _trapezoid(np.clip(a + (b - a) * t / w, lo, hi), w / (_N - 1))
 
 
-def test_trapezoid_no_clipping():
-    """Test trapezoid with analytical solution."""
-    # Trapezoid: left height=4, right height=2, width=3
-    x_edges = np.array([0, 3])
-    y_edges = np.array([[4, 2], [0, 0]])
-
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=-1, y_upper=5)
-
-    # Analytical: trapezoid area = 0.5 * (left + right) * width = 0.5 * (4 + 2) * 3 = 9
-    # avg_height = area/width = 9/3 = 3
-    np.testing.assert_allclose(avg_heights[0, 0], 3.0, rtol=0, atol=1e-12)
+def _positive_part_reference(a: float, b: float, w: float) -> float:
+    if w <= 0.0:
+        return 0.0
+    t = np.linspace(0.0, w, _N)
+    return _trapezoid(np.maximum(a + (b - a) * t / w, 0.0), w / (_N - 1))
 
 
-def test_trapezoid_with_clipping():
-    """Test trapezoid with clipping - analytical solution."""
-    # Trapezoid: left height=6, right height=4, width=2
-    x_edges = np.array([0, 2])
-    y_edges = np.array([[6, 4], [0, 0]])
-
-    # Clip to keep y from 1 to 5
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=1, y_upper=5)
-
-    # Analytical: The original trapezoid has a sloped top edge from (0,6) to (2,4)
-    # When clipped at y=5, this creates a pentagonal region with area = 7.5
-    # Average height = 7.5 / 2 = 3.75
-    np.testing.assert_allclose(avg_heights[0, 0], 3.75, rtol=0, atol=1e-12)
-
-
-def test_triangle_cases():
-    """Test edge crossing cases that form triangles."""
-    # Trapezoid where top edge crosses clipping bound
-    x_edges = np.array([0, 2])
-    y_edges = np.array([[3, 1], [0, 0]])  # Top slopes down from 3 to 1
-
-    # Clip at y=2 - top edge crosses this bound
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=-1, y_upper=2)
-
-    # This should form a pentagon/triangle after clipping
-    # Exact analytical solution is complex, but should be > 0 and < full height
-    assert avg_heights[0, 0] > 0
-    assert avg_heights[0, 0] < 2.0  # Less than average of full trapezoid
+@pytest.mark.parametrize(
+    ("a", "b", "lo", "hi"),
+    [
+        (1.0, 4.0, 0.0, 10.0),  # no clipping
+        (3.0, 7.0, 0.0, 5.0),  # upper clip, left-to-right crossing
+        (7.0, 3.0, 0.0, 5.0),  # upper clip, right-to-left crossing
+        (-2.0, 4.0, 0.0, 10.0),  # lower clip, crossing
+        (4.0, -2.0, 0.0, 10.0),  # lower clip, opposite crossing
+        (8.0, 9.0, 0.0, 5.0),  # fully clipped above
+        (-3.0, -1.0, 0.0, 5.0),  # fully clipped below
+        (-2.0, 8.0, 1.0, 5.0),  # crosses both bounds
+        (5.0, 5.0, 0.0, 10.0),  # flat, interior
+    ],
+)
+def test_clipped_linear_integral_matches_reference(a, b, lo, hi):
+    w = 2.0
+    got = _clipped_linear_integral(np.array([a]), np.array([b]), np.array([w]), lo, hi)
+    np.testing.assert_allclose(got, _clip_integral_reference(a, b, w, lo, hi), rtol=0, atol=1e-6)
 
 
-def test_multiple_quads():
-    """Test grid with multiple quadrilaterals."""
-    x_edges = np.array([0, 1, 2])
-    y_edges = np.array([[2, 2, 2], [1, 1, 1], [0, 0, 0]])
-
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0.5, y_upper=1.5)
-
-    # Top row: quads from y=1 to y=2, clipped to y=1 to y=1.5 (height=0.5)
-    # Bottom row: quads from y=0 to y=1, clipped to y=0.5 to y=1 (height=0.5)
-    expected = 0.5 * np.ones((2, 2))
-    np.testing.assert_allclose(avg_heights, expected, rtol=0, atol=1e-12)
+def test_clipped_linear_integral_zero_width():
+    got = _clipped_linear_integral(np.array([3.0]), np.array([7.0]), np.array([0.0]), 0.0, 5.0)
+    np.testing.assert_allclose(got, 0.0, atol=0)
 
 
-def test_zero_width_handling():
-    """Test handling of zero-width quadrilaterals."""
-    x_edges = np.array([0, 0, 2])  # Zero width, then width=2
-    y_edges = np.array([[2, 2, 2], [0, 0, 0]])
-
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=-1, y_upper=3)
-
-    # First column: zero width produces NaN (area/0), check if properly handled
-    assert np.isnan(avg_heights[0, 0]) or avg_heights[0, 0] == 0
-    # Second column: normal rectangle
-    np.testing.assert_allclose(avg_heights[0, 1], 2.0, rtol=0, atol=1e-12)
+def test_clipped_linear_integral_vectorized():
+    a = np.array([3.0, 7.0, -2.0])
+    b = np.array([7.0, 3.0, 4.0])
+    w = np.array([2.0, 2.0, 3.0])
+    got = _clipped_linear_integral(a, b, w, 0.0, 5.0)
+    expected = np.array([_clip_integral_reference(ai, bi, wi, 0.0, 5.0) for ai, bi, wi in zip(a, b, w, strict=True)])
+    np.testing.assert_allclose(got, expected, rtol=0, atol=1e-6)
 
 
-def test_edge_case_bounds():
-    """Test when clipping bounds exactly match quad boundaries."""
-    x_edges = np.array([0, 1])
-    y_edges = np.array([[2, 2], [0, 0]])
-
-    # Bounds exactly match quad
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=2)
-    np.testing.assert_allclose(avg_heights[0, 0], 2.0, rtol=0, atol=1e-12)
-
-    # Lower bound exactly at bottom
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=3)
-    np.testing.assert_allclose(avg_heights[0, 0], 2.0, rtol=0, atol=1e-12)
-
-    # Upper bound exactly at top
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=-1, y_upper=2)
-    np.testing.assert_allclose(avg_heights[0, 0], 2.0, rtol=0, atol=1e-12)
-
-
-def test_sloped_quad():
-    """Test quadrilateral with all corners at different heights."""
-    x_edges = np.array([0, 2])
-    y_edges = np.array([[3, 4], [1, 2]])  # All corners different
-
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=-1, y_upper=5)
-
-    # Analytical: corners at (0,3), (2,4), (0,1), (2,2)
-    # This is a general quadrilateral, area = 0.5 * |shoelace formula|
-    # Using shoelace: area = 0.5 * |x1(y2-y4) + x2(y3-y1) + x3(y4-y2) + x4(y1-y3)|
-    # With corners: (0,1), (2,2), (2,4), (0,3)
-    # area = 0.5 * |0*(2-3) + 2*(4-1) + 2*(3-2) + 0*(1-4)| = 0.5 * |0 + 6 + 2 + 0| = 4
-    # avg_height = area/width = 4/2 = 2
-    np.testing.assert_allclose(avg_heights[0, 0], 2.0, rtol=0, atol=1e-12)
-
-
-def test_conservation_property():
-    """Test that clipping conserves total area when bounds are expanded."""
-    x_edges = np.array([0, 1])
-    y_edges = np.array([[3, 3], [1, 1]])
-
-    # Full area
-    full_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=4)
-
-    # Split into two parts
-    lower_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=2)
-    upper_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=2, y_upper=4)
-
-    # Conservation: lower + upper should equal full
-    np.testing.assert_allclose(lower_heights[0, 0] + upper_heights[0, 0], full_heights[0, 0], rtol=0, atol=1e-12)
-
-
-def test_upper_clip_left_to_right_crossing():
-    """Test upper clip where top edge crosses from below to above (review counterexample #1).
-
-    Trapezoid: y_tl=3, y_tr=7, y_lower=0, y_upper=5, width=2.
-    Top edge crosses y_upper=5 at x=1. Left half: trapezoid (3+5)/2*1=4.
-    Right half: rectangle 5*1=5. Total avg = (4+5)/2 = 4.5.
-    """
-    x_edges = np.array([0, 2])
-    y_edges = np.array([[3, 7], [0, 0]])
-
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=5)
-
-    np.testing.assert_allclose(avg_heights[0, 0], 4.5, rtol=0, atol=1e-12)
-
-
-def test_lower_clip_crossing():
-    """Test lower clip crossing (review counterexample #2).
-
-    Quad: y_tl=2, y_tr=2, y_bl=-2, y_br=2, y_lower=0, y_upper=10, width=2.
-    Top edge: constant at 2. Bottom edge: linear from -2 to 2, crosses 0 at x=1.
-    Left half: triangle with height 2 at x=0 (top-bottom = 2-(-2)=4, but clipped at 0, so 2-0=2)
-    and height 0 at x=1 crossing. Area = 0.5*1*2 + 0.5*1*2 = 2 (triangle above 0).
-    Right half: rectangle 2*1=2 minus bottom part above 0 already.
-    Actually: left half [0,1]: top=2, bottom goes from -2 to 0, clipped at 0.
-    So clipped bottom = max(-2+2x, 0) = 0 for x in [0,1]. Height = 2-0=2 for x<0.5 (where bottom is negative, clipped to 0).
-    Wait, bottom at x=0: -2, at x=1: 0, at x=2: 2.
-    Clipped bottom = max(bottom, 0). For x<1: bottom<0 so clipped to 0. For x>=1: bottom>=0.
-    Height = top - clipped_bottom = 2 - 0 = 2 for x in [0,1], 2 - (bottom) for x in [1,2].
-    Bottom at x in [1,2]: -2 + 2x, so height = 2 - (-2+2x) = 4-2x.
-    Integral = 2*1 + integral(4-2x, 1, 2) = 2 + [4x - x²]_1^2 = 2 + (8-4-4+1) = 2+1 = 3.
-    Avg = 3/2 = 1.5.
-    """
-    x_edges = np.array([0, 2])
-    y_edges = np.array([[2, 2], [-2, 2]])
-
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=10)
-
-    np.testing.assert_allclose(avg_heights[0, 0], 1.5, rtol=0, atol=1e-12)
-
-
-def test_upper_clip_right_to_left_crossing():
-    """Test upper clip where top edge crosses from above to below (reversed direction).
-
-    Trapezoid: y_tl=7, y_tr=3, y_lower=0, y_upper=5, width=2.
-    Mirror of test_upper_clip_left_to_right_crossing, should give same result.
-    """
-    x_edges = np.array([0, 2])
-    y_edges = np.array([[7, 3], [0, 0]])
-
-    avg_heights = compute_average_heights(x_edges=x_edges, y_edges=y_edges, y_lower=0, y_upper=5)
-
-    np.testing.assert_allclose(avg_heights[0, 0], 4.5, rtol=0, atol=1e-12)
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [(2.0, 5.0), (5.0, 2.0), (-3.0, 4.0), (4.0, -3.0), (-2.0, -1.0)],
+)
+def test_positive_part_integral_matches_reference(a, b):
+    w = 2.0
+    got = _positive_part_integral(np.array([a]), np.array([b]), np.array([w]))
+    np.testing.assert_allclose(got, _positive_part_reference(a, b, w), rtol=0, atol=1e-6)

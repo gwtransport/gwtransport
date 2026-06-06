@@ -31,9 +31,10 @@ Available functions:
   choosing between different nullspace objectives (``'squared_differences'``,
   ``'summed_differences'``, or custom callables) and optimization methods.
 
-- :func:`compute_deposition_weights` - Internal helper function. Compute weight matrix relating
-  deposition rates to concentration changes. Used by both deposition_to_extraction (forward) and
-  extraction_to_deposition (reverse). Calculates contact area between water parcels and aquifer
+- :func:`compute_deposition_weights` - Internal helper function. Build the weight operator
+  relating deposition rates to concentration changes in a compact banded layout. Used by
+  deposition_to_extraction (forward), extraction_to_deposition (reverse), and
+  extraction_to_deposition_full. Calculates contact area between water parcels and aquifer
   matrix based on streamline geometry and residence times.
 
 - :func:`spinup_duration` - Compute spinup duration for deposition modeling. Returns the
@@ -47,7 +48,6 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
-import warnings
 from collections.abc import Callable
 
 import numpy as np
@@ -61,14 +61,13 @@ from gwtransport._validation import (
     _validate_positive_scalar,
     _validate_tedges_parity,
 )
-from gwtransport.advection_utils import _resolve_spinup_inputs
-from gwtransport.deposition_utils import compute_average_heights
+from gwtransport.advection_utils import _densify_weights, _resolve_spinup_inputs
+from gwtransport.deposition_utils import _clipped_linear_integral
 from gwtransport.residence_time import residence_time
 from gwtransport.utils import (
-    compute_reverse_target,
     cumulative_flow_volume,
     linear_interpolate,
-    solve_tikhonov,
+    solve_inverse_transport_banded,
     solve_underdetermined_system,
 )
 
@@ -94,7 +93,7 @@ def _validate_deposition_inputs(
       contain NaN values" message that covered both dep and flow).
     - ``cout_values`` + ``cout_tedges`` provided => ``cout_tedges``-parity check
       (inverse paths). ``cout_values`` itself is intentionally NOT NaN-checked
-      -- NaN in ``cout`` is allowed and excluded downstream by ``solve_tikhonov``.
+      -- NaN in ``cout`` is allowed and excluded downstream by the inverse solve.
     - ``flow_values`` + ``tedges`` always => parity check + non-negative;
       additionally, in the inverse path (``dep_values is None``), a flow-only
       NaN-check fires with the historical "flow array cannot contain NaN
@@ -151,13 +150,35 @@ def compute_deposition_weights(
     porosity: float,
     thickness: float,
     retardation_factor: float = 1.0,
-) -> npt.NDArray[np.floating]:
-    """Compute deposition weights for concentration-deposition convolution.
+) -> tuple[
+    npt.NDArray[np.floating],
+    npt.NDArray[np.intp],
+    npt.NDArray[np.floating],
+    npt.NDArray[np.bool_],
+    npt.NDArray[np.bool_],
+]:
+    """Build the deposition weight operator in a compact banded layout.
+
+    Row ``k`` of the dense ``(n_cout, n_cin)`` operator is ``band_vals[k]``
+    placed at columns ``[col_start[k], col_start[k] + full_band)``. The operator
+    is genuinely banded -- row ``k`` is nonzero only on the cin bins whose
+    cumulative through-flow volume lies in the residence-time window
+    ``[min(start_vol_k, start_vol_{k+1}), max(start_vol_k, start_vol_{k+1}) +
+    R * aquifer_pore_volume]`` -- so each band has at most ``full_band`` slots,
+    bounded by ``R * aquifer_pore_volume`` in volume (independent of record
+    length ``n_cin``). The window is located by :func:`numpy.searchsorted` on the
+    cumulative flow volume ``flow_cum``; the per-cell math reuses
+    :func:`~gwtransport.deposition_utils._clipped_linear_integral` restricted to
+    the band columns, so each row sums to
+    ``r_k = residence_time_k / (porosity * thickness)``. Reconstruct the dense
+    ``(n_cout, n_cin)`` matrix with
+    :func:`~gwtransport.advection_utils._densify_weights` when a dense operator
+    is required (the nullspace inverse).
 
     Parameters
     ----------
     flow : array-like
-        Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
+        Flow rates in aquifer [m3/day]. Length must equal ``len(tedges) - 1``.
     tedges : pandas.DatetimeIndex
         Time bin edges for flow data.
     cout_tedges : pandas.DatetimeIndex
@@ -173,23 +194,34 @@ def compute_deposition_weights(
 
     Returns
     -------
-    numpy.ndarray
-        Deposition weights matrix with shape (len(cout_tedges) - 1, len(tedges) - 1).
-        May contain NaN values where residence time cannot be computed.
+    band_vals : numpy.ndarray
+        Banded weights of shape ``(n_cout, full_band)``. Slot ``band_vals[k, b]``
+        is the weight on cin bin ``col_start[k] + b``. Row ``k`` sums to
+        ``r_k = residence_time_k / (porosity * thickness)``; invalid rows (NaN
+        residence time, zero-flow cout bins) are zero.
+    col_start : numpy.ndarray of int
+        First cin bin index of each cout row's band, shape ``(n_cout,)``.
+    extracted_volume : numpy.ndarray
+        Through-flow volume extracted during each cout bin, shape ``(n_cout,)``.
+        Zero for zero-flow cout bins.
+    row_valid : numpy.ndarray of bool
+        True for cout bins whose residence-time window is fully defined and
+        carries flow (the finite, nonzero rows), shape ``(n_cout,)``.
+    spinup_row : numpy.ndarray of bool
+        True for cout bins whose residence time is undefined (spin-up period),
+        shape ``(n_cout,)``. These rows carry an all-zero band; the forward
+        path returns NaN for these bins (distinct from zero-flow cout bins,
+        which return 0).
 
-    Notes
-    -----
-    The returned weights matrix may contain NaN values in locations where the
-    residence time calculation fails or is undefined. This typically occurs
-    when flow conditions result in invalid or non-physical residence times.
+    See Also
+    --------
+    gwtransport.advection_utils._densify_weights : Reconstruct the dense matrix.
     """
-    # Convert to days relative to first time edge
     t0 = tedges[0]
     tedges_days = tedges_to_days(tedges, ref=t0)
     cout_tedges_days = tedges_to_days(cout_tedges, ref=t0)
 
-    # Compute residence times and cumulative flow
-    flow_values = np.asarray(flow)
+    flow_values = np.asarray(flow, dtype=float)
     cout_rt_at_edges = residence_time(
         flow=flow_values,
         flow_tedges=tedges,
@@ -201,22 +233,61 @@ def compute_deposition_weights(
     cout_tedges_days_infiltration = cout_tedges_days - cout_rt_at_edges.squeeze(axis=0)
 
     flow_cum = cumulative_flow_volume(flow_values, np.diff(tedges_days))
-
-    # Interpolate volumes at concentration time edges
     start_vol = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days_infiltration)
     end_vol = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days)
 
-    # Compute deposition weights. Zero-flow cout bins have extracted_volume == 0;
-    # np.divide with where=mask leaves those rows at the out=zeros sentinel.
-    flow_cum_cout = flow_cum[None, :] - start_vol[:, None]
-    volume_array = compute_average_heights(
-        x_edges=tedges_days, y_edges=flow_cum_cout, y_lower=0.0, y_upper=retardation_factor * float(aquifer_pore_volume)
-    )
-    area_array = volume_array / (porosity * thickness)
+    n_cin = len(tedges) - 1
+    n_cout = len(cout_tedges) - 1
     extracted_volume = np.diff(end_vol)
-    numerator = area_array * np.diff(tedges_days)[None, :]
-    mask = extracted_volume > 0
-    return np.divide(numerator, extracted_volume[:, None], out=np.zeros_like(numerator), where=mask[:, None])
+    dt = np.diff(tedges_days)
+    r_apv = retardation_factor * float(aquifer_pore_volume)
+
+    # Row k's clipped trapezoid spans cout edges k (top: start_vol[k]) and k+1
+    # (bottom: start_vol[k+1]). It is nonzero only on cin bins j whose cumulative
+    # volume window [flow_cum[j], flow_cum[j+1]] overlaps the clip window
+    # [lower_k, upper_k] in flow_cum space, located by searchsorted.
+    sv_top, sv_bot = start_vol[:-1], start_vol[1:]
+    nan_row = np.isnan(sv_top) | np.isnan(sv_bot)
+    lower = np.minimum(sv_top, sv_bot)
+    upper = np.maximum(sv_top, sv_bot) + r_apv
+    j_first = np.clip(np.searchsorted(flow_cum, np.where(nan_row, flow_cum[0], lower), side="right") - 1, 0, n_cin - 1)
+    j_last = np.clip(np.searchsorted(flow_cum, np.where(nan_row, flow_cum[0], upper), side="left") - 1, 0, n_cin - 1)
+    width = np.where(nan_row, 0, j_last - j_first + 1)
+    full_band = int(max(1, width.max(initial=0)))
+
+    col_start = np.where(nan_row, 0, j_first).astype(np.intp)
+    row_valid = ~nan_row & (extracted_volume > 0)
+    # A row goes NaN in the forward only when its residence time is undefined AND
+    # it extracts water (left-edge spin-up). Out-of-range rows have undefined
+    # residence but zero extracted volume; they stay at the zeros sentinel (0).
+    spinup_row = nan_row & (extracted_volume > 0)
+
+    # Gather each row's band of cin edges (full_band + 1 edges) and bin widths,
+    # then evaluate the clipped-trapezoid integral on those columns only. Out-of-
+    # range / right-pad slots gather the last edge (zero-width contribution).
+    band_edge = col_start[:, None] + np.arange(full_band + 1)[None, :]
+    band_edge_clipped = np.clip(band_edge, 0, n_cin)
+    y_at_edge = flow_cum[band_edge_clipped]  # (n_cout, full_band + 1)
+    y_top = y_at_edge - sv_top[:, None]
+    y_bot = y_at_edge - sv_bot[:, None]
+    widths = dt[np.clip(col_start[:, None] + np.arange(full_band)[None, :], 0, n_cin - 1)]
+    # Zero the width of right-pad slots (band slot index >= width) so they add nothing.
+    slot = np.arange(full_band)[None, :]
+    widths = np.where(slot < width[:, None], widths, 0.0)
+
+    # volume = clipped_integral / width, area = volume / (porosity*thickness),
+    # numerator = area * width -- so the bin width cancels and numerator is just
+    # clipped_integral / (porosity*thickness). _clipped_linear_integral already
+    # integrates over the bin width, so do NOT multiply by widths again.
+    top_integral = _clipped_linear_integral(y_top[:, :-1], y_top[:, 1:], widths, 0.0, r_apv)
+    bottom_integral = _clipped_linear_integral(y_bot[:, :-1], y_bot[:, 1:], widths, 0.0, r_apv)
+    areas = np.maximum(top_integral - bottom_integral, 0.0)
+    numerator = areas / (porosity * thickness)
+
+    band_vals = np.zeros((n_cout, full_band))
+    # row_valid implies extracted_volume > 0, so the masked divide never sees a zero.
+    band_vals[row_valid] = numerator[row_valid] / extracted_volume[row_valid, None]
+    return band_vals, col_start, extracted_volume, row_valid, spinup_row
 
 
 def deposition_to_extraction(
@@ -331,8 +402,11 @@ def deposition_to_extraction(
     )
     weight_dep = np.asarray(weight_dep)
 
-    # Compute deposition weights
-    deposition_weights = compute_deposition_weights(
+    # Build the banded forward operator and apply it as a banded einsum instead of
+    # a dense W.dot(dep). Spin-up rows (NaN residence time) carry an all-zero band
+    # and must return NaN. Zero-flow cout bins (extracted_volume == 0) carry a zero
+    # band and return 0.
+    band_vals, col_start, _, _, spinup_row = compute_deposition_weights(
         flow=weight_flow,
         tedges=weight_tedges,
         cout_tedges=cout_tedges,
@@ -341,8 +415,11 @@ def deposition_to_extraction(
         thickness=thickness,
         retardation_factor=retardation_factor,
     )
-
-    return deposition_weights.dot(weight_dep)
+    n_cin = len(weight_tedges) - 1
+    cols = np.clip(col_start[:, None] + np.arange(band_vals.shape[1]), 0, n_cin - 1)
+    cout = np.einsum("kb,kb->k", band_vals, weight_dep[cols])
+    cout[spinup_row] = np.nan
+    return cout
 
 
 def extraction_to_deposition(
@@ -425,22 +502,12 @@ def extraction_to_deposition(
     ValueError
         If input dimensions are incompatible or if flow contains NaN values.
 
-    Warns
-    -----
-    UserWarning
-        When the weight matrix is rank-deficient. This occurs with constant
-        flow when the residence time is an integer multiple of the time step
-        width. The deposition weight matrix then acts as a uniform moving
-        average whose transfer function has exact zeros, making certain
-        deposition patterns invisible in the concentration signal. To fix,
-        adjust ``aquifer_pore_volume`` slightly (e.g., multiply by 1.001).
-
     See Also
     --------
     deposition_to_extraction : Forward operation (convolution)
     extraction_to_deposition_full : Full solver with nullspace options
     gwtransport.advection.extraction_to_infiltration : For concentration transport without deposition
-    gwtransport.utils.solve_tikhonov : Solver used for inversion
+    gwtransport.utils.solve_inverse_transport_banded : Banded Tikhonov solver used for inversion
     :ref:`concept-transport-equation` : Flow-weighted averaging approach
 
     Notes
@@ -451,17 +518,25 @@ def extraction_to_deposition(
 
     The forward model is ``W @ dep = cout``, where the weight matrix ``W``
     encodes the physical relationship between deposition rates and
-    concentrations. Unlike advection (where rows sum to ~1), deposition rows
-    sum to ``r_i = residence_time_i / (porosity * thickness)``. Rows are
+    concentrations. ``W`` is genuinely banded -- row ``i`` is nonzero only on
+    the cin bins inside its residence-time window -- and is built and solved in
+    a compact banded layout (peak memory ``O(n_cin * band)``, never the dense
+    ``O(n_cout * n_cin)``). Unlike advection (where rows sum to ~1), deposition
+    rows sum to ``r_i = residence_time_i / (porosity * thickness)``. Rows are
     rescaled by ``r_i`` before solving: for systems where ``cout`` lies in
     the column space of ``W`` this preserves the exact ``dep``, while for
     overdetermined systems with noise it is equivalent to weighted least
     squares with weights ``1 / r_i^2`` (shorter residence times get more
     weight; under constant flow all ``r_i`` are equal and this reduces to
-    OLS). The rescaling exists to put ``compute_reverse_target`` on the same
-    scale as ``dep``, which controls the regularization scale. Rows where
-    the residence time cannot be computed (spin-up period) contain NaN and
-    are excluded automatically. NaN values in ``cout`` are also excluded.
+    OLS). The rescaling puts the regularization target (transpose-and-normalize
+    of ``W`` applied to ``cout``) on the same scale as ``dep``, which controls
+    the regularization scale. Rows where the residence time cannot be computed
+    (spin-up period) and zero-flow cout bins are excluded automatically; NaN
+    values in ``cout`` are also excluded. The banded Tikhonov solve stays
+    well-defined via ``regularization_strength`` even when ``W`` is
+    rank-deficient (constant flow with integer ``RT/dt`` makes it a uniform
+    moving average with exact transfer-function zeros), so no rank-deficiency
+    warning is emitted.
 
     Examples
     --------
@@ -513,8 +588,8 @@ def extraction_to_deposition(
         retardation_factor=retardation_factor,
     )
 
-    # Compute deposition weights
-    deposition_weights = compute_deposition_weights(
+    # Build the banded forward operator (rows sum to r_k = RT_k/(porosity*thickness)).
+    band_vals, col_start, _, row_valid, _ = compute_deposition_weights(
         flow=weight_flow,
         tedges=weight_tedges,
         cout_tedges=cout_tedges,
@@ -523,63 +598,32 @@ def extraction_to_deposition(
         thickness=thickness,
         retardation_factor=retardation_factor,
     )
+    n_cin_padded = len(weight_tedges) - 1
 
-    # Rescale rows of W by their sum r_i = RT_i / (porosity*thickness). For
-    # systems where cout lies in the column space of W (e.g., noise-free
-    # roundtrip), this preserves the exact dep. For overdetermined systems
-    # with noise the rescaling is equivalent to weighted least squares with
-    # weights 1/r_i^2 -- shorter residence times get more weight; under
-    # constant flow all r_i are equal and this reduces to OLS. The rescaling
-    # exists to put compute_reverse_target on the same scale as dep, which
-    # controls the regularization scale. NaN rows (spin-up), all-zero rows
-    # (zero-flow cout bins; carry no info), and NaN values in cout are
-    # excluded by solve_tikhonov via its valid_rows = ~isnan(matrix).any(axis=1) & ~isnan(rhs) filter.
-    valid_rows = ~np.isnan(deposition_weights).any(axis=1) & (np.abs(deposition_weights).sum(axis=1) > 0)
-    valid_weights = deposition_weights[valid_rows]
-    row_sums = valid_weights.sum(axis=1, keepdims=True)
-    col_active = np.sum(np.abs(valid_weights), axis=0) > 0
+    # Per-row rescaling: normalize valid rows to sum 1 (w_norm = W_valid / r_k) and
+    # feed the banded solver observed = cout / r_k -- the SAME 1/r_k scaling, REQUIRED
+    # since deposition rows sum to r_k != 1 (unlike advection). Excluded rows -- NaN
+    # residence time / zero-flow cout bins (~row_valid) and NaN values in cout -- are
+    # zeroed in the band and given observed = 0 so they drop out of the normal
+    # equations (a zero band contributes nothing).
+    row_sums = band_vals.sum(axis=1)
+    keep = row_valid & ~np.isnan(cout_values)
+    safe_sum = np.where(keep, row_sums, 1.0)
+    band_norm = np.where(keep[:, None], band_vals / safe_sum[:, None], 0.0)
+    observed = np.where(keep, cout_values / safe_sum, 0.0)
 
-    if not np.any(col_active):
-        return np.full(deposition_weights.shape[1] - n_pad, np.nan)
-
-    # Build normalized system: W_norm @ dep = cout_norm
-    w_norm = valid_weights / row_sums
-    cout_norm = cout_values[valid_rows] / row_sums.ravel()
-
-    # Check for rank deficiency. With constant flow and integer RT/dt, the
-    # deposition weight matrix acts as a uniform moving average whose transfer
-    # function has exact zeros, making certain deposition patterns invisible.
-    n_active = int(col_active.sum())
-    rank = np.linalg.matrix_rank(w_norm[:, col_active])
-    if rank < n_active:
-        warnings.warn(
-            f"Weight matrix is rank-deficient (rank {rank} < {n_active} active "
-            f"columns). This occurs with constant flow when the residence time "
-            f"is an integer multiple of the time step width, creating deposition "
-            f"patterns that are invisible in the concentration signal. The "
-            f"underdetermined modes will be pulled toward the regularization "
-            f"target instead of being determined by data. To achieve full rank, "
-            f"adjust aquifer_pore_volume slightly (e.g., multiply by 1.001).",
-            stacklevel=2,
-        )
-
-    x_target = compute_reverse_target(coeff_matrix=w_norm, rhs_vector=cout_norm)
-
-    # solve_tikhonov filters NaN rows in *both* coefficient_matrix and rhs_vector
-    # (utils.py: valid_rows = ~isnan(matrix).any(axis=1) & ~isnan(rhs)).  We pass
-    # the already-pruned w_norm / cout_norm directly -- a reconstruction back to
-    # full size only to be filtered again would be dead work.
-    dep_solved = solve_tikhonov(
-        coefficient_matrix=w_norm,
-        rhs_vector=cout_norm,
-        x_target=x_target,
+    # The banded Tikhonov solve is well-defined via regularization even when the
+    # operator is rank-deficient (constant flow with integer RT/dt makes it a
+    # uniform moving average with exact transfer-function zeros).
+    dep_padded = solve_inverse_transport_banded(
+        band_vals=band_norm,
+        col_start=col_start,
+        observed=observed,
+        n_output=n_cin_padded,
         regularization_strength=regularization_strength,
     )
-
-    out = np.full(deposition_weights.shape[1], np.nan)
-    out[col_active] = dep_solved[col_active]
     # Drop warm-start prefix so output aligns with the user-provided tedges.
-    return out[n_pad:]
+    return dep_padded[n_pad:]
 
 
 def extraction_to_deposition_full(
@@ -696,8 +740,10 @@ def extraction_to_deposition_full(
         retardation_factor=retardation_factor,
     )
 
-    # Compute deposition weights
-    deposition_weights = compute_deposition_weights(
+    # The nullspace solver (lstsq + null_space SVD) genuinely needs a dense matrix,
+    # so build the band and densify it. Spin-up rows are set to NaN to match the
+    # behavior of the historical dense build (which left those rows entirely NaN).
+    band_vals, col_start, _, _, spinup_row = compute_deposition_weights(
         flow=weight_flow,
         tedges=weight_tedges,
         cout_tedges=cout_tedges,
@@ -706,6 +752,9 @@ def extraction_to_deposition_full(
         thickness=thickness,
         retardation_factor=retardation_factor,
     )
+    n_cin_padded = len(weight_tedges) - 1
+    deposition_weights = _densify_weights(band_vals, col_start, n_cin_padded)
+    deposition_weights[spinup_row] = np.nan
 
     dep_padded = solve_underdetermined_system(
         coefficient_matrix=deposition_weights,
