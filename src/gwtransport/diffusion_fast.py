@@ -84,11 +84,12 @@ from gwtransport._diffusion_shared import (
     _cout_cumulative_volume,
     _extend_tedges_flag,
     _retardation_excess_density,
+    _solve_reverse_banded,
     _validate_inputs,
 )
 from gwtransport._time import dt_to_days, tedges_to_days
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import cumulative_flow_volume, solve_inverse_transport
+from gwtransport.utils import cumulative_flow_volume
 
 # Default saturation threshold U for the banded build: a cout/cin pair is only evaluated
 # while the breakthrough |x|/(2*sqrt(D_t)) <= U; beyond it the bin-averaged C_F is saturated
@@ -99,111 +100,8 @@ from gwtransport.utils import cumulative_flow_volume, solve_inverse_transport
 _DEFAULT_SATURATION_THRESHOLD = 7.0
 
 
-def _flux_breakthrough_fraction(
+def _pv_band_geometry(
     *,
-    step_widths: npt.NDArray[np.floating],
-    tau: npt.NDArray[np.floating],
-    molecular_diffusivity: float,
-    longitudinal_dispersivity: float,
-    streamline_len: float,
-    retardation_factor: float,
-    velocity: npt.NDArray[np.floating],
-) -> npt.NDArray[np.floating]:
-    r"""Bin-averaged Kreft-Zuber flux concentration over each cout bin, per cin edge.
-
-    Closed-form evaluation of the bin-averaged outlet breakthrough. For a unit step
-    injected at cin edge *j*, the bin-averaged resident concentration over cout bin *i* is
-
-    .. math::
-
-        \frac{1}{\Delta x}\int C_R\,dx,\qquad
-        C_R = \tfrac12\bigl(1 + \operatorname{erf}(x/(2\sqrt{D_t}))\bigr),
-
-    with antiderivative
-    :math:`I(x) = \tfrac12 x + \tfrac12[x\,\operatorname{erf}(x/s) + (s/\sqrt\pi)e^{-(x/s)^2}]`,
-    :math:`s = 2\sqrt{D_t}`. Evaluating :math:`I` once per cout *edge* and differencing,
-    with the moving-frame dispersion product :math:`D_t = D_m\,\tau + \alpha_L\,\xi`
-    carried *per edge*, yields the **flux** concentration :math:`C_F` (Kreft & Zuber 1978),
-    not merely :math:`C_R`. This is exact, not coincidental: the antiderivative difference
-    picks up a :math:`\partial I/\partial D_t \cdot (dD_t/dx)` term, and
-
-    .. math::
-
-        \frac{dD_t}{dx} = D_m\frac{d\tau}{dx} + \alpha_L
-                        = \frac{D_m}{v} + \alpha_L = \frac{D_L}{v},
-
-    which is precisely the Kreft-Zuber flux coefficient (using :math:`d\tau/dx = 1/v`). The
-    dispersive boundary-flux correction therefore emerges from the ``D_t`` variation across
-    the bin; no explicit flux term is added.
-
-    Parameters
-    ----------
-    step_widths : ndarray, shape (n_cout_edges, n_cin_edges)
-        ``x = (V_cout - V_cin - R*V_pore) * L / (R*V_pore)`` at each (cout-edge, cin-edge);
-        equals :math:`\xi - L`.
-    tau : ndarray, shape (n_cout_edges, n_cin_edges)
-        Elapsed time ``t_cout - t_cin`` [day] at each (cout-edge, cin-edge), clipped at 0.
-    molecular_diffusivity : float
-        Effective molecular diffusivity D_m [m^2/day].
-    longitudinal_dispersivity : float
-        Longitudinal dispersivity alpha_L [m].
-    streamline_len : float
-        Streamline length L [m].
-    retardation_factor : float
-        Retardation factor R [-]. Triggers the K-Z flux-coefficient correction when
-        ``R != 1`` and ``D_m > 0`` (see notes in the body).
-    velocity : ndarray, shape (n_cout_bins,)
-        Fluid (unretarded) velocity ``Q*L/V_pore`` [m/day] in each cout bin, used by the
-        retardation correction.
-
-    Returns
-    -------
-    ndarray, shape (n_cout_bins, n_cin_edges)
-        Bin-averaged flux concentration for the step injected at each cin edge.
-
-    References
-    ----------
-    Kreft, A., & Zuber, A. (1978). On the physical meaning of the dispersion equation and
-    its solutions for different initial and boundary conditions. Chemical Engineering
-    Science, 33(11), 1471-1480.
-    """
-    x_lo = step_widths[:-1]
-    x_hi = step_widths[1:]
-    dx = x_hi - x_lo
-
-    # No dispersion: C_R is the step function H(x); its exact bin-average is the fraction
-    # of the cout bin with x > 0 (the limit of the erf form as D_t -> 0).
-    if molecular_diffusivity == 0.0 and longitudinal_dispersivity == 0.0:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            frac = (np.maximum(x_hi, 0.0) - np.maximum(x_lo, 0.0)) / dx
-        return np.where(dx > 0.0, frac, 0.5 + 0.5 * np.sign(x_lo))
-
-    xi = step_widths + streamline_len
-    dt_var = np.maximum(molecular_diffusivity * tau + longitudinal_dispersivity * np.maximum(xi, 0.0), _DT_FLOOR)
-    antideriv, s, gaussian = _breakthrough_antideriv(step_widths, dt_var)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        frac = np.where(dx > 0.0, np.diff(antideriv, axis=0) / dx, 0.0)
-
-    if retardation_factor != 1.0 and molecular_diffusivity > 0.0:
-        density_binavg = _retardation_excess_density(
-            x_lo=x_lo,
-            x_hi=x_hi,
-            dx=dx,
-            d_lo=dt_var[:-1],
-            d_hi=dt_var[1:],
-            s_lo=s[:-1],
-            s_hi=s[1:],
-            g_lo=gaussian[:-1],
-            g_hi=gaussian[1:],
-        )
-        excess = np.where(velocity > 0.0, (retardation_factor - 1.0) * molecular_diffusivity / velocity, 0.0)
-        frac -= excess[:, None] * density_binavg
-    return frac
-
-
-def _accumulate_pv_banded(
-    *,
-    accumulated_coeff: npt.NDArray[np.floating],
     cumulative_volume_at_cout: npt.NDArray[np.floating],
     cumulative_volume_at_cin: npt.NDArray[np.floating],
     cout_tedges_days: npt.NDArray[np.floating],
@@ -212,36 +110,34 @@ def _accumulate_pv_banded(
     length: float,
     molecular_diffusivity: float,
     longitudinal_dispersivity: float,
-    retardation_factor: float,
-    velocity: npt.NDArray[np.floating],
     min_cin_flow: float,
     saturation_threshold: float,
-) -> bool:
-    r"""Scatter one streamtube's banded ``C_F`` contribution into ``accumulated_coeff``.
+    n_cin_bins: int,
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    r"""Per-cout-row band bounds (lo, hi) in cin-bin columns for one streamtube (geometry only).
 
-    Computes the bin-averaged flux concentration only on the narrow cumulative-volume band where
-    the breakthrough transitions between 0 and 1 -- the only cin bins with a non-zero coefficient.
-    Within a streamtube the moving-frame dispersion product is exactly linear in the breakthrough
-    coordinate, ``D_t(x) = A + B*x``, with slope ``B = dD_t/dx = R*D_m/v + alpha_L`` (the per-bin
-    flux coefficient) and intercept ``A`` the front value, so the saturation edge
-    ``|x| = saturation_threshold * 2*sqrt(D_t(x))`` is the root of a quadratic -- the band
-    half-width is closed form, no iteration. The band is centred per cout bin on the front
-    ``V_cin = V_cout - R*V_pore`` and mapped to cin-edge columns with ``searchsorted`` (so
+    Locates the narrow cumulative-volume band where the breakthrough transitions between 0 and 1
+    -- the only cin bins with a non-zero coefficient. Within a streamtube the moving-frame
+    dispersion product is exactly linear in the breakthrough coordinate, ``D_t(x) = A + B*x``,
+    with slope ``B = dD_t/dx = R*D_m/v + alpha_L`` and intercept ``A`` the front value, so the
+    saturation edge ``|x| = saturation_threshold * 2*sqrt(D_t(x))`` is the root of a quadratic --
+    the band half-width is closed form, no iteration. The band is centred per cout bin on the
+    front ``V_cin = V_cout - R*V_pore`` and mapped to cin-edge columns with ``searchsorted`` (so
     non-uniform / variable-flow grids need no special handling).
 
-    At ``saturation_threshold`` around 7 the dropped tail is ``~exp(-threshold**2)``, far below the
-    ulp of the kept entries, so the scattered band reproduces the dense build
-    (:func:`_flux_breakthrough_fraction`) to machine precision; a smaller threshold narrows the
-    band (faster) at the cost of dropping breakthrough tails of that order. ``C_F`` over a cout bin
-    is ``(I(x_hi) - I(x_lo)) / dx`` with the antiderivative ``I`` evaluated at both cout edges over
-    the gathered cin stripe, plus the same closed-form retardation correction as the dense kernel.
+    With a warm-start spin-up and ``D_m > 0`` the breakthrough is *also* unsaturated at the
+    data-start edge (cin edge 0): a leading zero-flow plateau holds the cumulative volume flat
+    there, so the front search lands the local band one or more columns inside the record while a
+    genuine, non-negligible coefficient remains at column 0 (the warm-start tail of a wide bin with
+    large ``tau`` -> large ``D_t``). Each row therefore additionally tests ``|x0| < U*2*sqrt(D_t0)``
+    at edge 0 and, when non-saturated, drops its band lower bound to 0 so that tail is kept.
 
     Returns
     -------
-    bool
-        ``True`` if the contribution was scattered. ``False`` (leaving ``accumulated_coeff``
-        unchanged) when the band would span more than half the cin axis -- the caller then uses
-        the dense kernel for this streamtube, so the cost never exceeds the dense build.
+    lo : ndarray of int, shape (n_cout_bins,)
+        Per-row band lower bound (inclusive), clipped to ``[0, n_cin_bins - 1]``.
+    hi : ndarray of int, shape (n_cout_bins,)
+        Per-row band upper bound (inclusive), clipped to ``[0, n_cin_bins - 1]``.
     """
     v_cin = cumulative_volume_at_cin
     n_cin_edges = v_cin.size
@@ -262,7 +158,8 @@ def _accumulate_pv_banded(
     # flow with larger tau, so it carries its own intercept a_post; max(a_pre, a_post) bounds the front
     # D_t of both cout edges there. The pre extent anchors at the upper cout edge. a_pre uses the upper
     # edge time / mid front (conservative for the pre side). +1 absorbs searchsorted rounding;
-    # min_cin_flow == 0 -> B = inf -> the band trips the fallback below.
+    # min_cin_flow == 0 (no flow) -> the post slope is unbounded; b_max is set to span the whole axis
+    # only when D_m > 0, else 0 (no diffusion, no flow term), avoiding a 0/0 NaN.
     u = saturation_threshold
     v_front = 0.5 * (v_cout_lo + v_cout_hi) - r_vpv
     center = np.searchsorted(v_cin, v_front)
@@ -275,24 +172,92 @@ def _accumulate_pv_banded(
     )
     a_post = np.maximum(a_post, a_pre)
     pre_x = 2.0 * u * np.sqrt(a_pre)
-    with np.errstate(divide="ignore", invalid="ignore"):
+    if min_cin_flow > 0.0:
         b_max = longitudinal_dispersivity + molecular_diffusivity * r_vpv / (length * min_cin_flow)
-        post_x = 2.0 * u * u * b_max + 2.0 * u * np.sqrt(u * u * b_max * b_max + a_post)
-        col_post = np.searchsorted(v_cin, (v_cout_lo - r_vpv) - r_vpv * post_x / length)  # smallest V_cin
-        col_pre = np.searchsorted(v_cin, (v_cout_hi - r_vpv) + r_vpv * pre_x / length)  # largest V_cin
+    else:
+        b_max = np.inf if molecular_diffusivity > 0.0 else longitudinal_dispersivity
+    post_x = 2.0 * u * u * b_max + 2.0 * u * np.sqrt(u * u * b_max * b_max + a_post)
+    col_post = np.searchsorted(v_cin, (v_cout_lo - r_vpv) - r_vpv * post_x / length)  # smallest V_cin
+    col_pre = np.searchsorted(v_cin, (v_cout_hi - r_vpv) + r_vpv * pre_x / length)  # largest V_cin
+    # Scalar (global-max) half-widths, applied to every row via the band centre. Taking the max over
+    # all cout rows is conservative: a row whose front sits in a slow / zero-flow plateau (large tau,
+    # wide local transition) sets the half-width for all rows, so an interior zero-flow gap straddled
+    # by a misaligned cout bin is never under-covered. +1 absorbs the searchsorted rounding.
     hw_post = max(int(np.max(center - col_post)), 1) + 1
     hw_pre = max(int(np.max(col_pre - center)), 1) + 1
-    if hw_post + hw_pre >= n_cin_edges // 2:
-        return False
+    lo = np.clip(center - hw_post, 0, n_cin_bins - 1)
+    hi = np.clip(center + hw_pre - 1, 0, n_cin_bins - 1)
 
-    # Bin-averaged C_F over the stripe: I evaluated at both cout edges. Columns are clipped to the
-    # real data edges, which the warm-start extension makes saturated, so out-of-range columns
-    # carry frac 0/1 and telescope away in the cin-edge difference below.
-    cols = center[:, None] + np.arange(-hw_post, hw_pre + 1)[None, :]
+    # Warm-start data-start tail: drop the band to column 0 where the breakthrough is still
+    # unsaturated at cin edge 0. x0 is the breakthrough coordinate of the lower cout edge measured
+    # from V_cin[0] (the smallest x0 over the bin, hence the most-broken-through / largest |D_t0|);
+    # D_t0 floors at _DT_FLOOR so the zero-dispersion limit gives x0 != 0 -> saturated -> no spurious
+    # widening. The leading zero-flow plateau that triggers this keeps full_band bounded by the
+    # plateau length, independent of the record length.
+    x0 = (v_cout_lo - v_cin[0] - r_vpv) * length / r_vpv
+    tau0 = np.maximum(t_cout_lo - tedges_days[0], 0.0)
+    dt0 = np.maximum(molecular_diffusivity * tau0 + longitudinal_dispersivity * np.maximum(x0 + length, 0.0), _DT_FLOOR)
+    non_saturated0 = np.abs(x0) < u * 2.0 * np.sqrt(dt0)
+    lo[non_saturated0] = 0
+    return lo, hi
+
+
+def _pv_band_values(
+    *,
+    col_start: npt.NDArray[np.intp],
+    full_band: int,
+    cumulative_volume_at_cout: npt.NDArray[np.floating],
+    cumulative_volume_at_cin: npt.NDArray[np.floating],
+    cout_tedges_days: npt.NDArray[np.floating],
+    tedges_days: npt.NDArray[np.floating],
+    r_vpv: float,
+    length: float,
+    molecular_diffusivity: float,
+    longitudinal_dispersivity: float,
+    retardation_factor: float,
+    velocity: npt.NDArray[np.floating],
+) -> npt.NDArray[np.floating]:
+    r"""Bin-averaged ``C_F`` stripe for one streamtube on the shared band (values pass).
+
+    ``C_F`` over a cout bin is ``(I(x_hi) - I(x_lo)) / dx`` with the closed-form antiderivative
+    ``I`` evaluated at both cout edges over the band cin edges, plus the same closed-form
+    retardation correction as the slow quadrature. The stripe is the band itself: each row spans
+    cin edges ``col_start[k] .. col_start[k] + full_band`` (``full_band + 1`` edges), so the
+    coefficient for band offset ``b`` (cin bin ``col_start[k] + b``) is ``frac[b] - frac[b + 1]``.
+    The zero-dispersion limit is exact here too: ``D_t`` floors to ``_DT_FLOOR``, so ``C_F`` is a
+    step smoothed by ~1e-15.
+
+    Returns
+    -------
+    coeff : ndarray, shape (n_cout_bins, full_band)
+        Per-row, per-band-offset coefficient ``frac[:, :-1] - frac[:, 1:]`` already aligned to the
+        banded buffer (offset 0 -> cin bin ``col_start[k]``).
+    """
+    v_cin = cumulative_volume_at_cin
+    n_cin_edges = v_cin.size
+    v_cout_lo, v_cout_hi = cumulative_volume_at_cout[:-1], cumulative_volume_at_cout[1:]
+    t_cout_lo, t_cout_hi = cout_tedges_days[:-1], cout_tedges_days[1:]
+
+    # Bin-averaged C_F over the band: I evaluated at both cout edges on the full_band + 1 cin edges
+    # of each row's band. Edges are clipped to the real data edges, which the warm-start extension
+    # makes saturated, so out-of-range edges carry frac 0/1 and telescope away in the difference.
+    cols = col_start[:, None] + np.arange(full_band + 1)[None, :]
     cc = np.clip(cols, 0, n_cin_edges - 1)
     v_c, t_c = v_cin[cc], tedges_days[cc]
     sw_lo = (v_cout_lo[:, None] - v_c - r_vpv) * length / r_vpv
     sw_hi = (v_cout_hi[:, None] - v_c - r_vpv) * length / r_vpv
+
+    # No dispersion: C_R is the step H(x); its exact bin-average is the fraction of the cout bin with
+    # x > 0, and at a zero-width (dv_cout = 0) cout bin it is the point value 0.5*(1 + sign(x_lo)).
+    # This matches the dense kernel's zero-dispersion branch bit-for-bit (the floored erf form would
+    # instead give 0 at dx = 0, dropping the step at a gap-straddling misaligned cout bin).
+    if molecular_diffusivity == 0.0 and longitudinal_dispersivity == 0.0:
+        dx = sw_hi - sw_lo
+        with np.errstate(divide="ignore", invalid="ignore"):
+            frac = (np.maximum(sw_hi, 0.0) - np.maximum(sw_lo, 0.0)) / dx
+        frac = np.where(dx > 0.0, frac, 0.5 + 0.5 * np.sign(sw_lo))
+        return frac[:, :-1] - frac[:, 1:]
+
     dt_lo = np.maximum(
         molecular_diffusivity * np.maximum(t_cout_lo[:, None] - t_c, 0.0)
         + longitudinal_dispersivity * np.maximum(sw_lo + length, 0.0),
@@ -315,12 +280,7 @@ def _accumulate_pv_banded(
         excess = np.where(velocity > 0.0, (retardation_factor - 1.0) * molecular_diffusivity / velocity, 0.0)
         frac -= excess[:, None] * density_binavg
 
-    coeff = frac[:, :-1] - frac[:, 1:]
-    cin_bin = cols[:, :-1]
-    rows = np.broadcast_to(np.arange(center.size)[:, None], coeff.shape)
-    valid = (cin_bin >= 0) & (cin_bin < n_cin_edges - 1)
-    np.add.at(accumulated_coeff, (rows[valid], cin_bin[valid]), coeff[valid])
-    return True
+    return frac[:, :-1] - frac[:, 1:]
 
 
 def _closed_form_coeff_matrix(
@@ -336,22 +296,26 @@ def _closed_form_coeff_matrix(
     retardation_factor: float,
     extend_tedges: bool,
     saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
-    force_dense: bool = False,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool_]]:
-    """Build the forward coefficient matrix W (``cout = W @ cin``) via the closed-form C_F.
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp], npt.NDArray[np.bool_]]:
+    """Build the banded forward operator (``cout = W @ cin``) via the closed-form C_F.
 
     Mirrors :func:`gwtransport.diffusion._infiltration_to_extraction_coeff_matrix`
     (per-streamtube loop over pore volumes, 100-year warm-start extension, residence-time
-    validity) but computes the bin-averaged flux concentration in closed form
-    (:func:`_flux_breakthrough_fraction`) instead of 16-point Gauss-Legendre quadrature. The
-    result reproduces the slow module's C_F to machine precision when the cout grid aligns
-    with the flow grid. ``streamline_length``, ``molecular_diffusivity``, and
+    validity) but computes the bin-averaged flux concentration in closed form instead of
+    16-point Gauss-Legendre quadrature, and stores it in BANDED layout: row ``k`` of the dense
+    operator ``W`` is ``band_vals[k]`` placed at columns ``[col_start[k], col_start[k] + full_band)``.
+    The build runs in two passes over the pore-volume loop -- a cheap geometry pass that sizes the
+    per-row band union, then a values pass that scatters each streamtube's ``C_F`` stripe into the
+    banded buffer. The result reproduces the slow module's ``C_F`` to machine precision when the
+    cout grid aligns with the flow grid. ``streamline_length``, ``molecular_diffusivity``, and
     ``longitudinal_dispersivity`` are per-pore-volume arrays (length ``len(aquifer_pore_volumes)``).
 
     Returns
     -------
-    coeff_matrix : ndarray, shape (n_cout_bins, n_cin_bins)
-        Forward coefficient matrix, NaN replaced with zero.
+    band_vals : ndarray, shape (n_cout_bins, full_band)
+        Banded forward weights, NaN replaced with zero.
+    col_start : ndarray of int, shape (n_cout_bins,)
+        First cin-bin column of each cout row's band.
     valid_cout_bins : ndarray of bool, shape (n_cout_bins,)
         Output bins with complete breakthrough information for every streamtube.
     """
@@ -391,10 +355,6 @@ def _closed_form_coeff_matrix(
     )
     valid_cout_bins = ~np.any(np.isnan(rt_at_cout_tedges[:, :-1]) | np.isnan(rt_at_cout_tedges[:, 1:]), axis=0)
 
-    # Elapsed time tau[i, j] = t_cout_i - t_cin_j (the moving-frame age). Geometric xi and
-    # tau are all the closed form needs -- no per-cell residence-time inversion.
-    tau = np.maximum(cout_tedges_days[:, None] - tedges_days[None, :], 0.0)
-
     # Fluid (unretarded) velocity in each cout bin: q_cout * L / V_pore (V_pore folded in
     # per streamtube below). q_cout = dV_cout / dt_cout.
     dv_cout = np.diff(cumulative_volume_at_cout)
@@ -402,9 +362,9 @@ def _closed_form_coeff_matrix(
     with np.errstate(divide="ignore", invalid="ignore"):
         q_cout = np.where(dt_cout > 0, dv_cout / dt_cout, 0.0)
 
-    # Slowest cin-side flow rate, used by the banded build to bound the broken-through band width
-    # (the slowest flow gives the steepest dD_t/dx). Zero when flow is everywhere zero -> banding
-    # falls back to the dense kernel.
+    # Slowest cin-side flow rate, used to bound the broken-through band width (the slowest flow
+    # gives the steepest dD_t/dx). Zero when flow is everywhere zero -> the band widens (capped
+    # at n_cin_bins), and the resulting no-flow rows are masked invalid anyway.
     with np.errstate(divide="ignore", invalid="ignore"):
         cin_flow = np.diff(cumulative_volume_at_cin) / np.diff(tedges_days)
     positive_cin_flow = cin_flow[cin_flow > 0.0]
@@ -412,50 +372,59 @@ def _closed_form_coeff_matrix(
 
     n_cout_bins = len(cout_tedges) - 1
     n_cin_bins = len(flow)
-    accumulated_coeff = np.zeros((n_cout_bins, n_cin_bins))
+
+    # PASS 1 (geometry): per-streamtube band bounds (lo, hi) in cin-bin columns; accumulate the
+    # per-row union over streamtubes. union_lo / union_hi are the min / max bounds per cout row.
+    union_lo = np.full(n_cout_bins, n_cin_bins - 1, dtype=np.intp)
+    union_hi = np.zeros(n_cout_bins, dtype=np.intp)
+    geometry = []
     for i_pv, v_pore in enumerate(aquifer_pore_volumes):
         r_vpv = retardation_factor * v_pore
         length = float(streamline_length[i_pv])
         d_m = float(molecular_diffusivity[i_pv])
         alpha_l = float(longitudinal_dispersivity[i_pv])
-        velocity = q_cout * length / v_pore
-        # Banded build for the dispersive case. The zero-dispersion step function (no band to
-        # find) and a band wider than half the matrix fall back to the dense kernel, so the cost
-        # never exceeds -- and is bit-identical to -- the dense build.
-        if (
-            not force_dense
-            and (d_m > 0.0 or alpha_l > 0.0)
-            and _accumulate_pv_banded(
-                accumulated_coeff=accumulated_coeff,
-                cumulative_volume_at_cout=cumulative_volume_at_cout,
-                cumulative_volume_at_cin=cumulative_volume_at_cin,
-                cout_tedges_days=cout_tedges_days,
-                tedges_days=tedges_days,
-                r_vpv=r_vpv,
-                length=length,
-                molecular_diffusivity=d_m,
-                longitudinal_dispersivity=alpha_l,
-                retardation_factor=retardation_factor,
-                velocity=velocity,
-                min_cin_flow=min_cin_flow,
-                saturation_threshold=saturation_threshold,
-            )
-        ):
-            continue
-        step_widths = (cumulative_volume_at_cout[:, None] - cumulative_volume_at_cin[None, :] - r_vpv) * length / r_vpv
-        frac = _flux_breakthrough_fraction(
-            step_widths=step_widths,
-            tau=tau,
+        lo, hi = _pv_band_geometry(
+            cumulative_volume_at_cout=cumulative_volume_at_cout,
+            cumulative_volume_at_cin=cumulative_volume_at_cin,
+            cout_tedges_days=cout_tedges_days,
+            tedges_days=tedges_days,
+            r_vpv=r_vpv,
+            length=length,
             molecular_diffusivity=d_m,
             longitudinal_dispersivity=alpha_l,
-            streamline_len=length,
+            min_cin_flow=min_cin_flow,
+            saturation_threshold=saturation_threshold,
+            n_cin_bins=n_cin_bins,
+        )
+        np.minimum(union_lo, lo, out=union_lo)
+        np.maximum(union_hi, hi, out=union_hi)
+        geometry.append((r_vpv, length, d_m, alpha_l, v_pore))
+
+    col_start = union_lo
+    full_band = min(int(np.max(union_hi - union_lo)) + 1, n_cin_bins)
+    band_vals = np.zeros((n_cout_bins, full_band))
+
+    # PASS 2 (values): each streamtube's C_F stripe is built on the shared band (col_start,
+    # full_band), so its coeff is already offset-aligned and accumulates directly into the buffer.
+    for r_vpv, length, d_m, alpha_l, v_pore in geometry:
+        velocity = q_cout * length / v_pore
+        band_vals += _pv_band_values(
+            col_start=col_start,
+            full_band=full_band,
+            cumulative_volume_at_cout=cumulative_volume_at_cout,
+            cumulative_volume_at_cin=cumulative_volume_at_cin,
+            cout_tedges_days=cout_tedges_days,
+            tedges_days=tedges_days,
+            r_vpv=r_vpv,
+            length=length,
+            molecular_diffusivity=d_m,
+            longitudinal_dispersivity=alpha_l,
             retardation_factor=retardation_factor,
             velocity=velocity,
         )
-        accumulated_coeff += frac[:, :-1] - frac[:, 1:]
 
-    coeff_matrix = accumulated_coeff / len(aquifer_pore_volumes)
-    return np.nan_to_num(coeff_matrix, nan=0.0), valid_cout_bins
+    band_vals /= len(aquifer_pore_volumes)
+    return np.nan_to_num(band_vals, nan=0.0), col_start, valid_cout_bins
 
 
 def infiltration_to_extraction(
@@ -558,7 +527,7 @@ def infiltration_to_extraction(
     molecular_diffusivity = _broadcast_to_pore_volumes(molecular_diffusivity, n_pore_volumes)
     longitudinal_dispersivity = _broadcast_to_pore_volumes(longitudinal_dispersivity, n_pore_volumes)
 
-    coeff_matrix, valid_cout_bins = _closed_form_coeff_matrix(
+    band_vals, col_start, valid_cout_bins = _closed_form_coeff_matrix(
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
@@ -572,11 +541,14 @@ def infiltration_to_extraction(
         saturation_threshold=saturation_threshold,
     )
 
-    cout = coeff_matrix @ cin
+    n_cin = len(cin)
+    full_band = band_vals.shape[1]
+    cols = np.clip(col_start[:, None] + np.arange(full_band), 0, n_cin - 1)
+    cout = np.einsum("kb,kb->k", band_vals, cin[cols])
 
     # Mark output bins invalid where no input has broken through (spin-up) or the output
     # bin extends beyond the input data range.
-    total_coeff = np.sum(coeff_matrix, axis=1)
+    total_coeff = band_vals.sum(axis=1)
     cout[(total_coeff < _EPSILON_COEFF_SUM) | ~valid_cout_bins] = np.nan
     return cout
 
@@ -684,7 +656,7 @@ def extraction_to_infiltration(
     longitudinal_dispersivity = _broadcast_to_pore_volumes(longitudinal_dispersivity, n_pore_volumes)
 
     n_cin = len(tedges) - 1
-    w_forward, valid_cout_bins = _closed_form_coeff_matrix(
+    band_vals, col_start, valid_cout_bins = _closed_form_coeff_matrix(
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
@@ -698,13 +670,13 @@ def extraction_to_infiltration(
         saturation_threshold=saturation_threshold,
     )
 
-    return solve_inverse_transport(
-        w_forward=w_forward,
-        observed=cout,
-        n_output=n_cin,
+    return _solve_reverse_banded(
+        band_vals=band_vals,
+        col_start=col_start,
+        valid_cout_bins=valid_cout_bins,
+        cout=cout,
+        n_cin=n_cin,
         regularization_strength=regularization_strength,
-        valid_rows=valid_cout_bins,
-        warn_rank_deficient=True,
     )
 
 

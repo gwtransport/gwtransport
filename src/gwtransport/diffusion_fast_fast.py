@@ -79,12 +79,13 @@ from gwtransport._diffusion_shared import (
     _broadcast_to_pore_volumes,
     _cout_cumulative_volume,
     _extend_tedges_flag,
+    _solve_reverse_banded,
     _validate_inputs,
 )
 from gwtransport._time import dt_to_days, tedges_to_days
 from gwtransport.diffusion_fast import _DEFAULT_SATURATION_THRESHOLD, _closed_form_coeff_matrix
 from gwtransport.residence_time import residence_time
-from gwtransport.utils import cumulative_flow_volume, solve_inverse_transport
+from gwtransport.utils import cumulative_flow_volume
 
 # Samples per native bin used to discretise the 1D breakthrough antiderivative ``Ibar``. Higher =
 # more accurate ``Ibar`` interpolation (advection+micro error ~ O(1/_KERNEL_FINE^2)) at the cost of
@@ -575,7 +576,7 @@ def extraction_to_infiltration(
     longitudinal_dispersivity = _broadcast_to_pore_volumes(longitudinal_dispersivity, n_pv)
 
     n_cin = len(tedges) - 1
-    w_forward, valid_cout_bins = _closed_form_coeff_matrix(
+    band_vals, col_start, valid_cout_bins = _closed_form_coeff_matrix(
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
@@ -589,13 +590,13 @@ def extraction_to_infiltration(
         saturation_threshold=saturation_threshold,
     )
 
-    return solve_inverse_transport(
-        w_forward=w_forward,
-        observed=cout,
-        n_output=n_cin,
+    return _solve_reverse_banded(
+        band_vals=band_vals,
+        col_start=col_start,
+        valid_cout_bins=valid_cout_bins,
+        cout=cout,
+        n_cin=n_cin,
         regularization_strength=regularization_strength,
-        valid_rows=valid_cout_bins,
-        warn_rank_deficient=True,
     )
 
 
