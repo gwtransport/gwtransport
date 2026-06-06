@@ -2415,3 +2415,30 @@ def test_validate_diffusion_inputs_raises_on_bad_input(path, mutate, match_regex
     bad = mutate(_good_diffusion_inputs())
     with pytest.raises(ValueError, match=match_regex):
         _validate_diffusion_inputs(**bad)
+
+
+def test_cout_tedges_unit_mismatch_matches_aligned():
+    """cout_tedges in a different datetime64 resolution than tedges gives the same result.
+
+    The cumulative-volume interpolation reduces both edge arrays to a shared day axis; a
+    regression where np.interp received the raw datetime64 arrays silently returned all-NaN
+    when cout_tedges and tedges carried different units (e.g. ns vs us).
+    """
+    n = 60
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D").as_unit("us")
+    # Same instants, nanosecond resolution.
+    cout_tedges_ns = pd.DatetimeIndex(pd.to_datetime(tedges.values).as_unit("ns"))
+    kwargs = {
+        "cin": np.full(n, 5.0),
+        "flow": np.full(n, 100.0),
+        "tedges": tedges,
+        "aquifer_pore_volumes": np.array([300.0]),
+        "streamline_length": 50.0,
+        "molecular_diffusivity": 1e-3,
+        "longitudinal_dispersivity": 0.5,
+    }
+    aligned = infiltration_to_extraction(cout_tedges=tedges, **kwargs)
+    mismatched = infiltration_to_extraction(cout_tedges=cout_tedges_ns, **kwargs)
+
+    assert np.isfinite(mismatched).sum() == np.isfinite(aligned).sum() > 0
+    np.testing.assert_array_equal(mismatched, aligned)
