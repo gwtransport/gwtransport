@@ -3,9 +3,10 @@ Shared closed-form helpers for the Kreft-Zuber flux-concentration transport modu
 
 This private module holds the pieces common to :mod:`gwtransport.diffusion_fast` and
 :mod:`gwtransport.diffusion_fast_fast`: the breakthrough antiderivative, the retardation
-flux-coefficient correction, input validation, and the small per-streamtube / spin-up
-helpers. Both modules import from here so the closed-form math is defined once and produces
-bit-identical floating-point results regardless of which module evaluates it.
+flux-coefficient correction, input validation, the banded Tikhonov reverse solve, and the small
+per-streamtube / spin-up helpers. Both modules import from here so these primitives are defined once
+and evaluate bit-identically in either module (the modules' overall transport is *not* identical:
+diffusion_fast is exact, diffusion_fast_fast approximate).
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -144,8 +145,9 @@ def _cout_cumulative_volume(
     window starting before the input data stays correctly aligned). Otherwise the cout edges are
     interpolated from the infiltration cumulative-volume curve. Shared by
     :func:`gwtransport.diffusion_fast._closed_form_coeff_matrix` and
-    :func:`gwtransport.diffusion_fast_fast.infiltration_to_extraction` so the forward (approximate)
-    and reverse (exact) paths place the cout grid on identical volume coordinates.
+    :func:`gwtransport.diffusion_fast_fast._build_forward_operator` so every path --
+    diffusion_fast (exact) and diffusion_fast_fast's forward and reverse (both approximate, and built
+    from the same operator) -- places the cout grid on identical volume coordinates.
 
     Parameters
     ----------
@@ -324,15 +326,15 @@ def _solve_reverse_banded(
 ) -> npt.NDArray[np.floating]:
     """Normalize, decouple the warm-start tail, and solve the banded Tikhonov inverse.
 
-    Shared by :func:`gwtransport.diffusion_fast.extraction_to_infiltration` and
-    :func:`gwtransport.diffusion_fast_fast.extraction_to_infiltration`, which build the same banded
-    forward operator and must therefore produce byte-identical inverses. The steps are:
+    Shared by :func:`gwtransport.diffusion_fast.extraction_to_infiltration` (which feeds the exact
+    closed-form banded operator) and :func:`gwtransport.diffusion_fast_fast.extraction_to_infiltration`
+    (which feeds the approximate banded ``G . M`` operator). The steps are:
 
     1. Zero invalid rows (incomplete breakthrough) and normalize the remaining rows to sum to 1 --
        the banded solver's ``W x ~= observed`` precondition.
     2. Decouple the warm-start data-start tail. With a leading zero-flow plateau and ``D_m > 0`` the
        forward operator carries a negative warm-start coefficient at the data-start columns (kept in
-       the forward band so the forward ``C_F`` is exact); their net column sum is ``<= 0``, so the
+       the forward band so the forward ``C_F`` is reproduced); their net column sum is ``<= 0``, so the
        banded normal-equation solver would leave them unregularized -- a large, unregularized
        ``WᵀW`` diagonal coupled to the spin-up nullspace, which is indefinite and breaks the Cholesky
        factorisation. These columns are the unrecoverable spin-up region (NaN in the dense and the
@@ -342,7 +344,8 @@ def _solve_reverse_banded(
     Parameters
     ----------
     band_vals : ndarray, shape (n_cout_bins, full_band)
-        Banded forward weights from :func:`gwtransport.diffusion_fast._closed_form_coeff_matrix`.
+        Banded forward weights -- from :func:`gwtransport.diffusion_fast._closed_form_coeff_matrix`
+        (exact) or :func:`gwtransport.diffusion_fast_fast._banded_forward_matrix` (approximate ``G . M``).
     col_start : ndarray of int, shape (n_cout_bins,)
         First cin-bin column of each cout row's band.
     valid_cout_bins : ndarray of bool, shape (n_cout_bins,)

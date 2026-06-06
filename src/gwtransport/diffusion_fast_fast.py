@@ -44,15 +44,19 @@ Accuracy (vs :mod:`gwtransport.diffusion_fast`, flow-independent unless noted)
   molecular breakthrough. **Use** :mod:`gwtransport.diffusion_fast` **for exact results in this
   regime.**
 
-The inverse (:func:`extraction_to_infiltration`) is exact: it builds the true
-:mod:`gwtransport.diffusion_fast` forward operator and deconvolves it (the Tikhonov solve dominates
-the cost, and deconvolution wants the true operator). A round trip therefore recovers the input to
-the forward accuracy.
+The inverse (:func:`extraction_to_infiltration`) deconvolves the *same* approximate operator the
+forward applies. It assembles ``W = G . M`` directly in banded form (one ``Ibar`` gather plus a
+sparse ``G . M`` product -- no per-pore-volume closed-form loop, no dense ``(n_cout, n_cin)`` matrix)
+and solves it with banded Tikhonov regularisation (banded Cholesky, ``O(n * band**2)``), so it is
+much faster than :mod:`gwtransport.diffusion_fast`'s reverse, especially for many streamtubes.
+Inverting exactly the forward operator makes a round trip self-consistent: it recovers the input up
+to the deconvolution conditioning, with the only error being the forward operator's approximation of
+:mod:`gwtransport.diffusion_fast` (use that module when the approximation is unacceptable).
 
 Available functions:
 
 - :func:`infiltration_to_extraction` -- forward transport (approximate).
-- :func:`extraction_to_infiltration` -- inverse via Tikhonov regularisation (exact operator).
+- :func:`extraction_to_infiltration` -- inverse via banded Tikhonov regularisation (approximate).
 - :func:`gamma_infiltration_to_extraction` -- gamma-distributed APVD (forward).
 - :func:`gamma_extraction_to_infiltration` -- same, inverse.
 
@@ -70,6 +74,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 from scipy.ndimage import gaussian_filter1d
+from scipy.sparse import coo_array
 
 from gwtransport import gamma
 from gwtransport._diffusion_shared import (
@@ -83,7 +88,7 @@ from gwtransport._diffusion_shared import (
     _validate_inputs,
 )
 from gwtransport._time import dt_to_days, tedges_to_days
-from gwtransport.diffusion_fast import _DEFAULT_SATURATION_THRESHOLD, _closed_form_coeff_matrix
+from gwtransport.diffusion_fast import _DEFAULT_SATURATION_THRESHOLD
 from gwtransport.residence_time import residence_time
 from gwtransport.utils import cumulative_flow_volume
 
@@ -198,9 +203,8 @@ def _eval_antideriv(
     return np.where(dv > grid[-1], dv - mean_r_vpv, out)
 
 
-def _advection_micro_native(
+def _advection_micro_band(
     *,
-    cin: npt.NDArray[np.floating],
     cumulative_volume_at_cin: npt.NDArray[np.floating],
     cumulative_volume_at_cout: npt.NDArray[np.floating],
     grid: npt.NDArray[np.floating],
@@ -209,32 +213,39 @@ def _advection_micro_native(
     off_lo: float,
     off_hi: float,
     warmstart: bool,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
-    """Apply the exact ``D_m=0`` breakthrough banded on the native cumulative-volume grid.
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp]]:
+    """Banded ``D_m=0`` advection+macro+micro coefficients on the native cumulative-volume grid.
 
     For each cout bin, gathers the band of cin edges whose breakthrough offset falls in
     ``[off_lo, off_hi]`` (a conservative fixed window from ``searchsorted``, mirroring
-    :func:`gwtransport.diffusion_fast._accumulate_pv_banded`), evaluates ``Ibar`` at the native edge
-    offsets, and telescopes the edge-differences into per-cin-bin coefficients. With ``warmstart``
-    the grid is extended by one wide virtual bin each side carrying the constant boundary value
-    (``cin[0]`` / ``cin[-1]``), reproducing the 100-year warm-start.
+    :func:`gwtransport.diffusion_fast._closed_form_coeff_matrix`), evaluates ``Ibar`` at the native
+    edge offsets, and telescopes the edge-differences into per-cin-bin coefficients. With
+    ``warmstart`` the cin axis is extended by one wide virtual bin each side carrying the constant
+    boundary value (``cin[0]`` / ``cin[-1]``), reproducing the 100-year warm-start.
+
+    The coefficients depend only on the volume grid (not on ``cin``), so this band is built once and
+    shared: :func:`infiltration_to_extraction` applies it to the (extended) ``cin``, and
+    :func:`extraction_to_infiltration` folds it onto the real cin axis to assemble the banded
+    operator it deconvolves -- guaranteeing forward and reverse use the same operator.
 
     Returns
     -------
-    cout_micro : ndarray
-        Advection + macro + micro outlet concentration, length ``len(cumulative_volume_at_cout) - 1``.
-    row_sum : ndarray
-        Per-bin coefficient sum (1 where fully broken through; used to mask spin-up when not warm-started).
+    coeff : ndarray, shape (n_cout, band)
+        Per-(cout bin, band slot) coefficient.
+    cin_bin : ndarray of int, shape (n_cout, band)
+        Column index of each coefficient on the (warm-start-extended when ``warmstart``) cin axis:
+        ``cin_ext[cin_bin]`` for the forward, ``clip(cin_bin - warmstart, 0, n_cin - 1)`` for the
+        real cin axis in the reverse.
     """
     vi = cumulative_volume_at_cin
     vc = cumulative_volume_at_cout
     if warmstart:
         big = abs(off_hi) + abs(off_lo) + (vc[-1] - vc[0]) + (vi[-1] - vi[0]) + 1.0
         vi_ext = np.concatenate([[vi[0] - big], vi, [vi[-1] + big]])
-        cin_ext = np.concatenate([[cin[0]], cin, [cin[-1]]])
+        n_cin_ext = vi.size + 1  # (vi.size - 1) real bins + 2 virtual boundary bins
     else:
         vi_ext = vi
-        cin_ext = cin
+        n_cin_ext = vi.size - 1
 
     vc_lo, vc_hi = vc[:-1], vc[1:]
     w = vc_hi - vc_lo
@@ -255,9 +266,8 @@ def _advection_micro_native(
     with np.errstate(divide="ignore", invalid="ignore"):
         frac_edge = np.where(w[:, None] > 0.0, (ibar_hi - ibar_lo) / w[:, None], 0.0)
     coeff = frac_edge[:, :-1] - frac_edge[:, 1:]
-    cin_bin = np.clip(cols[:, :-1], 0, len(cin_ext) - 1)
-    cout_micro = (coeff * cin_ext[cin_bin]).sum(axis=1)
-    return cout_micro, coeff.sum(axis=1)
+    cin_bin = np.clip(cols[:, :-1], 0, n_cin_ext - 1)
+    return coeff, cin_bin
 
 
 def _valid_cout_bins(
@@ -290,6 +300,174 @@ def _valid_cout_bins(
         direction="extraction_to_infiltration",
     )
     return ~np.any(np.isnan(rt[:, :-1]) | np.isnan(rt[:, 1:]), axis=0)
+
+
+def _build_forward_operator(
+    *,
+    flow: npt.NDArray[np.floating],
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    flow_out: npt.NDArray[np.floating] | None,
+    aquifer_pore_volumes: npt.NDArray[np.floating],
+    streamline_length: npt.NDArray[np.floating],
+    molecular_diffusivity: npt.NDArray[np.floating],
+    longitudinal_dispersivity: npt.NDArray[np.floating],
+    retardation_factor: float,
+    extend: bool,
+    saturation_threshold: float,
+) -> (
+    tuple[npt.NDArray[np.floating], npt.NDArray[np.intp], float, npt.NDArray[np.bool_], npt.NDArray[np.floating]] | None
+):
+    r"""Build the cin-independent pieces of the approximate banded forward operator ``W = G . M``.
+
+    Both directions share this build: the advection+macro+micro band ``M`` (``coeff`` / ``cin_bin``,
+    :func:`_advection_micro_band`), the molecular time-Gaussian width ``sigma_bins`` (the operator
+    ``G``), the residence-time ``valid`` mask, and the per-row coefficient sum ``row_sum``. Because
+    the band depends only on the volume grid (not on ``cin`` / ``cout``), forward transport and
+    reverse deconvolution operate on exactly the same operator.
+
+    Returns
+    -------
+    coeff : ndarray, shape (n_cout, band)
+        Banded ``M`` coefficients.
+    cin_bin : ndarray of int, shape (n_cout, band)
+        Column indices of ``coeff`` on the warm-start-extended cin axis.
+    sigma_bins : float
+        Molecular Gaussian width in output-bin units (0 -> ``G`` is the identity).
+    valid : ndarray of bool, shape (n_cout,)
+        Output bins with residence time finite at both edges (complete breakthrough).
+    row_sum : ndarray, shape (n_cout,)
+        Per-cout-bin coefficient sum of ``M`` (1 where fully broken through).
+
+    None
+        Returned instead of the tuple when there is no through-flow (nothing breaks through).
+    """
+    tedges_days = tedges_to_days(tedges)
+    cout_tedges_days = tedges_to_days(cout_tedges, ref=tedges[0])
+    cumulative_volume_at_cin = cumulative_flow_volume(flow, dt_to_days(tedges))
+    total_volume = float(cumulative_volume_at_cin[-1])
+    if total_volume <= 0.0:
+        return None
+
+    cumulative_volume_at_cout = _cout_cumulative_volume(
+        flow_out=flow_out,
+        cout_tedges=cout_tedges,
+        cout_tedges_days=cout_tedges_days,
+        tedges_days=tedges_days,
+        cumulative_volume_at_cin=cumulative_volume_at_cin,
+    )
+
+    n_cout = len(cout_tedges) - 1
+    mean_bin_volume = total_volume / len(flow)
+    grid, ibar, mean_r_vpv, off_lo, off_hi = _summed_antideriv(
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        streamline_length=streamline_length,
+        longitudinal_dispersivity=longitudinal_dispersivity,
+        retardation_factor=retardation_factor,
+        mean_bin_volume=mean_bin_volume,
+        saturation_threshold=saturation_threshold,
+    )
+    coeff, cin_bin = _advection_micro_band(
+        cumulative_volume_at_cin=cumulative_volume_at_cin,
+        cumulative_volume_at_cout=cumulative_volume_at_cout,
+        grid=grid,
+        ibar=ibar,
+        mean_r_vpv=mean_r_vpv,
+        off_lo=off_lo,
+        off_hi=off_hi,
+        warmstart=extend,
+    )
+
+    # Molecular diffusion: a single mean-streamtube time-domain Gaussian on the outlet signal.
+    # sigma_t^2 = 2*D_m*tau_bt*(r_vpv/L)^2/Q^2, with tau_bt = R*mean(V_pore)/Q the mean breakthrough
+    # time and Q = total_volume/total_time the flow-weighted mean throughflow. sigma_t (days) is
+    # converted with the OUTPUT-grid mean bin width (not the flow grid -- they differ for a coarse
+    # cout grid); a smear wider than the record cannot be resolved, so it is capped at n_cout.
+    total_days = float(tedges_days[-1] - tedges_days[0])
+    q_mean = total_volume / total_days
+    tau_bt = retardation_factor * float(aquifer_pore_volumes.mean()) / q_mean
+    sigma_t2 = (
+        2.0 * float(molecular_diffusivity.mean()) * tau_bt * (mean_r_vpv / float(streamline_length.mean())) ** 2
+    ) / q_mean**2
+    mean_cout_dt = (cout_tedges_days[-1] - cout_tedges_days[0]) / n_cout
+    sigma_bins = min(float(np.sqrt(sigma_t2)) / mean_cout_dt, float(n_cout))
+
+    # Mask bins beyond the data range (and, without warm-start, incompletely-broken-through spin-up
+    # bins). residence_time uses the extended grid when warm-starting so spin-up bins stay valid.
+    work_tedges = tedges
+    if extend:
+        edge_values = tedges.to_numpy().copy()
+        delta = np.timedelta64(36500, "D")
+        edge_values[0] -= delta
+        edge_values[-1] += delta
+        work_tedges = pd.DatetimeIndex(edge_values)
+    valid = _valid_cout_bins(
+        flow=flow,
+        work_tedges=work_tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=retardation_factor,
+    )
+    return coeff, cin_bin, sigma_bins, valid, coeff.sum(axis=1)
+
+
+def _banded_forward_matrix(
+    *,
+    coeff: npt.NDArray[np.floating],
+    cin_bin: npt.NDArray[np.intp],
+    extend: bool,
+    n_cin: int,
+    sigma_bins: float,
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp]]:
+    """Assemble ``W = G . M`` as a per-row contiguous band for :func:`_solve_reverse_banded`.
+
+    ``M`` (advection + macro + microdispersion) is scattered from the native band onto the real cin
+    axis, folding the warm-start virtual columns into the boundary bins
+    (``clip(cin_bin - warmstart, 0, n_cin - 1)``, so ``M @ cin`` equals the forward's
+    ``coeff @ cin_ext`` exactly). ``G`` is the molecular time-Gaussian along the output-bin axis (the
+    same ``mode="nearest"`` kernel the forward applies with :func:`scipy.ndimage.gaussian_filter1d`).
+    The returned band carries the forward operator verbatim; :func:`_solve_reverse_banded` masks the
+    spin-up rows/columns and normalizes, so a forward-then-inverse round trip is self-consistent.
+
+    Returns
+    -------
+    band_vals : ndarray, shape (n_cout, full_band)
+        Forward weights in banded layout (explicit zeros outside each row's support).
+    col_start : ndarray of int, shape (n_cout,)
+        First real-cin column of each row's band.
+    """
+    n_cout = coeff.shape[0]
+    rows = np.broadcast_to(np.arange(n_cout)[:, None], coeff.shape)
+    real_col = np.clip(cin_bin - int(extend), 0, n_cin - 1)
+    m_mat = coo_array((coeff.ravel(), (rows.ravel(), real_col.ravel())), shape=(n_cout, n_cin)).tocsr()
+
+    lw = min(int(6.0 * sigma_bins + 0.5), n_cout - 1) if sigma_bins > 0.0 else 0
+    if lw > 0:
+        offsets = np.arange(-lw, lw + 1)
+        kernel = np.exp(-0.5 * (offsets / sigma_bins) ** 2)
+        kernel /= kernel.sum()
+        g_rows = np.repeat(np.arange(n_cout), offsets.size)
+        g_cols = np.clip(np.arange(n_cout)[:, None] + offsets[None, :], 0, n_cout - 1).ravel()
+        g_mat = coo_array((np.tile(kernel, n_cout), (g_rows, g_cols)), shape=(n_cout, n_cout)).tocsr()
+        w_mat = (g_mat @ m_mat).tocsr()
+    else:
+        w_mat = m_mat
+
+    # CSR -> contiguous per-row band. Each W row is the union of overlapping contiguous M bands, so
+    # it stays contiguous (a flow spike that briefly opens a gap only adds explicit interior zeros).
+    w_mat.sort_indices()
+    indptr, indices, data = w_mat.indptr, w_mat.indices, w_mat.data
+    nonempty = np.diff(indptr) > 0
+    col_start = np.zeros(n_cout, dtype=np.intp)
+    last_col = np.zeros(n_cout, dtype=np.intp)
+    col_start[nonempty] = indices[indptr[:-1][nonempty]]
+    last_col[nonempty] = indices[indptr[1:][nonempty] - 1]
+    full_band = int((last_col[nonempty] - col_start[nonempty] + 1).max()) if nonempty.any() else 1
+
+    band_vals = np.zeros((n_cout, full_band))
+    rows_of_nz = np.repeat(np.arange(n_cout), np.diff(indptr))
+    band_vals[rows_of_nz, indices - col_start[rows_of_nz]] = data
+    return band_vals, col_start
 
 
 def infiltration_to_extraction(
@@ -363,7 +541,7 @@ def infiltration_to_extraction(
     gwtransport.diffusion_fast.infiltration_to_extraction : Exact (machine-precision) counterpart;
         use it when approximation is unacceptable, especially in the molecular-dominant regime.
     gwtransport.diffusion.infiltration_to_extraction : Quadrature reference.
-    extraction_to_infiltration : Inverse operation (exact operator).
+    extraction_to_infiltration : Inverse operation (deconvolves this same operator).
     :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion.
     """
     tedges = pd.DatetimeIndex(tedges)
@@ -394,82 +572,31 @@ def infiltration_to_extraction(
     longitudinal_dispersivity = _broadcast_to_pore_volumes(longitudinal_dispersivity, n_pv)
 
     n_cout = len(cout_tedges) - 1
-    tedges_days = tedges_to_days(tedges)
-    cout_tedges_days = tedges_to_days(cout_tedges, ref=tedges[0])
-    cumulative_volume_at_cin = cumulative_flow_volume(flow, dt_to_days(tedges))
-    total_volume = float(cumulative_volume_at_cin[-1])
-    if total_volume <= 0.0:
-        # No through-flow: nothing breaks through (matches diffusion_fast's all-NaN result).
-        return np.full(n_cout, np.nan)
-
-    cumulative_volume_at_cout = _cout_cumulative_volume(
-        flow_out=flow_out,
+    extend = _extend_tedges_flag(spinup)
+    operator = _build_forward_operator(
+        flow=flow,
+        tedges=tedges,
         cout_tedges=cout_tedges,
-        cout_tedges_days=cout_tedges_days,
-        tedges_days=tedges_days,
-        cumulative_volume_at_cin=cumulative_volume_at_cin,
-    )
-
-    mean_bin_volume = total_volume / len(flow)
-    grid, ibar, mean_r_vpv, off_lo, off_hi = _summed_antideriv(
+        flow_out=flow_out,
         aquifer_pore_volumes=aquifer_pore_volumes,
         streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
-        mean_bin_volume=mean_bin_volume,
+        extend=extend,
         saturation_threshold=saturation_threshold,
     )
+    if operator is None:
+        # No through-flow: nothing breaks through (matches diffusion_fast's all-NaN result).
+        return np.full(n_cout, np.nan)
+    coeff, cin_bin, sigma_bins, valid, row_sum = operator
 
-    extend = _extend_tedges_flag(spinup)
-    cout_micro, row_sum = _advection_micro_native(
-        cin=cin,
-        cumulative_volume_at_cin=cumulative_volume_at_cin,
-        cumulative_volume_at_cout=cumulative_volume_at_cout,
-        grid=grid,
-        ibar=ibar,
-        mean_r_vpv=mean_r_vpv,
-        off_lo=off_lo,
-        off_hi=off_hi,
-        warmstart=extend,
-    )
-
-    # Molecular diffusion: a single mean-streamtube time-domain Gaussian on the outlet signal.
-    # sigma_t^2 = 2*D_m*tau_bt*(r_vpv/L)^2/Q^2, with tau_bt = R*mean(V_pore)/Q the mean breakthrough
-    # time and Q = total_volume/total_time the flow-weighted mean throughflow (= mean(flow) on a
-    # uniform grid). Applied before masking so it operates on NaN-free values; edge-padded.
-    total_days = float(tedges_days[-1] - tedges_days[0])
-    q_mean = total_volume / total_days
-    tau_bt = retardation_factor * float(aquifer_pore_volumes.mean()) / q_mean
-    sigma_t2 = (
-        2.0 * float(molecular_diffusivity.mean()) * tau_bt * (mean_r_vpv / float(streamline_length.mean())) ** 2
-    ) / q_mean**2
-    # The smear acts on cout_micro, so sigma_t (days) is converted with the OUTPUT-grid mean bin
-    # width (not the flow grid -- they differ for a coarse cout grid). A smear wider than the record
-    # washes the signal to a constant and cannot be resolved; cap it (tiny flow drives sigma_bins ->
-    # huge, but those bins are masked by residence time below anyway).
-    mean_cout_dt = (cout_tedges_days[-1] - cout_tedges_days[0]) / n_cout
-    sigma_bins = min(np.sqrt(sigma_t2) / mean_cout_dt, float(n_cout))
+    # Apply the advection+macro+micro band M to the (warm-start-extended) cin, then the molecular
+    # time-Gaussian G. The Gaussian runs before masking so it operates on NaN-free values.
+    cin_ext = np.concatenate([[cin[0]], cin, [cin[-1]]]) if extend else cin
+    cout_micro = (coeff * cin_ext[cin_bin]).sum(axis=1)
     cout = cout_micro if sigma_bins == 0.0 else gaussian_filter1d(cout_micro, sigma_bins, mode="nearest", truncate=6.0)
-
-    # Mask bins beyond the data range (and, without warm-start, incompletely-broken-through spin-up
-    # bins). residence_time uses the extended grid when warm-starting so spin-up bins stay valid.
-    work_tedges = tedges
-    if extend:
-        edge_values = tedges.to_numpy().copy()
-        delta = np.timedelta64(36500, "D")
-        edge_values[0] -= delta
-        edge_values[-1] += delta
-        work_tedges = pd.DatetimeIndex(edge_values)
-    valid = _valid_cout_bins(
-        flow=flow,
-        work_tedges=work_tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=retardation_factor,
-    )
-    cout = cout.copy()
-    cout[(row_sum < _EPSILON_COEFF_SUM) | ~valid] = np.nan
-    return cout
+    return np.where((row_sum >= _EPSILON_COEFF_SUM) & valid, cout, np.nan)
 
 
 def extraction_to_infiltration(
@@ -488,14 +615,19 @@ def extraction_to_infiltration(
     spinup: str | float | None = "constant",
     saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
-    """Reconstruct infiltration concentration from extracted water (deconvolution, exact operator).
+    """Reconstruct infiltration concentration from extracted water (fast approximate deconvolution).
 
-    Builds the **exact** closed-form forward coefficient matrix of
-    :func:`gwtransport.diffusion_fast.extraction_to_infiltration` and solves ``W @ cin = cout`` by
-    Tikhonov regularization. Unlike the approximate forward, the reverse uses the true operator: the
-    deconvolution cost is dominated by the solve, not the matrix build, and an accurate operator is
-    what the ill-posed inverse needs. A forward-then-inverse round trip recovers the input to the
-    forward accuracy.
+    Inverts the **same** approximate operator the forward applies: it assembles ``W = G . M`` (the
+    advection+macro+micro band ``M`` times the molecular time-Gaussian ``G``) directly in banded form
+    and deconvolves it with banded Tikhonov regularization (:func:`_solve_reverse_banded` -- banded
+    Cholesky on the normal equations, ``O(n * band**2)``). It builds ``W`` from one ``Ibar`` gather
+    plus a sparse ``G . M`` product -- no per-pore-volume closed-form loop and no dense
+    ``(n_cout, n_cin)`` matrix -- so it is much faster than
+    :func:`gwtransport.diffusion_fast.extraction_to_infiltration` (which evaluates the exact
+    breakthrough per streamtube), especially for many streamtubes. Because the deconvolved operator
+    is exactly the forward operator, a forward-then-inverse round trip recovers ``cin`` up to the
+    deconvolution conditioning and regularization; the approximation lives entirely in the forward
+    operator vs :mod:`gwtransport.diffusion_fast`.
 
     Parameters
     ----------
@@ -520,7 +652,9 @@ def extraction_to_infiltration(
     retardation_factor : float, optional
         Retardation factor (default 1.0).
     regularization_strength : float, optional
-        Tikhonov regularization parameter (default 1e-10).
+        Tikhonov regularization parameter (default 1e-10). Must be strictly positive: the banded
+        solver relies on it to make the normal equations positive-definite (it cannot return the
+        dense ``lambda = 0`` minimum-norm solution).
     flow_out : array-like or None, optional
         Extraction flow rate [m3/day] on the output grid (aligned to ``cout_tedges``). See
         :func:`infiltration_to_extraction`. Default None.
@@ -535,17 +669,11 @@ def extraction_to_infiltration(
         Bin-averaged concentration in the infiltrating water. Length ``len(tedges) - 1``.
         NaN where no extraction data constrains the bin.
 
-    Warns
-    -----
-    UserWarning
-        When the forward matrix is rank-deficient (constant flow with residence time an
-        integer multiple of the time step). Adjust ``aquifer_pore_volumes`` slightly
-        (e.g. multiply by 1.001) to fix.
-
     See Also
     --------
-    infiltration_to_extraction : Forward operation (approximate).
-    gwtransport.diffusion_fast.extraction_to_infiltration : Same exact matrix build and solve.
+    infiltration_to_extraction : Forward operation (the operator inverted here).
+    gwtransport.diffusion_fast.extraction_to_infiltration : Exact (machine-precision) counterpart;
+        use it when the approximation is unacceptable.
     :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion.
     """
     tedges = pd.DatetimeIndex(tedges)
@@ -576,7 +704,8 @@ def extraction_to_infiltration(
     longitudinal_dispersivity = _broadcast_to_pore_volumes(longitudinal_dispersivity, n_pv)
 
     n_cin = len(tedges) - 1
-    band_vals, col_start, valid_cout_bins = _closed_form_coeff_matrix(
+    extend = _extend_tedges_flag(spinup)
+    operator = _build_forward_operator(
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
@@ -586,14 +715,21 @@ def extraction_to_infiltration(
         molecular_diffusivity=molecular_diffusivity,
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
-        extend_tedges=_extend_tedges_flag(spinup),
+        extend=extend,
         saturation_threshold=saturation_threshold,
     )
+    if operator is None:
+        # No through-flow: nothing constrains the infiltration signal.
+        return np.full(n_cin, np.nan)
+    coeff, cin_bin, sigma_bins, valid, _row_sum = operator
 
+    band_vals, col_start = _banded_forward_matrix(
+        coeff=coeff, cin_bin=cin_bin, extend=extend, n_cin=n_cin, sigma_bins=sigma_bins
+    )
     return _solve_reverse_banded(
         band_vals=band_vals,
         col_start=col_start,
-        valid_cout_bins=valid_cout_bins,
+        valid_cout_bins=valid,
         cout=cout,
         n_cin=n_cin,
         regularization_strength=regularization_strength,
@@ -716,8 +852,8 @@ def gamma_extraction_to_infiltration(
 
     Convenience wrapper around :func:`extraction_to_infiltration` that discretizes a (shifted)
     gamma aquifer pore-volume distribution into ``n_bins`` equal-probability streamtubes. Provide
-    either (mean, std) or (alpha, beta); ``loc`` defaults to 0. Uses the exact forward operator (see
-    :func:`extraction_to_infiltration`).
+    either (mean, std) or (alpha, beta); ``loc`` defaults to 0. Fast approximate banded deconvolution
+    (see :func:`extraction_to_infiltration`).
 
     Parameters
     ----------
