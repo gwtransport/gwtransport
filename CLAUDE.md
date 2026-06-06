@@ -57,6 +57,8 @@ You are a quality gatekeeper, not just an implementer. Before writing code:
 - **Line length**: 120 characters.
 - **Type hints**: Required for all public functions. Use `npt.ArrayLike` for array inputs, `npt.NDArray[np.floating]` for array outputs, `pd.DatetimeIndex` for time edges. Use built-in Python generics (`list`, `tuple`, `dict`, `X | None`) -- NEVER import from `typing`.
 - **Vectorization**: ALWAYS prefer vectorized NumPy/SciPy/pandas operations over Python for-loops. If you find yourself writing a loop over array elements, stop and find the vectorized equivalent.
+- **Leanness -- one path**: Avoid alternative code paths for special cases that the main computation already handles. Prefer a single general path; only branch when a case genuinely cannot be expressed by the general one (e.g. a different solver that requires a different layout), and then adapt at that boundary rather than duplicating the computation.
+- **Leanness -- no cruft**: Don't introduce small helper functions used only once or twice -- inline them. Don't keep legacy functions out of obligation; delete them (this package has no backwards-compatibility requirement, so there are no shims, aliases, or deprecated paths to preserve).
 - **Formatting**: Enforced by linting with ruff and prettier. Do not fight the formatter.
 - **Parameter names**: Use descriptive names consistent with domain conventions. For example, use `flow` for flow rate, `cin`/`cout` for concentrations, `tedges` for time edges, `xedges` for spatial edges.
 
