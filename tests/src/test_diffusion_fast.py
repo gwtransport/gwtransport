@@ -6,7 +6,13 @@ import pytest
 from numpy.testing import assert_allclose
 
 from gwtransport import gamma as gamma_utils
-from gwtransport._time import tedges_to_days
+from gwtransport._diffusion_shared import (
+    _DT_FLOOR,
+    _breakthrough_antideriv,
+    _cout_cumulative_volume,
+    _retardation_excess_density,
+)
+from gwtransport._time import dt_to_days, tedges_to_days
 from gwtransport.advection import infiltration_to_extraction as advection_i2e
 from gwtransport.diffusion import extraction_to_infiltration as diffusion_exact_reverse
 from gwtransport.diffusion import gamma_infiltration_to_extraction as diffusion_gamma_i2e
@@ -21,7 +27,7 @@ from gwtransport.diffusion_fast import (
     infiltration_to_extraction,
 )
 from gwtransport.gamma import mean_std_loc_to_alpha_beta
-from gwtransport.utils import partial_isin
+from gwtransport.utils import cumulative_flow_volume, partial_isin
 
 # =============================================================================
 # Helper: create common test data for transport functions
@@ -1997,7 +2003,7 @@ def test_step_input_retardation_diffusion_variable_flow_matches_diffusion_exact(
     """Retardation correction reproduces ``gwtransport.diffusion`` under VARIABLE flow.
 
     The R != 1 with D_m > 0 regime triggers the per-cout-bin ``velocity`` retardation
-    correction in :func:`gwtransport.diffusion_fast._flux_breakthrough_fraction` (the
+    correction in :func:`gwtransport.diffusion_fast._pv_band_values` (the
     per-edge mechanism would otherwise weight the molecular-diffusion flux by R). Under
     constant flow the correction's velocity is a single value, so a bug that used a mean
     velocity instead of the per-bin ``q_cout`` would be invisible. Variable flow makes
@@ -2353,33 +2359,119 @@ def test_streamline_length_zero_rejected():
 # =============================================================================
 # Banded-build regression tests
 #
-# The forward coefficient matrix is built only on the breakthrough band -- the cin bins with a
-# non-zero coefficient -- because the bin-averaged C_F is saturated to 0 or 1 outside it. These
-# tests pin that the banded production path reproduces the full dense build (`force_dense=True`,
-# which fills every column), so no genuine coefficient is dropped. They complement the
-# equivalence tests above, which already anchor the banded output against the independent
-# `gwtransport.diffusion` quadrature.
+# The forward operator is stored in banded layout (band_vals, col_start): row k of the dense W is
+# band_vals[k] placed at columns [col_start[k], col_start[k] + full_band). The band spans only the
+# breakthrough transition -- the cin bins with a non-zero coefficient -- because the bin-averaged
+# C_F saturates to 0 or 1 outside it. These tests densify the banded production build and pin it
+# against an EXPLICIT full-width dense reference (`_dense_closed_form_w`) that evaluates the same
+# closed-form C_F on EVERY cin column, so no genuine coefficient is dropped: an under-sized band
+# drops O(1e-2..1e-4) and would fail at once. The reference shares the antiderivative kernel, so
+# it is bit-identical to the band where both are non-saturated. They complement the public-API
+# equivalence tests above, which anchor against the independent `gwtransport.diffusion` quadrature.
 # =============================================================================
 
 
-def _banded_and_dense_w(*, flow, tedges, cout_tedges, pv, length, d_m, alpha_l, retardation, flow_out):
-    """Build the forward matrix both ways: banded production path and forced-dense reference."""
+def _densify_banded(band_vals, col_start, n_cin):
+    """Place each row's band at columns [col_start[k], col_start[k] + full_band) -> dense (n_cout, n_cin)."""
+    n_cout, full_band = band_vals.shape
+    dense = np.zeros((n_cout, n_cin))
+    cols = col_start[:, None] + np.arange(full_band)[None, :]
+    rows = np.broadcast_to(np.arange(n_cout)[:, None], cols.shape)
+    in_range = (cols >= 0) & (cols < n_cin)
+    dense[rows[in_range], cols[in_range]] = band_vals[in_range]
+    return dense
+
+
+def _banded_dense(*, flow, tedges, cout_tedges, pv, length, d_m, alpha_l, retardation, flow_out):
+    """Densified banded production build of the forward operator."""
     nb = len(pv)
-    kwargs = {
-        "flow": flow,
-        "tedges": tedges,
-        "cout_tedges": cout_tedges,
-        "flow_out": flow_out,
-        "aquifer_pore_volumes": pv,
-        "streamline_length": np.full(nb, length),
-        "molecular_diffusivity": np.full(nb, d_m),
-        "longitudinal_dispersivity": np.full(nb, alpha_l),
-        "retardation_factor": retardation,
-        "extend_tedges": _extend_tedges_flag("constant"),
-    }
-    w_banded, _ = _closed_form_coeff_matrix(**kwargs, force_dense=False)
-    w_dense, _ = _closed_form_coeff_matrix(**kwargs, force_dense=True)
-    return w_banded, w_dense
+    band_vals, col_start, _ = _closed_form_coeff_matrix(
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        flow_out=flow_out,
+        aquifer_pore_volumes=pv,
+        streamline_length=np.full(nb, length),
+        molecular_diffusivity=np.full(nb, d_m),
+        longitudinal_dispersivity=np.full(nb, alpha_l),
+        retardation_factor=retardation,
+        extend_tedges=_extend_tedges_flag("constant"),
+    )
+    return _densify_banded(band_vals, col_start, len(flow))
+
+
+def _dense_closed_form_w(*, flow, tedges, cout_tedges, pv, length, d_m, alpha_l, retardation, flow_out):
+    """Explicit full-width dense closed-form C_F: the same kernel evaluated on EVERY cin column.
+
+    Reference for the banded build -- it shares the antiderivative kernel and the volume/tau setup,
+    so on the breakthrough band the two are computed from identical floating-point inputs (bit-exact
+    for R=1; the R != 1 erfcx retardation tail is far below machine epsilon). Outside the band the
+    closed form saturates to exactly 0 or 1 in the cin-edge difference, which the banded build drops.
+    """
+    nb = len(pv)
+    streamline_length = np.full(nb, length)
+    molecular_diffusivity = np.full(nb, d_m)
+    longitudinal_dispersivity = np.full(nb, alpha_l)
+
+    work_tedges = pd.DatetimeIndex([
+        tedges[0] - pd.Timedelta("36500D"),
+        *list(tedges[1:-1]),
+        tedges[-1] + pd.Timedelta("36500D"),
+    ])
+    tedges_days = tedges_to_days(work_tedges)
+    cout_tedges_days = tedges_to_days(cout_tedges, ref=work_tedges[0])
+    v_cin = cumulative_flow_volume(flow, dt_to_days(work_tedges))
+    v_cout = _cout_cumulative_volume(
+        flow_out=flow_out,
+        cout_tedges=cout_tedges,
+        cout_tedges_days=cout_tedges_days,
+        tedges_days=tedges_days,
+        cumulative_volume_at_cin=v_cin,
+    )
+    tau = np.maximum(cout_tedges_days[:, None] - tedges_days[None, :], 0.0)
+    dv_cout = np.diff(v_cout)
+    dt_cout = np.diff(cout_tedges_days)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        q_cout = np.where(dt_cout > 0, dv_cout / dt_cout, 0.0)
+
+    n_cout = len(cout_tedges) - 1
+    n_cin = len(flow)
+    acc = np.zeros((n_cout, n_cin))
+    for i_pv, v_pore in enumerate(pv):
+        r_vpv = retardation * v_pore
+        ell = float(streamline_length[i_pv])
+        dm = float(molecular_diffusivity[i_pv])
+        al = float(longitudinal_dispersivity[i_pv])
+        velocity = q_cout * ell / v_pore
+        step_widths = (v_cout[:, None] - v_cin[None, :] - r_vpv) * ell / r_vpv
+        x_lo, x_hi = step_widths[:-1], step_widths[1:]
+        dx = x_hi - x_lo
+        if dm == 0.0 and al == 0.0:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                frac = (np.maximum(x_hi, 0.0) - np.maximum(x_lo, 0.0)) / dx
+            frac = np.where(dx > 0.0, frac, 0.5 + 0.5 * np.sign(x_lo))
+        else:
+            xi = step_widths + ell
+            dt_var = np.maximum(dm * tau + al * np.maximum(xi, 0.0), _DT_FLOOR)
+            antideriv, s, gaussian = _breakthrough_antideriv(step_widths, dt_var)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                frac = np.where(dx > 0.0, np.diff(antideriv, axis=0) / dx, 0.0)
+            if retardation != 1.0 and dm > 0.0:
+                density_binavg = _retardation_excess_density(
+                    x_lo=x_lo,
+                    x_hi=x_hi,
+                    dx=dx,
+                    d_lo=dt_var[:-1],
+                    d_hi=dt_var[1:],
+                    s_lo=s[:-1],
+                    s_hi=s[1:],
+                    g_lo=gaussian[:-1],
+                    g_hi=gaussian[1:],
+                )
+                excess = np.where(velocity > 0.0, (retardation - 1.0) * dm / velocity, 0.0)
+                frac -= excess[:, None] * density_binavg
+        acc += frac[:, :-1] - frac[:, 1:]
+    return np.nan_to_num(acc / len(pv), nan=0.0)
 
 
 def _assert_banded_matches_dense(w_banded, w_dense, retardation):
@@ -2388,8 +2480,7 @@ def _assert_banded_matches_dense(w_banded, w_dense, retardation):
         np.testing.assert_array_equal(w_banded, w_dense)
     else:
         # R != 1: the closed-form retardation correction's erfcx tail is not bitwise zero, but is
-        # far below machine epsilon (measured well below 1e-100 where banding engages, exactly 0 on
-        # the single-PV rows). atol=1e-20 keeps enormous margin while still catching any genuinely
+        # far below machine epsilon. atol=1e-20 keeps margin while still catching any genuinely
         # dropped coefficient (an under-sized band drops O(1e-2..1e-4)).
         np.testing.assert_allclose(w_banded, w_dense, atol=1e-20, rtol=0.0)
 
@@ -2397,7 +2488,6 @@ def _assert_banded_matches_dense(w_banded, w_dense, retardation):
 @pytest.mark.parametrize(
     ("d_m", "alpha_l", "retardation"),
     [
-        (0.0, 0.0, 1.0),  # pure advection (routes to the dense step kernel; confirms routing)
         (0.05, 0.0, 1.0),  # weak molecular diffusion
         (2.0, 0.0, 1.0),  # strong molecular diffusion (wide band)
         (0.0, 2.0, 1.0),  # pure mechanical dispersion
@@ -2405,28 +2495,64 @@ def _assert_banded_matches_dense(w_banded, w_dense, retardation):
         (0.0, 2.0, 2.7),  # mechanical dispersion + retardation
     ],
 )
-def test_banded_equals_force_dense_single_pv(d_m, alpha_l, retardation):
-    """Banded build reproduces the dense build across dispersion/retardation regimes (single PV).
+def test_banded_equals_dense_single_pv(d_m, alpha_l, retardation):
+    """Densified banded build reproduces the full-width dense closed form across regimes (single PV).
 
-    Geometry (pv=200, L=60) is chosen so every dispersive row genuinely engages banding rather
-    than tripping the dense fallback -- in particular the R != 1 rows exercise the banded
-    retardation correction, not a dense-vs-dense tautology.
+    Geometry (pv=200, L=60) keeps every dispersive row's band narrow, so the banded path -- not a
+    near-full band -- is exercised, including the R != 1 retardation correction.
     """
     n = 120
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     flow = np.full(n, 100.0)
-    w_banded, w_dense = _banded_and_dense_w(
+    common = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "pv": np.array([200.0]),
+        "length": 60.0,
+        "d_m": d_m,
+        "alpha_l": alpha_l,
+        "retardation": retardation,
+    }
+    w_banded = _banded_dense(**common, flow_out=flow)
+    w_dense = _dense_closed_form_w(**common, flow_out=flow)
+    _assert_banded_matches_dense(w_banded, w_dense, retardation)
+
+
+def test_banded_both_zero_equals_advection_step():
+    """Both-zero (D_m=0, alpha_L=0) forward equals a pure-advection step to ~1e-14.
+
+    The zero-dispersion case routes through the same banded path; D_t floors to ~1e-30 so C_F is a
+    step smoothed by ~1e-15. The densified band must reproduce the advection breakthrough operator,
+    whose entries are 0 or 1 on aligned grids.
+    """
+    n = 120
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    w_banded = _banded_dense(
         flow=flow,
         tedges=tedges,
         cout_tedges=tedges,
         pv=np.array([200.0]),
         length=60.0,
-        d_m=d_m,
-        alpha_l=alpha_l,
-        retardation=retardation,
+        d_m=0.0,
+        alpha_l=0.0,
+        retardation=1.0,
         flow_out=flow,
     )
-    _assert_banded_matches_dense(w_banded, w_dense, retardation)
+    # Pure-advection step reference: dense closed form's exact 0/1 breakthrough operator.
+    w_step = _dense_closed_form_w(
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        pv=np.array([200.0]),
+        length=60.0,
+        d_m=0.0,
+        alpha_l=0.0,
+        retardation=1.0,
+        flow_out=flow,
+    )
+    np.testing.assert_allclose(w_banded, w_step, atol=1e-15, rtol=0.0)
 
 
 def test_banded_variable_flow_wandering_center():
@@ -2434,17 +2560,18 @@ def test_banded_variable_flow_wandering_center():
     n = 120
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     flow = 100.0 * (1.0 + 0.3 * np.sin(2 * np.pi * np.arange(n) / 30.0))
-    w_banded, w_dense = _banded_and_dense_w(
-        flow=flow,
-        tedges=tedges,
-        cout_tedges=tedges,
-        pv=np.array([500.0]),
-        length=30.0,
-        d_m=0.5,
-        alpha_l=1.0,
-        retardation=1.0,
-        flow_out=flow,
-    )
+    common = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "pv": np.array([500.0]),
+        "length": 30.0,
+        "d_m": 0.5,
+        "alpha_l": 1.0,
+        "retardation": 1.0,
+    }
+    w_banded = _banded_dense(**common, flow_out=flow)
+    w_dense = _dense_closed_form_w(**common, flow_out=flow)
     np.testing.assert_array_equal(w_banded, w_dense)
 
 
@@ -2453,26 +2580,27 @@ def test_banded_multipv_union_of_bands(retardation):
     """Each streamtube's band sits at a different cin offset; the accumulated band is their union.
 
     The R != 1 case also guards the per-tube ``np.add.at`` accumulation of retardation-corrected
-    bands -- a per-tube indexing error would corrupt the overlap.
+    bands into the union buffer -- a per-tube offset error would corrupt the overlap.
     """
     n = 120
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     flow = np.full(n, 100.0)
-    w_banded, w_dense = _banded_and_dense_w(
-        flow=flow,
-        tedges=tedges,
-        cout_tedges=tedges,
-        pv=np.array([120.0, 200.0, 280.0]),
-        length=100.0,
-        d_m=1.0,
-        alpha_l=0.3,
-        retardation=retardation,
-        flow_out=flow,
-    )
+    common = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "pv": np.array([120.0, 200.0, 280.0]),
+        "length": 100.0,
+        "d_m": 1.0,
+        "alpha_l": 0.3,
+        "retardation": retardation,
+    }
+    w_banded = _banded_dense(**common, flow_out=flow)
+    w_dense = _dense_closed_form_w(**common, flow_out=flow)
     _assert_banded_matches_dense(w_banded, w_dense, retardation)
 
 
-def test_banded_nonuniform_cin_grid_equals_force_dense():
+def test_banded_nonuniform_cin_grid_equals_dense():
     """Non-uniform cin bins must not mis-size the band.
 
     The band edges are located by ``searchsorted`` on the cumulative-volume axis, not by a
@@ -2484,17 +2612,18 @@ def test_banded_nonuniform_cin_grid_equals_force_dense():
     tedges = pd.DatetimeIndex(pd.Timestamp("2020-01-01") + pd.to_timedelta(days, unit="D"))
     n = len(tedges) - 1
     flow = np.full(n, 100.0)
-    w_banded, w_dense = _banded_and_dense_w(
-        flow=flow,
-        tedges=tedges,
-        cout_tedges=tedges,
-        pv=np.array([800.0]),
-        length=60.0,
-        d_m=0.5,
-        alpha_l=1.0,
-        retardation=1.0,
-        flow_out=flow,
-    )
+    common = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "pv": np.array([800.0]),
+        "length": 60.0,
+        "d_m": 0.5,
+        "alpha_l": 1.0,
+        "retardation": 1.0,
+    }
+    w_banded = _banded_dense(**common, flow_out=flow)
+    w_dense = _dense_closed_form_w(**common, flow_out=flow)
     np.testing.assert_array_equal(w_banded, w_dense)
 
 
@@ -2509,28 +2638,29 @@ def test_banded_nonuniform_cin_grid_equals_force_dense():
         (0.001, 20.0, 50.0, 0.5, 100.0),
     ],
 )
-def test_banded_variable_flow_step_equals_force_dense(d_m, pv, length, flow_lo, flow_hi):
+def test_banded_variable_flow_step_equals_dense(d_m, pv, length, flow_lo, flow_hi):
     """Sharp flow step under-covers the band unless both conservative post bounds hold.
 
     The breakthrough at a cout bin in one flow era reaches injections from another era (different
     tau, hence different D_t), so a front-anchored band width would drop real coefficients. Both
     parameter rows would fail against an under-sized band (~1e-2..1e-4 error); the conservative
-    closed form must reproduce the dense build. Both engage banding (verified, not the fallback).
+    closed form must reproduce the full-width dense build.
     """
     n = 200
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     flow = np.concatenate([np.full(n // 2, flow_lo), np.full(n - n // 2, flow_hi)])
-    w_banded, w_dense = _banded_and_dense_w(
-        flow=flow,
-        tedges=tedges,
-        cout_tedges=tedges,
-        pv=np.array([pv]),
-        length=length,
-        d_m=d_m,
-        alpha_l=0.0,
-        retardation=2.0,
-        flow_out=flow,
-    )
+    common = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "pv": np.array([pv]),
+        "length": length,
+        "d_m": d_m,
+        "alpha_l": 0.0,
+        "retardation": 2.0,
+    }
+    w_banded = _banded_dense(**common, flow_out=flow)
+    w_dense = _dense_closed_form_w(**common, flow_out=flow)
     _assert_banded_matches_dense(w_banded, w_dense, 2.0)
 
 
@@ -2560,3 +2690,225 @@ def test_banded_retardation_matches_diffusion_exact():
     valid = ~np.isnan(cout_fast) & ~np.isnan(cout_exact)
     assert np.sum(valid) > 50
     assert_allclose(cout_fast[valid], cout_exact[valid], atol=1e-12, rtol=0.0)
+
+
+def test_banded_forward_masking_matches_diffusion():
+    """Banded forward output values AND NaN (spin-up / out-of-range) mask match the slow quadrature.
+
+    Guards that the banded einsum and the total-coefficient masking reproduce the slow module's
+    finite/NaN pattern, not just the in-band values.
+    """
+    n = 150
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = 100.0 * (1.0 + 0.2 * np.sin(2 * np.pi * np.arange(n) / 40.0))
+    cin = np.sin(np.linspace(0, 8, n)) + 1.0
+    kwargs = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "aquifer_pore_volumes": np.array([300.0]),
+        "molecular_diffusivity": 0.5,
+        "longitudinal_dispersivity": 1.0,
+        "retardation_factor": 1.0,
+        "flow_out": flow,
+    }
+    cout_fast = infiltration_to_extraction(cin=cin, streamline_length=40.0, **kwargs)
+    kwargs_exact = {k: v for k, v in kwargs.items() if k != "flow_out"}
+    cout_exact = diffusion_exact(cin=cin, streamline_length=np.array([40.0]), **kwargs_exact)
+    np.testing.assert_array_equal(np.isnan(cout_fast), np.isnan(cout_exact))
+    valid = ~np.isnan(cout_fast)
+    assert np.sum(valid) > 50
+    assert_allclose(cout_fast[valid], cout_exact[valid], atol=1e-12, rtol=0.0)
+
+
+def test_banded_inverse_roundtrip_nonuniform_cin_and_cout():
+    """Inverse round-trip on NON-uniform cin AND non-uniform (misaligned, sub-bin) cout.
+
+    Builds cout via the forward banded operator and deconvolves with the banded inverse on a
+    non-uniform cout grid that REFINES the non-uniform cin grid (each cin bin split into halves,
+    plus a sub-bin first edge), so the system is well-determined. Exercises col_start / full_band
+    on grids where a fixed-width band would mis-align; the smooth interior recovers tightly.
+    """
+    cin_widths = np.tile([1, 1, 2, 3], 40)
+    cin_days = np.concatenate(([0], np.cumsum(cin_widths)))
+    tedges = pd.DatetimeIndex(pd.Timestamp("2020-01-01") + pd.to_timedelta(cin_days, unit="D"))
+    n = len(tedges) - 1
+    flow = np.full(n, 100.0)
+    cin_true = np.sin(np.linspace(0, 10, n)) + 2.0
+
+    # Non-uniform cout that refines cin (each cin edge plus its midpoint), so cout is finer than cin
+    # and the inverse is well-posed despite the misaligned, non-uniform layout.
+    mids = 0.5 * (cin_days[:-1] + cin_days[1:])
+    cout_days = np.unique(np.concatenate([cin_days.astype(float), mids]))
+    cout_tedges = pd.DatetimeIndex(pd.Timestamp("2020-01-01") + pd.to_timedelta(cout_days, unit="D"))
+    flow_out = np.full(len(cout_tedges) - 1, 100.0)
+
+    fwd_kwargs = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([500.0]),
+        "streamline_length": 50.0,
+        "molecular_diffusivity": 0.5,
+        "longitudinal_dispersivity": 1.0,
+        "flow_out": flow_out,
+    }
+    cout = infiltration_to_extraction(cin=cin_true, **fwd_kwargs)
+    cout_filled = np.nan_to_num(cout, nan=0.0)
+    cin_rec = extraction_to_infiltration(cout=cout_filled, regularization_strength=1e-10, **fwd_kwargs)
+
+    # The interior (away from spin-up edges) is well-constrained; check it is recovered.
+    finite = ~np.isnan(cin_rec)
+    interior = finite.copy()
+    interior[: n // 4] = False
+    interior[-n // 4 :] = False
+    assert np.sum(interior) > 20
+    assert_allclose(cin_rec[interior], cin_true[interior], atol=5e-3, rtol=0.0)
+
+
+@pytest.mark.parametrize("n_lead", [1, 5, 12, 30], ids=["lead1", "lead5", "lead12", "lead30"])
+@pytest.mark.parametrize(("d_m", "alpha_l"), [(0.1, 0.0), (2.0, 0.0), (0.05, 0.5)], ids=["dm0.1", "dm2", "dm_al"])
+def test_banded_leading_zero_flow_warm_start_equals_dense(n_lead, d_m, alpha_l):
+    """Leading zero-flow plateau + dispersion: the band keeps the warm-start data-start tail.
+
+    Regression for the banded under-coverage bug. With ``flow[:n_lead] == 0`` the cumulative volume
+    is flat over the leading edges, so the front search lands the local band one or more columns
+    inside the record while a genuine warm-start coefficient (large ``tau`` -> large ``D_t`` at cin
+    edge 0, magnitude up to ~0.47 per row) remains at column 0 and spreads across the leading
+    plateau. A band that did not reach column 0 dropped it (~0.3..0.5 error). The densified band must
+    reproduce the full-width dense closed form bit-for-bit.
+    """
+    n = 200
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    flow[:n_lead] = 0.0
+    common = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "pv": np.array([300.0]),
+        "length": 50.0,
+        "d_m": d_m,
+        "alpha_l": alpha_l,
+        "retardation": 1.0,
+    }
+    w_banded = _banded_dense(**common, flow_out=flow)
+    w_dense = _dense_closed_form_w(**common, flow_out=flow)
+    np.testing.assert_array_equal(w_banded, w_dense)
+
+
+@pytest.mark.parametrize("retardation", [1.0, 2.0], ids=["R1", "R2"])
+def test_banded_band_sizing_misaligned_subbin_multipv(retardation):
+    """Band sizing on a misaligned, sub-bin cout grid (multi-PV, variable flow) equals the dense ref.
+
+    The cout grid is finer than -- and offset from -- the variable-flow cin grid, so each cout bin
+    straddles cin bins and the per-row band must track a non-integer front across multiple
+    streamtubes. R=1 is bit-identical to the full-width dense closed form; the R=2 erfcx retardation
+    tail sits far below machine epsilon (atol 1e-20). An under-sized band would drop O(1e-2..1e-4).
+    """
+    n = 120
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = 100.0 * (1.0 + 0.3 * np.sin(2 * np.pi * np.arange(n) / 25.0))
+    # Misaligned sub-bin cout: refine each cin bin into halves and offset the first edge.
+    cout_tedges = pd.date_range(tedges[0], tedges[-1], periods=2 * n + 1)
+    flow_out = np.repeat(flow, 2)
+    common = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "pv": np.array([200.0, 350.0, 500.0]),
+        "length": 50.0,
+        "d_m": 0.1,
+        "alpha_l": 0.5,
+        "retardation": retardation,
+    }
+    w_banded = _banded_dense(**common, flow_out=flow_out)
+    w_dense = _dense_closed_form_w(**common, flow_out=flow_out)
+    if retardation == 1.0:
+        np.testing.assert_array_equal(w_banded, w_dense)
+    else:
+        np.testing.assert_allclose(w_banded, w_dense, atol=1e-20, rtol=0.0)
+
+
+def test_leading_zero_flow_forward_matches_diffusion_exact():
+    """Forward with a leading zero-flow plateau + molecular diffusion matches the slow quadrature.
+
+    The leading ``n_lead`` zero-flow bins hold the cumulative volume flat; with ``D_m > 0`` the
+    warm-start constant breaks through the data-start edge with a large ``D_t``, contributing a
+    non-saturated coefficient at cin column 0. The banded build keeps it (regression for the
+    dropped-warm-start bug), so a constant ``cin`` -- whose flux concentration is itself a clean
+    Kreft-Zuber breakthrough -- reproduces ``gwtransport.diffusion`` to machine precision.
+    """
+    n = 200
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    flow[:12] = 0.0
+    cin = np.ones(n)
+    kwargs = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "aquifer_pore_volumes": np.array([300.0]),
+        "molecular_diffusivity": 0.1,
+        "longitudinal_dispersivity": 0.0,
+        "retardation_factor": 1.0,
+    }
+    cout_fast = infiltration_to_extraction(cin=cin, streamline_length=50.0, **kwargs)
+    cout_exact = diffusion_exact(cin=cin, streamline_length=np.array([50.0]), **kwargs)
+    # NaN (spin-up / out-of-range) mask must match, and the finite breakthrough is bit-exact.
+    np.testing.assert_array_equal(np.isnan(cout_fast), np.isnan(cout_exact))
+    valid = ~np.isnan(cout_fast)
+    assert np.sum(valid) > 100
+    assert_allclose(cout_fast[valid], cout_exact[valid], atol=1e-12, rtol=0.0)
+
+
+def test_leading_zero_flow_inverse_finite_and_matches_dense_reverse():
+    """Inverse with a leading zero-flow plateau + molecular diffusion returns finite (no LinAlgError).
+
+    The warm-start data-start tail makes the forward operator carry negative coefficients at the
+    leading columns; their non-positive column sum left the banded normal equations indefinite,
+    crashing ``cholesky_banded``. The warm-start tail is decoupled before the solve, so the inverse
+    now returns a finite result with no exception, and the well-determined interior (away from the
+    unrecoverable spin-up nullspace) matches the slow-module reverse.
+    """
+    n = 200
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    flow[:12] = 0.0
+    cin_true = 1.0 + 0.5 * np.sin(2 * np.pi * np.arange(n) / 40.0)
+    kwargs = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "aquifer_pore_volumes": np.array([300.0]),
+        "streamline_length": 50.0,
+        "molecular_diffusivity": 0.1,
+        "longitudinal_dispersivity": 0.0,
+        "retardation_factor": 1.0,
+    }
+    cout = infiltration_to_extraction(cin=cin_true, **kwargs)
+    cout_filled = np.nan_to_num(cout, nan=0.0)
+
+    with warn_module.catch_warnings():
+        warn_module.simplefilter("ignore")
+        cin_rec = extraction_to_infiltration(cout=cout_filled, regularization_strength=1e-10, **kwargs)
+        cin_ref = diffusion_exact_reverse(
+            cout=cout_filled,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([300.0]),
+            streamline_length=np.array([50.0]),
+            molecular_diffusivity=0.1,
+            longitudinal_dispersivity=0.0,
+            retardation_factor=1.0,
+        )
+
+    # No exception was raised, and the recovered signal is finite where defined (not all-NaN).
+    assert np.isfinite(cin_rec).any()
+    # The well-determined interior (away from the spin-up nullspace) matches the slow reverse.
+    interior = np.zeros(n, dtype=bool)
+    interior[n // 2 : n - 10] = True
+    both = interior & np.isfinite(cin_rec) & np.isfinite(cin_ref)
+    assert np.sum(both) > 50
+    assert_allclose(cin_rec[both], cin_ref[both], atol=1e-6, rtol=0.0)

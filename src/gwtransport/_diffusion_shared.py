@@ -17,6 +17,7 @@ import pandas as pd
 from scipy.special import erf, erfcx
 
 from gwtransport._time import dt_to_days
+from gwtransport.utils import solve_inverse_transport_banded
 
 # Minimum coefficient sum to consider an output bin valid.
 _EPSILON_COEFF_SUM = 1e-10
@@ -36,9 +37,9 @@ def _breakthrough_antideriv(
 
     Returns :math:`I(x) = \tfrac12 x + \tfrac12[x\,\operatorname{erf}(x/s) + (s/\sqrt\pi)e^{-(x/s)^2}]`
     with :math:`s = 2\sqrt{D_t}`, alongside ``s`` and the Gaussian factor ``exp(-(x/s)^2)`` (both
-    reused by the retardation correction). Shared by the dense kernel
-    (:func:`gwtransport.diffusion_fast._flux_breakthrough_fraction`) and the banded build, so both
-    compute identical floating-point results for the same inputs.
+    reused by the retardation correction). Shared by the banded ``C_F`` build
+    (:func:`gwtransport.diffusion_fast._pv_band_values`) and the slow quadrature, so both compute
+    identical floating-point results for the same inputs.
 
     Returns
     -------
@@ -310,3 +311,73 @@ def _validate_inputs(
         if np.any(flow_out < 0):
             msg = "flow_out must be non-negative (negative flow not supported)"
             raise ValueError(msg)
+
+
+def _solve_reverse_banded(
+    *,
+    band_vals: npt.NDArray[np.floating],
+    col_start: npt.NDArray[np.intp],
+    valid_cout_bins: npt.NDArray[np.bool_],
+    cout: npt.NDArray[np.floating],
+    n_cin: int,
+    regularization_strength: float,
+) -> npt.NDArray[np.floating]:
+    """Normalize, decouple the warm-start tail, and solve the banded Tikhonov inverse.
+
+    Shared by :func:`gwtransport.diffusion_fast.extraction_to_infiltration` and
+    :func:`gwtransport.diffusion_fast_fast.extraction_to_infiltration`, which build the same banded
+    forward operator and must therefore produce byte-identical inverses. The steps are:
+
+    1. Zero invalid rows (incomplete breakthrough) and normalize the remaining rows to sum to 1 --
+       the banded solver's ``W x ~= observed`` precondition.
+    2. Decouple the warm-start data-start tail. With a leading zero-flow plateau and ``D_m > 0`` the
+       forward operator carries a negative warm-start coefficient at the data-start columns (kept in
+       the forward band so the forward ``C_F`` is exact); their net column sum is ``<= 0``, so the
+       banded normal-equation solver would leave them unregularized -- a large, unregularized
+       ``WᵀW`` diagonal coupled to the spin-up nullspace, which is indefinite and breaks the Cholesky
+       factorisation. These columns are the unrecoverable spin-up region (NaN in the dense and the
+       slow-module inverses alike), so zeroing their band entries decouples them: the solver's
+       zero-diagonal path returns them as NaN and the remaining system is symmetric positive definite.
+
+    Parameters
+    ----------
+    band_vals : ndarray, shape (n_cout_bins, full_band)
+        Banded forward weights from :func:`gwtransport.diffusion_fast._closed_form_coeff_matrix`.
+    col_start : ndarray of int, shape (n_cout_bins,)
+        First cin-bin column of each cout row's band.
+    valid_cout_bins : ndarray of bool, shape (n_cout_bins,)
+        Output bins with complete breakthrough information.
+    cout : ndarray, shape (n_cout_bins,)
+        Observed extraction concentration.
+    n_cin : int
+        Number of infiltration bins (output length).
+    regularization_strength : float
+        Tikhonov parameter.
+
+    Returns
+    -------
+    ndarray, shape (n_cin,)
+        Recovered infiltration concentration; NaN for unconstrained / spin-up bins.
+    """
+    row_sums = band_vals.sum(axis=1)
+    valid = valid_cout_bins & (row_sums > _EPSILON_COEFF_SUM)
+    bn = band_vals.copy()
+    bn[~valid] = 0.0
+    bn[valid] /= row_sums[valid, None]
+
+    full_band = bn.shape[1]
+    band_cols = col_start[:, None] + np.arange(full_band)
+    in_range = band_cols < n_cin
+    band_cols_clipped = np.clip(band_cols, 0, n_cin - 1)
+    col_sum = np.zeros(n_cin)
+    np.add.at(col_sum, band_cols_clipped[in_range], bn[in_range])
+    inactive_col = col_sum <= _EPSILON_COEFF_SUM
+    bn[inactive_col[band_cols_clipped] & in_range] = 0.0
+
+    return solve_inverse_transport_banded(
+        band_vals=bn,
+        col_start=col_start,
+        observed=cout,
+        n_output=n_cin,
+        regularization_strength=regularization_strength,
+    )
