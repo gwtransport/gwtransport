@@ -63,7 +63,7 @@ from gwtransport._validation import (
 )
 from gwtransport.advection_utils import _densify_weights, _resolve_spinup_inputs
 from gwtransport.deposition_utils import _clipped_linear_integral
-from gwtransport.residence_time import residence_time
+from gwtransport.residence_time import residence_time_series
 from gwtransport.utils import (
     cumulative_flow_volume,
     linear_interpolate,
@@ -222,7 +222,7 @@ def compute_deposition_weights(
     cout_tedges_days = tedges_to_days(cout_tedges, ref=t0)
 
     flow_values = np.asarray(flow, dtype=float)
-    cout_rt_at_edges = residence_time(
+    cout_rt_at_edges = residence_time_series(
         flow=flow_values,
         flow_tedges=tedges,
         index=cout_tedges,

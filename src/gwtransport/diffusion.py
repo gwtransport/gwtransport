@@ -120,7 +120,7 @@ from gwtransport._validation import (
     _validate_scalar_or_matching_length,
     _validate_tedges_parity,
 )
-from gwtransport.residence_time import residence_time
+from gwtransport.residence_time import residence_time_series
 from gwtransport.utils import cumulative_flow_volume, solve_inverse_transport
 
 # Numerical tolerance for coefficient sum to determine valid output bins
@@ -516,7 +516,7 @@ def _infiltration_to_extraction_coeff_matrix(
 
     # Compute residence time at cout_tedges to identify valid output bins
     # RT is NaN for cout_tedges beyond the input data range
-    rt_at_cout_tedges = residence_time(
+    rt_at_cout_tedges = residence_time_series(
         flow=flow,
         flow_tedges=tedges,
         index=cout_tedges,

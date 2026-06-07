@@ -89,7 +89,7 @@ from gwtransport._diffusion_shared import (
 )
 from gwtransport._time import dt_to_days, tedges_to_days
 from gwtransport.diffusion_fast import _DEFAULT_SATURATION_THRESHOLD
-from gwtransport.residence_time import residence_time
+from gwtransport.residence_time import residence_time_series
 from gwtransport.utils import cumulative_flow_volume
 
 # Samples per native bin used to discretise the 1D breakthrough antiderivative ``Ibar``. Higher =
@@ -291,7 +291,7 @@ def _valid_cout_bins(
     ndarray of bool, shape (len(cout_tedges) - 1,)
         True where the output bin is fully informed.
     """
-    rt = residence_time(
+    rt = residence_time_series(
         flow=flow,
         flow_tedges=work_tedges,
         index=cout_tedges,

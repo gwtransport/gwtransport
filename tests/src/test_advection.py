@@ -29,7 +29,7 @@ from gwtransport.advection_utils import (
     _resolve_spinup_mask as _banded_mask,
 )
 from gwtransport.fronttracking.math import ConstantRetardation
-from gwtransport.residence_time import residence_time
+from gwtransport.residence_time import residence_time_series
 from gwtransport.utils import (
     compute_time_edges,
     partial_isin,
@@ -3933,7 +3933,7 @@ def _dense_weights_reference(*, tedges, cout_tedges, aquifer_pore_volumes, flow,
     cout_in_cin_overlap = partial_isin(bin_edges_in=cout_tedges_days, bin_edges_out=cin_tedges_days)
     zero_flow_cout = (cout_in_cin_overlap @ flow) == 0
 
-    rt_edges_2d = residence_time(
+    rt_edges_2d = residence_time_series(
         flow=flow,
         flow_tedges=tedges,
         index=cout_tedges,
