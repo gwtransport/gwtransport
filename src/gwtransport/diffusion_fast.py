@@ -88,7 +88,7 @@ from gwtransport._diffusion_shared import (
     _validate_inputs,
 )
 from gwtransport._time import dt_to_days, tedges_to_days
-from gwtransport.residence_time import residence_time
+from gwtransport.residence_time import residence_time_series
 from gwtransport.utils import cumulative_flow_volume
 
 # Default saturation threshold U for the banded build: a cout/cin pair is only evaluated
@@ -345,7 +345,7 @@ def _closed_form_coeff_matrix(
     )
 
     # Residence time identifies cout bins with complete breakthrough (NaN beyond data).
-    rt_at_cout_tedges = residence_time(
+    rt_at_cout_tedges = residence_time_series(
         flow=flow,
         flow_tedges=work_tedges,
         index=cout_tedges,

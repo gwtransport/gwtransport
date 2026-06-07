@@ -21,7 +21,7 @@ Module Reference
    * - ``advection``
      - :py:func:`~gwtransport.advection.gamma_infiltration_to_extraction`, :py:func:`~gwtransport.advection.infiltration_to_extraction`, :py:func:`~gwtransport.advection.infiltration_to_extraction_nonlinear_sorption`
    * - ``residence_time``
-     - :py:func:`~gwtransport.residence_time.residence_time`, :py:func:`~gwtransport.residence_time.residence_time_mean`, :py:func:`~gwtransport.residence_time.freundlich_retardation`
+     - :py:func:`~gwtransport.residence_time.residence_time_full`, :py:func:`~gwtransport.residence_time.residence_time_series`, :py:func:`~gwtransport.residence_time.freundlich_retardation`
    * - ``deposition``
      - :py:func:`~gwtransport.deposition.deposition_to_extraction`, :py:func:`~gwtransport.deposition.extraction_to_deposition`
    * - ``logremoval``
@@ -301,7 +301,7 @@ Model Parameterization Assumptions
 
 - :py:func:`~gwtransport.advection.gamma_infiltration_to_extraction`, :py:func:`~gwtransport.advection.infiltration_to_extraction`
 - :py:func:`~gwtransport.advection.gamma_extraction_to_infiltration`, :py:func:`~gwtransport.advection.extraction_to_infiltration`
-- :py:func:`~gwtransport.residence_time.residence_time`, :py:func:`~gwtransport.residence_time.residence_time_mean`
+- :py:func:`~gwtransport.residence_time.residence_time_full`, :py:func:`~gwtransport.residence_time.residence_time_series`
 - :py:func:`~gwtransport.deposition.deposition_to_extraction`, :py:func:`~gwtransport.deposition.extraction_to_deposition`
 - :py:func:`~gwtransport.diffusion_fast.infiltration_to_extraction`
 

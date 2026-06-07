@@ -89,7 +89,7 @@ from gwtransport.fronttracking.math import (
 from gwtransport.fronttracking.output import compute_bin_averaged_concentration_exact
 from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
-from gwtransport.residence_time import residence_time
+from gwtransport.residence_time import residence_time_series
 from gwtransport.utils import solve_inverse_transport_banded
 
 
@@ -247,7 +247,7 @@ def infiltration_to_extraction_series(
     if retardation_factor < 1.0:
         msg = "retardation_factor must be >= 1.0"
         raise ValueError(msg)
-    rt_array = residence_time(
+    rt_array = residence_time_series(
         flow=flow,
         flow_tedges=tedges,
         index=tedges,
@@ -369,7 +369,7 @@ def extraction_to_infiltration_series(
     if retardation_factor < 1.0:
         msg = "retardation_factor must be >= 1.0"
         raise ValueError(msg)
-    rt_array = residence_time(
+    rt_array = residence_time_series(
         flow=flow,
         flow_tedges=tedges,
         index=tedges,
@@ -453,7 +453,7 @@ def gamma_infiltration_to_extraction(
     infiltration_to_extraction : Transport with explicit pore volume distribution
     gamma_extraction_to_infiltration : Reverse operation (deconvolution)
     gwtransport.gamma.bins : Create gamma distribution bins
-    gwtransport.residence_time.residence_time : Compute residence times
+    gwtransport.residence_time.residence_time_series : Compute residence times
     gwtransport.diffusion.infiltration_to_extraction : Add microdispersion and molecular diffusion
     :ref:`concept-gamma-distribution` : Two-parameter pore volume model
     :ref:`assumption-gamma-distribution` : When gamma distribution is adequate
@@ -819,7 +819,7 @@ def infiltration_to_extraction(
     gamma_infiltration_to_extraction : Transport with gamma-distributed pore volumes
     extraction_to_infiltration : Reverse operation (deconvolution)
     infiltration_to_extraction_series : Simple time-shift for single pore volume
-    gwtransport.residence_time.residence_time : Compute residence times from flow and pore volume
+    gwtransport.residence_time.residence_time_series : Compute residence times from flow and pore volume
     gwtransport.residence_time.freundlich_retardation : Compute concentration-dependent retardation
     :ref:`concept-pore-volume-distribution` : Background on aquifer heterogeneity modeling
     :ref:`concept-transport-equation` : Flow-weighted averaging approach
@@ -1056,7 +1056,7 @@ def extraction_to_infiltration(
     gamma_extraction_to_infiltration : Deconvolution with gamma-distributed pore volumes
     infiltration_to_extraction : Forward operation (flow-weighted averaging)
     extraction_to_infiltration_series : Simple time-shift for single pore volume
-    gwtransport.residence_time.residence_time : Compute residence times from flow and pore volume
+    gwtransport.residence_time.residence_time_series : Compute residence times from flow and pore volume
     gwtransport.utils.solve_tikhonov : Solver used for inversion
     :ref:`concept-pore-volume-distribution` : Background on aquifer heterogeneity modeling
     :ref:`concept-transport-equation` : Flow-weighted averaging approach

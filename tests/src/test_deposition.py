@@ -22,7 +22,7 @@ from gwtransport.deposition import (
     extraction_to_deposition_full,
     spinup_duration,
 )
-from gwtransport.residence_time import residence_time
+from gwtransport.residence_time import residence_time_series
 from gwtransport.utils import compute_reverse_target, compute_time_edges, solve_tikhonov
 
 
@@ -82,7 +82,7 @@ def test_exact_analytical_constant_deposition():
     )
 
     # Calculate expected using exact formula
-    rt = residence_time(
+    rt = residence_time_series(
         flow=flow_values,
         flow_tedges=tedges,
         index=cout_tedges,
@@ -135,7 +135,7 @@ def test_exact_analytical_varying_flow():
     )
 
     # Calculate expected using exact residence time
-    rt = residence_time(
+    rt = residence_time_series(
         flow=flow_values,
         flow_tedges=tedges,
         index=cout_tedges,
@@ -211,7 +211,7 @@ def test_forward_pins_extraction_to_infiltration_direction_genuinely_variable_fl
     # extraction_to_infiltration direction (the residence time of the water
     # currently being extracted).
     midpoints = cout_tedges[:-1] + (cout_tedges[1:] - cout_tedges[:-1]) / 2
-    rt_mid = residence_time(
+    rt_mid = residence_time_series(
         flow=flow,
         flow_tedges=tedges,
         index=midpoints,
@@ -261,7 +261,7 @@ def test_exact_analytical_retardation_factor():
             retardation_factor=params["retardation_factor"],
         )
 
-        rt = residence_time(
+        rt = residence_time_series(
             flow=flow_values,
             flow_tedges=tedges,
             index=cout_tedges,
@@ -1115,7 +1115,7 @@ def test_compute_deposition_weights_structure():
     assert np.all(np.isfinite(weights))
 
     # Row-sum invariant: sum(W[i, :]) * porosity * thickness == RT_i
-    rt = residence_time(
+    rt = residence_time_series(
         flow=flow,
         flow_tedges=tedges,
         index=cout_tedges,
@@ -1196,7 +1196,7 @@ def test_compute_deposition_weights_with_retardation():
             thickness=thickness,
             retardation_factor=retardation_factor,
         )
-        rt = residence_time(
+        rt = residence_time_series(
             flow=flow,
             flow_tedges=tedges,
             index=cout_tedges,
@@ -1887,7 +1887,7 @@ def test_roundtrip_variable_retardation(retardation_factor):
 
     All prior roundtrip tests use R=1.0. With R=2 (RT_eff=10 days) and R=3.5
     (RT_eff=17.5 days) the residence-time-dependent code paths
-    (``residence_time(direction="extraction_to_infiltration")``, the
+    (``residence_time_series(direction="extraction_to_infiltration")``, the
     ``y_upper=R*V_pore`` clip in the banded weight builder) are exercised
     end-to-end with a per-element machine-precision recovery check.
     """
@@ -2089,7 +2089,7 @@ def test_row_normalization_pre_norm_row_sum_equals_rt_over_nb():
     }
 
     weights = _dense_weights(flow=flow, tedges=tedges, cout_tedges=cout_tedges, **params)
-    rt = residence_time(
+    rt = residence_time_series(
         flow=flow,
         flow_tedges=tedges,
         index=cout_tedges,

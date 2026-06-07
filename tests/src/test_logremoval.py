@@ -17,7 +17,7 @@ from gwtransport.logremoval import (
     parallel_mean,
     residence_time_to_log_removal,
 )
-from gwtransport.residence_time import residence_time as compute_residence_time
+from gwtransport.residence_time import residence_time_series as compute_residence_time
 
 
 def test_single_flow():
@@ -405,7 +405,7 @@ def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow,
 
     Uses the full pipeline:
     1. gamma.bins() to discretize aquifer pore volumes
-    2. residence_time.residence_time() to compute residence times from pore volumes and flow
+    2. residence_time.residence_time_series() to compute residence times from pore volumes and flow
     3. residence_time_to_log_removal() to compute log removals
     4. parallel_mean() to compute effective log removal
 

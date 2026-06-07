@@ -37,7 +37,7 @@ The pore volume distribution :math:`f(V)` is the flow-invariant analogue of the 
 
    \int_{t-\tau}^{t} Q(s) \, ds \;=\; V_i \cdot R
 
-which says "the residence time at extraction time :math:`t` is whatever :math:`\tau` it took to pump :math:`V_i \cdot R` cubic metres of water." This integral is solved by interpolation on the cumulative-flow curve and is exactly what :py:func:`gwtransport.residence_time.residence_time` computes.
+which says "the residence time at extraction time :math:`t` is whatever :math:`\tau` it took to pump :math:`V_i \cdot R` cubic metres of water." This integral is solved by interpolation on the cumulative-flow curve and is exactly what :py:func:`gwtransport.residence_time.residence_time_full` computes.
 
 Re-calibration is replaced by cumulative-flow integration. Calibrate the PVD once; predict transport under any flow trajectory.
 
