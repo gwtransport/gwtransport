@@ -27,12 +27,14 @@ def test_basic_extraction(constant_flow_data):
     tedges_out = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1D")
     pore_volume = 200.0
 
+    # spinup=None keeps the strict spin-up NaN at the leading extraction bins.
     result = residence_time_full(
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=tedges_out,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
+        spinup=None,
     )
 
     # With constant flow of 100 m³/day and pore volume of 200 m³, residence time is
@@ -42,18 +44,31 @@ def test_basic_extraction(constant_flow_data):
     assert np.isnan(result[0, 1])
     np.testing.assert_allclose(result[0, 2:], 2.0, atol=0, rtol=1e-13)
 
+    # With the default spinup='constant' the spin-up zone is warm-started, so there is
+    # no in-record NaN: residence time is exactly 2 days at every output bin.
+    result_constant = residence_time_full(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        tedges_out=tedges_out,
+        aquifer_pore_volumes=pore_volume,
+        direction="extraction_to_infiltration",
+    )
+    np.testing.assert_allclose(result_constant[0], 2.0, atol=0, rtol=1e-13)
+
 
 def test_basic_infiltration(constant_flow_data):
     """Test basic infiltration scenario with constant flow."""
     flow_values, flow_tedges = constant_flow_data
     pore_volume = 200.0
 
+    # spinup=None keeps the strict spin-up NaN at the trailing infiltration bins.
     result = residence_time_full(
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=flow_tedges,
         aquifer_pore_volumes=pore_volume,
         direction="infiltration_to_extraction",
+        spinup=None,
     )
 
     # With constant flow of 100 m³/day and pore volume of 200 m³, residence time
@@ -62,6 +77,17 @@ def test_basic_infiltration(constant_flow_data):
     # Later values should be NaN as water hasn't been extracted yet
     assert np.isnan(result[0, -2])
     assert np.isnan(result[0, -1])
+
+    # With the default spinup='constant' the trailing spin-up is warm-started, so there
+    # is no in-record NaN: residence time is exactly 2 days at every output bin.
+    result_constant = residence_time_full(
+        flow=flow_values,
+        flow_tedges=flow_tedges,
+        tedges_out=flow_tedges,
+        aquifer_pore_volumes=pore_volume,
+        direction="infiltration_to_extraction",
+    )
+    np.testing.assert_allclose(result_constant[0], 2.0, atol=0, rtol=1e-13)
 
 
 def test_varying_extraction(constant_flow_data):
@@ -100,6 +126,7 @@ def test_retardation_factor(constant_flow_data):
     flow_values, flow_tedges = constant_flow_data
     pore_volume = 100.0
 
+    # spinup=None keeps the strict spin-up NaN so the leading-NaN assertions stay meaningful.
     result_no_retardation = residence_time_full(
         flow=flow_values,
         flow_tedges=flow_tedges,
@@ -107,6 +134,7 @@ def test_retardation_factor(constant_flow_data):
         aquifer_pore_volumes=pore_volume,
         retardation_factor=1.0,
         direction="extraction_to_infiltration",
+        spinup=None,
     )
 
     result_with_retardation = residence_time_full(
@@ -116,6 +144,7 @@ def test_retardation_factor(constant_flow_data):
         aquifer_pore_volumes=pore_volume,
         retardation_factor=2.0,
         direction="extraction_to_infiltration",
+        spinup=None,
     )
 
     # Residence time should double with retardation factor of 2
@@ -191,13 +220,16 @@ def test_edge_cases(sample_flow_data):
     )
     assert np.all(np.isnan(result_zero))
 
-    # Test very large pore volume
+    # Test very large pore volume. The whole output record lies inside the spin-up zone, so
+    # the strict spinup=None path marks every bin NaN. (Under the default spinup='constant'
+    # these bins are warm-started to finite, very large residence times instead.)
     result_large = residence_time_full(
         flow=flow_values,
         flow_tedges=flow_tedges,
         tedges_out=tedges_out,
         aquifer_pore_volumes=1e6,
         direction="extraction_to_infiltration",
+        spinup=None,
     )
     assert np.all(np.isnan(result_large))
 
@@ -311,12 +343,63 @@ def test_example_from_docstring():
         direction="extraction_to_infiltration",
     )
 
-    # The first values should be NaN (not enough water has passed)
-    assert np.isnan(mean_times[0, 0])
-    assert np.isnan(mean_times[0, 1])
+    # With the default spinup='constant' the docstring example warm-starts the spin-up zone,
+    # so there is no NaN: residence time is exactly 2 days at every output bin under constant flow.
+    np.testing.assert_allclose(mean_times[0], 2.0, atol=0, rtol=1e-13)
 
-    # Later values are exactly 2 days under constant flow.
-    np.testing.assert_allclose(mean_times[0, 2:], 2.0, atol=0, rtol=1e-13)
+
+def test_spinup_policy_constant_vs_none():
+    """Pin the spinup policy contract under constant flow with a spin-up region.
+
+    With constant flow Q and pore volume V_p the residence time is exactly R*V_p/Q at
+    every in-record output bin. A pore volume large enough that the look-back parcel
+    leaves the record over the first bins creates a spin-up region:
+
+    * ``spinup='constant'`` (default) warm-starts the spin-up by extrapolating the
+      boundary flow, so there is no in-record NaN and every bin equals R*V_p/Q.
+    * ``spinup=None`` is strict: the leading extraction bins are NaN, then R*V_p/Q.
+
+    An unrecognised ``spinup`` value must raise ``ValueError``.
+    """
+    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
+    flow = 100.0
+    flow_values = np.full(len(flow_tedges) - 1, flow)
+    retardation_factor = 1.0
+    # V_p = 300 with Q = 100 needs 3 days of look-back, so the first two daily output bins
+    # fall in the spin-up region under the strict policy.
+    pore_volume = 300.0
+    expected = retardation_factor * pore_volume / flow  # = 3.0 days
+
+    common = {
+        "flow": flow_values,
+        "flow_tedges": flow_tedges,
+        "tedges_out": flow_tedges,
+        "aquifer_pore_volumes": pore_volume,
+        "retardation_factor": retardation_factor,
+        "direction": "extraction_to_infiltration",
+    }
+
+    rt_constant = residence_time_full(**common, spinup="constant")
+    rt_none = residence_time_full(**common, spinup=None)
+
+    # Default warm-start: no NaN anywhere in-record, exactly R*V_p/Q at every bin.
+    assert not np.any(np.isnan(rt_constant))
+    np.testing.assert_allclose(rt_constant[0], expected, atol=0, rtol=1e-13)
+
+    # Strict: there is a genuine leading spin-up region (the first bin is NaN), it is a
+    # contiguous leading block, and every finite bin afterwards is exactly R*V_p/Q.
+    nan_mask = np.isnan(rt_none[0])
+    assert nan_mask[0]
+    n_nan = int(np.argmin(nan_mask)) if not nan_mask.all() else nan_mask.size
+    assert n_nan >= 1
+    assert not np.any(nan_mask[n_nan:])  # NaNs form a contiguous leading block
+    np.testing.assert_allclose(rt_none[0, n_nan:], expected, atol=0, rtol=1e-13)
+
+    # Wherever the strict path is finite it agrees exactly with the warm-started default.
+    np.testing.assert_allclose(rt_none[0, n_nan:], rt_constant[0, n_nan:], atol=0, rtol=1e-13)
+
+    with pytest.raises(ValueError, match="spinup"):
+        residence_time_full(**common, spinup="bad")
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +533,9 @@ def test_kink_handling_against_fine_grid():
     tedges_out = flow_tedges  # daily output bins, same as flow tedges
     n_fine = 20001
 
+    # The fine-grid reference below is built from residence_time_series, which always
+    # returns NaN in the spin-up (no warm-start). Use spinup=None so residence_time_full
+    # takes the matching strict path and the spin-up bin stays NaN in both.
     rt_mean = residence_time_full(
         flow=flow_values,
         flow_tedges=flow_tedges,
@@ -457,6 +543,7 @@ def test_kink_handling_against_fine_grid():
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
         weighting="time",
+        spinup=None,
     )
 
     # Independent reference: dense pointwise tau via residence_time_series, trapezoidal

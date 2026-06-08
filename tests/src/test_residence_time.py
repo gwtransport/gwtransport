@@ -2,7 +2,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gwtransport.residence_time import residence_time, residence_time_full
+from gwtransport.residence_time import (
+    fraction_explained,
+    residence_time,
+    residence_time_full,
+    residence_time_series,
+)
 
 DIRECTIONS = ["extraction_to_infiltration", "infiltration_to_extraction"]
 
@@ -18,36 +23,42 @@ def _constant_flow(n=40, q=100.0):
     return np.full(n, q), pd.date_range("2020-01-01", periods=n + 1, freq="D")
 
 
-def _manual_weighted_mean(rt, weights):
-    """Mass-weighted mean over the valid (non-NaN) streamtubes per output bin."""
-    w = np.asarray(weights, dtype=float)[:, None]
-    num = np.nansum(rt * w, axis=0)
-    den = np.sum(np.where(np.isfinite(rt), w, 0.0), axis=0)
+def _mean_over_valid(rt):
+    """Per-bin arithmetic mean over the finite per-pore-volume entries, via an explicit loop.
+
+    Structurally different from the vectorized ``nansum/count`` in the implementation, so it
+    catches the realistic mutations (renormalizing over the full ``n`` instead of the valid
+    subset, or treating NaN as 0 while keeping the full count).
+    """
     out = np.full(rt.shape[1], np.nan)
-    nonzero = den > 0
-    out[nonzero] = num[nonzero] / den[nonzero]
+    for b in range(rt.shape[1]):
+        column = rt[:, b]
+        finite = column[np.isfinite(column)]
+        if finite.size:
+            out[b] = finite.sum() / finite.size
     return out
 
 
 @pytest.mark.parametrize("direction", DIRECTIONS)
 @pytest.mark.parametrize("r", [1.0, 2.5])
-def test_discrete_equals_manual_weighted_mean(direction, r):
-    """residence_time is exactly the valid-renormalized, mass-weighted mean of residence_time_full.
+@pytest.mark.parametrize("spinup", ["constant", None])
+def test_discrete_equals_mean_over_valid_streamtubes(direction, r, spinup):
+    """residence_time is exactly the mean over the valid streamtubes of residence_time_full.
 
-    This is the defining identity of the discrete APVD mean and must hold to machine precision
-    under variable flow, retardation, and a non-uniform mass.
+    Holds to machine precision for both spin-up policies. Under ``spinup='constant'`` every
+    in-record streamtube is finite (warm-started), so it is a plain mean; under ``spinup=None`` it
+    renormalizes over the streamtubes that have broken through, dropping the rest all-or-nothing.
     """
     flow, tedges = _variable_flow()
-    apv = np.array([300.0, 800.0, 1500.0, 2600.0])
-    mass = np.array([0.4, 0.3, 0.2, 0.1])
+    apv = np.array([250.0, 600.0, 900.0, 1200.0])
     got = residence_time(
         flow=flow,
         flow_tedges=tedges,
         tedges_out=tedges,
         aquifer_pore_volumes=apv,
-        probability_mass=mass,
         direction=direction,
         retardation_factor=r,
+        spinup=spinup,
     )
     rt = residence_time_full(
         flow=flow,
@@ -57,25 +68,38 @@ def test_discrete_equals_manual_weighted_mean(direction, r):
         direction=direction,
         retardation_factor=r,
         weighting="flow",
+        spinup=spinup,
     )
-    expected = _manual_weighted_mean(rt, mass)
+    expected = _mean_over_valid(rt)
     np.testing.assert_array_equal(np.isnan(got), np.isnan(expected))
     np.testing.assert_allclose(got, expected, rtol=0, atol=0, equal_nan=True)
+    if spinup == "constant":
+        assert not np.isnan(got).any(), "constant warm-start must leave no in-record NaN"
+    else:
+        assert np.isnan(got).any(), "fixture must include a fully-uncovered (all-streamtube spin-up) bin"
 
 
-def test_uniform_default_matches_explicit_uniform_mass():
-    """probability_mass=None is exactly the uniform 1/n distribution."""
-    flow, tedges = _variable_flow()
-    apv = np.array([250.0, 900.0, 2000.0])
-    default = residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=apv)
-    explicit = residence_time(
+@pytest.mark.parametrize("direction", DIRECTIONS)
+@pytest.mark.parametrize("r", [1.0, 2.5])
+def test_constant_spinup_constant_flow_exact(direction, r):
+    """Constant flow + constant warm-start: tau == R*mean(V_p)/Q at every bin, no NaN.
+
+    The extrapolated boundary flow equals the in-record flow, so the spin-up bins take the same
+    value as the deep bins. This pins the warm-start to an independent analytic oracle.
+    """
+    q = 100.0
+    flow, tedges = _constant_flow(q=q)
+    apv = np.array([200.0, 500.0, 900.0])
+    got = residence_time(
         flow=flow,
         flow_tedges=tedges,
         tedges_out=tedges,
         aquifer_pore_volumes=apv,
-        probability_mass=np.full(len(apv), 1.0 / len(apv)),
+        direction=direction,
+        retardation_factor=r,
     )
-    np.testing.assert_array_equal(default, explicit)
+    assert not np.isnan(got).any()
+    np.testing.assert_allclose(got, r * apv.mean() / q, rtol=1e-11)
 
 
 def test_single_pore_volume_reduces_to_residence_time_full():
@@ -88,132 +112,78 @@ def test_single_pore_volume_reduces_to_residence_time_full():
     np.testing.assert_array_equal(got, ref)
 
 
-def test_spinup_all_or_nothing_drops_straddle_streamtube():
-    """A streamtube only partially covering a bin is dropped entirely (all-or-nothing spin-up).
+def test_spinup_none_drops_genuinely_partial_streamtube():
+    """With spinup=None a streamtube covered only part-way through a bin is dropped whole.
 
-    With constant flow the per-streamtube bin average is NaN wherever the look-back parcel leaves
-    the record part-way through the bin. residence_time renormalizes over the remaining valid
-    streamtubes rather than crediting the dropped one's partial sub-mass -- unlike
-    gamma_residence_time, which integrates the partial coverage exactly.
-    """
-    flow, tedges = _constant_flow(n=40, q=100.0)
-    apv = np.array([200.0, 3000.0])  # the large streamtube is still in spin-up where the small one is informed
-    rt = residence_time_full(
-        flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=apv, weighting="flow"
-    )
-    straddle = np.isfinite(rt[0]) & np.isnan(rt[1])
-    assert straddle.any(), "test setup must include a bin where only the small streamtube is informed"
-
-    got = residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=apv)
-    # Where only the small streamtube is valid, the mean equals its value exactly (the large one,
-    # though partially covered, contributes nothing).
-    np.testing.assert_allclose(got[straddle], rt[0][straddle], rtol=0, atol=0)
-
-
-def test_spinup_all_or_nothing_drops_genuinely_partial_streamtube():
-    """A streamtube covered only part-way *through a single output bin* is still dropped whole.
-
-    The existing straddle test uses ``tedges_out == flow_tedges``, where a streamtube's bin
-    average flips from whole-bin NaN to whole-bin finite at a bin edge -- it never spans the
-    record edge mid-bin, so it cannot distinguish all-or-nothing from sub-mass crediting. Here
-    the output grid is coarser than the flow grid (5-day bins over a daily record), so the large
-    streamtube is genuinely ~50% covered inside the transition bin while its
-    ``residence_time_full`` row is NaN. All-or-nothing must drop it: the bin mean equals the
-    small streamtube alone, not a coverage-weighted blend with the large one.
+    The output grid is coarser than the flow grid (5-day bins over a daily record), so the large
+    streamtube is genuinely ~50% covered inside the transition bin while its ``residence_time_full``
+    row is NaN. All-or-nothing must drop it: the bin mean equals the small streamtube alone, not a
+    coverage-weighted blend.
     """
     flow = np.full(40, 100.0)
     flow_tedges = pd.date_range("2020-01-01", periods=41, freq="D")
     tedges_out = pd.date_range("2020-01-01", periods=9, freq="5D")  # 8 output bins of 5 days
-    apv = np.array([200.0, 2750.0])  # large needs 27.5 days history -> transition inside bin 5 (days 25..30)
+    apv = np.array([200.0, 2750.0])  # large needs 27.5 days history -> transition inside bin 5
     rt = residence_time_full(
-        flow=flow, flow_tedges=flow_tedges, tedges_out=tedges_out, aquifer_pore_volumes=apv, weighting="flow"
+        flow=flow,
+        flow_tedges=flow_tedges,
+        tedges_out=tedges_out,
+        aquifer_pore_volumes=apv,
+        weighting="flow",
+        spinup=None,
     )
-    # Bin 5 must be exactly the configuration we rely on: small informed, large row NaN.
     assert np.isfinite(rt[0][5]), "test setup: small streamtube must be informed in bin 5"
     assert np.isnan(rt[1][5]), "test setup: large streamtube must straddle the record edge inside bin 5"
-    got = residence_time(flow=flow, flow_tedges=flow_tedges, tedges_out=tedges_out, aquifer_pore_volumes=apv)
-    # If the large tube's partial sub-mass leaked in, the mean would be pulled toward 27.5; it must
-    # stay exactly the small streamtube's 2 days.
+    got = residence_time(
+        flow=flow, flow_tedges=flow_tedges, tedges_out=tedges_out, aquifer_pore_volumes=apv, spinup=None
+    )
+    # If the large tube's partial coverage leaked in, the mean would be pulled toward 27.5 days.
     np.testing.assert_allclose(got[5], rt[0][5], rtol=0, atol=0)
 
 
-def test_loc_shift_matches_manual_weighted_mean():
-    """A non-zero gamma ``loc`` is irrelevant to the discrete mean, but the path must still hold.
-
-    The discrete API takes explicit pore volumes, so ``loc`` enters only through the user's chosen
-    ``aquifer_pore_volumes``; this exercises large shifted pore volumes (relative to the flow
-    record) under variable flow and a non-uniform mass, confirming the valid-renormalized identity
-    survives the deep-spin-up regime those large volumes induce.
-    """
-    flow, tedges = _variable_flow()
-    apv = np.array([1200.0, 1850.0, 2900.0])  # loc-shifted regime: all well into spin-up early on
-    mass = np.array([0.5, 0.3, 0.2])
-    got = residence_time(
-        flow=flow,
-        flow_tedges=tedges,
-        tedges_out=tedges,
-        aquifer_pore_volumes=apv,
-        probability_mass=mass,
-        direction="infiltration_to_extraction",
-    )
-    rt = residence_time_full(
-        flow=flow,
-        flow_tedges=tedges,
-        tedges_out=tedges,
-        aquifer_pore_volumes=apv,
-        direction="infiltration_to_extraction",
-        weighting="flow",
-    )
-    expected = _manual_weighted_mean(rt, mass)
-    np.testing.assert_array_equal(np.isnan(got), np.isnan(expected))
-    np.testing.assert_allclose(got, expected, rtol=0, atol=0, equal_nan=True)
-
-
-def test_fully_uncovered_bin_is_nan():
-    """A bin with no valid streamtube (entirely in spin-up) is NaN."""
+def test_spinup_none_fully_uncovered_bin_is_nan():
+    """With spinup=None, a bin with no valid streamtube (all in spin-up) is NaN."""
     flow, tedges = _constant_flow(n=40, q=100.0)
-    apv = np.array([3500.0, 3800.0])  # both need > 35 days of history; early bins have none
-    got = residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=apv)
+    apv = np.array([3500.0, 3800.0])  # both need > 35 days of history; the first bins have none
+    got = residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=apv, spinup=None)
     assert np.isnan(got[0])
 
 
-def test_probability_mass_negative_raises():
-    flow, tedges = _constant_flow()
-    with pytest.raises(ValueError, match="non-negative"):
-        residence_time(
-            flow=flow,
-            flow_tedges=tedges,
-            tedges_out=tedges,
-            aquifer_pore_volumes=[300.0, 600.0],
-            probability_mass=[-0.1, 1.1],
-        )
+@pytest.mark.parametrize("spinup", ["constant", None])
+def test_out_of_window_bin_is_nan(spinup):
+    """Output bins beyond the flow record are NaN under either spin-up policy."""
+    flow, tedges = _constant_flow(n=20, q=100.0)
+    tedges_out = pd.date_range("2020-01-01", periods=31, freq="D")  # extends 10 days past the record
+    got = residence_time(
+        flow=flow, flow_tedges=tedges, tedges_out=tedges_out, aquifer_pore_volumes=300.0, spinup=spinup
+    )
+    assert np.isnan(got[-1])
 
 
-def test_probability_mass_not_summing_to_one_raises():
-    flow, tedges = _constant_flow()
-    with pytest.raises(ValueError, match="sum to 1"):
-        residence_time(
-            flow=flow,
-            flow_tedges=tedges,
-            tedges_out=tedges,
-            aquifer_pore_volumes=[300.0, 600.0],
-            probability_mass=[0.4, 0.4],
-        )
+def test_series_still_marks_spinup_while_full_warm_starts():
+    """residence_time_series keeps its spin-up NaN even though residence_time_full warm-starts.
 
-
-def test_probability_mass_wrong_shape_raises():
-    flow, tedges = _constant_flow()
-    with pytest.raises(ValueError, match="same shape"):
-        residence_time(
-            flow=flow,
-            flow_tedges=tedges,
-            tedges_out=tedges,
-            aquifer_pore_volumes=[300.0, 600.0],
-            probability_mass=[0.2, 0.3, 0.5],
-        )
+    The point series is the primitive behind :func:`fraction_explained`, which therefore still
+    locates the spin-up region (fraction < 1) where the warm-started means are finite.
+    """
+    flow, tedges = _constant_flow(n=40, q=100.0)
+    apv = np.array([200.0, 1500.0])
+    series = residence_time_series(flow=flow, flow_tedges=tedges, aquifer_pore_volumes=apv)
+    full = residence_time_full(flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=apv)
+    assert np.isnan(series).any(), "series must keep its spin-up NaN"
+    assert not np.isnan(full).any(), "full default warm-start must be finite in-record"
+    frac = fraction_explained(rt=series)
+    assert (frac < 1.0).any(), "fraction_explained must flag the spin-up region"
+    assert (frac == 1.0).any(), "fraction_explained must reach 1 outside the spin-up"
 
 
 def test_invalid_direction_raises():
     flow, tedges = _constant_flow()
     with pytest.raises(ValueError, match="direction"):
         residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=300.0, direction="bad")
+
+
+def test_invalid_spinup_raises():
+    flow, tedges = _constant_flow()
+    with pytest.raises(ValueError, match="spinup"):
+        residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=300.0, spinup="bad")

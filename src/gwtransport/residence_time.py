@@ -20,20 +20,59 @@ Available functions:
   volume. Sampling at arbitrary instants departs from the bin-edge convention, so it is kept
   separate from :func:`residence_time_full`. Same directional options.
 
-- :func:`residence_time` - Compute the mass-weighted mean residence time over output bins for a
-  discrete aquifer pore-volume distribution (an array of pore volumes with optional probability
-  masses). Collapses the pore-volume axis to a single per-bin series. In the spin-up zone each
-  streamtube is included all-or-nothing; for the exact continuous spin-up result of a gamma
-  distribution use :func:`gamma_residence_time`.
+- :func:`residence_time` - Compute the mean residence time over output bins for a discrete
+  aquifer pore-volume distribution (an array of equally-weighted pore volumes). Collapses the
+  pore-volume axis to a single per-bin series. The ``spinup`` policy (default ``"constant"``)
+  warm-starts the spin-up by extrapolating the boundary flow.
 
-- :func:`gamma_residence_time` - Compute the exact closed-form mean residence time over output
-  bins for a (shifted) gamma aquifer pore-volume distribution, with no pore-volume
-  discretization. Exact in the spin-up zone via covered-sub-mass renormalization.
+- :func:`gamma_residence_time` - Compute the closed-form mean residence time over output bins for a
+  (shifted) gamma aquifer pore-volume distribution, with no pore-volume discretization. The
+  ``spinup`` policy (default ``"constant"``) warm-starts the spin-up; ``spinup=0.0`` instead
+  renormalizes over the covered sub-mass exactly.
 
 - :func:`fraction_explained` - Compute fraction of aquifer pore volumes with valid residence
   times. Indicates how many pore volumes have sufficient flow history to compute residence time.
   Returns values in [0, 1] where 1.0 means all volumes are fully informed. Useful for assessing
   spin-up periods and data coverage. NaN residence times indicate insufficient flow history.
+
+Spin-up period
+--------------
+The spin-up **region** is determined entirely by the supplied flow record (``flow_tedges``, which
+fixes the cumulative throughflow volume ``V`` from ``0`` at the record start to ``V_end`` at the
+record end) together with the retarded pore volume ``retardation_factor * V_p`` -- it is not a
+length you set. A residence time for an output time needs the corresponding parcel to stay inside
+the flow record:
+
+* ``direction='extraction_to_infiltration'`` looks **back** to the infiltration event, so the
+  spin-up sits at the **start** of the output record: the residence time of a pore volume ``V_p``
+  needs ``V(t) >= retardation_factor * V_p`` (the extracted water was infiltrated before the record
+  began otherwise).
+* ``direction='infiltration_to_extraction'`` looks **forward** to the extraction event, so the
+  spin-up sits at the **end** of the output record: it needs ``V_end - V(t) >= retardation_factor *
+  V_p`` (the infiltrated water is extracted after the record ends otherwise).
+
+The spin-up therefore lengthens with both the pore volume and the retardation factor, and is
+longest for the largest pore volumes of a distribution.
+
+What happens in that region is governed by a ``spinup`` policy, following the package convention
+(see :mod:`gwtransport.advection`); the default is ``"constant"`` everywhere:
+
+* :func:`residence_time_full` and :func:`residence_time` take ``spinup={'constant', None}``.
+  ``"constant"`` (default) **warm-starts** by extrapolating the boundary flow (flow held constant at
+  its first/last value), so no in-record output is ``NaN``; ``None`` is strict, marking a pore
+  volume ``NaN`` for any output bin its parcel leaves the record within (and :func:`residence_time`
+  then averages over the remaining informed streamtubes).
+* :func:`gamma_residence_time` takes ``spinup={'constant'} | float in [0, 1)``. ``"constant"``
+  (default) warm-starts identically; a ``float`` instead **renormalizes** over the covered
+  sub-mass, with ``0.0`` giving the exact covered-sub-mass conditional mean.
+* :func:`residence_time_series` (point samples) has no ``spinup`` policy: it always returns ``NaN``
+  in the spin-up. It is the primitive behind :func:`fraction_explained`.
+
+Output bins lying wholly outside ``flow_tedges`` are ``NaN`` under every policy.
+
+:func:`fraction_explained` reports, per output instant, the fraction of the pore-volume
+distribution that is out of spin-up (``1.0`` = fully informed, ``0.0`` = entirely in spin-up) and
+is the way to locate the spin-up region when the means warm-start over it.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -108,6 +147,14 @@ def residence_time_series(
     gwtransport.logremoval.residence_time_to_log_removal : Convert residence time to log removal
     :ref:`concept-residence-time` : Time in aquifer between infiltration and extraction
     :ref:`concept-retardation-factor` : Slower movement due to sorption
+
+    Notes
+    -----
+    Instants whose retarded look-back/forward parcel falls outside the supplied flow record -- the
+    spin-up period -- are returned as ``NaN`` rather than extrapolated. The spin-up is set by the
+    flow record and the retarded pore volume, not by any argument: for ``extraction_to_infiltration``
+    it occupies the start of the record, for ``infiltration_to_extraction`` the end. See the module
+    docstring (``Spin-up period``) for the full rule.
     """
     aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
     flow_tedges = pd.DatetimeIndex(flow_tedges)
@@ -158,6 +205,7 @@ def residence_time_full(
     direction: str = "extraction_to_infiltration",
     retardation_factor: float = 1.0,
     weighting: str = "flow",
+    spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     r"""
     Compute the mean residence time over output bins, per pore volume.
@@ -196,6 +244,18 @@ def residence_time_full(
           consume to compute a per-bin retarded velocity.
         * ``'time'``: time-weighted average -- uniform in clock time. Coincides with
           ``'flow'`` when flow is constant within an output bin.
+    spinup : {'constant'} or None, optional
+        How to treat the spin-up zone, where a pore volume's retarded look-back/forward parcel
+        leaves the flow record. Matches the package convention (see :mod:`gwtransport.advection`).
+
+        * ``'constant'`` (default): warm-start -- extrapolate the cumulative-volume-to-time map past
+          the record at the boundary flow rates (flow held constant at its first/last value), so
+          the residence time stays finite. No left-edge (extraction) or right-edge (infiltration)
+          spin-up ``NaN``.
+        * ``None``: strict -- a pore volume whose parcel leaves the record at any point within an
+          output bin is ``NaN`` for that bin (all-or-nothing per bin), with no extrapolation.
+
+        Output bins lying wholly outside ``flow_tedges`` are ``NaN`` under either policy.
 
     Returns
     -------
@@ -208,16 +268,23 @@ def residence_time_full(
     ValueError
         If ``flow_tedges`` does not have exactly one more element than ``flow``. If
         ``direction`` is not ``'extraction_to_infiltration'`` or
-        ``'infiltration_to_extraction'``. If ``weighting`` is not ``'flow'`` or ``'time'``.
+        ``'infiltration_to_extraction'``. If ``weighting`` is not ``'flow'`` or ``'time'``. If
+        ``spinup`` is not ``'constant'`` or ``None``.
 
     See Also
     --------
     residence_time_series : Residence time at specific time instants (per pore volume)
+    fraction_explained : Fraction of pore volumes out of spin-up at each instant
     :ref:`concept-residence-time` : Time in aquifer between infiltration and extraction
     :ref:`concept-transport-equation` : Flow-weighted averaging convention
 
     Notes
     -----
+    With the default ``spinup='constant'`` the spin-up zone is warm-started by extrapolating the
+    boundary flow, so no in-record bin is ``NaN``; use :func:`fraction_explained` (or
+    ``spinup=None``) to locate the spin-up region. See the module docstring (``Spin-up period``)
+    for the full rule.
+
     Exact-zero flow bins produce a plateau in cumulative volume that is bumped up by one
     float64 ulp per duplicate so the cumulative volume is strictly monotone; trapezoidal
     integration over the resulting one-ulp-wide ramp recovers the underlying step
@@ -248,15 +315,19 @@ def residence_time_full(
     ...     aquifer_pore_volumes=200.0,
     ...     direction="extraction_to_infiltration",
     ... )
-    >>> # 200 m³ / 100 m³/day = 2 days residence time
+    >>> # 200 m³ / 100 m³/day = 2 days residence time; the default constant warm-start
+    >>> # extrapolates the boundary flow, so the left-edge spin-up bins are also 2 days
     >>> print(mean_times)  # doctest: +NORMALIZE_WHITESPACE
-    [[nan nan  2.  2.  2.  2.  2.  2.  2.]]
+    [[2. 2. 2. 2. 2. 2. 2. 2. 2.]]
     """
     if direction not in {"extraction_to_infiltration", "infiltration_to_extraction"}:
         msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
         raise ValueError(msg)
     if weighting not in {"flow", "time"}:
         msg = "weighting should be 'flow' or 'time'"
+        raise ValueError(msg)
+    if spinup not in {"constant", None}:
+        msg = "spinup should be 'constant' or None"
         raise ValueError(msg)
 
     aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
@@ -295,7 +366,29 @@ def residence_time_full(
 
     flow_cum_at_grid = linear_interpolate(x_ref=flow_tedges_days, y_ref=flow_cum, x_query=augmented_grid)
     a_grid = flow_cum_at_grid[None, :] + sign * retardation_factor * aquifer_pore_volumes[:, None]
-    days_grid = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a_grid, left=np.nan, right=np.nan)
+
+    # Spin-up handling. A parcel whose infiltration/extraction falls outside the flow record has an
+    # out-of-range look-back/forward target a_grid. With spinup="constant" the cumulative-volume ->
+    # time map is extrapolated past the record at the boundary flow rates (flow held constant at its
+    # first/last value), so the residence time stays finite (the package default warm-start). One
+    # anchor each end, padded by the largest reach R * max(V_p), is enough that a_grid never exceeds
+    # the extended map, so the interpolation is an exact linear extrapolation. With spinup=None the
+    # map is not extended and the out-of-record target yields NaN (strict, no extrapolation).
+    if spinup == "constant":
+        pad = retardation_factor * float(aquifer_pore_volumes.max())
+        inv_q_first = (flow_tedges_days[1] - flow_tedges_days[0]) / (flow_cum[1] - flow_cum[0])
+        inv_q_last = (flow_tedges_days[-1] - flow_tedges_days[-2]) / (flow_cum[-1] - flow_cum[-2])
+        flow_cum_map = np.concatenate([[flow_cum[0] - pad], flow_cum, [flow_cum[-1] + pad]])
+        days_map = np.concatenate([
+            [flow_tedges_days[0] - pad * inv_q_first],
+            flow_tedges_days,
+            [flow_tedges_days[-1] + pad * inv_q_last],
+        ])
+        days_grid = linear_interpolate(x_ref=flow_cum_map, y_ref=days_map, x_query=a_grid)
+    else:
+        days_grid = linear_interpolate(
+            x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a_grid, left=np.nan, right=np.nan
+        )
     data_grid = sign * (days_grid - augmented_grid[None, :])
 
     if weighting == "time":
@@ -315,26 +408,30 @@ def residence_time(
     flow_tedges: pd.DatetimeIndex | np.ndarray,
     tedges_out: pd.DatetimeIndex | np.ndarray,
     aquifer_pore_volumes: npt.ArrayLike,
-    probability_mass: npt.ArrayLike | None = None,
     direction: str = "extraction_to_infiltration",
     retardation_factor: float = 1.0,
+    spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     r"""
-    Compute the mass-weighted mean residence time over output bins for a discrete APVD.
+    Compute the mean residence time over output bins for a discrete APVD.
 
-    The mean is taken over a **discrete** set of aquifer pore volumes -- one streamtube per
-    entry in ``aquifer_pore_volumes`` -- weighted by ``probability_mass``. Each streamtube's
-    flow-weighted bin average is computed with :func:`residence_time_full` and the pore-volume
-    axis is then collapsed to a single per-output-bin series. For a continuous (shifted) gamma
-    pore-volume distribution evaluated in closed form, use :func:`gamma_residence_time`.
+    The mean is taken over a **discrete** set of equally-weighted aquifer pore volumes -- one
+    streamtube per entry in ``aquifer_pore_volumes``. Each streamtube's flow-weighted bin average
+    is computed with :func:`residence_time_full` and the pore-volume axis is then collapsed to a
+    single per-output-bin series by averaging over the streamtubes that are valid in each bin. For
+    a continuous (shifted) gamma pore-volume distribution evaluated in closed form, use
+    :func:`gamma_residence_time`.
 
-    The collapse renormalizes over the streamtubes that are valid in each output bin,
+    The mean is over the valid streamtubes,
 
     .. math::
 
-        \bar\tau_b = \frac{\sum_i w_i\,\tau_{i,b}}{\sum_{i\,:\,\tau_{i,b}\ \mathrm{finite}} w_i},
+        \bar\tau_b = \frac{1}{|V_b|}\sum_{i \in V_b} \tau_{i,b},
+        \qquad V_b = \{\, i : \tau_{i,b}\ \mathrm{finite} \,\}.
 
-    so the bin mean is exact for fully-informed bins under both constant and variable flow.
+    With the default ``spinup='constant'`` every streamtube is finite within the flow record
+    (the boundary flow is extrapolated), so this is simply the mean over all pore volumes; with
+    ``spinup=None`` it renormalizes over the streamtubes that have broken through.
 
     Parameters
     ----------
@@ -345,12 +442,8 @@ def residence_time(
     tedges_out : array-like
         Output time edges as datetime64 objects; ``n + 1`` edges define ``n`` output bins.
     aquifer_pore_volumes : array-like
-        Discrete pore volumes [m3], one per streamtube. A single value collapses to the
-        per-streamtube mean of :func:`residence_time_full`.
-    probability_mass : array-like, optional
-        Probability mass of each pore volume [dimensionless], same shape as
-        ``aquifer_pore_volumes``. Must be non-negative and sum to 1; it is not normalized
-        internally. Defaults to a uniform ``1 / n`` over the ``n`` pore volumes.
+        Discrete pore volumes [m3], one per (equally-weighted) streamtube. A single value
+        collapses to the per-streamtube mean of :func:`residence_time_full`.
     direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
         Direction of the flow calculation:
         * 'extraction_to_infiltration': how many days ago was the extracted water infiltrated
@@ -358,36 +451,36 @@ def residence_time(
         Default is 'extraction_to_infiltration'.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
+    spinup : {'constant'} or None, optional
+        Spin-up policy, forwarded to :func:`residence_time_full`. ``'constant'`` (default)
+        warm-starts by extrapolating the boundary flow so no in-record bin is ``NaN``; ``None``
+        leaves spin-up streamtubes ``NaN`` and the mean renormalizes over those that have broken
+        through. Use :func:`fraction_explained` to locate the spin-up region.
 
     Returns
     -------
     numpy.ndarray
-        Mass-weighted mean residence time [days], shape ``(n_output_bins,)``. Output bins with
-        no valid streamtube (outside the flow record or fully in the spin-up zone) are NaN.
-
-    Raises
-    ------
-    ValueError
-        If ``flow_tedges`` does not have exactly one more element than ``flow``. If ``direction``
-        is not ``'extraction_to_infiltration'`` or ``'infiltration_to_extraction'``. If
-        ``probability_mass`` has a different shape than ``aquifer_pore_volumes``, is negative, or
-        does not sum to 1.
+        Mean residence time [days], shape ``(n_output_bins,)``. Output bins with no valid
+        streamtube (outside the flow record, or -- with ``spinup=None`` -- fully in the spin-up
+        zone) are NaN.
 
     See Also
     --------
     gamma_residence_time : Exact closed-form mean for a continuous (shifted) gamma APVD
     residence_time_full : Per-pore-volume mean residence time over output bins
+    fraction_explained : Fraction of pore volumes out of spin-up at each instant
     gwtransport.gamma.bins : Discretize a gamma APVD into pore-volume bins
     :ref:`concept-residence-time` : Time in aquifer between infiltration and extraction
 
     Notes
     -----
-    Spin-up is **all-or-nothing per streamtube**: a streamtube whose look-back/forward parcel
-    leaves the flow record part-way through an output bin has a NaN bin average (inherited from
-    :func:`residence_time_full`) and is dropped from that bin's mean entirely, rather than
-    contributing its partially-covered sub-mass. This differs from :func:`gamma_residence_time`,
-    which integrates the partial coverage exactly and is therefore the right choice when the
-    spin-up bins matter.
+    With ``spinup=None`` the spin-up is **all-or-nothing per streamtube**: a streamtube whose
+    look-back/forward parcel leaves the flow record part-way through an output bin has a ``NaN`` bin
+    average (inherited from :func:`residence_time_full`) and is dropped from that bin's mean
+    entirely, rather than contributing its partially-covered share; the bin is ``NaN`` only once
+    every streamtube is in spin-up. In that mode the discrete mean differs from
+    :func:`gamma_residence_time`, which renormalizes over the covered sub-mass exactly. See the
+    module docstring (``Spin-up period``) for the full rule.
 
     Examples
     --------
@@ -400,29 +493,12 @@ def residence_time(
     ...     flow=flow_values,
     ...     flow_tedges=flow_dates,
     ...     tedges_out=flow_dates,
-    ...     aquifer_pore_volumes=[400.0, 600.0],  # uniform mass over two streamtubes
+    ...     aquifer_pore_volumes=[400.0, 600.0],  # two equally-weighted streamtubes
     ... )
     >>> # Deep in the record: mean pore volume 500 / 100 m³/day = 5 days
     >>> float(np.round(tau_bar[-1], 6))
     5.0
     """
-    aquifer_pore_volumes = np.atleast_1d(np.asarray(aquifer_pore_volumes, dtype=float))
-    n_pore_volumes = len(aquifer_pore_volumes)
-
-    if probability_mass is None:
-        weights = np.full(n_pore_volumes, 1.0 / n_pore_volumes)
-    else:
-        weights = np.atleast_1d(np.asarray(probability_mass, dtype=float))
-        if weights.shape != aquifer_pore_volumes.shape:
-            msg = "probability_mass must have the same shape as aquifer_pore_volumes"
-            raise ValueError(msg)
-        if np.any(weights < 0):
-            msg = "probability_mass must be non-negative"
-            raise ValueError(msg)
-        if not np.isclose(weights.sum(), 1.0, rtol=0.0, atol=1e-8):
-            msg = "probability_mass must sum to 1"
-            raise ValueError(msg)
-
     rt = residence_time_full(
         flow=flow,
         flow_tedges=flow_tedges,
@@ -431,16 +507,15 @@ def residence_time(
         direction=direction,
         retardation_factor=retardation_factor,
         weighting="flow",
+        spinup=spinup,
     )
 
-    # Mass-weighted mean over the streamtubes that are valid (non-NaN) in each output bin.
-    weights = weights[:, None]
-    num = np.nansum(rt * weights, axis=0)
-    den = np.sum(np.where(np.isfinite(rt), weights, 0.0), axis=0)
-    result = np.full(rt.shape[1], np.nan)
-    covered = den > 0
-    result[covered] = num[covered] / den[covered]
-    return result
+    # Mean over the streamtubes that are valid (non-NaN) in each output bin; bins with no valid
+    # streamtube reduce to 0/0 and are NaN. With spinup='constant' every in-record streamtube is
+    # finite, so this is the plain mean; with spinup=None it renormalizes over the broken-through set.
+    valid_count = np.isfinite(rt).sum(axis=0)
+    with np.errstate(invalid="ignore"):
+        return np.nansum(rt, axis=0) / valid_count
 
 
 def gamma_residence_time(
@@ -455,10 +530,11 @@ def gamma_residence_time(
     beta: float | None = None,
     direction: str = "extraction_to_infiltration",
     retardation_factor: float = 1.0,
+    spinup: str | float = "constant",
     _max_tile_elements: int = 1_000_000,
 ) -> npt.NDArray[np.floating]:
     r"""
-    Compute the exact mean residence time over output bins for a (shifted) gamma APVD.
+    Compute the mean residence time over output bins for a (shifted) gamma APVD.
 
     The expectation over a (shifted) gamma aquifer pore-volume distribution (APVD),
     parameterized by either ``(mean, std, loc)`` or ``(alpha, beta, loc)``, is taken in closed
@@ -470,9 +546,11 @@ def gamma_residence_time(
     its per-bin time integral :math:`G_b(V_p) = \int_{\mathrm{bin}} \tau\,dV` is piecewise-
     quadratic in :math:`V_p` and the covered length :math:`L_b(V_p)` piecewise-linear. The bin
     mean is the ratio of two closed-form integrals against the gamma density -- its zeroth,
-    first and second partial moments (regularized incomplete gamma). Forming the ratio once,
-    after integrating, keeps the result **exact in the spin-up zone** where only part of the
-    APVD has sufficient flow history (the covered sub-mass renormalizes the mean).
+    first and second partial moments (regularized incomplete gamma) -- formed once after
+    integrating. The ``spinup`` policy sets what happens where part of the APVD lacks flow
+    history: ``'constant'`` (default) extrapolates the boundary flow over the full distribution
+    (the package default warm-start), while a ``float`` threshold renormalizes the mean over the
+    covered sub-mass (``0.0`` reproduces the exact covered-sub-mass conditional mean).
 
     Parameters
     ----------
@@ -501,27 +579,51 @@ def gamma_residence_time(
         Default is 'extraction_to_infiltration'.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
+    spinup : {'constant'} or float in [0, 1), optional
+        How to treat the spin-up zone, where part of the gamma APVD lacks flow history. Matches
+        the package convention (see :mod:`gwtransport.advection`); ``None`` is not offered because
+        a continuous distribution always has some covered sub-mass.
+
+        * ``'constant'`` (default): warm-start -- extrapolate the cumulative-volume-to-time map past
+          the record at the boundary flow rates (flow held constant at its first/last value) and
+          integrate the full distribution, so no in-record bin is ``NaN``.
+        * ``float`` in ``[0, 1)``: renormalize the mean over the covered sub-mass, emitting a bin
+          only where the covered fraction of the distribution is at least ``spinup``. ``0.0`` gives
+          the exact covered-sub-mass conditional mean (emit whenever any sub-mass is covered).
+
+        Output bins lying wholly outside ``flow_tedges`` are ``NaN`` under either policy.
 
     Returns
     -------
     numpy.ndarray
-        APVD-mean residence time [days], shape ``(n_output_bins,)``. Output bins outside the
-        flow record (or with no covered pore-volume sub-mass) are NaN.
+        APVD-mean residence time [days], shape ``(n_output_bins,)``. Output bins outside the flow
+        record are NaN; with a ``float`` ``spinup`` so are bins whose covered fraction is below the
+        threshold.
 
     Raises
     ------
     ValueError
         If ``flow_tedges`` does not have exactly one more element than ``flow``. If ``direction``
-        is not ``'extraction_to_infiltration'`` or ``'infiltration_to_extraction'``. Gamma
-        parameter validation is delegated to :func:`gwtransport.gamma.parse_parameters`.
+        is not ``'extraction_to_infiltration'`` or ``'infiltration_to_extraction'``. If ``spinup``
+        is not ``'constant'`` or a float in ``[0, 1)``. Gamma parameter validation is delegated to
+        :func:`gwtransport.gamma.parse_parameters`.
 
     See Also
     --------
-    residence_time : Mass-weighted mean for a discrete set of pore volumes
+    residence_time : Equally-weighted mean for a discrete set of pore volumes
     residence_time_full : Per-pore-volume mean residence time over output bins
+    fraction_explained : Fraction of pore volumes out of spin-up at each instant
     gwtransport.gamma.bins : Discretize a gamma APVD into pore-volume bins
     :ref:`concept-residence-time` : Time in aquifer between infiltration and extraction
     :ref:`concept-gamma-distribution` : Two-parameter pore volume model
+
+    Notes
+    -----
+    With the default ``spinup='constant'`` the spin-up is warm-started exactly as in
+    :func:`residence_time` (constant-boundary-flow extrapolation), so the two agree everywhere. With
+    ``spinup=0.0`` the spin-up is instead handled by exact covered-sub-mass renormalization: each
+    output bin integrates over only the pore-volume sub-range with sufficient flow history. See the
+    module docstring (``Spin-up period``) for the full rule.
 
     Examples
     --------
@@ -545,6 +647,14 @@ def gamma_residence_time(
     if direction not in {"extraction_to_infiltration", "infiltration_to_extraction"}:
         msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
         raise ValueError(msg)
+    extrapolate = spinup == "constant"
+    if extrapolate:
+        spinup_threshold = 0.0
+    elif isinstance(spinup, int | float) and not isinstance(spinup, bool) and 0.0 <= spinup < 1.0:
+        spinup_threshold = float(spinup)
+    else:
+        msg = "spinup should be 'constant' or a float in [0, 1)"
+        raise ValueError(msg)
 
     alpha, beta, loc = parse_parameters(mean=mean, std=std, loc=loc, alpha=alpha, beta=beta)
 
@@ -564,22 +674,44 @@ def gamma_residence_time(
 
     flow_tedges_days = tedges_to_days(flow_tedges)
     flow_cum = cumulative_flow_volume(flow, np.diff(flow_tedges_days), strictly_monotone=True)
-    dvol_seg = flow_cum[1:] - flow_cum[:-1]
-    flow_rate = dvol_seg / (flow_tedges_days[1:] - flow_tedges_days[:-1])
     v_end = flow_cum[-1]
     n_edges = len(flow_cum)
 
-    # phi(v) = int_0^v T(w) dw with T the inverse cumulative-volume map (piecewise-linear);
-    # phi is piecewise-quadratic with knots at flow_cum, so the per-bin time integral of tau is
-    # a difference of phi at the (validity-clipped) look-back/forward limits.
-    seg_integral = flow_tedges_days[:-1] * dvol_seg + dvol_seg**2 / (2 * flow_rate)
-    phi_knot = np.concatenate([[0.0], np.cumsum(seg_integral)])
+    # Finite support: drop the gamma tails (mass ~1e-13, far below the discretization error this
+    # closed form replaces). Restricting the integral to [support_lo, support_hi] is what keeps
+    # the per-bin flow-edge band -- and the gamma CDF evaluations -- bounded.
+    tail = 1e-13
+    support_lo = float(loc + gamma_dist.ppf(tail, alpha, scale=beta))
+    support_hi = float(loc + gamma_dist.ppf(1.0 - tail, alpha, scale=beta))
+
+    # phi(v) = int_0^v T(w) dw with T the inverse cumulative-volume map (piecewise-linear); phi is
+    # piecewise-quadratic with knots at the cumulative-volume edges, so the per-bin time integral of
+    # tau is a difference of phi at the look-back/forward limits. With spinup="constant" the map is
+    # extended past the record at the boundary flow rates (one anchor each end, padded by the largest
+    # reach r*support_hi) so phi extrapolates the spin-up; with a float spinup it stays clipped to
+    # [0, v_end] (the covered sub-mass only).
+    if extrapolate:
+        pad = r * support_hi
+        inv_q_first = (flow_tedges_days[1] - flow_tedges_days[0]) / (flow_cum[1] - flow_cum[0])
+        inv_q_last = (flow_tedges_days[-1] - flow_tedges_days[-2]) / (flow_cum[-1] - flow_cum[-2])
+        phi_v = np.concatenate([[flow_cum[0] - pad], flow_cum, [flow_cum[-1] + pad]])
+        phi_t = np.concatenate([
+            [flow_tedges_days[0] - pad * inv_q_first],
+            flow_tedges_days,
+            [flow_tedges_days[-1] + pad * inv_q_last],
+        ])
+    else:
+        phi_v = flow_cum
+        phi_t = flow_tedges_days
+    phi_dv = phi_v[1:] - phi_v[:-1]
+    phi_rate = phi_dv / (phi_t[1:] - phi_t[:-1])
+    phi_knot = np.concatenate([[0.0], np.cumsum(phi_t[:-1] * phi_dv + phi_dv**2 / (2 * phi_rate))])
 
     def phi(v: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
-        v = np.clip(v, 0.0, v_end)
-        j = np.clip(np.searchsorted(flow_cum, v, side="right") - 1, 0, len(flow_rate) - 1)
-        dv = v - flow_cum[j]
-        return phi_knot[j] + flow_tedges_days[j] * dv + dv * dv / (2 * flow_rate[j])
+        v = np.clip(v, phi_v[0], phi_v[-1])
+        j = np.clip(np.searchsorted(phi_v, v, side="right") - 1, 0, len(phi_rate) - 1)
+        dv = v - phi_v[j]
+        return phi_knot[j] + phi_t[j] * dv + dv * dv / (2 * phi_rate[j])
 
     tedges_out_days = tedges_to_days(tedges_out, ref=flow_tedges[0])
     vol_out = linear_interpolate(
@@ -590,13 +722,6 @@ def gamma_residence_time(
         return np.full(n_out, np.nan)
     v_lo_all = np.where(good_all, vol_out[:-1], 0.0)
     v_hi_all = np.where(good_all, vol_out[1:], 1.0)
-
-    # Finite support: drop the gamma tails (mass ~1e-13, far below the discretization error this
-    # closed form replaces). Restricting the integral to [support_lo, support_hi] is what keeps
-    # the per-bin flow-edge band -- and the gamma CDF evaluations -- bounded.
-    tail = 1e-13
-    support_lo = float(loc + gamma_dist.ppf(tail, alpha, scale=beta))
-    support_hi = float(loc + gamma_dist.ppf(1.0 - tail, alpha, scale=beta))
 
     # Fixed band of flow edges each bin's look-back/forward sweep can cross over the supported
     # pore volumes. band_width is the global maximum so every tile shares one column layout; a
@@ -644,22 +769,34 @@ def gamma_residence_time(
         half = 0.5 * (hi - lo)
         nodes = np.stack([lo, mid, hi], axis=0)  # (3, nt, n_pieces)
 
-        # G(V_p) at the three quadrature nodes (piece lo/mid/hi) as a difference of phi. The
-        # constant term phi(v_hi)/phi(v_lo) does not depend on V_p, so evaluate it once per bin
-        # and batch only the three V_p-dependent phi arguments.
+        # G(V_p) at the three quadrature nodes (piece lo/mid/hi) as a difference of phi. The constant
+        # term phi(v_hi)/phi(v_lo) does not depend on V_p, so evaluate it once per bin and batch only
+        # the three V_p-dependent phi arguments. With spinup="constant" the full bin is integrated
+        # against the extrapolated phi (length is the full bin width); with a float spinup the limits
+        # clamp to the streamtube's covered sub-interval and the covered length renormalizes.
         if sign < 0:
-            v_start = np.maximum(vlo[None], r * nodes)
-            a_lo = np.maximum(vlo[None] - r * nodes, 0.0)
             a_hi = vhi[None] - r * nodes
-            length = np.maximum(vhi[None] - v_start, 0.0)
+            if extrapolate:
+                v_start = np.broadcast_to(vlo[None], a_hi.shape)
+                a_lo = vlo[None] - r * nodes
+                length = np.broadcast_to(vhi[None] - vlo[None], a_hi.shape)
+            else:
+                v_start = np.maximum(vlo[None], r * nodes)
+                a_lo = np.maximum(vlo[None] - r * nodes, 0.0)
+                length = np.maximum(vhi[None] - v_start, 0.0)
             phi_const = phi(v_hi)
             phi_stack = phi(np.stack([v_start, a_hi, a_lo]))
             g = phi_const[None, :, None] - phi_stack[0] - phi_stack[1] + phi_stack[2]
         else:
-            v_stop = np.minimum(vhi[None], v_end - r * nodes)
-            a_hi = np.minimum(vhi[None] + r * nodes, v_end)
             a_lo = vlo[None] + r * nodes
-            length = np.maximum(v_stop - vlo[None], 0.0)
+            if extrapolate:
+                v_stop = np.broadcast_to(vhi[None], a_lo.shape)
+                a_hi = vhi[None] + r * nodes
+                length = np.broadcast_to(vhi[None] - vlo[None], a_lo.shape)
+            else:
+                v_stop = np.minimum(vhi[None], v_end - r * nodes)
+                a_hi = np.minimum(vhi[None] + r * nodes, v_end)
+                length = np.maximum(v_stop - vlo[None], 0.0)
             phi_const = phi(v_lo)
             phi_stack = phi(np.stack([a_hi, a_lo, v_stop]))
             g = phi_stack[0] - phi_stack[1] - phi_stack[2] + phi_const[None, :, None]
@@ -695,6 +832,10 @@ def gamma_residence_time(
         num = int_g.sum(axis=1)
         den = int_l.sum(axis=1)
         covered = good & (den > 0)
+        if spinup_threshold > 0.0:
+            # float spinup: emit only where the covered fraction of the APVD reaches the threshold.
+            # den is the covered sub-mass; (v_hi - v_lo) * m0.sum is the fully-covered sub-mass.
+            covered &= den >= spinup_threshold * (v_hi - v_lo) * m0.sum(axis=1)
         tile_result = np.full(nt, np.nan)
         tile_result[covered] = num[covered] / den[covered]
         result[t0:t1] = tile_result
@@ -713,6 +854,11 @@ def fraction_explained(
 ) -> npt.NDArray[np.floating]:
     """
     Compute the fraction of the aquifer that is informed with respect to the retarded flow.
+
+    For each output instant this is the fraction of the supplied pore volumes whose residence time
+    is finite, i.e. the complement of the spin-up coverage: ``1.0`` means every pore volume is out
+    of spin-up, ``0.0`` means all are still in it. The spin-up itself is set by the flow record and
+    the retarded pore volumes (see the module docstring, ``Spin-up period``), not by any argument.
 
     Parameters
     ----------

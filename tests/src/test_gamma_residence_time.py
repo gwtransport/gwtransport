@@ -5,7 +5,8 @@ from scipy.integrate import quad
 from scipy.stats import gamma as gamma_dist
 
 from gwtransport._time import tedges_to_days
-from gwtransport.residence_time import gamma_residence_time, residence_time_full
+from gwtransport.gamma import bins as gamma_bins
+from gwtransport.residence_time import gamma_residence_time, residence_time, residence_time_full
 from gwtransport.utils import cumulative_flow_volume
 
 DIRECTIONS = ["extraction_to_infiltration", "infiltration_to_extraction"]
@@ -59,6 +60,7 @@ def test_spinup_partial_bin_matches_direct_integral(direction):
         std=std,
         direction=direction,
         retardation_factor=r,
+        spinup=0.0,  # covered-sub-mass renormalization is the spinup=0.0 mode (matches the quad reference)
     )
     alpha, beta = (mean / std) ** 2, std**2 / mean
     v_end = q * n
@@ -210,6 +212,7 @@ def test_wide_gamma_matches_double_quad(direction):
         loc=loc,
         direction=direction,
         retardation_factor=r,
+        spinup=0.0,  # covered-sub-mass renormalization is the spinup=0.0 mode (matches the quad reference)
     )
     flow_cum = cumulative_flow_volume(flow, np.diff(tedges_to_days(tedges)), strictly_monotone=True)
     tested = 0
@@ -247,3 +250,133 @@ def test_tiling_boundary_invariance(direction):
     tiny_tile = gamma_residence_time(**common, _max_tile_elements=1)
     np.testing.assert_array_equal(np.isnan(one_tile), np.isnan(tiny_tile))
     np.testing.assert_allclose(one_tile, tiny_tile, rtol=1e-12, equal_nan=True)
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+@pytest.mark.parametrize("r", [1.0, 2.5])
+def test_constant_spinup_constant_flow_exact(direction, r):
+    """Warm-start (default spinup): under constant flow tau == R * mean / Q at EVERY in-record bin.
+
+    ``spinup="constant"`` extrapolates the boundary flow over the full distribution, so there is no
+    in-record spin-up NaN: every bin -- including the former spin-up bins -- sees the fully informed
+    APVD mean, which under constant flow Q collapses to ``R * E[V_p] / Q = R * mean / Q``.
+    """
+    q = 100.0
+    mean, std = 300.0, 80.0
+    flow, tedges = _constant_flow(q=q)
+    tau = gamma_residence_time(
+        flow=flow,
+        flow_tedges=tedges,
+        tedges_out=tedges,
+        mean=mean,
+        std=std,
+        direction=direction,
+        retardation_factor=r,
+    )
+    assert not np.isnan(tau).any(), "warm-start must not produce in-record spin-up NaN"
+    np.testing.assert_allclose(tau, r * mean / q, atol=0, rtol=1e-11)
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_constant_spinup_matches_discrete(direction):
+    """Default-spinup gamma mean matches the discrete equal-mass pore-volume average under warm-start.
+
+    ``gamma.bins`` returns equal-probability-mass bins, so the simple average of their
+    ``expected_values`` is an unbiased discretization of the gamma mean. With warm-start spin-up on
+    both sides, the closed-form gamma residence time and the discrete ``residence_time`` over those
+    pore volumes agree up to the discretization gap (300 bins).
+    """
+    mean, std = 700.0, 250.0
+    n = 30
+    tedges = pd.date_range("2021-01-01", periods=n + 1, freq="D")
+    rng = np.random.default_rng(7)
+    flow = np.clip(100.0 + 60.0 * np.sin(np.arange(n) / 3.0) + rng.normal(0, 10, n), 10.0, None)
+    tau = gamma_residence_time(
+        flow=flow, flow_tedges=tedges, tedges_out=tedges, mean=mean, std=std, direction=direction
+    )
+    expected_values = gamma_bins(mean=mean, std=std, n_bins=300)["expected_values"]
+    disc = residence_time(
+        flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=expected_values, direction=direction
+    )
+    mask = np.isfinite(tau) & np.isfinite(disc)
+    assert mask.any()
+    np.testing.assert_allclose(tau[mask], disc[mask], atol=5e-3)
+
+
+def test_spinup_invalid_raises():
+    """A bad ``spinup`` (not "constant", not a float in [0, 1)) raises ValueError mentioning spinup."""
+    flow, tedges = _constant_flow()
+    with pytest.raises(ValueError, match="spinup"):
+        gamma_residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, mean=300.0, std=80.0, spinup="bad")
+    with pytest.raises(ValueError, match="spinup"):
+        gamma_residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, mean=300.0, std=80.0, spinup=1.0)
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_spinup_zero_vs_constant_differ_in_spinup_agree_deep(direction):
+    """spinup=0.0 and spinup="constant" differ in early spin-up bins but agree in deep informed bins.
+
+    The warm-start extrapolates the boundary flow, so spin-up bins (where the covered sub-mass is
+    partial) take a materially different value than the covered-sub-mass renormalization of
+    spinup=0.0. In a deep, fully-informed bin neither side extrapolates, so they coincide.
+    """
+    n = 80
+    tedges = pd.date_range("2021-01-01", periods=n + 1, freq="D")
+    rng = np.random.default_rng(5)
+    flow = np.clip(110.0 + 40.0 * np.sin(np.arange(n) / 9.0) + rng.normal(0, 7, n), 8.0, None)
+    common = {
+        "flow": flow,
+        "flow_tedges": tedges,
+        "tedges_out": tedges,
+        "mean": 500.0,
+        "std": 200.0,
+        "loc": 30.0,
+        "direction": direction,
+        "retardation_factor": 1.2,
+    }
+    zero = gamma_residence_time(**common, spinup=0.0)
+    constant = gamma_residence_time(**common, spinup="constant")
+    deep_idx = -1 if direction == "extraction_to_infiltration" else 0
+    spin_idx = 0 if direction == "extraction_to_infiltration" else -1
+    assert np.isfinite(zero[spin_idx])
+    assert np.isfinite(constant[spin_idx])
+    assert abs(zero[spin_idx] - constant[spin_idx]) / abs(constant[spin_idx]) > 0.1
+    np.testing.assert_allclose(zero[deep_idx], constant[deep_idx], rtol=1e-9)
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_float_spinup_threshold_gates_emission(direction):
+    """A float ``spinup`` in (0, 1) marks spin-up bins NaN below the covered-fraction threshold.
+
+    ``spinup=p`` emits a bin only where the covered sub-mass is at least fraction ``p`` of the APVD;
+    otherwise the bin is NaN. Raising the threshold therefore marks a (weakly) growing set of spin-up
+    bins NaN, and is strictly larger here. The threshold only gates emission, never the value: where
+    both thresholds emit, the bin means are identical. This pins the float-threshold branch, which is
+    otherwise exercised only at ``spinup=0.0`` (emit-whenever-covered) and never for ``0 < p < 1``.
+    """
+    n = 80
+    tedges = pd.date_range("2021-01-01", periods=n + 1, freq="D")
+    rng = np.random.default_rng(5)
+    flow = np.clip(110.0 + 40.0 * np.sin(np.arange(n) / 9.0) + rng.normal(0, 7, n), 8.0, None)
+    common = {
+        "flow": flow,
+        "flow_tedges": tedges,
+        "tedges_out": tedges,
+        "mean": 500.0,
+        "std": 200.0,
+        "loc": 30.0,
+        "direction": direction,
+        "retardation_factor": 1.2,
+    }
+    low = gamma_residence_time(**common, spinup=0.05)
+    high = gamma_residence_time(**common, spinup=0.6)
+    nan_low = np.isnan(low)
+    nan_high = np.isnan(high)
+    # Monotone: every bin NaN at the low threshold stays NaN at the higher one.
+    assert np.all(nan_high[nan_low]), "raising the threshold must not un-mask a previously-NaN bin"
+    # And the higher threshold genuinely gates more bins (otherwise the branch is untested).
+    assert nan_high.sum() > nan_low.sum(), "higher threshold should mark strictly more spin-up bins NaN"
+    # The threshold gates emission only, not the value: shared emitted bins agree to machine precision.
+    both = ~nan_low & ~nan_high
+    assert both.any()
+    np.testing.assert_allclose(low[both], high[both], atol=0, rtol=1e-12)
