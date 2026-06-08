@@ -4,7 +4,9 @@ import pytest
 from scipy.integrate import quad
 from scipy.stats import gamma as gamma_dist
 
+from gwtransport._time import tedges_to_days
 from gwtransport.residence_time import gamma_residence_time, residence_time_full
+from gwtransport.utils import cumulative_flow_volume
 
 DIRECTIONS = ["extraction_to_infiltration", "infiltration_to_extraction"]
 
@@ -130,3 +132,118 @@ def test_bins_outside_record_are_nan():
     tedges_out = pd.date_range("2023-01-01", periods=31, freq="D")  # 10 days past the record
     tau = gamma_residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges_out, mean=300.0, std=80.0)
     assert np.isnan(tau[-1])
+
+
+def _quad_bin_moments(flow, tedges, v_lo, v_hi, mean, std, loc, r, direction):
+    """Independent reference: numerator and denominator of the flow-weighted bin mean by quadrature.
+
+    The bin mean is ``num / den`` with ``num = int f(Vp) G_b(Vp) dVp`` and ``den = int f(Vp)
+    L_b(Vp) dVp``: ``G_b`` the per-streamtube time integral and ``L_b`` the covered length over the
+    bin's cumulative-volume window. The inverse cumulative-volume map ``T`` is built directly with
+    ``np.interp`` and both integrals are taken with ``scipy.quad`` -- independent of this module's
+    phi antiderivative and fixed-band machinery. The kink times of ``T`` are passed to the inner
+    quadrature as break points so the piecewise-linear integrand is integrated cleanly.
+    """
+    alpha, beta = (mean - loc) ** 2 / std**2, std**2 / (mean - loc)
+    td = tedges_to_days(tedges)
+    flow_cum = cumulative_flow_volume(np.asarray(flow, float), np.diff(td), strictly_monotone=True)
+    v_end = flow_cum[-1]
+    sign = -1.0 if direction == "extraction_to_infiltration" else 1.0
+
+    inner_limit = 2 * len(flow_cum) + 50
+
+    def inner(vp):  # (time integral over the covered part of the bin, covered length)
+        if sign < 0:
+            lo, hi = max(v_lo, r * vp), v_hi
+            if hi <= lo:
+                return 0.0, 0.0
+            kinks = sorted(v for v in np.concatenate([flow_cum, flow_cum + r * vp]) if lo < v < hi)
+            g, _ = quad(
+                lambda v: np.interp(v, flow_cum, td) - np.interp(v - r * vp, flow_cum, td),
+                lo,
+                hi,
+                points=kinks,
+                limit=inner_limit,
+            )
+            return g, hi - lo
+        lo, hi = v_lo, min(v_hi, v_end - r * vp)
+        if hi <= lo:
+            return 0.0, 0.0
+        kinks = sorted(v for v in np.concatenate([flow_cum, flow_cum - r * vp]) if lo < v < hi)
+        g, _ = quad(
+            lambda v: np.interp(v + r * vp, flow_cum, td) - np.interp(v, flow_cum, td),
+            lo,
+            hi,
+            points=kinks,
+            limit=inner_limit,
+        )
+        return g, hi - lo
+
+    hi_vp = loc + gamma_dist.ppf(1 - 1e-12, alpha, scale=beta)
+    num, _ = quad(lambda vp: gamma_dist.pdf(vp - loc, alpha, scale=beta) * inner(vp)[0], loc, hi_vp, limit=200)
+    den, _ = quad(lambda vp: gamma_dist.pdf(vp - loc, alpha, scale=beta) * inner(vp)[1], loc, hi_vp, limit=200)
+    return num, den
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_wide_gamma_matches_double_quad(direction):
+    """Wide gamma + variable flow: output bins match an independent double-quadrature reference.
+
+    A wide distribution makes the look-back/forward band span many flow bins, exercising the full
+    piecewise-quadratic G machinery -- the regime where a per-bin looped engine accrues FP noise.
+    Tested against ``scipy.quad`` over both cumulative volume and the gamma density (rtol=1e-7, the
+    quadrature floor), on bins ranging from spin-up to fully informed. Bins whose covered sub-mass
+    is a tiny tail sliver are skipped, since there the quadrature reference -- not the closed form
+    -- is the inaccurate one.
+    """
+    n = 14
+    tedges = pd.date_range("2021-01-01", periods=n + 1, freq="D")
+    rng = np.random.default_rng(3)
+    flow = np.clip(100.0 + 60.0 * np.sin(np.arange(n) / 3.0) + rng.normal(0, 10, n), 10.0, None)
+    mean, std, loc, r = 700.0, 450.0, 50.0, 1.6
+    tau = gamma_residence_time(
+        flow=flow,
+        flow_tedges=tedges,
+        tedges_out=tedges,
+        mean=mean,
+        std=std,
+        loc=loc,
+        direction=direction,
+        retardation_factor=r,
+    )
+    flow_cum = cumulative_flow_volume(flow, np.diff(tedges_to_days(tedges)), strictly_monotone=True)
+    tested = 0
+    for b in (3, 5, 7, 9, 11):
+        num, den = _quad_bin_moments(flow, tedges, flow_cum[b], flow_cum[b + 1], mean, std, loc, r, direction)
+        if den < 1e-6 or not np.isfinite(tau[b]):  # negligible covered sub-mass -> quad-fragile, skip
+            continue
+        np.testing.assert_allclose(tau[b], num / den, rtol=1e-7)
+        tested += 1
+    assert tested >= 3, "wide-gamma reference should validate several bins from spin-up to deep"
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_tiling_boundary_invariance(direction):
+    """Tiling the output bins does not change the result: 1-bin-per-tile equals a single tile.
+
+    band_width is computed globally, so each bin's integration pieces are independent of the tile
+    it lands in; the loop boundaries must not couple bins. Compared NaN-pattern and value.
+    """
+    n = 60
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    rng = np.random.default_rng(5)
+    flow = np.clip(110.0 + 40.0 * np.sin(np.arange(n) / 9.0) + rng.normal(0, 7, n), 8.0, None)
+    common = {
+        "flow": flow,
+        "flow_tedges": tedges,
+        "tedges_out": tedges,
+        "mean": 900.0,
+        "std": 600.0,
+        "loc": 80.0,
+        "direction": direction,
+        "retardation_factor": 1.3,
+    }
+    one_tile = gamma_residence_time(**common, _max_tile_elements=10**18)
+    tiny_tile = gamma_residence_time(**common, _max_tile_elements=1)
+    np.testing.assert_array_equal(np.isnan(one_tile), np.isnan(tiny_tile))
+    np.testing.assert_allclose(one_tile, tiny_tile, rtol=1e-12, equal_nan=True)

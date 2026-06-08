@@ -20,9 +20,15 @@ Available functions:
   volume. Sampling at arbitrary instants departs from the bin-edge convention, so it is kept
   separate from :func:`residence_time_full`. Same directional options.
 
-- :func:`gamma_residence_time` - Compute the mean residence time over output bins for a
-  (shifted) gamma aquifer pore-volume distribution, in closed form (no pore-volume binning).
-  Collapses the pore-volume axis to a single per-bin series.
+- :func:`residence_time` - Compute the mass-weighted mean residence time over output bins for a
+  discrete aquifer pore-volume distribution (an array of pore volumes with optional probability
+  masses). Collapses the pore-volume axis to a single per-bin series. In the spin-up zone each
+  streamtube is included all-or-nothing; for the exact continuous spin-up result of a gamma
+  distribution use :func:`gamma_residence_time`.
+
+- :func:`gamma_residence_time` - Compute the exact closed-form mean residence time over output
+  bins for a (shifted) gamma aquifer pore-volume distribution, with no pore-volume
+  discretization. Exact in the spin-up zone via covered-sub-mass renormalization.
 
 - :func:`fraction_explained` - Compute fraction of aquifer pore volumes with valid residence
   times. Indicates how many pore volumes have sufficient flow history to compute residence time.
@@ -41,10 +47,6 @@ from scipy.stats import gamma as gamma_dist
 from gwtransport._time import tedges_to_days
 from gwtransport.gamma import parse_parameters
 from gwtransport.utils import cumulative_flow_volume, linear_average, linear_interpolate
-
-# Upper gamma quantile used as a finite support cap for the closed-form APVD integral;
-# the dropped tail mass (~1e-13) is far below the discretization error it replaces.
-_GAMMA_SUPPORT_TAIL = 1e-13
 
 
 def residence_time_series(
@@ -307,6 +309,140 @@ def residence_time_full(
     return result
 
 
+def residence_time(
+    *,
+    flow: npt.ArrayLike,
+    flow_tedges: pd.DatetimeIndex | np.ndarray,
+    tedges_out: pd.DatetimeIndex | np.ndarray,
+    aquifer_pore_volumes: npt.ArrayLike,
+    probability_mass: npt.ArrayLike | None = None,
+    direction: str = "extraction_to_infiltration",
+    retardation_factor: float = 1.0,
+) -> npt.NDArray[np.floating]:
+    r"""
+    Compute the mass-weighted mean residence time over output bins for a discrete APVD.
+
+    The mean is taken over a **discrete** set of aquifer pore volumes -- one streamtube per
+    entry in ``aquifer_pore_volumes`` -- weighted by ``probability_mass``. Each streamtube's
+    flow-weighted bin average is computed with :func:`residence_time_full` and the pore-volume
+    axis is then collapsed to a single per-output-bin series. For a continuous (shifted) gamma
+    pore-volume distribution evaluated in closed form, use :func:`gamma_residence_time`.
+
+    The collapse renormalizes over the streamtubes that are valid in each output bin,
+
+    .. math::
+
+        \bar\tau_b = \frac{\sum_i w_i\,\tau_{i,b}}{\sum_{i\,:\,\tau_{i,b}\ \mathrm{finite}} w_i},
+
+    so the bin mean is exact for fully-informed bins under both constant and variable flow.
+
+    Parameters
+    ----------
+    flow : array-like
+        Flow rate of water in the aquifer [m3/day]. Length matches ``flow_tedges`` minus one.
+    flow_tedges : array-like
+        Time edges for the flow data, as datetime64 objects, defining the flow intervals.
+    tedges_out : array-like
+        Output time edges as datetime64 objects; ``n + 1`` edges define ``n`` output bins.
+    aquifer_pore_volumes : array-like
+        Discrete pore volumes [m3], one per streamtube. A single value collapses to the
+        per-streamtube mean of :func:`residence_time_full`.
+    probability_mass : array-like, optional
+        Probability mass of each pore volume [dimensionless], same shape as
+        ``aquifer_pore_volumes``. Must be non-negative and sum to 1; it is not normalized
+        internally. Defaults to a uniform ``1 / n`` over the ``n`` pore volumes.
+    direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
+        Direction of the flow calculation:
+        * 'extraction_to_infiltration': how many days ago was the extracted water infiltrated
+        * 'infiltration_to_extraction': how many days until the infiltrated water is extracted
+        Default is 'extraction_to_infiltration'.
+    retardation_factor : float, optional
+        Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
+
+    Returns
+    -------
+    numpy.ndarray
+        Mass-weighted mean residence time [days], shape ``(n_output_bins,)``. Output bins with
+        no valid streamtube (outside the flow record or fully in the spin-up zone) are NaN.
+
+    Raises
+    ------
+    ValueError
+        If ``flow_tedges`` does not have exactly one more element than ``flow``. If ``direction``
+        is not ``'extraction_to_infiltration'`` or ``'infiltration_to_extraction'``. If
+        ``probability_mass`` has a different shape than ``aquifer_pore_volumes``, is negative, or
+        does not sum to 1.
+
+    See Also
+    --------
+    gamma_residence_time : Exact closed-form mean for a continuous (shifted) gamma APVD
+    residence_time_full : Per-pore-volume mean residence time over output bins
+    gwtransport.gamma.bins : Discretize a gamma APVD into pore-volume bins
+    :ref:`concept-residence-time` : Time in aquifer between infiltration and extraction
+
+    Notes
+    -----
+    Spin-up is **all-or-nothing per streamtube**: a streamtube whose look-back/forward parcel
+    leaves the flow record part-way through an output bin has a NaN bin average (inherited from
+    :func:`residence_time_full`) and is dropped from that bin's mean entirely, rather than
+    contributing its partially-covered sub-mass. This differs from :func:`gamma_residence_time`,
+    which integrates the partial coverage exactly and is therefore the right choice when the
+    spin-up bins matter.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> import numpy as np
+    >>> from gwtransport.residence_time import residence_time
+    >>> flow_dates = pd.date_range(start="2023-01-01", end="2023-02-10", freq="D")
+    >>> flow_values = np.full(len(flow_dates) - 1, 100.0)  # 100 m³/day
+    >>> tau_bar = residence_time(
+    ...     flow=flow_values,
+    ...     flow_tedges=flow_dates,
+    ...     tedges_out=flow_dates,
+    ...     aquifer_pore_volumes=[400.0, 600.0],  # uniform mass over two streamtubes
+    ... )
+    >>> # Deep in the record: mean pore volume 500 / 100 m³/day = 5 days
+    >>> float(np.round(tau_bar[-1], 6))
+    5.0
+    """
+    aquifer_pore_volumes = np.atleast_1d(np.asarray(aquifer_pore_volumes, dtype=float))
+    n_pore_volumes = len(aquifer_pore_volumes)
+
+    if probability_mass is None:
+        weights = np.full(n_pore_volumes, 1.0 / n_pore_volumes)
+    else:
+        weights = np.atleast_1d(np.asarray(probability_mass, dtype=float))
+        if weights.shape != aquifer_pore_volumes.shape:
+            msg = "probability_mass must have the same shape as aquifer_pore_volumes"
+            raise ValueError(msg)
+        if np.any(weights < 0):
+            msg = "probability_mass must be non-negative"
+            raise ValueError(msg)
+        if not np.isclose(weights.sum(), 1.0, rtol=0.0, atol=1e-8):
+            msg = "probability_mass must sum to 1"
+            raise ValueError(msg)
+
+    rt = residence_time_full(
+        flow=flow,
+        flow_tedges=flow_tedges,
+        tedges_out=tedges_out,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        direction=direction,
+        retardation_factor=retardation_factor,
+        weighting="flow",
+    )
+
+    # Mass-weighted mean over the streamtubes that are valid (non-NaN) in each output bin.
+    weights = weights[:, None]
+    num = np.nansum(rt * weights, axis=0)
+    den = np.sum(np.where(np.isfinite(rt), weights, 0.0), axis=0)
+    result = np.full(rt.shape[1], np.nan)
+    covered = den > 0
+    result[covered] = num[covered] / den[covered]
+    return result
+
+
 def gamma_residence_time(
     *,
     flow: npt.ArrayLike,
@@ -319,24 +455,24 @@ def gamma_residence_time(
     beta: float | None = None,
     direction: str = "extraction_to_infiltration",
     retardation_factor: float = 1.0,
+    _max_tile_elements: int = 1_000_000,
 ) -> npt.NDArray[np.floating]:
     r"""
-    Compute the mean residence time over output bins for a (shifted) gamma APVD.
+    Compute the exact mean residence time over output bins for a (shifted) gamma APVD.
 
-    The expectation over the aquifer pore-volume distribution (APVD) is taken in closed form,
-    so there is no discretization into pore-volume bins and no ``n_bins`` accuracy/cost knob.
-    The result is a single series -- the APVD-mean residence time per output bin -- not a
-    per-pore-volume array. The pore-volume distribution is a (shifted) gamma parameterized by
-    either ``(mean, std, loc)`` or ``(alpha, beta, loc)``.
+    The expectation over a (shifted) gamma aquifer pore-volume distribution (APVD),
+    parameterized by either ``(mean, std, loc)`` or ``(alpha, beta, loc)``, is taken in closed
+    form -- no pore-volume binning and no ``n_bins`` accuracy/cost knob. The bin mean is
+    flow-weighted (uniform in cumulative volume), matching the bin-edge convention of the
+    package, and a single per-output-bin series is returned.
 
-    The bin mean is flow-weighted (uniform in cumulative volume), matching the bin-edge
-    convention of the package. The single-streamtube residence time is piecewise-linear in
-    the pore volume :math:`V_p`, so its per-bin time integral is piecewise-quadratic in
-    :math:`V_p`, and the bin mean is the ratio of two closed-form integrals against the gamma
-    density (its zeroth, first and second partial moments). Forming the ratio once, after
-    integrating, keeps the result exact in the spin-up zone where only part of the APVD has
-    sufficient flow history (the covered sub-mass renormalizes the mean, matching a
-    pore-volume-resolved ``nanmean`` in the limit of infinite resolution).
+    The single-streamtube residence time is piecewise-linear in the pore volume :math:`V_p`, so
+    its per-bin time integral :math:`G_b(V_p) = \int_{\mathrm{bin}} \tau\,dV` is piecewise-
+    quadratic in :math:`V_p` and the covered length :math:`L_b(V_p)` piecewise-linear. The bin
+    mean is the ratio of two closed-form integrals against the gamma density -- its zeroth,
+    first and second partial moments (regularized incomplete gamma). Forming the ratio once,
+    after integrating, keeps the result **exact in the spin-up zone** where only part of the
+    APVD has sufficient flow history (the covered sub-mass renormalizes the mean).
 
     Parameters
     ----------
@@ -375,13 +511,13 @@ def gamma_residence_time(
     Raises
     ------
     ValueError
-        If ``flow_tedges`` does not have exactly one more element than ``flow``. If
-        ``direction`` is not ``'extraction_to_infiltration'`` or
-        ``'infiltration_to_extraction'``. If gamma parameter validation in
-        :func:`gwtransport.gamma.parse_parameters` fails.
+        If ``flow_tedges`` does not have exactly one more element than ``flow``. If ``direction``
+        is not ``'extraction_to_infiltration'`` or ``'infiltration_to_extraction'``. Gamma
+        parameter validation is delegated to :func:`gwtransport.gamma.parse_parameters`.
 
     See Also
     --------
+    residence_time : Mass-weighted mean for a discrete set of pore volumes
     residence_time_full : Per-pore-volume mean residence time over output bins
     gwtransport.gamma.bins : Discretize a gamma APVD into pore-volume bins
     :ref:`concept-residence-time` : Time in aquifer between infiltration and extraction
@@ -411,6 +547,7 @@ def gamma_residence_time(
         raise ValueError(msg)
 
     alpha, beta, loc = parse_parameters(mean=mean, std=std, loc=loc, alpha=alpha, beta=beta)
+
     flow = np.asarray(flow, dtype=float)
     flow_tedges = pd.DatetimeIndex(flow_tedges)
     tedges_out = pd.DatetimeIndex(tedges_out)
@@ -425,97 +562,142 @@ def gamma_residence_time(
     sign = -1.0 if direction == "extraction_to_infiltration" else 1.0
     r = retardation_factor
 
-    td = tedges_to_days(flow_tedges)
-    flow_cum = cumulative_flow_volume(flow, np.diff(td), strictly_monotone=True)
-    flow_rate = (flow_cum[1:] - flow_cum[:-1]) / (td[1:] - td[:-1])
+    flow_tedges_days = tedges_to_days(flow_tedges)
+    flow_cum = cumulative_flow_volume(flow, np.diff(flow_tedges_days), strictly_monotone=True)
+    dvol_seg = flow_cum[1:] - flow_cum[:-1]
+    flow_rate = dvol_seg / (flow_tedges_days[1:] - flow_tedges_days[:-1])
     v_end = flow_cum[-1]
-    # Phi(v) = int_0^v T(w) dw with T the inverse cumulative-volume map (piecewise-linear);
-    # Phi is piecewise-quadratic with knots at flow_cum.
-    seg_integral = td[:-1] * (flow_cum[1:] - flow_cum[:-1]) + (flow_cum[1:] - flow_cum[:-1]) ** 2 / (2 * flow_rate)
-    phi_knot = np.concatenate([[0.0], np.cumsum(seg_integral)])
+    n_edges = len(flow_cum)
 
-    tedges_out_days = tedges_to_days(tedges_out, ref=flow_tedges[0])
-    vol_out = linear_interpolate(x_ref=td, y_ref=flow_cum, x_query=tedges_out_days, left=np.nan, right=np.nan)
-    support_hi = loc + gamma_dist.ppf(1 - _GAMMA_SUPPORT_TAIL, alpha, scale=beta)
+    # phi(v) = int_0^v T(w) dw with T the inverse cumulative-volume map (piecewise-linear);
+    # phi is piecewise-quadratic with knots at flow_cum, so the per-bin time integral of tau is
+    # a difference of phi at the (validity-clipped) look-back/forward limits.
+    seg_integral = flow_tedges_days[:-1] * dvol_seg + dvol_seg**2 / (2 * flow_rate)
+    phi_knot = np.concatenate([[0.0], np.cumsum(seg_integral)])
 
     def phi(v: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         v = np.clip(v, 0.0, v_end)
         j = np.clip(np.searchsorted(flow_cum, v, side="right") - 1, 0, len(flow_rate) - 1)
         dv = v - flow_cum[j]
-        return phi_knot[j] + td[j] * dv + dv * dv / (2 * flow_rate[j])
+        return phi_knot[j] + flow_tedges_days[j] * dv + dv * dv / (2 * flow_rate[j])
 
-    def partial_moments(lo: np.ndarray, hi: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        # zeroth/first/second partial moments of the shifted gamma over [lo, hi] in V_p
-        def cdf(shape: float, x: np.ndarray) -> np.ndarray:
-            return gamma_dist.cdf(np.maximum(x - loc, 0.0), shape, scale=beta)
+    tedges_out_days = tedges_to_days(tedges_out, ref=flow_tedges[0])
+    vol_out = linear_interpolate(
+        x_ref=flow_tedges_days, y_ref=flow_cum, x_query=tedges_out_days, left=np.nan, right=np.nan
+    )
+    good_all = np.isfinite(vol_out[:-1]) & np.isfinite(vol_out[1:]) & (vol_out[1:] > vol_out[:-1])
+    if not np.any(good_all):
+        return np.full(n_out, np.nan)
+    v_lo_all = np.where(good_all, vol_out[:-1], 0.0)
+    v_hi_all = np.where(good_all, vol_out[1:], 1.0)
 
-        m0 = cdf(alpha, hi) - cdf(alpha, lo)
-        d1 = cdf(alpha + 1, hi) - cdf(alpha + 1, lo)
-        m1 = alpha * beta * d1 + loc * m0
-        d2 = cdf(alpha + 2, hi) - cdf(alpha + 2, lo)
-        m2 = alpha * (alpha + 1) * beta**2 * d2 + 2 * loc * alpha * beta * d1 + loc * loc * m0
-        return m0, m1, m2
+    # Finite support: drop the gamma tails (mass ~1e-13, far below the discretization error this
+    # closed form replaces). Restricting the integral to [support_lo, support_hi] is what keeps
+    # the per-bin flow-edge band -- and the gamma CDF evaluations -- bounded.
+    tail = 1e-13
+    support_lo = float(loc + gamma_dist.ppf(tail, alpha, scale=beta))
+    support_hi = float(loc + gamma_dist.ppf(1.0 - tail, alpha, scale=beta))
+
+    # Fixed band of flow edges each bin's look-back/forward sweep can cross over the supported
+    # pore volumes. band_width is the global maximum so every tile shares one column layout; a
+    # spurious column clips to the support and merely splits a quadratic piece without changing
+    # its integral, so the band is an exact superset.
+    a_min = v_lo_all - r * support_hi if sign < 0 else v_lo_all + r * support_lo
+    a_max = v_hi_all - r * support_lo if sign < 0 else v_hi_all + r * support_hi
+    jlo_all = np.clip(np.searchsorted(flow_cum, a_min, "left") - 1, 0, n_edges - 1)
+    jhi_all = np.clip(np.searchsorted(flow_cum, a_max, "right"), 0, n_edges - 1)
+    band_width = int((jhi_all - jlo_all).max()) + 1
+    band = np.arange(band_width)
+
+    # Tile over output bins to bound peak memory. Each bin carries ~3*band_width pieces through a
+    # (3 nodes, 3 phi-args) stack of 9 * n_pieces elements; size the tile to that element budget.
+    n_pieces = 3 * band_width + 3
+    tile = max(1, _max_tile_elements // (9 * n_pieces))
 
     result = np.full(n_out, np.nan)
-    for b in range(n_out):
-        v_lo, v_hi = vol_out[b], vol_out[b + 1]
-        if not (np.isfinite(v_lo) and np.isfinite(v_hi)) or v_hi <= v_lo:
-            continue
+    for t0 in range(0, n_out, tile):
+        t1 = min(t0 + tile, n_out)
+        nt = t1 - t0
+        good = good_all[t0:t1]
+        v_lo = v_lo_all[t0:t1]
+        v_hi = v_hi_all[t0:t1]
+        cols = np.clip(jlo_all[t0:t1, None] + band[None, :], 0, n_edges - 1)
+        fcb = flow_cum[cols]
+        vlo = v_lo[:, None]
+        vhi = v_hi[:, None]
 
-        # V_p breakpoints where a Phi argument (clipped look-back/forward limit) crosses a flow
-        # edge or a validity bound; a superset covering both directions is safe (an extra
-        # breakpoint merely splits one quadratic piece into two with the same integral).
-        candidates = np.concatenate([
-            (v_hi - flow_cum) / r,
-            (flow_cum - v_hi) / r,
-            (v_lo - flow_cum) / r,
-            (flow_cum - v_lo) / r,
-            flow_cum / r,
-            (v_end - flow_cum) / r,
-            [v_lo / r, v_hi / r, (v_end - v_lo) / r, (v_end - v_hi) / r],
-        ])
-        candidates = candidates[(candidates > 0.0) & (candidates < support_hi) & np.isfinite(candidates)]
-        edges_vp = np.unique(np.concatenate([[0.0], candidates, [support_hi]]))
-        lo, hi = edges_vp[:-1], edges_vp[1:]
+        # Direction-specific breakpoint families: the V_p values where a phi argument (a clipped
+        # look-back/forward limit) crosses a flow edge or a validity bound. Clip to the support
+        # and sort to form the integration pieces (zero-width pieces contribute nothing).
+        if sign < 0:
+            cand = np.concatenate([(vhi - fcb) / r, (vlo - fcb) / r, fcb / r, vlo / r, vhi / r], axis=1)
+        else:
+            cand = np.concatenate(
+                [(fcb - vlo) / r, (fcb - vhi) / r, (v_end - fcb) / r, (v_end - vlo) / r, (v_end - vhi) / r], axis=1
+            )
+        np.clip(cand, support_lo, support_hi, out=cand)
+        cand.sort(axis=1)
+        edges = np.concatenate([np.full((nt, 1), support_lo), cand, np.full((nt, 1), support_hi)], axis=1)
+        lo = edges[:, :-1]
+        hi = edges[:, 1:]
         mid = 0.5 * (lo + hi)
         half = 0.5 * (hi - lo)
+        nodes = np.stack([lo, mid, hi], axis=0)  # (3, nt, n_pieces)
 
-        # Evaluate the per-V_p bin integral g(V_p) = int_bin tau dv and the valid length l(V_p)
-        # at the three quadrature nodes (piece lo / mid / hi) at once; g is quadratic and l
-        # linear per piece. tau integrals are differences of Phi (the antiderivative of T).
-        vp3 = np.concatenate([lo, mid, hi])
-        if sign < 0:  # extraction_to_infiltration: look back, valid where a = v - r*V_p >= 0
-            v_start = np.maximum(v_lo, r * vp3)
-            length3 = np.maximum(v_hi - v_start, 0.0)
-            g3 = (phi(np.full_like(vp3, v_hi)) - phi(v_start)) - (
-                phi(v_hi - r * vp3) - phi(np.maximum(v_lo - r * vp3, 0.0))
-            )
-        else:  # infiltration_to_extraction: look forward, valid where a = v + r*V_p <= v_end
-            v_stop = np.minimum(v_hi, v_end - r * vp3)
-            length3 = np.maximum(v_stop - v_lo, 0.0)
-            g3 = (phi(np.minimum(v_hi + r * vp3, v_end)) - phi(v_lo + r * vp3)) - (
-                phi(v_stop) - phi(np.full_like(vp3, v_lo))
-            )
-        g3 = np.where(length3 > 0, g3, 0.0)
-        length3 = np.where(length3 > 0, length3, 0.0)
-        n_piece = len(lo)
-        g_lo, g_mid, g_hi = g3[:n_piece], g3[n_piece : 2 * n_piece], g3[2 * n_piece :]
-        l_lo, l_mid, l_hi = length3[:n_piece], length3[n_piece : 2 * n_piece], length3[2 * n_piece :]
-        m0, m1, m2 = partial_moments(lo, hi)
+        # G(V_p) at the three quadrature nodes (piece lo/mid/hi) as a difference of phi. The
+        # constant term phi(v_hi)/phi(v_lo) does not depend on V_p, so evaluate it once per bin
+        # and batch only the three V_p-dependent phi arguments.
+        if sign < 0:
+            v_start = np.maximum(vlo[None], r * nodes)
+            a_lo = np.maximum(vlo[None] - r * nodes, 0.0)
+            a_hi = vhi[None] - r * nodes
+            length = np.maximum(vhi[None] - v_start, 0.0)
+            phi_const = phi(v_hi)
+            phi_stack = phi(np.stack([v_start, a_hi, a_lo]))
+            g = phi_const[None, :, None] - phi_stack[0] - phi_stack[1] + phi_stack[2]
+        else:
+            v_stop = np.minimum(vhi[None], v_end - r * nodes)
+            a_hi = np.minimum(vhi[None] + r * nodes, v_end)
+            a_lo = vlo[None] + r * nodes
+            length = np.maximum(v_stop - vlo[None], 0.0)
+            phi_const = phi(v_lo)
+            phi_stack = phi(np.stack([a_hi, a_lo, v_stop]))
+            g = phi_stack[0] - phi_stack[1] - phi_stack[2] + phi_const[None, :, None]
+        g = np.where(length > 0, g, 0.0)
+        length = np.where(length > 0, length, 0.0)
+        g_lo, g_mid, g_hi = g
+        l_lo, l_mid, l_hi = length
 
-        # G is quadratic per piece, L linear; write both centred at mid and contract with the
-        # partial moments: int x^k f over [lo, hi] = m_k, so int (a(x-mid)^2 + b(x-mid) + c) f
-        # = a (m2 - 2 mid m1 + mid^2 m0) + b (m1 - mid m0) + c m0.
+        # Gamma partial moments over each piece: one CDF per shape on the piece edges, then diff.
+        # M1/M2 follow from the shifted-gamma partial-moment identities.
+        cdf_edges = edges - loc
+        f0 = gamma_dist.cdf(cdf_edges, alpha, scale=beta)
+        f1 = gamma_dist.cdf(cdf_edges, alpha + 1, scale=beta)
+        f2 = gamma_dist.cdf(cdf_edges, alpha + 2, scale=beta)
+        m0 = np.diff(f0, axis=1)
+        d1 = np.diff(f1, axis=1)
+        m1 = alpha * beta * d1 + loc * m0
+        d2 = np.diff(f2, axis=1)
+        m2 = alpha * (alpha + 1) * beta**2 * d2 + 2 * loc * alpha * beta * d1 + loc * loc * m0
+
+        # G is quadratic per piece, L linear; reconstruct each from its three nodes (Lagrange-
+        # exact) centred at mid and contract with the moments: int (a(x-mid)^2 + b(x-mid) + c) f
+        # = a (m2 - 2 mid m1 + mid^2 m0) + b (m1 - mid m0) + c m0. Zero-width pieces (duplicate
+        # breakpoints) divide by half == 0; their masked result is discarded by np.where.
         safe = half > 0
-        g_a = np.where(safe, (g_lo - 2 * g_mid + g_hi) / (2 * half**2), 0.0)
-        g_b = np.where(safe, (g_hi - g_lo) / (2 * half), 0.0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            g_a = np.where(safe, (g_lo - 2 * g_mid + g_hi) / (2 * half**2), 0.0)
+            g_b = np.where(safe, (g_hi - g_lo) / (2 * half), 0.0)
+            l_b = np.where(safe, (l_hi - l_lo) / (2 * half), 0.0)
         int_g = g_a * (m2 - 2 * mid * m1 + mid**2 * m0) + g_b * (m1 - mid * m0) + g_mid * m0
-        l_b = np.where(safe, (l_hi - l_lo) / (2 * half), 0.0)
         int_l = l_b * (m1 - mid * m0) + l_mid * m0
 
-        covered = np.sum(int_l)
-        if covered > 0:
-            result[b] = np.sum(int_g) / covered
+        num = int_g.sum(axis=1)
+        den = int_l.sum(axis=1)
+        covered = good & (den > 0)
+        tile_result = np.full(nt, np.nan)
+        tile_result[covered] = num[covered] / den[covered]
+        result[t0:t1] = tile_result
     return result
 
 
