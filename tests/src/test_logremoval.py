@@ -128,7 +128,7 @@ def test_extreme_weights():
 
 
 @pytest.mark.parametrize(
-    ("alpha", "beta", "log10_decay_rate", "target_mean"),
+    ("apv_alpha", "apv_beta", "log10_decay_rate", "target_mean"),
     [
         (1.5, 5.0, 0.1, 0.5),  # low alpha, small system
         (3.0, 10.0, 0.2, 1.5),  # moderate parameters
@@ -137,15 +137,17 @@ def test_extreme_weights():
         (0.8, 100.0, 0.01, 0.3),  # alpha < 1, very heterogeneous
     ],
 )
-def test_gamma_find_flow_for_target_mean(alpha, beta, log10_decay_rate, target_mean):
+def test_gamma_find_flow_for_target_mean(apv_alpha, apv_beta, log10_decay_rate, target_mean):
     """Test that gamma_find_flow_for_target_mean inverts gamma_mean correctly."""
     required_flow = gamma_find_flow_for_target_mean(
-        target_mean=target_mean, alpha=alpha, beta=beta, log10_decay_rate=log10_decay_rate
+        target_mean=target_mean, apv_alpha=apv_alpha, apv_beta=apv_beta, log10_decay_rate=log10_decay_rate
     )
 
     # Verify the round-trip: flow -> residence time params -> gamma_mean == target.
-    # loc=0 takes the closed-form branch, so the round-trip is bit-exact.
-    verification_mean = gamma_mean(alpha=alpha, beta=beta / required_flow, log10_decay_rate=log10_decay_rate)
+    # apv_loc=0 takes the closed-form branch, so the round-trip is bit-exact.
+    verification_mean = gamma_mean(
+        rt_alpha=apv_alpha, rt_beta=apv_beta / required_flow, log10_decay_rate=log10_decay_rate
+    )
     assert_allclose(verification_mean, target_mean, rtol=1e-15)
 
 
@@ -295,12 +297,12 @@ def test_decay_rate_conversion_round_trip(mu, lambda_):
 
 def test_gamma_pdf_integrates_to_one():
     """Test that the gamma PDF integrates to 1."""
-    alpha = 3.0
-    beta = 10.0
+    rt_alpha = 3.0
+    rt_beta = 10.0
     log10_decay_rate = 0.2
 
     result, _ = integrate.quad(
-        lambda r: gamma_pdf(r=r, alpha=alpha, beta=beta, log10_decay_rate=log10_decay_rate),
+        lambda r: gamma_pdf(r=r, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate),
         0,
         np.inf,
     )
@@ -316,40 +318,40 @@ def test_gamma_cdf_saturates_at_zero_and_one():
     distribution's support boundary and saturates the upper tail to 1.0 well past
     breakthrough, so both endpoints are exact (not merely close).
     """
-    alpha = 3.0
-    beta = 10.0
+    rt_alpha = 3.0
+    rt_beta = 10.0
     log10_decay_rate = 0.2
 
     # CDF at a very large r saturates to exactly 1.0
-    result = gamma_cdf(r=1000.0, alpha=alpha, beta=beta, log10_decay_rate=log10_decay_rate)
+    result = gamma_cdf(r=1000.0, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
     assert result == 1.0
 
     # CDF at the support boundary r=0 is exactly 0.0
-    result = gamma_cdf(r=0.0, alpha=alpha, beta=beta, log10_decay_rate=log10_decay_rate)
+    result = gamma_cdf(r=0.0, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
     assert result == 0.0
 
 
 def test_gamma_cdf_is_scaled_gamma():
     """Test that the log removal CDF matches a scaled gamma distribution.
 
-    R = mu * T, so R ~ Gamma(alpha, scale=mu*beta). This pins the scale factor
-    mu * beta: dropping the decay-rate factor (scale=mu*beta -> beta) would shift
+    R = mu * T, so R ~ Gamma(rt_alpha, scale=mu*rt_beta). This pins the scale factor
+    mu * rt_beta: dropping the decay-rate factor (scale=mu*beta -> beta) would shift
     the CDF and fail this assertion. Mirrors ``test_gamma_pdf_is_scaled_gamma``.
     """
-    alpha = 4.0
-    beta = 5.0
+    rt_alpha = 4.0
+    rt_beta = 5.0
     log10_decay_rate = 0.3
 
     r_values = np.linspace(0.1, 20.0, 50)
-    cdf_values = gamma_cdf(r=r_values, alpha=alpha, beta=beta, log10_decay_rate=log10_decay_rate)
+    cdf_values = gamma_cdf(r=r_values, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
 
-    expected = stats.gamma.cdf(r_values, a=alpha, scale=log10_decay_rate * beta)
+    expected = stats.gamma.cdf(r_values, a=rt_alpha, scale=log10_decay_rate * rt_beta)
     # loc=0 means gamma_cdf calls the identical scipy routine; the plumbing is bit-exact.
     np.testing.assert_array_equal(cdf_values, expected)
 
 
 @pytest.mark.parametrize(
-    ("alpha", "beta", "log10_decay_rate"),
+    ("rt_alpha", "rt_beta", "log10_decay_rate"),
     [
         (1.5, 5.0, 0.1),  # low alpha
         (3.0, 10.0, 0.2),  # moderate
@@ -358,16 +360,16 @@ def test_gamma_cdf_is_scaled_gamma():
         (0.8, 100.0, 0.01),  # alpha < 1
     ],
 )
-def test_gamma_mean_matches_numerical_integration(alpha, beta, log10_decay_rate):
+def test_gamma_mean_matches_numerical_integration(rt_alpha, rt_beta, log10_decay_rate):
     """Test that gamma_mean matches -log10(E[10^(-R)]) via numerical integration."""
-    analytical_mean = gamma_mean(alpha=alpha, beta=beta, log10_decay_rate=log10_decay_rate)
+    analytical_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
 
     # Integrate E[10^(-R)] = integral of 10^(-r) * pdf(r) dr.
     # scipy.integrate.quad on a half-infinite interval reports relative error
     # around 1e-8 for these integrands; the log10 step amplifies that, so an
     # atol of 1e-8 is an honest reflection of quad's accuracy here.
     expected_decimal_reduction, _ = integrate.quad(
-        lambda r: 10 ** (-r) * gamma_pdf(r=r, alpha=alpha, beta=beta, log10_decay_rate=log10_decay_rate),
+        lambda r: 10 ** (-r) * gamma_pdf(r=r, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate),
         0,
         np.inf,
     )
@@ -377,7 +379,7 @@ def test_gamma_mean_matches_numerical_integration(alpha, beta, log10_decay_rate)
 
 
 @pytest.mark.parametrize(
-    ("alpha", "beta", "flow", "log10_decay_rate"),
+    ("apv_alpha", "apv_beta", "flow", "log10_decay_rate"),
     [
         (1.5, 50.0, 10.0, 0.1),  # low alpha
         (3.0, 100.0, 10.0, 0.2),  # moderate
@@ -386,7 +388,7 @@ def test_gamma_mean_matches_numerical_integration(alpha, beta, log10_decay_rate)
         (0.8, 1000.0, 10.0, 0.01),  # alpha < 1
     ],
 )
-def test_gamma_mean_matches_discretized_parallel_mean(alpha, beta, flow, log10_decay_rate):
+def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow, log10_decay_rate):
     """Test gamma_mean matches the full pipeline: bins, residence_time, log_removal, parallel_mean.
 
     Uses the full pipeline:
@@ -395,13 +397,15 @@ def test_gamma_mean_matches_discretized_parallel_mean(alpha, beta, flow, log10_d
     3. residence_time_to_log_removal() to compute log removals
     4. parallel_mean() to compute effective log removal
 
-    The result should match gamma_mean() with beta = beta / flow.
+    The result should match gamma_mean() with rt_beta = apv_beta / flow.
     """
     # Analytical effective mean
-    analytical = gamma_mean(alpha=alpha, beta=beta / flow, log10_decay_rate=log10_decay_rate)
+    rt_alpha = apv_alpha
+    rt_beta = apv_beta / flow
+    analytical = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
 
     # Step 1: Discretize aquifer pore volume distribution
-    b = gamma_bins(alpha=alpha, beta=beta, n_bins=10000)
+    b = gamma_bins(alpha=apv_alpha, beta=apv_beta, n_bins=10000)
     pore_volumes = b["expected_values"]
     flow_fractions = b["probability_mass"]
 
@@ -437,7 +441,7 @@ def test_gamma_mean_matches_discretized_parallel_mean(alpha, beta, flow, log10_d
 
 
 @pytest.mark.parametrize(
-    ("alpha", "beta", "log10_decay_rate"),
+    ("rt_alpha", "rt_beta", "log10_decay_rate"),
     [
         (1.5, 5.0, 0.1),
         (3.0, 10.0, 0.2),
@@ -450,18 +454,18 @@ def test_gamma_mean_matches_discretized_parallel_mean(alpha, beta, flow, log10_d
         (50.0, 1.0, 0.05),
     ],
 )
-def test_gamma_mean_less_than_arithmetic_mean(alpha, beta, log10_decay_rate):
+def test_gamma_mean_less_than_arithmetic_mean(rt_alpha, rt_beta, log10_decay_rate):
     """Effective parallel (mixed-effluent) mean is strictly below the arithmetic mean.
 
     This is Jensen's inequality applied to the convex function ``10^(-x)``: the
-    arithmetic mean of log removals is ``mu * alpha * beta`` (= mu * E[T]) while
+    arithmetic mean of log removals is ``mu * rt_alpha * rt_beta`` (= mu * E[T]) while
     the parallel mean is always strictly less because short-residence-time paths
     contribute disproportionately to the output concentration. The gap is large
     for non-degenerate gamma distributions, so the strict ``<`` holds without any
     numerical slack.
     """
-    effective_mean = gamma_mean(alpha=alpha, beta=beta, log10_decay_rate=log10_decay_rate)
-    arithmetic_mean = log10_decay_rate * alpha * beta
+    effective_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
+    arithmetic_mean = log10_decay_rate * rt_alpha * rt_beta
 
     assert effective_mean < arithmetic_mean
 
@@ -469,79 +473,79 @@ def test_gamma_mean_less_than_arithmetic_mean(alpha, beta, log10_decay_rate):
 def test_gamma_mean_arithmetic_limit_small_argument():
     """As ``beta*mu*ln(10) -> 0`` the effective mean approaches the arithmetic mean.
 
-    For tiny ``x = beta*mu*ln(10)``, ``log10(1+x) -> x/ln(10)`` so
-    ``gamma_mean -> alpha*beta*mu``. The ``log1p`` spelling is what makes this
+    For tiny ``x = rt_beta*mu*ln(10)``, ``log10(1+x) -> x/ln(10)`` so
+    ``gamma_mean -> rt_alpha*rt_beta*mu``. The ``log1p`` spelling is what makes this
     limit accurate to machine precision; the naive ``log10(1+x)`` form would lose
     digits here.
     """
-    alpha = 2.0
-    beta = 1e-3
+    rt_alpha = 2.0
+    rt_beta = 1e-3
     mu = 1e-3
-    result = gamma_mean(alpha=alpha, beta=beta, log10_decay_rate=mu)
-    assert_allclose(result, mu * alpha * beta, rtol=1e-5)
+    result = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=mu)
+    assert_allclose(result, mu * rt_alpha * rt_beta, rtol=1e-5)
 
 
 def test_gamma_pdf_is_scaled_gamma():
     """Test that the log removal PDF matches a scaled gamma distribution."""
-    alpha = 4.0
-    beta = 5.0
+    rt_alpha = 4.0
+    rt_beta = 5.0
     log10_decay_rate = 0.3
 
     r_values = np.linspace(0.1, 20.0, 50)
-    pdf_values = gamma_pdf(r=r_values, alpha=alpha, beta=beta, log10_decay_rate=log10_decay_rate)
+    pdf_values = gamma_pdf(r=r_values, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
 
     # R = mu*T, so R ~ Gamma(alpha, mu*beta)
-    expected = stats.gamma.pdf(r_values, a=alpha, scale=log10_decay_rate * beta)
+    expected = stats.gamma.pdf(r_values, a=rt_alpha, scale=log10_decay_rate * rt_beta)
     # loc=0 means gamma_pdf calls the identical scipy routine; the plumbing is bit-exact.
     np.testing.assert_array_equal(pdf_values, expected)
 
 
 @pytest.mark.parametrize(
-    ("alpha", "beta", "loc", "log10_decay_rate"),
+    ("rt_alpha", "rt_beta", "rt_loc", "log10_decay_rate"),
     [
         (3.0, 10.0, 5.0, 0.2),
         (10.0, 5.0, 20.0, 0.1),
         (0.8, 100.0, 50.0, 0.01),
     ],
 )
-def test_gamma_pdf_shifted_by_mu_loc(alpha, beta, loc, log10_decay_rate):
-    """PDF with loc > 0 is a pure horizontal shift of the loc=0 PDF by mu*loc."""
+def test_gamma_pdf_shifted_by_mu_loc(rt_alpha, rt_beta, rt_loc, log10_decay_rate):
+    """PDF with rt_loc > 0 is a pure horizontal shift of the loc=0 PDF by mu*rt_loc."""
     r_base = np.linspace(0.01, 20.0, 30)
-    pdf_loc_zero = gamma_pdf(r=r_base, alpha=alpha, beta=beta, log10_decay_rate=log10_decay_rate)
+    pdf_loc_zero = gamma_pdf(r=r_base, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
     pdf_shifted = gamma_pdf(
-        r=r_base + log10_decay_rate * loc,
-        alpha=alpha,
-        beta=beta,
-        loc=loc,
+        r=r_base + log10_decay_rate * rt_loc,
+        rt_alpha=rt_alpha,
+        rt_beta=rt_beta,
+        rt_loc=rt_loc,
         log10_decay_rate=log10_decay_rate,
     )
     assert_allclose(pdf_shifted, pdf_loc_zero, rtol=1e-12, atol=1e-15)
 
 
 @pytest.mark.parametrize(
-    ("alpha", "beta", "loc", "log10_decay_rate"),
+    ("rt_alpha", "rt_beta", "rt_loc", "log10_decay_rate"),
     [
         (3.0, 10.0, 5.0, 0.2),
         (10.0, 5.0, 20.0, 0.1),
         (0.8, 100.0, 50.0, 0.01),
     ],
 )
-def test_gamma_cdf_shifted_by_mu_loc(alpha, beta, loc, log10_decay_rate):
-    """CDF with loc > 0 is a pure horizontal shift of the loc=0 CDF by mu*loc."""
+def test_gamma_cdf_shifted_by_mu_loc(rt_alpha, rt_beta, rt_loc, log10_decay_rate):
+    """CDF with rt_loc > 0 is a pure horizontal shift of the loc=0 CDF by mu*rt_loc."""
     r_base = np.linspace(0.01, 20.0, 30)
-    cdf_loc_zero = gamma_cdf(r=r_base, alpha=alpha, beta=beta, log10_decay_rate=log10_decay_rate)
+    cdf_loc_zero = gamma_cdf(r=r_base, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
     cdf_shifted = gamma_cdf(
-        r=r_base + log10_decay_rate * loc,
-        alpha=alpha,
-        beta=beta,
-        loc=loc,
+        r=r_base + log10_decay_rate * rt_loc,
+        rt_alpha=rt_alpha,
+        rt_beta=rt_beta,
+        rt_loc=rt_loc,
         log10_decay_rate=log10_decay_rate,
     )
     assert_allclose(cdf_shifted, cdf_loc_zero, rtol=1e-12, atol=1e-15)
 
 
 @pytest.mark.parametrize(
-    ("alpha", "beta", "loc", "log10_decay_rate"),
+    ("rt_alpha", "rt_beta", "rt_loc", "log10_decay_rate"),
     [
         (3.0, 10.0, 5.0, 0.2),
         (10.0, 5.0, 20.0, 0.1),
@@ -549,52 +553,52 @@ def test_gamma_cdf_shifted_by_mu_loc(alpha, beta, loc, log10_decay_rate):
         (0.8, 100.0, 50.0, 0.01),
     ],
 )
-def test_gamma_mean_loc_adds_mu_loc(alpha, beta, loc, log10_decay_rate):
-    """gamma_mean with loc > 0 equals loc=0 case plus the constant mu*loc.
+def test_gamma_mean_loc_adds_mu_loc(rt_alpha, rt_beta, rt_loc, log10_decay_rate):
+    """gamma_mean with rt_loc > 0 equals loc=0 case plus the constant mu*rt_loc.
 
-    Compares ``mean_loc`` directly against ``mean_zero + mu*loc`` instead
+    Compares ``mean_loc`` directly against ``mean_zero + mu*rt_loc`` instead
     of the subtraction form ``mean_loc - mean_zero``. Both sides sum the
-    same two floats (``mu*loc`` and ``alpha*log10(...)``) in commutative
+    same two floats (``mu*rt_loc`` and ``alpha*log10(...)``) in commutative
     order, so the comparison is bit-identical at ``rtol=1e-15``. The
-    subtraction form suffered catastrophic cancellation when ``mu*loc``
+    subtraction form suffered catastrophic cancellation when ``mu*rt_loc``
     was much smaller than the alpha/beta term.
     """
-    mean_loc_zero = gamma_mean(alpha=alpha, beta=beta, log10_decay_rate=log10_decay_rate)
+    mean_loc_zero = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
     mean_loc = gamma_mean(
-        alpha=alpha,
-        beta=beta,
-        loc=loc,
+        rt_alpha=rt_alpha,
+        rt_beta=rt_beta,
+        rt_loc=rt_loc,
         log10_decay_rate=log10_decay_rate,
     )
-    assert_allclose(mean_loc, mean_loc_zero + log10_decay_rate * loc, rtol=1e-15)
+    assert_allclose(mean_loc, mean_loc_zero + log10_decay_rate * rt_loc, rtol=1e-15)
 
 
 @pytest.mark.parametrize(
-    ("alpha", "beta", "loc", "log10_decay_rate"),
+    ("rt_alpha", "rt_beta", "rt_loc", "log10_decay_rate"),
     [
         (3.0, 10.0, 5.0, 0.2),
         (10.0, 5.0, 20.0, 0.1),
         (0.8, 100.0, 50.0, 0.01),
     ],
 )
-def test_gamma_mean_loc_matches_numerical_integration(alpha, beta, loc, log10_decay_rate):
-    """gamma_mean with loc > 0 matches -log10(E[10^(-R)]) via numerical integration."""
+def test_gamma_mean_loc_matches_numerical_integration(rt_alpha, rt_beta, rt_loc, log10_decay_rate):
+    """gamma_mean with rt_loc > 0 matches -log10(E[10^(-R)]) via numerical integration."""
     analytical_mean = gamma_mean(
-        alpha=alpha,
-        beta=beta,
-        loc=loc,
+        rt_alpha=rt_alpha,
+        rt_beta=rt_beta,
+        rt_loc=rt_loc,
         log10_decay_rate=log10_decay_rate,
     )
-    # E[10^(-R)] = integral of 10^(-r) * pdf(r) dr, where pdf has location mu*loc
-    lower = log10_decay_rate * loc
+    # E[10^(-R)] = integral of 10^(-r) * pdf(r) dr, where pdf has location mu*rt_loc
+    lower = log10_decay_rate * rt_loc
     expected_decimal_reduction, _ = integrate.quad(
         lambda r: (
             10 ** (-r)
             * gamma_pdf(
                 r=r,
-                alpha=alpha,
-                beta=beta,
-                loc=loc,
+                rt_alpha=rt_alpha,
+                rt_beta=rt_beta,
+                rt_loc=rt_loc,
                 log10_decay_rate=log10_decay_rate,
             )
         ),
@@ -608,7 +612,7 @@ def test_gamma_mean_loc_matches_numerical_integration(alpha, beta, loc, log10_de
 
 
 @pytest.mark.parametrize(
-    ("alpha", "beta", "loc", "log10_decay_rate", "target_mean"),
+    ("apv_alpha", "apv_beta", "apv_loc", "log10_decay_rate", "target_mean"),
     [
         (1.5, 5.0, 2.0, 0.1, 0.5),
         (3.0, 10.0, 5.0, 0.2, 1.8),
@@ -616,24 +620,24 @@ def test_gamma_mean_loc_matches_numerical_integration(alpha, beta, loc, log10_de
         (0.8, 100.0, 50.0, 0.01, 0.4),
     ],
 )
-def test_gamma_find_flow_for_target_mean_with_loc(alpha, beta, loc, log10_decay_rate, target_mean):
-    """gamma_find_flow_for_target_mean with loc > 0 inverts gamma_mean round-trip."""
+def test_gamma_find_flow_for_target_mean_with_loc(apv_alpha, apv_beta, apv_loc, log10_decay_rate, target_mean):
+    """gamma_find_flow_for_target_mean with apv_loc > 0 inverts gamma_mean round-trip."""
     required_flow = gamma_find_flow_for_target_mean(
         target_mean=target_mean,
-        alpha=alpha,
-        beta=beta,
-        loc=loc,
+        apv_alpha=apv_alpha,
+        apv_beta=apv_beta,
+        apv_loc=apv_loc,
         log10_decay_rate=log10_decay_rate,
     )
     # The residence-time distribution at flow Q is a shifted gamma with
-    # shape=alpha, scale=beta/Q, location=loc/Q.
+    # shape=apv_alpha, scale=apv_beta/Q, location=apv_loc/Q.
     verification_mean = gamma_mean(
-        alpha=alpha,
-        beta=beta / required_flow,
-        loc=loc / required_flow,
+        rt_alpha=apv_alpha,
+        rt_beta=apv_beta / required_flow,
+        rt_loc=apv_loc / required_flow,
         log10_decay_rate=log10_decay_rate,
     )
-    # loc>0 requires brentq, whose default tolerance limits the round-trip.
+    # apv_loc>0 requires brentq, whose default tolerance limits the round-trip.
     assert_allclose(verification_mean, target_mean, rtol=1e-10)
 
 
@@ -641,65 +645,65 @@ def test_gamma_find_flow_for_target_mean_loc_zero_matches_closed_form():
     """With loc=0 the implementation must use the closed-form branch and match the formula.
 
     Asserts the returned flow against the independently derived closed form
-    ``Q = beta * mu * ln(10) / (10^(target_mean / alpha) - 1)``. This pins the
+    ``Q = apv_beta * mu * ln(10) / (10^(target_mean / apv_alpha) - 1)``. This pins the
     closed-form branch directly and fails if its derivation changes. Also checks
-    that the default ``loc`` and an explicit ``loc=0.0`` agree bit-for-bit.
+    that the default ``apv_loc`` and an explicit ``apv_loc=0.0`` agree bit-for-bit.
     """
-    alpha = 3.0
-    beta = 10.0
+    apv_alpha = 3.0
+    apv_beta = 10.0
     log10_decay_rate = 0.2
     target_mean = 1.5
     flow_default = gamma_find_flow_for_target_mean(
         target_mean=target_mean,
-        alpha=alpha,
-        beta=beta,
+        apv_alpha=apv_alpha,
+        apv_beta=apv_beta,
         log10_decay_rate=log10_decay_rate,
     )
     flow_loc_zero = gamma_find_flow_for_target_mean(
         target_mean=target_mean,
-        alpha=alpha,
-        beta=beta,
-        loc=0.0,
+        apv_alpha=apv_alpha,
+        apv_beta=apv_beta,
+        apv_loc=0.0,
         log10_decay_rate=log10_decay_rate,
     )
     assert flow_default == flow_loc_zero
 
-    expected = beta * log10_decay_rate * np.log(10) / (10 ** (target_mean / alpha) - 1)
+    expected = apv_beta * log10_decay_rate * np.log(10) / (10 ** (target_mean / apv_alpha) - 1)
     assert_allclose(flow_default, expected, rtol=1e-15)
 
 
 def test_gamma_pdf_negative_loc_raises():
-    """gamma_pdf must reject negative loc."""
-    with pytest.raises(ValueError, match="loc must be non-negative"):
-        gamma_pdf(r=np.array([1.0]), alpha=3.0, beta=10.0, loc=-1.0, log10_decay_rate=0.2)
+    """gamma_pdf must reject negative rt_loc."""
+    with pytest.raises(ValueError, match="rt_loc must be non-negative"):
+        gamma_pdf(r=np.array([1.0]), rt_alpha=3.0, rt_beta=10.0, rt_loc=-1.0, log10_decay_rate=0.2)
 
 
 def test_gamma_cdf_negative_loc_raises():
-    """gamma_cdf must reject negative loc."""
-    with pytest.raises(ValueError, match="loc must be non-negative"):
-        gamma_cdf(r=np.array([1.0]), alpha=3.0, beta=10.0, loc=-1.0, log10_decay_rate=0.2)
+    """gamma_cdf must reject negative rt_loc."""
+    with pytest.raises(ValueError, match="rt_loc must be non-negative"):
+        gamma_cdf(r=np.array([1.0]), rt_alpha=3.0, rt_beta=10.0, rt_loc=-1.0, log10_decay_rate=0.2)
 
 
 def test_gamma_mean_negative_loc_raises():
-    """gamma_mean must reject negative loc."""
-    with pytest.raises(ValueError, match="loc must be non-negative"):
-        gamma_mean(alpha=3.0, beta=10.0, loc=-1.0, log10_decay_rate=0.2)
+    """gamma_mean must reject negative rt_loc."""
+    with pytest.raises(ValueError, match="rt_loc must be non-negative"):
+        gamma_mean(rt_alpha=3.0, rt_beta=10.0, rt_loc=-1.0, log10_decay_rate=0.2)
 
 
 def test_gamma_find_flow_for_target_mean_negative_loc_raises():
-    """gamma_find_flow_for_target_mean must reject negative loc."""
-    with pytest.raises(ValueError, match="loc must be non-negative"):
+    """gamma_find_flow_for_target_mean must reject negative apv_loc."""
+    with pytest.raises(ValueError, match="apv_loc must be non-negative"):
         gamma_find_flow_for_target_mean(
             target_mean=1.0,
-            alpha=3.0,
-            beta=10.0,
-            loc=-5.0,
+            apv_alpha=3.0,
+            apv_beta=10.0,
+            apv_loc=-5.0,
             log10_decay_rate=0.2,
         )
 
 
 def test_gamma_find_flow_for_target_mean_zero_decay_raises():
-    """log10_decay_rate=0 with loc>0 used to call brentq on [0, inf]; now raises.
+    """log10_decay_rate=0 with apv_loc>0 used to call brentq on [0, inf]; now raises.
 
     Without decay the effective mean log removal is identically zero regardless of flow,
     so no finite flow can reach a strictly positive target_mean; ``flow_closed_form``
@@ -709,19 +713,19 @@ def test_gamma_find_flow_for_target_mean_zero_decay_raises():
     with pytest.raises(ValueError, match="log10_decay_rate must be positive"):
         gamma_find_flow_for_target_mean(
             target_mean=1.0,
-            alpha=3.0,
-            beta=10.0,
-            loc=5.0,
+            apv_alpha=3.0,
+            apv_beta=10.0,
+            apv_loc=5.0,
             log10_decay_rate=0.0,
         )
-    # Same guard fires when loc=0, since the closed-form would otherwise
-    # divide by 10**(target_mean/alpha) - 1 with a zero numerator.
+    # Same guard fires when apv_loc=0, since the closed-form would otherwise
+    # divide by 10**(target_mean/apv_alpha) - 1 with a zero numerator.
     with pytest.raises(ValueError, match="log10_decay_rate must be positive"):
         gamma_find_flow_for_target_mean(
             target_mean=1.0,
-            alpha=3.0,
-            beta=10.0,
-            loc=0.0,
+            apv_alpha=3.0,
+            apv_beta=10.0,
+            apv_loc=0.0,
             log10_decay_rate=0.0,
         )
 
@@ -731,22 +735,22 @@ def test_gamma_find_flow_for_target_mean_negative_decay_raises():
     with pytest.raises(ValueError, match="log10_decay_rate must be positive"):
         gamma_find_flow_for_target_mean(
             target_mean=1.0,
-            alpha=3.0,
-            beta=10.0,
-            loc=5.0,
+            apv_alpha=3.0,
+            apv_beta=10.0,
+            apv_loc=5.0,
             log10_decay_rate=-0.1,
         )
 
 
-@pytest.mark.parametrize(("alpha", "beta"), [(0.0, 10.0), (-1.0, 10.0), (3.0, 0.0), (3.0, -5.0)])
-def test_gamma_find_flow_for_target_mean_invalid_alpha_beta_raises(alpha, beta):
-    """alpha and beta must be strictly positive."""
+@pytest.mark.parametrize(("apv_alpha", "apv_beta"), [(0.0, 10.0), (-1.0, 10.0), (3.0, 0.0), (3.0, -5.0)])
+def test_gamma_find_flow_for_target_mean_invalid_alpha_beta_raises(apv_alpha, apv_beta):
+    """apv_alpha and apv_beta must be strictly positive."""
     with pytest.raises(ValueError, match="must be positive"):
         gamma_find_flow_for_target_mean(
             target_mean=1.0,
-            alpha=alpha,
-            beta=beta,
-            loc=5.0,
+            apv_alpha=apv_alpha,
+            apv_beta=apv_beta,
+            apv_loc=5.0,
             log10_decay_rate=0.1,
         )
 
