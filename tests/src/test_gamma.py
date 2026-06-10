@@ -1,10 +1,8 @@
 import numpy as np
-import pandas as pd
 import pytest
 from scipy.stats import gamma as gamma_dist
 
 from gwtransport.gamma import (
-    _bin_masses,
     alpha_beta_loc_to_mean_std,
     mean_std_loc_to_alpha_beta,
     parse_parameters,
@@ -16,15 +14,6 @@ from gwtransport.gamma import (
 
 # Fixtures
 @pytest.fixture
-def sample_time_series():
-    """Create sample time series data for testing."""
-    dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
-    concentration = pd.Series(np.sin(np.linspace(0, 4 * np.pi, len(dates))) + 2, index=dates)
-    flow = pd.Series(np.ones(len(dates)) * 100, index=dates)  # Constant flow of 100 m3/day
-    return concentration, flow
-
-
-@pytest.fixture
 def gamma_params():
     """Sample gamma distribution parameters."""
     return {
@@ -32,23 +21,6 @@ def gamma_params():
         "beta": 5.0,  # Scale parameter
         "n_bins": 10,  # Number of bins
     }
-
-
-# Tests for the private _bin_masses helper. It has no input validation by design;
-# its preconditions are guaranteed by the only internal caller (bins()).
-def test_bin_masses_normalization_over_full_support():
-    """``_bin_masses`` over ``[0, inf)`` integrates to 1 exactly."""
-    masses = _bin_masses(alpha=2.0, beta=1.0, bin_edges=np.array([0, 1, 2, np.inf]))
-    assert len(masses) == 3
-    assert np.all(masses >= 0)
-    np.testing.assert_allclose(np.sum(masses), 1.0, rtol=1e-14)
-
-
-def test_bin_masses_single_bin_is_unit():
-    """A single bin spanning the full support carries the entire probability mass."""
-    masses = _bin_masses(alpha=2.0, beta=1.0, bin_edges=np.array([0, np.inf]))
-    assert len(masses) == 1
-    np.testing.assert_allclose(masses[0], 1.0, rtol=1e-14)
 
 
 # Test bins function
@@ -68,11 +40,16 @@ def test_bins_basic(gamma_params):
     assert len(result["expected_values"]) == n_bins
     assert len(result["probability_mass"]) == n_bins
 
-    # Check probability masses sum to 1
-    assert np.isclose(np.sum(result["probability_mass"]), 1.0, rtol=1e-10)
+    # Check probability masses sum to 1 (the sum is exactly representable; honor rtol with atol=0)
+    np.testing.assert_allclose(np.sum(result["probability_mass"]), 1.0, rtol=1e-14)
 
     # Check bin edges are monotonically increasing
     assert np.all(np.diff(result["edges"]) > 0)
+
+    # Each conditional mean must lie within its own bin. This per-bin oracle is
+    # immune to permutations that a sum-only conservation check would not catch.
+    assert np.all(result["lower_bound"] <= result["expected_values"])
+    assert np.all(result["expected_values"] <= result["upper_bound"])
 
     # Check if the sum of the expected value of each bin is equal to the expected value of the distribution (alpha * beta)
     expected_value_bins = np.sum(result["expected_values"] * result["probability_mass"])
@@ -91,23 +68,23 @@ def test_invalid_parameters():
 
 
 @pytest.mark.parametrize(
-    ("alpha", "beta"),
+    ("alpha", "beta", "n_bins"),
     [
-        (0.05, 1.0),  # alpha << 1: PDF singularity at 0
-        (0.5, 1.0),  # alpha < 1
-        (0.5, 1e-3),  # alpha < 1, beta tiny
-        (1.0, 1.0),  # exponential
-        (10.0, 1.0),  # moderate
-        (1e4, 1.0),  # very large alpha
-        (1.0, 1e3),  # beta large
+        (0.05, 1.0, 10),  # alpha << 1: PDF singularity at 0
+        (0.5, 1.0, 10),  # alpha < 1
+        (0.5, 1e-3, 10),  # alpha < 1, beta tiny
+        (1.0, 1.0, 10),  # exponential
+        (10.0, 1.0, 10),  # moderate
+        (1e4, 1.0, 10),  # very large alpha
+        (1.0, 1e3, 10),  # beta large
+        (0.5, 10.0, 100),  # alpha < 1 with many bins (PDF singularity + fine discretization)
     ],
 )
-def test_bins_extreme_regimes_finite_and_conservative(alpha, beta):
+def test_bins_extreme_regimes_finite_and_conservative(alpha, beta, n_bins):
     """Across extreme regimes, ``bins`` must produce finite, in-bin values and conserve mass + first moment.
 
     Replaces the original ``test_numerical_stability`` (only asserted non-NaN).
     """
-    n_bins = 10
     r = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
 
     assert np.all(np.isfinite(r["expected_values"])), f"non-finite expected_values at alpha={alpha}, beta={beta}"
@@ -131,10 +108,10 @@ def test_gamma_mean_std_loc_to_alpha_beta_basic():
     assert alpha > 0
     assert beta > 0
 
-    # Convert back and check if we get approximately the same mean/std
+    # Convert back: the conversion is bit-exact algebra, so the round-trip is exact.
     mean_back, std_back = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta)
-    assert np.isclose(mean, mean_back, rtol=1e-7), f"Expected mean ~ {mean}, got {mean_back}"
-    assert np.isclose(std, std_back, rtol=1e-7), f"Expected std ~ {std}, got {std_back}"
+    np.testing.assert_allclose(mean, mean_back, rtol=1e-15)
+    np.testing.assert_allclose(std, std_back, rtol=1e-15)
 
 
 def test_gamma_mean_std_loc_to_alpha_beta_with_loc():
@@ -179,7 +156,8 @@ def test_gamma_alpha_beta_loc_to_mean_std_basic():
     mean_expected = alpha * beta
     mean, std = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta)
     assert mean == mean_expected, f"Expected mean = {mean_expected}, got {mean}"
-    assert np.isclose(std, 4.0, rtol=1e-7), f"Expected std ~ 4.0, got {std}"
+    # std = sqrt(4) * 2 = 4.0 exactly
+    np.testing.assert_allclose(std, 4.0, rtol=0, atol=0)
 
 
 def test_gamma_alpha_beta_loc_to_mean_std_with_loc():
@@ -190,168 +168,10 @@ def test_gamma_alpha_beta_loc_to_mean_std_with_loc():
     np.testing.assert_allclose(std, np.sqrt(alpha) * beta, rtol=1e-15)
 
 
-def test_expected_bin_values_monte_carlo():
-    """Test expected bin values using Monte Carlo sampling with strong curvature gamma distributions."""
-    np.random.seed(42)
-
-    # Test parameters for gamma distributions with strong curvature (low alpha values)
-    test_cases = [
-        {"alpha": 0.5, "beta": 2.0, "n_bins": 5},  # Strong curvature, low alpha
-        {"alpha": 1.0, "beta": 1.5, "n_bins": 4},  # Exponential-like
-        {"alpha": 2.0, "beta": 0.5, "n_bins": 6},  # Moderate curvature
-    ]
-
-    n_samples = 100000
-    tolerance = 0.005  # 0.5% tolerance for convergence
-
-    for params in test_cases:
-        alpha = float(params["alpha"])
-        beta = float(params["beta"])
-        n_bins = int(params["n_bins"])
-
-        # Get theoretical bin properties
-        bin_result = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
-        theoretical_expected = bin_result["expected_values"]
-        lower_bounds = bin_result["lower_bound"]
-        upper_bounds = bin_result["upper_bound"]
-
-        # Generate samples from gamma distribution
-        samples = np.array(gamma_dist.rvs(alpha, scale=beta, size=n_samples, random_state=42))
-
-        # Calculate empirical expected values for each bin
-        empirical_expected = np.zeros(n_bins)
-
-        for i in range(n_bins):
-            # Find samples that fall within this bin
-            if i == n_bins - 1:  # Last bin goes to infinity
-                bin_mask = samples >= lower_bounds[i]
-            else:
-                bin_mask = (samples >= lower_bounds[i]) & (samples < upper_bounds[i])
-
-            bin_samples = samples[bin_mask]
-
-            if len(bin_samples) > 0:
-                empirical_expected[i] = np.mean(bin_samples)
-            else:
-                empirical_expected[i] = np.nan
-
-        # Compare theoretical and empirical expected values
-        for i in range(n_bins):
-            if not np.isnan(empirical_expected[i]):
-                relative_error = abs(empirical_expected[i] - theoretical_expected[i]) / theoretical_expected[i]
-                assert relative_error < tolerance, (
-                    f"Bin {i} for alpha={alpha}, beta={beta}: "
-                    f"Theoretical={theoretical_expected[i]:.6f}, "
-                    f"Empirical={empirical_expected[i]:.6f}, "
-                    f"Relative error={relative_error:.6f} > {tolerance}"
-                )
-
-
-def test_expected_bin_values_convergence():
-    """Test convergence of expected values to theoretical values with increasing sample sizes."""
-    np.random.seed(123)
-
-    # Strong curvature gamma distribution
-    alpha, beta = 0.8, 1.2
-    n_bins = 4
-
-    # Get theoretical values
-    bin_result = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
-    theoretical_expected = bin_result["expected_values"]
-    lower_bounds = bin_result["lower_bound"]
-    upper_bounds = bin_result["upper_bound"]
-
-    # Test with increasing sample sizes
-    sample_sizes = [1000, 5000, 25000, 100000]
-
-    for n_samples in sample_sizes:
-        samples = np.array(gamma_dist.rvs(alpha, scale=beta, size=n_samples, random_state=123))
-
-        empirical_expected = np.zeros(n_bins)
-
-        for i in range(n_bins):
-            if i == n_bins - 1:
-                bin_mask = samples >= lower_bounds[i]
-            else:
-                bin_mask = (samples >= lower_bounds[i]) & (samples < upper_bounds[i])
-
-            bin_samples = samples[bin_mask]
-
-            if len(bin_samples) > 0:
-                empirical_expected[i] = np.mean(bin_samples)
-            else:
-                empirical_expected[i] = np.nan
-
-        # Check that empirical values are getting closer to theoretical values
-        # Use relaxed tolerance for smaller sample sizes
-        tolerance = 0.04 if n_samples <= 5000 else 0.02
-
-        for i in range(n_bins):
-            if not np.isnan(empirical_expected[i]):
-                relative_error = abs(empirical_expected[i] - theoretical_expected[i]) / theoretical_expected[i]
-                assert relative_error < tolerance, (
-                    f"Sample size {n_samples}, bin {i}: "
-                    f"Theoretical={theoretical_expected[i]:.6f}, "
-                    f"Empirical={empirical_expected[i]:.6f}, "
-                    f"Relative error={relative_error:.6f} > {tolerance}"
-                )
-
-
-def test_multiple_gamma_distributions_expected_values():
-    """Test expected bin values for multiple gamma distributions with different parameters."""
-    np.random.seed(456)
-
-    # Various gamma distributions with different characteristics
-    distributions = [
-        {"alpha": 0.3, "beta": 3.0, "description": "Very strong curvature"},
-        {"alpha": 1.0, "beta": 2.0, "description": "Exponential"},
-        {"alpha": 2.5, "beta": 1.5, "description": "Moderate shape"},
-        {"alpha": 5.0, "beta": 0.8, "description": "Bell-shaped"},
-    ]
-
-    n_samples = 50000
-    n_bins = 5
-    tolerance = 0.01
-
-    for dist_params in distributions:
-        alpha = float(dist_params["alpha"])
-        beta = float(dist_params["beta"])
-
-        # Get theoretical bin properties
-        bin_result = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
-        theoretical_expected = bin_result["expected_values"]
-        lower_bounds = bin_result["lower_bound"]
-        upper_bounds = bin_result["upper_bound"]
-
-        # Generate samples
-        samples = np.array(gamma_dist.rvs(alpha, scale=beta, size=n_samples, random_state=456))
-
-        # Calculate empirical expected values
-        empirical_expected = np.zeros(n_bins)
-
-        for i in range(n_bins):
-            if i == n_bins - 1:
-                bin_mask = samples >= lower_bounds[i]
-            else:
-                bin_mask = (samples >= lower_bounds[i]) & (samples < upper_bounds[i])
-
-            bin_samples = samples[bin_mask]
-
-            if len(bin_samples) > 0:
-                empirical_expected[i] = np.mean(bin_samples)
-            else:
-                empirical_expected[i] = np.nan
-
-        # Validate convergence for each bin
-        for i in range(n_bins):
-            if not np.isnan(empirical_expected[i]):
-                relative_error = abs(empirical_expected[i] - theoretical_expected[i]) / theoretical_expected[i]
-                assert relative_error < tolerance, (
-                    f"{dist_params['description']} (alpha={alpha}, beta={beta}), bin {i}: "
-                    f"Theoretical={theoretical_expected[i]:.6f}, "
-                    f"Empirical={empirical_expected[i]:.6f}, "
-                    f"Relative error={relative_error:.6f} > {tolerance}"
-                )
+# The unshifted Monte Carlo accuracy tests have been removed: their bug-catching is a
+# strict subset of test_bins_expected_values_against_scipy_quadrature (exact, deterministic)
+# and the single retained sampling sanity check test_bins_loc_monte_carlo_expected_values
+# (shifted case). See the per-module review for the deduplication rationale.
 
 
 # =============================================================================
@@ -379,10 +199,10 @@ def test_parse_parameters_with_mean_std():
     assert beta > 0
     assert loc == 0.0
 
-    # Verify conversion back gives same mean/std
+    # Verify conversion back gives same mean/std (bit-exact algebra)
     mean_back, std_back = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta, loc=loc)
-    assert np.isclose(mean, mean_back)
-    assert np.isclose(std, std_back)
+    np.testing.assert_allclose(mean, mean_back, rtol=1e-15)
+    np.testing.assert_allclose(std, std_back, rtol=1e-15)
 
 
 def test_parse_parameters_with_loc():
@@ -394,6 +214,22 @@ def test_parse_parameters_with_loc():
     np.testing.assert_allclose(alpha, (8.0 / 3.0) ** 2, rtol=1e-15)
     np.testing.assert_allclose(beta, 9.0 / 8.0, rtol=1e-15)
     assert loc == 2.0
+
+
+def test_parse_parameters_both_pairs_provided():
+    """Regression: providing both (alpha, beta) and (mean, std) must raise, not silently ignore mean/std.
+
+    Before the fix, (alpha, beta) silently won and (mean, std) were dropped without error.
+    """
+    with pytest.raises(ValueError, match="Provide either"):
+        parse_parameters(alpha=5.0, beta=2.0, mean=10.0, std=3.0)
+
+    # A single stray mean/std alongside a full (alpha, beta) pair must also raise.
+    with pytest.raises(ValueError, match="Provide either"):
+        parse_parameters(alpha=5.0, beta=2.0, mean=10.0)
+
+    with pytest.raises(ValueError, match="Provide either"):
+        parse_parameters(alpha=5.0, beta=2.0, std=3.0)
 
 
 def test_parse_parameters_negative_loc():
@@ -471,8 +307,8 @@ def test_bins_with_quantile_edges_basic():
     assert len(result["expected_values"]) == 4
     assert len(result["edges"]) == 5
 
-    # Verify probability masses sum to 1
-    assert np.isclose(np.sum(result["probability_mass"]), 1.0)
+    # Verify probability masses sum to 1 (the sum is exactly representable)
+    np.testing.assert_allclose(np.sum(result["probability_mass"]), 1.0, rtol=1e-14)
 
     # Verify probability masses match quantile differences
     expected_masses = np.diff(quantile_edges)
@@ -542,6 +378,39 @@ def test_bins_n_bins_too_small():
 
     with pytest.raises(ValueError, match="Number of bins must be greater than 1"):
         gamma_bins(alpha=5.0, beta=2.0, n_bins=0)
+
+
+def test_bins_quantile_edges_must_span_unit_interval():
+    """Regression: quantile_edges not spanning [0, 1] must raise, not silently lose probability mass.
+
+    Before the fix, ``quantile_edges=[0.1, 0.5, 0.9]`` ran and produced bins covering
+    only 0.8 of the total probability mass, silently violating the conservation contract.
+    """
+    with pytest.raises(ValueError, match="must start at 0 and end at 1"):
+        gamma_bins(alpha=5.0, beta=2.0, quantile_edges=np.array([0.1, 0.5, 0.9]))
+
+    # First edge not 0
+    with pytest.raises(ValueError, match="must start at 0 and end at 1"):
+        gamma_bins(alpha=5.0, beta=2.0, quantile_edges=np.array([0.1, 0.5, 1.0]))
+
+    # Last edge not 1
+    with pytest.raises(ValueError, match="must start at 0 and end at 1"):
+        gamma_bins(alpha=5.0, beta=2.0, quantile_edges=np.array([0.0, 0.5, 0.9]))
+
+
+def test_bins_quantile_edges_must_be_strictly_increasing():
+    """Non-monotone or duplicated quantile_edges must raise."""
+    with pytest.raises(ValueError, match="strictly increasing"):
+        gamma_bins(alpha=5.0, beta=2.0, quantile_edges=np.array([0.0, 0.5, 0.5, 1.0]))
+
+    with pytest.raises(ValueError, match="strictly increasing"):
+        gamma_bins(alpha=5.0, beta=2.0, quantile_edges=np.array([0.0, 0.7, 0.3, 1.0]))
+
+
+def test_bins_quantile_edges_too_few():
+    """quantile_edges with only 2 entries (n_bins=1) must raise via the n_bins guard."""
+    with pytest.raises(ValueError, match="Number of bins must be greater than 1"):
+        gamma_bins(alpha=5.0, beta=2.0, quantile_edges=np.array([0.0, 1.0]))
 
 
 def test_bins_loc_zero_matches_legacy():
@@ -636,13 +505,12 @@ def test_bins_second_moment_matches_parameterization(mean, std, loc):
     np.testing.assert_allclose(gamma_dist(alpha, loc=loc_out, scale=beta).mean(), mean, rtol=1e-12)
 
 
-def test_bin_masses_quantile_inverse():
-    """``bin_masses`` applied to ``gamma.bins`` edges recovers the input quantile diff exactly.
+def test_bins_quantile_edge_construction_inverts_to_quantile_diff():
+    """The bin edges produced by ``gamma.bins`` recover the input quantile diff exactly.
 
     The construction
         edges = gamma_dist.ppf(q, alpha, scale=beta) + loc
-        bin_masses(alpha, beta, edges - loc) = diff(gammainc(alpha, ppf(q)/beta))
-                                             = diff(q)
+        diff(gamma_dist.cdf(edges - loc, alpha, scale=beta)) = diff(q)
     holds by the CDF-PPF round-trip identity ``F(F^{-1}(q)) == q``. Catches any
     inconsistency between the edge-construction path and the mass-computation path.
     """
@@ -653,18 +521,17 @@ def test_bin_masses_quantile_inverse():
     # probability_mass is constructed directly as np.diff(q) inside bins
     np.testing.assert_array_equal(r["probability_mass"], np.diff(quantile_edges))
 
-    # _bin_masses applied to the unshifted edges must reproduce diff(q) to machine precision
+    # Re-deriving the masses from the constructed (unshifted) edges must reproduce diff(q)
     unshifted_edges = r["edges"] - loc
-    np.testing.assert_allclose(
-        _bin_masses(alpha=alpha, beta=beta, bin_edges=unshifted_edges),
-        np.diff(quantile_edges),
-        rtol=1e-13,
-    )
+    cdf = gamma_dist.cdf(unshifted_edges, alpha, scale=beta)
+    np.testing.assert_allclose(np.diff(cdf), np.diff(quantile_edges), rtol=1e-13)
 
 
 def test_bins_loc_monte_carlo_expected_values():
-    """Monte Carlo validation of expected_values under a shifted gamma distribution."""
-    np.random.seed(789)
+    """Monte Carlo validation of expected_values under a shifted gamma distribution.
+
+    Determinism comes from the ``random_state=`` argument on ``rvs`` below.
+    """
     alpha, beta, loc = 2.0, 0.5, 1.3
     n_bins = 6
     n_samples = 100_000
@@ -761,26 +628,6 @@ def test_bins_expected_values_against_scipy_quadrature():
             )
 
 
-def test_bins_alpha_less_than_one_large_nbins():
-    """Test numerical stability of gamma.bins() with alpha < 1 and large n_bins.
-
-    Alpha < 1 produces a distribution with a singularity at 0, which can
-    cause numerical issues with quantile computation.
-    """
-    result = gamma_bins(alpha=0.5, beta=10.0, n_bins=100)
-
-    # No NaN values in expected values
-    assert not np.any(np.isnan(result["expected_values"]))
-
-    # All expected values should be positive
-    assert np.all(result["expected_values"] > 0)
-
-    # Probability masses should sum to 1
-    np.testing.assert_allclose(np.sum(result["probability_mass"]), 1.0, rtol=1e-10)
-
-    # Edges should be monotonically increasing
-    assert np.all(np.diff(result["edges"]) > 0)
-
-    # Expected values should be within their bin bounds
-    for i in range(len(result["expected_values"])):
-        assert result["lower_bound"][i] <= result["expected_values"][i] <= result["upper_bound"][i]
+# The former test_bins_alpha_less_than_one_large_nbins (alpha=0.5, beta=10.0, n_bins=100)
+# is now covered, at tighter tolerance and with the first-moment check, by the
+# (0.5, 10.0, 100) case in test_bins_extreme_regimes_finite_and_conservative.
