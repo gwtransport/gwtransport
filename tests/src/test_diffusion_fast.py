@@ -10,7 +10,9 @@ from gwtransport._diffusion_shared import (
     _DT_FLOOR,
     _breakthrough_antideriv,
     _cout_cumulative_volume,
+    _extend_tedges_flag,
     _retardation_excess_density,
+    _validate_inputs,
 )
 from gwtransport._time import dt_to_days, tedges_to_days
 from gwtransport.advection import infiltration_to_extraction as advection_i2e
@@ -19,8 +21,6 @@ from gwtransport.diffusion import gamma_infiltration_to_extraction as diffusion_
 from gwtransport.diffusion import infiltration_to_extraction as diffusion_exact
 from gwtransport.diffusion_fast import (
     _closed_form_coeff_matrix,
-    _extend_tedges_flag,
-    _validate_inputs,
     extraction_to_infiltration,
     gamma_extraction_to_infiltration,
     gamma_infiltration_to_extraction,
@@ -131,7 +131,13 @@ def test_infiltration_to_extraction_output_bounded_by_input():
 
 
 def test_infiltration_to_extraction_multiple_pore_volumes():
-    """Test with multiple pore volumes."""
+    """A pulse through a 3-streamtube APVD conserves mass exactly and stays non-negative.
+
+    On a matched cout/flow grid with ``flow_out == flow`` the volume-weighted superposition of the
+    three streamtubes' C_F breakthroughs is mass-conservative, so the full pulse breakthrough
+    (which lies inside the informed region here) recovers the infiltrated mass to machine precision
+    under ``nansum`` -- a real invariant, not just a sign check.
+    """
     tedges, cout_tedges, flow = _make_transport_data(n_days=300)
     n_days = len(flow)
     cin = np.zeros(n_days)
@@ -146,12 +152,16 @@ def test_infiltration_to_extraction_multiple_pore_volumes():
         streamline_length=100.0,
         molecular_diffusivity=0.03,
         longitudinal_dispersivity=0.0,
+        flow_out=flow,
     )
 
     assert len(cout) == n_days
     valid = ~np.isnan(cout)
     assert np.any(valid)
     assert np.all(cout[valid] >= -1e-10)
+    # Exact mass conservation: flow_out == flow on a matched grid -> V_out == V_in, and the full
+    # pulse breakthrough lies in the informed region, so nansum(cout) recovers the infiltrated mass.
+    assert_allclose(np.nansum(cout), cin.sum(), atol=1e-12, rtol=0.0)
 
 
 def test_infiltration_to_extraction_cout_tedges_different_resolution():
@@ -182,29 +192,43 @@ def test_infiltration_to_extraction_cout_tedges_different_resolution():
 
 @pytest.mark.parametrize("retardation_factor", [1.0, 2.0, 3.5])
 def test_infiltration_to_extraction_with_retardation(retardation_factor):
-    """Test with different retardation factors."""
+    """Retardation shifts the breakthrough centre by exactly ``R * V / Q``.
+
+    A step ``cin`` injected at bin 50 breaks through at the bin where the cumulative through-flow
+    volume since injection equals ``R * V_pore`` -- i.e. ``50 + R * V / Q`` bins under constant
+    flow. Asserting the half-rise crossing lands there pins that the retardation factor enters the
+    travel-volume ``tau = R * V / Q`` correctly, an R-dependent invariant a sign check would miss.
+    """
     n_days = 300
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
     cout_tedges = tedges.copy()
     cin = np.zeros(n_days)
-    cin[50:] = 10.0
-    flow = np.full(n_days, 100.0)
+    step_bin = 50
+    cin[step_bin:] = 10.0
+    flow_rate = 100.0
+    flow = np.full(n_days, flow_rate)
+    v_pore = 1000.0
 
     cout = infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
-        aquifer_pore_volumes=np.array([1000.0]),
+        aquifer_pore_volumes=np.array([v_pore]),
         streamline_length=80.0,
         molecular_diffusivity=0.03,
         longitudinal_dispersivity=0.0,
         retardation_factor=retardation_factor,
+        flow_out=flow,
     )
 
     assert len(cout) == n_days
     valid = ~np.isnan(cout)
     assert np.any(valid)
+    # Half-rise crossing of the step (final level 10.0 -> half 5.0) lands at 50 + R*V/Q.
+    crossing = int(np.argmax(valid & (cout >= 5.0)))
+    expected = step_bin + retardation_factor * v_pore / flow_rate
+    assert abs(crossing - expected) <= 1.0
 
 
 @pytest.mark.parametrize("molecular_diffusivity", [0.01, 0.03, 0.08])
@@ -583,17 +607,18 @@ def test_diffusion_fast_vs_diffusion_same_grid():
     assert np.all(cout_fast[~np.isnan(cout_fast)] >= -1e-10)
     assert np.all(cout_exact[~np.isnan(cout_exact)] >= -1e-10)
 
-    # Smooth signal: agreement to the interpolation floor of the flow_out=None path.
-    assert_allclose(cout_fast[both_valid], cout_exact[both_valid], atol=1e-6)
+    # Smooth signal: agreement to the interpolation floor of the flow_out=None path
+    # (measured ~1.3e-8; gate at 1e-7 to keep margin while catching a regression).
+    assert_allclose(cout_fast[both_valid], cout_exact[both_valid], atol=1e-7)
 
-    # Step function: sharpest front, still within the interpolation floor.
+    # Step function: sharpest front, still within the interpolation floor (measured ~2.1e-7).
     cin_step = np.zeros(n_days)
     cin_step[30:] = 1.0
     cout_fast_step = infiltration_to_extraction(cin=cin_step, **fast_kwargs)
     cout_exact_step = diffusion_exact(cin=cin_step, **exact_kwargs)
 
     both_valid_step = ~np.isnan(cout_fast_step) & ~np.isnan(cout_exact_step)
-    assert_allclose(cout_fast_step[both_valid_step], cout_exact_step[both_valid_step], atol=1e-6)
+    assert_allclose(cout_fast_step[both_valid_step], cout_exact_step[both_valid_step], atol=5e-7)
 
 
 def _breakthrough_centre_idx(*, flow, dt, j_in, retarded_volume):
@@ -1087,7 +1112,14 @@ class TestGammaExtractionToInfiltrationFast:
         }
 
     def test_zero_cout_gives_zero_cin(self):
-        """Zero extraction concentration must produce zero infiltration."""
+        """Zero extraction concentration deconvolves to zero -- no additive bias, zeros preserved.
+
+        For a linear Tikhonov solve a zero right-hand side trivially yields a zero solution, so this
+        is not a deconvolution-accuracy check (the constant-nonzero-cout test carries that signal).
+        Its purpose is narrower: the gamma wrapper's normalization and NaN-masking path must not
+        inject any additive offset or leak a NaN into a defined bin -- an all-zero ``cout`` stays
+        exactly zero wherever the inverse is defined.
+        """
         tedges, cout_tedges, flow = _make_transport_data(n_days=200)
         cout = np.zeros(len(cout_tedges) - 1)
 
@@ -1127,10 +1159,15 @@ class TestGammaExtractionToInfiltrationFast:
             longitudinal_dispersivity=gamma_setup["longitudinal_dispersivity"],
         )
 
-        valid = ~np.isnan(cin)
-        well_supported = valid & (cin > 1.0)
-        assert np.sum(well_supported) > 30
-        assert_allclose(cin[well_supported], 7.0, atol=1e-12)
+        # Use a column-support index margin (as the roundtrip tests do) rather than a
+        # value-based ``cin > 1.0`` filter, so an erroneously-small interior recovery fails
+        # instead of being silently masked out.
+        margin = 50
+        interior = ~np.isnan(cin)
+        interior[:margin] = False
+        interior[-margin:] = False
+        assert np.sum(interior) > 30
+        assert_allclose(cin[interior], 7.0, atol=1e-12)
 
     def test_roundtrip_recovers_signal(self):
         """Forward then inverse roundtrip recovers the original signal.
@@ -2356,6 +2393,46 @@ def test_streamline_length_zero_rejected():
         )
 
 
+def test_spinup_invalid_string_rejected(tedges_short, constant_flow_short):
+    """An unsupported ``spinup`` string raises ValueError with the helper's message."""
+    flow = constant_flow_short
+    cin = np.ones(len(flow))
+    with pytest.raises(ValueError, match=r"spinup string must be 'constant'; got 'bad'"):
+        infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges_short,
+            cout_tedges=tedges_short,
+            aquifer_pore_volumes=np.array([500.0]),
+            streamline_length=80.0,
+            molecular_diffusivity=0.01,
+            longitudinal_dispersivity=0.5,
+            spinup="bad",
+        )
+
+
+def test_spinup_float_not_implemented(tedges_short, constant_flow_short):
+    """A float ``spinup`` (fraction-threshold mode) raises NotImplementedError.
+
+    The public type hint advertises only ``str | None``; a float still reaches the shared
+    ``_extend_tedges_flag`` and is rejected there rather than silently accepted.
+    """
+    flow = constant_flow_short
+    cin = np.ones(len(flow))
+    with pytest.raises(NotImplementedError, match=r"float thresholds are not implemented"):
+        infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges_short,
+            cout_tedges=tedges_short,
+            aquifer_pore_volumes=np.array([500.0]),
+            streamline_length=80.0,
+            molecular_diffusivity=0.01,
+            longitudinal_dispersivity=0.5,
+            spinup=0.5,
+        )
+
+
 # =============================================================================
 # Banded-build regression tests
 #
@@ -2519,6 +2596,63 @@ def test_banded_equals_dense_single_pv(d_m, alpha_l, retardation):
     _assert_banded_matches_dense(w_banded, w_dense, retardation)
 
 
+def _banded_dense_threshold(*, flow, tedges, pv, length, d_m, alpha_l, saturation_threshold):
+    """Densified banded production build at an explicit ``saturation_threshold``."""
+    nb = len(pv)
+    band_vals, col_start, _ = _closed_form_coeff_matrix(
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        flow_out=flow,
+        aquifer_pore_volumes=pv,
+        streamline_length=np.full(nb, length),
+        molecular_diffusivity=np.full(nb, d_m),
+        longitudinal_dispersivity=np.full(nb, alpha_l),
+        retardation_factor=1.0,
+        extend_tedges=_extend_tedges_flag("constant"),
+        saturation_threshold=saturation_threshold,
+    )
+    return _densify_banded(band_vals, col_start, len(flow))
+
+
+@pytest.mark.parametrize("u_high", [12.0, 15.0])
+def test_saturation_threshold_high_reproduces_default_build(u_high):
+    """A larger ``U`` than the default (7) reproduces the default build bit-for-bit.
+
+    The dropped breakthrough tail is of order ``exp(-U**2)``; at the default ``U=7`` it is
+    already below the ulp of the saturated 0/1 values, so widening the band to ``U>=12`` adds
+    no new non-zero coefficient. This pins that the default sits in the saturated/exact regime.
+    """
+    n = 120
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    common = {"flow": flow, "tedges": tedges, "pv": np.array([200.0]), "length": 60.0, "d_m": 0.5, "alpha_l": 1.0}
+    w_default = _banded_dense_threshold(**common, saturation_threshold=7.0)
+    w_high = _banded_dense_threshold(**common, saturation_threshold=u_high)
+    np.testing.assert_array_equal(w_high, w_default)
+
+
+@pytest.mark.parametrize("u_small", [2.0, 3.0])
+def test_saturation_threshold_small_narrows_by_bounded_tail(u_small):
+    """A small ``U`` narrows the band, dropping only a breakthrough tail of order ``exp(-U**2)``.
+
+    The narrower band drops the saturated tail rather than any interior coefficient, so the
+    densified forward operator departs from the default build by at most a bound proportional to
+    ``exp(-U**2)`` (a per-edge ``frac`` difference), well above the ``U>=7`` machine-epsilon floor.
+    """
+    n = 120
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    common = {"flow": flow, "tedges": tedges, "pv": np.array([200.0]), "length": 60.0, "d_m": 0.5, "alpha_l": 1.0}
+    w_default = _banded_dense_threshold(**common, saturation_threshold=7.0)
+    w_small = _banded_dense_threshold(**common, saturation_threshold=u_small)
+    max_diff = np.max(np.abs(w_small - w_default))
+    # Non-trivially narrower: a genuine tail is dropped (not bit-identical to the default).
+    assert max_diff > 0.0
+    # ...but bounded by the saturated-tail magnitude exp(-U**2).
+    assert max_diff < 10.0 * np.exp(-u_small * u_small)
+
+
 def test_banded_both_zero_equals_advection_step():
     """Both-zero (D_m=0, alpha_L=0) forward equals a pure-advection step to ~1e-14.
 
@@ -2553,6 +2687,11 @@ def test_banded_both_zero_equals_advection_step():
         flow_out=flow,
     )
     np.testing.assert_allclose(w_banded, w_step, atol=1e-15, rtol=0.0)
+    # Honor the "advection" claim: on this aligned grid the operator is a pure shift, so every
+    # non-zero coefficient is exactly 1.0 (no dispersive splitting across neighbouring columns).
+    nonzero = w_banded[np.abs(w_banded) > 1e-12]
+    assert nonzero.size > 50
+    np.testing.assert_array_equal(nonzero, 1.0)
 
 
 def test_banded_variable_flow_wandering_center():
