@@ -4,6 +4,7 @@ import pytest
 
 from gwtransport.residence_time import (
     fraction_explained,
+    gamma_residence_time,
     residence_time,
     residence_time_full,
     residence_time_series,
@@ -187,3 +188,80 @@ def test_invalid_spinup_raises():
     flow, tedges = _constant_flow()
     with pytest.raises(ValueError, match="spinup"):
         residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=300.0, spinup="bad")
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_zero_flow_boundary_warmstart_is_finite(direction):
+    """A Q=0 boundary bin must not corrupt the constant warm-start extrapolation.
+
+    Regression: ``inv_q = dt / dV`` from a zero-flow boundary bin used the strictly-monotone ulp
+    bump as ``dV``, giving ~1e13-day spin-up residence times. The slope must instead come from the
+    nearest strictly-positive flow. The fix only touches the out-of-record warm-start, so the
+    deep-interior bins (look-back fully inside the record) stay at the steady value Vp/Q exactly.
+    """
+    tedges = pd.date_range("2020-01-01", periods=10, freq="D")
+    flow = np.array([0.0, 100, 100, 100, 100, 100, 100, 100, 0.0])  # zero first AND last bin
+    pv, q = 200.0, 100.0
+    got_full = residence_time_full(
+        flow=flow,
+        flow_tedges=tedges,
+        tedges_out=tedges,
+        aquifer_pore_volumes=np.array([pv]),
+        direction=direction,
+        spinup="constant",
+    )[0]
+    got_mean = residence_time(
+        flow=flow,
+        flow_tedges=tedges,
+        tedges_out=tedges,
+        aquifer_pore_volumes=np.array([pv]),
+        direction=direction,
+        spinup="constant",
+    )
+    got_gamma = gamma_residence_time(
+        flow=flow,
+        flow_tedges=tedges,
+        tedges_out=tedges,
+        mean=pv,
+        std=0.5,
+        direction=direction,
+        spinup="constant",
+    )
+    for name, got in (("full", got_full), ("mean", got_mean), ("gamma", got_gamma)):
+        assert np.all(np.nan_to_num(np.abs(got)) < 1e4), f"{name} {direction} blew up: max={np.nanmax(np.abs(got))}"
+    # Single pore volume: deep-interior bins (look-back fully inside the record) == steady Vp/Q exactly.
+    np.testing.assert_allclose(got_full[3:6], pv / q, atol=1e-12)
+    np.testing.assert_allclose(got_mean[3:6], pv / q, atol=1e-12)
+
+
+def test_gamma_zero_flow_output_bins_match_full_oracle():
+    """Zero-throughflow output bins must return the pointwise gamma-mean, not cancellation garbage.
+
+    Regression: a Q=0 output bin has a cumulative-volume window only as wide as the ulp bump, so the
+    closed-form bin-average ``num/den`` cancelled to ~1e10 days. The result must instead equal the
+    well-defined zero-width-bin limit, which ``residence_time_full`` computes correctly.
+    """
+    tedges = pd.date_range("2020-01-01", periods=10, freq="D")
+    flow = np.array([100.0, 100, 100, 100, 0, 0, 100, 100, 100])  # mid-record shutdown
+    for direction in DIRECTIONS:
+        got = gamma_residence_time(
+            flow=flow,
+            flow_tedges=tedges,
+            tedges_out=tedges,
+            mean=300.0,
+            std=0.1,
+            direction=direction,
+            spinup="constant",
+        )
+        ref = residence_time_full(
+            flow=flow,
+            flow_tedges=tedges,
+            tedges_out=tedges,
+            aquifer_pore_volumes=np.array([300.0]),
+            direction=direction,
+            spinup="constant",
+        )[0]
+        assert np.nanmax(np.abs(got)) < 1e4, f"{direction}: zero-flow bins blew up to {np.nanmax(np.abs(got))}"
+        # Narrow gamma (std=0.1) ~ single pore volume at the mean, so it tracks the full oracle.
+        valid = np.isfinite(got) & np.isfinite(ref)
+        np.testing.assert_allclose(got[valid], ref[valid], atol=0.05)

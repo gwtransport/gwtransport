@@ -374,10 +374,15 @@ def residence_time_full(
     # anchor each end, padded by the largest reach R * max(V_p), is enough that a_grid never exceeds
     # the extended map, so the interpolation is an exact linear extrapolation. With spinup=None the
     # map is not extended and the out-of-record target yields NaN (strict, no extrapolation).
-    if spinup == "constant":
+    if spinup == "constant" and np.any(flow > 0.0):
+        # Warm-start: extend the cumulative-volume -> time map past the record at the boundary
+        # flow rate, slope = 1/Q. A zero-flow boundary bin would give 1/0 (its flow_cum step is
+        # only the strictly-monotone ulp bump), so anchor the slope on the nearest strictly-positive
+        # flow; this is bit-identical to 1/Q_boundary when the boundary bin already carries flow.
         pad = retardation_factor * float(aquifer_pore_volumes.max())
-        inv_q_first = (flow_tedges_days[1] - flow_tedges_days[0]) / (flow_cum[1] - flow_cum[0])
-        inv_q_last = (flow_tedges_days[-1] - flow_tedges_days[-2]) / (flow_cum[-1] - flow_cum[-2])
+        positive_flow = flow[flow > 0.0]
+        inv_q_first = 1.0 / positive_flow[0]
+        inv_q_last = 1.0 / positive_flow[-1]
         flow_cum_map = np.concatenate([[flow_cum[0] - pad], flow_cum, [flow_cum[-1] + pad]])
         days_map = np.concatenate([
             [flow_tedges_days[0] - pad * inv_q_first],
@@ -690,10 +695,14 @@ def gamma_residence_time(
     # extended past the record at the boundary flow rates (one anchor each end, padded by the largest
     # reach r*support_hi) so phi extrapolates the spin-up; with a float spinup it stays clipped to
     # [0, v_end] (the covered sub-mass only).
-    if extrapolate:
+    if extrapolate and np.any(flow > 0.0):
+        # Warm-start slope = 1/Q at the boundary; anchor on the nearest strictly-positive flow so a
+        # zero-flow boundary bin (whose flow_cum step is only the strictly-monotone ulp bump) does
+        # not produce a 1/0 extrapolation. Bit-identical to 1/Q_boundary when the boundary carries flow.
         pad = r * support_hi
-        inv_q_first = (flow_tedges_days[1] - flow_tedges_days[0]) / (flow_cum[1] - flow_cum[0])
-        inv_q_last = (flow_tedges_days[-1] - flow_tedges_days[-2]) / (flow_cum[-1] - flow_cum[-2])
+        positive_flow = flow[flow > 0.0]
+        inv_q_first = 1.0 / positive_flow[0]
+        inv_q_last = 1.0 / positive_flow[-1]
         phi_v = np.concatenate([[flow_cum[0] - pad], flow_cum, [flow_cum[-1] + pad]])
         phi_t = np.concatenate([
             [flow_tedges_days[0] - pad * inv_q_first],
@@ -839,6 +848,39 @@ def gamma_residence_time(
         tile_result = np.full(nt, np.nan)
         tile_result[covered] = num[covered] / den[covered]
         result[t0:t1] = tile_result
+
+    # Zero-throughflow output bins (Q = 0 over the bin) have a cumulative-volume window only as wide
+    # as the strictly-monotone ulp bump, so the bin-average num/den ratio above catastrophically
+    # cancels. There the bin-average degenerates to its well-defined zero-width-bin limit: the
+    # pointwise gamma-mean residence time at the bin's cumulative volume (matching residence_time_full).
+    dvol = vol_out[1:] - vol_out[:-1]
+    tol = 1e6 * np.spacing(float(np.max(np.abs(flow_cum)))) if flow_cum.size else 0.0
+    degenerate = good_all & (dvol <= tol)
+    if np.any(degenerate):
+        v = vol_out[:-1][degenerate]  # (k,) bin cumulative volume (constant over a zero-flow bin)
+        # Over a zero-flow bin the volume is fixed but output time advances, so tau ramps linearly with
+        # output time; its bin-average is the value at the bin's time midpoint, not at T(v).
+        t_v = (0.5 * (tedges_out_days[:-1] + tedges_out_days[1:]))[degenerate]
+        # tau(v, V_p) = sign * (T(v + sign*r*V_p) - t_mid) is piecewise-linear in V_p with knots where
+        # v + sign*r*V_p crosses a phi_v edge; integrate it against the gamma density over the support.
+        bp = np.clip(sign * (phi_v[None, :] - v[:, None]) / r, support_lo, support_hi)
+        bp.sort(axis=1)
+        edges_pt = np.concatenate([np.full((v.size, 1), support_lo), bp, np.full((v.size, 1), support_hi)], axis=1)
+        lo_pt, hi_pt = edges_pt[:, :-1], edges_pt[:, 1:]
+        nodes_pt = np.stack([lo_pt, 0.5 * (lo_pt + hi_pt), hi_pt])  # (3, k, n_pieces)
+        a_pt = v[None, :, None] + sign * r * nodes_pt
+        tau_lo, tau_mid, tau_hi = sign * (
+            np.interp(a_pt.ravel(), phi_v, phi_t).reshape(a_pt.shape) - t_v[None, :, None]
+        )
+        width = np.where(hi_pt > lo_pt, hi_pt - lo_pt, 1.0)
+        slope = np.where(hi_pt > lo_pt, (tau_hi - tau_lo) / width, 0.0)
+        mid_pt = 0.5 * (lo_pt + hi_pt)
+        cdf_pt = edges_pt - loc
+        m0_pt = np.diff(gamma_dist.cdf(cdf_pt, alpha, scale=beta), axis=1)
+        m1_pt = alpha * beta * np.diff(gamma_dist.cdf(cdf_pt, alpha + 1, scale=beta), axis=1) + loc * m0_pt
+        num_pt = (tau_mid * m0_pt + slope * (m1_pt - mid_pt * m0_pt)).sum(axis=1)
+        den_pt = m0_pt.sum(axis=1)
+        result[degenerate] = np.where(den_pt > 0, num_pt / den_pt, np.nan)
     return result
 
 
