@@ -32,13 +32,13 @@ def test_basic_constant_flow_residence_time(direction):
     construction paths -- the timing-equivalence is now asserted separately by
     ``test_timing_methods_yield_identical_results``.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)
     pore_volume = 200.0
 
     result = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction=direction,
     )
@@ -50,13 +50,13 @@ def test_basic_constant_flow_residence_time(direction):
 
 def test_retardation_factor():
     """Test the effect of retardation factor."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)
     pore_volume = 200.0
 
     result_no_retardation = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=1.0,
         direction="extraction_to_infiltration",
@@ -64,7 +64,7 @@ def test_retardation_factor():
 
     result_with_retardation = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=2.0,
         direction="extraction_to_infiltration",
@@ -81,14 +81,14 @@ def test_retardation_factor():
 
 def test_custom_index():
     """Test using custom index for results."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)
     custom_dates = pd.date_range(start="2023-01-02", end="2023-01-04", freq="D")
     pore_volume = 200.0
 
     result = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         index=custom_dates,
         direction="extraction_to_infiltration",
@@ -99,38 +99,38 @@ def test_custom_index():
 
 def test_return_numpy_array():
     """Test returning results as numpy array (default behavior)."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)
     pore_volume = 200.0
 
     result = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
     assert isinstance(result, np.ndarray)
     # Should return for the center points of flow bins
-    expected_length = len(flow_tedges) - 1
+    expected_length = len(tedges) - 1
     assert result.shape == (1, expected_length)
 
 
 def test_multiple_pore_volumes():
     """Test handling of multiple pore volumes."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)
     pore_volumes = np.array([200.0, 300.0, 400.0])
 
     result = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volumes,
         direction="extraction_to_infiltration",
     )
 
     assert result.shape[0] == len(pore_volumes)
-    expected_time_points = len(flow_tedges) - 1
+    expected_time_points = len(tedges) - 1
     assert result.shape[1] == expected_time_points
 
     # Residence times should increase with increasing pore volumes
@@ -141,16 +141,14 @@ def test_multiple_pore_volumes():
 
 def test_invalid_direction():
     """Test that invalid direction raises ValueError."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)
     pore_volume = 200.0
 
     with pytest.raises(
         ValueError, match="direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
     ):
-        residence_time_series(
-            flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volumes=pore_volume, direction="invalid"
-        )
+        residence_time_series(flow=flow_values, tedges=tedges, aquifer_pore_volumes=pore_volume, direction="invalid")
 
 
 def test_missing_flow_timing_parameters():
@@ -158,24 +156,24 @@ def test_missing_flow_timing_parameters():
     flow_values = np.full(5, 100.0)
     pore_volume = 200.0
 
-    # Since flow_tedges is now a required parameter (no longer has | None),
+    # Since tedges is now a required parameter (no longer has | None),
     # Python raises TypeError when it's not provided
-    with pytest.raises(TypeError, match="missing 1 required keyword-only argument: 'flow_tedges'"):
+    with pytest.raises(TypeError, match="missing 1 required keyword-only argument: 'tedges'"):
         residence_time_series(
             flow=flow_values, aquifer_pore_volumes=pore_volume, direction="extraction_to_infiltration"
         )  # type: ignore[missing-argument]
 
 
-def test_flow_tedges_length_validation():
-    """Test validation of flow_tedges length."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    flow_values = np.full(len(flow_tedges), 100.0)  # Wrong length (should be len-1)
+def test_tedges_length_validation():
+    """Test validation of tedges length."""
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    flow_values = np.full(len(tedges), 100.0)  # Wrong length (should be len-1)
     pore_volume = 200.0
 
     with pytest.raises(ValueError, match="tedges must have one more element than flow"):
         residence_time_series(
             flow=flow_values,
-            flow_tedges=flow_tedges,
+            tedges=tedges,
             aquifer_pore_volumes=pore_volume,
             direction="extraction_to_infiltration",
         )
@@ -210,13 +208,13 @@ def test_edge_cases_zero_flow():
     right=nan)`` returns NaN. The previous union assertion ``isnan | isinf`` accepted two
     physically distinct outcomes; tighten to the actual all-NaN behavior.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    zero_flow = np.zeros(len(flow_tedges) - 1)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    zero_flow = np.zeros(len(tedges) - 1)
     pore_volume = 100.0
 
     result = residence_time_series(
         flow=zero_flow,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
@@ -234,14 +232,14 @@ def test_zero_flow_plateau_kink_consistency():
     The ulp-bump regularization in :func:`residence_time_series` resolves the multi-valued
     ``V_inv`` deterministically to the midpoint ``t_in = 2``, giving ``tau = 1.5``.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", periods=5, freq="D")
+    tedges = pd.date_range(start="2023-01-01", periods=5, freq="D")
     flow_values = np.array([100.0, 0.0, 0.0, 100.0])
     pore_volume = 50.0
     index = pd.DatetimeIndex(["2023-01-04 12:00:00"])  # t = 3.5 d
 
     rt = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         index=index,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
@@ -251,13 +249,13 @@ def test_zero_flow_plateau_kink_consistency():
 
 def test_edge_cases_very_large_pore_volume():
     """Test edge cases with very large pore volumes."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)
     large_pore_volume = 1e6
 
     result = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=large_pore_volume,
         direction="extraction_to_infiltration",
     )
@@ -273,13 +271,13 @@ def test_negative_flow():
     the function spec is ``np.full(..., np.nan)``, so tighten to exact all-NaN like
     ``test_edge_cases_zero_flow`` and ``test_nan_flow_returns_nan``.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    negative_flow = np.full(len(flow_tedges) - 1, -100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    negative_flow = np.full(len(tedges) - 1, -100.0)
     pore_volume = 200.0
 
     result = residence_time_series(
         flow=negative_flow,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
@@ -297,19 +295,19 @@ def test_flow_variations(constant_flow_data):
     tau / 2. Only for constant Q is the relationship exact. This test therefore uses a
     constant-flow fixture to enforce the exact halving to machine precision.
     """
-    flow_values, flow_tedges = constant_flow_data
+    flow_values, tedges = constant_flow_data
     pore_volume = 200.0  # m³, gives valid results across the whole window
 
     result1 = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
     result2 = residence_time_series(
         flow=flow_values * 2,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
@@ -323,7 +321,7 @@ def test_flow_variations(constant_flow_data):
 def test_timing_methods_yield_identical_results():
     """The three timing inputs (tedges, tstart, tend) produce bit-identical residence times.
 
-    ``compute_time_edges`` reconstructs the same ``flow_tedges`` regardless of which timing
+    ``compute_time_edges`` reconstructs the same ``tedges`` regardless of which timing
     parameter is supplied, so the resulting ``residence_time`` outputs must agree to bit
     precision. The previous assertion only checked ``np.any(valid_mask)`` -- a mutation that
     skews indices by one would not have failed it.
@@ -337,15 +335,15 @@ def test_timing_methods_yield_identical_results():
         "aquifer_pore_volumes": pore_volume,
         "direction": "extraction_to_infiltration",
     }
-    result_tedges = residence_time_series(flow_tedges=dates, **common)
+    result_tedges = residence_time_series(tedges=dates, **common)
     flow_tedges_from_tstart = compute_time_edges(
         tedges=None, tstart=dates[:-1], tend=None, number_of_bins=len(flow_values)
     )
-    result_tstart = residence_time_series(flow_tedges=flow_tedges_from_tstart, **common)
+    result_tstart = residence_time_series(tedges=flow_tedges_from_tstart, **common)
     flow_tedges_from_tend = compute_time_edges(
         tedges=None, tstart=None, tend=dates[1:], number_of_bins=len(flow_values)
     )
-    result_tend = residence_time_series(flow_tedges=flow_tedges_from_tend, **common)
+    result_tend = residence_time_series(tedges=flow_tedges_from_tend, **common)
 
     np.testing.assert_array_equal(result_tedges, result_tstart)
     np.testing.assert_array_equal(result_tedges, result_tend)
@@ -353,14 +351,14 @@ def test_timing_methods_yield_identical_results():
 
 def test_array_like_flow_input():
     """Test that array-like flow inputs (lists, numpy arrays) work correctly."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
     pore_volume = 200.0
 
     # Test with list
     flow_list = [100.0, 110.0, 105.0, 95.0, 98.0]
     result_list = residence_time_series(
         flow=flow_list,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
@@ -369,7 +367,7 @@ def test_array_like_flow_input():
     flow_array = np.array([100.0, 110.0, 105.0, 95.0, 98.0])
     result_array = residence_time_series(
         flow=flow_array,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
@@ -380,17 +378,17 @@ def test_array_like_flow_input():
 
 def test_single_pore_volume_vs_array():
     """Test that single pore volume and array with one element give same results."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)
 
     # Single float
     result_float = residence_time_series(
-        flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volumes=200.0, direction="extraction_to_infiltration"
+        flow=flow_values, tedges=tedges, aquifer_pore_volumes=200.0, direction="extraction_to_infiltration"
     )
 
     # Array with single element
     result_array = residence_time_series(
-        flow=flow_values, flow_tedges=flow_tedges, aquifer_pore_volumes=[200.0], direction="extraction_to_infiltration"
+        flow=flow_values, tedges=tedges, aquifer_pore_volumes=[200.0], direction="extraction_to_infiltration"
     )
 
     # Results should be identical
@@ -407,20 +405,20 @@ def test_infiltration_vs_extraction_symmetry():
     so the *values* at every informed index must agree to machine precision -- which is what
     this test now asserts.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)
     pore_volume = 300.0
     expected_tau = pore_volume / flow_values[0]  # 3.0 days
 
     result_extraction = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
     result_infiltration = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="infiltration_to_extraction",
     )
@@ -543,7 +541,7 @@ def test_variable_flow_residence_time_analytical():
 
     For piecewise-constant flow ``flow[i]`` over time bins of width ``dt``, sample the rate
     ``Q(t) = q0 + a * t`` at bin midpoints (``flow[i] = q0 + a * (i + 0.5) * dt``). Then the
-    function's cumulative-flow curve, evaluated at ``index = flow_tedges`` (i.e. integer
+    function's cumulative-flow curve, evaluated at ``index = tedges`` (i.e. integer
     edge times), is exact for the piecewise-constant flow profile -- there is no bin-center
     interpolation error. The analytical residence time ``tau`` at extraction time
     ``t_index = N * dt`` is recovered exactly by accumulating bin volumes backward in time
@@ -564,17 +562,17 @@ def test_variable_flow_residence_time_analytical():
     pore_volume = 500.0  # m³
     dt = 1.0  # day
 
-    flow_tedges = pd.date_range(start="2023-01-01", periods=n_days + 1, freq="D")
+    tedges = pd.date_range(start="2023-01-01", periods=n_days + 1, freq="D")
     t_days = np.arange(n_days, dtype=float)
     flow_values = q0 + a * (t_days + 0.5) * dt  # midpoint sampling of the linear ramp
 
-    # Evaluate at flow_tedges (integer edge times) -- avoids the bin-center interpolation
+    # Evaluate at tedges (integer edge times) -- avoids the bin-center interpolation
     # path and keeps the test exact w.r.t. the function's piecewise-constant flow.
     result = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
-        index=flow_tedges,
+        index=tedges,
         direction="extraction_to_infiltration",
     )
 
@@ -642,11 +640,11 @@ def test_mass_conservation_under_cumulative_flow(flow_values, pore_volume, retar
     concatenation (residence_time.py:114) breaks all R; applying R outside the integration
     breaks all R != 1 under variable Q.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", periods=len(flow_values) + 1, freq="D")
+    tedges = pd.date_range(start="2023-01-01", periods=len(flow_values) + 1, freq="D")
 
     tau = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=retardation_factor,
         direction="extraction_to_infiltration",
@@ -656,11 +654,11 @@ def test_mass_conservation_under_cumulative_flow(flow_values, pore_volume, retar
 
     # Independent cumulative-flow integral; ``residence_time`` evaluates at bin centers
     # when ``index`` is None, so the query times are the bin centers.
-    flow_tedges_days = np.asarray((flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D"))
-    bin_centers = (flow_tedges_days[:-1] + flow_tedges_days[1:]) / 2
-    flow_cum_at_edges = np.concatenate(([0.0], np.cumsum(flow_values * np.diff(flow_tedges_days))))
-    flow_cum_at_t = np.interp(bin_centers, flow_tedges_days, flow_cum_at_edges)
-    flow_cum_at_t_minus_tau = np.interp(bin_centers - tau, flow_tedges_days, flow_cum_at_edges)
+    tedges_days = np.asarray((tedges - tedges[0]) / np.timedelta64(1, "D"))
+    bin_centers = (tedges_days[:-1] + tedges_days[1:]) / 2
+    flow_cum_at_edges = np.concatenate(([0.0], np.cumsum(flow_values * np.diff(tedges_days))))
+    flow_cum_at_t = np.interp(bin_centers, tedges_days, flow_cum_at_edges)
+    flow_cum_at_t_minus_tau = np.interp(bin_centers - tau, tedges_days, flow_cum_at_edges)
 
     np.testing.assert_allclose(
         flow_cum_at_t[valid] - flow_cum_at_t_minus_tau[valid],
@@ -679,25 +677,25 @@ def test_forward_then_reverse_identity(pore_volume):
     different proof than the constant-flow symmetry test -- it works under variable flow with
     interior kinks.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", periods=21, freq="D")
+    tedges = pd.date_range(start="2023-01-01", periods=21, freq="D")
     flow_values = np.array([100.0, 50.0, 200.0, 80.0, 150.0, 60.0, 120.0, 90.0, 110.0, 70.0] * 2)
 
-    # Forward tau at flow_tedges (avoid bin-center timing for clean evaluation).
+    # Forward tau at tedges (avoid bin-center timing for clean evaluation).
     tau_fwd = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
-        index=flow_tedges,
+        index=tedges,
         direction="infiltration_to_extraction",
     )[0]
     valid = ~np.isnan(tau_fwd)
     assert np.any(valid)
 
     # Reverse evaluation at the extraction times ``t + tau_fwd``.
-    extraction_times = flow_tedges + pd.to_timedelta(np.where(valid, tau_fwd, 0.0), unit="D")
+    extraction_times = tedges + pd.to_timedelta(np.where(valid, tau_fwd, 0.0), unit="D")
     tau_rev = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         index=extraction_times[valid],
         direction="extraction_to_infiltration",
@@ -713,7 +711,7 @@ def test_monotonicity_under_increasing_flow():
     be strictly decreasing across informed indices. The legacy ``test_multiple_pore_volumes``
     asserted monotonicity in V_p only; this asserts the dual monotonicity in Q.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", periods=51, freq="D")
+    tedges = pd.date_range(start="2023-01-01", periods=51, freq="D")
     # Linear ramp Q(t) sampled at bin midpoints; strictly increasing.
     t_mid = (np.arange(50) + 0.5) * 1.0
     flow_values = 50.0 + 5.0 * t_mid
@@ -721,7 +719,7 @@ def test_monotonicity_under_increasing_flow():
 
     tau = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )[0]
@@ -743,26 +741,26 @@ def test_nan_flow_returns_nan(nan_index):
     downstream of ``cumsum`` and would pass even without the gate, but a late NaN (index -1)
     leaves the leading entries finite, exposing a partial-NaN result if the gate is removed.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
     flow_values = np.array([100.0, 100.0, 100.0, 100.0, 100.0])
     flow_values[nan_index] = np.nan
     pore_volume = 100.0
 
     rt = residence_time_series(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
-    assert rt.shape == (1, len(flow_tedges) - 1)
+    assert rt.shape == (1, len(tedges) - 1)
     assert np.all(np.isnan(rt))
 
 
 @pytest.mark.parametrize("tz", ["UTC", "America/New_York"])
 def test_timezone_invariance(tz):
-    """A tz-aware ``flow_tedges`` (no DST in-window) matches the tz-naive result.
+    """A tz-aware ``tedges`` (no DST in-window) matches the tz-naive result.
 
-    The function reduces time edges to days relative to ``flow_tedges[0]``, so the result
+    The function reduces time edges to days relative to ``tedges[0]``, so the result
     is origin-invariant: any constant shift -- including a tz strip or UTC-normalize --
     cancels by construction. This guard therefore does NOT lock origin-preservation. It
     locks the narrower, still-useful contract that a tz-aware index with the same
@@ -779,13 +777,13 @@ def test_timezone_invariance(tz):
 
     rt_naive = residence_time_series(
         flow=flow_values,
-        flow_tedges=naive,
+        tedges=naive,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
     rt_aware = residence_time_series(
         flow=flow_values,
-        flow_tedges=aware,
+        tedges=aware,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )

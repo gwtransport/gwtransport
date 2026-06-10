@@ -249,7 +249,7 @@ def infiltration_to_extraction_series(
         raise ValueError(msg)
     rt_array = residence_time_series(
         flow=flow,
-        flow_tedges=tedges,
+        tedges=tedges,
         index=tedges,
         aquifer_pore_volumes=aquifer_pore_volume,
         retardation_factor=retardation_factor,
@@ -371,7 +371,7 @@ def extraction_to_infiltration_series(
         raise ValueError(msg)
     rt_array = residence_time_series(
         flow=flow,
-        flow_tedges=tedges,
+        tedges=tedges,
         index=tedges,
         aquifer_pore_volumes=aquifer_pore_volume,
         retardation_factor=retardation_factor,

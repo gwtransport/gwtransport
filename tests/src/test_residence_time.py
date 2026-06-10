@@ -54,8 +54,8 @@ def test_discrete_equals_mean_over_valid_streamtubes(direction, r, spinup):
     apv = np.array([250.0, 600.0, 900.0, 1200.0])
     got = residence_time(
         flow=flow,
-        flow_tedges=tedges,
-        tedges_out=tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=apv,
         direction=direction,
         retardation_factor=r,
@@ -63,8 +63,8 @@ def test_discrete_equals_mean_over_valid_streamtubes(direction, r, spinup):
     )
     rt = residence_time_full(
         flow=flow,
-        flow_tedges=tedges,
-        tedges_out=tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=apv,
         direction=direction,
         retardation_factor=r,
@@ -93,8 +93,8 @@ def test_constant_spinup_constant_flow_exact(direction, r):
     apv = np.array([200.0, 500.0, 900.0])
     got = residence_time(
         flow=flow,
-        flow_tedges=tedges,
-        tedges_out=tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=apv,
         direction=direction,
         retardation_factor=r,
@@ -106,9 +106,9 @@ def test_constant_spinup_constant_flow_exact(direction, r):
 def test_single_pore_volume_reduces_to_residence_time_full():
     """A one-element APVD collapses to that streamtube's residence_time_full row."""
     flow, tedges = _variable_flow()
-    got = residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=750.0)
+    got = residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=750.0)
     ref = residence_time_full(
-        flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=750.0, weighting="flow"
+        flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=750.0, weighting="flow"
     )[0]
     np.testing.assert_array_equal(got, ref)
 
@@ -122,22 +122,20 @@ def test_spinup_none_drops_genuinely_partial_streamtube():
     coverage-weighted blend.
     """
     flow = np.full(40, 100.0)
-    flow_tedges = pd.date_range("2020-01-01", periods=41, freq="D")
-    tedges_out = pd.date_range("2020-01-01", periods=9, freq="5D")  # 8 output bins of 5 days
+    tedges = pd.date_range("2020-01-01", periods=41, freq="D")
+    cout_tedges = pd.date_range("2020-01-01", periods=9, freq="5D")  # 8 output bins of 5 days
     apv = np.array([200.0, 2750.0])  # large needs 27.5 days history -> transition inside bin 5
     rt = residence_time_full(
         flow=flow,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=apv,
         weighting="flow",
         spinup=None,
     )
     assert np.isfinite(rt[0][5]), "test setup: small streamtube must be informed in bin 5"
     assert np.isnan(rt[1][5]), "test setup: large streamtube must straddle the record edge inside bin 5"
-    got = residence_time(
-        flow=flow, flow_tedges=flow_tedges, tedges_out=tedges_out, aquifer_pore_volumes=apv, spinup=None
-    )
+    got = residence_time(flow=flow, tedges=tedges, cout_tedges=cout_tedges, aquifer_pore_volumes=apv, spinup=None)
     # If the large tube's partial coverage leaked in, the mean would be pulled toward 27.5 days.
     np.testing.assert_allclose(got[5], rt[0][5], rtol=0, atol=0)
 
@@ -146,7 +144,7 @@ def test_spinup_none_fully_uncovered_bin_is_nan():
     """With spinup=None, a bin with no valid streamtube (all in spin-up) is NaN."""
     flow, tedges = _constant_flow(n=40, q=100.0)
     apv = np.array([3500.0, 3800.0])  # both need > 35 days of history; the first bins have none
-    got = residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=apv, spinup=None)
+    got = residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=None)
     assert np.isnan(got[0])
 
 
@@ -154,10 +152,8 @@ def test_spinup_none_fully_uncovered_bin_is_nan():
 def test_out_of_window_bin_is_nan(spinup):
     """Output bins beyond the flow record are NaN under either spin-up policy."""
     flow, tedges = _constant_flow(n=20, q=100.0)
-    tedges_out = pd.date_range("2020-01-01", periods=31, freq="D")  # extends 10 days past the record
-    got = residence_time(
-        flow=flow, flow_tedges=tedges, tedges_out=tedges_out, aquifer_pore_volumes=300.0, spinup=spinup
-    )
+    cout_tedges = pd.date_range("2020-01-01", periods=31, freq="D")  # extends 10 days past the record
+    got = residence_time(flow=flow, tedges=tedges, cout_tedges=cout_tedges, aquifer_pore_volumes=300.0, spinup=spinup)
     assert np.isnan(got[-1])
 
 
@@ -169,8 +165,8 @@ def test_series_still_marks_spinup_while_full_warm_starts():
     """
     flow, tedges = _constant_flow(n=40, q=100.0)
     apv = np.array([200.0, 1500.0])
-    series = residence_time_series(flow=flow, flow_tedges=tedges, aquifer_pore_volumes=apv)
-    full = residence_time_full(flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=apv)
+    series = residence_time_series(flow=flow, tedges=tedges, aquifer_pore_volumes=apv)
+    full = residence_time_full(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv)
     assert np.isnan(series).any(), "series must keep its spin-up NaN"
     assert not np.isnan(full).any(), "full default warm-start must be finite in-record"
     frac = fraction_explained(rt=series)
@@ -181,13 +177,13 @@ def test_series_still_marks_spinup_while_full_warm_starts():
 def test_invalid_direction_raises():
     flow, tedges = _constant_flow()
     with pytest.raises(ValueError, match="direction"):
-        residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=300.0, direction="bad")
+        residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=300.0, direction="bad")
 
 
 def test_invalid_spinup_raises():
     flow, tedges = _constant_flow()
     with pytest.raises(ValueError, match="spinup"):
-        residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=300.0, spinup="bad")
+        residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=300.0, spinup="bad")
 
 
 @pytest.mark.parametrize("direction", DIRECTIONS)
@@ -204,24 +200,24 @@ def test_zero_flow_boundary_warmstart_is_finite(direction):
     pv, q = 200.0, 100.0
     got_full = residence_time_full(
         flow=flow,
-        flow_tedges=tedges,
-        tedges_out=tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=np.array([pv]),
         direction=direction,
         spinup="constant",
     )[0]
     got_mean = residence_time(
         flow=flow,
-        flow_tedges=tedges,
-        tedges_out=tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=np.array([pv]),
         direction=direction,
         spinup="constant",
     )
     got_gamma = gamma_residence_time(
         flow=flow,
-        flow_tedges=tedges,
-        tedges_out=tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         mean=pv,
         std=0.5,
         direction=direction,
@@ -246,8 +242,8 @@ def test_gamma_zero_flow_output_bins_match_full_oracle():
     for direction in DIRECTIONS:
         got = gamma_residence_time(
             flow=flow,
-            flow_tedges=tedges,
-            tedges_out=tedges,
+            tedges=tedges,
+            cout_tedges=tedges,
             mean=300.0,
             std=0.1,
             direction=direction,
@@ -255,8 +251,8 @@ def test_gamma_zero_flow_output_bins_match_full_oracle():
         )
         ref = residence_time_full(
             flow=flow,
-            flow_tedges=tedges,
-            tedges_out=tedges,
+            tedges=tedges,
+            cout_tedges=tedges,
             aquifer_pore_volumes=np.array([300.0]),
             direction=direction,
             spinup="constant",

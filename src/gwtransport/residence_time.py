@@ -40,7 +40,7 @@ Available functions:
 
 Spin-up period
 --------------
-The spin-up **region** is determined entirely by the supplied flow record (``flow_tedges``, which
+The spin-up **region** is determined entirely by the supplied flow record (``tedges``, which
 fixes the cumulative throughflow volume ``V`` from ``0`` at the record start to ``V_end`` at the
 record end) together with the retarded pore volume ``retardation_factor * V_p`` -- it is not a
 length you set. A residence time for an output time needs the corresponding parcel to stay inside
@@ -71,7 +71,7 @@ What happens in that region is governed by a ``spinup`` policy, following the pa
 * :func:`residence_time_series` (point samples) has no ``spinup`` policy: it always returns ``NaN``
   in the spin-up. It is the primitive behind :func:`fraction_explained`.
 
-Output bins lying wholly outside ``flow_tedges`` are ``NaN`` under every policy.
+Output bins lying wholly outside ``tedges`` are ``NaN`` under every policy.
 
 :func:`fraction_explained` reports, per output instant, the fraction of the pore-volume
 distribution that is out of spin-up (``1.0`` = fully informed, ``0.0`` = entirely in spin-up) and
@@ -94,7 +94,7 @@ from gwtransport.utils import cumulative_flow_volume, linear_average, linear_int
 def _boundary_extrapolated_map(
     flow: npt.NDArray[np.floating],
     flow_cum: npt.NDArray[np.floating],
-    flow_tedges_days: npt.NDArray[np.floating],
+    tedges_days: npt.NDArray[np.floating],
     pad: float,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
     """Extend the cumulative-volume -> time map past the record for the ``"constant"`` warm-start.
@@ -109,7 +109,7 @@ def _boundary_extrapolated_map(
     volume_map : ndarray
         ``flow_cum`` padded by ``pad`` on each end.
     time_map : ndarray
-        ``flow_tedges_days`` padded by ``pad * (1/Q)`` on each end, aligned with ``volume_map``.
+        ``tedges_days`` padded by ``pad * (1/Q)`` on each end, aligned with ``volume_map``.
         Shared by :func:`residence_time_full` and :func:`gamma_residence_time`.
     """
     positive_flow = flow[flow > 0.0]
@@ -117,9 +117,9 @@ def _boundary_extrapolated_map(
     inv_q_last = 1.0 / positive_flow[-1]
     volume_map = np.concatenate([[flow_cum[0] - pad], flow_cum, [flow_cum[-1] + pad]])
     time_map = np.concatenate([
-        [flow_tedges_days[0] - pad * inv_q_first],
-        flow_tedges_days,
-        [flow_tedges_days[-1] + pad * inv_q_last],
+        [tedges_days[0] - pad * inv_q_first],
+        tedges_days,
+        [tedges_days[-1] + pad * inv_q_last],
     ])
     return volume_map, time_map
 
@@ -127,7 +127,7 @@ def _boundary_extrapolated_map(
 def residence_time_series(
     *,
     flow: npt.ArrayLike,
-    flow_tedges: pd.DatetimeIndex | np.ndarray,
+    tedges: pd.DatetimeIndex | np.ndarray,
     aquifer_pore_volumes: npt.ArrayLike,
     index: pd.DatetimeIndex | np.ndarray | None = None,
     direction: str = "extraction_to_infiltration",
@@ -140,13 +140,13 @@ def residence_time_series(
     rather than as a bin average over an output grid. Sampling at arbitrary instants departs
     from the package's bin-edge convention, so this is kept separate from
     :func:`residence_time_full`, which returns the flow- or time-weighted bin average over
-    ``tedges_out`` and is the form consumed elsewhere in the package.
+    ``cout_tedges`` and is the form consumed elsewhere in the package.
 
     Parameters
     ----------
     flow : array-like
-        Flow rate of water in the aquifer [m³/day]. The length of `flow` should match the length of `flow_tedges` minus one.
-    flow_tedges : pandas.DatetimeIndex
+        Flow rate of water in the aquifer [m³/day]. The length of `flow` should match the length of `tedges` minus one.
+    tedges : pandas.DatetimeIndex
         Time edges for the flow data. Used to compute the cumulative flow.
         Has a length of one more than `flow`.
     aquifer_pore_volumes : float or array-like of float
@@ -172,7 +172,7 @@ def residence_time_series(
     Raises
     ------
     ValueError
-        If ``flow_tedges`` does not have exactly one more element than ``flow``.
+        If ``tedges`` does not have exactly one more element than ``flow``.
         If ``direction`` is not ``'extraction_to_infiltration'`` or
         ``'infiltration_to_extraction'``.
 
@@ -193,50 +193,50 @@ def residence_time_series(
     docstring (``Spin-up period``) for the full rule.
     """
     aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
-    flow_tedges = pd.DatetimeIndex(flow_tedges)
+    tedges = pd.DatetimeIndex(tedges)
     flow = np.asarray(flow)
 
-    if len(flow_tedges) != len(flow) + 1:
+    if len(tedges) != len(flow) + 1:
         msg = "tedges must have one more element than flow"
         raise ValueError(msg)
 
     # Negative or non-finite flow makes V(t) non-monotone or undefined; refuse to answer
     # rather than fail noisily downstream where the cumulative volume must be strictly ascending.
     if np.any(flow < 0) or np.any(np.isnan(flow)):
-        n_output = len(flow_tedges) - 1 if index is None else len(index)
+        n_output = len(tedges) - 1 if index is None else len(index)
         return np.full((len(aquifer_pore_volumes), n_output), np.nan)
 
     if direction not in {"extraction_to_infiltration", "infiltration_to_extraction"}:
         msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
         raise ValueError(msg)
 
-    flow_tedges_days = tedges_to_days(flow_tedges)
+    tedges_days = tedges_to_days(tedges)
     # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
     # by the smallest representable amount so downstream np.interp resolves consistently.
-    flow_cum = cumulative_flow_volume(flow, np.diff(flow_tedges_days), strictly_monotone=True)
+    flow_cum = cumulative_flow_volume(flow, np.diff(tedges_days), strictly_monotone=True)
 
     if index is None:
         # Bin-center evaluation; for piecewise-linear V the midpoint of cumulative values
         # equals V at the midpoint time.
-        index_days = (flow_tedges_days[:-1] + flow_tedges_days[1:]) / 2
+        index_days = (tedges_days[:-1] + tedges_days[1:]) / 2
         flow_cum_at_index = (flow_cum[:-1] + flow_cum[1:]) / 2
     else:
-        index_days = tedges_to_days(pd.DatetimeIndex(index), ref=flow_tedges[0])
+        index_days = tedges_to_days(pd.DatetimeIndex(index), ref=tedges[0])
         flow_cum_at_index = linear_interpolate(
-            x_ref=flow_tedges_days, y_ref=flow_cum, x_query=index_days, left=np.nan, right=np.nan
+            x_ref=tedges_days, y_ref=flow_cum, x_query=index_days, left=np.nan, right=np.nan
         )
 
     sign = -1.0 if direction == "extraction_to_infiltration" else 1.0
     a = flow_cum_at_index[None, :] + sign * retardation_factor * aquifer_pore_volumes[:, None]
-    days = linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a, left=np.nan, right=np.nan)
+    days = linear_interpolate(x_ref=flow_cum, y_ref=tedges_days, x_query=a, left=np.nan, right=np.nan)
     return sign * (days - index_days)
 
 
 def residence_time_full(
     *,
     flow: npt.ArrayLike,
-    flow_tedges: pd.DatetimeIndex | np.ndarray,
-    tedges_out: pd.DatetimeIndex | np.ndarray,
+    tedges: pd.DatetimeIndex | np.ndarray,
+    cout_tedges: pd.DatetimeIndex | np.ndarray,
     aquifer_pore_volumes: npt.ArrayLike,
     direction: str = "extraction_to_infiltration",
     retardation_factor: float = 1.0,
@@ -247,7 +247,7 @@ def residence_time_full(
     Compute the mean residence time over output bins, per pore volume.
 
     The flow- or time-weighted mean residence time is computed over each output interval
-    ``[tedges_out[i], tedges_out[i + 1])`` and returned as the full
+    ``[cout_tedges[i], cout_tedges[i + 1])`` and returned as the full
     ``(n_pore_volumes, n_output_bins)`` array -- one row per entry in
     ``aquifer_pore_volumes``, without collapsing the pore-volume axis. This bin-average form
     follows the package's bin-edge convention; for point samples at arbitrary instants use
@@ -256,10 +256,10 @@ def residence_time_full(
     Parameters
     ----------
     flow : array-like
-        Flow rate of water in the aquifer [m³/day]. Length matches ``flow_tedges`` minus one.
-    flow_tedges : array-like
+        Flow rate of water in the aquifer [m³/day]. Length matches ``tedges`` minus one.
+    tedges : pandas.DatetimeIndex
         Time edges for the flow data, as datetime64 objects, defining the flow intervals.
-    tedges_out : array-like
+    cout_tedges : pandas.DatetimeIndex
         Output time edges as datetime64 objects; ``n + 1`` edges define ``n`` output bins.
     aquifer_pore_volumes : float or array-like
         Pore volume(s) of the aquifer [m³]. A single value or an array of pore volumes
@@ -291,18 +291,18 @@ def residence_time_full(
         * ``None``: strict -- a pore volume whose parcel leaves the record at any point within an
           output bin is ``NaN`` for that bin (all-or-nothing per bin), with no extrapolation.
 
-        Output bins lying wholly outside ``flow_tedges`` are ``NaN`` under either policy.
+        Output bins lying wholly outside ``tedges`` are ``NaN`` under either policy.
 
     Returns
     -------
     numpy.ndarray
         Mean residence time [days], shape ``(n_pore_volumes, n_output_bins)``. The first
-        dimension corresponds to the pore volumes and the second to the ``tedges_out`` bins.
+        dimension corresponds to the pore volumes and the second to the ``cout_tedges`` bins.
 
     Raises
     ------
     ValueError
-        If ``flow_tedges`` does not have exactly one more element than ``flow``. If
+        If ``tedges`` does not have exactly one more element than ``flow``. If
         ``direction`` is not ``'extraction_to_infiltration'`` or
         ``'infiltration_to_extraction'``. If ``weighting`` is not ``'flow'`` or ``'time'``. If
         ``spinup`` is not ``'constant'`` or ``None``.
@@ -346,8 +346,8 @@ def residence_time_full(
     >>> flow_values = np.full(len(flow_dates) - 1, 100.0)  # Constant flow of 100 m³/day
     >>> mean_times = residence_time_full(
     ...     flow=flow_values,
-    ...     flow_tedges=flow_dates,
-    ...     tedges_out=flow_dates,
+    ...     tedges=flow_dates,
+    ...     cout_tedges=flow_dates,
     ...     aquifer_pore_volumes=200.0,
     ...     direction="extraction_to_infiltration",
     ... )
@@ -367,22 +367,22 @@ def residence_time_full(
         raise ValueError(msg)
 
     aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
-    flow_tedges = pd.DatetimeIndex(flow_tedges)
-    tedges_out = pd.DatetimeIndex(tedges_out)
+    tedges = pd.DatetimeIndex(tedges)
+    cout_tedges = pd.DatetimeIndex(cout_tedges)
     flow = np.asarray(flow, dtype=float)
 
-    if len(flow_tedges) != len(flow) + 1:
+    if len(tedges) != len(flow) + 1:
         msg = "tedges must have one more element than flow"
         raise ValueError(msg)
 
     if np.any(flow < 0) or np.any(np.isnan(flow)):
-        return np.full((len(aquifer_pore_volumes), len(tedges_out) - 1), np.nan)
+        return np.full((len(aquifer_pore_volumes), len(cout_tedges) - 1), np.nan)
 
-    flow_tedges_days = tedges_to_days(flow_tedges)
-    tedges_out_days = tedges_to_days(tedges_out, ref=flow_tedges[0])
+    tedges_days = tedges_to_days(tedges)
+    cout_tedges_days = tedges_to_days(cout_tedges, ref=tedges[0])
     # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
     # by the smallest representable amount so downstream np.interp resolves consistently.
-    flow_cum = cumulative_flow_volume(flow, np.diff(flow_tedges_days), strictly_monotone=True)
+    flow_cum = cumulative_flow_volume(flow, np.diff(tedges_days), strictly_monotone=True)
 
     # Sign convention: with sign = -1 for extraction_to_infiltration and +1 for
     # infiltration_to_extraction, the look-back/forward target volume is
@@ -390,17 +390,17 @@ def residence_time_full(
     sign = -1.0 if direction == "extraction_to_infiltration" else 1.0
 
     # tau(t) is piecewise-linear in t (equivalently in cumulative volume V), but its
-    # breakpoints are not only at flow_tedges: within a flow bin Q is constant, so as t advances
+    # breakpoints are not only at tedges: within a flow bin Q is constant, so as t advances
     # the look-back parcel sweeps through V at a constant rate and crosses each interior flow_cum
-    # edge at a definite time. Sampling tau only at flow_tedges would miss those kinks and bias
+    # edge at a definite time. Sampling tau only at tedges would miss those kinks and bias
     # the bin mean under regime changes; augment the integration grid by exactly those crossings.
     target_volumes_at_kinks = flow_cum[None, :] - sign * retardation_factor * aquifer_pore_volumes[:, None]
     kink_times = linear_interpolate(
-        x_ref=flow_cum, y_ref=flow_tedges_days, x_query=target_volumes_at_kinks, left=np.nan, right=np.nan
+        x_ref=flow_cum, y_ref=tedges_days, x_query=target_volumes_at_kinks, left=np.nan, right=np.nan
     )
-    augmented_grid = np.unique(np.concatenate([flow_tedges_days, kink_times[np.isfinite(kink_times)]]))
+    augmented_grid = np.unique(np.concatenate([tedges_days, kink_times[np.isfinite(kink_times)]]))
 
-    flow_cum_at_grid = linear_interpolate(x_ref=flow_tedges_days, y_ref=flow_cum, x_query=augmented_grid)
+    flow_cum_at_grid = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=augmented_grid)
     a_grid = flow_cum_at_grid[None, :] + sign * retardation_factor * aquifer_pore_volumes[:, None]
 
     # Spin-up handling. A parcel whose infiltration/extraction falls outside the flow record has an
@@ -412,20 +412,18 @@ def residence_time_full(
     # map is not extended and the out-of-record target yields NaN (strict, no extrapolation).
     if spinup == "constant" and np.any(flow > 0.0):
         pad = retardation_factor * float(aquifer_pore_volumes.max())
-        flow_cum_map, days_map = _boundary_extrapolated_map(flow, flow_cum, flow_tedges_days, pad)
+        flow_cum_map, days_map = _boundary_extrapolated_map(flow, flow_cum, tedges_days, pad)
         days_grid = linear_interpolate(x_ref=flow_cum_map, y_ref=days_map, x_query=a_grid)
     else:
-        days_grid = linear_interpolate(
-            x_ref=flow_cum, y_ref=flow_tedges_days, x_query=a_grid, left=np.nan, right=np.nan
-        )
+        days_grid = linear_interpolate(x_ref=flow_cum, y_ref=tedges_days, x_query=a_grid, left=np.nan, right=np.nan)
     data_grid = sign * (days_grid - augmented_grid[None, :])
 
     if weighting == "time":
-        return linear_average(x_data=augmented_grid, y_data=data_grid, x_edges=tedges_out_days)
+        return linear_average(x_data=augmented_grid, y_data=data_grid, x_edges=cout_tedges_days)
 
-    flow_cum_at_tedges_out = linear_interpolate(x_ref=flow_tedges_days, y_ref=flow_cum, x_query=tedges_out_days)
-    result = linear_average(x_data=flow_cum_at_grid, y_data=data_grid, x_edges=flow_cum_at_tedges_out)
-    bins_within = (tedges_out_days[:-1] >= flow_tedges_days[0]) & (tedges_out_days[1:] <= flow_tedges_days[-1])
+    flow_cum_at_cout_tedges = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days)
+    result = linear_average(x_data=flow_cum_at_grid, y_data=data_grid, x_edges=flow_cum_at_cout_tedges)
+    bins_within = (cout_tedges_days[:-1] >= tedges_days[0]) & (cout_tedges_days[1:] <= tedges_days[-1])
     if not np.all(bins_within):
         result = np.where(bins_within[None, :], result, np.nan)
     return result
@@ -434,8 +432,8 @@ def residence_time_full(
 def residence_time(
     *,
     flow: npt.ArrayLike,
-    flow_tedges: pd.DatetimeIndex | np.ndarray,
-    tedges_out: pd.DatetimeIndex | np.ndarray,
+    tedges: pd.DatetimeIndex | np.ndarray,
+    cout_tedges: pd.DatetimeIndex | np.ndarray,
     aquifer_pore_volumes: npt.ArrayLike,
     direction: str = "extraction_to_infiltration",
     retardation_factor: float = 1.0,
@@ -465,10 +463,10 @@ def residence_time(
     Parameters
     ----------
     flow : array-like
-        Flow rate of water in the aquifer [m³/day]. Length matches ``flow_tedges`` minus one.
-    flow_tedges : array-like
+        Flow rate of water in the aquifer [m³/day]. Length matches ``tedges`` minus one.
+    tedges : pandas.DatetimeIndex
         Time edges for the flow data, as datetime64 objects, defining the flow intervals.
-    tedges_out : array-like
+    cout_tedges : pandas.DatetimeIndex
         Output time edges as datetime64 objects; ``n + 1`` edges define ``n`` output bins.
     aquifer_pore_volumes : array-like
         Discrete pore volumes [m³], one per (equally-weighted) streamtube. A single value
@@ -520,8 +518,8 @@ def residence_time(
     >>> flow_values = np.full(len(flow_dates) - 1, 100.0)  # 100 m³/day
     >>> tau_bar = residence_time(
     ...     flow=flow_values,
-    ...     flow_tedges=flow_dates,
-    ...     tedges_out=flow_dates,
+    ...     tedges=flow_dates,
+    ...     cout_tedges=flow_dates,
     ...     aquifer_pore_volumes=[400.0, 600.0],  # two equally-weighted streamtubes
     ... )
     >>> # Deep in the record: mean pore volume 500 / 100 m³/day = 5 days
@@ -530,8 +528,8 @@ def residence_time(
     """
     rt = residence_time_full(
         flow=flow,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         direction=direction,
         retardation_factor=retardation_factor,
@@ -550,8 +548,8 @@ def residence_time(
 def gamma_residence_time(
     *,
     flow: npt.ArrayLike,
-    flow_tedges: pd.DatetimeIndex | np.ndarray,
-    tedges_out: pd.DatetimeIndex | np.ndarray,
+    tedges: pd.DatetimeIndex | np.ndarray,
+    cout_tedges: pd.DatetimeIndex | np.ndarray,
     mean: float | None = None,
     std: float | None = None,
     loc: float = 0.0,
@@ -584,10 +582,10 @@ def gamma_residence_time(
     Parameters
     ----------
     flow : array-like
-        Flow rate of water in the aquifer [m³/day]. Length matches ``flow_tedges`` minus one.
-    flow_tedges : array-like
+        Flow rate of water in the aquifer [m³/day]. Length matches ``tedges`` minus one.
+    tedges : pandas.DatetimeIndex
         Time edges for the flow data, as datetime64 objects, defining the flow intervals.
-    tedges_out : array-like
+    cout_tedges : pandas.DatetimeIndex
         Output time edges as datetime64 objects; ``n + 1`` edges define ``n`` output bins.
     mean : float, optional
         Mean of the gamma APVD [m³]. Must be strictly greater than ``loc``. Provide either
@@ -620,7 +618,7 @@ def gamma_residence_time(
           only where the covered fraction of the distribution is at least ``spinup``. ``0.0`` gives
           the exact covered-sub-mass conditional mean (emit whenever any sub-mass is covered).
 
-        Output bins lying wholly outside ``flow_tedges`` are ``NaN`` under either policy.
+        Output bins lying wholly outside ``tedges`` are ``NaN`` under either policy.
 
     Returns
     -------
@@ -632,7 +630,7 @@ def gamma_residence_time(
     Raises
     ------
     ValueError
-        If ``flow_tedges`` does not have exactly one more element than ``flow``. If ``direction``
+        If ``tedges`` does not have exactly one more element than ``flow``. If ``direction``
         is not ``'extraction_to_infiltration'`` or ``'infiltration_to_extraction'``. If ``spinup``
         is not ``'constant'`` or a float in ``[0, 1)``. Gamma parameter validation is delegated to
         :func:`gwtransport.gamma.parse_parameters`.
@@ -663,8 +661,8 @@ def gamma_residence_time(
     >>> flow_values = np.full(len(flow_dates) - 1, 100.0)  # 100 m³/day
     >>> tau_bar = gamma_residence_time(
     ...     flow=flow_values,
-    ...     flow_tedges=flow_dates,
-    ...     tedges_out=flow_dates,
+    ...     tedges=flow_dates,
+    ...     cout_tedges=flow_dates,
     ...     mean=500.0,
     ...     std=100.0,
     ...     direction="extraction_to_infiltration",
@@ -688,11 +686,11 @@ def gamma_residence_time(
     alpha, beta, loc = parse_parameters(mean=mean, std=std, loc=loc, alpha=alpha, beta=beta)
 
     flow = np.asarray(flow, dtype=float)
-    flow_tedges = pd.DatetimeIndex(flow_tedges)
-    tedges_out = pd.DatetimeIndex(tedges_out)
-    n_out = len(tedges_out) - 1
+    tedges = pd.DatetimeIndex(tedges)
+    cout_tedges = pd.DatetimeIndex(cout_tedges)
+    n_out = len(cout_tedges) - 1
 
-    if len(flow_tedges) != len(flow) + 1:
+    if len(tedges) != len(flow) + 1:
         msg = "tedges must have one more element than flow"
         raise ValueError(msg)
     if np.any(flow < 0) or np.any(np.isnan(flow)):
@@ -701,8 +699,8 @@ def gamma_residence_time(
     sign = -1.0 if direction == "extraction_to_infiltration" else 1.0
     r = retardation_factor
 
-    flow_tedges_days = tedges_to_days(flow_tedges)
-    flow_cum = cumulative_flow_volume(flow, np.diff(flow_tedges_days), strictly_monotone=True)
+    tedges_days = tedges_to_days(tedges)
+    flow_cum = cumulative_flow_volume(flow, np.diff(tedges_days), strictly_monotone=True)
     v_end = flow_cum[-1]
     n_edges = len(flow_cum)
 
@@ -720,10 +718,10 @@ def gamma_residence_time(
     # reach r*support_hi) so phi extrapolates the spin-up; with a float spinup it stays clipped to
     # [0, v_end] (the covered sub-mass only).
     if extrapolate and np.any(flow > 0.0):
-        phi_v, phi_t = _boundary_extrapolated_map(flow, flow_cum, flow_tedges_days, r * support_hi)
+        phi_v, phi_t = _boundary_extrapolated_map(flow, flow_cum, tedges_days, r * support_hi)
     else:
         phi_v = flow_cum
-        phi_t = flow_tedges_days
+        phi_t = tedges_days
     phi_dv = phi_v[1:] - phi_v[:-1]
     phi_rate = phi_dv / (phi_t[1:] - phi_t[:-1])
     phi_knot = np.concatenate([[0.0], np.cumsum(phi_t[:-1] * phi_dv + phi_dv**2 / (2 * phi_rate))])
@@ -734,10 +732,8 @@ def gamma_residence_time(
         dv = v - phi_v[j]
         return phi_knot[j] + phi_t[j] * dv + dv * dv / (2 * phi_rate[j])
 
-    tedges_out_days = tedges_to_days(tedges_out, ref=flow_tedges[0])
-    vol_out = linear_interpolate(
-        x_ref=flow_tedges_days, y_ref=flow_cum, x_query=tedges_out_days, left=np.nan, right=np.nan
-    )
+    cout_tedges_days = tedges_to_days(cout_tedges, ref=tedges[0])
+    vol_out = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days, left=np.nan, right=np.nan)
     good_all = np.isfinite(vol_out[:-1]) & np.isfinite(vol_out[1:]) & (vol_out[1:] > vol_out[:-1])
     if not np.any(good_all):
         return np.full(n_out, np.nan)
@@ -872,7 +868,7 @@ def gamma_residence_time(
         v = vol_out[:-1][degenerate]  # (k,) bin cumulative volume (constant over a zero-flow bin)
         # Over a zero-flow bin the volume is fixed but output time advances, so tau ramps linearly with
         # output time; its bin-average is the value at the bin's time midpoint, not at T(v).
-        t_v = (0.5 * (tedges_out_days[:-1] + tedges_out_days[1:]))[degenerate]
+        t_v = (0.5 * (cout_tedges_days[:-1] + cout_tedges_days[1:]))[degenerate]
         # tau(v, V_p) = sign * (T(v + sign*r*V_p) - t_mid) is piecewise-linear in V_p with knots where
         # v + sign*r*V_p crosses a phi_v edge; integrate it against the gamma density over the support.
         bp = np.clip(sign * (phi_v[None, :] - v[:, None]) / r, support_lo, support_hi)
@@ -900,7 +896,7 @@ def fraction_explained(
     *,
     rt: npt.NDArray[np.floating] | None = None,
     flow: npt.ArrayLike | None = None,
-    flow_tedges: pd.DatetimeIndex | np.ndarray | None = None,
+    tedges: pd.DatetimeIndex | np.ndarray | None = None,
     aquifer_pore_volumes: npt.ArrayLike | None = None,
     index: pd.DatetimeIndex | np.ndarray | None = None,
     direction: str = "extraction_to_infiltration",
@@ -919,8 +915,8 @@ def fraction_explained(
     rt : numpy.ndarray, optional
         Pre-computed residence time array [days]. If not provided, it will be computed.
     flow : array-like, optional
-        Flow rate of water in the aquifer [m³/day]. The length of `flow` should match the length of `flow_tedges` minus one.
-    flow_tedges : pandas.DatetimeIndex, optional
+        Flow rate of water in the aquifer [m³/day]. The length of `flow` should match the length of `tedges` minus one.
+    tedges : pandas.DatetimeIndex, optional
         Time edges for the flow data. Used to compute the cumulative flow.
         Has a length of one more than `flow`. Inbetween neighboring time edges, the flow is assumed constant.
     aquifer_pore_volumes : float or array-like of float, optional
@@ -947,7 +943,7 @@ def fraction_explained(
     Raises
     ------
     ValueError
-        If ``rt`` is not provided and any of ``flow``, ``flow_tedges``, or
+        If ``rt`` is not provided and any of ``flow``, ``tedges``, or
         ``aquifer_pore_volumes`` are missing. If ``rt`` is provided but is not 2D.
 
     See Also
@@ -970,7 +966,7 @@ def fraction_explained(
     >>> tedges = pd.date_range("2020-01-01", periods=11, freq="D")
     >>> flow = np.full(10, 100.0)
     >>> series = residence_time_series(
-    ...     flow=flow, flow_tedges=tedges, aquifer_pore_volumes=[200.0, 1500.0]
+    ...     flow=flow, tedges=tedges, aquifer_pore_volumes=[200.0, 1500.0]
     ... )
     >>> fraction_explained(rt=series).tolist()
     [0.0, 0.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
@@ -979,8 +975,8 @@ def fraction_explained(
         if flow is None:
             msg = "Either rt or flow must be provided"
             raise ValueError(msg)
-        if flow_tedges is None:
-            msg = "Either rt or flow_tedges must be provided"
+        if tedges is None:
+            msg = "Either rt or tedges must be provided"
             raise ValueError(msg)
         if aquifer_pore_volumes is None:
             msg = "Either rt or aquifer_pore_volumes must be provided"
@@ -988,7 +984,7 @@ def fraction_explained(
 
         rt = residence_time_series(
             flow=flow,
-            flow_tedges=flow_tedges,
+            tedges=tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             index=index,
             direction=direction,

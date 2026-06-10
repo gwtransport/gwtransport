@@ -224,7 +224,7 @@ def compute_deposition_weights(
     flow_values = np.asarray(flow, dtype=float)
     cout_rt_at_edges = residence_time_series(
         flow=flow_values,
-        flow_tedges=tedges,
+        tedges=tedges,
         index=cout_tedges,
         aquifer_pore_volumes=float(aquifer_pore_volume),
         retardation_factor=retardation_factor,

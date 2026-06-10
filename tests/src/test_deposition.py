@@ -84,7 +84,7 @@ def test_exact_analytical_constant_deposition():
     # Calculate expected using exact formula
     rt = residence_time_series(
         flow=flow_values,
-        flow_tedges=tedges,
+        tedges=tedges,
         index=cout_tedges,
         aquifer_pore_volumes=params["aquifer_pore_volume"],
         retardation_factor=params["retardation_factor"],
@@ -137,7 +137,7 @@ def test_exact_analytical_varying_flow():
     # Calculate expected using exact residence time
     rt = residence_time_series(
         flow=flow_values,
-        flow_tedges=tedges,
+        tedges=tedges,
         index=cout_tedges,
         aquifer_pore_volumes=params["aquifer_pore_volume"],
         retardation_factor=params["retardation_factor"],
@@ -213,7 +213,7 @@ def test_forward_pins_extraction_to_infiltration_direction_genuinely_variable_fl
     midpoints = cout_tedges[:-1] + (cout_tedges[1:] - cout_tedges[:-1]) / 2
     rt_mid = residence_time_series(
         flow=flow,
-        flow_tedges=tedges,
+        tedges=tedges,
         index=midpoints,
         aquifer_pore_volumes=aquifer_pore_volume,
         retardation_factor=retardation_factor,
@@ -263,7 +263,7 @@ def test_exact_analytical_retardation_factor():
 
         rt = residence_time_series(
             flow=flow_values,
-            flow_tedges=tedges,
+            tedges=tedges,
             index=cout_tedges,
             aquifer_pore_volumes=params["aquifer_pore_volume"],
             retardation_factor=retardation_factor,
@@ -1117,7 +1117,7 @@ def test_compute_deposition_weights_structure():
     # Row-sum invariant: sum(W[i, :]) * porosity * thickness == RT_i
     rt = residence_time_series(
         flow=flow,
-        flow_tedges=tedges,
+        tedges=tedges,
         index=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volume,
         retardation_factor=retardation_factor,
@@ -1198,7 +1198,7 @@ def test_compute_deposition_weights_with_retardation():
         )
         rt = residence_time_series(
             flow=flow,
-            flow_tedges=tedges,
+            tedges=tedges,
             index=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volume,
             retardation_factor=retardation_factor,
@@ -2091,7 +2091,7 @@ def test_row_normalization_pre_norm_row_sum_equals_rt_over_nb():
     weights = _dense_weights(flow=flow, tedges=tedges, cout_tedges=cout_tedges, **params)
     rt = residence_time_series(
         flow=flow,
-        flow_tedges=tedges,
+        tedges=tedges,
         index=cout_tedges,
         aquifer_pore_volumes=params["aquifer_pore_volume"],
         retardation_factor=params["retardation_factor"],
