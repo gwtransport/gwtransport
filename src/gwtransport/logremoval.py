@@ -75,11 +75,12 @@ Available functions:
 
 - :func:`gamma_mean` - Compute effective (parallel) mean log removal for gamma-distributed
   residence time. Uses the moment generating function of the gamma distribution to compute the
-  log-weighted average: LR_eff = alpha * log10(1 + beta * mu * ln(10)).
+  log-weighted average: LR_eff = mu * loc + alpha * log10(1 + beta * mu * ln(10)).
 
 - :func:`gamma_find_flow_for_target_mean` - Find flow rate that produces specified target
-  effective mean log removal given gamma-distributed aquifer pore volume. Solves inverse problem:
-  flow = apv_beta * mu * ln(10) / (10^(target_mean / apv_alpha) - 1).
+  effective mean log removal given gamma-distributed aquifer pore volume. For ``loc == 0`` this
+  is the closed-form inverse: flow = beta * mu * ln(10) / (10^(target_mean / alpha) - 1); for
+  ``loc > 0`` the transcendental equation is solved numerically.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -118,7 +119,7 @@ def residence_time_to_log_removal(
 
     Returns
     -------
-    log_removals : numpy.ndarray
+    log_removals : ndarray
         Array of log removal values corresponding to the input residence times.
         Same shape as input residence_times.
 
@@ -199,8 +200,8 @@ def decay_rate_to_log10_decay_rate(decay_rate: float) -> float:
     >>> import numpy as np
     >>> # Convert a decay rate of ln(2)/30 (half-life of 30 days)
     >>> decay_rate = np.log(2) / 30
-    >>> decay_rate_to_log10_decay_rate(decay_rate)  # doctest: +SKIP
-    0.01003...
+    >>> decay_rate_to_log10_decay_rate(decay_rate)  # doctest: +ELLIPSIS
+    np.float64(0.01003...)
     """
     return decay_rate / np.log(10)
 
@@ -229,8 +230,8 @@ def log10_decay_rate_to_decay_rate(log10_decay_rate: float) -> float:
     Examples
     --------
     >>> from gwtransport.logremoval import log10_decay_rate_to_decay_rate
-    >>> log10_decay_rate_to_decay_rate(0.2)  # doctest: +SKIP
-    0.4605...
+    >>> log10_decay_rate_to_decay_rate(0.2)  # doctest: +ELLIPSIS
+    np.float64(0.4605...)
     """
     return log10_decay_rate * np.log(10)
 
@@ -275,10 +276,10 @@ def parallel_mean(
 
     Returns
     -------
-    float or array-like
-        The combined log removal value for the parallel system.
-        If log_removals is multi-dimensional and axis is specified,
-        returns an array with the specified axis removed.
+    np.floating or ndarray
+        The combined log removal value for the parallel system. Returns a
+        scalar when axis=None, otherwise an array with the specified axis
+        removed.
 
     Raises
     ------
@@ -335,27 +336,27 @@ def parallel_mean(
 def gamma_pdf(
     *,
     r: npt.ArrayLike,
-    rt_alpha: float,
-    rt_beta: float,
-    rt_loc: float = 0.0,
+    alpha: float,
+    beta: float,
+    loc: float = 0.0,
     log10_decay_rate: float,
 ) -> npt.NDArray[np.floating]:
     """
     Compute the PDF of log removal given (shifted) gamma-distributed residence time.
 
-    With residence time ``T = T0 + rt_loc`` where ``T0 ~ Gamma(rt_alpha, rt_beta)``,
+    With residence time ``T = T0 + loc`` where ``T0 ~ Gamma(alpha, beta)``,
     the log removal ``R = mu * T`` follows a shifted gamma distribution with shape
-    ``rt_alpha``, scale ``mu * rt_beta``, and location ``mu * rt_loc``.
+    ``alpha``, scale ``mu * beta``, and location ``mu * loc``.
 
     Parameters
     ----------
     r : array-like
         Log removal values at which to compute the PDF.
-    rt_alpha : float
-        Shape parameter of the gamma distribution for residence time.
-    rt_beta : float
-        Scale parameter of the gamma distribution for residence time (days).
-    rt_loc : float, optional
+    alpha : float
+        Shape parameter of the gamma distribution for residence time. Must be positive.
+    beta : float
+        Scale parameter of the gamma distribution for residence time (days). Must be positive.
+    loc : float, optional
         Location (minimum residence time, days) of the residence time distribution.
         Must be non-negative. Default is ``0.0``.
     log10_decay_rate : float
@@ -364,51 +365,50 @@ def gamma_pdf(
 
     Returns
     -------
-    pdf : numpy.ndarray
+    pdf : ndarray
         PDF values corresponding to the input r values.
 
     Raises
     ------
     ValueError
-        If ``rt_loc`` is negative.
+        If ``loc`` is negative.
 
     See Also
     --------
     gamma_cdf : Cumulative distribution function of log removal
     gamma_mean : Mean of the log removal distribution
     """
-    if rt_loc < 0:
-        msg = "rt_loc must be non-negative"
+    if loc < 0:
+        msg = "loc must be non-negative"
         raise ValueError(msg)
-    r = np.asarray(r)
-    return stats.gamma.pdf(r, a=rt_alpha, loc=log10_decay_rate * rt_loc, scale=log10_decay_rate * rt_beta)
+    return stats.gamma.pdf(r, a=alpha, loc=log10_decay_rate * loc, scale=log10_decay_rate * beta)
 
 
 def gamma_cdf(
     *,
     r: npt.ArrayLike,
-    rt_alpha: float,
-    rt_beta: float,
-    rt_loc: float = 0.0,
+    alpha: float,
+    beta: float,
+    loc: float = 0.0,
     log10_decay_rate: float,
 ) -> npt.NDArray[np.floating]:
     """
     Compute the CDF of log removal given (shifted) gamma-distributed residence time.
 
-    With residence time ``T = T0 + rt_loc`` where ``T0 ~ Gamma(rt_alpha, rt_beta)``,
-    the CDF is ``P(R <= r) = P(mu*(T0 + rt_loc) <= r) =
-    P(T0 <= (r - mu*rt_loc)/mu)`` which is the CDF of a shifted gamma distribution
-    with location ``mu * rt_loc``.
+    With residence time ``T = T0 + loc`` where ``T0 ~ Gamma(alpha, beta)``,
+    the CDF is ``P(R <= r) = P(mu*(T0 + loc) <= r) =
+    P(T0 <= (r - mu*loc)/mu)`` which is the CDF of a shifted gamma distribution
+    with location ``mu * loc``.
 
     Parameters
     ----------
     r : array-like
         Log removal values at which to compute the CDF.
-    rt_alpha : float
-        Shape parameter of the gamma distribution for residence time.
-    rt_beta : float
-        Scale parameter of the gamma distribution for residence time (days).
-    rt_loc : float, optional
+    alpha : float
+        Shape parameter of the gamma distribution for residence time. Must be positive.
+    beta : float
+        Scale parameter of the gamma distribution for residence time (days). Must be positive.
+    loc : float, optional
         Location (minimum residence time, days) of the residence time distribution.
         Must be non-negative. Default is ``0.0``.
     log10_decay_rate : float
@@ -417,31 +417,30 @@ def gamma_cdf(
 
     Returns
     -------
-    cdf : numpy.ndarray
+    cdf : ndarray
         CDF values corresponding to the input r values.
 
     Raises
     ------
     ValueError
-        If ``rt_loc`` is negative.
+        If ``loc`` is negative.
 
     See Also
     --------
     gamma_pdf : Probability density function of log removal
     gamma_mean : Mean of the log removal distribution
     """
-    if rt_loc < 0:
-        msg = "rt_loc must be non-negative"
+    if loc < 0:
+        msg = "loc must be non-negative"
         raise ValueError(msg)
-    r = np.asarray(r)
-    return stats.gamma.cdf(r, a=rt_alpha, loc=log10_decay_rate * rt_loc, scale=log10_decay_rate * rt_beta)
+    return stats.gamma.cdf(r, a=alpha, loc=log10_decay_rate * loc, scale=log10_decay_rate * beta)
 
 
 def gamma_mean(
     *,
-    rt_alpha: float,
-    rt_beta: float,
-    rt_loc: float = 0.0,
+    alpha: float,
+    beta: float,
+    loc: float = 0.0,
     log10_decay_rate: float,
 ) -> float:
     """
@@ -450,25 +449,25 @@ def gamma_mean(
     When water travels through multiple flow paths with gamma-distributed
     residence times, the effective log removal is determined by mixing the
     output concentrations (not by averaging individual log removals). For a
-    shifted gamma distribution ``T = T0 + rt_loc`` with ``T0 ~ Gamma(alpha, beta)``,
+    shifted gamma distribution ``T = T0 + loc`` with ``T0 ~ Gamma(alpha, beta)``,
     factoring the moment generating function gives:
 
     LR_eff = -log10(E[10^(-mu*T)])
-           = -log10(10^(-mu*rt_loc) * E[10^(-mu*T0)])
-           = mu * rt_loc + alpha * log10(1 + beta * mu * ln(10))
+           = -log10(10^(-mu*loc) * E[10^(-mu*T0)])
+           = mu * loc + alpha * log10(1 + beta * mu * ln(10))
 
-    The ``rt_loc`` term shifts the whole log-removal distribution by a constant
-    ``mu * rt_loc``; the alpha/beta term is unchanged. This is always less than
-    the arithmetic mean ``mu * (alpha * beta + rt_loc)`` because short residence
+    The ``loc`` term shifts the whole log-removal distribution by a constant
+    ``mu * loc``; the alpha/beta term is unchanged. This is always less than
+    the arithmetic mean ``mu * (alpha * beta + loc)`` because short residence
     time paths contribute disproportionately to the output concentration.
 
     Parameters
     ----------
-    rt_alpha : float
-        Shape parameter of the gamma distribution for residence time.
-    rt_beta : float
-        Scale parameter of the gamma distribution for residence time (days).
-    rt_loc : float, optional
+    alpha : float
+        Shape parameter of the gamma distribution for residence time. Must be positive.
+    beta : float
+        Scale parameter of the gamma distribution for residence time (days). Must be positive.
+    loc : float, optional
         Location (minimum residence time, days) of the residence time distribution.
         Must be non-negative. Default is ``0.0``.
     log10_decay_rate : float
@@ -482,7 +481,7 @@ def gamma_mean(
     Raises
     ------
     ValueError
-        If ``rt_loc`` is negative.
+        If ``loc`` is negative.
 
     See Also
     --------
@@ -492,46 +491,46 @@ def gamma_mean(
     gamma_cdf : CDF of the log removal distribution
     :ref:`concept-pore-volume-distribution` : Why residence times are distributed
     """
-    if rt_loc < 0:
-        msg = "rt_loc must be non-negative"
+    if loc < 0:
+        msg = "loc must be non-negative"
         raise ValueError(msg)
-    return log10_decay_rate * rt_loc + rt_alpha * np.log10(1 + rt_beta * log10_decay_rate * np.log(10))
+    return log10_decay_rate * loc + alpha * np.log1p(beta * log10_decay_rate * np.log(10)) / np.log(10)
 
 
 def gamma_find_flow_for_target_mean(
     *,
     target_mean: float,
-    apv_alpha: float,
-    apv_beta: float,
-    apv_loc: float = 0.0,
+    alpha: float,
+    beta: float,
+    loc: float = 0.0,
     log10_decay_rate: float,
 ) -> float:
     """
     Find the flow rate that produces a target effective mean log removal.
 
     Given a (shifted) gamma-distributed aquifer pore volume with parameters
-    ``(apv_alpha, apv_beta, apv_loc)``, the residence time distribution at flow
-    ``Q`` is a shifted gamma with shape ``apv_alpha``, scale ``apv_beta/Q``, and
-    location ``apv_loc/Q``. From :func:`gamma_mean`:
+    ``(alpha, beta, loc)``, the residence time distribution at flow
+    ``Q`` is a shifted gamma with shape ``alpha``, scale ``beta/Q``, and
+    location ``loc/Q``. From :func:`gamma_mean`:
 
-    LR_eff = mu * apv_loc / Q + apv_alpha * log10(1 + (apv_beta/Q) * mu * ln(10))
+    LR_eff = mu * loc / Q + alpha * log10(1 + (beta/Q) * mu * ln(10))
 
-    For ``apv_loc == 0`` this is closed-form:
+    For ``loc == 0`` this is closed-form:
 
-    Q = apv_beta * mu * ln(10) / (10^(target_mean / apv_alpha) - 1)
+    Q = beta * mu * ln(10) / (10^(target_mean / alpha) - 1)
 
-    For ``apv_loc > 0`` the equation is transcendental and solved numerically
+    For ``loc > 0`` the equation is transcendental and solved numerically
     with :func:`scipy.optimize.brentq` by bracketing the root in ``1/Q``.
 
     Parameters
     ----------
     target_mean : float
         Target effective mean log removal value. Must be positive.
-    apv_alpha : float
-        Shape parameter of the gamma distribution for aquifer pore volume.
-    apv_beta : float
-        Scale parameter of the gamma distribution for aquifer pore volume.
-    apv_loc : float, optional
+    alpha : float
+        Shape parameter of the gamma distribution for aquifer pore volume. Must be positive.
+    beta : float
+        Scale parameter of the gamma distribution for aquifer pore volume. Must be positive.
+    loc : float, optional
         Location (minimum aquifer pore volume) of the gamma distribution.
         Must be non-negative. Default is ``0.0``.
     log10_decay_rate : float
@@ -540,32 +539,32 @@ def gamma_find_flow_for_target_mean(
     Returns
     -------
     flow : float
-        Flow rate (same units as apv_beta per day) that produces the
+        Flow rate (same units as beta per day) that produces the
         target mean log removal.
 
     Raises
     ------
     ValueError
-        If ``apv_loc`` is negative, if ``target_mean`` is not positive, if
+        If ``loc`` is negative, if ``target_mean`` is not positive, if
         ``log10_decay_rate`` is not positive (no decay can never produce a
-        positive target log removal), or if ``apv_alpha`` or ``apv_beta`` are
+        positive target log removal), or if ``alpha`` or ``beta`` are
         not positive.
 
     See Also
     --------
     gamma_mean : Compute effective mean log removal for given parameters
     """
-    if apv_loc < 0:
-        msg = "apv_loc must be non-negative"
+    if loc < 0:
+        msg = "loc must be non-negative"
         raise ValueError(msg)
     if target_mean <= 0:
         msg = "target_mean must be positive"
         raise ValueError(msg)
-    if apv_alpha <= 0:
-        msg = "apv_alpha must be positive"
+    if alpha <= 0:
+        msg = "alpha must be positive"
         raise ValueError(msg)
-    if apv_beta <= 0:
-        msg = "apv_beta must be positive"
+    if beta <= 0:
+        msg = "beta must be positive"
         raise ValueError(msg)
     if log10_decay_rate <= 0:
         # Without decay, the effective mean log removal is identically zero
@@ -574,22 +573,20 @@ def gamma_find_flow_for_target_mean(
         raise ValueError(msg)
 
     ln10 = np.log(10)
-    flow_closed_form = apv_beta * log10_decay_rate * ln10 / (10 ** (target_mean / apv_alpha) - 1)
+    flow_closed_form = beta * log10_decay_rate * ln10 / (10 ** (target_mean / alpha) - 1)
 
-    if apv_loc == 0.0:
+    if loc == 0.0:
         return float(flow_closed_form)
 
-    # Solve target = mu*apv_loc*u + apv_alpha*log10(1 + apv_beta*mu*ln(10)*u) for u = 1/flow.
+    # Solve target = mu*loc*u + alpha*log10(1 + beta*mu*ln(10)*u) for u = 1/flow.
     # Both terms are monotonically increasing in u, so f(u) - target is monotonic with a
     # unique positive root. Bracket: at u = 1/flow_closed_form the alpha/beta term alone
-    # equals target_mean, so the full f overshoots by exactly mu*apv_loc*u_upper > 0.
+    # equals target_mean, so the full f overshoots by exactly mu*loc*u_upper > 0.
     u_upper = 1.0 / flow_closed_form
 
     def residual(u: float) -> float:
         return float(
-            log10_decay_rate * apv_loc * u
-            + apv_alpha * np.log10(1 + apv_beta * log10_decay_rate * ln10 * u)
-            - target_mean
+            log10_decay_rate * loc * u + alpha * np.log1p(beta * log10_decay_rate * ln10 * u) / ln10 - target_mean
         )
 
     u_root = optimize.brentq(residual, 0.0, u_upper)
