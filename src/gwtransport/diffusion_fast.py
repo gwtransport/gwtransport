@@ -347,7 +347,7 @@ def _closed_form_coeff_matrix(
     # Residence time identifies cout bins with complete breakthrough (NaN beyond data).
     rt_at_cout_tedges = residence_time_series(
         flow=flow,
-        flow_tedges=work_tedges,
+        tedges=work_tedges,
         index=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=retardation_factor,

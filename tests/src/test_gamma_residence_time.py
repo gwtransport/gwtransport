@@ -30,8 +30,8 @@ def test_constant_flow_deep_bin_equals_analytic(direction, mean, std, loc, r):
     flow, tedges = _constant_flow(q=q)
     tau = gamma_residence_time(
         flow=flow,
-        flow_tedges=tedges,
-        tedges_out=tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         mean=mean,
         std=std,
         loc=loc,
@@ -54,8 +54,8 @@ def test_spinup_partial_bin_matches_direct_integral(direction):
     flow, tedges = _constant_flow(n_days=n, q=q)
     tau = gamma_residence_time(
         flow=flow,
-        flow_tedges=tedges,
-        tedges_out=tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         mean=mean,
         std=std,
         direction=direction,
@@ -96,10 +96,10 @@ def test_narrow_gamma_reduces_to_single_pore_volume(direction):
     # std small enough that the std -> 0 limit is reached to ~3e-9 (residual scales with std^2);
     # loc != 0 exercises the loc shift in the partial moments.
     tau = gamma_residence_time(
-        flow=flow, flow_tedges=tedges, tedges_out=tedges, mean=mean, std=0.05, loc=120.0, direction=direction
+        flow=flow, tedges=tedges, cout_tedges=tedges, mean=mean, std=0.05, loc=120.0, direction=direction
     )
     ref = residence_time_full(
-        flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=mean, direction=direction
+        flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=mean, direction=direction
     )[0]
     mask = np.isfinite(tau) & np.isfinite(ref)
     assert mask.sum() > n // 2
@@ -111,28 +111,28 @@ def test_alpha_beta_matches_mean_std():
     flow, tedges = _constant_flow()
     mean, std = 350.0, 90.0
     alpha, beta = (mean / std) ** 2, std**2 / mean
-    by_moments = gamma_residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, mean=mean, std=std)
-    by_shape = gamma_residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, alpha=alpha, beta=beta)
+    by_moments = gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=mean, std=std)
+    by_shape = gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, alpha=alpha, beta=beta)
     np.testing.assert_allclose(by_moments, by_shape, atol=0, rtol=1e-12, equal_nan=True)
 
 
 def test_invalid_direction_raises():
     flow, tedges = _constant_flow()
     with pytest.raises(ValueError, match="direction"):
-        gamma_residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, mean=300.0, std=80.0, direction="bad")
+        gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, direction="bad")
 
 
 def test_requires_gamma_parameters():
     flow, tedges = _constant_flow()
     with pytest.raises(ValueError):
-        gamma_residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges)
+        gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges)
 
 
 def test_bins_outside_record_are_nan():
     """Output bins extending beyond the flow record are NaN, like residence_time_full."""
     flow, tedges = _constant_flow(n_days=20)
-    tedges_out = pd.date_range("2023-01-01", periods=31, freq="D")  # 10 days past the record
-    tau = gamma_residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges_out, mean=300.0, std=80.0)
+    cout_tedges = pd.date_range("2023-01-01", periods=31, freq="D")  # 10 days past the record
+    tau = gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=cout_tedges, mean=300.0, std=80.0)
     assert np.isnan(tau[-1])
 
 
@@ -205,8 +205,8 @@ def test_wide_gamma_matches_double_quad(direction):
     mean, std, loc, r = 700.0, 450.0, 50.0, 1.6
     tau = gamma_residence_time(
         flow=flow,
-        flow_tedges=tedges,
-        tedges_out=tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         mean=mean,
         std=std,
         loc=loc,
@@ -238,8 +238,8 @@ def test_tiling_boundary_invariance(direction):
     flow = np.clip(110.0 + 40.0 * np.sin(np.arange(n) / 9.0) + rng.normal(0, 7, n), 8.0, None)
     common = {
         "flow": flow,
-        "flow_tedges": tedges,
-        "tedges_out": tedges,
+        "tedges": tedges,
+        "cout_tedges": tedges,
         "mean": 900.0,
         "std": 600.0,
         "loc": 80.0,
@@ -248,8 +248,9 @@ def test_tiling_boundary_invariance(direction):
     }
     one_tile = gamma_residence_time(**common, _max_tile_elements=10**18)
     tiny_tile = gamma_residence_time(**common, _max_tile_elements=1)
-    np.testing.assert_array_equal(np.isnan(one_tile), np.isnan(tiny_tile))
-    np.testing.assert_allclose(one_tile, tiny_tile, rtol=1e-12, equal_nan=True)
+    # Tiling is a pure loop partition: each output bin's arithmetic is independent of the tile it
+    # lands in, so the two results must be bit-for-bit identical, not merely close.
+    np.testing.assert_array_equal(one_tile, tiny_tile)
 
 
 @pytest.mark.parametrize("direction", DIRECTIONS)
@@ -266,8 +267,8 @@ def test_constant_spinup_constant_flow_exact(direction, r):
     flow, tedges = _constant_flow(q=q)
     tau = gamma_residence_time(
         flow=flow,
-        flow_tedges=tedges,
-        tedges_out=tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         mean=mean,
         std=std,
         direction=direction,
@@ -291,12 +292,10 @@ def test_constant_spinup_matches_discrete(direction):
     tedges = pd.date_range("2021-01-01", periods=n + 1, freq="D")
     rng = np.random.default_rng(7)
     flow = np.clip(100.0 + 60.0 * np.sin(np.arange(n) / 3.0) + rng.normal(0, 10, n), 10.0, None)
-    tau = gamma_residence_time(
-        flow=flow, flow_tedges=tedges, tedges_out=tedges, mean=mean, std=std, direction=direction
-    )
+    tau = gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=mean, std=std, direction=direction)
     expected_values = gamma_bins(mean=mean, std=std, n_bins=300)["expected_values"]
     disc = residence_time(
-        flow=flow, flow_tedges=tedges, tedges_out=tedges, aquifer_pore_volumes=expected_values, direction=direction
+        flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=expected_values, direction=direction
     )
     mask = np.isfinite(tau) & np.isfinite(disc)
     assert mask.any()
@@ -307,9 +306,9 @@ def test_spinup_invalid_raises():
     """A bad ``spinup`` (not "constant", not a float in [0, 1)) raises ValueError mentioning spinup."""
     flow, tedges = _constant_flow()
     with pytest.raises(ValueError, match="spinup"):
-        gamma_residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, mean=300.0, std=80.0, spinup="bad")
+        gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, spinup="bad")
     with pytest.raises(ValueError, match="spinup"):
-        gamma_residence_time(flow=flow, flow_tedges=tedges, tedges_out=tedges, mean=300.0, std=80.0, spinup=1.0)
+        gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, spinup=1.0)
 
 
 @pytest.mark.parametrize("direction", DIRECTIONS)
@@ -326,8 +325,8 @@ def test_spinup_zero_vs_constant_differ_in_spinup_agree_deep(direction):
     flow = np.clip(110.0 + 40.0 * np.sin(np.arange(n) / 9.0) + rng.normal(0, 7, n), 8.0, None)
     common = {
         "flow": flow,
-        "flow_tedges": tedges,
-        "tedges_out": tedges,
+        "tedges": tedges,
+        "cout_tedges": tedges,
         "mean": 500.0,
         "std": 200.0,
         "loc": 30.0,
@@ -360,8 +359,8 @@ def test_float_spinup_threshold_gates_emission(direction):
     flow = np.clip(110.0 + 40.0 * np.sin(np.arange(n) / 9.0) + rng.normal(0, 7, n), 8.0, None)
     common = {
         "flow": flow,
-        "flow_tedges": tedges,
-        "tedges_out": tedges,
+        "tedges": tedges,
+        "cout_tedges": tedges,
         "mean": 500.0,
         "std": 200.0,
         "loc": 30.0,

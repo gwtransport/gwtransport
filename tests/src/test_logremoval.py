@@ -425,14 +425,14 @@ def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow,
     # Create a constant flow time series long enough for the largest pore volume
     max_residence_days = pore_volumes.max() / flow * 2
     n_days = int(np.ceil(max_residence_days)) + 10
-    flow_tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
     constant_flow = np.full(n_days, flow)
 
     # Compute residence time at a single point (midpoint, far enough from edges)
-    index = pd.DatetimeIndex([flow_tedges[0] + (flow_tedges[-1] - flow_tedges[0]) / 2])
+    index = pd.DatetimeIndex([tedges[0] + (tedges[-1] - tedges[0]) / 2])
     rt_array = compute_residence_time(
         flow=constant_flow,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volumes,
         index=index,
         direction="extraction_to_infiltration",
