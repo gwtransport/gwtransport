@@ -145,12 +145,12 @@ def residence_time_series(
     Parameters
     ----------
     flow : array-like
-        Flow rate of water in the aquifer [m3/day]. The length of `flow` should match the length of `flow_tedges` minus one.
+        Flow rate of water in the aquifer [m³/day]. The length of `flow` should match the length of `flow_tedges` minus one.
     flow_tedges : pandas.DatetimeIndex
         Time edges for the flow data. Used to compute the cumulative flow.
         Has a length of one more than `flow`.
     aquifer_pore_volumes : float or array-like of float
-        Pore volume(s) of the aquifer [m3]. Can be a single value or an array
+        Pore volume(s) of the aquifer [m³]. Can be a single value or an array
         of pore volumes representing different flow paths.
     index : pandas.DatetimeIndex, optional
         Instants at which to evaluate the residence time. If left to None, flow-bin centres
@@ -256,13 +256,13 @@ def residence_time_full(
     Parameters
     ----------
     flow : array-like
-        Flow rate of water in the aquifer [m3/day]. Length matches ``flow_tedges`` minus one.
+        Flow rate of water in the aquifer [m³/day]. Length matches ``flow_tedges`` minus one.
     flow_tedges : array-like
         Time edges for the flow data, as datetime64 objects, defining the flow intervals.
     tedges_out : array-like
         Output time edges as datetime64 objects; ``n + 1`` edges define ``n`` output bins.
     aquifer_pore_volumes : float or array-like
-        Pore volume(s) of the aquifer [m3]. A single value or an array of pore volumes
+        Pore volume(s) of the aquifer [m³]. A single value or an array of pore volumes
         representing different flow paths.
     direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
         Direction of the flow calculation:
@@ -465,13 +465,13 @@ def residence_time(
     Parameters
     ----------
     flow : array-like
-        Flow rate of water in the aquifer [m3/day]. Length matches ``flow_tedges`` minus one.
+        Flow rate of water in the aquifer [m³/day]. Length matches ``flow_tedges`` minus one.
     flow_tedges : array-like
         Time edges for the flow data, as datetime64 objects, defining the flow intervals.
     tedges_out : array-like
         Output time edges as datetime64 objects; ``n + 1`` edges define ``n`` output bins.
     aquifer_pore_volumes : array-like
-        Discrete pore volumes [m3], one per (equally-weighted) streamtube. A single value
+        Discrete pore volumes [m³], one per (equally-weighted) streamtube. A single value
         collapses to the per-streamtube mean of :func:`residence_time_full`.
     direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
         Direction of the flow calculation:
@@ -584,18 +584,18 @@ def gamma_residence_time(
     Parameters
     ----------
     flow : array-like
-        Flow rate of water in the aquifer [m3/day]. Length matches ``flow_tedges`` minus one.
+        Flow rate of water in the aquifer [m³/day]. Length matches ``flow_tedges`` minus one.
     flow_tedges : array-like
         Time edges for the flow data, as datetime64 objects, defining the flow intervals.
     tedges_out : array-like
         Output time edges as datetime64 objects; ``n + 1`` edges define ``n`` output bins.
     mean : float, optional
-        Mean of the gamma APVD [m3]. Must be strictly greater than ``loc``. Provide either
+        Mean of the gamma APVD [m³]. Must be strictly greater than ``loc``. Provide either
         ``(mean, std)`` or ``(alpha, beta)``.
     std : float, optional
-        Standard deviation of the gamma APVD [m3]. Must be positive.
+        Standard deviation of the gamma APVD [m³]. Must be positive.
     loc : float, optional
-        Location (lower bound of support) of the gamma APVD [m3]; a guaranteed minimum pore
+        Location (lower bound of support) of the gamma APVD [m³]; a guaranteed minimum pore
         volume. Must satisfy ``0 <= loc < mean``. Default is 0.0.
     alpha : float, optional
         Shape parameter of the gamma APVD (must be > 0).
@@ -919,12 +919,12 @@ def fraction_explained(
     rt : numpy.ndarray, optional
         Pre-computed residence time array [days]. If not provided, it will be computed.
     flow : array-like, optional
-        Flow rate of water in the aquifer [m3/day]. The length of `flow` should match the length of `flow_tedges` minus one.
+        Flow rate of water in the aquifer [m³/day]. The length of `flow` should match the length of `flow_tedges` minus one.
     flow_tedges : pandas.DatetimeIndex, optional
         Time edges for the flow data. Used to compute the cumulative flow.
         Has a length of one more than `flow`. Inbetween neighboring time edges, the flow is assumed constant.
     aquifer_pore_volumes : float or array-like of float, optional
-        Pore volume(s) of the aquifer [m3]. Can be a single value or an array
+        Pore volume(s) of the aquifer [m³]. Can be a single value or an array
         of pore volumes representing different flow paths.
     index : pandas.DatetimeIndex, optional
         Index at which to compute the fraction. If left to None, flow-bin centres are used.
@@ -940,13 +940,40 @@ def fraction_explained(
     Returns
     -------
     numpy.ndarray
-        Fraction of the aquifer that is informed with respect to the retarded flow.
+        Fraction of the aquifer that is informed with respect to the retarded flow, one value per
+        output instant. Shape ``(n_index,)`` (or ``(rt.shape[1],)`` when ``rt`` is supplied), with
+        values in ``[0, 1]`` (``1.0`` = fully informed, ``0.0`` = entirely in spin-up).
 
     Raises
     ------
     ValueError
         If ``rt`` is not provided and any of ``flow``, ``flow_tedges``, or
         ``aquifer_pore_volumes`` are missing. If ``rt`` is provided but is not 2D.
+
+    See Also
+    --------
+    residence_time_series : Per-instant residence times; the primitive this fraction is built on.
+    residence_time_full : Bin-averaged warm-started means that this diagnostic locates the spin-up of.
+
+    Notes
+    -----
+    The fraction is the per-instant complement of the spin-up coverage: it counts the supplied pore
+    volumes whose :func:`residence_time_series` value is finite. Because the warm-started means of
+    :func:`residence_time_full` / :func:`residence_time` are finite even inside the spin-up, this is
+    the way to locate that region.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import pandas as pd
+    >>> from gwtransport.residence_time import residence_time_series, fraction_explained
+    >>> tedges = pd.date_range("2020-01-01", periods=11, freq="D")
+    >>> flow = np.full(10, 100.0)
+    >>> series = residence_time_series(
+    ...     flow=flow, flow_tedges=tedges, aquifer_pore_volumes=[200.0, 1500.0]
+    ... )
+    >>> fraction_explained(rt=series).tolist()
+    [0.0, 0.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
     """
     if rt is None:
         if flow is None:
@@ -1035,14 +1062,13 @@ def freundlich_retardation(
     ...     concentration=concentration,
     ...     freundlich_k=0.5,
     ...     freundlich_n=0.9,
-    ...     bulk_density=1600,  # kg/m3
+    ...     bulk_density=1600,  # kg/m³
     ...     porosity=0.35,
     ... )
     >>> # Use R in residence_time_series as retardation_factor
     """
     concentration = np.asarray(concentration)
 
-    # Validate physical parameters
     if not 0 < porosity < 1:
         msg = f"Porosity must be in (0, 1), got {porosity}"
         raise ValueError(msg)
