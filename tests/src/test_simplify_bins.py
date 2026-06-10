@@ -247,6 +247,7 @@ class TestSimplifyBinsMassConservation:
         widths = np.diff(edges)
 
         new_edges, new_values, new_flow = simplify_bins(edges=edges, values=values, flow=flow, tol=0.3)
+        assert new_flow is not None  # flow supplied -> flow_out is an array
 
         # Pin the (non-obvious) merge boundaries: only bins 2-3 and 5-6-7 merge under tol=0.3.
         assert_array_equal(new_edges, [0.0, 1.0, 2.0, 4.0, 5.0, 8.0, 9.0, 10.0])
