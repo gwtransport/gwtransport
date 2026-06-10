@@ -212,7 +212,7 @@ def _advection_micro_band(
     mean_r_vpv: float,
     off_lo: float,
     off_hi: float,
-    warmstart: bool,
+    extend: bool,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp]]:
     """Banded ``D_m=0`` advection+macro+micro coefficients on the native cumulative-volume grid.
 
@@ -220,7 +220,7 @@ def _advection_micro_band(
     ``[off_lo, off_hi]`` (a conservative fixed window from ``searchsorted``, mirroring
     :func:`gwtransport.diffusion_fast._closed_form_coeff_matrix`), evaluates ``Ibar`` at the native
     edge offsets, and telescopes the edge-differences into per-cin-bin coefficients. With
-    ``warmstart`` the cin axis is extended by one wide virtual bin each side carrying the constant
+    ``extend`` the cin axis is extended by one wide virtual bin each side carrying the constant
     boundary value (``cin[0]`` / ``cin[-1]``), reproducing the 100-year warm-start.
 
     The coefficients depend only on the volume grid (not on ``cin``), so this band is built once and
@@ -233,13 +233,13 @@ def _advection_micro_band(
     coeff : ndarray, shape (n_cout, band)
         Per-(cout bin, band slot) coefficient.
     cin_bin : ndarray of int, shape (n_cout, band)
-        Column index of each coefficient on the (warm-start-extended when ``warmstart``) cin axis:
-        ``cin_ext[cin_bin]`` for the forward, ``clip(cin_bin - warmstart, 0, n_cin - 1)`` for the
+        Column index of each coefficient on the (warm-start-extended when ``extend``) cin axis:
+        ``cin_ext[cin_bin]`` for the forward, ``clip(cin_bin - int(extend), 0, n_cin - 1)`` for the
         real cin axis in the reverse.
     """
     vi = cumulative_volume_at_cin
     vc = cumulative_volume_at_cout
-    if warmstart:
+    if extend:
         big = abs(off_hi) + abs(off_lo) + (vc[-1] - vc[0]) + (vi[-1] - vi[0]) + 1.0
         vi_ext = np.concatenate([[vi[0] - big], vi, [vi[-1] + big]])
         n_cin_ext = vi.size + 1  # (vi.size - 1) real bins + 2 virtual boundary bins
@@ -315,16 +315,14 @@ def _build_forward_operator(
     retardation_factor: float,
     extend: bool,
     saturation_threshold: float,
-) -> (
-    tuple[npt.NDArray[np.floating], npt.NDArray[np.intp], float, npt.NDArray[np.bool_], npt.NDArray[np.floating]] | None
-):
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp], float, npt.NDArray[np.bool_]] | None:
     r"""Build the cin-independent pieces of the approximate banded forward operator ``W = G . M``.
 
     Both directions share this build: the advection+macro+micro band ``M`` (``coeff`` / ``cin_bin``,
     :func:`_advection_micro_band`), the molecular time-Gaussian width ``sigma_bins`` (the operator
-    ``G``), the residence-time ``valid`` mask, and the per-row coefficient sum ``row_sum``. Because
-    the band depends only on the volume grid (not on ``cin`` / ``cout``), forward transport and
-    reverse deconvolution operate on exactly the same operator.
+    ``G``), and the residence-time ``valid`` mask. Because the band depends only on the volume grid
+    (not on ``cin`` / ``cout``), forward transport and reverse deconvolution operate on exactly the
+    same operator.
 
     Returns
     -------
@@ -336,8 +334,6 @@ def _build_forward_operator(
         Molecular Gaussian width in output-bin units (0 -> ``G`` is the identity).
     valid : ndarray of bool, shape (n_cout,)
         Output bins with residence time finite at both edges (complete breakthrough).
-    row_sum : ndarray, shape (n_cout,)
-        Per-cout-bin coefficient sum of ``M`` (1 where fully broken through).
 
     None
         Returned instead of the tuple when there is no through-flow (nothing breaks through).
@@ -375,14 +371,17 @@ def _build_forward_operator(
         mean_r_vpv=mean_r_vpv,
         off_lo=off_lo,
         off_hi=off_hi,
-        warmstart=extend,
+        extend=extend,
     )
 
     # Molecular diffusion: a single mean-streamtube time-domain Gaussian on the outlet signal.
     # sigma_t^2 = 2*D_m*tau_bt*(r_vpv/L)^2/Q^2, with tau_bt = R*mean(V_pore)/Q the mean breakthrough
     # time and Q = total_volume/total_time the flow-weighted mean throughflow. sigma_t (days) is
     # converted with the OUTPUT-grid mean bin width (not the flow grid -- they differ for a coarse
-    # cout grid); a smear wider than the record cannot be resolved, so it is capped at n_cout.
+    # cout grid); a smear wider than the record cannot be resolved. Cap sigma_bins so the forward's
+    # truncation radius int(6*sigma_bins + 0.5) cannot exceed n_cout - 1 -- this matches the explicit
+    # min(..., n_cout - 1) clip the reverse applies in _banded_forward_matrix, so forward and reverse
+    # always use the identical molecular kernel (the cap is unreachable for realistic D_m).
     total_days = float(tedges_days[-1] - tedges_days[0])
     q_mean = total_volume / total_days
     tau_bt = retardation_factor * float(aquifer_pore_volumes.mean()) / q_mean
@@ -390,7 +389,7 @@ def _build_forward_operator(
         2.0 * float(molecular_diffusivity.mean()) * tau_bt * (mean_r_vpv / float(streamline_length.mean())) ** 2
     ) / q_mean**2
     mean_cout_dt = (cout_tedges_days[-1] - cout_tedges_days[0]) / n_cout
-    sigma_bins = min(float(np.sqrt(sigma_t2)) / mean_cout_dt, float(n_cout))
+    sigma_bins = min(float(np.sqrt(sigma_t2)) / mean_cout_dt, (n_cout - 1) / 6.0)
 
     # Mask bins beyond the data range (and, without warm-start, incompletely-broken-through spin-up
     # bins). residence_time uses the extended grid when warm-starting so spin-up bins stay valid.
@@ -408,7 +407,7 @@ def _build_forward_operator(
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=retardation_factor,
     )
-    return coeff, cin_bin, sigma_bins, valid, coeff.sum(axis=1)
+    return coeff, cin_bin, sigma_bins, valid
 
 
 def _banded_forward_matrix(
@@ -423,7 +422,7 @@ def _banded_forward_matrix(
 
     ``M`` (advection + macro + microdispersion) is scattered from the native band onto the real cin
     axis, folding the warm-start virtual columns into the boundary bins
-    (``clip(cin_bin - warmstart, 0, n_cin - 1)``, so ``M @ cin`` equals the forward's
+    (``clip(cin_bin - int(extend), 0, n_cin - 1)``, so ``M @ cin`` equals the forward's
     ``coeff @ cin_ext`` exactly). ``G`` is the molecular time-Gaussian along the output-bin axis (the
     same ``mode="nearest"`` kernel the forward applies with :func:`scipy.ndimage.gaussian_filter1d`).
     The returned band carries the forward operator verbatim; :func:`_solve_reverse_banded` masks the
@@ -457,7 +456,8 @@ def _banded_forward_matrix(
     # it stays contiguous (a flow spike that briefly opens a gap only adds explicit interior zeros).
     w_mat.sort_indices()
     indptr, indices, data = w_mat.indptr, w_mat.indices, w_mat.data
-    nonempty = np.diff(indptr) > 0
+    row_counts = np.diff(indptr)
+    nonempty = row_counts > 0
     col_start = np.zeros(n_cout, dtype=np.intp)
     last_col = np.zeros(n_cout, dtype=np.intp)
     col_start[nonempty] = indices[indptr[:-1][nonempty]]
@@ -465,7 +465,7 @@ def _banded_forward_matrix(
     full_band = int((last_col[nonempty] - col_start[nonempty] + 1).max()) if nonempty.any() else 1
 
     band_vals = np.zeros((n_cout, full_band))
-    rows_of_nz = np.repeat(np.arange(n_cout), np.diff(indptr))
+    rows_of_nz = np.repeat(np.arange(n_cout), row_counts)
     band_vals[rows_of_nz, indices - col_start[rows_of_nz]] = data
     return band_vals, col_start
 
@@ -482,7 +482,7 @@ def infiltration_to_extraction(
     longitudinal_dispersivity: npt.NDArray[np.floating] | float,
     retardation_factor: float = 1.0,
     flow_out: npt.ArrayLike | None = None,
-    spinup: str | float | None = "constant",
+    spinup: str | None = "constant",
     saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Compute extracted concentration with advection and longitudinal dispersion (approximate).
@@ -500,19 +500,19 @@ def infiltration_to_extraction(
     cin : array-like
         Concentration of the compound in the infiltrating water. Length ``len(tedges) - 1``.
     flow : array-like
-        Flow rate of water in the aquifer [m3/day]. Length ``len(tedges) - 1``.
+        Flow rate of water in the aquifer [m³/day]. Length ``len(tedges) - 1``.
     tedges : pandas.DatetimeIndex
         Time edges for cin and flow data. Length ``len(cin) + 1``.
     cout_tedges : pandas.DatetimeIndex
         Time edges for output data bins. Length ``len(output) + 1``.
     aquifer_pore_volumes : array-like
-        Aquifer pore volumes [m3] -- one independent streamtube per entry. Any distribution shape
+        Aquifer pore volumes [m³] -- one independent streamtube per entry. Any distribution shape
         (the APVD is pre-summed exactly).
     streamline_length : float or ndarray
         Travel distance L [m]: a scalar (shared by all streamtubes) or an array with one
         value per aquifer pore volume. Must be positive.
     molecular_diffusivity : float or ndarray
-        Effective molecular diffusivity D_m [m2/day]: scalar or one value per pore volume.
+        Effective molecular diffusivity D_m [m²/day]: scalar or one value per pore volume.
         Must be non-negative.
     longitudinal_dispersivity : float or ndarray
         Longitudinal dispersivity alpha_L [m]: scalar or one value per pore volume.
@@ -520,7 +520,7 @@ def infiltration_to_extraction(
     retardation_factor : float, optional
         Retardation factor (default 1.0). Values > 1.0 indicate slower transport.
     flow_out : array-like or None, optional
-        Extraction flow rate [m3/day] on the output grid (aligned to ``cout_tedges``,
+        Extraction flow rate [m³/day] on the output grid (aligned to ``cout_tedges``,
         length ``len(cout_tedges) - 1``). Required when ``cout_tedges`` differs from ``tedges``;
         may be omitted only when ``cout_tedges`` equals ``tedges``. Default None.
     spinup : {"constant"} | None, optional
@@ -589,14 +589,14 @@ def infiltration_to_extraction(
     if operator is None:
         # No through-flow: nothing breaks through (matches diffusion_fast's all-NaN result).
         return np.full(n_cout, np.nan)
-    coeff, cin_bin, sigma_bins, valid, row_sum = operator
+    coeff, cin_bin, sigma_bins, valid = operator
 
     # Apply the advection+macro+micro band M to the (warm-start-extended) cin, then the molecular
     # time-Gaussian G. The Gaussian runs before masking so it operates on NaN-free values.
     cin_ext = np.concatenate([[cin[0]], cin, [cin[-1]]]) if extend else cin
-    cout_micro = (coeff * cin_ext[cin_bin]).sum(axis=1)
+    cout_micro = np.einsum("kb,kb->k", coeff, cin_ext[cin_bin])
     cout = cout_micro if sigma_bins == 0.0 else gaussian_filter1d(cout_micro, sigma_bins, mode="nearest", truncate=6.0)
-    return np.where((row_sum >= _EPSILON_COEFF_SUM) & valid, cout, np.nan)
+    return np.where((coeff.sum(axis=1) >= _EPSILON_COEFF_SUM) & valid, cout, np.nan)
 
 
 def extraction_to_infiltration(
@@ -612,7 +612,7 @@ def extraction_to_infiltration(
     retardation_factor: float = 1.0,
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
-    spinup: str | float | None = "constant",
+    spinup: str | None = "constant",
     saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Reconstruct infiltration concentration from extracted water (fast approximate deconvolution).
@@ -634,17 +634,17 @@ def extraction_to_infiltration(
     cout : array-like
         Concentration of the compound in extracted water. Length ``len(cout_tedges) - 1``.
     flow : array-like
-        Flow rate of water in the aquifer [m3/day]. Length ``len(tedges) - 1``.
+        Flow rate of water in the aquifer [m³/day]. Length ``len(tedges) - 1``.
     tedges : pandas.DatetimeIndex
         Time edges for cin (output) and flow data. Length ``len(flow) + 1``.
     cout_tedges : pandas.DatetimeIndex
         Time edges for cout data bins. Length ``len(cout) + 1``.
     aquifer_pore_volumes : array-like
-        Aquifer pore volumes [m3] -- one independent streamtube per entry.
+        Aquifer pore volumes [m³] -- one independent streamtube per entry.
     streamline_length : float or ndarray
         Travel distance L [m]: scalar or one value per pore volume. Must be positive.
     molecular_diffusivity : float or ndarray
-        Effective molecular diffusivity D_m [m2/day]: scalar or one value per pore volume.
+        Effective molecular diffusivity D_m [m²/day]: scalar or one value per pore volume.
         Must be non-negative.
     longitudinal_dispersivity : float or ndarray
         Longitudinal dispersivity alpha_L [m]: scalar or one value per pore volume.
@@ -656,7 +656,7 @@ def extraction_to_infiltration(
         solver relies on it to make the normal equations positive-definite (it cannot return the
         dense ``lambda = 0`` minimum-norm solution).
     flow_out : array-like or None, optional
-        Extraction flow rate [m3/day] on the output grid (aligned to ``cout_tedges``). See
+        Extraction flow rate [m³/day] on the output grid (aligned to ``cout_tedges``). See
         :func:`infiltration_to_extraction`. Default None.
     spinup : {"constant"} | None, optional
         See :func:`infiltration_to_extraction`. Default ``"constant"``.
@@ -721,7 +721,7 @@ def extraction_to_infiltration(
     if operator is None:
         # No through-flow: nothing constrains the infiltration signal.
         return np.full(n_cin, np.nan)
-    coeff, cin_bin, sigma_bins, valid, _row_sum = operator
+    coeff, cin_bin, sigma_bins, valid = operator
 
     band_vals, col_start = _banded_forward_matrix(
         coeff=coeff, cin_bin=cin_bin, extend=extend, n_cin=n_cin, sigma_bins=sigma_bins
@@ -753,7 +753,7 @@ def gamma_infiltration_to_extraction(
     longitudinal_dispersivity: float,
     retardation_factor: float = 1.0,
     flow_out: npt.ArrayLike | None = None,
-    spinup: str | float | None = "constant",
+    spinup: str | None = "constant",
     saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Compute extracted concentration for a gamma-distributed pore volume distribution (approximate).
@@ -768,11 +768,11 @@ def gamma_infiltration_to_extraction(
     cin : array-like
         Concentration of the compound in infiltrating water.
     flow : array-like
-        Flow rate of water in the aquifer [m3/day].
+        Flow rate of water in the aquifer [m³/day].
     tedges : pandas.DatetimeIndex
         Time edges for cin and flow data. Length ``len(cin) + 1``.
     cout_tedges : pandas.DatetimeIndex
-        Time edges for output data bins.
+        Time edges for output data bins. Length ``len(result) + 1``.
     mean, std : float, optional
         Mean and standard deviation of the gamma pore-volume distribution.
     loc : float, optional
@@ -784,14 +784,14 @@ def gamma_infiltration_to_extraction(
     streamline_length : float
         Travel distance L [m], applied to all gamma streamtubes. Must be positive.
     molecular_diffusivity : float
-        Effective molecular diffusivity D_m [m2/day], applied to all streamtubes. Must be
+        Effective molecular diffusivity D_m [m²/day], applied to all streamtubes. Must be
         non-negative.
     longitudinal_dispersivity : float
         Longitudinal dispersivity alpha_L [m], applied to all streamtubes. Must be non-negative.
     retardation_factor : float, optional
         Retardation factor (default 1.0).
     flow_out : array-like or None, optional
-        Extraction flow rate [m3/day] on the output grid. See
+        Extraction flow rate [m³/day] on the output grid. See
         :func:`infiltration_to_extraction`. Default None.
     spinup : {"constant"} | None, optional
         See :func:`infiltration_to_extraction`. Default ``"constant"``.
@@ -802,6 +802,7 @@ def gamma_infiltration_to_extraction(
     -------
     numpy.ndarray
         Bin-averaged Kreft-Zuber flux concentration ``C_F`` in the extracted water.
+        Length ``len(cout_tedges) - 1``. NaN where no infiltration data has broken through.
 
     See Also
     --------
@@ -845,7 +846,7 @@ def gamma_extraction_to_infiltration(
     retardation_factor: float = 1.0,
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
-    spinup: str | float | None = "constant",
+    spinup: str | None = "constant",
     saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Reconstruct infiltration concentration for a gamma-distributed pore volume distribution.
@@ -860,7 +861,7 @@ def gamma_extraction_to_infiltration(
     cout : array-like
         Concentration of the compound in extracted water.
     flow : array-like
-        Flow rate of water in the aquifer [m3/day].
+        Flow rate of water in the aquifer [m³/day].
     tedges : pandas.DatetimeIndex
         Time edges for cin (output) and flow data. Length ``len(flow) + 1``.
     cout_tedges : pandas.DatetimeIndex
@@ -876,7 +877,7 @@ def gamma_extraction_to_infiltration(
     streamline_length : float
         Travel distance L [m], applied to all gamma streamtubes. Must be positive.
     molecular_diffusivity : float
-        Effective molecular diffusivity D_m [m2/day], applied to all streamtubes. Must be
+        Effective molecular diffusivity D_m [m²/day], applied to all streamtubes. Must be
         non-negative.
     longitudinal_dispersivity : float
         Longitudinal dispersivity alpha_L [m], applied to all streamtubes. Must be non-negative.
@@ -885,7 +886,7 @@ def gamma_extraction_to_infiltration(
     regularization_strength : float, optional
         Tikhonov regularization parameter (default 1e-10).
     flow_out : array-like or None, optional
-        Extraction flow rate [m3/day] on the output grid. See
+        Extraction flow rate [m³/day] on the output grid. See
         :func:`infiltration_to_extraction`. Default None.
     spinup : {"constant"} | None, optional
         See :func:`infiltration_to_extraction`. Default ``"constant"``.
