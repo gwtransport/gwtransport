@@ -68,14 +68,14 @@ _KERNEL_CUTOFF = 60.0
 
 def recharge_to_extraction(
     *,
+    cin: npt.ArrayLike | None = None,
     cin_recharge: npt.ArrayLike,
+    flow: npt.ArrayLike | None = None,
     recharge: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
     cout_tedges: pd.DatetimeIndex,
-    aquifer_pore_depth: float,
-    cin: npt.ArrayLike | None = None,
-    flow: npt.ArrayLike | None = None,
     aquifer_pore_volume: float | None = None,
+    aquifer_pore_depth: float,
     retardation_factor: float = 1.0,
 ) -> npt.NDArray[np.floating]:
     """Compute the concentration of extracted water under uniform areal recharge.
@@ -90,10 +90,19 @@ def recharge_to_extraction(
 
     Parameters
     ----------
+    cin : array-like, optional
+        Concentration of the water entering at the upstream side of the
+        bounded aquifer [concentration units]. Required when
+        ``aquifer_pore_volume`` is set; must be None otherwise.
     cin_recharge : array-like
         Concentration of the recharge water entering via the surface
         [concentration units]. Length must equal ``len(tedges) - 1``; constant
         over each interval ``[tedges[i], tedges[i+1])``.
+    flow : array-like, optional
+        Extraction rate [m3/day]. Required when ``aquifer_pore_volume`` is
+        set; must be None otherwise, because the unbounded model is
+        independent of the pumping rate (see Notes). Must be non-negative and
+        NaN-free.
     recharge : array-like
         Areal recharge rate N [m/day; same length unit as
         ``aquifer_pore_depth``]. Length must equal ``len(tedges) - 1``.
@@ -103,22 +112,13 @@ def recharge_to_extraction(
     cout_tedges : pandas.DatetimeIndex
         Time bin edges for the output series. Bins not fully inside the
         ``tedges`` range return NaN.
-    aquifer_pore_depth : float
-        Pore volume per unit surface area: porosity times saturated thickness
-        [m]. The only static aquifer parameter of the unbounded model.
-    cin : array-like, optional
-        Concentration of the water entering at the upstream side of the
-        bounded aquifer [concentration units]. Required when
-        ``aquifer_pore_volume`` is set; must be None otherwise.
-    flow : array-like, optional
-        Extraction rate [m3/day]. Required when ``aquifer_pore_volume`` is
-        set; must be None otherwise, because the unbounded model is
-        independent of the pumping rate (see Notes). Must be non-negative and
-        NaN-free.
     aquifer_pore_volume : float, optional
         Pore volume of the bounded aquifer [m3]. The strip area between the
         upstream boundary and the well is
         ``aquifer_pore_volume / aquifer_pore_depth``. Default None (unbounded).
+    aquifer_pore_depth : float
+        Pore volume per unit surface area: porosity times saturated thickness
+        [m]. The only static aquifer parameter of the unbounded model.
     retardation_factor : float, optional
         Compound retardation factor (>= 1.0), by default 1.0. Dilates the
         solute clock; mixing fractions are unaffected.
