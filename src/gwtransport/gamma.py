@@ -115,7 +115,9 @@ def parse_parameters(
         msg = "Provide either (alpha, beta) or (mean, std), not both."
         raise ValueError(msg)
 
-    if alpha is None:
+    # The ``or beta is None`` is redundant at runtime (the check above pairs them) but lets the
+    # type checker narrow ``beta`` to a float on the fall-through return.
+    if alpha is None or beta is None:
         if mean is None or std is None:
             msg = "Either (alpha, beta) or (mean, std) must be provided."
             raise ValueError(msg)
