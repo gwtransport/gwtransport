@@ -20,13 +20,9 @@ plus ``tests/src/test_validation.py``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import numpy as np
 import numpy.typing as npt
-
-if TYPE_CHECKING:
-    import pandas as pd
+import pandas as pd  # noqa: TC002  -- pandas is a hard runtime dependency; import unconditionally
 
 
 def _validate_tedges_parity(
