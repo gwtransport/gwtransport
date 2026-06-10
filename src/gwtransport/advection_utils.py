@@ -75,9 +75,9 @@ def _infiltration_to_extraction_weights(
     cout_tedges : pandas.DatetimeIndex
         Time edges for extraction bins.
     aquifer_pore_volumes : array-like
-        Distribution of pore volumes [m3].
+        Distribution of pore volumes [m³].
     flow : array-like
-        Flow rate values [m3/day].
+        Flow rate values [m³/day].
     retardation_factor : float
         Constant retardation factor.
 
@@ -304,83 +304,6 @@ def _densify_weights(
     rows = np.broadcast_to(np.arange(n_cout)[:, None], cols.shape)
     dense[rows[in_range], cols[in_range]] = band_vals[in_range]
     return dense
-
-
-# Pad duration used by the wide-edges spinup mode. 100 years is overkill for
-# any reasonable groundwater residence time + Gaussian-kernel tail, but it
-# matches the analytical diffusion module's historical extension and keeps
-# the wide-bin numerics stable across pathological inputs.
-_DIFFUSION_WIDE_PAD = pd.Timedelta(days=36500)
-
-
-def _resolve_spinup_inputs_wide_edges(
-    spinup: object,
-    *,
-    tedges: pd.DatetimeIndex,
-) -> tuple[pd.DatetimeIndex, float | None]:
-    """Validate ``spinup`` and apply diffusion-style wide-edge padding.
-
-    Unlike :func:`_resolve_spinup_inputs` (which prepends ``n_pad`` uniform
-    bins for advection-only physics-precise warm-start), this helper
-    extends only the first and last edges by 100 years each. Single wide
-    boundary bins are used so the diffusion module's Gaussian kernel tail
-    is captured without the cost of many extra bins. The length of
-    ``tedges`` is preserved; cin and flow lengths are therefore also
-    preserved, and inverse-direction outputs need no slicing.
-
-    For the smooth-then-advect path in ``diffusion_fast``, the per-bin
-    sigma scales inversely with bin width, so smoothing on the (very wide)
-    warm-start bin is automatically negligible and the algorithm remains
-    self-consistent.
-
-    Parameters
-    ----------
-    spinup : None, "constant", or float in [0, 1]
-        Public spin-up policy. Same semantics as the parameter on the
-        public i2e/e2i functions.
-    tedges : pandas.DatetimeIndex
-        Original cin/flow time edges (length n_cin + 1).
-
-    Returns
-    -------
-    weight_tedges : pandas.DatetimeIndex
-        Tedges to pass to the weight-matrix computation. Same length as
-        ``tedges``; under ``"constant"``, the first and last edges are
-        shifted outward by 100 years each.
-    threshold : float in [0, 1] or None
-        Threshold for :func:`_resolve_spinup_mask`. ``None`` under
-        ``spinup`` is ``None`` or ``"constant"``.
-
-    Raises
-    ------
-    TypeError
-        If ``spinup`` has an unsupported type (notably ``bool``).
-    ValueError
-        If ``spinup`` is a string other than ``"constant"`` or a float
-        outside ``[0, 1]``, or if ``len(tedges) < 2``.
-    """
-    if spinup is None:
-        return tedges, None
-    if isinstance(spinup, str):
-        if spinup != "constant":
-            msg = f"spinup string must be 'constant'; got {spinup!r}"
-            raise ValueError(msg)
-        if len(tedges) < 2:  # noqa: PLR2004
-            msg = "spinup='constant' requires len(tedges) >= 2"
-            raise ValueError(msg)
-        new_tedges = pd.DatetimeIndex([
-            tedges[0] - _DIFFUSION_WIDE_PAD,
-            *list(tedges[1:-1]),
-            tedges[-1] + _DIFFUSION_WIDE_PAD,
-        ])
-        return new_tedges, None
-    if isinstance(spinup, bool) or not isinstance(spinup, (int, float)):
-        msg = f"spinup must be None, 'constant', or float in [0, 1]; got {spinup!r}"
-        raise TypeError(msg)
-    if not (0.0 <= spinup <= 1.0):
-        msg = f"spinup float must be in [0, 1]; got {spinup!r}"
-        raise ValueError(msg)
-    return tedges, float(spinup)
 
 
 def _resolve_spinup_inputs(
