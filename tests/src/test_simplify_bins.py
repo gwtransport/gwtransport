@@ -171,31 +171,44 @@ class TestSimplifyBinsFlowSimplification:
         assert new_flow is None
 
     def test_flow_volume_conservation(self):
-        """Total volume (flow x width) should be conserved after simplification."""
+        """Known-answer merge pins the split boundary AND the time-weighted flow per bin.
+
+        The value series ``[2, 2, 5, 5, 5]`` merges only at the single 2->5 jump (edge 3.0),
+        which is NOT a midpoint: a wrong split direction would land elsewhere and fail the
+        pinned ``new_edges``. The merged flows are the hand-derived time-weighted averages:
+        group 1 widths (1, 2) flow (3, 1) -> (1*3 + 2*1) / 3 = 5/3; group 2 widths (1, 3, 1)
+        flow (4, 2, 6) -> (1*4 + 3*2 + 1*6) / 5 = 16/5.
+        """
         edges = np.array([0.0, 1.0, 3.0, 4.0, 7.0, 8.0])
         values = np.array([2.0, 2.0, 5.0, 5.0, 5.0])
         flow = np.array([3.0, 1.0, 4.0, 2.0, 6.0])
+        new_edges, new_values, new_flow = simplify_bins(edges=edges, values=values, flow=flow)
+        assert_array_equal(new_edges, [0.0, 3.0, 8.0])
+        assert_array_equal(new_values, [2.0, 5.0])
+        assert_array_equal(new_flow, [5.0 / 3.0, 16.0 / 5.0])
+        # Conservation follows from the literals: total volume is preserved.
         widths = np.diff(edges)
-        volume_before = np.sum(flow * widths)
-        new_edges, _, new_flow = simplify_bins(edges=edges, values=values, flow=flow)
         new_widths = np.diff(new_edges)
-        volume_after = np.sum(new_flow * new_widths)
-        assert_array_equal(volume_after, volume_before)
+        assert_allclose(np.sum(new_flow * new_widths), np.sum(flow * widths), atol=0.0, rtol=float(np.finfo(float).eps))
 
 
 class TestSimplifyBinsMassConservation:
     """Test that total mass is conserved after simplification."""
 
     def test_mass_conservation_no_flow(self):
-        """Total widthxvalue should be conserved."""
+        """Known-answer width-weighted merge: the split boundary and merged values are pinned.
+
+        ``[2, 2, 5, 5, 5]`` merges only at the 2->5 jump (edge 3.0). Within each group all
+        values are identical, so the width-weighted averages are exactly 2 and 5 -- a wrong
+        split would mix the 2s and 5s and change these literals.
+        """
         edges = np.array([0.0, 1.0, 3.0, 4.0, 7.0, 8.0])
         values = np.array([2.0, 2.0, 5.0, 5.0, 5.0])
-        widths = np.diff(edges)
-        mass_before = np.sum(widths * values)
         new_edges, new_values, _ = simplify_bins(edges=edges, values=values)
-        new_widths = np.diff(new_edges)
-        mass_after = np.sum(new_widths * new_values)
-        assert_array_equal(mass_after, mass_before)
+        assert_array_equal(new_edges, [0.0, 3.0, 8.0])
+        assert_array_equal(new_values, [2.0, 5.0])
+        # Conservation follows from the literals: total width x value is preserved.
+        assert_array_equal(np.sum(np.diff(new_edges) * new_values), np.sum(np.diff(edges) * values))
 
     def test_mass_conservation_with_flow(self):
         """Total flowxwidthxvalue (= mass) is conserved when a merge group mixes values.
@@ -220,18 +233,36 @@ class TestSimplifyBinsMassConservation:
         assert_array_equal(mass_after, mass_before)
 
     def test_mass_conservation_with_tolerance(self):
-        """Mass conservation should hold even when merging with tolerance."""
+        """Known-answer tolerance merge: the split boundaries are pinned, not just conserved.
+
+        Pinning ``new_edges`` to the literal merge boundaries makes the test sensitive to the
+        split algorithm: a wrong split would merge a different set of bins and fail here. The
+        merged values/flows are then checked against an independent per-group weighted average
+        recomputed from the input literals (so the result is not compared against itself).
+        """
         rng = np.random.default_rng(42)
         edges = np.arange(11, dtype=float)
         values = rng.uniform(0, 1, size=10)
         flow = rng.uniform(0.5, 2.0, size=10)
         widths = np.diff(edges)
-        mass_before = np.sum(flow * widths * values)
 
         new_edges, new_values, new_flow = simplify_bins(edges=edges, values=values, flow=flow, tol=0.3)
-        new_widths = np.diff(new_edges)
-        mass_after = np.sum(new_flow * new_widths * new_values)
-        # Summation order differs after merging, so allow machine-precision tolerance
+
+        # Pin the (non-obvious) merge boundaries: only bins 2-3 and 5-6-7 merge under tol=0.3.
+        assert_array_equal(new_edges, [0.0, 1.0, 2.0, 4.0, 5.0, 8.0, 9.0, 10.0])
+
+        # Independent per-group reference (volume-weighted value, time-weighted flow).
+        groups = [[0], [1], [2, 3], [4], [5, 6, 7], [8], [9]]
+        expected_values = np.array([
+            np.sum(flow[g] * widths[g] * values[g]) / np.sum(flow[g] * widths[g]) for g in groups
+        ])
+        expected_flow = np.array([np.sum(flow[g] * widths[g]) / np.sum(widths[g]) for g in groups])
+        assert_allclose(new_values, expected_values, atol=0.0, rtol=float(np.finfo(float).eps))
+        assert_allclose(new_flow, expected_flow, atol=0.0, rtol=float(np.finfo(float).eps))
+
+        # Mass (flow x width x value) is conserved up to summation-order rounding.
+        mass_before = np.sum(flow * widths * values)
+        mass_after = np.sum(new_flow * np.diff(new_edges) * new_values)
         assert_allclose(mass_after, mass_before, atol=0.0, rtol=float(np.finfo(float).eps))
 
 

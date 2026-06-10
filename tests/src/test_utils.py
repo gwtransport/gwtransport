@@ -14,13 +14,17 @@ from gwtransport.examples import generate_example_data, generate_example_deposit
 from gwtransport.utils import (
     _make_strictly_monotone,
     combine_bin_series,
+    compute_reverse_target,
+    compute_time_edges,
     cumulative_flow_volume,
     get_soil_temperature,
     linear_average,
     linear_interpolate,
     partial_isin,
+    simplify_bins,
     solve_tikhonov,
     solve_underdetermined_system,
+    step_plot_coords,
     time_bin_overlap,
 )
 
@@ -381,7 +385,7 @@ def test_basic_case():
     expected = np.array([[0.5, 0.0], [0.5, 0.5], [0.0, 0.5]])
 
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_no_overlap():
@@ -391,7 +395,7 @@ def test_no_overlap():
     expected = np.array([[0.0, 0.0], [0.0, 0.0]])
 
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_complete_overlap():
@@ -401,7 +405,7 @@ def test_complete_overlap():
     expected = np.array([[1.0, 0.0], [0.0, 1.0]])
 
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_exact_bin_match():
@@ -411,7 +415,7 @@ def test_exact_bin_match():
     expected = np.array([[1.0, 0.0], [0.0, 1.0]])
 
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_multiple_bins():
@@ -421,7 +425,7 @@ def test_multiple_bins():
     expected = np.array([[0.5, 0.0, 0.0], [0.2, 0.6, 0.2], [0.0, 0.0, 0.5]])
 
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_partial_overlaps():
@@ -431,7 +435,7 @@ def test_partial_overlaps():
     expected = np.array([[0.25, 0.25]])  # 25% overlap with each output bin
 
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_list_inputs():
@@ -441,7 +445,7 @@ def test_list_inputs():
     expected = np.array([[0.5, 0.0], [0.5, 0.5], [0.0, 0.5]])
 
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_empty_inputs():
@@ -451,7 +455,7 @@ def test_empty_inputs():
     expected = np.array([[0.5]])
 
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_single_bin():
@@ -461,7 +465,7 @@ def test_single_bin():
     expected = np.array([[0.5]])
 
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_edge_alignment():
@@ -471,7 +475,7 @@ def test_edge_alignment():
     expected = np.array([[1.0, 0.0], [0.5, 0.5], [0.0, 1.0]])
 
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_floating_point_precision():
@@ -491,7 +495,7 @@ def test_negative_values():
     expected = np.array([[0.5, 0.0], [0.5, 0.5]])
 
     result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_invalid_inputs():
@@ -521,15 +525,15 @@ def test_combine_bin_series_basic():
 
     # Expected combined edges: [0, 1, 1.5, 2]
     expected_edges = np.array([0.0, 1.0, 1.5, 2.0])
-    np.testing.assert_allclose(c_edges, expected_edges, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges, expected_edges, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c_edges, expected_edges)
+    np.testing.assert_array_equal(d_edges, expected_edges)
 
     # Expected values for c: [1, 2, 2] (a[0] broadcasts to first bin, a[1] broadcasts to bins 2&3)
     # Expected values for d: [0, 3, 4] (b[0] broadcasts to second bin, b[1] broadcasts to third bin)
     expected_c = np.array([1.0, 2.0, 2.0])
     expected_d = np.array([0.0, 3.0, 4.0])
-    np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d, expected_d, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c, expected_c)
+    np.testing.assert_array_equal(d, expected_d)
 
 
 def test_combine_bin_series_identical_edges():
@@ -543,12 +547,12 @@ def test_combine_bin_series_identical_edges():
 
     # Edges should remain the same
     expected_edges = np.array([0.0, 1.0, 2.0, 3.0])
-    np.testing.assert_allclose(c_edges, expected_edges, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges, expected_edges, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c_edges, expected_edges)
+    np.testing.assert_array_equal(d_edges, expected_edges)
 
     # Values should be preserved
-    np.testing.assert_allclose(c, a, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d, b, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c, a)
+    np.testing.assert_array_equal(d, b)
 
 
 def test_combine_bin_series_overlapping_bins():
@@ -562,8 +566,8 @@ def test_combine_bin_series_overlapping_bins():
 
     # Expected combined edges: [0, 2, 5, 7, 10, 12]
     expected_edges = np.array([0.0, 2.0, 5.0, 7.0, 10.0, 12.0])
-    np.testing.assert_allclose(c_edges, expected_edges, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges, expected_edges, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c_edges, expected_edges)
+    np.testing.assert_array_equal(d_edges, expected_edges)
 
     # Test that the values are broadcasted/repeated correctly
     # a[0]=10 covers [0,5]: broadcasts to bins [0,2] and [2,5]
@@ -572,8 +576,8 @@ def test_combine_bin_series_overlapping_bins():
     # b[1]=40 covers [7,12]: broadcasts to bins [7,10] and [10,12]
     expected_c = np.array([10.0, 10.0, 20.0, 20.0, 0.0])
     expected_d = np.array([0.0, 30.0, 30.0, 40.0, 40.0])
-    np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d, expected_d, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c, expected_c)
+    np.testing.assert_array_equal(d, expected_d)
 
 
 def test_combine_bin_series_single_bins():
@@ -587,15 +591,15 @@ def test_combine_bin_series_single_bins():
 
     # Expected combined edges: [0, 1, 2, 3]
     expected_edges = np.array([0.0, 1.0, 2.0, 3.0])
-    np.testing.assert_allclose(c_edges, expected_edges, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges, expected_edges, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c_edges, expected_edges)
+    np.testing.assert_array_equal(d_edges, expected_edges)
 
     # a=5 covers [0,2]: broadcasts to [0,1] and [1,2]
     # b=10 covers [1,3]: broadcasts to [1,2] and [2,3]
     expected_c = np.array([5.0, 5.0, 0.0])
     expected_d = np.array([0.0, 10.0, 10.0])
-    np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d, expected_d, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c, expected_c)
+    np.testing.assert_array_equal(d, expected_d)
 
 
 def test_combine_bin_series_nested_bins():
@@ -609,15 +613,15 @@ def test_combine_bin_series_nested_bins():
 
     # Expected combined edges: [0, 2, 5, 8, 10]
     expected_edges = np.array([0.0, 2.0, 5.0, 8.0, 10.0])
-    np.testing.assert_allclose(c_edges, expected_edges, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges, expected_edges, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c_edges, expected_edges)
+    np.testing.assert_array_equal(d_edges, expected_edges)
 
     # a=100 covers [0,10]: broadcasts to all combined bins within its range
     # b[0]=20 covers [2,5] and b[1]=30 covers [5,8]
     expected_c = np.array([100.0, 100.0, 100.0, 100.0])
     expected_d = np.array([0.0, 20.0, 30.0, 0.0])
-    np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d, expected_d, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c, expected_c)
+    np.testing.assert_array_equal(d, expected_d)
 
 
 def test_combine_bin_series_non_overlapping():
@@ -631,14 +635,14 @@ def test_combine_bin_series_non_overlapping():
 
     # Expected combined edges: [0, 1, 2, 3, 4, 5]
     expected_edges = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
-    np.testing.assert_allclose(c_edges, expected_edges, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges, expected_edges, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c_edges, expected_edges)
+    np.testing.assert_array_equal(d_edges, expected_edges)
 
     # a maps to first two bins, b maps to last two bins
     expected_c = np.array([1.0, 2.0, 0.0, 0.0, 0.0])
     expected_d = np.array([0.0, 0.0, 0.0, 3.0, 4.0])
-    np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d, expected_d, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c, expected_c)
+    np.testing.assert_array_equal(d, expected_d)
 
 
 def test_combine_bin_series_zero_values():
@@ -652,14 +656,14 @@ def test_combine_bin_series_zero_values():
 
     # Expected combined edges: [0, 0.5, 1, 1.5, 2, 2.5]
     expected_edges = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 2.5])
-    np.testing.assert_allclose(c_edges, expected_edges, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges, expected_edges, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c_edges, expected_edges)
+    np.testing.assert_array_equal(d_edges, expected_edges)
 
     # Check that zero values are preserved and broadcasted correctly
     expected_c = np.array([0.0, 0.0, 5.0, 5.0, 0.0])
     expected_d = np.array([0.0, 3.0, 3.0, 0.0, 0.0])
-    np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d, expected_d, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c, expected_c)
+    np.testing.assert_array_equal(d, expected_d)
 
 
 def test_combine_bin_series_floating_point():
@@ -673,14 +677,14 @@ def test_combine_bin_series_floating_point():
 
     # Expected combined edges: [0.1, 0.6, 1.1, 1.6, 2.1, 2.6]
     expected_edges = np.array([0.1, 0.6, 1.1, 1.6, 2.1, 2.6])
-    np.testing.assert_allclose(c_edges, expected_edges, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges, expected_edges, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c_edges, expected_edges)
+    np.testing.assert_array_equal(d_edges, expected_edges)
 
     # Test with appropriate precision and broadcasting
     expected_c = np.array([1.1, 1.1, 2.2, 2.2, 0.0])
     expected_d = np.array([0.0, 3.3, 3.3, 4.4, 4.4])
-    np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-10)
-    np.testing.assert_allclose(d, expected_d, rtol=0, atol=1e-10)
+    np.testing.assert_array_equal(c, expected_c)
+    np.testing.assert_array_equal(d, expected_d)
 
 
 def test_combine_bin_series_input_validation():
@@ -721,8 +725,8 @@ def test_combine_bin_series_list_inputs():
 
     # Expected combined edges: [0, 1, 1.5, 2, 2.5, 3.5]
     expected_edges = np.array([0.0, 1.0, 1.5, 2.0, 2.5, 3.5])
-    np.testing.assert_allclose(c_edges, expected_edges, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges, expected_edges, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c_edges, expected_edges)
+    np.testing.assert_array_equal(d_edges, expected_edges)
 
 
 def test_combine_bin_series_negative_values():
@@ -736,14 +740,14 @@ def test_combine_bin_series_negative_values():
 
     # Expected combined edges: [-10, -3, -1, 0, 2, 5]
     expected_edges = np.array([-10.0, -3.0, -1.0, 0.0, 2.0, 5.0])
-    np.testing.assert_allclose(c_edges, expected_edges, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges, expected_edges, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c_edges, expected_edges)
+    np.testing.assert_array_equal(d_edges, expected_edges)
 
     # Test correct mapping with negative values and broadcasting
     expected_c = np.array([-5.0, -2.0, -2.0, 0.0, 0.0])
     expected_d = np.array([0.0, 0.0, 1.0, 1.0, 4.0])
-    np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d, expected_d, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c, expected_c)
+    np.testing.assert_array_equal(d, expected_d)
 
 
 def test_combine_bin_series_empty_arrays():
@@ -757,13 +761,13 @@ def test_combine_bin_series_empty_arrays():
 
     # Expected combined edges: [0, 0.5, 1, 1.5]
     expected_edges = np.array([0.0, 0.5, 1.0, 1.5])
-    np.testing.assert_allclose(c_edges, expected_edges, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges, expected_edges, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c_edges, expected_edges)
+    np.testing.assert_array_equal(d_edges, expected_edges)
 
     expected_c = np.array([42.0, 42.0, 0.0])
     expected_d = np.array([0.0, 24.0, 24.0])
-    np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d, expected_d, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c, expected_c)
+    np.testing.assert_array_equal(d, expected_d)
 
 
 def test_combine_bin_series_extrapolation_nearest():
@@ -777,16 +781,16 @@ def test_combine_bin_series_extrapolation_nearest():
 
     # Expected combined edges: [1, 2, 3, 4]
     expected_edges = np.array([1.0, 2.0, 3.0, 4.0])
-    np.testing.assert_allclose(c_edges, expected_edges, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges, expected_edges, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c_edges, expected_edges)
+    np.testing.assert_array_equal(d_edges, expected_edges)
 
     # With nearest extrapolation:
     # c extends to all bins using nearest values
     # d extends to all bins using nearest values
     expected_c = np.array([1.0, 2.0, 2.0])  # nearest for [3,4] is a[1]=2.0
     expected_d = np.array([10.0, 10.0, 20.0])  # nearest for [1,2] is b[0]=10.0
-    np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d, expected_d, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c, expected_c)
+    np.testing.assert_array_equal(d, expected_d)
 
 
 def test_combine_bin_series_extrapolation_nan():
@@ -800,15 +804,15 @@ def test_combine_bin_series_extrapolation_nan():
 
     # Expected combined edges: [1, 2, 3, 4]
     expected_edges = np.array([1.0, 2.0, 3.0, 4.0])
-    np.testing.assert_allclose(c_edges, expected_edges, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges, expected_edges, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c_edges, expected_edges)
+    np.testing.assert_array_equal(d_edges, expected_edges)
 
     # With nan extrapolation:
     # Out-of-range bins get nan values
     expected_c = np.array([1.0, 2.0, np.nan])  # [3,4] is out of range for a
     expected_d = np.array([np.nan, 10.0, 20.0])  # [1,2] is out of range for b
-    np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d, expected_d, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c, expected_c)
+    np.testing.assert_array_equal(d, expected_d)
 
 
 def test_combine_bin_series_extrapolation_custom_value():
@@ -822,15 +826,15 @@ def test_combine_bin_series_extrapolation_custom_value():
 
     # Expected combined edges: [1, 2, 3, 4]
     expected_edges = np.array([1.0, 2.0, 3.0, 4.0])
-    np.testing.assert_allclose(c_edges, expected_edges, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges, expected_edges, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c_edges, expected_edges)
+    np.testing.assert_array_equal(d_edges, expected_edges)
 
     # With custom extrapolation value:
     # Out-of-range bins get the custom value
     expected_c = np.array([1.0, 2.0, -999.0])  # [3,4] is out of range for a
     expected_d = np.array([-999.0, 10.0, 20.0])  # [1,2] is out of range for b
-    np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d, expected_d, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c, expected_c)
+    np.testing.assert_array_equal(d, expected_d)
 
 
 def test_combine_bin_series_extrapolation_default_behavior():
@@ -844,10 +848,10 @@ def test_combine_bin_series_extrapolation_default_behavior():
     c1, c_edges1, d1, d_edges1 = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
     c2, c_edges2, d2, d_edges2 = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges, extrapolation=0.0)
 
-    np.testing.assert_allclose(c1, c2, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d1, d2, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(c_edges1, c_edges2, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d_edges1, d_edges2, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c1, c2)
+    np.testing.assert_array_equal(d1, d2)
+    np.testing.assert_array_equal(c_edges1, c_edges2)
+    np.testing.assert_array_equal(d_edges1, d_edges2)
 
 
 def test_combine_bin_series_extrapolation_no_out_of_range():
@@ -862,10 +866,10 @@ def test_combine_bin_series_extrapolation_no_out_of_range():
     c2, _, d2, _ = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges, extrapolation=np.nan)
     c3, _, d3, _ = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges, extrapolation=0.0)
 
-    np.testing.assert_allclose(c1, c2, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(c1, c3, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d1, d2, rtol=0, atol=1e-6)
-    np.testing.assert_allclose(d1, d3, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(c1, c2)
+    np.testing.assert_array_equal(c1, c3)
+    np.testing.assert_array_equal(d1, d2)
+    np.testing.assert_array_equal(d1, d3)
 
 
 def test_get_soil_temperature_basic():
@@ -948,7 +952,7 @@ def test_time_bin_overlap_basic():
     expected = np.array([[0.5, 0.5, 0.0], [0.0, 0.0, 0.5]])
 
     result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_time_bin_overlap_no_overlap():
@@ -958,7 +962,7 @@ def test_time_bin_overlap_no_overlap():
     expected = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
 
     result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_time_bin_overlap_complete_overlap():
@@ -968,7 +972,7 @@ def test_time_bin_overlap_complete_overlap():
     expected = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
 
     result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_time_bin_overlap_partial_overlap():
@@ -978,7 +982,7 @@ def test_time_bin_overlap_partial_overlap():
     expected = np.array([[0.5, 1.0, 0.5]])
 
     result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_time_bin_overlap_single_bin():
@@ -988,7 +992,7 @@ def test_time_bin_overlap_single_bin():
     expected = np.array([[0.5], [0.5]])
 
     result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_time_bin_overlap_edge_alignment():
@@ -998,7 +1002,7 @@ def test_time_bin_overlap_edge_alignment():
     expected = np.array([[1.0, 1.0, 0.0], [0.0, 1.0, 1.0]])
 
     result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_time_bin_overlap_floating_point():
@@ -1018,7 +1022,7 @@ def test_time_bin_overlap_negative_values():
     expected = np.array([[0.5, 0.5, 0.0], [0.0, 0.0, 0.5]])
 
     result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_time_bin_overlap_overlapping_ranges():
@@ -1028,7 +1032,7 @@ def test_time_bin_overlap_overlapping_ranges():
     expected = np.array([[0.5, 0.5, 0.0], [0.0, 1.0, 0.5]])
 
     result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_time_bin_overlap_zero_width_bins():
@@ -1038,7 +1042,7 @@ def test_time_bin_overlap_zero_width_bins():
     expected = np.array([[0.5, 0.0, 0.5]])
 
     result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_time_bin_overlap_large_range():
@@ -1048,7 +1052,7 @@ def test_time_bin_overlap_large_range():
     expected = np.array([[1.0, 1.0, 1.0]])
 
     result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_time_bin_overlap_list_inputs():
@@ -1058,7 +1062,7 @@ def test_time_bin_overlap_list_inputs():
     expected = np.array([[0.5, 0.5, 0.0], [0.0, 0.0, 0.5]])
 
     result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_time_bin_overlap_input_validation():
@@ -1100,7 +1104,7 @@ def test_time_bin_overlap_many_ranges():
     for i in range(len(bin_tedges)):
         # Each range spans 10 units, so total overlap should be 10
         total_overlap = np.sum(result[i, :])
-        np.testing.assert_allclose([total_overlap], [10.0], rtol=0, atol=1e-06)
+        np.testing.assert_array_equal([total_overlap], [10.0])
 
 
 def test_time_bin_overlap_boundary_cases():
@@ -1111,13 +1115,13 @@ def test_time_bin_overlap_boundary_cases():
     bin_tedges = [(10, 10)]
     result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
     expected = np.array([[0.0, 0.0, 0.0, 0.0]])
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
     # Range that exactly matches a bin
     bin_tedges = [(5, 10)]
     result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
     expected = np.array([[0.0, 1.0, 0.0, 0.0]])
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(result, expected)
 
 
 # =============================================================================
@@ -1142,7 +1146,7 @@ def test_solve_tikhonov_resolution_well_determined():
     )
 
     np.testing.assert_allclose(x, x_true, atol=1e-6)
-    np.testing.assert_allclose(fraction_data, 1.0, atol=1e-4)
+    np.testing.assert_allclose(fraction_data, 1.0, rtol=0, atol=1e-9)
 
 
 def test_solve_tikhonov_resolution_underdetermined():
@@ -1281,13 +1285,13 @@ def test_generate_example_data_seed_changes_output():
 
 @pytest.mark.parametrize("seed", list(range(20)))
 def test_generate_example_data_flow_floor_enforced(seed):
-    """Flow floor of 5 m3/day must hold even after the spill loop divides flow.
+    """Flow floor of 5 m³/day must hold even after the spill loop divides flow.
 
     Regression test for issue 167: the floor was applied before spills, so
-    spill divisions could push flow well below 5 m3/day (observed min ~0.3).
+    spill divisions could push flow well below 5 m³/day (observed min ~0.3).
     """
     df, _ = generate_example_data(rng=seed)
-    assert df["flow"].min() >= 5.0, f"flow min {df['flow'].min()} below 5.0 m3/day for seed={seed}"
+    assert df["flow"].min() >= 5.0, f"flow min {df['flow'].min()} below 5.0 m³/day for seed={seed}"
 
 
 # =============================================================================
@@ -1532,3 +1536,313 @@ def test_dt_to_days_matches_reference_widths():
     assert result.dtype == np.float64
     # Consistency with tedges_to_days: widths are the successive differences.
     np.testing.assert_array_equal(result, np.diff(tedges_to_days(tedges)))
+
+
+# ---------------------------------------------------------------------------
+# step_plot_coords
+# ---------------------------------------------------------------------------
+
+
+def test_step_plot_coords_single_bin():
+    """n=1: one bin doubles each edge-pair and repeats the single value."""
+    edges = np.array([0.0, 2.0])
+    values = np.array([7.0])
+    x, y = step_plot_coords(edges, values)
+    # repeat(edges,2)[1:-1] = [0,0,2,2][1:-1] = [0,2]; repeat(values,2) = [7,7].
+    np.testing.assert_array_equal(x, [0.0, 2.0])
+    np.testing.assert_array_equal(y, [7.0, 7.0])
+
+
+def test_step_plot_coords_three_bins():
+    """n=3: hand-computed paired step coordinates for a piecewise-constant series."""
+    edges = np.array([0.0, 1.0, 3.0, 6.0])
+    values = np.array([2.0, 5.0, 1.0])
+    x, y = step_plot_coords(edges, values)
+    np.testing.assert_array_equal(x, [0.0, 1.0, 1.0, 3.0, 3.0, 6.0])
+    np.testing.assert_array_equal(y, [2.0, 2.0, 5.0, 5.0, 1.0, 1.0])
+    # The step coordinates have 2n points for n bins.
+    assert x.shape == (2 * values.size,)
+    assert y.shape == (2 * values.size,)
+
+
+def test_step_plot_coords_datetime_edges_preserve_dtype():
+    """Datetime edges round-trip through the step expansion without losing dtype."""
+    edges = pd.DatetimeIndex(["2020-01-01", "2020-01-02", "2020-01-04"])
+    values = np.array([1.0, 2.0])
+    x, y = step_plot_coords(np.asarray(edges), values)
+    expected_x = np.asarray(edges)[[0, 1, 1, 2]]
+    np.testing.assert_array_equal(x, expected_x)
+    np.testing.assert_array_equal(y, [1.0, 1.0, 2.0, 2.0])
+
+
+# ---------------------------------------------------------------------------
+# compute_time_edges
+# ---------------------------------------------------------------------------
+
+
+def test_compute_time_edges_explicit_tedges_roundtrip():
+    """Explicit tedges pass through unchanged (ns unit) when the length matches."""
+    tedges = pd.DatetimeIndex(["2020-01-01", "2020-01-02", "2020-01-03"])
+    result = compute_time_edges(tedges=tedges, tstart=None, tend=None, number_of_bins=2)
+    assert isinstance(result, pd.DatetimeIndex)
+    assert result.dtype == np.dtype("datetime64[ns]")
+    np.testing.assert_array_equal(result.to_numpy(), tedges.as_unit("ns").to_numpy())
+
+
+def test_compute_time_edges_explicit_tedges_wrong_length():
+    """tedges with the wrong length (not number_of_bins + 1) is rejected."""
+    tedges = pd.DatetimeIndex(["2020-01-01", "2020-01-02", "2020-01-03"])
+    with pytest.raises(ValueError, match="tedges must have one more element than flow"):
+        compute_time_edges(tedges=tedges, tstart=None, tend=None, number_of_bins=5)
+
+
+def test_compute_time_edges_tstart_extrapolates_final_edge():
+    """tstart: the FINAL edge is extrapolated as tstart[-1] + (tstart[-1] - tstart[-2])."""
+    tstart = pd.DatetimeIndex(["2020-01-01", "2020-01-02", "2020-01-03"])
+    result = compute_time_edges(tedges=None, tstart=tstart, tend=None, number_of_bins=3)
+    expected = pd.DatetimeIndex(["2020-01-01", "2020-01-02", "2020-01-03", "2020-01-04"])
+    np.testing.assert_array_equal(result.to_numpy(), expected.as_unit("ns").to_numpy())
+
+
+def test_compute_time_edges_tstart_wrong_length():
+    """tstart length must equal number_of_bins."""
+    tstart = pd.DatetimeIndex(["2020-01-01", "2020-01-02", "2020-01-03"])
+    with pytest.raises(ValueError, match="tstart must have the same number of elements as flow"):
+        compute_time_edges(tedges=None, tstart=tstart, tend=None, number_of_bins=2)
+
+
+def test_compute_time_edges_tend_extrapolates_initial_edge():
+    """tend: the INITIAL edge is extrapolated as tend[0] - (tend[1] - tend[0])."""
+    tend = pd.DatetimeIndex(["2020-01-02", "2020-01-03", "2020-01-04"])
+    result = compute_time_edges(tedges=None, tstart=None, tend=tend, number_of_bins=3)
+    expected = pd.DatetimeIndex(["2020-01-01", "2020-01-02", "2020-01-03", "2020-01-04"])
+    np.testing.assert_array_equal(result.to_numpy(), expected.as_unit("ns").to_numpy())
+
+
+def test_compute_time_edges_tend_wrong_length():
+    """tend length must equal number_of_bins."""
+    tend = pd.DatetimeIndex(["2020-01-02", "2020-01-03"])
+    with pytest.raises(ValueError, match="tend must have the same number of elements as flow"):
+        compute_time_edges(tedges=None, tstart=None, tend=tend, number_of_bins=3)
+
+
+def test_compute_time_edges_none_provided_raises():
+    """With none of tedges/tstart/tend provided, a clear 'or' message is raised."""
+    with pytest.raises(ValueError, match="Either provide tedges, tstart, or tend"):
+        compute_time_edges(tedges=None, tstart=None, tend=None, number_of_bins=3)
+
+
+def test_compute_time_edges_tstart_single_bin_raises():
+    """A single-bin series from tstart leaves the bin width undefined: a clear ValueError."""
+    tstart = pd.DatetimeIndex(["2020-01-01"])
+    with pytest.raises(ValueError, match="tstart must have at least 2 elements"):
+        compute_time_edges(tedges=None, tstart=tstart, tend=None, number_of_bins=1)
+
+
+def test_compute_time_edges_tend_single_bin_raises():
+    """A single-bin series from tend leaves the bin width undefined: a clear ValueError."""
+    tend = pd.DatetimeIndex(["2020-01-01"])
+    with pytest.raises(ValueError, match="tend must have at least 2 elements"):
+        compute_time_edges(tedges=None, tstart=None, tend=tend, number_of_bins=1)
+
+
+# ---------------------------------------------------------------------------
+# compute_reverse_target
+# ---------------------------------------------------------------------------
+
+
+def test_compute_reverse_target_transpose_normalize():
+    """The target is the row-normalized transpose of the forward matrix applied to observed.
+
+    For a forward matrix whose columns map cin to cout, transpose-and-normalize reconstructs
+    each cin bin as the column-sum-weighted average of the cout values it fed. The expected
+    values here are hand-derived rational numbers, so the check is exact.
+    """
+    # Column 0 feeds rows 0 and 1; column 1 feeds only row 1.
+    coeff = np.array([[1.0, 0.0], [1.0, 2.0]])
+    observed = np.array([4.0, 10.0])
+    # wt = coeff.T = [[1,1],[0,2]]; row_sums = [2, 2].
+    # x_target[0] = (1*4 + 1*10) / 2 = 7; x_target[1] = (0*4 + 2*10) / 2 = 10.
+    result = compute_reverse_target(coeff_matrix=coeff, rhs_vector=observed)
+    np.testing.assert_array_equal(result, [7.0, 10.0])
+
+
+def test_compute_reverse_target_zero_column_is_nan():
+    """A cin bin with a near-zero forward column sum is returned as NaN (undetermined)."""
+    coeff = np.array([[1.0, 0.0], [1.0, 0.0]])  # column 1 has zero sum
+    observed = np.array([3.0, 5.0])
+    result = compute_reverse_target(coeff_matrix=coeff, rhs_vector=observed)
+    # column 0 sum = 2; x_target[0] = (3 + 5) / 2 = 4. column 1 -> NaN.
+    np.testing.assert_array_equal(result[0], 4.0)
+    assert np.isnan(result[1])
+
+
+# ---------------------------------------------------------------------------
+# _make_strictly_monotone overshoot regression
+# ---------------------------------------------------------------------------
+
+
+def test_make_strictly_monotone_long_run_does_not_overshoot_close_successor():
+    """A long plateau followed by a closely-spaced genuine value must stay strictly monotone.
+
+    Regression: the unconditional ``cumcount * 16 * ulp`` bump could push the last duplicate of
+    a long run past a successor only a few ulps above the plateau, producing a NON-monotone
+    array. The per-run cap (step <= gap / (run_len + 1)) prevents the overshoot.
+    """
+    base = 1.0
+    ulp = np.nextafter(base, np.inf) - base
+    # Run of 4 duplicates at ``base`` followed by a genuine value only 10 ulps above; the
+    # uncapped bump (up to 4 * 16 = 64 ulp) would overshoot the 10-ulp gap.
+    arr = np.array([0.0, base, base, base, base, base + 10 * ulp])
+    result = _make_strictly_monotone(arr)
+    assert np.all(np.diff(result) > 0), f"non-monotone result: {result}"
+    # The successor value is preserved (never exceeded).
+    assert result[-1] == base + 10 * ulp
+
+
+def test_make_strictly_monotone_trailing_plateau_uses_full_bump():
+    """A plateau at the array end has no successor, so the uncapped bump applies."""
+    arr = np.array([0.0, 1.0, 1.0, 1.0])
+    ulp_max = np.nextafter(1.0, np.inf) - 1.0
+    bump = 16 * ulp_max
+    expected = np.array([0.0, 1.0, 1.0 + bump, 1.0 + 2 * bump])
+    result = _make_strictly_monotone(arr)
+    np.testing.assert_array_equal(result, expected)
+    assert np.all(np.diff(result) > 0)
+
+
+# ---------------------------------------------------------------------------
+# partial_isin zero-width and NaN-edge handling
+# ---------------------------------------------------------------------------
+
+
+def test_partial_isin_zero_width_input_bin_is_zero():
+    """A zero-width (degenerate) input bin yields 0.0 overlap (no water passed)."""
+    bin_edges_in = np.array([0.0, 10.0, 10.0, 20.0])  # middle bin has zero width
+    bin_edges_out = np.array([0.0, 20.0])
+    result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
+    # First and third bins fully overlap the single output bin; the zero-width bin is 0.
+    np.testing.assert_array_equal(result, [[1.0], [0.0], [1.0]])
+
+
+def test_partial_isin_nan_input_edge_propagates_nan():
+    """A NaN input edge propagates as NaN fractions for the adjacent bins (spin-up masking)."""
+    bin_edges_in = np.array([0.0, np.nan, 20.0])
+    bin_edges_out = np.array([0.0, 10.0, 20.0])
+    result = partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
+    # Both bins are adjacent to the NaN edge, so every fraction is NaN.
+    assert np.isnan(result).all()
+
+
+# ---------------------------------------------------------------------------
+# linear_average extrapolate_method='raise' and 1D NaN bridging
+# ---------------------------------------------------------------------------
+
+
+def test_linear_average_raise_out_of_range():
+    """extrapolate_method='raise' rejects any edge outside the data range."""
+    x_data = np.array([0.0, 1.0, 2.0])
+    y_data = np.array([0.0, 1.0, 2.0])
+    with pytest.raises(ValueError, match="x_edges must be within the range of x_data"):
+        linear_average(x_data=x_data, y_data=y_data, x_edges=np.array([-1.0, 2.0]), extrapolate_method="raise")
+
+
+def test_linear_average_raise_in_range_passes():
+    """extrapolate_method='raise' returns the in-range average when all edges are in range."""
+    x_data = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    y_data = np.array([0.0, 1.0, 2.0, 3.0, 4.0])  # y = x
+    result = linear_average(x_data=x_data, y_data=y_data, x_edges=np.array([1.0, 3.0]), extrapolate_method="raise")
+    # mean of y = x over [1, 3] = 2.
+    np.testing.assert_array_equal(result, [[2.0]])
+
+
+def test_linear_average_1d_nan_bridging():
+    """1D y_data silently bridges an interior NaN by linear interpolation across the gap.
+
+    This pins the documented 1D-vs-2D asymmetry: a 1D series treats an interior NaN as a gap
+    to interpolate across, so a bin spanning it returns the bridged linear mean.
+    """
+    x_data = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    y_data = np.array([0.0, 1.0, np.nan, 3.0, 4.0])  # y = x with an interior hole at x=2
+    # The NaN sample is dropped; the remaining points still lie on y = x, so the bridged
+    # value at x=2 is 2. Mean of y = x over [1, 3] is therefore 2 (no NaN leaks through).
+    result = linear_average(x_data=x_data, y_data=y_data, x_edges=np.array([1.0, 3.0]))
+    np.testing.assert_array_equal(result, [[2.0]])
+
+
+# ---------------------------------------------------------------------------
+# solve_underdetermined_system: summed_differences and NaN-row paths
+# ---------------------------------------------------------------------------
+
+
+def test_solve_underdetermined_system_summed_differences_is_feasible_and_sparse():
+    """The summed_differences objective stays feasible and yields a sparser difference profile.
+
+    summed_differences (L1 on adjacent differences) promotes piecewise-constant solutions, so
+    its difference vector must have strictly more (near-)zero entries than the smooth
+    squared_differences (L2) solution while still satisfying A x = b exactly. The L1 objective
+    is non-smooth at its piecewise-constant optimum, so a derivative-free method is used.
+    """
+    # Block-structured system: each equation constrains a separate pair of unknowns.
+    matrix = np.array([[1.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 1.0]])
+    rhs = np.array([4.0, 6.0])
+
+    x_summed = solve_underdetermined_system(
+        coefficient_matrix=matrix,
+        rhs_vector=rhs,
+        nullspace_objective="summed_differences",
+        optimization_method="Nelder-Mead",
+    )
+    x_squared = solve_underdetermined_system(
+        coefficient_matrix=matrix, rhs_vector=rhs, nullspace_objective="squared_differences"
+    )
+
+    # (1) Feasibility of the L1 solution.
+    np.testing.assert_allclose(matrix @ x_summed, rhs, atol=1e-8)
+
+    # (2) The L1 minimizer is piecewise-constant within each block: [2, 2, 3, 3].
+    np.testing.assert_allclose(x_summed, [2.0, 2.0, 3.0, 3.0], atol=1e-6)
+
+    # (3) Strictly sparser difference profile than the smooth L2 solution.
+    n_zero_summed = int(np.sum(np.abs(np.diff(x_summed)) < 1e-6))
+    n_zero_squared = int(np.sum(np.abs(np.diff(x_squared)) < 1e-6))
+    assert n_zero_summed > n_zero_squared
+
+
+def test_solve_underdetermined_system_excludes_nan_row():
+    """A NaN row is dropped from the system; the solution still satisfies the finite equations."""
+    matrix = np.array([
+        [1.0, 2.0, 1.0, 0.0],
+        [np.nan, np.nan, np.nan, np.nan],
+        [0.0, 1.0, 2.0, 1.0],
+    ])
+    rhs = np.array([5.0, np.nan, 4.0])
+    result = solve_underdetermined_system(coefficient_matrix=matrix, rhs_vector=rhs)
+    finite = np.array([[1.0, 2.0, 1.0, 0.0], [0.0, 1.0, 2.0, 1.0]])
+    np.testing.assert_allclose(finite @ result, [5.0, 4.0], atol=1e-8)
+
+
+def test_solve_underdetermined_system_all_nan_rows_raises():
+    """When every row contains NaN, no valid rows remain and a ValueError is raised."""
+    matrix = np.full((2, 3), np.nan)
+    rhs = np.array([np.nan, np.nan])
+    with pytest.raises(ValueError, match="No valid rows found"):
+        solve_underdetermined_system(coefficient_matrix=matrix, rhs_vector=rhs)
+
+
+# ---------------------------------------------------------------------------
+# simplify_bins early-exit must echo the flow array when flow is provided
+# ---------------------------------------------------------------------------
+
+
+def test_simplify_bins_empty_with_flow_returns_empty_flow_array():
+    """Empty input with flow provided returns an empty float array, not None."""
+    edges = np.array([0.0])
+    values = np.array([])
+    flow = np.array([])
+    new_edges, new_values, new_flow = simplify_bins(edges=edges, values=values, flow=flow)
+    assert len(new_edges) == 1
+    assert len(new_values) == 0
+    assert new_flow is not None
+    assert new_flow.dtype == np.float64
+    assert len(new_flow) == 0
