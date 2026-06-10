@@ -35,6 +35,9 @@ Available functions:
   Returns values in [0, 1] where 1.0 means all volumes are fully informed. Useful for assessing
   spin-up periods and data coverage. NaN residence times indicate insufficient flow history.
 
+- :func:`freundlich_retardation` - Compute concentration-dependent retardation factors from a
+  Freundlich isotherm, for use as the ``retardation_factor`` input to the transport functions.
+
 Spin-up period
 --------------
 The spin-up **region** is determined entirely by the supplied flow record (``flow_tedges``, which
@@ -924,7 +927,7 @@ def fraction_explained(
         Pore volume(s) of the aquifer [m3]. Can be a single value or an array
         of pore volumes representing different flow paths.
     index : pandas.DatetimeIndex, optional
-        Index at which to compute the fraction. If left to None, the index of `flow` is used.
+        Index at which to compute the fraction. If left to None, flow-bin centres are used.
         Default is None.
     direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
         Direction of the flow calculation:
@@ -986,16 +989,16 @@ def freundlich_retardation(
     Compute concentration-dependent retardation factors using Freundlich isotherm.
 
     The Freundlich isotherm relates sorbed concentration S to aqueous concentration C:
-        S = rho_f * C^n
+        S = k_f * C^n
 
     The retardation factor is computed as:
-        R = 1 + (rho_b/θ) * dS/dC = 1 + (rho_b/θ) * rho_f * n * C^(n-1)
+        R = 1 + (rho_b/θ) * dS/dC = 1 + (rho_b/θ) * k_f * n * C^(n-1)
 
     Parameters
     ----------
     concentration : array-like
-        Concentration of compound in water [mass/volume].
-        Length should match flow (i.e., len(flow_tedges) - 1).
+        Concentration of compound in water [mass/volume]. One value per time bin, consistent
+        with the ``flow`` array passed to the transport function.
     freundlich_k : float
         Freundlich coefficient [(m³/kg)^n] (under S = k_f * C^n with S dimensionless
         and C in [kg/m³]).
