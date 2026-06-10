@@ -574,6 +574,38 @@ class TestBounded:
         cin, cr = rng.uniform(0.5, 4.0, n), rng.uniform(0.5, 4.0, n)
         self.assert_matches_oracle_quadrature(tedges, flow, rech, cin, cr, 1.0, 3.0, 3.0, 8.0)
 
+    def test_delayed_prerecord_transition(self):
+        """Pre-record water hands over to boundary water via a DELAYED transition.
+
+        When the record opens with a rainfall-surplus episode, the parcels
+        released at the earliest edges are expelled and the first surviving
+        arrival comes from a later edge g. The backward path just before that
+        transition then lands INSIDE the domain at t0 (the grazing
+        continuation from (t[g], apv)), not on the boundary (regression: the
+        original implementation substituted apv for the landing position at
+        the transition endpoint, which pushed the spin-up log term far off --
+        source fractions went negative). Checked by oracle quadrature across
+        the transition with cin != cin_recharge, and by the fraction bounds.
+        """
+        n = 12
+        tedges = to_tedges(np.arange(n + 1.0))
+        flow = np.full(n, 2.0)
+        rech = np.array([0.5, 2.0, 2.0, 2.0, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3])
+        rng = np.random.default_rng(11)
+        cin, cr = rng.uniform(0.5, 4.0, n), rng.uniform(0.5, 4.0, n)
+        self.assert_matches_oracle_quadrature(tedges, flow, rech, cin, cr, 1.0, 3.0, 5.0, 7.0)
+        frac = recharge_to_extraction(
+            cin=np.zeros(n),
+            cin_recharge=np.ones(n),
+            flow=flow,
+            recharge=rech,
+            tedges=tedges,
+            cout_tedges=to_tedges(np.linspace(0.0, 12.0, 7)),
+            aquifer_pore_volume=3.0,
+            aquifer_pore_depth=1.0,
+        )
+        assert np.all((frac >= -1e-14) & (frac <= 1 + 1e-14))
+
     def test_single_bin_recharge_exceeding_pore_volume(self):
         """One bin receives six pore volumes of rainfall (N * area * dt = 6 * apv).
 

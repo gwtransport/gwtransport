@@ -390,9 +390,10 @@ def _bounded_average(*, t, dt, u, k, q, cr, cb, apv, tq, covered):
     # grazing trajectory, traced backward from (t[g], V=apv).
     g_idx = np.nonzero(np.isfinite(arrivals))[0]
     s_left = np.full(len(arrivals), np.nan)
-    g_pos = g_idx[g_idx >= 1]  # the g = 0 arrival is the pre-record transition; its left side needs no entry
+    v0_left = np.full(len(arrivals), np.nan)
+    g_pos = g_idx[g_idx >= 1]  # the g = 0 arrival grazes the boundary exactly at t[0] (landing position apv)
     if g_pos.size:
-        s_left[g_pos], _ = _backward_entries(
+        s_left[g_pos], v0_left[g_pos] = _backward_entries(
             queries=t[g_pos], t=t, dt=dt, k=k, q=q, apv=apv, v_start=apv, edge_side="left"
         )
     av = arrivals[g_idx]
@@ -464,11 +465,16 @@ def _bounded_average(*, t, dt, u, k, q, cr, cb, apv, tq, covered):
     entered_atom = (cb[js] - cr[js]) * np.where(pre, 0.0, qb[js]) * ds + cr[js] * piece_integral(u[js])
     qb0 = qb[0]
     if qb0 > 0 and k[0] > 0:
-        # Landing positions v0 = G(t) at the piece endpoints; at the pre-record
-        # transition the walk may resolve the grazing endpoint as entered (v0
-        # NaN) -- that path lands exactly on the boundary.
-        v0_1 = np.where(pre & np.isnan(v0_bp[:-1]), apv, np.where(pre, v0_bp[:-1], 0.0))
-        v0_2 = np.where(pre & np.isnan(v0_bp[1:]), apv, np.where(pre, v0_bp[1:], 0.0))
+        # Landing positions v0 = G(t) at the piece endpoints. At the
+        # pre-record transition the one-sided limit is the landing position of
+        # the grazing continuation from (t[g], apv): apv itself only when the
+        # transition parcel is the t[0] release; when earlier releases were
+        # expelled (delayed transition) the grazing path lands INSIDE at t0.
+        v0_arr = np.where(np.isnan(v0_left), apv, v0_left)
+        v0_1 = np.where(e1 >= 0, v0_arr[np.maximum(e1, 0)], v0_bp[:-1])
+        v0_2 = np.where(e2 >= 0, v0_arr[np.maximum(e2, 0)], v0_bp[1:])
+        v0_1 = np.where(pre, np.where(np.isnan(v0_1), apv, v0_1), 0.0)
+        v0_2 = np.where(pre, np.where(np.isnan(v0_2), apv, v0_2), 0.0)
         v_r0 = q[0] / k[0]
         ic_log = np.log((v_r0 - v0_1) / (v_r0 - v0_2))
         ic_atom = cr[0] * piece_integral(0.0) + (cb[0] - cr[0]) * (v_r0 - apv) * ic_log
