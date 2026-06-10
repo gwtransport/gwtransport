@@ -88,6 +88,39 @@ from gwtransport.gamma import parse_parameters
 from gwtransport.utils import cumulative_flow_volume, linear_average, linear_interpolate
 
 
+def _boundary_extrapolated_map(
+    flow: npt.NDArray[np.floating],
+    flow_cum: npt.NDArray[np.floating],
+    flow_tedges_days: npt.NDArray[np.floating],
+    pad: float,
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+    """Extend the cumulative-volume -> time map past the record for the ``"constant"`` warm-start.
+
+    The boundary extrapolation slope is ``1/Q``, anchored on the nearest strictly-positive flow so a
+    zero-flow boundary bin (whose ``flow_cum`` step is only the strictly-monotone ulp bump) does not
+    give a ``1/0`` extrapolation. Bit-identical to ``1/Q_boundary`` when the boundary already carries
+    flow.
+
+    Returns
+    -------
+    volume_map : ndarray
+        ``flow_cum`` padded by ``pad`` on each end.
+    time_map : ndarray
+        ``flow_tedges_days`` padded by ``pad * (1/Q)`` on each end, aligned with ``volume_map``.
+        Shared by :func:`residence_time_full` and :func:`gamma_residence_time`.
+    """
+    positive_flow = flow[flow > 0.0]
+    inv_q_first = 1.0 / positive_flow[0]
+    inv_q_last = 1.0 / positive_flow[-1]
+    volume_map = np.concatenate([[flow_cum[0] - pad], flow_cum, [flow_cum[-1] + pad]])
+    time_map = np.concatenate([
+        [flow_tedges_days[0] - pad * inv_q_first],
+        flow_tedges_days,
+        [flow_tedges_days[-1] + pad * inv_q_last],
+    ])
+    return volume_map, time_map
+
+
 def residence_time_series(
     *,
     flow: npt.ArrayLike,
@@ -375,20 +408,8 @@ def residence_time_full(
     # the extended map, so the interpolation is an exact linear extrapolation. With spinup=None the
     # map is not extended and the out-of-record target yields NaN (strict, no extrapolation).
     if spinup == "constant" and np.any(flow > 0.0):
-        # Warm-start: extend the cumulative-volume -> time map past the record at the boundary
-        # flow rate, slope = 1/Q. A zero-flow boundary bin would give 1/0 (its flow_cum step is
-        # only the strictly-monotone ulp bump), so anchor the slope on the nearest strictly-positive
-        # flow; this is bit-identical to 1/Q_boundary when the boundary bin already carries flow.
         pad = retardation_factor * float(aquifer_pore_volumes.max())
-        positive_flow = flow[flow > 0.0]
-        inv_q_first = 1.0 / positive_flow[0]
-        inv_q_last = 1.0 / positive_flow[-1]
-        flow_cum_map = np.concatenate([[flow_cum[0] - pad], flow_cum, [flow_cum[-1] + pad]])
-        days_map = np.concatenate([
-            [flow_tedges_days[0] - pad * inv_q_first],
-            flow_tedges_days,
-            [flow_tedges_days[-1] + pad * inv_q_last],
-        ])
+        flow_cum_map, days_map = _boundary_extrapolated_map(flow, flow_cum, flow_tedges_days, pad)
         days_grid = linear_interpolate(x_ref=flow_cum_map, y_ref=days_map, x_query=a_grid)
     else:
         days_grid = linear_interpolate(
@@ -696,19 +717,7 @@ def gamma_residence_time(
     # reach r*support_hi) so phi extrapolates the spin-up; with a float spinup it stays clipped to
     # [0, v_end] (the covered sub-mass only).
     if extrapolate and np.any(flow > 0.0):
-        # Warm-start slope = 1/Q at the boundary; anchor on the nearest strictly-positive flow so a
-        # zero-flow boundary bin (whose flow_cum step is only the strictly-monotone ulp bump) does
-        # not produce a 1/0 extrapolation. Bit-identical to 1/Q_boundary when the boundary carries flow.
-        pad = r * support_hi
-        positive_flow = flow[flow > 0.0]
-        inv_q_first = 1.0 / positive_flow[0]
-        inv_q_last = 1.0 / positive_flow[-1]
-        phi_v = np.concatenate([[flow_cum[0] - pad], flow_cum, [flow_cum[-1] + pad]])
-        phi_t = np.concatenate([
-            [flow_tedges_days[0] - pad * inv_q_first],
-            flow_tedges_days,
-            [flow_tedges_days[-1] + pad * inv_q_last],
-        ])
+        phi_v, phi_t = _boundary_extrapolated_map(flow, flow_cum, flow_tedges_days, r * support_hi)
     else:
         phi_v = flow_cum
         phi_t = flow_tedges_days

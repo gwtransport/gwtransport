@@ -248,8 +248,9 @@ def test_tiling_boundary_invariance(direction):
     }
     one_tile = gamma_residence_time(**common, _max_tile_elements=10**18)
     tiny_tile = gamma_residence_time(**common, _max_tile_elements=1)
-    np.testing.assert_array_equal(np.isnan(one_tile), np.isnan(tiny_tile))
-    np.testing.assert_allclose(one_tile, tiny_tile, rtol=1e-12, equal_nan=True)
+    # Tiling is a pure loop partition: each output bin's arithmetic is independent of the tile it
+    # lands in, so the two results must be bit-for-bit identical, not merely close.
+    np.testing.assert_array_equal(one_tile, tiny_tile)
 
 
 @pytest.mark.parametrize("direction", DIRECTIONS)

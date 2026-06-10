@@ -100,7 +100,7 @@ def test_constant_spinup_constant_flow_exact(direction, r):
         retardation_factor=r,
     )
     assert not np.isnan(got).any()
-    np.testing.assert_allclose(got, r * apv.mean() / q, rtol=1e-11)
+    np.testing.assert_allclose(got, r * apv.mean() / q, rtol=1e-13)
 
 
 def test_single_pore_volume_reduces_to_residence_time_full():
