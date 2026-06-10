@@ -329,25 +329,6 @@ def test_output_tedges_alignment():
         np.testing.assert_allclose(result2[0, valid_mask2], result2[0, valid_mask2][0], atol=0, rtol=1e-13)
 
 
-def test_example_from_docstring():
-    """Test the example provided in the function's docstring."""
-    flow_dates = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
-    flow_values = np.full(len(flow_dates) - 1, 100.0)  # Constant flow of 100 m³/day
-    pore_volume = 200.0
-
-    mean_times = residence_time_full(
-        flow=flow_values,
-        tedges=flow_dates,
-        cout_tedges=flow_dates,
-        aquifer_pore_volumes=pore_volume,
-        direction="extraction_to_infiltration",
-    )
-
-    # With the default spinup='constant' the docstring example warm-starts the spin-up zone,
-    # so there is no NaN: residence time is exactly 2 days at every output bin under constant flow.
-    np.testing.assert_allclose(mean_times[0], 2.0, atol=0, rtol=1e-13)
-
-
 def test_spinup_policy_constant_vs_none():
     """Pin the spinup policy contract under constant flow with a spin-up region.
 

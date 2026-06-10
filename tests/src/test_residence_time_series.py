@@ -95,6 +95,11 @@ def test_custom_index():
     )
 
     assert result.shape[1] == len(custom_dates)
+    # Constant flow: the residence time at every informed instant is exactly Vp/Q (= 2 days),
+    # which pins the magnitude (a shape-only check passes under any value-scaling regression).
+    informed = result[np.isfinite(result)]
+    assert informed.size > 0
+    np.testing.assert_allclose(informed, pore_volume / 100.0, rtol=1e-12)
 
 
 def test_return_numpy_array():
@@ -114,6 +119,10 @@ def test_return_numpy_array():
     # Should return for the center points of flow bins
     expected_length = len(tedges) - 1
     assert result.shape == (1, expected_length)
+    # Constant flow: informed instants equal Vp/Q (= 2 days), pinning value as well as shape.
+    informed = result[np.isfinite(result)]
+    assert informed.size > 0
+    np.testing.assert_allclose(informed, pore_volume / 100.0, rtol=1e-12)
 
 
 def test_multiple_pore_volumes():
