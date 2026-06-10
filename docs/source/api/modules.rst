@@ -142,6 +142,14 @@ percolation
    :undoc-members:
    :show-inheritance:
 
+recharge
+========
+
+.. automodule:: gwtransport.recharge
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 residence_time
 ==============
 
