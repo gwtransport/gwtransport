@@ -1140,9 +1140,7 @@ def get_soil_temperature(*, station_number: int = 260, interpolate_missing_value
         parse_dates=False,
     )
 
-    df.index = pd.to_datetime(df["YYYYMMDD"].values, format=r"%Y%m%d").tz_localize("UTC") + pd.to_timedelta(
-        df["HH"].values, unit="h"
-    )
+    df.index = pd.to_datetime(df["YYYYMMDD"].values, format=r"%Y%m%d") + pd.to_timedelta(df["HH"].values, unit="h")
 
     df.drop(columns=["YYYYMMDD", "HH"], inplace=True)
     df.columns = df.columns.str.strip()
