@@ -51,9 +51,17 @@ Available functions:
 - :func:`solve_tikhonov` - Solve linear system with Tikhonov regularization toward a target.
   Well-determined modes follow the data; poorly-determined modes are pulled toward the target.
 
+- :func:`compute_reverse_target` - Build the regularization target for the inverse problem by
+  transposing and row-normalizing the forward coefficient matrix. Consumed by
+  :func:`solve_tikhonov` and :func:`solve_inverse_transport`.
+
 - :func:`solve_inverse_transport` - Solve the inverse transport problem (deconvolution) via
   Tikhonov regularization. Shared by advection, diffusion, and diffusion_fast
   ``extraction_to_infiltration`` functions.
+
+- :func:`solve_inverse_transport_banded` - Memory-light banded equivalent of
+  :func:`solve_inverse_transport` for a forward operator stored in banded layout. Assembles the
+  Tikhonov normal equations directly in banded form and solves them via banded Cholesky.
 
 - :func:`solve_underdetermined_system` - Solve underdetermined linear system (Ax = b, m < n)
   with nullspace regularization. Handles NaN values by row exclusion. Supports built-in
@@ -135,16 +143,22 @@ def _make_strictly_monotone(arr: npt.ArrayLike) -> npt.NDArray[np.floating]:
     """Bump consecutive duplicates so a non-decreasing array becomes strictly monotone.
 
     Returns the input unchanged if no consecutive duplicates are present. Otherwise returns a
-    new array with each duplicate bumped up by ``k * 16 * ulp(max(arr))``, where ``k`` is its
-    1-based position within the consecutive duplicate run.
+    new array with each duplicate bumped up by ``k * step``, where ``k`` is its 1-based
+    position within the consecutive duplicate run and ``step`` is ``16 * ulp(max(arr))``
+    capped per run so the largest bump stays strictly below the next genuine value above the
+    plateau (``step = min(16 * ulp(max(arr)), gap / (run_len + 1))``). The cap prevents a long
+    run from overshooting a closely-spaced successor; a gap narrower than the run length in
+    ulps is unrepresentable and cannot be separated.
 
     The factor of 16 is a safety margin against IEEE 754 rounding noise in ``np.interp``'s
     linear-interpolation arithmetic, which differs subtly between Linux x86_64 (with FMA)
     and ARM macOS. A 1-ulp gap, while strictly monotone, can place a downstream query value
     on the wrong side of a bracket boundary if the intermediate arithmetic rounds 1 ulp away
     from the exact value. 16 ulps ensures the bracket selection is unambiguous on every
-    platform we support, while keeping the absolute perturbation at ``~1e-13`` for typical
-    cumulative-flow values -- well below physical relevance.
+    platform we support. The perturbation is relative to the array scale:
+    ``bump ≈ 16 * ulp(max(arr)) ≈ 3.5e-15 * max(arr)``, i.e. about 15 significant digits
+    below the data scale and well below physical relevance. The absolute size therefore grows
+    with the cumulative-volume magnitude (e.g. ``~1e-13`` only for ``max(arr) ~ 30``).
 
     Parameters
     ----------
@@ -169,11 +183,29 @@ def _make_strictly_monotone(arr: npt.ArrayLike) -> npt.NDArray[np.floating]:
     if not np.any(diffs == 0):
         return arr
     ulp_max = np.nextafter(arr.max(), np.inf) - arr.max()
+    n = len(arr)
+    idx = np.arange(n)
     is_dup = np.concatenate(([False], diffs == 0))
-    idx = np.arange(len(arr))
+    # 1-based position of each duplicate within its consecutive run.
     last_nondup = np.maximum.accumulate(np.where(is_dup, -1, idx))
     cumcount = np.where(is_dup, idx - last_nondup, 0)
-    return arr + cumcount * (_DUP_BUMP_ULPS * ulp_max)
+
+    # Per-run headroom: each bumped value must stay strictly below the next genuine
+    # (non-duplicate) value above the plateau, otherwise a long run can overshoot a
+    # closely-spaced next value and break monotonicity. ``next_nondup_idx`` is the first
+    # non-duplicate index after each position (``n`` when the run reaches the array end, where
+    # there is no successor and hence no overshoot risk). The gap to that successor caps the
+    # bump step so the last (largest) bump in a run of length L is at most ``L/(L+1)`` of the
+    # gap. A gap narrower than the run length in ulps is unrepresentable and cannot be split.
+    next_nondup_idx = np.minimum.accumulate(np.where(is_dup, n, idx)[::-1])[::-1]
+    has_successor = next_nondup_idx < n
+    gap_to_next = arr[np.clip(next_nondup_idx, 0, n - 1)] - arr[idx]
+    run_len = next_nondup_idx - last_nondup - 1
+    full_step = _DUP_BUMP_ULPS * ulp_max
+    with np.errstate(invalid="ignore", divide="ignore"):
+        capped_step = np.where(has_successor, np.minimum(full_step, gap_to_next / (run_len + 1.0)), full_step)
+    bump = np.where(is_dup, cumcount * capped_step, 0.0)
+    return arr + bump
 
 
 def cumulative_flow_volume(
@@ -246,7 +278,7 @@ def linear_interpolate(
 
     Returns
     -------
-    numpy.ndarray
+    ndarray
         Interpolated y-values with the same shape as x_query.
 
     Examples
@@ -275,17 +307,14 @@ def linear_interpolate(
     >>> linear_interpolate(x_ref=x_unsorted, y_ref=y_unsorted, x_query=x_query)
     array([10., 15., 25., 35., 40.])
     """
-    # Convert inputs to arrays
     x_ref = np.asarray(x_ref)
     y_ref = np.asarray(y_ref)
     x_query = np.asarray(x_query)
 
-    # Sort reference data to ensure monotonic ordering
     sort_idx = np.argsort(x_ref)
     x_ref_sorted = x_ref[sort_idx]
     y_ref_sorted = y_ref[sort_idx]
 
-    # Default behavior (left=None, right=None) clamps to boundary values
     return np.interp(x_query, x_ref_sorted, y_ref_sorted, left=left, right=right)
 
 
@@ -295,7 +324,7 @@ def linear_average(
     y_data: npt.ArrayLike,
     x_edges: npt.ArrayLike,
     extrapolate_method: str = "nan",
-) -> npt.NDArray[np.float64]:
+) -> npt.NDArray[np.floating]:
     """
     Compute the average value of a piecewise linear time series between specified x-edges.
 
@@ -332,7 +361,7 @@ def linear_average(
 
     Returns
     -------
-    numpy.ndarray
+    ndarray
         2D array of average values between consecutive pairs of x_edges.
         Shape is ``(n_series, n_bins)`` where ``n_bins = n_edges - 1`` and
         ``n_series = max(n_series_x, n_series_y)``. Both ``x_edges`` and ``y_data``
@@ -448,16 +477,18 @@ def linear_average(
     x_data_clean = x_data[show]
     y_data_clean = y_data[:, show]  # shape (n_series_y, n_clean)
 
-    # Handle extrapolation for all series at once (vectorized)
+    # Handle extrapolation for all series at once (vectorized). The 'raise' and 'nan'
+    # branches never mutate edges_processed, so they alias x_edges directly; 'outer'
+    # produces a fresh clipped array.
     if extrapolate_method == "outer":
         edges_processed = np.clip(x_edges, x_data_clean[0], x_data_clean[-1])
     elif extrapolate_method == "raise":
         if np.any(x_edges < x_data_clean[0]) or np.any(x_edges > x_data_clean[-1]):
             msg = "x_edges must be within the range of x_data"
             raise ValueError(msg)
-        edges_processed = x_edges.copy()
+        edges_processed = x_edges
     else:  # nan method
-        edges_processed = x_edges.copy()
+        edges_processed = x_edges
 
     # Create a combined grid of all unique x points (data + all edges)
     all_unique_x = np.unique(np.concatenate([x_data_clean, edges_processed.ravel()]))
@@ -466,7 +497,7 @@ def linear_average(
     # the linear interpolation manually since np.interp does not accept 2D y.
     if n_series_y == 1:
         all_unique_y_result = np.interp(all_unique_x, x_data_clean, y_data_clean[0], left=np.nan, right=np.nan)
-        all_unique_y: npt.NDArray[np.float64] = np.asarray(all_unique_y_result, dtype=np.float64)[np.newaxis, :]
+        all_unique_y: npt.NDArray[np.floating] = np.asarray(all_unique_y_result, dtype=np.float64)[np.newaxis, :]
     else:
         # Locate each query x in x_data_clean. For x within the data range, idx is in
         # [1, len(x_data_clean) - 1] so left_idx = idx - 1 is the bracketing left index.
@@ -599,7 +630,7 @@ def partial_isin(*, bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -
 
     Returns
     -------
-    overlap_matrix : numpy.ndarray
+    overlap_matrix : ndarray
         Dense matrix of shape (n_in, n_out) where n_in is the number of input
         bins and n_out is the number of output bins. Each element (i, j)
         represents the fraction of input bin i that overlaps with output bin j.
@@ -663,7 +694,7 @@ def partial_isin(*, bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -
     # Create meshgrids for all possible input-output bin combinations
     in_left = bin_edges_in[:-1, None]  # Shape: (n_bins_in, 1)
     in_right = bin_edges_in[1:, None]  # Shape: (n_bins_in, 1)
-    in_width = np.diff(bin_edges_in)[:, None]  # Shape: (n_bins_in, 1)
+    in_width = diffs_in[:, None]  # Shape: (n_bins_in, 1); reuses the validated np.diff above
 
     out_left = bin_edges_out[None, :-1]  # Shape: (1, n_bins_out)
     out_right = bin_edges_out[None, 1:]  # Shape: (1, n_bins_out)
@@ -701,7 +732,7 @@ def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.N
 
     Returns
     -------
-    overlap_array : numpy.ndarray
+    overlap_array : ndarray
         Array of shape (len(bin_tedges), n_bins) where n_bins is the number of
         time bins. Each element (i, j) represents the fraction of time bin j
         that overlaps with time range i. Values range from 0 (no overlap) to
@@ -805,7 +836,8 @@ def simplify_bins(
     edges = np.asarray(edges) if not isinstance(edges, pd.DatetimeIndex) else edges
     values = np.asarray(values, dtype=float)
     if len(values) == 0:
-        return edges, values, None
+        flow_out = np.asarray(flow, dtype=float) if flow is not None else None
+        return edges, values, flow_out
 
     widths = np.asarray(np.diff(edges), dtype=float)
     if flow is not None:
@@ -824,8 +856,10 @@ def simplify_bins(
     idx = np.append(s, len(values))
     new_edges = edges[idx]
     new_widths = np.add.reduceat(widths, s)
-    new_values = np.add.reduceat(weights * values, s) / np.add.reduceat(weights, s)
-    new_flow = np.add.reduceat(flow * widths, s) / new_widths if flow is not None else None
+    weight_sums = np.add.reduceat(weights, s)
+    new_values = np.add.reduceat(weights * values, s) / weight_sums
+    # When flow is given, weights == flow * widths, so weight_sums == reduceat(flow * widths, s) exactly.
+    new_flow = weight_sums / new_widths if flow is not None else None
 
     return new_edges, new_values, new_flow
 
@@ -845,7 +879,7 @@ def combine_bin_series(
     b: npt.ArrayLike,
     b_edges: npt.ArrayLike,
     extrapolation: str | float = 0.0,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]]:
     """
     Combine two binned series onto a common set of unique edges.
 
@@ -870,13 +904,13 @@ def combine_bin_series(
 
     Returns
     -------
-    c : numpy.ndarray
+    c : ndarray
         Values from series a mapped to the combined edge structure.
-    c_edges : numpy.ndarray
+    c_edges : ndarray
         Combined unique edges from a_edges and b_edges.
-    d : numpy.ndarray
+    d : ndarray
         Values from series b mapped to the combined edge structure.
-    d_edges : numpy.ndarray
+    d_edges : ndarray
         Combined unique edges from a_edges and b_edges (same as c_edges).
 
     Raises
@@ -892,13 +926,11 @@ def combine_bin_series(
     are then broadcasted/repeated for each combined bin that falls within
     the original bin's range.
     """
-    # Convert inputs to numpy arrays
     a = np.asarray(a, dtype=float)
     a_edges = np.asarray(a_edges, dtype=float)
     b = np.asarray(b, dtype=float)
     b_edges = np.asarray(b_edges, dtype=float)
 
-    # Validate inputs
     if len(a_edges) != len(a) + 1:
         msg = "a_edges must have len(a) + 1 elements"
         raise ValueError(msg)
@@ -906,53 +938,24 @@ def combine_bin_series(
         msg = "b_edges must have len(b) + 1 elements"
         raise ValueError(msg)
 
-    # Create combined unique edges
     combined_edges = np.unique(np.concatenate([a_edges, b_edges]))
-
-    # Initialize output arrays
-    c = np.zeros(len(combined_edges) - 1)
-    d = np.zeros(len(combined_edges) - 1)
-
-    # Vectorized mapping using searchsorted - find which original bin each combined bin belongs to
-    # For series a: find which original bin each combined bin center falls into
     combined_bin_centers = (combined_edges[:-1] + combined_edges[1:]) / 2
-    a_bin_assignment_result = np.searchsorted(a_edges, combined_bin_centers, side="right") - 1
-    # Ensure it's an array for type checker
-    a_bin_assignment: npt.NDArray[np.intp] = np.asarray(a_bin_assignment_result, dtype=np.intp)
-    a_bin_assignment = np.clip(a_bin_assignment, 0, len(a) - 1)
 
-    # Handle extrapolation for series a
-    if extrapolation == "nearest":
-        # Assign all values using nearest neighbor (already clipped)
-        c[:] = a[a_bin_assignment]
-    else:
-        # Only assign values where the combined bin is completely within the original bin
-        a_valid_mask = (combined_edges[:-1] >= a_edges[a_bin_assignment]) & (
-            combined_edges[1:] <= a_edges[a_bin_assignment + 1]
-        )
-        c[a_valid_mask] = a[a_bin_assignment[a_valid_mask]]
-        # Fill out-of-range bins with extrapolation value
-        c[~a_valid_mask] = extrapolation
+    def _map(values: npt.NDArray[np.floating], edges: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        # Map one series onto the combined bins, applying the chosen extrapolation.
+        assignment = np.clip(np.searchsorted(edges, combined_bin_centers, side="right") - 1, 0, len(values) - 1)
+        if extrapolation == "nearest":
+            return values[assignment]
+        out = np.zeros(len(combined_edges) - 1)
+        # A combined bin keeps the original value only when it lies fully inside that bin.
+        valid = (combined_edges[:-1] >= edges[assignment]) & (combined_edges[1:] <= edges[assignment + 1])
+        out[valid] = values[assignment[valid]]
+        out[~valid] = extrapolation
+        return out
 
-    # Handle extrapolation for series b
-    b_bin_assignment_result = np.searchsorted(b_edges, combined_bin_centers, side="right") - 1
-    # Ensure it's an array for type checker
-    b_bin_assignment: npt.NDArray[np.intp] = np.asarray(b_bin_assignment_result, dtype=np.intp)
-    b_bin_assignment = np.clip(b_bin_assignment, 0, len(b) - 1)
+    c = _map(a, a_edges)
+    d = _map(b, b_edges)
 
-    if extrapolation == "nearest":
-        # Assign all values using nearest neighbor (already clipped)
-        d[:] = b[b_bin_assignment]
-    else:
-        # Only assign values where the combined bin is completely within the original bin
-        b_valid_mask = (combined_edges[:-1] >= b_edges[b_bin_assignment]) & (
-            combined_edges[1:] <= b_edges[b_bin_assignment + 1]
-        )
-        d[b_valid_mask] = b[b_bin_assignment[b_valid_mask]]
-        # Fill out-of-range bins with extrapolation value
-        d[~b_valid_mask] = extrapolation
-
-    # Return the combined series
     c_edges = combined_edges
     d_edges = combined_edges.copy()
 
@@ -1032,6 +1035,9 @@ def compute_time_edges(
         if number_of_bins != len(tstart):
             msg = "tstart must have the same number of elements as flow"
             raise ValueError(msg)
+        if len(tstart) < 2:  # noqa: PLR2004
+            msg = "tstart must have at least 2 elements to infer the bin width; pass tedges for a single bin"
+            raise ValueError(msg)
 
         # Extrapolate final edge using uniform spacing
         final_edge = tstart[-1] + (tstart[-1] - tstart[-2])
@@ -1043,12 +1049,15 @@ def compute_time_edges(
         if number_of_bins != len(tend):
             msg = "tend must have the same number of elements as flow"
             raise ValueError(msg)
+        if len(tend) < 2:  # noqa: PLR2004
+            msg = "tend must have at least 2 elements to infer the bin width; pass tedges for a single bin"
+            raise ValueError(msg)
 
         # Extrapolate initial edge using uniform spacing
         initial_edge = tend[0] - (tend[1] - tend[0])
         return pd.DatetimeIndex([initial_edge, *list(tend)], dtype=tend.dtype)
 
-    msg = "Either provide tedges, tstart, and tend"
+    msg = "Either provide tedges, tstart, or tend"
     raise ValueError(msg)
 
 
@@ -1162,7 +1171,10 @@ def solve_underdetermined_system(
     *,
     coefficient_matrix: npt.ArrayLike,
     rhs_vector: npt.ArrayLike,
-    nullspace_objective: str | Callable[[np.ndarray, np.ndarray, np.ndarray], float] = "squared_differences",
+    nullspace_objective: str
+    | Callable[
+        [npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]], float
+    ] = "squared_differences",
     optimization_method: str = "BFGS",
     rcond: float | None = None,
 ) -> npt.NDArray[np.floating]:
@@ -1210,7 +1222,7 @@ def solve_underdetermined_system(
 
     Returns
     -------
-    numpy.ndarray
+    ndarray
         Solution vector that minimizes the specified nullspace objective.
         Has length n (number of columns in coefficient_matrix).
 
@@ -1326,9 +1338,10 @@ def solve_underdetermined_system(
 
 def _optimize_nullspace_coefficients(
     *,
-    x_ls: np.ndarray,
-    nullspace_basis: np.ndarray,
-    nullspace_objective: str | Callable[[np.ndarray, np.ndarray, np.ndarray], float],
+    x_ls: npt.NDArray[np.floating],
+    nullspace_basis: npt.NDArray[np.floating],
+    nullspace_objective: str
+    | Callable[[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]], float],
     optimization_method: str,
 ) -> npt.NDArray[np.floating]:
     """Optimize coefficients in the nullspace to minimize the objective.
@@ -1366,9 +1379,8 @@ def _optimize_nullspace_coefficients(
 
     # For other objectives, use iterative optimization starting from the
     # squared_differences solution for stability
-    nullrank = nullspace_basis.shape[1]
     objective_func = _get_nullspace_objective_function(nullspace_objective=nullspace_objective)
-    coeffs_0 = coeffs_sq if coeffs_sq is not None else np.zeros(nullrank)
+    coeffs_0 = coeffs_sq
 
     res = minimize(
         objective_func,
@@ -1386,8 +1398,8 @@ def _optimize_nullspace_coefficients(
 
 def _solve_squared_differences_analytical(
     *,
-    x_ls: np.ndarray,
-    nullspace_basis: np.ndarray,
+    x_ls: npt.NDArray[np.floating],
+    nullspace_basis: npt.NDArray[np.floating],
 ) -> npt.NDArray[np.floating]:
     """Solve the squared-differences nullspace problem analytically.
 
@@ -1458,16 +1470,20 @@ def compute_reverse_target(
 
     Parameters
     ----------
-    coeff_matrix : numpy.ndarray
+    coeff_matrix : ndarray
         Forward coefficient matrix of shape (n_cout, n_cin).
-    rhs_vector : numpy.ndarray
+    rhs_vector : ndarray
         Right-hand side vector of length n_cout (e.g., cout values).
 
     Returns
     -------
-    numpy.ndarray
+    ndarray
         Target solution vector of length n_cin. Entries with near-zero
         column sums in the forward matrix are set to NaN.
+
+    See Also
+    --------
+    solve_tikhonov : Consumes this target as the regularization reference.
     """
     min_row_sum = 1e-10
     wt = coeff_matrix.T  # (n_cin, n_cout)
@@ -1510,7 +1526,7 @@ def solve_tikhonov(
     rhs_vector : array-like
         Right-hand side vector of length m. May contain NaN values
         corresponding to NaN rows in coefficient_matrix.
-    x_target : numpy.ndarray
+    x_target : ndarray
         Target solution of length n, typically from
         :func:`compute_reverse_target`. NaN entries are excluded from the
         regularization term.
@@ -1529,7 +1545,7 @@ def solve_tikhonov(
 
     Returns
     -------
-    numpy.ndarray or tuple of numpy.ndarray
+    ndarray or tuple of ndarray
         If ``return_resolution`` is False (default), returns the solution
         vector of length n.
 
@@ -1596,7 +1612,8 @@ def solve_tikhonov(
         # fraction_data[j] = R[j,j] = 1 - λ d[j] G_inv[j,j]
         d_reg = np.zeros(n_cin)
         d_reg[target_indices] = 1.0
-        gram = valid_matrix.T @ valid_matrix + regularization_strength * np.diag(d_reg)
+        gram = valid_matrix.T @ valid_matrix
+        gram[np.arange(n_cin), np.arange(n_cin)] += regularization_strength * d_reg
         gram_inv_diag = np.diag(np.linalg.inv(gram))
         fraction_data = 1.0 - regularization_strength * gram_inv_diag * d_reg
         return x, fraction_data
@@ -1655,6 +1672,10 @@ def solve_inverse_transport(
     -----
     UserWarning
         When ``warn_rank_deficient=True`` and the matrix is rank-deficient.
+
+    See Also
+    --------
+    solve_inverse_transport_banded : Memory-light banded equivalent.
     """
     row_sums = w_forward.sum(axis=1)
     col_active: npt.NDArray[np.bool_] = w_forward.sum(axis=0) > 0
@@ -1729,13 +1750,13 @@ def solve_inverse_transport_banded(
 
     Parameters
     ----------
-    band_vals : numpy.ndarray
+    band_vals : ndarray
         Banded forward weights of shape ``(n_obs, full_band)``. Rows the caller
         considers invalid must already be zeroed (as :func:`_resolve_spinup_mask`
         does); zero rows contribute nothing to the normal equations.
-    col_start : numpy.ndarray of int
+    col_start : ndarray of int
         First output-column index of each row's band, shape ``(n_obs,)``.
-    observed : numpy.ndarray
+    observed : ndarray
         Observed values of shape ``(n_obs,)`` (e.g. extraction concentrations).
         Must not contain NaN.
     n_output : int
@@ -1749,7 +1770,7 @@ def solve_inverse_transport_banded(
 
     Returns
     -------
-    numpy.ndarray
+    ndarray
         Recovered signal of shape ``(n_output,)``. NaN for output bins with no
         forward contribution (zero column).
 
@@ -1839,7 +1860,9 @@ def solve_inverse_transport_banded(
     return out
 
 
-def _squared_differences_objective(coeffs: np.ndarray, x_ls: np.ndarray, nullspace_basis: np.ndarray) -> float:
+def _squared_differences_objective(
+    coeffs: npt.NDArray[np.floating], x_ls: npt.NDArray[np.floating], nullspace_basis: npt.NDArray[np.floating]
+) -> float:
     """Minimize sum of squared differences between adjacent elements.
 
     Parameters
@@ -1860,7 +1883,9 @@ def _squared_differences_objective(coeffs: np.ndarray, x_ls: np.ndarray, nullspa
     return np.sum(np.square(x[1:] - x[:-1]))
 
 
-def _summed_differences_objective(coeffs: np.ndarray, x_ls: np.ndarray, nullspace_basis: np.ndarray) -> float:
+def _summed_differences_objective(
+    coeffs: npt.NDArray[np.floating], x_ls: npt.NDArray[np.floating], nullspace_basis: npt.NDArray[np.floating]
+) -> float:
     """Minimize sum of absolute differences between adjacent elements.
 
     Parameters
@@ -1883,8 +1908,9 @@ def _summed_differences_objective(coeffs: np.ndarray, x_ls: np.ndarray, nullspac
 
 def _get_nullspace_objective_function(
     *,
-    nullspace_objective: str | Callable[[np.ndarray, np.ndarray, np.ndarray], float],
-) -> Callable[[np.ndarray, np.ndarray, np.ndarray], float]:
+    nullspace_objective: str
+    | Callable[[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]], float],
+) -> Callable[[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]], float]:
     """Get the objective function for nullspace optimization.
 
     Parameters
