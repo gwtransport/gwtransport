@@ -124,6 +124,7 @@ For an in-depth discussion of the core modeling approach, see :doc:`user_guide/c
    examples/04_Deposition_Analysis_Bank_Filtration.nblink
    examples/08_bank_filtration_timflow.nblink
    examples/10_Advection_with_non_linear_sorption.nblink
+   examples/12_Bank_Filtration_Rainwater_Fraction.nblink
 
 .. toctree::
    :maxdepth: 2
