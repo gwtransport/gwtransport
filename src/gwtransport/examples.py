@@ -180,7 +180,7 @@ def generate_example_data(
     rng = np.random.default_rng(rng)
 
     # Create date range
-    dates = pd.date_range(start=date_start, end=date_end, freq=date_freq).tz_localize("UTC")
+    dates = pd.date_range(start=date_start, end=date_end, freq=date_freq)
     days = (dates - dates[0]).days.values
 
     # Generate flow data with seasonal pattern (higher in winter)
@@ -547,7 +547,7 @@ def generate_example_deposition_timeseries(
     rng = np.random.default_rng(rng)
 
     # Create synthetic deposition time series - needs to match flow period
-    dates = pd.date_range(date_start, date_end, freq=freq).tz_localize("UTC")
+    dates = pd.date_range(date_start, date_end, freq=freq)
     n_dates = len(dates)
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=n_dates)
 
