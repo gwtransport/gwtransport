@@ -10,7 +10,6 @@ from gwtransport._diffusion_shared import (
     _DT_FLOOR,
     _breakthrough_antideriv,
     _cout_cumulative_volume,
-    _retardation_excess_density,
 )
 from gwtransport._time import dt_to_days, tedges_to_days
 from gwtransport.advection import infiltration_to_extraction as advection_i2e
@@ -2405,8 +2404,10 @@ def _dense_closed_form_w(*, flow, tedges, cout_tedges, pv, length, d_m, alpha_l,
 
     Reference for the banded build -- it shares the antiderivative kernel and the volume/tau setup,
     so on the breakthrough band the two are computed from identical floating-point inputs (bit-exact
-    for R=1; the R != 1 erfcx retardation tail is far below machine epsilon). Outside the band the
-    closed form saturates to exactly 0 or 1 in the cin-edge difference, which the banded build drops.
+    for any regime). Outside the band the closed form saturates to exactly 0 or 1 in the cin-edge
+    difference, which the banded build drops. The antiderivative's slope ``dD_t/dx = D_s/v_s`` is the
+    Kreft-Zuber flux coefficient at the solute-front velocity, so differencing it gives ``C_F``
+    natively for R > 1 with D_m > 0 -- no explicit retardation correction term.
     """
     nb = len(pv)
     streamline_length = np.full(nb, length)
@@ -2429,10 +2430,6 @@ def _dense_closed_form_w(*, flow, tedges, cout_tedges, pv, length, d_m, alpha_l,
         cumulative_volume_at_cin=v_cin,
     )
     tau = np.maximum(cout_tedges_days[:, None] - tedges_days[None, :], 0.0)
-    dv_cout = np.diff(v_cout)
-    dt_cout = np.diff(cout_tedges_days)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        q_cout = np.where(dt_cout > 0, dv_cout / dt_cout, 0.0)
 
     n_cout = len(cout_tedges) - 1
     n_cin = len(flow)
@@ -2442,7 +2439,6 @@ def _dense_closed_form_w(*, flow, tedges, cout_tedges, pv, length, d_m, alpha_l,
         ell = float(streamline_length[i_pv])
         dm = float(molecular_diffusivity[i_pv])
         al = float(longitudinal_dispersivity[i_pv])
-        velocity = q_cout * ell / v_pore
         step_widths = (v_cout[:, None] - v_cin[None, :] - r_vpv) * ell / r_vpv
         x_lo, x_hi = step_widths[:-1], step_widths[1:]
         dx = x_hi - x_lo
@@ -2453,36 +2449,21 @@ def _dense_closed_form_w(*, flow, tedges, cout_tedges, pv, length, d_m, alpha_l,
         else:
             xi = step_widths + ell
             dt_var = np.maximum(dm * tau + al * np.maximum(xi, 0.0), _DT_FLOOR)
-            antideriv, s, gaussian = _breakthrough_antideriv(step_widths, dt_var)
+            antideriv = _breakthrough_antideriv(step_widths, dt_var)
             with np.errstate(divide="ignore", invalid="ignore"):
                 frac = np.where(dx > 0.0, np.diff(antideriv, axis=0) / dx, 0.0)
-            if retardation != 1.0 and dm > 0.0:
-                density_binavg = _retardation_excess_density(
-                    x_lo=x_lo,
-                    x_hi=x_hi,
-                    dx=dx,
-                    d_lo=dt_var[:-1],
-                    d_hi=dt_var[1:],
-                    s_lo=s[:-1],
-                    s_hi=s[1:],
-                    g_lo=gaussian[:-1],
-                    g_hi=gaussian[1:],
-                )
-                excess = np.where(velocity > 0.0, (retardation - 1.0) * dm / velocity, 0.0)
-                frac -= excess[:, None] * density_binavg
         acc += frac[:, :-1] - frac[:, 1:]
     return np.nan_to_num(acc / len(pv), nan=0.0)
 
 
-def _assert_banded_matches_dense(w_banded, w_dense, retardation):
-    """R=1 is bit-identical; R!=1 carries an erfcx retardation-correction tail far below eps."""
-    if retardation == 1.0:
-        np.testing.assert_array_equal(w_banded, w_dense)
-    else:
-        # R != 1: the closed-form retardation correction's erfcx tail is not bitwise zero, but is
-        # far below machine epsilon. atol=1e-20 keeps margin while still catching any genuinely
-        # dropped coefficient (an under-sized band drops O(1e-2..1e-4)).
-        np.testing.assert_allclose(w_banded, w_dense, atol=1e-20, rtol=0.0)
+def _assert_banded_matches_dense(w_banded, w_dense, retardation):  # noqa: ARG001
+    """Banded build is bit-identical to the dense reference in every regime.
+
+    The flux concentration emerges natively from the antiderivative's ``D_s/v_s`` slope, so the
+    banded and dense paths compute the same ``frac`` from identical inputs for any R (no separate
+    retardation-correction term that could diverge in the last ulps).
+    """
+    np.testing.assert_array_equal(w_banded, w_dense)
 
 
 @pytest.mark.parametrize(
@@ -2579,8 +2560,8 @@ def test_banded_variable_flow_wandering_center():
 def test_banded_multipv_union_of_bands(retardation):
     """Each streamtube's band sits at a different cin offset; the accumulated band is their union.
 
-    The R != 1 case also guards the per-tube ``np.add.at`` accumulation of retardation-corrected
-    bands into the union buffer -- a per-tube offset error would corrupt the overlap.
+    The R != 1 case also guards the per-tube accumulation of the (natively flux-corrected) bands
+    into the union buffer -- a per-tube offset error would corrupt the overlap.
     """
     n = 120
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
@@ -2665,7 +2646,7 @@ def test_banded_variable_flow_step_equals_dense(d_m, pv, length, flow_lo, flow_h
 
 
 def test_banded_retardation_matches_diffusion_exact():
-    """Banded R != 1 build (with the erfcx retardation correction) matches the independent
+    """Banded R != 1 build (native solute-front flux coefficient) matches the independent
     ``gwtransport.diffusion`` quadrature -- an anchor that does not share the closed-form code.
 
     Geometry (pv=200, L=60) keeps the band narrow enough that banding engages rather than falling
@@ -2803,8 +2784,8 @@ def test_banded_band_sizing_misaligned_subbin_multipv(retardation):
 
     The cout grid is finer than -- and offset from -- the variable-flow cin grid, so each cout bin
     straddles cin bins and the per-row band must track a non-integer front across multiple
-    streamtubes. R=1 is bit-identical to the full-width dense closed form; the R=2 erfcx retardation
-    tail sits far below machine epsilon (atol 1e-20). An under-sized band would drop O(1e-2..1e-4).
+    streamtubes. Bit-identical to the full-width dense closed form for any R (the flux coefficient
+    emerges natively). An under-sized band would drop O(1e-2..1e-4).
     """
     n = 120
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
@@ -2824,10 +2805,7 @@ def test_banded_band_sizing_misaligned_subbin_multipv(retardation):
     }
     w_banded = _banded_dense(**common, flow_out=flow_out)
     w_dense = _dense_closed_form_w(**common, flow_out=flow_out)
-    if retardation == 1.0:
-        np.testing.assert_array_equal(w_banded, w_dense)
-    else:
-        np.testing.assert_allclose(w_banded, w_dense, atol=1e-20, rtol=0.0)
+    np.testing.assert_array_equal(w_banded, w_dense)
 
 
 def test_leading_zero_flow_forward_matches_diffusion_exact():

@@ -1607,6 +1607,43 @@ class TestFlowWeightedDiffusion:
         ratios = mass_out_per_cin[10:42] / v_in_interior
         np.testing.assert_allclose(ratios, 1.0, atol=1e-10, rtol=0)
 
+    @pytest.mark.parametrize("retardation_factor", [1.0, 2.7])
+    def test_mass_conservation_retardation_with_molecular_diffusion(self, retardation_factor):
+        """Flux-weighted mass ``∫Q·c_out dt = ∫Q·c_in dt`` holds under variable flow for R>1 AND D_m>0.
+
+        Regression for the Kreft-Zuber flux coefficient: it must use the solute-front velocity
+        ``v_s = Q·L/(R·V_pore)`` (so ``D_s/v_s = R·D_m/v_fluid + alpha_L``), not the fluid velocity.
+        With the fluid velocity the molecular term breaks conservation for R>1, D_m>0 by O((R-1)·D_m)
+        under variable flow (≈ -6e-4 at R=2.7, D_m=0.5); R=1 and D_m=0 are unaffected, which is why the
+        defect stayed hidden. Fails on the pre-fix code.
+        """
+        n = 120
+        tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+        rng = np.random.default_rng(7)
+        flow = 60.0 + 40.0 * rng.random(n)  # variable, strictly positive
+        cin = np.zeros(n)
+        cin[20:25] = 10.0  # compact pulse well inside the record
+        dt = np.diff(tedges) / pd.Timedelta("1D")
+
+        cout = infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([300.0]),
+            streamline_length=np.array([20.0]),
+            molecular_diffusivity=0.5,
+            longitudinal_dispersivity=0.0,
+            retardation_factor=retardation_factor,
+            spinup=None,
+        )
+        valid = ~np.isnan(cout)
+        # The output window must capture all breakthrough mass (no leakage at the right edge).
+        assert np.allclose(cout[valid][-3:], 0.0, atol=1e-6), "breakthrough not fully captured in window"
+        m_in = np.nansum(flow * cin * dt)
+        m_out = np.nansum(flow[valid] * cout[valid] * dt[valid])
+        np.testing.assert_allclose(m_out, m_in, rtol=1e-10)
+
     def test_constant_cin_varying_flow_gives_constant_cout(self):
         """Constant cin with varying flow must produce constant cout."""
         tedges = pd.date_range("2020-01-01", periods=61, freq="D")
@@ -1654,9 +1691,8 @@ class TestFlowWeightedDiffusion:
         cum_cin = np.array([0.0, 50.0, 130.0, 220.0, 330.0, 500.0])
         tedges_days = np.array([0.0, 0.5, 1.4, 2.3, 3.4, 5.0])  # variable Q
 
-        r_vpv = 200.0
+        r_vpv = 200.0  # = R * V_pore; R = 1 here (no retardation), so v_s == v_fluid
         sl = 50.0
-        v_pore = 200.0  # = r_vpv when R = 1 (no retardation in this test)
 
         # Several narrow cout cells: pre, around, and post breakthrough for j=0
         cum_cout = np.array([60.0, 130.0, 200.0, 260.0, 330.0, 420.0, 480.0])
@@ -1673,12 +1709,11 @@ class TestFlowWeightedDiffusion:
             longitudinal_dispersivity=alpha_l,
             r_vpv=r_vpv,
             streamline_len=sl,
-            aquifer_pore_volume=v_pore,
         )
 
-        # Fluid velocity per flow bin
+        # Solute-front velocity per flow bin (v_pore == r_vpv here, i.e. R = 1, so v_s == v_fluid)
         q_per_bin = np.diff(cum_cin) / np.diff(tedges_days)
-        v_per_bin = q_per_bin * sl / v_pore
+        v_per_bin = q_per_bin * sl / r_vpv
 
         def _make_integrand(v_j_, t_j_):
             def integrand(v):
