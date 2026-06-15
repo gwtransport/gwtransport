@@ -13,9 +13,14 @@ the moving-frame dispersion product. Its bin-average over a cout bin has the clo
 antiderivative ``I(x) = 0.5*x + 0.5*[x*erf(x/s) + (s/sqrt(pi))*exp(-(x/s)^2)]``,
 ``s = 2*sqrt(D_t)``. Evaluating ``I`` once per cout edge with ``D_t`` carried *per edge*
 and differencing yields the flux concentration ``C_F`` directly -- not merely ``C_R`` --
-because ``dD_t/dx = D_m/v + alpha_L = D_L/v`` is exactly the Kreft-Zuber flux coefficient
-(using ``d(tau)/dx = 1/v``). The dispersive boundary-flux correction therefore emerges from
-the ``D_t`` variation across the bin; no explicit correction term is added.
+because the per-edge geometry gives ``d(tau)/dx = R/v``, so the slope is
+``dD_t/dx = R*D_m/v + alpha_L``. This equals the Kreft-Zuber flux coefficient
+``D_L/v = D_m/v + alpha_L`` only when ``R = 1``. For ``R = 1`` (any ``D_m``/``alpha_L``) the
+dispersive boundary-flux correction therefore emerges from the ``D_t`` variation across the bin
+with no explicit correction term. For ``R != 1`` *and* ``D_m > 0`` the per-edge antiderivative
+bakes in the R-weighted molecular flux, so an explicit retardation correction subtracting
+``(R-1)*D_m/v`` times the bin-averaged Gaussian density is applied (see lines below and
+:func:`_pv_band_values`) to recover the Kreft-Zuber coefficient.
 
 The elapsed time ``tau`` and travel distance ``xi`` are read directly from the time and
 cumulative-volume edges (``tau_ij = t_cout_i - t_cin_j``, ``xi`` geometric), so no per-cell

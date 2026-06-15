@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 from numpy.testing import assert_allclose
+from scipy.integrate import quad
+from scipy.special import erf, erfc
 
 from gwtransport import gamma as gamma_utils
 from gwtransport._diffusion_shared import (
@@ -2023,6 +2025,105 @@ def test_delta_input_single_pv_matches_diffusion_exact_constant_flow(retardation
     # vs the 16-point quadrature -- machine precision for every leg, including R != 1 with
     # D_m > 0 now that the retardation correction is evaluated in closed form.
     assert_allclose(cout_fast[valid], cout_exact[valid], atol=1e-12, rtol=0)
+
+
+def test_delta_response_matches_hand_coded_erfc_known_answer():
+    r"""The forward delta-response column equals a hand-coded ``0.5*erfc`` breakthrough.
+
+    Independent known-answer anchor (F086): every other equivalence test compares
+    ``diffusion_fast`` against ``gwtransport.diffusion``, which shares the *same* physical
+    formula (``C_R = 0.5*erfc((L - xi) / (2*sqrt(D_t)))`` with ``D_t = D_m*tau + alpha_L*xi``)
+    and the *same* per-edge antiderivative -- only the evaluation differs (closed form vs
+    16-point quadrature). A conceptual error in that shared formula would be invisible to a
+    fast-vs-slow comparison. This test reconstructs the breakthrough from scratch using
+    :func:`scipy.special.erfc` / :func:`scipy.special.erf` (not the module's
+    ``_breakthrough_antideriv``, not the slow module), so it pins the formula itself.
+
+    Construction (constant flow, single PV, ``R=1``, matched grid). A unit delta injected at
+    ``cin`` bin ``j0`` produces the forward operator column ``W[:, j0]``. For a single
+    streamtube the bin-averaged flux concentration over cout bin ``i`` is the per-edge
+    antiderivative difference ``(J(x_hi; D_t_hi) - J(x_lo; D_t_lo)) / dx`` evaluated at cin
+    edges ``j0`` and ``j0+1`` and differenced, where
+
+        ``J(x; D_t) = 0.5*x + 0.5*x*erf(x / (2*sqrt(D_t))) + sqrt(D_t/pi)*exp(-x**2/(4*D_t))``
+
+    is the antiderivative of the resident concentration ``0.5*erfc(-x / (2*sqrt(D_t)))``
+    (here ``x = xi - L`` is the breakthrough coordinate, so ``L - xi = -x``). Freezing ``D_t``
+    per cout edge is what turns the resident antiderivative into the Kreft-Zuber *flux*
+    concentration. The breakthrough coordinate, ``tau``, ``xi`` and ``D_t`` are rebuilt from
+    the same 100-year warm-start extension and cumulative-volume geometry the module uses.
+
+    Two independent checks: (1) the hand-coded ``J`` antiderivative matches a direct
+    :func:`scipy.integrate.quad` of ``0.5*erfc(-x/(2*sqrt(D_t)))`` at frozen ``D_t`` (anchors
+    that ``J`` integrates the claimed resident concentration), and (2) the full delta-response
+    column ``W[:, j0]`` reproduces the hand-coded breakthrough to machine precision (~1e-14),
+    spanning the partial-breakthrough front rather than only the saturated 0/1 tails.
+    """
+    n = 200
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow_rate = 100.0
+    flow = np.full(n, flow_rate)
+    v_pore = 1000.0
+    length = 30.0
+    d_m = 0.5
+    alpha_l = 1.0
+    j0 = 60
+
+    def antideriv_erfc(x, d_t):
+        """Hand-coded antiderivative of the resident concentration 0.5*erfc(-x/(2*sqrt(D_t)))."""
+        two_s = 2.0 * np.sqrt(d_t)
+        return 0.5 * x + 0.5 * x * erf(x / two_s) + np.sqrt(d_t / np.pi) * np.exp(-((x / two_s) ** 2))
+
+    # Check (1): J integrates 0.5*erfc(-x/(2 sqrt D_t)) at frozen D_t (independent of the module).
+    d_t_frozen, x_lo_chk, x_hi_chk = 7.3, -2.0, 5.0
+    quad_binavg, _ = quad(lambda xx: 0.5 * erfc(-xx / (2.0 * np.sqrt(d_t_frozen))), x_lo_chk, x_hi_chk)
+    hand_binavg = (antideriv_erfc(x_hi_chk, d_t_frozen) - antideriv_erfc(x_lo_chk, d_t_frozen)) / (x_hi_chk - x_lo_chk)
+    assert_allclose(hand_binavg, quad_binavg / (x_hi_chk - x_lo_chk), atol=1e-12, rtol=0.0)
+
+    cin = np.zeros(n)
+    cin[j0] = 1.0
+    w_col = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=np.array([v_pore]),
+        streamline_length=length,
+        molecular_diffusivity=d_m,
+        longitudinal_dispersivity=alpha_l,
+        retardation_factor=1.0,
+        flow_out=flow,
+    )
+
+    # Rebuild the module's geometry from scratch: 100-year warm-start extension, cumulative
+    # through-flow volume, and per-(cout edge, cin edge) breakthrough coordinate / tau / xi / D_t.
+    pad = pd.Timedelta(days=36500)
+    work_tedges = tedges[:1] - pad
+    work_tedges = work_tedges.append(tedges[1:-1]).append(tedges[-1:] + pad)
+    work_days = tedges_to_days(work_tedges)
+    cout_days = tedges_to_days(tedges, ref=work_tedges[0])
+    v_edges = cumulative_flow_volume(flow, dt_to_days(work_tedges))  # at work edges == cout edges (matched grid)
+    r_vpv = 1.0 * v_pore
+
+    def frac_for_cin_edge(j):
+        """Bin-averaged resident-antiderivative fraction over every cout bin for cin edge j."""
+        x = (v_edges - v_edges[j] - r_vpv) * length / r_vpv  # breakthrough coord at each cout edge
+        tau = np.maximum(cout_days - work_days[j], 0.0)
+        d_t = np.maximum(d_m * tau + alpha_l * np.maximum(x + length, 0.0), _DT_FLOOR)
+        j_anti = antideriv_erfc(x, d_t)
+        x_lo, x_hi = x[:-1], x[1:]
+        dx = x_hi - x_lo
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.where(dx > 0.0, (j_anti[1:] - j_anti[:-1]) / dx, 0.0)
+
+    w_col_expected = frac_for_cin_edge(j0) - frac_for_cin_edge(j0 + 1)
+
+    valid = ~np.isnan(w_col)
+    # The partial-breakthrough front (strictly between the 0 and 1 saturation plateaus) must be
+    # present, so the test genuinely exercises the erfc breakthrough rather than just saturation.
+    front = valid & (w_col > 1e-6)
+    assert front.sum() > 10
+    assert_allclose(w_col[valid], w_col_expected[valid], atol=1e-13, rtol=0.0)
 
 
 def test_step_input_single_pv_variable_flow_matches_diffusion_exact():
