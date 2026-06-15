@@ -722,6 +722,63 @@ class TestKScaling:
             )
 
 
+class TestValidatorBranches:
+    """C6: each input-validation branch raises ``ValueError`` with an informative message.
+
+    Covers the eight core validator branches not exercised by C4 (``k_scaling``
+    shape/NaN), C5 (output-grid mismatch under ``k_scaling``) or M3
+    (saturation/ponding). Each case overrides exactly one keyword of an otherwise
+    valid call so the matched message pins the intended branch.
+    """
+
+    @staticmethod
+    def _valid_kwargs(n=5):
+        """Return a fully valid keyword set for an ``n``-bin call (overridable per case)."""
+        tedges = _make_tedges(n)
+        return {
+            "q_root_zone": np.full(n, 0.001),
+            "tedges": tedges,
+            "q_water_table_tedges": tedges,
+            "cumulative_pore_volumes_outlet": np.array([O05["theta_s"] * 0.3]),
+            "theta_r": O05["theta_r"],
+            "theta_s": O05["theta_s"],
+            "k_s": O05["k_s"],
+            "brooks_corey_lambda": O05["brooks_corey_lambda"],
+        }
+
+    @pytest.mark.parametrize(
+        ("override", "match"),
+        [
+            # 1. tedges length != len(q_root_zone) + 1.
+            ({"tedges": _make_tedges(6)}, r"tedges must have length"),
+            # 2. output edges reach beyond the input window.
+            (
+                {"q_water_table_tedges": pd.date_range("2020-01-02", periods=6, freq="D")},
+                r"must lie within the input window",
+            ),
+            # 3. negative q_root_zone.
+            ({"q_root_zone": np.array([0.001, -0.001, 0.001, 0.001, 0.001])}, r"non-negative"),
+            # 4. NaN in q_root_zone.
+            ({"q_root_zone": np.array([0.001, np.nan, 0.001, 0.001, 0.001])}, r"must not contain NaN"),
+            # 5. non-positive / empty cumulative_pore_volumes_outlet.
+            ({"cumulative_pore_volumes_outlet": np.array([0.1, -0.2])}, r"non-empty with all entries positive"),
+            ({"cumulative_pore_volumes_outlet": np.array([])}, r"non-empty with all entries positive"),
+            # 6. theta ordering / range violated.
+            ({"theta_r": 0.4, "theta_s": 0.337}, r"theta_r, theta_s must satisfy"),
+            # 7. non-positive k_s.
+            ({"k_s": 0.0}, r"k_s must be positive"),
+            # 8. neither / both sorption-parameter groups.
+            ({"brooks_corey_lambda": None}, r"Exactly one of"),
+            ({"van_genuchten_n": 2.28}, r"Exactly one of"),
+        ],
+    )
+    def test_c6_validator_branch_raises(self, override, match):
+        """C6: a single malformed keyword trips the matching validator branch."""
+        kwargs = {**self._valid_kwargs(), **override}
+        with pytest.raises(ValueError, match=match):
+            root_zone_to_water_table_kinematic_wave(**kwargs)
+
+
 # =============================================================================
 # Section D — vG characteristic-speed monotonicity (property test)
 # =============================================================================
@@ -1115,9 +1172,10 @@ class TestShippedCollisionBugRegression:
         This is the 500%-error symptom: on the colliding (DSW) run the
         bin-averaged output must equal the flow-weighted (== time-weighted, no
         K-scaling) mean of the pointwise ``concentration_at_point`` curve over
-        each bin. Checked across several bins — including the arrival bin that
-        straddles the wetting-front jump (trapezoid error ≈ 2e-4 there) — at
-        ``rtol <= 1e-3``.
+        each bin. The sampled bins are smooth (DSW-controlled), so the
+        trapezoid residual is ≈ 4e-14 and the check holds at ``rtol = 1e-9``
+        with a five-order margin — tight enough to catch sub-percent
+        regressions, not just the shipped ~500% overshoot.
         """
         q_wt, structures = self._run_canonical()
         state = structures[0]["tracker_state"]
@@ -1145,11 +1203,11 @@ class TestShippedCollisionBugRegression:
         eligible = np.where(nonzero & inside & post_arrival)[0]
         assert eligible.size >= 5, f"expected several eligible bins, got {eligible.size}"
 
-        # Sample the arrival bin (straddles the front jump → largest trapezoid
-        # error) plus four spread-out bins covering the DSW-controlled and
-        # steady regimes. 2001 sample points keep the trapezoid error ≈ 4e-14
-        # (≪ rtol=1e-3) even across the arrival jump, while a 5% bin-average
-        # overshoot — the shipped-bug symptom — still fails at rtol=1e-3.
+        # Sample the first post-arrival bin plus four spread-out bins covering
+        # the DSW-controlled and steady regimes. These bins are smooth
+        # (DSW-controlled), so 2001 sample points keep the trapezoid residual
+        # ≈ 4e-14 (≪ rtol=1e-9), while a sub-percent bin-average error — and a
+        # fortiori the shipped ~500% overshoot — fails at rtol=1e-9.
         idx = [int(eligible[0]), *(int(eligible[j]) for j in np.linspace(1, eligible.size - 1, 4).astype(int))]
         for k in idx:
             t_lo, t_hi = out_days[k], out_days[k + 1]
@@ -1161,7 +1219,7 @@ class TestShippedCollisionBugRegression:
             np.testing.assert_allclose(
                 q_wt[k],
                 mean_exact,
-                rtol=1e-3,
+                rtol=1e-9,
                 err_msg=f"bin {k}: bin-average {q_wt[k]:.6e} vs flow-weighted exact {mean_exact:.6e}",
             )
 
@@ -1245,7 +1303,7 @@ class TestTransientMassBalance:
             "theta_s": O05_VG["theta_s"],
             "k_s": O05_VG["k_s"],
             "van_genuchten_n": O05_VG["van_genuchten_n"],
-            "van_genuchten_l": 0.0,
+            "mualem_l": 0.0,
         }
         q_root, q_wt, state, v_out_val = self._run(vg_l0)
         theta_s = vg_l0["theta_s"]
