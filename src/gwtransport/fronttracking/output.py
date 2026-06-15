@@ -1037,6 +1037,11 @@ def compute_domain_mass(
         if raref_wave is not None:
             mass_segment = _integrate_rarefaction_spatial_exact(raref_wave, v_start, v_end, theta, sorption)
         elif decaying_wave is not None:
+            # The decaying fan is bounded at its apex by the parent's tail concentration
+            # ``c_fan_tail`` (the sustained-inlet plateau), NOT the downstream ``c_fixed``.
+            # ``integrate_fan_spatial_exact`` then clamps the abandoned region at ``c_fan_tail``;
+            # passing ``c_fixed`` would integrate the unbounded self-similar fan to the apex and
+            # over-count the tail, breaking domain-mass conservation once a DSW forms.
             mass_segment = integrate_fan_spatial_exact(
                 decaying_wave.theta_origin,
                 decaying_wave.v_origin,
@@ -1044,7 +1049,7 @@ def compute_domain_mass(
                 v_end,
                 theta,
                 sorption,
-                c_apex=decaying_wave.c_fixed,
+                c_apex=decaying_wave.c_fan_tail,
             )
         else:
             # Constant region: c at midpoint is exact for the segment.

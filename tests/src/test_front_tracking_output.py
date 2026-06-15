@@ -9,10 +9,11 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 """
 
 import numpy as np
+import pandas as pd
 import pytest
 import scipy.integrate
 
-from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption
+from gwtransport.fronttracking.math import BrooksCoreyConductivity, ConstantRetardation, FreundlichSorption
 from gwtransport.fronttracking.output import (
     compute_bin_averaged_concentration_exact,
     compute_breakthrough_curve,
@@ -23,6 +24,7 @@ from gwtransport.fronttracking.output import (
     identify_outlet_segments,
     integrate_rarefaction_exact,
 )
+from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWave, RarefactionWave, ShockWave
 
 
@@ -765,3 +767,51 @@ class TestMassBalanceFunctions:
         # Closed form: ∫_θ_cross^θ_query c dθ' = c · (θ_query - θ_cross) = 10 · 900 = 9000.
         expected = c * (theta_query - theta_cross)
         assert np.isclose(mass, expected, rtol=1e-12)
+
+
+class TestDecayingShockWaveDomainMassConservation:
+    """``compute_domain_mass`` conserves mass once a DecayingShockWave forms (T3 regression).
+
+    A sustained-then-reduced inlet (wet-then-dry) forms a ``decay_side='left'`` DSW whose fan
+    tail concentration ``c_fan_tail`` exceeds the downstream ``c_fixed``. Before the first outlet
+    crossing no mass has left the domain, so the stored domain mass must equal the cumulative
+    injected mass exactly: ``m_dom(theta) == m_in(theta)``. This anchor uses only the closed-form
+    ``compute_cumulative_inlet_mass`` and the function under test (never the outlet integral), so
+    it is independent -- not tautological. Before the fix (``c_apex=c_fixed`` over-counted the
+    abandoned fan tail) the pre-arrival residual reaches ~9 %.
+    """
+
+    def test_domain_mass_equals_inlet_mass_before_arrival_with_dsw(self):
+        """No-outflow invariant ``m_dom(theta) == m_in(theta)`` to machine precision pre-arrival."""
+        sorption = BrooksCoreyConductivity(theta_r=0.01, theta_s=0.337, k_s=0.174, brooks_corey_lambda=0.25)
+        cin = np.array([0.003] * 30 + [0.0008] * 170)
+        n = len(cin)
+        tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+        v_outlet = sorption.theta_s * 0.5
+        tracker = FrontTracker(
+            cin=cin,
+            flow=sorption.theta_s * np.ones(n),
+            tedges=tedges,
+            aquifer_pore_volume=float(v_outlet),
+            sorption=sorption,
+        )
+        tracker.run(max_iterations=10000)
+        waves = tracker.state.waves
+        theta_edges = tracker.state.theta_edges
+
+        decaying = [w for w in waves if isinstance(w, DecayingShockWave)]
+        assert decaying, "scenario must form a DecayingShockWave"
+        dsw = decaying[0]
+        assert dsw.c_fan_tail > dsw.c_fixed  # the regime that exposed the over-counting bug
+
+        arrivals = [ev["theta"] for ev in tracker.state.events if ev["type"] == "outlet_crossing"]
+        theta_arrival = min(arrivals) if arrivals else float(theta_edges[-1])
+        # Sample strictly inside the DSW-active window and before any outlet crossing.
+        thetas = np.linspace(dsw.theta_start + 1e-3, min(dsw.theta_deactivation - 1e-3, theta_arrival - 1e-3), 25)
+        m_in = np.array([
+            compute_cumulative_inlet_mass(theta=float(t), cin=cin, theta_edges=theta_edges) for t in thetas
+        ])
+        m_dom = np.array([
+            compute_domain_mass(theta=float(t), v_outlet=v_outlet, waves=waves, sorption=sorption) for t in thetas
+        ])
+        np.testing.assert_allclose(m_dom, m_in, rtol=1e-12)
