@@ -375,7 +375,20 @@ class TestComputeBinAveragedConcentrationExact:
         assert c_avg[3] == 5.0  # [1500, 2000]
 
     def test_bin_averaging_conserves_mass(self):
-        """Bin averaging conserves total mass at machine precision."""
+        """Bin averaging conserves total mass and matches an independent reference.
+
+        Two checks pin the bin-average to a *wave-dependent* truth (a wrong wave
+        geometry or a wiped wave list fails both, so neither is tautological):
+
+        1. The total extracted mass ``Σ c_avg·Δθ`` equals the closed-form
+           ``c_left·(θ_cross2 − θ_cross1)`` — this depends on both crossing θs,
+           hence on both wave speeds.
+        2. The same total equals an *independent* adaptive quadrature of the
+           pointwise breakthrough curve ``∫ C(v_outlet, θ) dθ`` (scipy
+           Gauss-Kronrod, a different integration route than the segment-exact
+           bin average). A geometry error that preserves total mass by accident
+           would still split differently across these two routes.
+        """
         sorption = ConstantRetardation(retardation_factor=2.0)
         # Pulse: c=10 then c=0.
         char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=10.0, sorption=sorption, is_active=True)
@@ -395,6 +408,19 @@ class TestComputeBinAveragedConcentrationExact:
         expected_mass = 10.0 * 500.0
 
         assert np.isclose(mass_extracted, expected_mass, rtol=1e-13)
+
+        # Independent reference: adaptive quadrature of the pointwise curve.
+        # The breakthrough is a top-hat in θ (c=10 on [1000, 1500], else 0); the
+        # two interior break points are supplied so quad resolves the steps.
+        mass_quad, _ = scipy.integrate.quad(
+            lambda t: concentration_at_point(v_outlet, t, waves, sorption),
+            0.0,
+            3000.0,
+            points=[1000.0, 1500.0],
+            epsabs=1e-12,
+            epsrel=1e-12,
+        )
+        assert np.isclose(mass_extracted, mass_quad, rtol=1e-12)
 
     def test_rarefaction_bin_averaging_exact(self):
         """Bin averaging with rarefaction uses exact integration."""
