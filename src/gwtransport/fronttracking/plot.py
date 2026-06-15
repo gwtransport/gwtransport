@@ -15,7 +15,10 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 
 from gwtransport._time import tedges_to_days
 from gwtransport.fronttracking.output import concentration_at_point, identify_outlet_segments
@@ -80,25 +83,22 @@ def _wave_trajectory_in_t(
     thetas = np.linspace(theta_start, theta_end, n_points)
     vs = v_start + speed * (thetas - theta_start)
 
-    t_samples: list[float] = []
-    v_samples: list[float] = []
-    for theta, v in zip(thetas, vs, strict=True):
-        if 0 <= v <= state.v_outlet:
-            t_samples.append(state.t_at_theta(float(theta)))
-            v_samples.append(float(v))
-
-    return t_samples, v_samples
+    mask = (vs >= 0) & (vs <= state.v_outlet)
+    t_arr = [state.t_at_theta(float(theta)) for theta in thetas[mask]]
+    # Callers test truthiness of the returned lists (``if v_head:``), so keep
+    # Python lists rather than arrays.
+    return t_arr, [float(v) for v in vs[mask]]
 
 
 def plot_vt_diagram(
     state: FrontTrackerState,
-    ax=None,
+    ax: Axes | None = None,
+    *,
     t_max: float | None = None,
     figsize: tuple[float, float] = (14, 10),
-    *,
     show_inactive: bool = False,
     show_events: bool = False,
-):
+) -> Axes:
     """
     Create V-t diagram showing all waves in space-time.
 
@@ -133,6 +133,13 @@ def plot_vt_diagram(
     ax : matplotlib.axes.Axes
         Axes object containing the V-t diagram.
 
+    See Also
+    --------
+    plot_breakthrough_curve : Outlet breakthrough curve for the same state.
+    plot_wave_interactions : Event timeline of wave interactions.
+    plot_front_tracking_summary : Multi-panel summary combining these views.
+    gwtransport.advection.infiltration_to_extraction_nonlinear_sorption : Produces the tracker state.
+
     Notes
     -----
     - Characteristics appear as blue lines (constant speed in θ).
@@ -163,7 +170,6 @@ def plot_vt_diagram(
     raref_labeled = False
     event_labeled = False
 
-    # Plot characteristics (blue lines)
     for wave in state.waves:
         if isinstance(wave, CharacteristicWave):
             if not wave.is_active and not show_inactive:
@@ -183,7 +189,6 @@ def plot_vt_diagram(
                 )
                 char_labeled = True
 
-    # Plot shocks (red lines)
     for wave in state.waves:
         if isinstance(wave, ShockWave):
             if not wave.is_active and not show_inactive:
@@ -203,7 +208,6 @@ def plot_vt_diagram(
                 )
                 shock_labeled = True
 
-    # Plot rarefactions (green fans)
     for wave in state.waves:
         if isinstance(wave, RarefactionWave):
             if not wave.is_active and not show_inactive:
@@ -237,7 +241,6 @@ def plot_vt_diagram(
                         alpha=0.1 if not wave.is_active else 0.2,
                     )
 
-    # Plot outlet position
     ax.axhline(
         state.v_outlet,
         color="k",
@@ -247,7 +250,6 @@ def plot_vt_diagram(
         label=f"Outlet (V={state.v_outlet:.1f} m³)",
     )
 
-    # Plot inlet position
     ax.axhline(
         0.0,
         color="k",
@@ -311,12 +313,13 @@ def plot_vt_diagram(
 
 def plot_breakthrough_curve(
     state: FrontTrackerState,
-    ax=None,
+    ax: Axes | None = None,
+    *,
     t_max: float | None = None,
     n_rarefaction_points: int = 50,
     figsize: tuple[float, float] = (12, 6),
     t_first_arrival: float | None = None,
-):
+) -> Axes:
     """
     Plot exact analytical concentration breakthrough curve at outlet.
 
@@ -347,6 +350,13 @@ def plot_breakthrough_curve(
     -------
     ax : matplotlib.axes.Axes
         Axes object containing the breakthrough curve.
+
+    See Also
+    --------
+    plot_vt_diagram : Space-time diagram of the same waves.
+    plot_front_tracking_summary : Multi-panel summary combining these views.
+    gwtransport.fronttracking.output.compute_breakthrough_curve : Underlying analytical curve.
+    gwtransport.advection.infiltration_to_extraction_nonlinear_sorption : Produces the tracker state.
 
     Notes
     -----
@@ -438,9 +448,10 @@ def plot_breakthrough_curve(
 
 def plot_wave_interactions(
     state: FrontTrackerState,
+    ax: Axes | None = None,
+    *,
     figsize: tuple[float, float] = (14, 8),
-    ax=None,
-):
+) -> Axes:
     """
     Plot event timeline showing wave interactions.
 
@@ -540,20 +551,20 @@ def plot_wave_interactions(
 
 
 def plot_inlet_concentration(
-    tedges,
-    cin,
-    ax=None,
+    tedges: pd.DatetimeIndex,
+    cin: npt.ArrayLike,
+    ax: Axes | None = None,
     *,
-    t_first_arrival=None,
-    event_markers=None,
-    color="blue",
-    t_max=None,
-    xlabel="Time [days]",
-    ylabel="Concentration",
-    title="Inlet Concentration",
-    figsize=(8, 5),
+    t_first_arrival: float | None = None,
+    event_markers: list[dict] | None = None,
+    color: str = "blue",
+    t_max: float | None = None,
+    xlabel: str = "Time [days]",
+    ylabel: str = "Concentration",
+    title: str = "Inlet Concentration",
+    figsize: tuple[float, float] = (8, 5),
     **step_kwargs,
-):
+) -> Axes:
     """
     Plot inlet concentration as step function with optional markers.
 
@@ -581,7 +592,7 @@ def plot_inlet_concentration(
         Label for y-axis. Default 'Concentration'.
     title : str, optional
         Plot title. Default 'Inlet Concentration'.
-    figsize : tuple, optional
+    figsize : tuple of float, optional
         Figure size if creating new figure. Default (8, 5).
     **step_kwargs
         Additional arguments passed to ax.plot().
@@ -590,12 +601,15 @@ def plot_inlet_concentration(
     -------
     ax : matplotlib.axes.Axes
         Axes object.
+
+    See Also
+    --------
+    plot_front_tracking_summary : Multi-panel summary that places this inlet panel.
     """
     if ax is None:
         _, ax = plt.subplots(figsize=figsize)
 
-    tedges_array = tedges.to_numpy() if hasattr(tedges, "to_numpy") else np.array(tedges)
-    t_days = (tedges_array - tedges_array[0]) / pd.Timedelta(days=1)
+    t_days = tedges_to_days(tedges)
 
     x_plot, y_plot = step_plot_coords(t_days, cin)
     ax.plot(x_plot, y_plot, linewidth=2, color=color, label="Inlet", **step_kwargs)
@@ -643,8 +657,8 @@ def plot_inlet_concentration(
 
 def _outlet_concentration_curve(
     state: FrontTrackerState,
-    t_array: np.ndarray,
-) -> np.ndarray:
+    t_array: npt.NDArray[np.floating],
+) -> npt.NDArray[np.floating]:
     """Sample the exact outlet concentration at the given user-facing times.
 
     Each ``t`` is translated to θ via ``state.theta_at_t`` and passed to
@@ -670,24 +684,24 @@ def _outlet_concentration_curve(
 
 
 def plot_front_tracking_summary(
-    structure,
-    tedges,
-    cin,
-    cout_tedges,
-    cout,
+    structure: dict,
+    tedges: pd.DatetimeIndex,
+    cin: npt.ArrayLike,
+    cout_tedges: pd.DatetimeIndex,
+    cout: npt.ArrayLike,
     *,
-    figsize=(16, 10),
-    show_exact=True,
-    show_bin_averaged=True,
-    show_events=True,
-    show_inactive=False,
-    t_max=None,
-    title=None,
-    inlet_color="blue",
-    outlet_exact_color="blue",
-    outlet_binned_color="red",
-    first_arrival_color="green",
-):
+    figsize: tuple[float, float] = (16, 10),
+    show_exact: bool = True,
+    show_bin_averaged: bool = True,
+    show_events: bool = True,
+    show_inactive: bool = False,
+    t_max: float | None = None,
+    title: str | None = None,
+    inlet_color: str = "blue",
+    outlet_exact_color: str = "blue",
+    outlet_binned_color: str = "red",
+    first_arrival_color: str = "green",
+) -> tuple[Figure, dict]:
     """
     Create comprehensive 3-panel summary figure for front tracking simulation.
 
@@ -713,7 +727,7 @@ def plot_front_tracking_summary(
     cout : array-like
         Bin-averaged output concentration values.
         Length = len(cout_tedges) - 1.
-    figsize : tuple, optional
+    figsize : tuple of float, optional
         Figure size (width, height). Default (16, 10).
     show_exact : bool, optional
         Whether to show exact analytical breakthrough curve. Default True.
@@ -742,12 +756,22 @@ def plot_front_tracking_summary(
         Figure object.
     axes : dict
         Dictionary with keys 'vt', 'inlet', 'outlet' containing axes objects.
+
+    See Also
+    --------
+    plot_vt_diagram : The top-left sub-panel.
+    plot_breakthrough_curve : Outlet breakthrough curve for the same state.
+    plot_inlet_concentration : The top-right sub-panel.
+    gwtransport.advection.infiltration_to_extraction_nonlinear_sorption : Produces ``structure``.
     """
     fig = plt.figure(figsize=figsize)
     gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.3)
 
     axes: dict = {}
     tracker_state: FrontTrackerState = structure["tracker_state"]
+
+    if t_max is None:
+        t_max = float((tedges.to_numpy()[-1] - tedges.to_numpy()[0]) / pd.Timedelta(days=1))
 
     # Top left: V-t diagram
     ax_vt = fig.add_subplot(gs[0, 0])
@@ -775,9 +799,6 @@ def plot_front_tracking_summary(
 
     # Bottom: Outlet concentration (exact and bin-averaged)
     ax_outlet = fig.add_subplot(gs[1, :])
-
-    if t_max is None:
-        t_max = (tedges.to_numpy()[-1] - tedges.to_numpy()[0]) / pd.Timedelta(days=1)
 
     if show_exact:
         t_exact = np.linspace(0, t_max, 1000)
@@ -832,19 +853,19 @@ def plot_front_tracking_summary(
 
 
 def plot_sorption_comparison(
-    pulse_favorable_structure,
-    pulse_unfavorable_structure,
-    pulse_tedges,
-    pulse_cin,
-    dip_favorable_structure,
-    dip_unfavorable_structure,
-    dip_tedges,
-    dip_cin,
+    pulse_favorable_structure: dict,
+    pulse_unfavorable_structure: dict,
+    pulse_tedges: pd.DatetimeIndex,
+    pulse_cin: npt.ArrayLike,
+    dip_favorable_structure: dict,
+    dip_unfavorable_structure: dict,
+    dip_tedges: pd.DatetimeIndex,
+    dip_cin: npt.ArrayLike,
     *,
-    figsize=(16, 12),
-    t_max_pulse=None,
-    t_max_dip=None,
-):
+    figsize: tuple[float, float] = (16, 12),
+    t_max_pulse: float | None = None,
+    t_max_dip: float | None = None,
+) -> tuple[Figure, npt.NDArray]:
     """
     Compare how each inlet produces different outputs with n>1 vs n<1 sorption.
 
@@ -877,7 +898,7 @@ def plot_sorption_comparison(
     dip_cin : array-like
         Dip inlet concentration (e.g., 10->2->10).
         Length = len(dip_tedges) - 1.
-    figsize : tuple, optional
+    figsize : tuple of float, optional
         Figure size (width, height). Default (16, 12).
     t_max_pulse : float, optional
         Max time for pulse plots [days]. If None, auto-computed.
@@ -905,7 +926,7 @@ def plot_sorption_comparison(
         t_max_dip = (dip_tedges.to_numpy()[-1] - dip_tedges.to_numpy()[0]) / pd.Timedelta(days=1)
 
     # === ROW 1: Pulse inlet ===
-    t_days_pulse = (pulse_tedges.to_numpy() - pulse_tedges.to_numpy()[0]) / pd.Timedelta(days=1)
+    t_days_pulse = tedges_to_days(pulse_tedges)
 
     ax_pulse_inlet = axes[0, 0]
     x_pulse, y_pulse = step_plot_coords(t_days_pulse, pulse_cin)
@@ -955,7 +976,7 @@ def plot_sorption_comparison(
     )
 
     # === ROW 2: Dip inlet ===
-    t_days_dip = (dip_tedges.to_numpy() - dip_tedges.to_numpy()[0]) / pd.Timedelta(days=1)
+    t_days_dip = tedges_to_days(dip_tedges)
 
     ax_dip_inlet = axes[1, 0]
     x_dip, y_dip = step_plot_coords(t_days_dip, dip_cin)

@@ -12,23 +12,20 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
-from __future__ import annotations
-
 import logging
-from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 
+from gwtransport._time import tedges_to_days
 from gwtransport.fronttracking.output import (
     compute_breakthrough_curve,
     compute_cumulative_inlet_mass,
     compute_domain_mass,
 )
+from gwtransport.fronttracking.solver import FrontTrackerState
 from gwtransport.fronttracking.waves import ShockWave
-
-if TYPE_CHECKING:
-    from gwtransport.fronttracking.solver import FrontTrackerState
 
 # Numerical tolerance constants
 EPSILON_CONCENTRATION_TOLERANCE = -1e-14  # Minimum allowed concentration (machine precision)
@@ -93,7 +90,15 @@ def _independent_outlet_mass(tracker_state: FrontTrackerState, *, n_grid: int = 
     return mass_out + mass_dom
 
 
-def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-10):
+def verify_physics(
+    structure: dict,
+    cout: npt.ArrayLike,
+    cout_tedges: pd.DatetimeIndex,
+    cin: npt.ArrayLike,
+    *,
+    verbose: bool = True,
+    rtol: float = 1e-10,
+) -> dict:
     """
     Run comprehensive physics verification checks on front tracking results.
 
@@ -112,7 +117,7 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     structure : dict
         Structure returned from ``infiltration_to_extraction_nonlinear_sorption``.
         Must contain keys: ``'waves'``, ``'theta_first_arrival'``, ``'events'``,
-        ``'n_shocks'``, ``'n_rarefactions'``, and optionally ``'tracker_state'``.
+        and optionally ``'tracker_state'``.
     cout : array-like
         Bin-averaged output concentrations.
     cout_tedges : pandas.DatetimeIndex
@@ -136,6 +141,8 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
         - ``'n_checks'``: int - Total number of checks performed
         - ``'n_passed'``: int - Number of checks that passed
         - ``'failures'``: list of str - Description of failed checks (empty if all passed)
+        - ``'checks'``: list of dict - Per-check result records; each has ``'name'``,
+          ``'passed'``, ``'message'`` keys.
         - ``'summary'``: str - One-line summary
 
     Examples
@@ -146,6 +153,8 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
         print(results["summary"])
         assert results["all_passed"]
     """
+    cout = np.asarray(cout, dtype=float)
+    cin = np.asarray(cin, dtype=float)
     failures: list[str] = []
     checks: list[dict] = []
 
@@ -199,9 +208,8 @@ def verify_physics(structure, cout, cout_tedges, cin, *, verbose=True, rtol=1e-1
     # Check 5: No NaN values after spin-up
     tracker_state = structure.get("tracker_state")
     if tracker_state is not None and np.isfinite(theta_first):
-        theta_at_edge = np.asarray([
-            tracker_state.theta_at_t(float(t)) for t in (cout_tedges[:-1] - cout_tedges[0]).total_seconds() / 86400.0
-        ])
+        t_days = tedges_to_days(cout_tedges)[:-1]
+        theta_at_edge = np.asarray([tracker_state.theta_at_t(float(t)) for t in t_days])
         mask_after_spinup = theta_at_edge >= theta_first
     elif not np.isfinite(theta_first):
         # No spin-up bound — every output row counts as "after spin-up".
