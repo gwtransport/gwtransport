@@ -42,6 +42,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from gwtransport._time import tedges_to_days
 from gwtransport.advection import _flow_weighted_front_tracking_output
 from gwtransport.fronttracking.math import (
     BrooksCoreyConductivity,
@@ -62,7 +63,7 @@ def root_zone_to_water_table_kinematic_wave(
     k_s: float,
     brooks_corey_lambda: float | None = None,
     van_genuchten_n: float | None = None,
-    van_genuchten_l: float = 0.5,
+    mualem_l: float = 0.5,
     k_scaling: npt.ArrayLike | None = None,
     max_iterations: int = 10000,
 ) -> tuple[npt.NDArray[np.floating], list[dict]]:
@@ -123,7 +124,7 @@ def root_zone_to_water_table_kinematic_wave(
         Van Genuchten shape parameter ``n_vG > 1``. Set to use the
         van Genuchten-Mualem branch (numerical inversion via brentq).
         Mutually exclusive with ``brooks_corey_lambda``.
-    van_genuchten_l : float, optional
+    mualem_l : float, optional
         Mualem pore-connectivity parameter ``L``. Default 0.5
         (standard Mualem). Honored only when ``van_genuchten_n`` is set.
     k_scaling : array-like or None, optional
@@ -143,7 +144,7 @@ def root_zone_to_water_table_kinematic_wave(
 
     Returns
     -------
-    q_water_table : numpy.ndarray
+    q_water_table : ndarray
         Bin-averaged percolation flux at the water table [same units as
         ``q_root_zone``], length ``len(q_water_table_tedges) - 1``,
         averaged across the columns in ``cumulative_pore_volumes_outlet``.
@@ -154,7 +155,9 @@ def root_zone_to_water_table_kinematic_wave(
         ``cumulative_pore_volume_outlet``):
 
         - ``waves`` — all wave objects.
-        - ``events`` — event history with ``"theta"`` keys.
+        - ``events`` — event history; each record has ``"theta"`` (cumulative
+          effective time) and ``"type"`` keys. Translate ``theta`` to wall-clock
+          time via ``tracker_state.t_at_theta(event["theta"])``.
         - ``theta_first_arrival`` — cumulative effective time at which
           the first nonzero arrival reaches the outlet.
         - ``n_events``, ``n_shocks``, ``n_rarefactions``,
@@ -175,6 +178,13 @@ def root_zone_to_water_table_kinematic_wave(
         or if ``q_water_table_tedges`` does not equal ``tedges`` while
         ``k_scaling`` is provided.
 
+    Warns
+    -----
+    UserWarning
+        If output θ-bins extend beyond the inlet θ-window (i.e. the drying tail
+        of ``q_root_zone`` reaches zero and the column has not yet equilibrated
+        by the last output bin). Bin averages in that region are clamped to zero.
+
     See Also
     --------
     gwtransport.advection.infiltration_to_extraction_nonlinear_sorption :
@@ -187,6 +197,8 @@ def root_zone_to_water_table_kinematic_wave(
         Brooks-Corey constitutive class.
     gwtransport.fronttracking.math.VanGenuchtenMualemConductivity :
         van Genuchten-Mualem constitutive class.
+    :ref:`concept-kinematic-wave` : Background on the Kinematic-Wave method for
+        unsaturated-zone percolation.
 
     Notes
     -----
@@ -225,7 +237,7 @@ def root_zone_to_water_table_kinematic_wave(
     For Brooks-Corey both ``c`` and ``C_T`` at the endpoints are closed
     form; for van Genuchten-Mualem they require a single ``brentq`` call
     per endpoint (transcendental ``K(theta)``). The Burdine variant
-    (``van_genuchten_l = 0``) admits a closed-form inverse and is fully
+    (``mualem_l = 0``) admits a closed-form inverse and is fully
     free of root-finding.
 
     References
@@ -284,7 +296,6 @@ def root_zone_to_water_table_kinematic_wave(
             k_scaling=k_scaling,
         )
     """
-    # --- Inline validation ---------------------------------------------------
     q_root_zone_arr = np.asarray(q_root_zone, dtype=float)
     cumulative_pore_volumes_outlet_arr = np.asarray(cumulative_pore_volumes_outlet, dtype=float)
     tedges = pd.DatetimeIndex(tedges)
@@ -338,17 +349,16 @@ def root_zone_to_water_table_kinematic_wave(
             raise ValueError(msg)
 
     # Saturation/ponding admissibility: K_ref(θ_m at inlet) = q_root/f must be <= k_s.
-    cin_solver_max = float(np.max(q_root_zone_arr / f))
-    if cin_solver_max > k_s:
-        bin_idx = int(np.argmax(q_root_zone_arr / f))
+    cin_solver = q_root_zone_arr / f
+    if float(cin_solver.max()) > k_s:
+        bin_idx = int(cin_solver.argmax())
         msg = (
             f"Inlet saturation/ponding limit exceeded at bin {bin_idx}: "
-            f"q_root_zone/k_scaling = {q_root_zone_arr[bin_idx] / f[bin_idx]:.6g} > k_s = {k_s:.6g}. "
+            f"q_root_zone/k_scaling = {cin_solver[bin_idx]:.6g} > k_s = {k_s:.6g}. "
             "Reduce q_root_zone or increase k_scaling (warmer water → lower viscosity → higher k_s effective)."
         )
         raise ValueError(msg)
 
-    # --- Construct sorption ---
     if brooks_corey_lambda is not None:
         sorption: BrooksCoreyConductivity | VanGenuchtenMualemConductivity = BrooksCoreyConductivity(
             theta_r=theta_r, theta_s=theta_s, k_s=k_s, brooks_corey_lambda=brooks_corey_lambda
@@ -356,19 +366,17 @@ def root_zone_to_water_table_kinematic_wave(
     else:
         assert van_genuchten_n is not None  # noqa: S101  # narrowed by validation above
         sorption = VanGenuchtenMualemConductivity(
-            theta_r=theta_r, theta_s=theta_s, k_s=k_s, van_genuchten_n=van_genuchten_n, mualem_l=van_genuchten_l
+            theta_r=theta_r, theta_s=theta_s, k_s=k_s, van_genuchten_n=van_genuchten_n, mualem_l=mualem_l
         )
 
-    # --- Solver-frame arrays. flow_solver = θ_s · f(t); cin_solver = q_root/f. ---
-    n_p = theta_s  # identify porosity with saturated moisture content
-    flow_solver = n_p * f
-    cin_solver = q_root_zone_arr / f
+    # Solver-frame arrays: flow_solver = θ_s · f(t) (porosity ≡ θ_s for unsaturated KW);
+    # cin_solver = q_root/f was already formed for the admissibility check above.
+    flow_solver = theta_s * f
 
-    flow_tedges_days = ((tedges - tedges[0]) / pd.Timedelta(days=1)).values
-    cout_tedges_days = ((q_water_table_tedges - tedges[0]) / pd.Timedelta(days=1)).values
+    flow_tedges_days = tedges_to_days(tedges)
+    cout_tedges_days = tedges_to_days(q_water_table_tedges, ref=tedges[0])
     n_out = len(q_water_table_tedges) - 1
 
-    # --- Loop over columns ---
     q_wt_all = np.zeros((len(cumulative_pore_volumes_outlet_arr), n_out))
     structures: list[dict] = []
 
