@@ -57,6 +57,22 @@ def constant_flow_short(short_dates):
     return np.full(len(short_dates), 100.0)
 
 
+@pytest.fixture
+def sample_flow_data():
+    """Variable daily flow over 2023-01-01..2023-01-10 with its date range."""
+    dates = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
+    flow_values = np.array([100.0, 110.0, 105.0, 95.0, 98.0, 102.0, 107.0, 103.0, 96.0])
+    return flow_values, dates
+
+
+@pytest.fixture
+def constant_flow_data():
+    """Constant 100 m³/day flow over 2023-01-01..2023-01-10 with its date range."""
+    dates = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
+    flow_values = np.full(len(dates) - 1, 100.0)
+    return flow_values, dates
+
+
 # ============================================================================
 # Concentration Input Fixtures
 # ============================================================================

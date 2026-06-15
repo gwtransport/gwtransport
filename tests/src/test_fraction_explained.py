@@ -155,10 +155,13 @@ def test_retardation_factor_effect(constant_flow_setup):
 
 def test_direction_consistency(constant_flow_setup, multiple_pore_volumes):
     """
-    Test that both directions give reasonable results.
+    Test that the two directions produce mirror-image exact staircases.
 
-    The fraction calculation logic is the same regardless of direction,
-    but residence time patterns will be different.
+    With constant flow=100 m³/d and pore volumes [100..500] m³, residence times are
+    [1, 2, 3, 4, 5] days. ``extraction_to_infiltration`` looks back, so its spin-up sits at
+    the start of the record and the fraction climbs 0 → 1 in 0.2 steps; ``infiltration_to_
+    extraction`` looks forward, so its spin-up sits at the end and the staircase is the exact
+    time-reversal. Both are analytic, so assert them to machine precision.
     """
     flow_values, tedges = constant_flow_setup
 
@@ -176,13 +179,9 @@ def test_direction_consistency(constant_flow_setup, multiple_pore_volumes):
         direction="infiltration_to_extraction",
     )
 
-    # Both should be valid fractions
-    assert np.all((result_extraction >= 0.0) & (result_extraction <= 1.0))
-    assert np.all((result_infiltration >= 0.0) & (result_infiltration <= 1.0))
-
-    # Both should have some variation (not all zeros or all ones)
-    assert len(np.unique(result_extraction)) > 1
-    assert len(np.unique(result_infiltration)) > 1
+    expected_extraction = np.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0])
+    np.testing.assert_allclose(result_extraction, expected_extraction, rtol=0, atol=1e-15)
+    np.testing.assert_allclose(result_infiltration, expected_extraction[::-1], rtol=0, atol=1e-15)
 
 
 def test_precomputed_residence_time():
@@ -212,7 +211,12 @@ def test_precomputed_residence_time():
 
 
 def test_edge_case_single_time_point():
-    """Test fraction_explained with minimal data (single time point)."""
+    """Test fraction_explained with minimal data (two bins, single pore volume).
+
+    With flow=100 m³/d and pore volume 50 m³ the residence time is 0.5 days, well within
+    both daily bins, so the single pore volume is informed at every output instant and the
+    fraction is exactly 1.0 everywhere (a single valid pore volume gives 1/1).
+    """
     tedges = pd.date_range(start="2023-01-01", end="2023-01-03", freq="D")
     flow_values = np.array([100.0, 100.0])
     pore_volume = 50.0  # Small enough to give valid residence time
@@ -225,7 +229,7 @@ def test_edge_case_single_time_point():
     )
 
     assert result.shape == (2,)
-    assert np.all((result >= 0.0) & (result <= 1.0))
+    np.testing.assert_array_equal(result, np.ones(2))
 
 
 def test_mixed_valid_invalid_residence_times():

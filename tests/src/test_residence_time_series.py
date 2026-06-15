@@ -6,22 +6,6 @@ from gwtransport.residence_time import freundlich_retardation, residence_time_se
 from gwtransport.utils import compute_time_edges
 
 
-@pytest.fixture
-def sample_flow_data():
-    """Create sample flow data for testing."""
-    dates = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
-    flow_values = np.array([100.0, 110.0, 105.0, 95.0, 98.0, 102.0, 107.0, 103.0, 96.0])
-    return flow_values, dates
-
-
-@pytest.fixture
-def constant_flow_data():
-    """Create constant flow data for testing."""
-    dates = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
-    flow_values = np.full(len(dates) - 1, 100.0)
-    return flow_values, dates
-
-
 @pytest.mark.parametrize("direction", ["extraction_to_infiltration", "infiltration_to_extraction"])
 def test_basic_constant_flow_residence_time(direction):
     """Constant flow Q with pore volume V_p gives tau = V_p / Q exactly in both directions.

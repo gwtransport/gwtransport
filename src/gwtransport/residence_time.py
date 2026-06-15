@@ -157,8 +157,12 @@ def residence_time_series(
         are used. Default is None.
     direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
         Direction of the flow calculation:
-        * 'extraction_to_infiltration': Extraction to infiltration modeling - how many days ago was the extracted water infiltrated
-        * 'infiltration_to_extraction': Infiltration to extraction modeling - how many days until the infiltrated water is extracted
+
+        * 'extraction_to_infiltration':
+          Extraction to infiltration modeling - how many days ago was the extracted water infiltrated.
+        * 'infiltration_to_extraction':
+          Infiltration to extraction modeling - how many days until the infiltrated water is extracted.
+
         Default is 'extraction_to_infiltration'.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
@@ -200,15 +204,15 @@ def residence_time_series(
         msg = "tedges must have one more element than flow"
         raise ValueError(msg)
 
+    if direction not in {"extraction_to_infiltration", "infiltration_to_extraction"}:
+        msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
+        raise ValueError(msg)
+
     # Negative or non-finite flow makes V(t) non-monotone or undefined; refuse to answer
     # rather than fail noisily downstream where the cumulative volume must be strictly ascending.
     if np.any(flow < 0) or np.any(np.isnan(flow)):
         n_output = len(tedges) - 1 if index is None else len(index)
         return np.full((len(aquifer_pore_volumes), n_output), np.nan)
-
-    if direction not in {"extraction_to_infiltration", "infiltration_to_extraction"}:
-        msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
-        raise ValueError(msg)
 
     tedges_days = tedges_to_days(tedges)
     # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
@@ -266,8 +270,12 @@ def residence_time_full(
         representing different flow paths.
     direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
         Direction of the flow calculation:
-        * 'extraction_to_infiltration': Extraction to infiltration modeling - how many days ago was the extracted water infiltrated
-        * 'infiltration_to_extraction': Infiltration to extraction modeling - how many days until the infiltrated water is extracted
+
+        * 'extraction_to_infiltration':
+          Extraction to infiltration modeling - how many days ago was the extracted water infiltrated.
+        * 'infiltration_to_extraction':
+          Infiltration to extraction modeling - how many days until the infiltrated water is extracted.
+
         Default is 'extraction_to_infiltration'.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless]. A value greater
@@ -927,8 +935,12 @@ def fraction_explained(
         Default is None.
     direction : {'extraction_to_infiltration', 'infiltration_to_extraction'}, optional
         Direction of the flow calculation:
-        * 'extraction_to_infiltration': Extraction to infiltration modeling - how many days ago was the extracted water infiltrated
-        * 'infiltration_to_extraction': Infiltration to extraction modeling - how many days until the infiltrated water is extracted
+
+        * 'extraction_to_infiltration':
+          Extraction to infiltration modeling - how many days ago was the extracted water infiltrated.
+        * 'infiltration_to_extraction':
+          Infiltration to extraction modeling - how many days until the infiltrated water is extracted.
+
         Default is 'extraction_to_infiltration'.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
@@ -991,8 +1003,7 @@ def fraction_explained(
             retardation_factor=retardation_factor,
         )
 
-    expected_ndim = 2
-    if rt.ndim != expected_ndim:
+    if rt.ndim != 2:  # noqa: PLR2004
         msg = f"rt must be 2D with shape (n_pore_volumes, n_times), got {rt.ndim}D"
         raise ValueError(msg)
 
