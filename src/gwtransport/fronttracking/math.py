@@ -49,17 +49,14 @@ class NonlinearSorption(ABC):
     @abstractmethod
     def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """Compute retardation factor R(C)."""
-        raise NotImplementedError
 
     @abstractmethod
     def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """Compute total concentration (dissolved + sorbed per unit pore volume)."""
-        raise NotImplementedError
 
     @abstractmethod
     def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """Invert retardation factor to obtain concentration."""
-        raise NotImplementedError
 
     def shock_speed(self, c_left: float, c_right: float) -> float:
         """Compute shock speed dV/dθ via Rankine-Hugoniot in (V, θ) coordinates.
@@ -181,8 +178,8 @@ class FreundlichSorption(NonlinearSorption):
     porosity : float
         Porosity [-]. Must be in (0, 1).
     c_min : float, optional
-        Minimum concentration threshold. For n>1, prevents infinite retardation
-        as C→0. Default: 0.1 for n>1, 0.0 for n<1 (set automatically if not provided).
+        Minimum concentration threshold (the dry-soil singularity floor). For
+        n>1, prevents infinite retardation as C→0. Default ``1e-12`` for all n.
 
     Notes
     -----
@@ -1223,7 +1220,7 @@ def compute_first_front_arrival_theta(
     Examples
     --------
     >>> cin = np.array([0.0, 10.0] + [10.0] * 10)
-    >>> theta_edges = np.linspace(0.0, 1300.0, 13)  # constant flow=100, dt=1
+    >>> theta_edges = np.arange(0.0, 1300.0, 100.0)  # constant flow=100, dt=1
     >>> sorption = ConstantRetardation(retardation_factor=2.0)
     >>> theta_first = compute_first_front_arrival_theta(
     ...     cin, theta_edges, 500.0, sorption

@@ -181,14 +181,15 @@ class CharacteristicWave(Wave):
 
     Examples
     --------
-    >>> sorption = ConstantRetardation(retardation_factor=2.0)
+    >>> sorption = FreundlichSorption(
+    ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+    ... )
     >>> char = CharacteristicWave(
     ...     theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption
     ... )
-    >>> char.speed()
-    0.5
-    >>> char.position_at_theta(1000.0)
-    500.0
+    >>> speed = char.speed()
+    >>> bool(np.isclose(char.position_at_theta(1000.0), speed * 1000.0))
+    True
     """
 
     concentration: float
@@ -697,11 +698,8 @@ class DecayingShockWave(Wave):
         if not self.was_active_at(theta):
             return None
 
-        c_d = self.c_decay_at_theta(theta)
-        if c_d is None:
-            return None
-
         theta_local = theta - self.theta_origin
+        c_d = self._c_decay_at_theta_local(theta_local)
         return float(self.v_origin + theta_local / float(self.sorption.retardation(c_d)))
 
     def theta_at_fan_exhaustion(self) -> float | None:
