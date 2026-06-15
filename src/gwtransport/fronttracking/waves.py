@@ -30,6 +30,7 @@ from gwtransport.fronttracking.math import (
     LangmuirSorption,
     NonlinearSorption,
     SorptionModel,
+    characteristic_speed,
 )
 
 # Numerical tolerance constants
@@ -198,8 +199,8 @@ class CharacteristicWave(Wave):
     """Sorption model determining the speed."""
 
     def speed(self) -> float:
-        """Characteristic speed dV/dθ = 1/R(C)."""
-        return float(1.0 / self.sorption.retardation(self.concentration))
+        """Characteristic speed dV/dθ = 1/R(C) (``+∞`` at a saturated state, R = 0)."""
+        return characteristic_speed(self.concentration, self.sorption)
 
     def position_at_theta(self, theta: float) -> float | None:
         """Position at cumulative flow θ.
@@ -396,12 +397,12 @@ class RarefactionWave(Wave):
             raise ValueError(msg)
 
     def head_speed(self) -> float:
-        """Speed of rarefaction head dV/dθ = 1/R(C_head)."""
-        return float(1.0 / self.sorption.retardation(self.c_head))
+        """Speed of rarefaction head dV/dθ = 1/R(C_head) (``+∞`` at a saturated state, R = 0)."""
+        return characteristic_speed(self.c_head, self.sorption)
 
     def tail_speed(self) -> float:
-        """Speed of rarefaction tail dV/dθ = 1/R(C_tail)."""
-        return float(1.0 / self.sorption.retardation(self.c_tail))
+        """Speed of rarefaction tail dV/dθ = 1/R(C_tail) (``+∞`` at a saturated state, R = 0)."""
+        return characteristic_speed(self.c_tail, self.sorption)
 
     def head_position_at_theta(self, theta: float) -> float | None:
         """Position of rarefaction head at cumulative flow θ."""

@@ -12,7 +12,12 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import pytest
 
-from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption, LangmuirSorption
+from gwtransport.fronttracking.math import (
+    ConstantRetardation,
+    FreundlichSorption,
+    LangmuirSorption,
+    VanGenuchtenMualemConductivity,
+)
 from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWave, RarefactionWave, ShockWave
 
 
@@ -787,3 +792,31 @@ class TestDecayingShockWave:
         c_fan = wave.concentration_at_point(v=v_fan, theta=theta_test)
         assert c_fan is not None
         assert pytest.approx(c_fan_expected, rel=1e-13) == c_fan
+
+
+class TestSaturatedVanGenuchtenWaveSpeeds:
+    """Wave celerities at a saturated Mualem-vG state (``R = 0``) are the removable limit ``+∞``.
+
+    At ``S_e = 1`` (``C = K_s``) the Mualem-vG retardation is exactly ``0`` (``dK/dS_e → +∞``),
+    so every ``1/R`` characteristic celerity is ``+∞`` rather than a ``ZeroDivisionError``. The
+    realised wetting front is still bounded by a finite Rankine-Hugoniot shock, so this only
+    affects the (infinitely fast) characteristic carriers, never the physical front arrival.
+    """
+
+    def _sorption(self):
+        return VanGenuchtenMualemConductivity(theta_r=0.01, theta_s=0.337, k_s=0.174, van_genuchten_n=2.28)
+
+    def test_characteristic_wave_speed_saturated_is_inf(self):
+        """``CharacteristicWave.speed()`` at ``C = K_s`` is ``+∞`` (was ``ZeroDivisionError``)."""
+        sorption = self._sorption()
+        wave = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=sorption.k_s, sorption=sorption)
+        assert wave.speed() == np.inf
+
+    def test_rarefaction_head_speed_saturated_is_inf(self):
+        """A rarefaction whose head is at saturation: head celerity ``+∞``, tail finite."""
+        sorption = self._sorption()
+        wave = RarefactionWave(
+            theta_start=0.0, v_start=0.0, c_head=sorption.k_s, c_tail=0.3 * sorption.k_s, sorption=sorption
+        )
+        assert wave.head_speed() == np.inf
+        assert np.isfinite(wave.tail_speed())
