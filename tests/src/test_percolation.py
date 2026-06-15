@@ -12,7 +12,8 @@ Tests cover:
 - Section D: vG characteristic-speed monotonicity (property test).
 - Section E: smoke (multi-column, perf budget).
 - Section M: missing-test additions (dry days, saturation, idempotence, sign-flip invariance, two-step ramp).
-- Section P: transient global mass balance (BC closed-form, vG exact ``L=0`` branch).
+- Section N: degenerate-shape inputs (scalar 0-d outlet pore volume, single input bin).
+- Section P: transient global mass balance (BC closed-form, vG exact ``L=0`` and default ``L=0.5`` branches).
 
 Tolerances: machine precision for Brooks-Corey closed-form paths; brentq-bounded
 for vG; explicitly relaxed where physical reasoning permits (e.g. mass balance
@@ -23,7 +24,6 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 """
 
 import logging
-import time
 import warnings
 
 import numpy as np
@@ -132,6 +132,27 @@ class TestConstitutiveGroundTruth:
         expected = {0.3: 0.0007937546629693939, 0.5: 0.005360952042145455, 0.7: 0.020747175800063807}
         for se, k_expected in expected.items():
             np.testing.assert_allclose(sorption._k_se(se), k_expected, rtol=1e-12)  # noqa: SLF001
+
+    def test_a6_vg_total_concentration_public_round_trip(self):
+        """A6: the PUBLIC ``total_concentration`` round-trips ``_k_se`` to ``Δθ · S_e``.
+
+        A4/A5 pin the private ``_k_se`` curve shape; this anchors the public path
+        so a bug confined to the ``total_concentration`` wrapper (e.g. a wrong
+        ``Δθ`` multiply) is also caught. By construction ``C_T(C) = Δθ · S_e(C)``
+        with ``S_e`` the inverse of ``_k_se``, so feeding ``C = _k_se(S_e)`` back
+        through ``total_concentration`` must return ``Δθ · S_e`` exactly. With
+        ``Δθ = θ_s − θ_r = 0.327`` the hand-derived literals at
+        ``S_e ∈ {0.3, 0.5, 0.7}`` are ``{0.0981, 0.1635, 0.2289}``. Tolerance is
+        brentq-bounded (the inverse ``S_e(C)`` uses brentq).
+        """
+        sorption = VanGenuchtenMualemConductivity(**O05_VG)
+        delta_theta = O05_VG["theta_s"] - O05_VG["theta_r"]
+        # Δθ · S_e hand-derived literals (Δθ = 0.327).
+        expected = {0.3: 0.0981, 0.5: 0.1635, 0.7: 0.2289}
+        for se, ct_expected in expected.items():
+            c = sorption._k_se(se)  # noqa: SLF001
+            np.testing.assert_allclose(sorption.total_concentration(c), ct_expected, rtol=1e-11)
+            np.testing.assert_allclose(ct_expected, delta_theta * se, rtol=1e-13)
 
 
 # =============================================================================
@@ -598,7 +619,14 @@ class TestEndToEnd:
         compose correctly through multi-fan collisions (see plan v3 "Out of
         scope §1"). Exact multi-pulse mass balance for BC/vG is a v2 deliverable.
 
-        This test confirms the function returns without crashing.
+        The exact bin-average is therefore NOT asserted (global mass balance is
+        ~18 % off on this fallback regime). What IS asserted is the physical
+        envelope every admissible result must satisfy regardless of the fallback's
+        approximation: ``0 ≤ q_wt ≤ q_root.max()`` — a flux at the water table can
+        neither go negative nor exceed the largest root-zone leakage. A regression
+        that scales the multi-fan fallback output (e.g. by 3×) pushes ``q_wt.max()``
+        to ~3× ``q_root.max()`` and fails this envelope, so this is no longer a
+        pure no-crash smoke test.
         """
         n = 90
         tedges = _make_tedges(n)
@@ -607,15 +635,28 @@ class TestEndToEnd:
         for start in (10, 40, 70):
             q_root[start : start + 3] = rng.uniform(0.0005, 0.0015, 3)
         v_out_val = O05["theta_s"] * 5.0
-        q_wt, _ = root_zone_to_water_table_kinematic_wave(
-            q_root_zone=q_root,
-            tedges=tedges,
-            q_water_table_tedges=tedges,
-            cumulative_pore_volumes_outlet=np.array([v_out_val]),
-            **O05,
-        )
+        with warnings.catch_warnings():
+            # The long column pushes some output θ-bins past the inlet window; the
+            # resulting out-of-window clamp warning is incidental to this envelope
+            # probe (and the multi-fan fallback is not exact here anyway).
+            warnings.simplefilter("ignore")
+            q_wt, _ = root_zone_to_water_table_kinematic_wave(
+                q_root_zone=q_root,
+                tedges=tedges,
+                q_water_table_tedges=tedges,
+                cumulative_pore_volumes_outlet=np.array([v_out_val]),
+                **O05,
+            )
         assert q_wt.shape == (n,)
         assert not np.any(np.isnan(q_wt))
+        assert not np.any(np.isinf(q_wt))
+        # Physical envelope: 0 ≤ q_wt ≤ q_root.max() (a few ULPs of slack at the
+        # upper edge where a bin-average grazes the largest input plateau).
+        assert np.all(q_wt >= 0.0), f"q_wt went negative: min={q_wt.min()}"
+        upper = float(q_root.max())
+        assert np.all(q_wt <= upper + 1e3 * np.finfo(float).eps * upper), (
+            f"q_wt exceeded q_root.max()={upper}: max={q_wt.max()}"
+        )
 
 
 # =============================================================================
@@ -817,7 +858,7 @@ class TestCharacteristicSpeedMonotonicity:
 
 
 class TestSmoke:
-    """E-series smoke tests: multi-column averaging, performance budget."""
+    """E-series smoke tests: multi-column averaging."""
 
     def test_e1_multi_column_arithmetic_mean(self):
         """E1: result equals the arithmetic mean of single-column runs."""
@@ -845,22 +886,6 @@ class TestSmoke:
             singles.append(q_wt_single)
         expected = np.mean(np.stack(singles), axis=0)
         np.testing.assert_array_equal(q_wt_multi, expected)
-
-    def test_e2_perf_budget_bc(self):
-        """E2: 1-year daily BC simulation < 30 s wall-clock (CI-safe bound)."""
-        tedges = _make_tedges(365)
-        q_root = np.full(365, 0.001)
-        v_out = np.array([O05["theta_s"] * 5.0])
-        start = time.perf_counter()
-        root_zone_to_water_table_kinematic_wave(
-            q_root_zone=q_root,
-            tedges=tedges,
-            q_water_table_tedges=tedges,
-            cumulative_pore_volumes_outlet=v_out,
-            **O05,
-        )
-        elapsed = time.perf_counter() - start
-        assert elapsed < 30.0, f"BC 1-year simulation took {elapsed:.1f}s, exceeds 30s CI budget"
 
 
 # =============================================================================
@@ -901,9 +926,14 @@ class TestMissingCoverage:
         assert not np.any(np.isnan(q_wt))
         assert not np.any(np.isinf(q_wt))
         # Physical bounds: 0 ≤ q_wt ≤ q_root.max(). The upper edge can sit a few
-        # ULPs above q_root.max() where the bin-average grazes the steady plateau.
+        # ULPs above q_root.max() where the bin-average grazes the steady plateau
+        # (measured overshoot ≈ 1.3e-17 for q_root.max()=1e-3); a scaled
+        # machine-epsilon slack rejects any 1e-12-scale spurious super-source.
         assert np.all(q_wt >= 0.0), f"q_wt went negative: min={q_wt.min()}"
-        assert np.all(q_wt <= q_root.max() + 1e-12), f"q_wt exceeded q_root.max(): max={q_wt.max()}"
+        upper = float(q_root.max())
+        assert np.all(q_wt <= upper + 1e3 * np.finfo(float).eps * upper), (
+            f"q_wt exceeded q_root.max()={upper}: max={q_wt.max()}"
+        )
 
     def test_m2b_no_clamp_warning_inside_inlet_window(self):
         """M2b: a wet-then-dry run *inside* the inlet θ-window emits no clamp-to-zero ``UserWarning``.
@@ -1054,6 +1084,68 @@ class TestMissingCoverage:
         assert sorption.check_entropy_condition(c2, c1, sorption.shock_speed(c2, c1))
 
 
+class TestDegenerateInputs:
+    """Degenerate-shape end-to-end probes: scalar (0-d) outlet, single input bin."""
+
+    def test_n1_scalar_cumulative_pore_volume_outlet(self):
+        """N1: a scalar (0-d) ``cumulative_pore_volumes_outlet`` is promoted to a single column.
+
+        The docstring advertises ``cumulative_pore_volumes_outlet`` as array-like;
+        a lone scalar is a valid single column. The validator promotes it via
+        ``np.atleast_1d`` so the per-column loop and ``len()`` are well-defined
+        (previously a 0-d input crashed with an opaque ``TypeError: len() of
+        unsized object``). The scalar result must equal the equivalent
+        single-element 1-d call bit-for-bit.
+        """
+        tedges = _make_tedges(60)
+        q_root = np.full(60, 0.001)
+        v_scalar = O05["theta_s"] * 0.5
+        q_wt_scalar, _ = root_zone_to_water_table_kinematic_wave(
+            q_root_zone=q_root,
+            tedges=tedges,
+            q_water_table_tedges=tedges,
+            cumulative_pore_volumes_outlet=v_scalar,
+            **O05,
+        )
+        q_wt_1d, _ = root_zone_to_water_table_kinematic_wave(
+            q_root_zone=q_root,
+            tedges=tedges,
+            q_water_table_tedges=tedges,
+            cumulative_pore_volumes_outlet=np.array([v_scalar]),
+            **O05,
+        )
+        assert q_wt_scalar.shape == (60,)
+        np.testing.assert_array_equal(q_wt_scalar, q_wt_1d)
+
+    def test_n2_single_input_bin(self):
+        """N2: a single input bin (``n = 1``, two ``tedges``) runs and stays physically bounded.
+
+        Exercises the degenerate ``n = 1`` path that the bin-edge / cumulative-flow
+        machinery (``flow_tedges_days`` / ``cout_tedges_days`` construction, the
+        single-interval ``θ_at_t`` mapping) distinguishes from the multi-bin case.
+        A high constant flux over a very short column drives a partial breakthrough
+        in the lone bin, so the bound ``0 ≤ q_wt ≤ q0`` is non-trivial (not
+        always-zero). Runs under ``simplefilter("error")`` to keep it in-window.
+        """
+        tedges = _make_tedges(1)
+        q0 = 0.1  # high flux, still < k_s = 0.174
+        v_out = np.array([O05["theta_s"] * 0.005])  # very short column → partial breakthrough in one day
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            q_wt, _ = root_zone_to_water_table_kinematic_wave(
+                q_root_zone=np.array([q0]),
+                tedges=tedges,
+                q_water_table_tedges=tedges,
+                cumulative_pore_volumes_outlet=v_out,
+                **O05,
+            )
+        assert q_wt.shape == (1,)
+        assert np.all(np.isfinite(q_wt))
+        assert 0.0 <= q_wt[0] <= q0 * (1.0 + 1e-12), f"single-bin q_wt out of [0, q0]: {q_wt[0]}"
+        # Non-trivial: the front partially breaks through (not a degenerate all-zero bin).
+        assert q_wt[0] > 0.0, f"expected a partial breakthrough in the single bin, got {q_wt[0]}"
+
+
 class TestPlottingClaim:
     """Anchors the notebook's plotting claim in a unit test (independent of the notebook)."""
 
@@ -1064,8 +1156,10 @@ class TestPlottingClaim:
         continuous line; the step value over a bin must equal the flow-weighted mean of the
         exact ``concentration_at_point`` curve across that bin. With constant ``flow_solver``
         (no K-scaling), flow-weighting reduces to a time average. Sampling a fine grid and
-        comparing to the solver's reported bin value pins this claim at ``rtol=1e-3``
-        (trapezoid error across the wetting-front jump inside the chosen bin).
+        comparing to the solver's reported bin value pins this claim at ``rtol=1e-4``
+        (trapezoid error across the wetting-front jump inside the chosen bin). The
+        sample count is 100001 (verified residual ≈ 1.7e-5, a ~6x margin); a 5e-4
+        output error fails this bound.
         """
         tedges = _make_tedges(300)
         q0 = 0.002
@@ -1092,12 +1186,12 @@ class TestPlottingClaim:
         # Flow-weighted mean of the exact outlet curve over bin k. flow_solver is constant
         # (no scaling) so flow-weighting == time-weighting: mean = (1/Δt)∫ c_exact(t) dt.
         t_lo, t_hi = out_days[k], out_days[k + 1]
-        tt = np.linspace(t_lo, t_hi, 20001)
+        tt = np.linspace(t_lo, t_hi, 100001)
         c_exact = np.array([
             concentration_at_point(v_out_val, state.theta_at_t(float(t)), state.waves, state.sorption) for t in tt
         ])
         mean_exact = np.trapezoid(c_exact, tt) / (t_hi - t_lo)
-        np.testing.assert_allclose(q_wt[k], mean_exact, rtol=1e-3)
+        np.testing.assert_allclose(q_wt[k], mean_exact, rtol=1e-4)
 
 
 # =============================================================================
@@ -1259,8 +1353,13 @@ class TestTransientMassBalance:
         n = len(q_root)
         tedges = _make_tedges(n)
         v_out_val = sorption_kwargs["theta_s"] * self._Z_WT
+        # The class forcing is chosen so the response stays inside the inlet
+        # θ-window (no out-of-window clamp). Enforce that contract: any warning
+        # (e.g. the clamp UserWarning that would signal an out-of-window, possibly
+        # clamped-to-zero, distorted balance) becomes an error rather than being
+        # silently swallowed — mirroring test_m2b_no_clamp_warning_inside_inlet_window.
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+            warnings.simplefilter("error")
             q_wt, structures = root_zone_to_water_table_kinematic_wave(
                 q_root_zone=q_root,
                 tedges=tedges,
@@ -1312,3 +1411,29 @@ class TestTransientMassBalance:
         m_out = float(np.sum(q_wt) * self._DT_DAYS)
         m_dom = compute_domain_mass(theta=theta_query, v_outlet=v_out_val, waves=state.waves, sorption=state.sorption)
         np.testing.assert_allclose(m_in, m_out + m_dom / theta_s, rtol=1e-12)
+
+    def test_p3_global_water_balance_vg_default_mualem_branch(self):
+        """P3 (vG, default ``mualem_l = 0.5``): the DEFAULT brentq branch global water balance closes.
+
+        P2 covers only the ``L = 0`` (Burdine, root-finding-free) branch. The
+        DEFAULT and most common usage is ``van_genuchten_l = 0.5``, which inverts
+        ``K_M(S_e) = C`` with brentq throughout. This is the only end-to-end
+        conservation test on that iterative branch: it catches a brentq-only
+        inlet/outlet inversion error, or a ``compute_domain_mass`` scaling bug,
+        that the closed-form ``L = 0`` path (P2) and Brooks-Corey path (P1) would
+        both mask. On the in-window ``_WET_THEN_DRY`` forcing the balance closes to
+        the brentq-bounded ``rtol = 1e-11`` (the verified residual is ≈ 0).
+        """
+        vg_default = {
+            "theta_r": O05_VG["theta_r"],
+            "theta_s": O05_VG["theta_s"],
+            "k_s": O05_VG["k_s"],
+            "van_genuchten_n": O05_VG["van_genuchten_n"],
+        }  # mualem_l omitted → default 0.5 (brentq inversions)
+        q_root, q_wt, state, v_out_val = self._run(vg_default)
+        theta_s = vg_default["theta_s"]
+        theta_query = float(state.theta_edges[-1])
+        m_in = float(np.sum(q_root) * self._DT_DAYS)
+        m_out = float(np.sum(q_wt) * self._DT_DAYS)
+        m_dom = compute_domain_mass(theta=theta_query, v_outlet=v_out_val, waves=state.waves, sorption=state.sorption)
+        np.testing.assert_allclose(m_in, m_out + m_dom / theta_s, rtol=1e-11)

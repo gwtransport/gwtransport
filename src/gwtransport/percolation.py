@@ -297,7 +297,10 @@ def root_zone_to_water_table_kinematic_wave(
         )
     """
     q_root_zone_arr = np.asarray(q_root_zone, dtype=float)
-    cumulative_pore_volumes_outlet_arr = np.asarray(cumulative_pore_volumes_outlet, dtype=float)
+    # Promote a scalar / 0-d outlet pore volume to a single-column 1-d array so the
+    # downstream per-column iteration and len() are well-defined (a lone scalar is a
+    # valid single column, consistent with the "array-like" contract in the docstring).
+    cumulative_pore_volumes_outlet_arr = np.atleast_1d(np.asarray(cumulative_pore_volumes_outlet, dtype=float))
     tedges = pd.DatetimeIndex(tedges)
     q_water_table_tedges = pd.DatetimeIndex(q_water_table_tedges)
 
