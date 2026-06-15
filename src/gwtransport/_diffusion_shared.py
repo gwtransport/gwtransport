@@ -97,7 +97,8 @@ def _cout_cumulative_volume(
         return np.interp(cout_tedges_days, tedges_days, cumulative_volume_at_cin)
     cumsum_out = np.concatenate(([0.0], np.cumsum(flow_out * dt_to_days(cout_tedges))))
     in_range = (cout_tedges_days >= tedges_days[0]) & (cout_tedges_days <= tedges_days[-1])
-    i0 = int(np.argmax(in_range)) if np.any(in_range) else 0
+    # np.argmax returns 0 for an all-False mask, the same fallback the guard provided.
+    i0 = int(np.argmax(in_range))
     v_at_i0 = float(np.interp(cout_tedges_days[i0], tedges_days, cumulative_volume_at_cin))
     return v_at_i0 + (cumsum_out - cumsum_out[i0])
 
