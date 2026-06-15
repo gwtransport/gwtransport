@@ -246,19 +246,6 @@ class TestShockRarefactionCollisionHandler:
         assert not shock.is_active
         assert not raref.is_active
 
-    def test_head_catches_shock(self, freundlich_sorption):
-        """Test rarefaction head catching shock."""
-        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=8.0, c_right=4.0, sorption=freundlich_sorption)
-
-        raref = RarefactionWave(theta_start=5.0, v_start=0.0, c_head=10.0, c_tail=5.0, sorption=freundlich_sorption)
-
-        new_waves = handle_shock_rarefaction_collision(
-            shock, raref, theta_event=20.0, v_event=150.0, boundary_type="head"
-        )
-
-        # May create new waves or return empty
-        assert isinstance(new_waves, list)
-
 
 class TestOutletCrossingHandler:
     """Test handle_outlet_crossing function."""
@@ -860,12 +847,18 @@ class TestShockRarefactionHeadCollisionPhysics:
         return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
     def test_physics_rarefaction_head_creates_compression(self, freundlich_n_gt_1):
-        """Test rarefaction head catching shock creates compression.
+        """Rarefaction head faster than the leading shock compresses into one DSW.
 
-        Physics: If rarefaction head is faster than the shock it catches,
-        the head compresses against the shock, potentially forming a new shock.
+        Physics: when the rarefaction head outruns the leading shock, the head
+        compresses against it. The exact handler subsumes the fan + shock into a
+        single left-decaying DecayingShockWave: the decaying (left) side starts
+        at the head concentration, the shock's downstream state is held fixed,
+        and the fan is bounded by the rarefaction tail. The compression is
+        encoded in the merged wave starting exactly at the collision point and
+        decaying from the (faster) head concentration. Asserts unconditionally
+        on a genuinely-taken path (head speed > shock speed is verified in setup).
         """
-        # Slow shock that rarefaction head can catch
+        # Slow shock that rarefaction head can catch.
         shock = ShockWave(
             theta_start=0.0,
             v_start=50.0,  # Started ahead
@@ -874,30 +867,42 @@ class TestShockRarefactionHeadCollisionPhysics:
             sorption=freundlich_n_gt_1,
         )
 
-        # Fast rarefaction with high-C head (fast for n>1)
+        # Fast rarefaction with high-C head (fast for n>1).
         raref = RarefactionWave(
             theta_start=5.0,
             v_start=0.0,  # Started behind
-            c_head=12.0,  # Higher C = slower velocity for n>1
-            c_tail=6.0,  # Lower C = faster velocity
+            c_head=12.0,  # Higher C = faster velocity for n>1
+            c_tail=6.0,  # Lower C = slower velocity
             sorption=freundlich_n_gt_1,
         )
 
-        # Check velocities
         shock_vel = shock.speed
         head_vel = raref.head_speed()
         assert shock_vel is not None
+        # Guard the setup, not the assertions: the head MUST outrun the shock so
+        # the compression (non-degenerate) branch is the one exercised.
+        assert head_vel > shock_vel, "Setup requires the rarefaction head to be faster than the shock"
 
+        theta_event, v_event = 25.0, 180.0
         new_waves = handle_shock_rarefaction_collision(
-            shock, raref, theta_event=25.0, v_event=180.0, boundary_type="head"
+            shock, raref, theta_event=theta_event, v_event=v_event, boundary_type="head"
         )
 
-        # If head is faster than shock, may create new shock
-        if head_vel > shock_vel:
-            # Check for shock in result
-            shocks = [w for w in new_waves if isinstance(w, ShockWave)]
-            for s in shocks:
-                assert s.satisfies_entropy(), "Compression shock must satisfy entropy"
+        # Compression is resolved by exactly one left-decaying DecayingShockWave.
+        assert len(new_waves) == 1
+        dsw = new_waves[0]
+        assert isinstance(dsw, DecayingShockWave)
+        assert dsw.decay_side == "left"
+        assert dsw.c_decay_initial == raref.c_head
+        assert dsw.c_fixed == shock.c_right
+        assert dsw.c_fan_tail == raref.c_tail
+        # The merged wave starts at the collision point and decays from the head.
+        assert dsw.theta_start == theta_event
+        assert dsw.v_start == v_event
+        assert dsw.c_decay_at_theta(dsw.theta_start) == pytest.approx(dsw.c_decay_initial)
+        # Both parents deactivated at the collision.
+        assert not shock.is_active
+        assert not raref.is_active
 
     def test_physics_shock_deactivated_on_head_collision(self, freundlich_n_gt_1):
         """Test that original shock is deactivated when caught by rarefaction head."""
@@ -1051,13 +1056,17 @@ class TestEntropyViolationRarefactionCreation:
         """Freundlich sorption with n>1."""
         return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-    def test_physics_expansion_creates_rarefaction_not_shock(self, freundlich_n_gt_1):
-        """Test: Expansion scenario creates rarefaction instead of non-entropic shock.
+    def test_physics_faster_characteristic_catches_shock_creates_entropy_shock(self, freundlich_n_gt_1):
+        """A genuinely faster characteristic catching a shock yields one entropy shock.
 
-        Physics: When fast water catches slow water, it's expansion (not compression).
-        Attempting to form a shock would violate entropy. Create rarefaction instead.
+        Physics: for n>1 higher C travels faster, so a high-C characteristic
+        catching a slower leading shock from behind is a compression. The
+        characteristic concentration replaces the upstream (left) state, and the
+        result is a single entropy-admissible ShockWave connecting
+        ``c_left = char.concentration`` to the original ``c_right``. This asserts
+        unconditionally on a path that is genuinely taken (the speed ordering is
+        verified, not merely hoped for).
         """
-        # Create shock with moderate jump
         shock = ShockWave(
             theta_start=0.0,
             v_start=0.0,
@@ -1066,33 +1075,30 @@ class TestEntropyViolationRarefactionCreation:
             sorption=freundlich_n_gt_1,
         )
 
-        # Create fast characteristic that catches shock
-        # For n>1, lower C = faster
-        char = CharacteristicWave(
-            theta_start=5.0,
-            v_start=0.0,
-            concentration=2.0,  # Very fast (low C for n>1)
-            sorption=freundlich_n_gt_1,
-        )
+        # n>1: higher C is faster. C=8 characteristic outruns the shock.
+        c_char = 8.0
+        char = CharacteristicWave(theta_start=5.0, v_start=0.0, concentration=c_char, sorption=freundlich_n_gt_1)
 
-        # Fast characteristic catches slower shock
-        char_vel = characteristic_speed(2.0, freundlich_n_gt_1)
+        char_vel = characteristic_speed(c_char, freundlich_n_gt_1)
         shock_vel = shock.speed
         assert shock_vel is not None
+        # Guard the setup, not the assertions: the characteristic MUST be faster
+        # so the char-catches-shock branch is the one exercised.
+        assert char_vel > shock_vel, "Setup requires the characteristic to be faster than the shock"
 
-        if char_vel > shock_vel:
-            # Characteristic is faster - catches shock from behind
-            new_waves = handle_shock_characteristic_collision(shock, char, theta_event=20.0, v_event=150.0)
+        new_waves = handle_shock_characteristic_collision(shock, char, theta_event=20.0, v_event=150.0)
 
-            # Check what was created
-            rarefactions = [w for w in new_waves if isinstance(w, RarefactionWave)]
-            shocks = [w for w in new_waves if isinstance(w, ShockWave)]
-
-            # Either rarefaction or valid shock
-            for r in rarefactions:
-                assert r.head_speed() > r.tail_speed(), "Rarefaction structure must be valid"
-            for s in shocks:
-                assert s.satisfies_entropy(), "Any shock must satisfy entropy"
+        # Exactly one entropy-admissible shock; no rarefaction in this compression.
+        assert len(new_waves) == 1
+        new_shock = new_waves[0]
+        assert isinstance(new_shock, ShockWave)
+        assert not isinstance(new_shock, DecayingShockWave)
+        assert new_shock.satisfies_entropy(), "Compression shock must satisfy entropy"
+        assert new_shock.c_left == c_char, "Faster characteristic replaces the upstream (left) state"
+        assert new_shock.c_right == shock.c_right, "Downstream (right) state is unchanged"
+        # Both parents are always deactivated by the collision.
+        assert not shock.is_active
+        assert not char.is_active
 
     def test_physics_rarefaction_head_faster_than_tail(self, freundlich_n_gt_1):
         """Test: Created rarefactions always have head faster than tail.

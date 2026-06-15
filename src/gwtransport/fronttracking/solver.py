@@ -37,6 +37,7 @@ from gwtransport.fronttracking.events import (
     find_shock_shock_intersection,
 )
 from gwtransport.fronttracking.handlers import (
+    EPSILON_CONCENTRATION,
     create_inlet_waves_at_theta,
     handle_characteristic_collision,
     handle_outlet_crossing,
@@ -63,9 +64,6 @@ from gwtransport.fronttracking.waves import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Numerical tolerance constants
-EPSILON_CONCENTRATION = 1e-15  # Tolerance for concentration changes
 
 
 @dataclass
@@ -244,13 +242,12 @@ class FrontTracker:
 
         for i in range(len(self.state.cin)):
             c_new = float(self.state.cin[i])
-            theta_change = float(theta_edges[i])
 
             if abs(c_new - c_prev) > EPSILON_CONCENTRATION:
                 new_waves = create_inlet_waves_at_theta(
                     c_prev=c_prev,
                     c_new=c_new,
-                    theta=theta_change,
+                    theta=float(theta_edges[i]),
                     sorption=self.state.sorption,
                     v_inlet=0.0,
                 )
