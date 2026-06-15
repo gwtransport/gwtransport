@@ -256,16 +256,16 @@ def _resolve_spinup_mask(
         return np.zeros_like(band_vals), col_start, np.ones(band_vals.shape[0], dtype=bool)
 
     if spinup is None:
+        # Strict validity: every streamtube must have contributed, so
+        # contributing_bins == n_pv on valid rows and the shared divisor below
+        # (contributing_bins) coincides with n_pv there.
         valid = (contributing_bins == n_pv) & ~zero_flow_cout
-        weights = np.zeros_like(band_vals)
-        weights[valid, :] = band_vals[valid, :] / n_pv
-        return weights, col_start, ~valid
-
-    if not (isinstance(spinup, (int, float)) and not isinstance(spinup, bool) and 0.0 <= spinup <= 1.0):
+    elif isinstance(spinup, (int, float)) and not isinstance(spinup, bool) and 0.0 <= spinup <= 1.0:
+        valid = (contributing_bins >= spinup * n_pv) & ~zero_flow_cout & (contributing_bins > 0)
+    else:
         msg = f"spinup must be None, 'constant', or float in [0, 1]; got {spinup!r}"
         raise ValueError(msg)
 
-    valid = (contributing_bins >= spinup * n_pv) & ~zero_flow_cout & (contributing_bins > 0)
     weights = np.zeros_like(band_vals)
     safe_div = np.where(valid, contributing_bins, 1)
     weights[valid, :] = band_vals[valid, :] / safe_div[valid, None]
