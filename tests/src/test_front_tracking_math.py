@@ -854,6 +854,8 @@ class TestVanGenuchtenMualemConductivity:
         sorption = VanGenuchtenMualemConductivity(theta_r=theta_r, theta_s=theta_s, k_s=k_s, van_genuchten_n=n_vg)
         assert sorption.retardation(k_s) == 0.0
         assert characteristic_speed(k_s, sorption) == np.inf
+        # Degenerate zero-strength shock between two saturated states (avg R = 0) -> +inf.
+        assert sorption.shock_speed(k_s, k_s) == np.inf
         c = 0.3 * k_s
         assert characteristic_speed(c, sorption) == 1.0 / float(sorption.retardation(c))
 
