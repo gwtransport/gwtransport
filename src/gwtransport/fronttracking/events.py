@@ -50,6 +50,9 @@ class EventType(Enum):
 class Event:
     """A single event in the simulation, ordered by cumulative flow θ.
 
+    The solver's priority queue orders ``(theta, counter, ...)`` tuples, not
+    ``Event`` objects, so this dataclass intentionally defines no ordering.
+
     Parameters
     ----------
     theta : float
@@ -70,9 +73,6 @@ class Event:
     waves_involved: list  # List[Wave] - can't type hint due to circular import
     location: float
     boundary_type: str | None = None
-
-    def __lt__(self, other):  # noqa: D105
-        return self.theta < other.theta
 
     def __repr__(self):  # noqa: D105
         return (
@@ -262,8 +262,12 @@ def find_rarefaction_boundary_intersections(raref, other_wave, theta_current: fl
 def find_outlet_crossing(wave, v_outlet: float, theta_current: float) -> float | None:
     """Find the cumulative flow θ at which the wave crosses ``v_outlet``.
 
-    Assumes positive flow (waves always move toward larger V). For rarefactions,
-    returns the θ at which the head (leading edge) crosses. Returns None if
+    Handles ``CharacteristicWave``, ``ShockWave``, and ``DecayingShockWave``.
+    Rarefaction outlet crossings are handled by the callers directly (the
+    solver and ``output.py`` split them into head/tail boundary crossings), so
+    a ``RarefactionWave`` never reaches this function and returns ``None``.
+
+    Assumes positive flow (waves always move toward larger V). Returns None if
     the wave has already passed the outlet, is not active, or moves backward.
     The "already past" check uses a relative tolerance so that a wave whose
     crossing event has just been processed (and is at v_outlet ± a few ULPs)
@@ -304,20 +308,6 @@ def find_outlet_crossing(wave, v_outlet: float, theta_current: float) -> float |
             return None
 
         dtheta = (v_outlet - v_current) / wave.speed
-        return theta_eval + dtheta
-
-    if isinstance(wave, RarefactionWave):
-        theta_eval = max(theta_current, wave.theta_start)
-        s_head = characteristic_speed(wave.c_head, wave.sorption)
-        v_head = characteristic_position(wave.c_head, wave.sorption, wave.theta_start, wave.v_start, theta_eval)
-
-        if v_head is None or v_head >= v_outlet - tol:
-            return None
-
-        if s_head <= 0:
-            return None
-
-        dtheta = (v_outlet - v_head) / s_head
         return theta_eval + dtheta
 
     if isinstance(wave, DecayingShockWave):
