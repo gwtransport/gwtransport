@@ -251,6 +251,11 @@ def generate_example_data(
     if 0 < n_diffusion < len(diffusion_provided):
         msg = "molecular_diffusivity, longitudinal_dispersivity, and streamline_length must all be provided together."
         raise ValueError(msg)
+    # Validation above forbids partial-set states, so this conjunction is equivalent to any single check;
+    # writing it in full lets the type checker narrow all three params to non-None inside the branches below.
+    use_diffusion = (
+        molecular_diffusivity is not None and longitudinal_dispersivity is not None and streamline_length is not None
+    )
 
     # Fill in gamma defaults so downstream callers see concrete values (not used when
     # aquifer_pore_volumes is supplied, but kept in scope for the attrs block below).
@@ -264,11 +269,7 @@ def generate_example_data(
     # Compute cout. Branch on pore volume parameterization, then on diffusion.
     if aquifer_pore_volumes is not None:
         aquifer_pore_volumes_array = np.asarray(aquifer_pore_volumes, dtype=float)
-        if (
-            molecular_diffusivity is not None
-            and longitudinal_dispersivity is not None
-            and streamline_length is not None
-        ):
+        if use_diffusion:
             cout_values = diffusion_infiltration_to_extraction(
                 cin=cin_nonoise,
                 flow=flow,
@@ -289,7 +290,7 @@ def generate_example_data(
                 aquifer_pore_volumes=aquifer_pore_volumes_array,
                 retardation_factor=retardation_factor,
             )
-    elif molecular_diffusivity is not None and longitudinal_dispersivity is not None and streamline_length is not None:
+    elif use_diffusion:
         cout_values = diffusion_gamma_infiltration_to_extraction(
             cin=cin_nonoise,
             flow=flow,
