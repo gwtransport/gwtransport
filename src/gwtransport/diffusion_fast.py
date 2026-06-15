@@ -322,10 +322,12 @@ def _closed_form_coeff_matrix(
     """
     work_tedges = tedges
     if extend_tedges:
-        vals = tedges.to_numpy().copy()
-        vals[0] = tedges[0].to_numpy() - np.timedelta64(36500, "D")
-        vals[-1] = tedges[-1].to_numpy() + np.timedelta64(36500, "D")
-        work_tedges = pd.DatetimeIndex(vals)
+        # Extend by 100 years on each side so a constant warm-start fills the spin-up region.
+        # Timestamp arithmetic keeps the input timezone (tz-naive stays naive, tz-aware UTC
+        # stays tz-aware); going through ``.to_numpy()`` would strip/mix the tz.
+        pad = pd.Timedelta(days=36500)
+        work_tedges = tedges[:1] - pad
+        work_tedges = work_tedges.append(tedges[1:-1]).append(tedges[-1:] + pad)
 
     tedges_days = tedges_to_days(work_tedges)
     cout_tedges_days = tedges_to_days(cout_tedges, ref=work_tedges[0])

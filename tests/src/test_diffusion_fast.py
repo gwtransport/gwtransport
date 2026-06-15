@@ -280,6 +280,39 @@ def test_infiltration_to_extraction_with_variable_flow():
     assert_allclose(cout[valid], 10.0, atol=1e-13)
 
 
+def test_infiltration_to_extraction_tz_aware_matches_naive():
+    """tz-aware (UTC) tedges run without error and match the tz-naive result exactly.
+
+    The example data is tz-aware UTC by design, and the ``spinup="constant"`` warm-start
+    extends ``tedges`` by 100 years on each side. That extension must preserve the input
+    timezone -- a tz-stripping/mixing extension raises "Mixed timezones detected". With the
+    same wall-clock edges, the tz-aware run is identical to the tz-naive run to machine
+    precision (NaN spin-up mask included).
+    """
+    tedges_naive, _, flow = _make_transport_data(n_days=200)
+    n_days = len(flow)
+    cin = np.sin(np.linspace(0, 4 * np.pi, n_days)) + 2.0
+    tedges_aware = tedges_naive.tz_localize("UTC")
+    assert tedges_aware.tz is not None
+
+    kwargs = {
+        "cin": cin,
+        "flow": flow,
+        "aquifer_pore_volumes": np.array([400.0, 500.0]),
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.03,
+        "longitudinal_dispersivity": 1.0,
+        "spinup": "constant",
+    }
+    cout_naive = infiltration_to_extraction(tedges=tedges_naive, cout_tedges=tedges_naive, **kwargs)
+    cout_aware = infiltration_to_extraction(tedges=tedges_aware, cout_tedges=tedges_aware, **kwargs)
+
+    assert np.any(~np.isnan(cout_naive))
+    assert_allclose(np.isnan(cout_aware), np.isnan(cout_naive))
+    valid = ~np.isnan(cout_naive)
+    assert_allclose(cout_aware[valid], cout_naive[valid], rtol=0.0, atol=0.0)
+
+
 # =============================================================================
 # Machine-precision tests for retardation (R != 1)
 #
