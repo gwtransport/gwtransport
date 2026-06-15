@@ -1386,6 +1386,8 @@ def compute_total_outlet_mass(
     cin_arr = np.asarray(cin, dtype=float)
     te = np.asarray(theta_edges, dtype=float)
     m_in_total = float(np.sum(cin_arr * np.diff(te)))
-    c_inf = float(cin_arr[-1]) if cin_arr.size > 0 else 0.0
+    # An empty cin is a malformed (no-bin) input by the cin/theta_edges contract;
+    # let cin_arr[-1] raise IndexError rather than masking it as c_inf=0.
+    c_inf = float(cin_arr[-1])
     m_dom_asymptotic = float(sorption.total_concentration(c_inf)) * v_outlet
     return m_in_total - m_dom_asymptotic

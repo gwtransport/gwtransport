@@ -20,7 +20,7 @@ All calculations are exact analytical with machine precision.
 
 import logging
 from dataclasses import dataclass
-from heapq import heappop, heappush
+from operator import itemgetter
 
 import numpy as np
 import numpy.typing as npt
@@ -49,11 +49,6 @@ from gwtransport.fronttracking.handlers import (
 from gwtransport.fronttracking.math import (
     SorptionModel,
     compute_first_front_arrival_theta,
-)
-from gwtransport.fronttracking.output import (
-    compute_cumulative_inlet_mass,
-    compute_cumulative_outlet_mass,
-    compute_domain_mass,
 )
 from gwtransport.fronttracking.waves import (
     CharacteristicWave,
@@ -132,8 +127,9 @@ class FrontTrackerState:
         # Find bin index i with theta_edges[i] <= theta < theta_edges[i+1].
         # np.searchsorted with side='right' returns the smallest i+1 such that
         # theta_edges[i+1] > theta, so subtracting 1 gives i.
+        # The boundary returns above guarantee strictly-interior theta here, so
+        # searchsorted lands in [0, len(flow)-1] without an extra index clamp.
         i = int(np.searchsorted(self.theta_edges, theta, side="right")) - 1
-        i = max(0, min(i, len(self.flow) - 1))
         flow_i = float(self.flow[i])
         if flow_i <= 0:
             return float(self.tedges_days[i])
@@ -150,9 +146,40 @@ class FrontTrackerState:
         if t >= self.tedges_days[-1]:
             return float(self.theta_edges[-1] + (t - self.tedges_days[-1]) * float(self.flow[-1]))
 
+        # Boundary returns above guarantee strictly-interior t, so searchsorted
+        # lands in [0, len(flow)-1] without an extra index clamp.
         i = int(np.searchsorted(self.tedges_days, t, side="right")) - 1
-        i = max(0, min(i, len(self.flow) - 1))
         return float(self.theta_edges[i] + (t - self.tedges_days[i]) * float(self.flow[i]))
+
+    def theta_at_t_array(self, t: npt.ArrayLike) -> npt.NDArray[np.floating]:
+        """Vectorized ``theta_at_t``: map an array of times t [days] to θ [m³].
+
+        Element-wise identical to :meth:`theta_at_t`; replaces per-scalar loops
+        in the plotting/output breakthrough routines.
+
+        Parameters
+        ----------
+        t : array-like
+            User-facing time points [days].
+
+        Returns
+        -------
+        ndarray
+            Cumulative flow θ at each ``t`` [m³].
+        """
+        t_arr = np.asarray(t, dtype=float)
+        # Interior map: i = searchsorted(tedges_days, t, 'right') - 1, clipped to
+        # a valid bin so the boundary branches can overwrite the extrapolated tails.
+        i = np.clip(np.searchsorted(self.tedges_days, t_arr, side="right") - 1, 0, len(self.flow) - 1)
+        theta = self.theta_edges[i] + (t_arr - self.tedges_days[i]) * self.flow[i]
+        # Left of the first edge: clamp to theta_edges[0].
+        theta = np.where(t_arr <= self.tedges_days[0], self.theta_edges[0], theta)
+        # Right of the last edge: extrapolate at the final-bin flow.
+        return np.where(
+            t_arr >= self.tedges_days[-1],
+            self.theta_edges[-1] + (t_arr - self.tedges_days[-1]) * float(self.flow[-1]),
+            theta,
+        )
 
 
 class FrontTracker:
@@ -257,8 +284,13 @@ class FrontTracker:
 
     def find_next_event(self) -> Event | None:
         """Return the next event in θ-order, or ``None`` if none."""
+        # Each call collects every candidate and selects the single earliest via
+        # ``min`` over the (theta, counter, ...) tuples; the unique ``counter``
+        # breaks θ-ties deterministically (and stops comparison before the
+        # non-orderable EventType/Wave fields). A heap would only pay for its
+        # invariant to extract one minimum, so a flat list + ``min`` is leaner.
         candidates: list[tuple] = []
-        counter = 0  # Unique counter to break ties in the heap
+        counter = 0  # Unique counter to break θ-ties deterministically
 
         active_waves = [w for w in self.state.waves if w.is_active]
         theta_current = self.state.theta_current
@@ -277,7 +309,7 @@ class FrontTracker:
                 return
             if theta <= theta_current + collision_tol:
                 return
-            heappush(candidates, (theta, counter, event_type, waves, v, boundary))
+            candidates.append((theta, counter, event_type, waves, v, boundary))
             counter += 1
 
         chars = [w for w in active_waves if isinstance(w, CharacteristicWave)]
@@ -333,10 +365,7 @@ class FrontTracker:
                 v_exhaust = wave.position_at_theta(theta_exhaust)
                 if v_exhaust is None or not (0 <= v_exhaust <= self.state.v_outlet):
                     continue
-                heappush(
-                    candidates,
-                    (theta_exhaust, counter, EventType.DSW_FAN_EXHAUSTED, [wave], v_exhaust, None),
-                )
+                candidates.append((theta_exhaust, counter, EventType.DSW_FAN_EXHAUSTED, [wave], v_exhaust, None))
                 counter += 1
 
         v_outlet = self.state.v_outlet
@@ -359,24 +388,25 @@ class FrontTracker:
                         continue
                     theta_cross = theta_eval + (v_outlet - v_pos) / s
                     if theta_cross > theta_current:
-                        heappush(
-                            candidates,
-                            (theta_cross, counter, EventType.OUTLET_CROSSING, [wave], v_outlet, None),
-                        )
+                        candidates.append((theta_cross, counter, EventType.OUTLET_CROSSING, [wave], v_outlet, None))
                         counter += 1
             else:
                 theta_cross = find_outlet_crossing(wave, self.state.v_outlet, theta_current)
                 if theta_cross and theta_cross > theta_current:
-                    heappush(
-                        candidates,
-                        (theta_cross, counter, EventType.OUTLET_CROSSING, [wave], self.state.v_outlet, None),
-                    )
+                    candidates.append((
+                        theta_cross,
+                        counter,
+                        EventType.OUTLET_CROSSING,
+                        [wave],
+                        self.state.v_outlet,
+                        None,
+                    ))
                     counter += 1
 
         if not candidates:
             return None
 
-        theta_event, _, event_type, waves, v, extra = heappop(candidates)
+        theta_event, _, event_type, waves, v, extra = min(candidates, key=itemgetter(slice(2)))
 
         raref_types = {
             EventType.RAREF_CHAR_COLLISION,
@@ -533,28 +563,24 @@ class FrontTracker:
             logger.info("  Active waves: %d", sum(1 for w in self.state.waves if w.is_active))
             logger.info("  First arrival: θ=%.6f", self.theta_first_arrival)
 
-    def verify_physics(self, *, check_mass_balance: bool = False, mass_balance_rtol: float = 1e-12):
-        """Verify physical correctness: shock entropy and (optionally) mass balance.
+    def verify_physics(self):
+        """Verify physical correctness: every active shock satisfies Lax entropy.
 
-        Mass balance equation in θ-space::
-
-            mass_in_domain(θ) + mass_out_cumulative(θ) = mass_in_cumulative(θ)
-
-        This runtime check runs at the *current* simulation θ (possibly beyond the last
-        θ-bin edge, while the solver drains outlet crossings) and uses the closed-form
-        conservation identity ``m_out(θ) = m_in(θ) − m_dom(θ)`` to machine precision.
-        The non-tautological, integral-based conservation check (an independent
-        breakthrough integral compared to the inlet mass) lives in
-        :func:`gwtransport.fronttracking.validation.verify_physics` check 7, which is
-        evaluated at the well-defined θ_max boundary; that route is intentionally not
-        reused here because its first-order trapezoid would forfeit the machine-precision
-        runtime guarantee and is ill-defined for θ beyond θ_max with a sustained inlet.
+        Mass conservation is intentionally NOT checked here. The closed-form
+        identity ``m_out(θ) = m_in(θ) − m_dom(θ)`` makes any runtime
+        ``m_in_domain + m_out_cumulative == m_in_cumulative`` test tautological
+        (residual identically zero, regardless of any ``compute_domain_mass``
+        bug), so it cannot catch a conservation error. The non-tautological,
+        integral-based conservation check (an independent breakthrough integral
+        compared to the inlet mass) lives in
+        :func:`gwtransport.fronttracking.validation.verify_physics` check 7 and
+        is exercised by ``TestEndToEndConservation`` /
+        ``TestIndependentDomainMass``.
 
         Raises
         ------
         RuntimeError
-            If an active shock violates entropy or if mass balance fails to
-            ``mass_balance_rtol`` at the current simulation θ.
+            If an active shock violates the Lax entropy condition.
         """
         for wave in self.state.waves:
             if isinstance(wave, ShockWave) and wave.is_active and not wave.satisfies_entropy():
@@ -562,48 +588,5 @@ class FrontTracker:
                     f"Shock at θ_start={wave.theta_start:.3f} violates entropy! "
                     f"c_left={wave.c_left:.3f}, c_right={wave.c_right:.3f}, "
                     f"speed={wave.speed:.6g}"
-                )
-                raise RuntimeError(msg)
-
-        if check_mass_balance:
-            theta = self.state.theta_current
-
-            mass_in_domain = compute_domain_mass(
-                theta=theta,
-                v_outlet=self.state.v_outlet,
-                waves=self.state.waves,
-                sorption=self.state.sorption,
-            )
-
-            mass_in_cumulative = compute_cumulative_inlet_mass(
-                theta=theta,
-                cin=self.state.cin,
-                theta_edges=self.state.theta_edges,
-            )
-
-            mass_out_cumulative = compute_cumulative_outlet_mass(
-                theta=theta,
-                v_outlet=self.state.v_outlet,
-                waves=self.state.waves,
-                sorption=self.state.sorption,
-                cin=self.state.cin,
-                theta_edges=self.state.theta_edges,
-            )
-
-            mass_balance_error = (mass_in_domain + mass_out_cumulative) - mass_in_cumulative
-
-            if mass_in_cumulative > 0:
-                relative_error = abs(mass_balance_error) / mass_in_cumulative
-            else:
-                relative_error = abs(mass_balance_error)
-
-            if relative_error > mass_balance_rtol:
-                msg = (
-                    f"Mass balance violation at θ={theta:.6f}! "
-                    f"mass_in_domain={mass_in_domain:.6e}, "
-                    f"mass_out={mass_out_cumulative:.6e}, "
-                    f"mass_in={mass_in_cumulative:.6e}, "
-                    f"error={mass_balance_error:.6e}, "
-                    f"relative_error={relative_error:.6e} > {mass_balance_rtol:.6e}"
                 )
                 raise RuntimeError(msg)

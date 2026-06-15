@@ -125,9 +125,6 @@ def find_shock_shock_intersection(shock1, shock2, theta_current: float) -> tuple
     if abs(s1 - s2) < EPSILON_SPEED:
         return None
 
-    if not shock1.is_active or not shock2.is_active:
-        return None
-
     theta_both_active = max(shock1.theta_start, shock2.theta_start, theta_current)
 
     v1_ref = shock1.v_start + shock1.speed * (theta_both_active - shock1.theta_start)
@@ -160,7 +157,7 @@ def find_shock_characteristic_intersection(shock, char, theta_current: float) ->
         char.concentration, char.sorption, char.theta_start, char.v_start, theta_both_active
     )
 
-    if v_char is None or not shock.is_active or not char.is_active:
+    if v_char is None:
         return None
 
     dtheta = (v_char - v_shock) / (s_shock - s_char)

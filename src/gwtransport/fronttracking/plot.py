@@ -21,7 +21,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from gwtransport._time import tedges_to_days
-from gwtransport.fronttracking.output import concentration_at_point, identify_outlet_segments
+from gwtransport.fronttracking.output import compute_breakthrough_curve, identify_outlet_segments
 from gwtransport.fronttracking.solver import FrontTrackerState
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.utils import step_plot_coords
@@ -405,11 +405,13 @@ def plot_breakthrough_curve(
         elif segment["type"] == "rarefaction":
             raref = segment["wave"]
             t_raref = np.linspace(t_seg_start, t_seg_end, n_rarefaction_points)
+            theta_raref = state.theta_at_t_array(t_raref)
             c_raref = np.zeros_like(t_raref)
 
-            for j, t in enumerate(t_raref):
-                theta = state.theta_at_t(float(t))
-                c_at_point = raref.concentration_at_point(state.v_outlet, theta)
+            # concentration_at_point is inherently scalar (returns None outside
+            # the fan); only the t→θ map is vectorizable and is hoisted above.
+            for j in range(len(t_raref)):
+                c_at_point = raref.concentration_at_point(state.v_outlet, float(theta_raref[j]))
                 if c_at_point is not None:
                     c_raref[j] = c_at_point
                 else:
@@ -661,8 +663,9 @@ def _outlet_concentration_curve(
 ) -> npt.NDArray[np.floating]:
     """Sample the exact outlet concentration at the given user-facing times.
 
-    Each ``t`` is translated to θ via ``state.theta_at_t`` and passed to
-    ``concentration_at_point`` (which works in θ).
+    The ``t`` array is mapped to θ vectorially via ``state.theta_at_t_array``
+    and delegated to :func:`compute_breakthrough_curve` (the outlet body of
+    ``concentration_at_point`` over a θ-array).
 
     Parameters
     ----------
@@ -676,11 +679,8 @@ def _outlet_concentration_curve(
     c_out : numpy.ndarray
         Outlet concentrations matching ``t_array``.
     """
-    c_out = np.empty_like(t_array, dtype=float)
-    for i, t in enumerate(t_array):
-        theta = state.theta_at_t(float(t))
-        c_out[i] = concentration_at_point(state.v_outlet, theta, state.waves, state.sorption)
-    return c_out
+    theta_array = state.theta_at_t_array(t_array)
+    return compute_breakthrough_curve(theta_array, state.v_outlet, state.waves, state.sorption)
 
 
 def plot_front_tracking_summary(
