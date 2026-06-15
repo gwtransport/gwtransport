@@ -517,6 +517,14 @@ class TestVerifyPhysicsNegativeCases:
         Injecting it into the wave list exercises the live entropy branch in
         ``verify_physics`` — a regression that inverts the
         ``not wave.satisfies_entropy()`` guard would make this test fail.
+
+        The legitimate entropy-satisfying init shock (c_left=10, c_right=0)
+        that ``FrontTracker.__init__`` creates is cleared first, so only
+        ``bad_shock`` is active; otherwise an inverted guard would raise on the
+        legitimate shock (whose message also contains "violates entropy") and
+        the test would pass on buggy code. The matcher additionally pins the
+        bad shock by ``c_left=2.000`` to confirm the raise is about the right
+        wave.
         """
         cin, flow, tedges = simple_step_input
         tracker = FrontTracker(
@@ -525,9 +533,10 @@ class TestVerifyPhysicsNegativeCases:
 
         bad_shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=2.0, c_right=10.0, sorption=freundlich_sorption)
         assert not bad_shock.satisfies_entropy(), "test setup invalid: shock must violate entropy for n>1"
+        tracker.state.waves.clear()
         tracker.state.waves.append(bad_shock)
 
-        with pytest.raises(RuntimeError, match="violates entropy"):
+        with pytest.raises(RuntimeError, match=r"c_left=2\.000"):
             tracker.verify_physics()
 
 
