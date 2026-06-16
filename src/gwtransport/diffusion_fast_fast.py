@@ -293,7 +293,7 @@ def _valid_cout_bins(
     """
     rt = residence_time_series(
         flow=flow,
-        flow_tedges=work_tedges,
+        tedges=work_tedges,
         index=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=retardation_factor,

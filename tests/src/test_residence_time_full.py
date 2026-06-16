@@ -5,33 +5,17 @@ import pytest
 from gwtransport.residence_time import residence_time_full, residence_time_series
 
 
-@pytest.fixture
-def sample_flow_data():
-    """Create sample flow data for testing."""
-    dates = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
-    flow_values = np.array([100.0, 110.0, 105.0, 95.0, 98.0, 102.0, 107.0, 103.0, 96.0])
-    return flow_values, dates
-
-
-@pytest.fixture
-def constant_flow_data():
-    """Create constant flow data for testing."""
-    dates = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
-    flow_values = np.full(len(dates) - 1, 100.0)
-    return flow_values, dates
-
-
 def test_basic_extraction(constant_flow_data):
     """Test basic extraction scenario with constant flow."""
-    flow_values, flow_tedges = constant_flow_data
-    tedges_out = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1D")
+    flow_values, tedges = constant_flow_data
+    cout_tedges = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1D")
     pore_volume = 200.0
 
     # spinup=None keeps the strict spin-up NaN at the leading extraction bins.
     result = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
         spinup=None,
@@ -48,8 +32,8 @@ def test_basic_extraction(constant_flow_data):
     # no in-record NaN: residence time is exactly 2 days at every output bin.
     result_constant = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
@@ -58,14 +42,14 @@ def test_basic_extraction(constant_flow_data):
 
 def test_basic_infiltration(constant_flow_data):
     """Test basic infiltration scenario with constant flow."""
-    flow_values, flow_tedges = constant_flow_data
+    flow_values, tedges = constant_flow_data
     pore_volume = 200.0
 
     # spinup=None keeps the strict spin-up NaN at the trailing infiltration bins.
     result = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=flow_tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="infiltration_to_extraction",
         spinup=None,
@@ -82,8 +66,8 @@ def test_basic_infiltration(constant_flow_data):
     # is no in-record NaN: residence time is exactly 2 days at every output bin.
     result_constant = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=flow_tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="infiltration_to_extraction",
     )
@@ -92,25 +76,25 @@ def test_basic_infiltration(constant_flow_data):
 
 def test_varying_extraction(constant_flow_data):
     """Test basic extraction scenario with constant flow."""
-    flow_values, flow_tedges = constant_flow_data
+    flow_values, tedges = constant_flow_data
     flow_values[5:] *= 2.0  # Double the flow after the 5th day
-    tedges_out_highres = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1h")
-    tedges_out_lowres = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1D")
+    cout_tedges_highres = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1h")
+    cout_tedges_lowres = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1D")
     pore_volume = 200.0
 
     result_highres = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out_highres,
+        tedges=tedges,
+        cout_tedges=cout_tedges_highres,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
-    df_highres = pd.Series(result_highres[0], index=tedges_out_highres[:-1])
+    df_highres = pd.Series(result_highres[0], index=cout_tedges_highres[:-1])
     df_lowres = df_highres.resample("1D").mean()
     result_lowres = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out_lowres,
+        tedges=tedges,
+        cout_tedges=cout_tedges_lowres,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
@@ -123,14 +107,14 @@ def test_varying_extraction(constant_flow_data):
 
 def test_retardation_factor(constant_flow_data):
     """Test the effect of retardation factor."""
-    flow_values, flow_tedges = constant_flow_data
+    flow_values, tedges = constant_flow_data
     pore_volume = 100.0
 
     # spinup=None keeps the strict spin-up NaN so the leading-NaN assertions stay meaningful.
     result_no_retardation = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=flow_tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=1.0,
         direction="extraction_to_infiltration",
@@ -139,8 +123,8 @@ def test_retardation_factor(constant_flow_data):
 
     result_with_retardation = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=flow_tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=2.0,
         direction="extraction_to_infiltration",
@@ -162,19 +146,19 @@ def test_retardation_factor(constant_flow_data):
 
 def test_multiple_pore_volumes(constant_flow_data):
     """Test handling of multiple pore volumes."""
-    flow_values, flow_tedges = constant_flow_data
+    flow_values, tedges = constant_flow_data
     pore_volumes = np.array([100.0, 200.0, 300.0])
 
     result = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=flow_tedges,
+        tedges=tedges,
+        cout_tedges=tedges,
         aquifer_pore_volumes=pore_volumes,
         direction="extraction_to_infiltration",
     )
 
     assert result.shape[0] == len(pore_volumes)
-    assert result.shape[1] == len(flow_tedges) - 1
+    assert result.shape[1] == len(tedges) - 1
 
     # Check that NaN pattern follows pore volumes
     # More NaNs at the beginning for larger pore volumes
@@ -188,8 +172,8 @@ def test_multiple_pore_volumes(constant_flow_data):
 
 def test_invalid_direction(constant_flow_data):
     """Test that invalid direction raises ValueError."""
-    flow_values, flow_tedges = constant_flow_data
-    tedges_out = pd.date_range(start="2023-01-02", end="2023-01-09", freq="2D")
+    flow_values, tedges = constant_flow_data
+    cout_tedges = pd.date_range(start="2023-01-02", end="2023-01-09", freq="2D")
     pore_volume = 200.0
 
     with pytest.raises(
@@ -197,8 +181,8 @@ def test_invalid_direction(constant_flow_data):
     ):
         residence_time_full(
             flow=flow_values,
-            flow_tedges=flow_tedges,
-            tedges_out=tedges_out,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
             aquifer_pore_volumes=pore_volume,
             direction="invalid",
         )
@@ -206,15 +190,15 @@ def test_invalid_direction(constant_flow_data):
 
 def test_edge_cases(sample_flow_data):
     """Test edge cases such as zero flow and very large pore volumes."""
-    flow_values, flow_tedges = sample_flow_data
-    tedges_out = pd.date_range(start="2023-01-02", end="2023-01-09", freq="2D")
+    flow_values, tedges = sample_flow_data
+    cout_tedges = pd.date_range(start="2023-01-02", end="2023-01-09", freq="2D")
 
     # Test zero flow
     zero_flow = np.zeros_like(flow_values)
     result_zero = residence_time_full(
         flow=zero_flow,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=100.0,
         direction="extraction_to_infiltration",
     )
@@ -225,8 +209,8 @@ def test_edge_cases(sample_flow_data):
     # these bins are warm-started to finite, very large residence times instead.)
     result_large = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=1e6,
         direction="extraction_to_infiltration",
         spinup=None,
@@ -236,15 +220,15 @@ def test_edge_cases(sample_flow_data):
 
 def test_negative_flow(constant_flow_data):
     """Test handling of negative flow values."""
-    _, flow_tedges = constant_flow_data
-    flow_values = np.full(len(flow_tedges) - 1, -100.0)
-    tedges_out = pd.date_range(start="2023-01-02", end="2023-01-09", freq="2D")
+    _, tedges = constant_flow_data
+    flow_values = np.full(len(tedges) - 1, -100.0)
+    cout_tedges = pd.date_range(start="2023-01-02", end="2023-01-09", freq="2D")
     pore_volume = 200.0
 
     result = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
@@ -261,23 +245,23 @@ def test_flow_variations(constant_flow_data):
     doubling Q halves both the pointwise residence time and its bin average, so the
     ratio must be 2.0 to machine precision wherever both are valid.
     """
-    flow_values, flow_tedges = constant_flow_data
+    flow_values, tedges = constant_flow_data
     double_flow = flow_values * 2
-    tedges_out = pd.date_range(start="2023-01-04", end="2023-01-09", freq="1D")
+    cout_tedges = pd.date_range(start="2023-01-04", end="2023-01-09", freq="1D")
     pore_volume = 100.0
 
     result1 = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
     result2 = residence_time_full(
         flow=double_flow,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
@@ -290,33 +274,33 @@ def test_flow_variations(constant_flow_data):
 
 def test_output_tedges_alignment():
     """Test that results align correctly with output time edges."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)
 
     # Test with different output time edges
-    tedges_out1 = pd.date_range(start="2023-01-02", end="2023-01-09", freq="2D")
-    tedges_out2 = pd.date_range(start="2023-01-02", end="2023-01-09", freq="1D")
+    cout_tedges1 = pd.date_range(start="2023-01-02", end="2023-01-09", freq="2D")
+    cout_tedges2 = pd.date_range(start="2023-01-02", end="2023-01-09", freq="1D")
     pore_volume = 100.0
 
     result1 = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out1,
+        tedges=tedges,
+        cout_tedges=cout_tedges1,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
     result2 = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out2,
+        tedges=tedges,
+        cout_tedges=cout_tedges2,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
     # Check output shapes match the expected dimensions
-    assert result1.shape[1] == len(tedges_out1) - 1
-    assert result2.shape[1] == len(tedges_out2) - 1
+    assert result1.shape[1] == len(cout_tedges1) - 1
+    assert result2.shape[1] == len(cout_tedges2) - 1
 
     # With constant flow, residence time should be constant after initial NaNs
     valid_mask1 = ~np.isnan(result1[0])
@@ -327,25 +311,6 @@ def test_output_tedges_alignment():
 
     if np.any(valid_mask2):
         np.testing.assert_allclose(result2[0, valid_mask2], result2[0, valid_mask2][0], atol=0, rtol=1e-13)
-
-
-def test_example_from_docstring():
-    """Test the example provided in the function's docstring."""
-    flow_dates = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
-    flow_values = np.full(len(flow_dates) - 1, 100.0)  # Constant flow of 100 m³/day
-    pore_volume = 200.0
-
-    mean_times = residence_time_full(
-        flow=flow_values,
-        flow_tedges=flow_dates,
-        tedges_out=flow_dates,
-        aquifer_pore_volumes=pore_volume,
-        direction="extraction_to_infiltration",
-    )
-
-    # With the default spinup='constant' the docstring example warm-starts the spin-up zone,
-    # so there is no NaN: residence time is exactly 2 days at every output bin under constant flow.
-    np.testing.assert_allclose(mean_times[0], 2.0, atol=0, rtol=1e-13)
 
 
 def test_spinup_policy_constant_vs_none():
@@ -361,9 +326,9 @@ def test_spinup_policy_constant_vs_none():
 
     An unrecognised ``spinup`` value must raise ``ValueError``.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-10", freq="D")
     flow = 100.0
-    flow_values = np.full(len(flow_tedges) - 1, flow)
+    flow_values = np.full(len(tedges) - 1, flow)
     retardation_factor = 1.0
     # V_p = 300 with Q = 100 needs 3 days of look-back, so the first two daily output bins
     # fall in the spin-up region under the strict policy.
@@ -372,8 +337,8 @@ def test_spinup_policy_constant_vs_none():
 
     common = {
         "flow": flow_values,
-        "flow_tedges": flow_tedges,
-        "tedges_out": flow_tedges,
+        "tedges": tedges,
+        "cout_tedges": tedges,
         "aquifer_pore_volumes": pore_volume,
         "retardation_factor": retardation_factor,
         "direction": "extraction_to_infiltration",
@@ -413,16 +378,16 @@ def test_constant_flow_weighting_equivalence(constant_flow_data):
     Under constant flow, integrating uniformly in cumulative volume and
     integrating uniformly in time produce the same per-bin average. Any drift
     here would indicate that the volume-coordinate path has lost an exact
-    invariant, e.g. via off-by-one indexing of ``flow_cum_at_tedges_out``.
+    invariant, e.g. via off-by-one indexing of ``flow_cum_at_cout_tedges``.
     """
-    flow_values, flow_tedges = constant_flow_data
-    tedges_out = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1D")
+    flow_values, tedges = constant_flow_data
+    cout_tedges = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1D")
     pore_volumes = np.array([100.0, 200.0, 300.0])
 
     common = {
         "flow": flow_values,
-        "flow_tedges": flow_tedges,
-        "tedges_out": tedges_out,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
         "aquifer_pore_volumes": pore_volumes,
         "direction": "extraction_to_infiltration",
     }
@@ -439,15 +404,15 @@ def test_default_weighting_is_flow():
     weightings would coincide and the default-vs-explicit comparison would be
     vacuous.
     """
-    flow_tedges = pd.DatetimeIndex(["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04"])
+    tedges = pd.DatetimeIndex(["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04"])
     flow_values = np.array([1.0, 1.0, 2.0])
     pore_volume = 0.5
-    tedges_out = pd.DatetimeIndex(["2023-01-02", "2023-01-04"])
+    cout_tedges = pd.DatetimeIndex(["2023-01-02", "2023-01-04"])
 
     common = {
         "flow": flow_values,
-        "flow_tedges": flow_tedges,
-        "tedges_out": tedges_out,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
         "aquifer_pore_volumes": pore_volume,
         "direction": "extraction_to_infiltration",
     }
@@ -462,14 +427,14 @@ def test_default_weighting_is_flow():
 
 def test_invalid_weighting(constant_flow_data):
     """An unrecognised ``weighting`` value must raise ValueError."""
-    flow_values, flow_tedges = constant_flow_data
-    tedges_out = pd.date_range(start="2023-01-02", end="2023-01-09", freq="2D")
+    flow_values, tedges = constant_flow_data
+    cout_tedges = pd.date_range(start="2023-01-02", end="2023-01-09", freq="2D")
 
     with pytest.raises(ValueError, match=r"weighting should be 'flow' or 'time'"):
         residence_time_full(
             flow=flow_values,
-            flow_tedges=flow_tedges,
-            tedges_out=tedges_out,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
             aquifer_pore_volumes=200.0,
             weighting="invalid",
         )
@@ -496,15 +461,15 @@ def test_analytical_variable_flow_weighting():
                                    + int_{V=2.5}^{V=4} 0.25 dV]
                          = (1/3) [0.5 + 0.1875 + 0.375] = 17/48 day.
     """
-    flow_tedges = pd.DatetimeIndex(["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04"])
+    tedges = pd.DatetimeIndex(["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04"])
     flow_values = np.array([1.0, 1.0, 2.0])
     pore_volume = 0.5
-    tedges_out = pd.DatetimeIndex(["2023-01-02", "2023-01-04"])
+    cout_tedges = pd.DatetimeIndex(["2023-01-02", "2023-01-04"])
 
     common = {
         "flow": flow_values,
-        "flow_tedges": flow_tedges,
-        "tedges_out": tedges_out,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
         "aquifer_pore_volumes": pore_volume,
         "direction": "extraction_to_infiltration",
     }
@@ -519,7 +484,7 @@ def test_kink_handling_against_fine_grid():
     """Recover the residence-time integral against a fine-grid reference.
 
     Issue #165: ``residence_time_full`` previously sampled tau only at
-    ``flow_tedges`` and missed kinks within a flow bin where the look-back
+    ``tedges`` and missed kinks within a flow bin where the look-back
     parcel crosses an internal flow edge. Under the regime change
     ``Q = [100, 100, 100, 100, 100, 10, 200]`` from the issue body, the legacy
     edge-sampled estimate over the last bin overshoots the truth by ~70 %.
@@ -527,10 +492,10 @@ def test_kink_handling_against_fine_grid():
     This test pins the function against an independent fine-grid trapezoidal
     average of ``residence_time_series`` (which is pointwise correct).
     """
-    flow_tedges = pd.date_range(start="2023-01-01", periods=8, freq="D")
+    tedges = pd.date_range(start="2023-01-01", periods=8, freq="D")
     flow_values = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 10.0, 200.0])
     pore_volume = 50.0
-    tedges_out = flow_tedges  # daily output bins, same as flow tedges
+    cout_tedges = tedges  # daily output bins, same as flow tedges
     n_fine = 20001
 
     # The fine-grid reference below is built from residence_time_series, which always
@@ -538,8 +503,8 @@ def test_kink_handling_against_fine_grid():
     # takes the matching strict path and the spin-up bin stays NaN in both.
     rt_mean = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
         weighting="time",
@@ -548,15 +513,14 @@ def test_kink_handling_against_fine_grid():
 
     # Independent reference: dense pointwise tau via residence_time_series, trapezoidal
     # average per output bin.
-    flow_tedges_days_arr = (flow_tedges - flow_tedges[0]) / np.timedelta64(1, "D")
-    tedges_days_arr = np.asarray(flow_tedges_days_arr, dtype=float)
-    expected = np.full((1, len(tedges_out) - 1), np.nan)
-    for k in range(len(tedges_out) - 1):
+    tedges_days_arr = np.asarray((tedges - tedges[0]) / np.timedelta64(1, "D"), dtype=float)
+    expected = np.full((1, len(cout_tedges) - 1), np.nan)
+    for k in range(len(cout_tedges) - 1):
         t_dense = np.linspace(tedges_days_arr[k], tedges_days_arr[k + 1], n_fine)
-        index = flow_tedges[0] + pd.to_timedelta(t_dense, unit="D")
+        index = tedges[0] + pd.to_timedelta(t_dense, unit="D")
         tau_dense = residence_time_series(
             flow=flow_values,
-            flow_tedges=flow_tedges,
+            tedges=tedges,
             aquifer_pore_volumes=pore_volume,
             index=index,
             direction="extraction_to_infiltration",
@@ -589,15 +553,15 @@ def test_zero_flow_plateau_extraction():
     ``flow_cum`` values and the trapezoidal grid smears the step into a linear ramp, returning
     1.0 instead.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", periods=5, freq="D")
+    tedges = pd.date_range(start="2023-01-01", periods=5, freq="D")
     flow_values = np.array([100.0, 0.0, 0.0, 100.0])
     pore_volume = 50.0
-    tedges_out = flow_tedges
+    cout_tedges = tedges
 
     common = {
         "flow": flow_values,
-        "flow_tedges": flow_tedges,
-        "tedges_out": tedges_out,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
         "aquifer_pore_volumes": pore_volume,
         "direction": "extraction_to_infiltration",
     }
@@ -629,15 +593,15 @@ def test_zero_flow_plateau_offset_step():
 
     Without regularization the legacy code returned 0.6875.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", periods=4, freq="D")
+    tedges = pd.date_range(start="2023-01-01", periods=4, freq="D")
     flow_values = np.array([200.0, 0.0, 100.0])
     pore_volume = 50.0
-    tedges_out = flow_tedges
+    cout_tedges = tedges
 
     rt_time = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
         weighting="time",
@@ -648,27 +612,27 @@ def test_zero_flow_plateau_offset_step():
 def test_weighting_extrapolation_nan_consistency():
     """Output bins extending beyond the flow record are NaN under both weightings.
 
-    The volume path computes ``flow_cum_at_tedges_out`` by clamping; without the
+    The volume path computes ``flow_cum_at_cout_tedges`` by clamping; without the
     explicit bin-bounds mask in the implementation, those bins would yield a
     finite (but meaningless) value instead of NaN.
     """
-    flow_tedges = pd.DatetimeIndex(["2023-01-01", "2023-01-02", "2023-01-03"])
+    tedges = pd.DatetimeIndex(["2023-01-01", "2023-01-02", "2023-01-03"])
     flow_values = np.array([1.0, 2.0])
     # Output bin extends past the last flow edge.
-    tedges_out = pd.DatetimeIndex(["2023-01-02", "2023-01-04"])
+    cout_tedges = pd.DatetimeIndex(["2023-01-02", "2023-01-04"])
 
     rt_flow = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=0.25,
         direction="extraction_to_infiltration",
         weighting="flow",
     )
     rt_time = residence_time_full(
         flow=flow_values,
-        flow_tedges=flow_tedges,
-        tedges_out=tedges_out,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
         aquifer_pore_volumes=0.25,
         direction="extraction_to_infiltration",
         weighting="time",

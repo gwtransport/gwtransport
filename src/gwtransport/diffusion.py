@@ -568,7 +568,7 @@ def _infiltration_to_extraction_coeff_matrix(
     # RT is NaN for cout_tedges beyond the input data range
     rt_at_cout_tedges = residence_time_series(
         flow=flow,
-        flow_tedges=tedges,
+        tedges=tedges,
         index=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=retardation_factor,

@@ -255,7 +255,7 @@ def infiltration_to_extraction_series(
         raise ValueError(msg)
     rt_array = residence_time_series(
         flow=flow,
-        flow_tedges=tedges,
+        tedges=tedges,
         index=tedges,
         aquifer_pore_volumes=aquifer_pore_volume,
         retardation_factor=retardation_factor,
@@ -383,7 +383,7 @@ def extraction_to_infiltration_series(
         raise ValueError(msg)
     rt_array = residence_time_series(
         flow=flow,
-        flow_tedges=tedges,
+        tedges=tedges,
         index=tedges,
         aquifer_pore_volumes=aquifer_pore_volume,
         retardation_factor=retardation_factor,
@@ -1481,7 +1481,8 @@ def infiltration_to_extraction_nonlinear_sorption(
         Array of aquifer pore volumes [m³] representing the distribution
         of residence times in the aquifer system. Each pore volume must be positive.
     freundlich_k : float, optional
-        Freundlich coefficient [(m³/kg)^(1/n)]. Must be positive.
+        Freundlich coefficient [(m³/kg)^(1/n)]. Must be positive. Same convention (isotherm
+        ``s = k_f * C^(1/n)``) as :func:`gwtransport.residence_time.freundlich_retardation`.
     freundlich_n : float, optional
         Freundlich exponent [-]. Must be positive and != 1.
     bulk_density : float, optional

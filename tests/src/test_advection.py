@@ -4000,7 +4000,7 @@ def _dense_weights_reference(*, tedges, cout_tedges, aquifer_pore_volumes, flow,
 
     rt_edges_2d = residence_time_series(
         flow=flow,
-        flow_tedges=tedges,
+        tedges=tedges,
         index=cout_tedges,
         aquifer_pore_volumes=aquifer_pore_volumes,
         retardation_factor=retardation_factor,

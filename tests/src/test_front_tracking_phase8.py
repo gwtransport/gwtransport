@@ -418,17 +418,24 @@ class TestComplexInteractions:
     """Test complex multi-wave interaction scenarios."""
 
     def test_shock_then_rarefaction_outlet_behavior(self):
-        """Shock followed by rarefaction: outlet should show discontinuous jump then smooth decline."""
-        dates = pd.date_range(start="2020-01-01", periods=15, freq="D")
-        tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
+        """Shock then rarefaction: a clean breakthrough at arrival, exactly zero before it.
 
-        # Step up then step down: 0→10→2
-        cin = np.zeros(len(dates))
+        The inlet (0->10->2, held at 2) must span the full output window so the bin-average integral
+        and the wave list stay on a consistent theta range. For the retarded front the breakthrough
+        arrives near day 94 (~R*V/Q); before that the outlet is exactly zero. This pins the DSW
+        domain-mass bin-average: any over-count would manufacture a spurious pre-arrival echo.
+        """
+        n = 120
+        dates = pd.date_range(start="2020-01-01", periods=n, freq="D")
+        tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=n)
+
+        # Step up then sustained step down: 0 -> 10 -> 2 (held at 2 to cover the output window)
+        cin = np.zeros(n)
         cin[5:10] = 10.0
         cin[10:] = 2.0
-        flow = np.full(len(dates), 100.0)
+        flow = np.full(n, 100.0)
 
-        cout_dates = pd.date_range(start=dates[0], periods=40, freq="D")
+        cout_dates = pd.date_range(start=dates[0], periods=120, freq="D")
         cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
         cout, structure = infiltration_to_extraction_nonlinear_sorption(
@@ -438,27 +445,20 @@ class TestComplexInteractions:
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=np.array([300.0]),
             freundlich_k=0.01,
-            freundlich_n=2.0,  # n>1: n>1
+            freundlich_n=2.0,
             bulk_density=1500.0,
             porosity=0.3,
         )
 
-        # Should create waves for concentration changes
-        # Note: Shock count can vary due to merging; rarefaction is more reliable indicator
-        assert structure[0]["n_rarefactions"] >= 1, "Should create rarefaction for step decrease"
+        assert structure[0]["n_rarefactions"] >= 1, "Step decrease should create a rarefaction (n>1)"
 
-        # Outlet behavior: should show concentration change
         valid_cout = cout[~np.isnan(cout)]
-        if len(valid_cout) > 5:
-            max_cout = np.max(valid_cout)
-            # With corrected wave physics, peak may be different than expected
-            # Main verification is that rarefaction was created and concentration varies
-            assert max_cout >= 2.0, f"Peak concentration should match final inlet, got {max_cout}"
-            assert max_cout <= 12.0, f"Peak should not greatly exceed input max, got {max_cout}"
-
-            # Verify concentration shows variation (not stuck at one value)
-            cout_range = np.max(valid_cout) - np.min(valid_cout)
-            assert cout_range > 0.1, "Concentration should show variation from wave passage"
+        nonzero = np.flatnonzero(valid_cout > 1e-9)
+        assert len(nonzero) > 0, "Breakthrough should occur within the output window"
+        # Exactly zero before the front arrives -- no spurious pre-arrival echo from the bin-average.
+        assert np.allclose(valid_cout[: nonzero[0]], 0.0), "Outlet must be zero before the front arrives"
+        # Plateau reaches the sustained inlet (2.0) and never greatly exceeds the input peak (10.0).
+        assert 2.0 - 1e-9 <= np.max(valid_cout) <= 12.0, f"Peak should be in [2, 12], got {np.max(valid_cout)}"
 
     def test_rapid_sequential_changes_event_ordering(self):
         """Rapid concentration changes: stress test for event queue and wave creation."""

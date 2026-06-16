@@ -8,9 +8,9 @@ from gwtransport.residence_time import fraction_explained
 @pytest.fixture
 def constant_flow_setup():
     """Create constant flow setup for testing."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-11", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)  # 100 m³/day constant flow
-    return flow_values, flow_tedges
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-11", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)  # 100 m³/day constant flow
+    return flow_values, tedges
 
 
 @pytest.fixture
@@ -28,12 +28,12 @@ def test_single_pore_volume_constant_flow(constant_flow_setup):
     residence time = 2 days. For times >= 2 days from start, fraction should be 1.0,
     for earlier times it should be 0.0 (NaN residence times).
     """
-    flow_values, flow_tedges = constant_flow_setup
+    flow_values, tedges = constant_flow_setup
     pore_volume = 200.0  # Should give 2-day residence time
 
     result = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
@@ -58,11 +58,11 @@ def test_multiple_pore_volumes_gradual_increase(constant_flow_setup, multiple_po
     constant flow of 100 m³/day, residence times are [1, 2, 3, 4, 5] days.
     Fraction should increase stepwise: 0.0 → 0.2 → 0.4 → 0.6 → 0.8 → 1.0
     """
-    flow_values, flow_tedges = constant_flow_setup
+    flow_values, tedges = constant_flow_setup
 
     result = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=multiple_pore_volumes,
         direction="extraction_to_infiltration",
     )
@@ -81,13 +81,13 @@ def test_zero_flow_all_invalid():
     Analytical solution: Zero flow results in infinite/NaN residence times
     for all pore volumes, so fraction should be 0.0 everywhere.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    flow_values = np.zeros(len(flow_tedges) - 1)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    flow_values = np.zeros(len(tedges) - 1)
     pore_volumes = np.array([100.0, 200.0, 300.0])
 
     result = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volumes,
         direction="extraction_to_infiltration",
     )
@@ -103,14 +103,14 @@ def test_very_large_pore_volumes_all_invalid():
     Analytical solution: Very large pore volumes require more flow history
     than available, resulting in NaN residence times and 0.0 fraction.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)
     # Very large pore volumes that exceed total flow
     large_pore_volumes = np.array([1e6, 2e6, 3e6])
 
     result = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=large_pore_volumes,
         direction="extraction_to_infiltration",
     )
@@ -127,12 +127,12 @@ def test_retardation_factor_effect(constant_flow_setup):
     making more residence time calculations result in NaN for early times,
     thus reducing the fraction explained.
     """
-    flow_values, flow_tedges = constant_flow_setup
+    flow_values, tedges = constant_flow_setup
     pore_volume = 200.0
 
     result_no_retardation = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=1.0,
         direction="extraction_to_infiltration",
@@ -140,7 +140,7 @@ def test_retardation_factor_effect(constant_flow_setup):
 
     result_with_retardation = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         retardation_factor=3.0,
         direction="extraction_to_infiltration",
@@ -155,34 +155,33 @@ def test_retardation_factor_effect(constant_flow_setup):
 
 def test_direction_consistency(constant_flow_setup, multiple_pore_volumes):
     """
-    Test that both directions give reasonable results.
+    Test that the two directions produce mirror-image exact staircases.
 
-    The fraction calculation logic is the same regardless of direction,
-    but residence time patterns will be different.
+    With constant flow=100 m³/d and pore volumes [100..500] m³, residence times are
+    [1, 2, 3, 4, 5] days. ``extraction_to_infiltration`` looks back, so its spin-up sits at
+    the start of the record and the fraction climbs 0 → 1 in 0.2 steps; ``infiltration_to_
+    extraction`` looks forward, so its spin-up sits at the end and the staircase is the exact
+    time-reversal. Both are analytic, so assert them to machine precision.
     """
-    flow_values, flow_tedges = constant_flow_setup
+    flow_values, tedges = constant_flow_setup
 
     result_extraction = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=multiple_pore_volumes,
         direction="extraction_to_infiltration",
     )
 
     result_infiltration = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=multiple_pore_volumes,
         direction="infiltration_to_extraction",
     )
 
-    # Both should be valid fractions
-    assert np.all((result_extraction >= 0.0) & (result_extraction <= 1.0))
-    assert np.all((result_infiltration >= 0.0) & (result_infiltration <= 1.0))
-
-    # Both should have some variation (not all zeros or all ones)
-    assert len(np.unique(result_extraction)) > 1
-    assert len(np.unique(result_infiltration)) > 1
+    expected_extraction = np.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0])
+    np.testing.assert_allclose(result_extraction, expected_extraction, rtol=0, atol=1e-15)
+    np.testing.assert_allclose(result_infiltration, expected_extraction[::-1], rtol=0, atol=1e-15)
 
 
 def test_precomputed_residence_time():
@@ -212,20 +211,25 @@ def test_precomputed_residence_time():
 
 
 def test_edge_case_single_time_point():
-    """Test fraction_explained with minimal data (single time point)."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-03", freq="D")
+    """Test fraction_explained with minimal data (two bins, single pore volume).
+
+    With flow=100 m³/d and pore volume 50 m³ the residence time is 0.5 days, well within
+    both daily bins, so the single pore volume is informed at every output instant and the
+    fraction is exactly 1.0 everywhere (a single valid pore volume gives 1/1).
+    """
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-03", freq="D")
     flow_values = np.array([100.0, 100.0])
     pore_volume = 50.0  # Small enough to give valid residence time
 
     result = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
     )
 
     assert result.shape == (2,)
-    assert np.all((result >= 0.0) & (result <= 1.0))
+    np.testing.assert_array_equal(result, np.ones(2))
 
 
 def test_mixed_valid_invalid_residence_times():
@@ -234,8 +238,8 @@ def test_mixed_valid_invalid_residence_times():
 
     Use pore volumes where some will give valid residence times and others won't.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-08", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-08", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)
 
     # Mix of small (valid) and large (invalid) pore volumes.
     # Sorted residence times at flow=100 m3/d: [1, 2, 3, 1e4, 2e4] days; only the
@@ -244,7 +248,7 @@ def test_mixed_valid_invalid_residence_times():
 
     result = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volumes,
         direction="extraction_to_infiltration",
     )
@@ -260,7 +264,7 @@ def test_input_validation_missing_parameters():
     with pytest.raises((ValueError, TypeError)):
         fraction_explained()
 
-    # Missing flow_tedges when rt is None
+    # Missing tedges when rt is None
     with pytest.raises(ValueError):
         fraction_explained(
             flow=np.array([100.0, 100.0]),
@@ -270,13 +274,13 @@ def test_input_validation_missing_parameters():
 
 def test_invalid_direction():
     """Test that invalid direction parameter raises error."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-04", freq="D")
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-04", freq="D")
     flow_values = np.array([100.0, 100.0, 100.0])
 
     with pytest.raises(ValueError, match="direction should be"):
         fraction_explained(
             flow=flow_values,
-            flow_tedges=flow_tedges,
+            tedges=tedges,
             aquifer_pore_volumes=200.0,
             direction="invalid_direction",
         )
@@ -284,7 +288,7 @@ def test_invalid_direction():
 
 def test_array_consistency():
     """Test that array inputs give consistent results."""
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-06", freq="D")
     flow_values = np.array([100.0, 110.0, 105.0, 95.0, 98.0])
 
     # Test with list vs numpy array pore volumes
@@ -293,14 +297,14 @@ def test_array_consistency():
 
     result_list = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volumes_list,
         direction="extraction_to_infiltration",
     )
 
     result_array = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volumes_array,
         direction="extraction_to_infiltration",
     )
@@ -315,8 +319,8 @@ def test_numerical_precision():
     Ensure that fractions are calculated precisely, especially for
     cases with many pore volumes.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-11", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-11", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)
 
     # 7 pore volumes spaced 50, 100, 150, 200, 250, 300, 350 m3 give residence
     # times 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5 days at constant flow=100 m3/d.
@@ -327,7 +331,7 @@ def test_numerical_precision():
 
     result = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volumes,
         direction="extraction_to_infiltration",
     )
@@ -343,8 +347,8 @@ def test_monotonic_behavior_across_pore_volumes():
     With ordered pore volumes and constant flow, smaller pore volumes should
     become valid before larger ones, creating monotonic increase pattern.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", end="2023-01-15", freq="D")
-    flow_values = np.full(len(flow_tedges) - 1, 100.0)
+    tedges = pd.date_range(start="2023-01-01", end="2023-01-15", freq="D")
+    flow_values = np.full(len(tedges) - 1, 100.0)
 
     # Well-separated pore volumes give residence times 1, 3, 5, 7, 9 days at
     # constant flow=100 m3/d. Over 14 daily output bins this produces a clean
@@ -353,7 +357,7 @@ def test_monotonic_behavior_across_pore_volumes():
 
     result = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=pore_volumes,
         direction="extraction_to_infiltration",
     )
@@ -378,13 +382,13 @@ def test_inf_flow_yields_finite_residence_time_and_full_fraction():
     falls inside the valid range and the spin-up gap closes. ``inf - inf = nan``
     inside numpy's interp emits a harmless RuntimeWarning that we silence here.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", periods=11, freq="D")
+    tedges = pd.date_range(start="2023-01-01", periods=11, freq="D")
     flow_values = np.full(10, np.inf)
     apv = np.array([100.0, 200.0, 300.0, 400.0])
 
     result = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=apv,
         direction="extraction_to_infiltration",
     )
@@ -399,14 +403,14 @@ def test_partial_nan_flow_propagates_to_zero_fraction():
     refactor that switches to per-element NaN propagation breaks this test loudly rather
     than silently changing what callers see.
     """
-    flow_tedges = pd.date_range(start="2023-01-01", periods=11, freq="D")
+    tedges = pd.date_range(start="2023-01-01", periods=11, freq="D")
     flow_values = np.full(10, 100.0)
     flow_values[3:5] = np.nan
     apv = np.array([100.0, 200.0, 300.0])
 
     result = fraction_explained(
         flow=flow_values,
-        flow_tedges=flow_tedges,
+        tedges=tedges,
         aquifer_pore_volumes=apv,
         direction="extraction_to_infiltration",
     )
@@ -423,7 +427,7 @@ def test_fraction_in_zero_one_for_random_inputs(seed):
     """
     rng = np.random.default_rng(seed)
     n_times = int(rng.integers(5, 40))
-    flow_tedges = pd.date_range(start="2023-01-01", periods=n_times + 1, freq="D")
+    tedges = pd.date_range(start="2023-01-01", periods=n_times + 1, freq="D")
     flow_values = rng.uniform(low=0.1, high=500.0, size=n_times)
     n_pv = int(rng.integers(1, 8))
     apv = rng.uniform(low=10.0, high=2000.0, size=n_pv)
@@ -432,7 +436,7 @@ def test_fraction_in_zero_one_for_random_inputs(seed):
     for direction in ("extraction_to_infiltration", "infiltration_to_extraction"):
         result = fraction_explained(
             flow=flow_values,
-            flow_tedges=flow_tedges,
+            tedges=tedges,
             aquifer_pore_volumes=apv,
             direction=direction,
             retardation_factor=retardation,
