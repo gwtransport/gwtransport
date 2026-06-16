@@ -46,6 +46,14 @@ diffusion
    :undoc-members:
    :show-inheritance:
 
+examples
+========
+
+.. automodule:: gwtransport.examples
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 fronttracking
 =============
 

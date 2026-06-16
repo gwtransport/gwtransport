@@ -13,14 +13,10 @@ the moving-frame dispersion product. Its bin-average over a cout bin has the clo
 antiderivative ``I(x) = 0.5*x + 0.5*[x*erf(x/s) + (s/sqrt(pi))*exp(-(x/s)^2)]``,
 ``s = 2*sqrt(D_t)``. Evaluating ``I`` once per cout edge with ``D_t`` carried *per edge*
 and differencing yields the flux concentration ``C_F`` directly -- not merely ``C_R`` --
-because the per-edge geometry gives ``d(tau)/dx = R/v``, so the slope is
-``dD_t/dx = R*D_m/v + alpha_L``. This equals the Kreft-Zuber flux coefficient
-``D_L/v = D_m/v + alpha_L`` only when ``R = 1``. For ``R = 1`` (any ``D_m``/``alpha_L``) the
-dispersive boundary-flux correction therefore emerges from the ``D_t`` variation across the bin
-with no explicit correction term. For ``R != 1`` *and* ``D_m > 0`` the per-edge antiderivative
-bakes in the R-weighted molecular flux, so an explicit retardation correction subtracting
-``(R-1)*D_m/v`` times the bin-averaged Gaussian density is applied (see lines below and
-:func:`_pv_band_values`) to recover the Kreft-Zuber coefficient.
+because ``dD_t/dx = D_m/v_s + alpha_L = D_s/v_s`` is exactly the Kreft-Zuber flux coefficient
+at the solute-front velocity ``v_s = Q*L/(R*V_pore)`` (using ``d(tau)/dx = 1/v_s`` with
+``tau = R*V/(L*Q)``). The dispersive boundary-flux correction therefore emerges from the
+``D_t`` variation across the bin; no explicit correction term is added.
 
 The elapsed time ``tau`` and travel distance ``xi`` are read directly from the time and
 cumulative-volume edges (``tau_ij = t_cout_i - t_cin_j``, ``xi`` geometric), so no per-cell
@@ -49,8 +45,8 @@ concentration on 1D streamtubes, with retardation and the moving-frame variance
 ``molecular_diffusivity`` / ``longitudinal_dispersivity`` arrays. Whenever the cout grid is
 at or finer than the flow grid, this module reproduces :mod:`gwtransport.diffusion` to
 machine precision for *every* parameter regime -- including ``retardation_factor != 1`` with
-``molecular_diffusivity > 0``, whose flux correction is itself evaluated in closed form
-(its Gaussian-density bin-average has an exact erf/erfcx form) -- while being ~80-90x faster
+``molecular_diffusivity > 0``, where the antiderivative's slope ``dD_t/dx = D_s/v_s`` already
+carries the solute-front Kreft-Zuber flux coefficient natively -- while being ~80-90x faster
 even before banding (closed form, no Gauss-Legendre quadrature, no residence-time inversion),
 and the banded build computes only the non-zero breakthrough band -- faster still at the
 weak-to-moderate dispersion of realistic problems. So it is the right default. The only case that favours
@@ -88,7 +84,6 @@ from gwtransport._diffusion_shared import (
     _broadcast_to_pore_volumes,
     _cout_cumulative_volume,
     _extend_tedges_flag,
-    _retardation_excess_density,
     _solve_reverse_banded,
     _validate_inputs,
 )
@@ -219,18 +214,19 @@ def _pv_band_values(
     length: float,
     molecular_diffusivity: float,
     longitudinal_dispersivity: float,
-    retardation_factor: float,
-    velocity: npt.NDArray[np.floating],
 ) -> npt.NDArray[np.floating]:
     r"""Bin-averaged ``C_F`` stripe for one streamtube on the shared band (values pass).
 
     ``C_F`` over a cout bin is ``(I(x_hi) - I(x_lo)) / dx`` with the closed-form antiderivative
-    ``I`` evaluated at both cout edges over the band cin edges, plus the same closed-form
-    retardation correction as the slow quadrature. The stripe is the band itself: each row spans
-    cin edges ``col_start[k] .. col_start[k] + full_band`` (``full_band + 1`` edges), so the
-    coefficient for band offset ``b`` (cin bin ``col_start[k] + b``) is ``frac[b] - frac[b + 1]``.
-    The zero-dispersion limit is exact here too: ``D_t`` floors to ``_DT_FLOOR``, so ``C_F`` is a
-    step smoothed by ~1e-15.
+    ``I`` evaluated at both cout edges over the band cin edges. Because ``D_t = D_m*tau + alpha_L*xi``
+    with ``tau = R*V/(L*Q)``, the antiderivative's slope ``dD_t/dx = R*D_m/v_fluid + alpha_L =
+    D_s/v_s`` is exactly the Kreft-Zuber flux coefficient at the solute-front velocity
+    ``v_s = Q*L/(R*V_pore)``, so the flux concentration emerges natively -- no correction term is
+    added. The stripe is the band itself: each row spans cin edges
+    ``col_start[k] .. col_start[k] + full_band`` (``full_band + 1`` edges), so the coefficient for
+    band offset ``b`` (cin bin ``col_start[k] + b``) is ``frac[b] - frac[b + 1]``. The
+    zero-dispersion limit is exact here too: ``D_t`` floors to ``_DT_FLOOR``, so ``C_F`` is a step
+    smoothed by ~1e-15.
 
     Returns
     -------
@@ -273,18 +269,11 @@ def _pv_band_values(
         + longitudinal_dispersivity * np.maximum(sw_hi + length, 0.0),
         _DT_FLOOR,
     )
-    i_lo, s_lo, g_lo = _breakthrough_antideriv(sw_lo, dt_lo)
-    i_hi, s_hi, g_hi = _breakthrough_antideriv(sw_hi, dt_hi)
+    i_lo = _breakthrough_antideriv(sw_lo, dt_lo)
+    i_hi = _breakthrough_antideriv(sw_hi, dt_hi)
     dx = sw_hi - sw_lo
     with np.errstate(divide="ignore", invalid="ignore"):
         frac = np.where(dx > 0.0, (i_hi - i_lo) / dx, 0.0)
-    if retardation_factor != 1.0 and molecular_diffusivity > 0.0:
-        density_binavg = _retardation_excess_density(
-            x_lo=sw_lo, x_hi=sw_hi, dx=dx, d_lo=dt_lo, d_hi=dt_hi, s_lo=s_lo, s_hi=s_hi, g_lo=g_lo, g_hi=g_hi
-        )
-        with np.errstate(divide="ignore", invalid="ignore"):
-            excess = np.where(velocity > 0.0, (retardation_factor - 1.0) * molecular_diffusivity / velocity, 0.0)
-        frac -= excess[:, None] * density_binavg
 
     return frac[:, :-1] - frac[:, 1:]
 
@@ -362,13 +351,6 @@ def _closed_form_coeff_matrix(
     )
     valid_cout_bins = ~np.any(np.isnan(rt_at_cout_tedges[:, :-1]) | np.isnan(rt_at_cout_tedges[:, 1:]), axis=0)
 
-    # Fluid (unretarded) velocity in each cout bin: q_cout * L / V_pore (V_pore folded in
-    # per streamtube below). q_cout = dV_cout / dt_cout.
-    dv_cout = np.diff(cumulative_volume_at_cout)
-    dt_cout = np.diff(cout_tedges_days)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        q_cout = np.where(dt_cout > 0, dv_cout / dt_cout, 0.0)
-
     # Slowest cin-side flow rate, used to bound the broken-through band width (the slowest flow
     # gives the steepest dD_t/dx). Zero when flow is everywhere zero -> the band widens (capped
     # at n_cin_bins), and the resulting no-flow rows are masked invalid anyway.
@@ -403,7 +385,7 @@ def _closed_form_coeff_matrix(
         )
         np.minimum(union_lo, lo, out=union_lo)
         np.maximum(union_hi, hi, out=union_hi)
-        geometry.append((r_vpv, length, d_m, alpha_l, v_pore))
+        geometry.append((r_vpv, length, d_m, alpha_l))
 
     col_start = union_lo
     full_band = min(int(np.max(union_hi - union_lo)) + 1, n_cin_bins)
@@ -411,8 +393,7 @@ def _closed_form_coeff_matrix(
 
     # PASS 2 (values): each streamtube's C_F stripe is built on the shared band (col_start,
     # full_band), so its coeff is already offset-aligned and accumulates directly into the buffer.
-    for r_vpv, length, d_m, alpha_l, v_pore in geometry:
-        velocity = q_cout * length / v_pore
+    for r_vpv, length, d_m, alpha_l in geometry:
         band_vals += _pv_band_values(
             col_start=col_start,
             full_band=full_band,
@@ -424,8 +405,6 @@ def _closed_form_coeff_matrix(
             length=length,
             molecular_diffusivity=d_m,
             longitudinal_dispersivity=alpha_l,
-            retardation_factor=retardation_factor,
-            velocity=velocity,
         )
 
     band_vals /= len(aquifer_pore_volumes)

@@ -24,7 +24,9 @@ from gwtransport.fronttracking.math import (
 from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWave, RarefactionWave, ShockWave
 
 # Numerical tolerance constants
-EPSILON_CONCENTRATION = 1e-15  # Tolerance for checking if concentration change is negligible
+# Shared single source for the negligible-concentration-change tolerance; the
+# solver imports this rather than redefining it.
+EPSILON_CONCENTRATION = 1e-15
 
 
 def handle_characteristic_collision(

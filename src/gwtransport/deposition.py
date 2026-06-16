@@ -31,9 +31,9 @@ Available functions:
   choosing between different nullspace objectives (``'squared_differences'``,
   ``'summed_differences'``, or custom callables) and optimization methods.
 
-- :func:`compute_deposition_weights` - Internal helper function. Build the weight operator
-  relating deposition rates to concentration changes in a compact banded layout. Used by
-  deposition_to_extraction (forward), extraction_to_deposition (reverse), and
+- :func:`compute_deposition_weights` - Build the banded weight operator relating deposition
+  rates to concentration changes in a compact banded layout. Useful for custom inverse solvers.
+  Used by deposition_to_extraction (forward), extraction_to_deposition (reverse), and
   extraction_to_deposition_full. Calculates contact area between water parcels and aquifer
   matrix based on streamline geometry and residence times.
 
@@ -153,7 +153,6 @@ def compute_deposition_weights(
 ) -> tuple[
     npt.NDArray[np.floating],
     npt.NDArray[np.intp],
-    npt.NDArray[np.floating],
     npt.NDArray[np.bool_],
     npt.NDArray[np.bool_],
 ]:
@@ -178,13 +177,13 @@ def compute_deposition_weights(
     Parameters
     ----------
     flow : array-like
-        Flow rates in aquifer [m3/day]. Length must equal ``len(tedges) - 1``.
+        Flow rates in aquifer [m³/day]. Length must equal ``len(tedges) - 1``.
     tedges : pandas.DatetimeIndex
         Time bin edges for flow data.
     cout_tedges : pandas.DatetimeIndex
         Time bin edges for output concentration data.
     aquifer_pore_volume : float
-        Aquifer pore volume [m3].
+        Aquifer pore volume [m³].
     porosity : float
         Aquifer porosity [dimensionless].
     thickness : float
@@ -201,9 +200,6 @@ def compute_deposition_weights(
         residence time, zero-flow cout bins) are zero.
     col_start : numpy.ndarray of int
         First cin bin index of each cout row's band, shape ``(n_cout,)``.
-    extracted_volume : numpy.ndarray
-        Through-flow volume extracted during each cout bin, shape ``(n_cout,)``.
-        Zero for zero-flow cout bins.
     row_valid : numpy.ndarray of bool
         True for cout bins whose residence-time window is fully defined and
         carries flow (the finite, nonzero rows), shape ``(n_cout,)``.
@@ -275,19 +271,20 @@ def compute_deposition_weights(
     slot = np.arange(full_band)[None, :]
     widths = np.where(slot < width[:, None], widths, 0.0)
 
-    # volume = clipped_integral / width, area = volume / (porosity*thickness),
-    # numerator = area * width -- so the bin width cancels and numerator is just
-    # clipped_integral / (porosity*thickness). _clipped_linear_integral already
-    # integrates over the bin width, so do NOT multiply by widths again.
+    # _clipped_linear_integral returns the volume*time measure (m³*day) of the
+    # parcel's residence-window overlap with each cin bin; dividing by
+    # (porosity*thickness) converts that overlap to contact area * time. The bin
+    # width is already folded into the integral, so do NOT multiply by widths
+    # again.
     top_integral = _clipped_linear_integral(y_top[:, :-1], y_top[:, 1:], widths, 0.0, r_apv)
     bottom_integral = _clipped_linear_integral(y_bot[:, :-1], y_bot[:, 1:], widths, 0.0, r_apv)
-    areas = np.maximum(top_integral - bottom_integral, 0.0)
-    numerator = areas / (porosity * thickness)
+    contact_volume_time = np.maximum(top_integral - bottom_integral, 0.0)
+    numerator = contact_volume_time / (porosity * thickness)
 
     band_vals = np.zeros((n_cout, full_band))
     # row_valid implies extracted_volume > 0, so the masked divide never sees a zero.
     band_vals[row_valid] = numerator[row_valid] / extracted_volume[row_valid, None]
-    return band_vals, col_start, extracted_volume, row_valid, spinup_row
+    return band_vals, col_start, row_valid, spinup_row
 
 
 def deposition_to_extraction(
@@ -307,16 +304,16 @@ def deposition_to_extraction(
     Parameters
     ----------
     dep : array-like
-        Deposition rates [ng/m2/day]. Length must equal len(tedges) - 1.
+        Deposition rates [ng/m²/day]. Length must equal len(tedges) - 1.
     flow : array-like
-        Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1. The model
+        Flow rates in aquifer [m³/day]. Length must equal len(tedges) - 1. The model
         assumes this value is constant over each interval ``[tedges[i], tedges[i+1])``.
     tedges : pandas.DatetimeIndex
         Time bin edges for deposition and flow data.
     cout_tedges : pandas.DatetimeIndex
         Time bin edges for output concentration data.
     aquifer_pore_volume : float
-        Aquifer pore volume [m3].
+        Aquifer pore volume [m³].
     porosity : float
         Aquifer porosity [dimensionless].
     thickness : float
@@ -330,13 +327,13 @@ def deposition_to_extraction(
         ``dep`` and ``flow`` as constant at their first observed values
         over the prepended interval. ``None`` keeps the existing
         strict-validity behavior (NaN cout rows during spin-up). A float
-        threshold has no effect with a single pore volume and behaves
-        like ``None``.
+        value is accepted but silently ignored; behavior is identical to
+        ``None``.
 
     Returns
     -------
     numpy.ndarray
-        Concentration changes [ng/m3] with length len(cout_tedges) - 1.
+        Concentration changes [ng/m³] with length len(cout_tedges) - 1.
 
     Raises
     ------
@@ -349,6 +346,7 @@ def deposition_to_extraction(
     See Also
     --------
     extraction_to_deposition : Inverse operation (deconvolution)
+    spinup_duration : Earliest extraction time with a fully resolved deposition history
     gwtransport.advection.infiltration_to_extraction : For concentration transport without deposition
     :ref:`concept-transport-equation` : Flow-weighted averaging approach
 
@@ -377,6 +375,8 @@ def deposition_to_extraction(
     ...     porosity=0.3,
     ...     thickness=10.0,
     ... )
+    >>> print(f"First finite cout: {cout[np.isfinite(cout)][0]:.4f} ng/m³")
+    First finite cout: 1.6667 ng/m³
     """
     tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
     dep_values, flow_values = np.asarray(dep), np.asarray(flow)
@@ -400,13 +400,13 @@ def deposition_to_extraction(
         retardation_factor=retardation_factor,
         cin=dep_values,
     )
-    weight_dep = np.asarray(weight_dep)
+    assert weight_dep is not None  # noqa: S101 -- narrowed: cin was passed in
 
     # Build the banded forward operator and apply it as a banded einsum instead of
     # a dense W.dot(dep). Spin-up rows (NaN residence time) carry an all-zero band
     # and must return NaN. Zero-flow cout bins (extracted_volume == 0) carry a zero
     # band and return 0.
-    band_vals, col_start, _, _, spinup_row = compute_deposition_weights(
+    band_vals, col_start, _, spinup_row = compute_deposition_weights(
         flow=weight_flow,
         tedges=weight_tedges,
         cout_tedges=cout_tedges,
@@ -449,13 +449,13 @@ def extraction_to_deposition(
     Parameters
     ----------
     cout : array-like
-        Concentration changes in extracted water [ng/m3]. Length must equal
+        Concentration changes in extracted water [ng/m³]. Length must equal
         len(cout_tedges) - 1. May contain NaN values, which will be excluded
         from the computation along with corresponding rows in the weight matrix.
         The model assumes this value is constant over each interval
         ``[cout_tedges[i], cout_tedges[i+1])``.
     flow : array-like
-        Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
+        Flow rates in aquifer [m³/day]. Length must equal len(tedges) - 1.
         Must not contain NaN values. The model assumes this value is constant
         over each interval ``[tedges[i], tedges[i+1])``.
     tedges : pandas.DatetimeIndex
@@ -465,7 +465,7 @@ def extraction_to_deposition(
         Time bin edges for output concentration data. Length must equal
         len(cout) + 1.
     aquifer_pore_volume : float
-        Aquifer pore volume [m3].
+        Aquifer pore volume [m³].
     porosity : float
         Aquifer porosity [dimensionless].
     thickness : float
@@ -488,13 +488,13 @@ def extraction_to_deposition(
         flow as constant at its first value over the prepended interval;
         the recovered deposition vector is sliced back to the original
         ``tedges`` length so the public output shape is unchanged.
-        ``None`` keeps strict-validity behavior. A float threshold has no
-        effect with a single pore volume and behaves like ``None``.
+        ``None`` keeps strict-validity behavior. A float value is accepted
+        but silently ignored; behavior is identical to ``None``.
 
     Returns
     -------
     numpy.ndarray
-        Mean deposition rates [ng/m2/day] between tedges. Length equals
+        Mean deposition rates [ng/m²/day] between tedges. Length equals
         len(tedges) - 1.
 
     Raises
@@ -506,6 +506,7 @@ def extraction_to_deposition(
     --------
     deposition_to_extraction : Forward operation (convolution)
     extraction_to_deposition_full : Full solver with nullspace options
+    spinup_duration : Earliest extraction time with a fully resolved deposition history
     gwtransport.advection.extraction_to_infiltration : For concentration transport without deposition
     gwtransport.utils.solve_inverse_transport_banded : Banded Tikhonov solver used for inversion
     :ref:`concept-transport-equation` : Flow-weighted averaging approach
@@ -548,8 +549,8 @@ def extraction_to_deposition(
     >>> tedges = pd.date_range("2019-12-31 12:00", "2020-01-10 12:00", freq="D")
     >>> cout_tedges = pd.date_range("2020-01-03 12:00", "2020-01-12 12:00", freq="D")
     >>>
-    >>> flow = np.full(len(dates), 100.0)  # m3/day
-    >>> cout = np.ones(len(cout_tedges) - 1) * 10.0  # ng/m3
+    >>> flow = np.full(len(dates), 100.0)  # m³/day
+    >>> cout = np.ones(len(cout_tedges) - 1) * 10.0  # ng/m³
     >>>
     >>> dep = extraction_to_deposition(
     ...     cout=cout,
@@ -562,8 +563,8 @@ def extraction_to_deposition(
     ... )
     >>> print(f"Deposition rates shape: {dep.shape}")
     Deposition rates shape: (10,)
-    >>> print(f"Mean deposition rate: {np.nanmean(dep):.2f} ng/m2/day")
-    Mean deposition rate: 6.00 ng/m2/day
+    >>> print(f"Mean deposition rate: {np.nanmean(dep):.2f} ng/m²/day")
+    Mean deposition rate: 6.00 ng/m²/day
     """
     tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
     cout_values, flow_values = np.asarray(cout), np.asarray(flow)
@@ -589,7 +590,7 @@ def extraction_to_deposition(
     )
 
     # Build the banded forward operator (rows sum to r_k = RT_k/(porosity*thickness)).
-    band_vals, col_start, _, row_valid, _ = compute_deposition_weights(
+    band_vals, col_start, row_valid, _ = compute_deposition_weights(
         flow=weight_flow,
         tedges=weight_tedges,
         cout_tedges=cout_tedges,
@@ -651,11 +652,11 @@ def extraction_to_deposition_full(
     Parameters
     ----------
     cout : array-like
-        Concentration changes in extracted water [ng/m3]. Length must equal
+        Concentration changes in extracted water [ng/m³]. Length must equal
         len(cout_tedges) - 1. May contain NaN values, which will be excluded
         from the computation along with corresponding rows in the weight matrix.
     flow : array-like
-        Flow rates in aquifer [m3/day]. Length must equal len(tedges) - 1.
+        Flow rates in aquifer [m³/day]. Length must equal len(tedges) - 1.
         Must not contain NaN values.
     tedges : pandas.DatetimeIndex
         Time bin edges for deposition and flow data. Length must equal
@@ -664,7 +665,7 @@ def extraction_to_deposition_full(
         Time bin edges for output concentration data. Length must equal
         len(cout) + 1.
     aquifer_pore_volume : float
-        Aquifer pore volume [m3].
+        Aquifer pore volume [m³].
     porosity : float
         Aquifer porosity [dimensionless].
     thickness : float
@@ -690,12 +691,14 @@ def extraction_to_deposition_full(
         Default ``"constant"`` shifts ``tedges[0]`` backward by
         ``retardation_factor * aquifer_pore_volume / flow[0]``; the
         recovered deposition is sliced back to the original ``tedges``
-        length. See :func:`extraction_to_deposition` for full semantics.
+        length. ``None`` keeps strict-validity behavior. A float value is
+        accepted but silently ignored; behavior is identical to ``None``.
+        See :func:`extraction_to_deposition` for full semantics.
 
     Returns
     -------
     numpy.ndarray
-        Mean deposition rates [ng/m2/day] between tedges. Length equals
+        Mean deposition rates [ng/m²/day] between tedges. Length equals
         len(tedges) - 1.
 
     Raises
@@ -709,6 +712,7 @@ def extraction_to_deposition_full(
     See Also
     --------
     extraction_to_deposition : Recommended solver using Tikhonov regularization.
+    spinup_duration : Earliest extraction time with a fully resolved deposition history.
     gwtransport.utils.solve_underdetermined_system : Underlying solver.
 
     Notes
@@ -743,7 +747,7 @@ def extraction_to_deposition_full(
     # The nullspace solver (lstsq + null_space SVD) genuinely needs a dense matrix,
     # so build the band and densify it. Spin-up rows are set to NaN to match the
     # behavior of the historical dense build (which left those rows entirely NaN).
-    band_vals, col_start, _, _, spinup_row = compute_deposition_weights(
+    band_vals, col_start, _, spinup_row = compute_deposition_weights(
         flow=weight_flow,
         tedges=weight_tedges,
         cout_tedges=cout_tedges,
@@ -769,8 +773,8 @@ def extraction_to_deposition_full(
 
 def spinup_duration(
     *,
-    flow: np.ndarray,
-    flow_tedges: pd.DatetimeIndex,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
     aquifer_pore_volume: float,
     retardation_factor: float,
 ) -> float:
@@ -778,21 +782,21 @@ def spinup_duration(
     Compute the spinup duration for deposition modeling.
 
     The spinup duration is the smallest extraction time ``t*`` (relative to
-    ``flow_tedges[0]``) at which the extracted water was infiltrated exactly
-    at ``flow_tedges[0]``: equivalently, the time at which the cumulative
-    flow first reaches ``retardation_factor * aquifer_pore_volume``. For
-    extraction times earlier than ``t*`` the extracted concentration lacks
-    complete deposition history. Under constant flow this equals
+    ``tedges[0]``) at which the extracted water was infiltrated exactly at
+    ``tedges[0]``: equivalently, the time at which the cumulative flow first
+    reaches ``retardation_factor * aquifer_pore_volume``. For extraction times
+    earlier than ``t*`` the extracted concentration lacks complete deposition
+    history. Under constant flow this equals
     ``aquifer_pore_volume * retardation_factor / flow``.
 
     Parameters
     ----------
-    flow : numpy.ndarray
-        Flow rate of water in the aquifer [m3/day].
-    flow_tedges : pandas.DatetimeIndex
+    flow : array-like
+        Flow rate of water in the aquifer [m³/day].
+    tedges : pandas.DatetimeIndex
         Time edges for the flow data.
     aquifer_pore_volume : float
-        Pore volume of the aquifer [m3].
+        Pore volume of the aquifer [m³].
     retardation_factor : float
         Retardation factor of the compound in the aquifer [dimensionless].
 
@@ -804,9 +808,14 @@ def spinup_duration(
     Raises
     ------
     ValueError
-        If the cumulative flow over the entire ``flow_tedges`` window does
-        not reach ``retardation_factor * aquifer_pore_volume``, indicating
-        the flow timeseries is too short to fully characterise the aquifer.
+        If the cumulative flow over the entire ``tedges`` window does not
+        reach ``retardation_factor * aquifer_pore_volume``, indicating the
+        flow timeseries is too short to characterise the spin-up duration.
+
+    See Also
+    --------
+    deposition_to_extraction : Forward solver that uses the spin-up duration to resolve NaN cout rows.
+    extraction_to_deposition : Inverse solver.
     """
     # Spin-up is the residence time of water *currently being extracted*: how
     # far back in history we must know deposition to fully characterise the
@@ -817,27 +826,27 @@ def spinup_duration(
     # forward-in-time question that is not what spin-up means).
     #
     # The smallest extraction time t* at which the extracted water was
-    # infiltrated exactly at flow_tedges[0] satisfies
+    # infiltrated exactly at tedges[0] satisfies
     # ``flow_cum(t*) = R * V_pore``; the spin-up duration is then
     # ``t* - 0 = t*``. Inverting the cumulative flow gives this value
-    # exactly (no quantisation to flow_tedges spacing). Under constant flow
+    # exactly (no quantisation to tedges spacing). Under constant flow
     # this matches V*R/Q.
     flow_arr = np.asarray(flow)
-    flow_tedges_days = tedges_to_days(flow_tedges)
-    dt_days = np.diff(flow_tedges_days)
+    tedges_days = tedges_to_days(tedges)
+    dt_days = np.diff(tedges_days)
     target_cum = retardation_factor * float(aquifer_pore_volume)
     # Feasibility guard on the *un-bumped* cumulative total: the request is infeasible iff
     # R*V_pore exceeds the true total infiltrated volume. (The monotone bump below would
     # otherwise lift a trailing Q=0 plateau above target_cum and admit an infeasible request.)
     flow_cum_raw = cumulative_flow_volume(flow_arr, dt_days)
     if not flow_cum_raw[-1] >= target_cum:
-        msg = "Residence time at the first time step is NaN. This indicates that the aquifer is not fully informed: flow timeseries too short."
+        msg = (
+            f"Cumulative flow over the entire tedges window ({flow_cum_raw[-1]:.6g} m³) does not reach "
+            f"retardation_factor * aquifer_pore_volume ({target_cum:.6g} m³); the flow timeseries is too "
+            "short to characterise the spin-up duration."
+        )
         raise ValueError(msg)
     # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
     # by the smallest representable amount so np.interp resolves consistently at plateau levels.
     flow_cum = cumulative_flow_volume(flow_arr, dt_days, strictly_monotone=True)
-    rt_value = float(linear_interpolate(x_ref=flow_cum, y_ref=flow_tedges_days, x_query=target_cum))
-    if np.isnan(rt_value):
-        msg = "Residence time at the first time step is NaN. This indicates that the aquifer is not fully informed: flow timeseries too short."
-        raise ValueError(msg)
-    return rt_value
+    return float(linear_interpolate(x_ref=flow_cum, y_ref=tedges_days, x_query=target_cum))

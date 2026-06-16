@@ -34,8 +34,6 @@ def _positive_part_integral(
         Integral values.
     """
     both_pos = (a > 0) & (b > 0)
-    only_a_pos = (a > 0) & ~both_pos
-    only_b_pos = (b > 0) & ~both_pos
 
     abs_diff = np.abs(a - b)
     # Sentinel ``1.0`` avoids division by zero in the ``excess**2 / (2*safe_diff)``
@@ -44,7 +42,11 @@ def _positive_part_integral(
     # is used instead), so the sentinel value is never observed in the output.
     safe_diff = np.where(abs_diff > 0, abs_diff, 1.0)
 
-    excess = np.where(only_a_pos, a, np.where(only_b_pos, b, 0.0))
+    # When exactly one endpoint is positive, ``excess`` is that endpoint;
+    # when neither is positive it is 0. ``max(max(a, b), 0)`` yields both:
+    # the positive endpoint when only one is positive, 0 otherwise. The
+    # both-positive case is discarded by the ``np.where`` below.
+    excess = np.maximum(np.maximum(a, b), 0.0)
 
     return np.where(
         both_pos,

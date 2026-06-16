@@ -106,8 +106,8 @@ def test_infiltration_to_extraction_series_output_structure():
     assert isinstance(tedges_out[0], pd.Timestamp)
 
 
-def test_infiltration_to_extraction_series_constant_input():
-    """Test constant concentration produces constant output with proper time shift."""
+def test_infiltration_to_extraction_series_residence_time_shift():
+    """Time edges shift forward by exactly the residence time (pore_volume / flow)."""
     dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
     flow = np.ones(len(dates)) * 100.0
@@ -208,8 +208,8 @@ def test_extraction_to_infiltration_series_output_structure():
     assert tedges_out.notna().any()
 
 
-def test_extraction_to_infiltration_series_constant_input():
-    """Test constant concentration produces constant output with proper time shift backward."""
+def test_extraction_to_infiltration_series_residence_time_shift():
+    """Time edges shift backward by exactly the residence time (pore_volume / flow)."""
     dates = pd.date_range(start="2020-01-10", end="2020-01-20", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
     flow = np.ones(len(dates)) * 100.0
@@ -399,7 +399,14 @@ def test_gamma_infiltration_to_extraction_with_mean_std():
 
 
 def test_gamma_infiltration_to_extraction_retardation_factor():
-    """Test gamma_infiltration_to_extraction with different retardation factors."""
+    """Retardation shifts the gamma step arrival by exactly (R-1)*mean_pv/flow days.
+
+    With a narrow gamma (std << mean) the APVD collapses toward a single pore
+    volume, so the mean residence time ``R*mean_pv/flow`` dominates and the step
+    in cout lands at output index ``offset + R*mean_pv/flow``. Comparing R=1 and
+    R=2 gives a deterministic shift of ``mean_pv/flow`` bins. This replaces a
+    loose diff/std comparison that passed even under wrong-direction retardation.
+    """
     # Create test data - use year-long series for robust results
     dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -407,53 +414,48 @@ def test_gamma_infiltration_to_extraction_retardation_factor():
     cout_dates = pd.date_range(start="2020-03-01", end="2020-10-31", freq="D")
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-    # Use a step function to see retardation effects
-    cin_values = np.ones(len(dates))
-    cin_values[90:] = 2.0  # Step change on day 91 (April 1)
+    # Step function: jump from 0 to 1 on cin day 90 (index 90).
+    cin_values = np.zeros(len(dates))
+    cin_values[90:] = 1.0
     cin = pd.Series(cin_values, index=dates)
-    flow = pd.Series(np.ones(len(dates)) * 100, index=dates)
+    flow_rate = 100.0
+    flow = pd.Series(np.full(len(dates), flow_rate), index=dates)
 
-    # Compare results with different retardation factors
-    cout1 = gamma_infiltration_to_extraction(
+    # Narrow gamma: mean_pv = 300 m³ -> mean RT = 3 days; std = 10 m³ -> 0.1 day.
+    mean_pv = 300.0
+    std_pv = 10.0
+
+    cout_r1 = gamma_infiltration_to_extraction(
         cin=cin,
         tedges=tedges,
         cout_tedges=cout_tedges,
         flow=flow,
-        alpha=10.0,
-        beta=10.0,
+        mean=mean_pv,
+        std=std_pv,
         retardation_factor=1.0,
-        n_bins=20,
+        n_bins=50,
     )
-
-    cout2 = gamma_infiltration_to_extraction(
+    cout_r2 = gamma_infiltration_to_extraction(
         cin=cin,
         tedges=tedges,
         cout_tedges=cout_tedges,
         flow=flow,
-        alpha=10.0,
-        beta=10.0,
+        mean=mean_pv,
+        std=std_pv,
         retardation_factor=2.0,
-        n_bins=20,
+        n_bins=50,
     )
 
-    # Explicit validation
-    valid_mask = ~np.isnan(cout1) & ~np.isnan(cout2)
-    valid_count = np.sum(valid_mask)
-    assert valid_count >= 200, f"Expected at least 200 valid overlap bins, got {valid_count}"
+    # Find the step midpoint (first bin where cout exceeds 0.5) on each path.
+    valid = ~np.isnan(cout_r1) & ~np.isnan(cout_r2)
+    idx_r1 = np.argmax((cout_r1 > 0.5) & valid)
+    idx_r2 = np.argmax((cout_r2 > 0.5) & valid)
 
-    # Extract valid values
-    cout1_valid = cout1[valid_mask]
-    cout2_valid = cout2[valid_mask]
-
-    # Test that step timing is different (max absolute difference)
-    max_diff = np.max(np.abs(cout1_valid - cout2_valid))
-    assert max_diff > 0.1, f"Expected max difference > 0.1 due to shifted step, got {max_diff:.3f}"
-
-    # Test that variation is present (step was detected)
-    std1 = np.std(cout1_valid)
-    std2 = np.std(cout2_valid)
-    assert std1 > 0.1, f"Expected std1 > 0.1 showing step, got {std1:.3f}"
-    assert std2 > 0.1, f"Expected std2 > 0.1 showing step, got {std2:.3f}"
+    # The R=2 step lags R=1 by exactly (R-1)*mean_pv/flow = 3 bins.
+    expected_delay = round((2.0 - 1.0) * mean_pv / flow_rate)
+    assert idx_r2 - idx_r1 == expected_delay, (
+        f"Expected R=2 step to lag R=1 by {expected_delay} bins, got {idx_r2 - idx_r1}"
+    )
 
 
 def test_gamma_infiltration_to_extraction_constant_input():
@@ -522,54 +524,54 @@ def test_gamma_infiltration_to_extraction_missing_parameters():
 
 
 def test_gamma_infiltration_to_extraction_analytical_mean_residence_time():
-    """Test gamma_infiltration_to_extraction with analytical mean residence time."""
-    # Create constant input
+    """Step crossing lags by the analytical gamma mean residence time.
+
+    For a symmetric-enough gamma APVD the cout 50%-crossing of a unit step lags
+    the cin step by the mean residence time ``mean_pv/flow``. With mean_pv = 500
+    and flow = 100 the expected lag is 5 days; a wider gamma broadens the
+    breakthrough but leaves the 50%-crossing at the mean. This is a genuine
+    residence-time assertion, unlike the previous constant-input steady-state
+    check (covered by test_gamma_infiltration_to_extraction_constant_input).
+    """
     dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    # Output period starts later to capture steady state
-    cout_dates = pd.date_range(start="2020-06-01", end="2020-11-30", freq="D")
+    cout_dates = pd.date_range(start="2020-01-15", end="2020-11-30", freq="D")
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-    # Constant input and flow
-    cin = pd.Series([10.0] * len(dates), index=dates)
-    flow = pd.Series([100.0] * len(dates), index=dates)
+    # Unit step in cin on day 100 (index 100).
+    step_idx = 100
+    cin_values = np.zeros(len(dates))
+    cin_values[step_idx:] = 1.0
+    cin = pd.Series(cin_values, index=dates)
+    flow_rate = 100.0
+    flow = pd.Series([flow_rate] * len(dates), index=dates)
 
-    # Gamma distribution parameters
-    # Mean residence time = alpha * beta / flow = 10 * 10 / 100 = 1 day
-    alpha = 10.0
-    beta = 10.0
-
-    # Run gamma_infiltration_to_extraction
+    # Mean residence time = mean_pv / flow = 500 / 100 = 5 days.
+    mean_pv = 500.0
+    std_pv = 100.0
     cout = gamma_infiltration_to_extraction(
         cin=cin,
         flow=flow,
         tedges=tedges,
         cout_tedges=cout_tedges,
-        alpha=alpha,
-        beta=beta,
-        n_bins=20,
+        mean=mean_pv,
+        std=std_pv,
+        n_bins=50,
         retardation_factor=1.0,
     )
 
-    # Explicit validation
-    valid_mask = ~np.isnan(cout)
-    valid_count = np.sum(valid_mask)
-    assert valid_count >= 150, f"Expected at least 150 valid bins for 6-month extraction, got {valid_count}"
+    # cout index of the step day, accounting for the cout window offset.
+    offset_days = (cout_tedges[0] - tedges[0]) / pd.Timedelta(days=1)
+    cin_step_in_cout = step_idx - round(offset_days)
 
-    # Extract stable region (last 30 valid points for steady state)
-    valid_indices = np.where(valid_mask)[0]
-    assert len(valid_indices) >= 30, f"Need at least 30 valid points, got {len(valid_indices)}"
-
-    stable_indices = valid_indices[-30:]
-    stable_region = cout[stable_indices]
-
-    # For constant input and constant flow, steady-state output equals input exactly.
-    np.testing.assert_allclose(
-        stable_region,
-        10.0,
-        rtol=1e-12,
-        err_msg="Constant input should reproduce input exactly in steady state",
+    # The 50%-crossing of cout must lag the cin step by the mean RT (5 days).
+    valid = ~np.isnan(cout)
+    crossing = np.argmax((cout > 0.5) & valid)
+    measured_lag = crossing - cin_step_in_cout
+    expected_lag = round(mean_pv / flow_rate)
+    assert abs(measured_lag - expected_lag) <= 1, (
+        f"Expected step 50%-crossing to lag by ~{expected_lag} days, got {measured_lag}"
     )
 
 
@@ -637,14 +639,17 @@ def test_infiltration_to_extraction_constant_input():
     valid_count = np.sum(~np.isnan(cout))
     assert valid_count >= 150, f"Expected at least 150 valid bins for 6-month extraction, got {valid_count}"
 
-    # Test constant input preservation
-    valid_outputs = cout[~np.isnan(cout)]
-    mean_cout = np.mean(valid_outputs)
-    assert abs(mean_cout - 5.0) < 0.5, f"Expected mean ~5.0 (preserved from constant input), got {mean_cout:.3f}"
-
-    # Test low variation for constant input
-    std_cout = np.std(valid_outputs)
-    assert std_cout < 0.5, f"Expected std < 0.5 for constant input, got {std_cout:.3f}"
+    # For constant input and constant flow, the post-spin-up steady state is exact.
+    # Skip the first valid bins (spin-up margin: longest RT = 1000/100 = 10 days) and
+    # assert exact equality to the input on the steady-state interior.
+    valid_indices = np.where(~np.isnan(cout))[0]
+    steady_indices = valid_indices[30:]
+    np.testing.assert_allclose(
+        cout[steady_indices],
+        5.0,
+        rtol=1e-12,
+        err_msg="Constant input with constant flow should reproduce input exactly in steady state",
+    )
 
 
 def test_infiltration_to_extraction_single_pore_volume():
@@ -1041,15 +1046,19 @@ def test_infiltration_to_extraction_known_constant_delay():
         retardation_factor=1.0,
     )
 
-    # With 1-day residence time, the step change on day 5 should appear on day 6
-    # Output days 6-10 correspond to infiltration days 5-9
-    # So we expect outputs close to 5.0 (after the step change)
+    # With 1-day residence time, the step change on day 5 appears on day 6.
+    # Output days 6-10 correspond entirely to post-step infiltration days 5-9,
+    # so every valid output bin must equal the post-step value 5.0 exactly.
     valid_count = np.sum(~np.isnan(cout))
     assert valid_count >= 4, f"Expected at least 4 valid bins for 1-day delay, got {valid_count}"
 
     valid_outputs = cout[~np.isnan(cout)]
-    mean_output = np.mean(valid_outputs)
-    assert abs(mean_output - 5.0) < 0.5, f"Expected mean ~5.0 after step, got {mean_output:.3f}"
+    np.testing.assert_allclose(
+        valid_outputs,
+        5.0,
+        rtol=1e-12,
+        err_msg="Post-step output window should equal the post-step input exactly",
+    )
 
 
 def test_infiltration_to_extraction_known_average_of_pore_volumes():
@@ -1062,8 +1071,9 @@ def test_infiltration_to_extraction_known_average_of_pore_volumes():
     cout_dates = pd.date_range(start="2020-01-10", end="2020-01-15", freq="D")
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-    # Constant concentration and flow
-    cin = pd.Series([10.0] * len(dates), index=dates)
+    # Non-constant input so that averaging two identical pore volumes is a
+    # non-trivial equality (a constant input would make this hold trivially).
+    cin = pd.Series(np.sin(np.linspace(0, 2 * np.pi, len(dates))) + 2.0, index=dates)
     flow = pd.Series([100.0] * len(dates), index=dates)
 
     # Two identical pore volumes - average should equal the single pore volume result
@@ -1088,15 +1098,17 @@ def test_infiltration_to_extraction_known_average_of_pore_volumes():
         retardation_factor=1.0,
     )
 
-    # Results should be nearly identical (averaging two identical contributions)
+    # Results must be identical (averaging two identical contributions).
     valid_mask = ~np.isnan(cout_single) & ~np.isnan(cout_double)
-    if np.any(valid_mask):
-        np.testing.assert_allclose(
-            cout_single[valid_mask],
-            cout_double[valid_mask],
-            rtol=1e-10,
-            err_msg="Averaging identical pore volumes should give same result as single pore volume",
-        )
+    assert np.any(valid_mask), "Expected at least one valid overlapping output bin"
+    # Verify the input is genuinely non-constant so the equality is non-trivial.
+    assert np.ptp(cout_single[valid_mask]) > 0.5, "Output should vary (non-trivial test)"
+    np.testing.assert_allclose(
+        cout_single[valid_mask],
+        cout_double[valid_mask],
+        rtol=1e-10,
+        err_msg="Averaging identical pore volumes should give same result as single pore volume",
+    )
 
 
 def test_infiltration_to_extraction_known_zero_input_gives_zero_output():
@@ -1224,43 +1236,51 @@ def test_time_edge_consistency():
     assert len(cout) == len(cout_dates)
 
 
-def test_conservation_properties():
-    """Test mass conservation properties where applicable."""
-    # Create test data with longer time series for better conservation
-    dates = pd.date_range(start="2020-01-01", end="2021-12-31", freq="D")
+def test_gamma_infiltration_to_extraction_pulse_mass_conservation():
+    """Gamma forward transport conserves pulse mass under constant flow.
+
+    A finite cin pulse carries total mass ``Σ cin·flow·dt``. When the cout
+    window captures the entire pulse from every gamma pore-volume path
+    (strict ``spinup=None``), the flow-weighted output mass must equal the
+    input mass to machine precision -- a genuine property of the gamma path
+    not covered by the constant-input steady-state tests.
+    """
+    dates = pd.date_range(start="2020-01-01", end="2020-03-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
-    # Output period covers most of the second year to capture steady state
-    cout_dates = pd.date_range(start="2021-01-01", end="2021-11-30", freq="D")
+    # cin record starts ~20 days before the cout window so the pulse and the full
+    # gamma residence-time spread lie inside the cin range for every cout bin.
+    cout_dates = pd.date_range(start="2020-01-25", end="2020-03-31", freq="D")
     cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
 
-    cin = pd.Series(np.ones(len(dates)), index=dates)  # Constant input
-    flow = pd.Series(np.ones(len(dates)) * 100, index=dates)  # Constant flow
+    # Finite pulse: nonzero for 5 days, breaking through inside the cout window.
+    cin_values = np.zeros(len(dates))
+    cin_values[30:35] = 8.0
+    cin = pd.Series(cin_values, index=dates)
+    flow_rate = 100.0
+    flow = pd.Series([flow_rate] * len(dates), index=dates)
 
     cout = gamma_infiltration_to_extraction(
         cin=cin,
         tedges=tedges,
         cout_tedges=cout_tedges,
         flow=flow,
-        alpha=10.0,
-        beta=10.0,
+        mean=200.0,  # mean RT = 2 days
+        std=50.0,
         n_bins=10,
+        spinup=None,
     )
 
-    # For constant input and constant flow, the post-spin-up steady state equals
-    # the input value exactly. With one year of cin spin-up (2020) before the cout
-    # window (2021), every gamma pore-volume bin has had ample residence time to
-    # contribute fully.
-    valid_mask = ~np.isnan(cout)
-    valid_values = cout[valid_mask]
-    assert valid_values.size > 100, "Need a long valid steady-state region"
-    stable_region = valid_values[-100:]
-    np.testing.assert_allclose(
-        stable_region,
-        1.0,
-        rtol=1e-12,
-        err_msg="Constant input with constant flow should reproduce input exactly in steady state",
-    )
+    # Input mass over the (1-day) cin bins.
+    input_mass = np.sum(cin_values * flow_rate * 1.0)
+    assert input_mass > 0
+
+    # Output mass: constant flow, so Q_cout = flow_rate; sum over valid 1-day cout bins.
+    valid = ~np.isnan(cout)
+    output_mass = np.sum(cout[valid] * flow_rate * 1.0)
+
+    mass_error = abs(output_mass - input_mass) / input_mass
+    assert mass_error < 1e-12, f"Gamma pulse mass conservation error {mass_error:.2e} >= 1e-12"
 
 
 def test_empty_series():
@@ -1367,12 +1387,21 @@ def test_extraction_to_infiltration_constant_input():
     valid_count = np.sum(~np.isnan(cin))
     assert valid_count >= 300, f"Expected at least 300 valid bins with proper overlap, got {valid_count}"
 
-    # Test non-negativity and constant preservation
+    # Non-negativity over all valid bins.
     valid_inputs = cin[~np.isnan(cin)]
     assert np.all(valid_inputs >= 0), "All inputs should be non-negative"
 
-    mean_cin = np.mean(valid_inputs)
-    assert abs(mean_cin - 5.0) < 0.5, f"Expected mean ~5.0 (preserved from constant output), got {mean_cin:.3f}"
+    # For constant cout and constant flow the deconvolution recovers the exact
+    # constant in the data-dominated interior; clip spin-up/boundary bins (which
+    # absorb the Tikhonov bias of the ill-posed inverse) and assert exact equality.
+    valid_indices = np.where(~np.isnan(cin))[0]
+    interior_indices = valid_indices[20:-20]
+    np.testing.assert_allclose(
+        cin[interior_indices],
+        5.0,
+        atol=1e-9,
+        err_msg="Constant extraction with constant flow should recover the exact constant infiltration",
+    )
 
 
 def test_extraction_to_infiltration_single_pore_volume():
@@ -1731,11 +1760,15 @@ def test_gamma_extraction_to_infiltration_constant_input():
     middle_values = cin[middle_indices]
     assert not np.any(np.isnan(middle_values)), "Middle region must have no NaN values"
 
-    # Constant extraction must produce constant infiltration
-    mean_input = np.mean(middle_values)
-    std_input = np.std(middle_values)
-    assert abs(mean_input - 5.0) < 0.5, f"Expected mean ~5.0 in steady state, got {mean_input:.3f}"
-    assert std_input < 0.5, f"Expected low variance (std < 0.5) in steady state, got {std_input:.3f}"
+    # Constant extraction with constant flow recovers the exact constant
+    # infiltration in the data-dominated interior (boundary bins absorb the
+    # Tikhonov bias and are clipped above).
+    np.testing.assert_allclose(
+        middle_values,
+        5.0,
+        atol=1e-9,
+        err_msg="Constant extraction with constant flow should recover the exact constant infiltration",
+    )
 
 
 def test_gamma_extraction_to_infiltration_step_function():
@@ -1840,11 +1873,13 @@ def test_gamma_extraction_to_infiltration_roundtrip():
     reconstructed_middle = cin_reconstructed[middle_region]
     original_middle = cin_original.to_numpy()[middle_region]
 
-    # lstsq inversion should recover to machine precision in the stable middle region
+    # The Tikhonov inversion recovers the smooth sine input in the stable interior
+    # to ~1e-13 (the measured regularization bias on this well-conditioned gamma
+    # roundtrip); rtol=1e-10 is a generous margin that still fails any percent-level bias.
     np.testing.assert_allclose(
         reconstructed_middle,
         original_middle,
-        rtol=1e-6,
+        rtol=1e-10,
         err_msg=f"Roundtrip error: expected mean ~{np.mean(original_middle):.2f}, got {np.mean(reconstructed_middle):.2f}",
     )
 
@@ -1978,70 +2013,73 @@ def test_gamma_roundtrip_with_loc():
 
     middle_indices = valid_indices[50:-50]
     middle_region = slice(middle_indices[0], middle_indices[-1] + 1)
+    # Well-conditioned gamma roundtrip with loc>0: the interior recovers to ~1e-13;
+    # rtol=1e-10 is a generous margin that still fails any percent-level bias.
     np.testing.assert_allclose(
         cin_reconstructed[middle_region],
         cin_original.to_numpy()[middle_region],
-        rtol=1e-6,
+        rtol=1e-10,
     )
 
 
 def test_gamma_extraction_to_infiltration_retardation_factor():
-    """Test gamma_extraction_to_infiltration with different retardation factors."""
+    """Retardation shifts the deconvolved cin step earlier by (R-1)*mean_pv/flow days.
+
+    Deconvolution maps a step in cout back to a step in cin that leads it by the
+    residence time ``R*mean_pv/flow``. A larger R means a longer lead, so the
+    recovered cin step lands earlier. With a narrow gamma (std << mean) the
+    arrival is sharp and the R=2 step leads the R=1 step by exactly
+    ``(R-1)*mean_pv/flow`` bins. This replaces a loose diff/std comparison that
+    passed even under wrong-direction retardation.
+    """
     dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
     cin_dates = pd.date_range(start="2019-11-01", end="2020-11-30", freq="D")
     cin_tedges = compute_time_edges(tedges=None, tstart=None, tend=cin_dates, number_of_bins=len(cin_dates))
 
-    # Step function
-    cout_values = np.ones(len(dates))
+    # Step function: jump from 0 to 3 on cout day 180.
+    cout_values = np.zeros(len(dates))
     cout_values[180:] = 3.0
     cout = pd.Series(cout_values, index=dates)
-    flow = pd.Series([100.0] * len(cin_dates), index=cin_dates)
+    flow_rate = 100.0
+    flow = pd.Series([flow_rate] * len(cin_dates), index=cin_dates)
 
-    # Test with retardation factor = 1.0
+    # Narrow gamma: mean_pv = 300 m³ -> mean RT = 3 days; std = 10 m³ -> 0.1 day.
+    mean_pv = 300.0
+    std_pv = 10.0
+
     cin1 = gamma_extraction_to_infiltration(
         cout=cout,
         tedges=cin_tedges,
         cout_tedges=tedges,
         flow=flow,
-        alpha=10.0,
-        beta=10.0,
+        mean=mean_pv,
+        std=std_pv,
         retardation_factor=1.0,
-        n_bins=20,
+        n_bins=50,
     )
-
-    # Test with retardation factor = 2.0 (doubles residence time)
     cin2 = gamma_extraction_to_infiltration(
         cout=cout,
         tedges=cin_tedges,
         cout_tedges=tedges,
         flow=flow,
-        alpha=10.0,
-        beta=10.0,
+        mean=mean_pv,
+        std=std_pv,
         retardation_factor=2.0,
-        n_bins=20,
+        n_bins=50,
     )
 
-    # Explicit validation of overlap
-    valid_mask = ~np.isnan(cin1) & ~np.isnan(cin2)
-    valid_count = np.sum(valid_mask)
-    assert valid_count >= 250, f"Expected at least 250 valid overlap bins for year-long data, got {valid_count}"
+    # Find the step midpoint (first bin where recovered cin exceeds 1.5) on each path.
+    valid = ~np.isnan(cin1) & ~np.isnan(cin2)
+    idx_r1 = np.argmax((cin1 > 1.5) & valid)
+    idx_r2 = np.argmax((cin2 > 1.5) & valid)
 
-    # Extract valid values for comparison
-    cin1_valid = cin1[valid_mask]
-    cin2_valid = cin2[valid_mask]
-
-    # The timing of the step should be different - compute max absolute difference
-    max_diff = np.max(np.abs(cin1_valid - cin2_valid))
-    assert max_diff > 0.5, f"Expected max difference > 0.5 due to shifted timing, got {max_diff:.3f}"
-
-    # Test that spatial variation differs (distribution of values changes with retardation)
-    std1 = np.std(cin1_valid)
-    std2 = np.std(cin2_valid)
-    # At least one should show significant variation from the step function
-    max_std = max(std1, std2)
-    assert max_std > 0.3, f"Expected max std > 0.3 showing step variation, got {max_std:.3f}"
+    # The R=2 cin step leads R=1 by exactly (R-1)*mean_pv/flow = 3 bins.
+    expected_lead = round((2.0 - 1.0) * mean_pv / flow_rate)
+    assert idx_r1 - idx_r2 == expected_lead, (
+        f"Expected R=2 step to lead R=1 by {expected_lead} bins, got {idx_r1 - idx_r2}"
+    )
 
 
 def test_gamma_extraction_to_infiltration_with_mean_std():
@@ -2074,15 +2112,17 @@ def test_gamma_extraction_to_infiltration_with_mean_std():
     valid_count = np.sum(~np.isnan(cin))
     assert valid_count >= 100, f"Expected at least 100 valid bins for 6-month data, got {valid_count}"
 
-    # Test mean preservation for constant input
-    valid_mask = ~np.isnan(cin)
-    valid_cin = cin[valid_mask]
-    mean_cin = np.mean(valid_cin)
-    assert abs(mean_cin - 3.0) < 0.5, f"Expected mean ~3.0 (preserved from constant input), got {mean_cin:.3f}"
-
-    # For constant input, expect low variation in output
-    std_cin = np.std(valid_cin)
-    assert std_cin < 0.5, f"Expected low std (<0.5) for constant input, got {std_cin:.3f}"
+    # For constant extraction with constant flow the deconvolution recovers the
+    # exact constant in the data-dominated interior; clip spin-up/boundary bins
+    # (which absorb the Tikhonov bias) and assert exact equality.
+    valid_indices = np.where(~np.isnan(cin))[0]
+    interior_indices = valid_indices[20:-20]
+    np.testing.assert_allclose(
+        cin[interior_indices],
+        3.0,
+        atol=1e-9,
+        err_msg="Constant extraction with constant flow should recover the exact constant infiltration",
+    )
 
 
 def test_gamma_extraction_to_infiltration_missing_parameters():
@@ -2214,18 +2254,36 @@ def test_gamma_roundtrip_step_function():
         retardation_factor=1.0,
     )
 
-    # Verify step is recovered (smoothed by dispersion)
-    valid_mask = ~np.isnan(cin_recovered)
-    valid_recovered = cin_recovered[valid_mask]
+    # Build the analytic step on the recovered cin grid: 0 before the step day,
+    # 15.0 from the step day onward. The original step is on cin index 100 of the
+    # 2020-01-01 record, i.e. at the cin_tedges day equal to dates[100].
+    step_day = dates[100]
+    cin_grid_days = cin_tedges[:-1]  # left edge of each recovered bin
+    expected = np.where(cin_grid_days >= step_day, 15.0, 0.0)
 
-    # Note: Roundtrip is not exact due to regularization and the ill-posed nature of the inverse problem
-    # After mass conservation fix, we verify basic properties rather than exact recovery
-    assert len(valid_recovered) > 0  # Should have some valid values
-    # Allow small negative values from smoothness-extrapolated edge bins
-    assert np.min(valid_recovered) >= -2.0  # Slight undershoot is acceptable near step edges
-    assert np.max(valid_recovered) <= 30.0  # Should not amplify input by more than 2x
-    # The recovered signal should show some variation (not completely flat)
-    assert np.std(valid_recovered) > 0.1
+    # The forward gamma here has a wide APVD (mean RT 50 d, std ~11 d), so the
+    # inverse is genuinely ill-posed: even away from the discontinuity the
+    # Tikhonov-regularized roundtrip carries a residual oscillation of ~1.6 on a
+    # step height of 15 (~11%). Machine-precision recovery is therefore NOT
+    # attainable for this scenario (unlike the narrow single-PV roundtrips). We
+    # assert the flat data-dominated runs stay close to the original step within
+    # that physical bias, which still fails any gross (>~17%) inversion regression
+    # -- far stronger than the previous "anything in [-2, 30]" bound.
+    valid_mask = ~np.isnan(cin_recovered)
+    valid_indices = np.where(valid_mask)[0]
+    assert len(valid_indices) >= 100, f"Need a long valid region, got {len(valid_indices)}"
+
+    step_idx = int(np.argmax(cin_grid_days >= step_day))
+    buffer = 15  # exclude bins within ~1.3 std of the breakthrough spread
+    interior = valid_indices[20:-20]
+    flat = interior[np.abs(interior - step_idx) > buffer]
+    assert len(flat) > 30, f"Need enough flat interior bins, got {len(flat)}"
+    np.testing.assert_allclose(
+        cin_recovered[flat],
+        expected[flat],
+        atol=2.5,
+        err_msg="Step roundtrip should recover the original step away from the discontinuity",
+    )
 
 
 @pytest.mark.roundtrip
@@ -2269,14 +2327,22 @@ def test_extraction_to_infiltration_single_pore_volume_roundtrip():
         retardation_factor=1.0,
     )
 
-    # Verify roundtrip
-    valid_mask = ~np.isnan(cin_recovered)
-    if not np.any(valid_mask):
-        pytest.skip("No valid recovered values")
-    valid_recovered = cin_recovered[valid_mask]
+    # Single-PV roundtrip is a well-conditioned (square-shift) inverse, so the
+    # recovered cin must match the original pointwise in the interior, not merely
+    # in the mean. Align the recovered cin (on cin_tedges) to the original cin
+    # (on tedges) by matching bin-left-edge days; clip spin-up/boundary bins.
+    valid_indices = np.where(~np.isnan(cin_recovered))[0]
+    assert len(valid_indices) >= 40, f"Expected a substantial valid region, got {len(valid_indices)}"
 
-    # lstsq inversion should recover mean to machine precision
-    np.testing.assert_allclose(np.mean(valid_recovered), 5.0, atol=1e-8)
+    rec_days = cin_tedges[:-1]
+    orig_days = tedges[:-1]
+    orig_lookup = dict(zip(orig_days, cin_original, strict=True))
+    interior = valid_indices[20:-20]
+    matched = [(i, orig_lookup[rec_days[i]]) for i in interior if rec_days[i] in orig_lookup]
+    assert len(matched) > 20, f"Expected overlapping interior bins to compare, got {len(matched)}"
+    idx = np.array([m[0] for m in matched])
+    expected = np.array([m[1] for m in matched])
+    np.testing.assert_allclose(cin_recovered[idx], expected, atol=1e-8)
 
 
 @pytest.mark.roundtrip
@@ -2323,8 +2389,7 @@ def test_extraction_to_infiltration_multiple_pore_volumes():
 
     # Verify roundtrip
     valid_mask = ~np.isnan(cin_recovered)
-    if not np.any(valid_mask):
-        pytest.skip("No valid recovered values")
+    assert np.any(valid_mask), "Expected at least one valid recovered bin"
     valid_recovered = cin_recovered[valid_mask]
 
     # lstsq inversion should recover constant value to machine precision
@@ -2582,8 +2647,8 @@ class TestFlowWeightedFrontTracking:
         )
 
         valid = cout > 0
-        if np.any(valid):
-            np.testing.assert_allclose(cout[valid], 7.0, atol=1e-13)
+        assert np.any(valid), "Expected at least one valid (post-breakthrough) output bin"
+        np.testing.assert_allclose(cout[valid], 7.0, atol=1e-13)
 
     def test_constant_flow_mass_conservation(self):
         """Mass must be conserved under constant flow."""

@@ -2,9 +2,9 @@
 Shared closed-form helpers for the Kreft-Zuber flux-concentration transport modules.
 
 This private module holds the pieces common to :mod:`gwtransport.diffusion_fast` and
-:mod:`gwtransport.diffusion_fast_fast`: the breakthrough antiderivative, the retardation
-flux-coefficient correction, input validation, the banded Tikhonov reverse solve, and the small
-per-streamtube / spin-up helpers. Both modules import from here so these primitives are defined once
+:mod:`gwtransport.diffusion_fast_fast`: the breakthrough antiderivative, input validation, the
+banded Tikhonov reverse solve, and the small per-streamtube / spin-up helpers. Both modules import
+from here so these primitives are defined once
 and evaluate bit-identically in either module (the modules' overall transport is *not* identical:
 diffusion_fast is exact, diffusion_fast_fast approximate).
 
@@ -15,7 +15,7 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from scipy.special import erf, erfcx
+from scipy.special import erf
 
 from gwtransport._time import dt_to_days
 from gwtransport.utils import solve_inverse_transport_banded
@@ -33,101 +33,26 @@ _DT_FLOOR = 1e-30
 
 def _breakthrough_antideriv(
     step_widths: npt.NDArray[np.floating], dt_var: npt.NDArray[np.floating]
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+) -> npt.NDArray[np.floating]:
     r"""Closed-form antiderivative of the resident concentration, evaluated per edge.
 
     Returns :math:`I(x) = \tfrac12 x + \tfrac12[x\,\operatorname{erf}(x/s) + (s/\sqrt\pi)e^{-(x/s)^2}]`
-    with :math:`s = 2\sqrt{D_t}`, alongside ``s`` and the Gaussian factor ``exp(-(x/s)^2)`` (both
-    reused by the retardation correction). Shared by the banded ``C_F`` build
+    with :math:`s = 2\sqrt{D_t}`. Shared by the banded ``C_F`` build
     (:func:`gwtransport.diffusion_fast._pv_band_values`) and the slow quadrature, so both compute
-    identical floating-point results for the same inputs.
+    identical floating-point results for the same inputs. Because ``dD_t/dx = D_s/v_s`` is the
+    Kreft-Zuber flux coefficient at the solute-front velocity, differencing ``I`` across a cout bin
+    yields the flux concentration ``C_F`` directly.
 
     Returns
     -------
     antideriv : ndarray
         The antiderivative :math:`I(x)`.
-    s : ndarray
-        ``2 * sqrt(D_t)``.
-    gaussian : ndarray
-        ``exp(-(x/s)^2)``.
     """
     s = 2.0 * np.sqrt(dt_var)
     with np.errstate(over="ignore", invalid="ignore"):
         u = step_widths / s
         gaussian = np.exp(-(u * u))
-        antideriv = 0.5 * step_widths + 0.5 * (step_widths * erf(u) + (s / _SQRT_PI) * gaussian)
-    return antideriv, s, gaussian
-
-
-def _retardation_excess_density(
-    *,
-    x_lo: npt.NDArray[np.floating],
-    x_hi: npt.NDArray[np.floating],
-    dx: npt.NDArray[np.floating],
-    d_lo: npt.NDArray[np.floating],
-    d_hi: npt.NDArray[np.floating],
-    s_lo: npt.NDArray[np.floating],
-    s_hi: npt.NDArray[np.floating],
-    g_lo: npt.NDArray[np.floating],
-    g_hi: npt.NDArray[np.floating],
-) -> npt.NDArray[np.floating]:
-    r"""Closed-form bin-average of the Gaussian density ``<g>`` for the retardation correction.
-
-    When ``R != 1`` and ``D_m > 0`` the per-edge antiderivative bakes in an effective flux
-    coefficient ``dD_t/dx = R*D_m/v + alpha_L`` (because ``d(tau)/dx = R/v`` under retardation),
-    whereas Kreft-Zuber wants ``D_L/v = D_m/v + alpha_L``. The excess ``(R-1)*D_m/v`` is removed
-    by subtracting it times ``<g>``, the bin-average of the Gaussian density
-    ``g = e^{-x^2/(4 D_t)} / (2 sqrt(pi D_t))``. Within a bin ``D_t`` is linear in ``x``, so ``<g>``
-    is closed form: substituting ``w = D_t`` in ``int g dx`` gives
-    ``int w^{-1/2} e^{-w/(4 m^2) - c^2/(4 m^2 w)} dw`` -- a pair of error functions -- with slope
-    ``m = dD_t/dx`` and intercept ``c = D_t(x=0)``. Reusing the antiderivative's Gaussian factor
-    ``G = e^{-x^2/(4 D_t)}``, ``erfcx`` keeps the (always non-negative) ``u+`` branch overflow-free;
-    the ``u-`` branch splits: ``erfcx`` where ``u- >= 0``, ``erf`` elsewhere. Each transcendental is
-    evaluated on its own subset (fancy indexing) rather than over the full array. The slope->0
-    (constant-``D_t``) limit is the exact ``[C_R(x_hi) - C_R(x_lo)] / dx``, applied only on that subset.
-
-    Parameters
-    ----------
-    x_lo, x_hi : ndarray
-        Breakthrough coordinate ``step_widths`` at the lower / upper cout edge of each bin.
-    dx : ndarray
-        ``x_hi - x_lo``.
-    d_lo, d_hi : ndarray
-        Moving-frame dispersion product ``D_t`` at the lower / upper edge.
-    s_lo, s_hi : ndarray
-        ``2 * sqrt(D_t)`` at the lower / upper edge.
-    g_lo, g_hi : ndarray
-        Gaussian factor ``exp(-(x/s)^2)`` at the lower / upper edge.
-
-    Returns
-    -------
-    ndarray
-        Bin-averaged Gaussian density ``<g>``.
-    """
-    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        slope = (d_hi - d_lo) / dx
-        intercept = d_lo - slope * x_lo
-        abs_int = np.abs(intercept)
-        # s = 2*sqrt(D_t) is already computed, so slope*s = 2*slope*sqrt(D_t).
-        two_m_sqrt_lo = slope * s_lo
-        two_m_sqrt_hi = slope * s_hi
-        um_lo = (d_lo - abs_int) / two_m_sqrt_lo
-        um_hi = (d_hi - abs_int) / two_m_sqrt_hi
-        up_lo = (d_lo + abs_int) / two_m_sqrt_lo
-        up_hi = (d_hi + abs_int) / two_m_sqrt_hi
-        t_plus = g_lo * erfcx(up_lo) - g_hi * erfcx(up_hi)
-        t_minus = np.empty_like(t_plus)
-        pos = um_lo >= 0.0
-        neg = ~pos
-        t_minus[pos] = g_lo[pos] * erfcx(um_lo[pos]) - g_hi[pos] * erfcx(um_hi[pos])
-        c_minus = np.exp((intercept[neg] - abs_int[neg]) / (2.0 * slope[neg] ** 2))
-        t_minus[neg] = c_minus * (erf(um_hi[neg]) - erf(um_lo[neg]))
-        density_binavg = (t_minus + t_plus) / (2.0 * dx)
-        flat = np.abs(d_hi - d_lo) <= 1e-9 * np.maximum(d_lo, d_hi)
-        d_bar_s = 2.0 * np.sqrt(0.5 * (d_lo[flat] + d_hi[flat]))
-        density_binavg[flat] = 0.5 * (erf(x_hi[flat] / d_bar_s) - erf(x_lo[flat] / d_bar_s)) / dx[flat]
-        density_binavg[dx <= 0.0] = 0.0
-    return density_binavg
+        return 0.5 * step_widths + 0.5 * (step_widths * erf(u) + (s / _SQRT_PI) * gaussian)
 
 
 def _cout_cumulative_volume(
@@ -172,7 +97,8 @@ def _cout_cumulative_volume(
         return np.interp(cout_tedges_days, tedges_days, cumulative_volume_at_cin)
     cumsum_out = np.concatenate(([0.0], np.cumsum(flow_out * dt_to_days(cout_tedges))))
     in_range = (cout_tedges_days >= tedges_days[0]) & (cout_tedges_days <= tedges_days[-1])
-    i0 = int(np.argmax(in_range)) if np.any(in_range) else 0
+    # np.argmax returns 0 for an all-False mask, the same fallback the guard provided.
+    i0 = int(np.argmax(in_range))
     v_at_i0 = float(np.interp(cout_tedges_days[i0], tedges_days, cumulative_volume_at_cin))
     return v_at_i0 + (cumsum_out - cumsum_out[i0])
 
