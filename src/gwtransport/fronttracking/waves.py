@@ -30,6 +30,7 @@ from gwtransport.fronttracking.math import (
     LangmuirSorption,
     NonlinearSorption,
     SorptionModel,
+    characteristic_speed,
 )
 
 # Numerical tolerance constants
@@ -181,14 +182,15 @@ class CharacteristicWave(Wave):
 
     Examples
     --------
-    >>> sorption = ConstantRetardation(retardation_factor=2.0)
+    >>> sorption = FreundlichSorption(
+    ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
+    ... )
     >>> char = CharacteristicWave(
     ...     theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption
     ... )
-    >>> char.speed()
-    0.5
-    >>> char.position_at_theta(1000.0)
-    500.0
+    >>> speed = char.speed()
+    >>> bool(np.isclose(char.position_at_theta(1000.0), speed * 1000.0))
+    True
     """
 
     concentration: float
@@ -197,8 +199,8 @@ class CharacteristicWave(Wave):
     """Sorption model determining the speed."""
 
     def speed(self) -> float:
-        """Characteristic speed dV/dθ = 1/R(C)."""
-        return float(1.0 / self.sorption.retardation(self.concentration))
+        """Characteristic speed dV/dθ = 1/R(C) (``+∞`` at a saturated state, R = 0)."""
+        return characteristic_speed(self.concentration, self.sorption)
 
     def position_at_theta(self, theta: float) -> float | None:
         """Position at cumulative flow θ.
@@ -311,7 +313,10 @@ class ShockWave(Wave):
         if v_shock is None:
             return None
 
-        tol = 1e-15
+        # Position-scaled face width (~1 ULP at all positions), matching
+        # DecayingShockWave.concentration_at_point; a fixed 1e-15 falls below
+        # one ULP for any v_shock > ~1 m³ and degenerates to bit-equality.
+        tol = 1e-15 * max(abs(v_shock), 1.0)
 
         if v < v_shock - tol:
             return self.c_left
@@ -395,12 +400,12 @@ class RarefactionWave(Wave):
             raise ValueError(msg)
 
     def head_speed(self) -> float:
-        """Speed of rarefaction head dV/dθ = 1/R(C_head)."""
-        return float(1.0 / self.sorption.retardation(self.c_head))
+        """Speed of rarefaction head dV/dθ = 1/R(C_head) (``+∞`` at a saturated state, R = 0)."""
+        return characteristic_speed(self.c_head, self.sorption)
 
     def tail_speed(self) -> float:
-        """Speed of rarefaction tail dV/dθ = 1/R(C_tail)."""
-        return float(1.0 / self.sorption.retardation(self.c_tail))
+        """Speed of rarefaction tail dV/dθ = 1/R(C_tail) (``+∞`` at a saturated state, R = 0)."""
+        return characteristic_speed(self.c_tail, self.sorption)
 
     def head_position_at_theta(self, theta: float) -> float | None:
         """Position of rarefaction head at cumulative flow θ."""
@@ -697,11 +702,8 @@ class DecayingShockWave(Wave):
         if not self.was_active_at(theta):
             return None
 
-        c_d = self.c_decay_at_theta(theta)
-        if c_d is None:
-            return None
-
         theta_local = theta - self.theta_origin
+        c_d = self._c_decay_at_theta_local(theta_local)
         return float(self.v_origin + theta_local / float(self.sorption.retardation(c_d)))
 
     def theta_at_fan_exhaustion(self) -> float | None:
@@ -740,7 +742,8 @@ class DecayingShockWave(Wave):
         if f_lo <= 0.0:
             # Already at/below the tail at collision — exhausted immediately.
             return self.theta_start
-        theta_local_exhaust = _invert_monotone_theta_local(f, theta_hi_seed=theta_local_collision)
+        # Seed == theta_local_collision, so reuse f_lo to skip one quad/eval.
+        theta_local_exhaust = _invert_monotone_theta_local(f, theta_hi_seed=theta_local_collision, f_seed=f_lo)
         if theta_local_exhaust is None:
             return None
         return self.theta_origin + theta_local_exhaust
@@ -830,7 +833,11 @@ class DecayingShockWave(Wave):
             # Already at/past the outlet at collision; the linear-shock guards
             # in the solver handle the duplicate-crossing suppression.
             return self.theta_start
-        theta_local_cross = _invert_monotone_theta_local(f, theta_hi_seed=max(theta_local_collision, 1.0))
+        # Reuse f_lo only when the seed coincides with the collision (≥1.0);
+        # otherwise let the helper evaluate f at its own seed.
+        theta_hi_seed = max(theta_local_collision, 1.0)
+        seed_f = f_lo if theta_local_collision >= 1.0 else None
+        theta_local_cross = _invert_monotone_theta_local(f, theta_hi_seed=theta_hi_seed, f_seed=seed_f)
         if theta_local_cross is None:
             return None
         return self.theta_origin + theta_local_cross
@@ -922,17 +929,17 @@ class DecayingShockWave(Wave):
         if not self.was_active_at(theta):
             return None
 
-        v_s = self.position_at_theta(theta)
-        if v_s is None:
-            return None
+        # Compute the decaying-side concentration once and derive V_s from it
+        # (inlining position_at_theta's body) so the shock-face branch can reuse
+        # it instead of re-running the numerical-isotherm root-find.
+        theta_local = theta - self.theta_origin
+        c_d = self._c_decay_at_theta_local(theta_local)
+        v_s = float(self.v_origin + theta_local / float(self.sorption.retardation(c_d)))
 
         tol = 1e-15 * max(abs(v_s), 1.0)
 
         if abs(v - v_s) < tol:
-            c_decay = self.c_decay_at_theta(theta)
-            if c_decay is None:
-                return None
-            return 0.5 * (c_decay + self.c_fixed)
+            return 0.5 * (c_d + self.c_fixed)
 
         # Region selection depends on decay_side:
         # 'left'  (favorable n>1, Langmuir): fan extends upstream of V_s
@@ -975,7 +982,7 @@ class DecayingShockWave(Wave):
         return c_fan
 
 
-def _invert_monotone_theta_local(f, *, theta_hi_seed: float) -> float | None:
+def _invert_monotone_theta_local(f, *, theta_hi_seed: float, f_seed: float | None = None) -> float | None:
     """Bracket-then-brentq a monotone ``f(θ_local)`` with a sign change above the seed.
 
     Shared by ``theta_at_fan_exhaustion`` and ``_outlet_crossing_numerical``:
@@ -993,13 +1000,18 @@ def _invert_monotone_theta_local(f, *, theta_hi_seed: float) -> float | None:
         (already-exhausted / already-past-outlet) are handled by the caller.
     theta_hi_seed : float
         ``θ_local`` lower bracket; the search grows ``θ_hi`` from here.
+    f_seed : float, optional
+        Pre-evaluated ``f(theta_hi_seed)``; callers that already computed it
+        (the numerical path's ``f`` is a ``scipy.quad`` call) pass it to avoid a
+        redundant evaluation. ``None`` recomputes it here.
 
     Returns
     -------
     float or None
         Root ``θ_local`` of ``f``, or ``None`` if not bracketed.
     """
-    f_seed = f(theta_hi_seed)
+    if f_seed is None:
+        f_seed = f(theta_hi_seed)
     theta_hi = theta_hi_seed
     for _ in range(200):
         theta_hi *= 2.0

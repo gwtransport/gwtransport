@@ -49,17 +49,14 @@ class NonlinearSorption(ABC):
     @abstractmethod
     def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """Compute retardation factor R(C)."""
-        raise NotImplementedError
 
     @abstractmethod
     def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """Compute total concentration (dissolved + sorbed per unit pore volume)."""
-        raise NotImplementedError
 
     @abstractmethod
     def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """Invert retardation factor to obtain concentration."""
-        raise NotImplementedError
 
     def shock_speed(self, c_left: float, c_right: float) -> float:
         """Compute shock speed dV/dθ via Rankine-Hugoniot in (V, θ) coordinates.
@@ -90,8 +87,10 @@ class NonlinearSorption(ABC):
         denom = c_total_right - c_total_left
 
         if abs(denom) < EPSILON_DENOMINATOR:
-            avg_retardation = 0.5 * (self.retardation(c_left) + self.retardation(c_right))
-            return float(1.0 / avg_retardation)
+            avg_retardation = 0.5 * float(self.retardation(c_left) + self.retardation(c_right))
+            # Degenerate (zero-strength) shock: its speed is the characteristic speed 1/R. A pair of
+            # saturated states (R = 0, e.g. Mualem-vG at S_e = 1) gives +∞, matching characteristic_speed.
+            return float("inf") if avg_retardation == 0.0 else 1.0 / avg_retardation
 
         return float((c_right - c_left) / denom)
 
@@ -142,13 +141,19 @@ class NonlinearSorption(ABC):
         satisfies : bool
             True if shock satisfies entropy condition (is physical).
         """
-        lambda_left = 1.0 / self.retardation(c_left)
-        lambda_right = 1.0 / self.retardation(c_right)
+        r_left = float(self.retardation(c_left))
+        r_right = float(self.retardation(c_right))
+        lambda_left = float("inf") if r_left == 0.0 else 1.0 / r_left
+        lambda_right = float("inf") if r_right == 0.0 else 1.0 / r_right
 
-        if not np.isfinite(lambda_left) or not np.isfinite(lambda_right) or not np.isfinite(shock_speed):
+        # A saturated upstream state (λ_left = +∞, e.g. a Mualem-vG wetting front at S_e = 1) is
+        # physical; reject only a non-finite shock speed or downstream characteristic, where the
+        # Lax test itself is ill-posed.
+        if not np.isfinite(shock_speed) or not np.isfinite(lambda_right):
             return False
 
-        tolerance = 1e-14 * max(abs(lambda_left), abs(lambda_right), abs(shock_speed))
+        finite_left = abs(lambda_left) if np.isfinite(lambda_left) else 0.0
+        tolerance = 1e-14 * max(finite_left, abs(lambda_right), abs(shock_speed))
 
         return bool((lambda_left > shock_speed - tolerance) and (shock_speed > lambda_right - tolerance))
 
@@ -181,8 +186,8 @@ class FreundlichSorption(NonlinearSorption):
     porosity : float
         Porosity [-]. Must be in (0, 1).
     c_min : float, optional
-        Minimum concentration threshold. For n>1, prevents infinite retardation
-        as C→0. Default: 0.1 for n>1, 0.0 for n<1 (set automatically if not provided).
+        Minimum concentration threshold (the dry-soil singularity floor). For
+        n>1, prevents infinite retardation as C→0. Default ``1e-12`` for all n.
 
     Notes
     -----
@@ -1131,7 +1136,8 @@ def characteristic_speed(c: float, sorption: SorptionModel) -> float:
     >>> s > 0
     True
     """
-    return float(1.0 / sorption.retardation(c))
+    r = float(sorption.retardation(c))
+    return float("inf") if r == 0.0 else 1.0 / r
 
 
 def characteristic_position(
@@ -1223,7 +1229,7 @@ def compute_first_front_arrival_theta(
     Examples
     --------
     >>> cin = np.array([0.0, 10.0] + [10.0] * 10)
-    >>> theta_edges = np.linspace(0.0, 1300.0, 13)  # constant flow=100, dt=1
+    >>> theta_edges = np.arange(0.0, 1300.0, 100.0)  # constant flow=100, dt=1
     >>> sorption = ConstantRetardation(retardation_factor=2.0)
     >>> theta_first = compute_first_front_arrival_theta(
     ...     cin, theta_edges, 500.0, sorption

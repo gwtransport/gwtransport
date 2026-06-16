@@ -844,6 +844,33 @@ class TestVanGenuchtenMualemConductivity:
         c_grid = np.geomspace(1e-8 * k_s, 0.9 * k_s, 12)
         assert np.all(sorption.retardation(c_grid) > 0)
 
+    def test_characteristic_speed_at_saturation_is_inf(self, theta_r, theta_s, k_s, n_vg):
+        """At ``S_e = 1`` (``C = K_s``) the characteristic celerity is the removable limit ``+∞``.
+
+        ``dK_M/dS_e → +∞`` as ``S_e → 1`` (the ``T^{m-1}`` term, ``m-1 < 0``), so
+        ``R = Δθ/(dK/dS_e) = 0`` exactly and ``1/R`` is ``+∞`` — not a ``ZeroDivisionError``.
+        Below saturation the speed is finite and equals ``1/R(C)`` to the last bit.
+        """
+        sorption = VanGenuchtenMualemConductivity(theta_r=theta_r, theta_s=theta_s, k_s=k_s, van_genuchten_n=n_vg)
+        assert sorption.retardation(k_s) == 0.0
+        assert characteristic_speed(k_s, sorption) == np.inf
+        # Degenerate zero-strength shock between two saturated states (avg R = 0) -> +inf.
+        assert sorption.shock_speed(k_s, k_s) == np.inf
+        c = 0.3 * k_s
+        assert characteristic_speed(c, sorption) == 1.0 / float(sorption.retardation(c))
+
+    def test_check_entropy_condition_saturated_wetting_front(self, theta_r, theta_s, k_s, n_vg):
+        """A wetting-front shock from a saturated upstream state (``C_L = K_s``) is admissible.
+
+        The Lax condition ``λ_left = 1/R(K_s) = +∞ > shock_speed > λ_right`` holds, so the
+        entropy check returns ``True`` (was a ``ZeroDivisionError`` before the ``R = 0 → +∞`` fix).
+        """
+        sorption = VanGenuchtenMualemConductivity(theta_r=theta_r, theta_s=theta_s, k_s=k_s, van_genuchten_n=n_vg)
+        c_right = 1e-9 * k_s
+        shock_speed = sorption.shock_speed(k_s, c_right)
+        assert np.isfinite(shock_speed)
+        assert sorption.check_entropy_condition(k_s, c_right, shock_speed) is True
+
 
 @pytest.mark.parametrize(
     "invalid_kwargs",
