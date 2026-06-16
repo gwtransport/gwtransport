@@ -61,7 +61,7 @@ with the dispersion variance accumulated in the moving (Lagrangian) frame:
 
 where:
 
-- D_m is the effective molecular (or thermal) diffusivity [m^2/day]
+- D_m is the effective molecular (or thermal) diffusivity [m²/day]
 - alpha_L is the longitudinal dispersivity [m]
 - tau(V) is the elapsed time since infiltration [day], with V the cumulative
   extracted volume
@@ -140,15 +140,15 @@ _GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(16)
 
 def _cfrac_mean_volume(
     *,
-    step_widths: npt.NDArray[np.float64],
-    cumulative_volume_at_cout_tedges: npt.NDArray[np.float64],
+    step_widths: npt.NDArray[np.floating],
+    cumulative_volume_at_cout_tedges: npt.NDArray[np.floating],
     cumulative_volume_at_cin_tedges: npt.NDArray[np.floating],
     tedges_days: npt.NDArray[np.floating],
     molecular_diffusivity: float,
     longitudinal_dispersivity: float,
     r_vpv: float,
     streamline_len: float,
-) -> npt.NDArray[np.float64]:
+) -> npt.NDArray[np.floating]:
     r"""Compute bin-averaged flux concentration at the outlet for each cell.
 
     For each cell (cout-bin *i*, cin-edge *j*), computes the flow-weighted
@@ -262,10 +262,11 @@ def _cfrac_mean_volume(
         # alpha_L to use THAT velocity (not the fluid velocity Q L / V_pore); pairing it with the
         # moving-frame variance D_t = D_m tau + alpha_L xi is what conserves mass for R>1, D_m>0.
         v_per_bin = q_per_bin * streamline_len / r_vpv
-        # (D_s/v_s) = D_m/v_s + alpha_L. At v_s=0 the bin has dV=0 and is skipped below.
+        # (D_s/v_s) = D_m/v_s + alpha_L. At v_s=0 the bin has dV=0 and is skipped below; the
+        # surrounding errstate suppresses the divide warning for those lanes.
         dl_over_v_per_bin = np.where(
             v_per_bin > 0,
-            molecular_diffusivity / np.where(v_per_bin > 0, v_per_bin, 1.0) + longitudinal_dispersivity,
+            molecular_diffusivity / v_per_bin + longitudinal_dispersivity,
             0.0,
         )
 
@@ -337,7 +338,7 @@ def _cfrac_mean_volume(
             )
         cf_vals = cr_vals + dl_over_v_k * gauss_vals
 
-        integral_cf[overlap] += (dv_sub / 2.0) * (cf_vals @ _GL_WEIGHTS)
+        integral_cf[overlap] += v_half_sub * (cf_vals @ _GL_WEIGHTS)
 
     with np.errstate(divide="ignore", invalid="ignore"):
         frac_cells = np.where(valid_cells, integral_cf / total_dv, np.nan)
@@ -386,14 +387,14 @@ def _diffusion_extend_tedges_flag(spinup: object) -> bool:
 def _validate_diffusion_inputs(
     *,
     tedges: pd.DatetimeIndex,
-    flow: np.ndarray,
-    aquifer_pore_volumes: np.ndarray,
-    streamline_length: np.ndarray,
-    molecular_diffusivity: np.ndarray,
-    longitudinal_dispersivity: np.ndarray,
+    flow: npt.NDArray[np.floating],
+    aquifer_pore_volumes: npt.NDArray[np.floating],
+    streamline_length: npt.NDArray[np.floating],
+    molecular_diffusivity: npt.NDArray[np.floating],
+    longitudinal_dispersivity: npt.NDArray[np.floating],
     retardation_factor: float,
-    cin_values: np.ndarray | None = None,
-    cout_values: np.ndarray | None = None,
+    cin_values: npt.NDArray[np.floating] | None = None,
+    cout_values: npt.NDArray[np.floating] | None = None,
     cout_tedges: pd.DatetimeIndex | None = None,
 ) -> None:
     """Validate inputs common to diffusion forward / reverse entry points.
@@ -403,12 +404,6 @@ def _validate_diffusion_inputs(
     - ``cin_values`` provided => forward path. ``tedges`` parities cin and flow.
     - ``cout_values`` + ``cout_tedges`` provided => reverse path. ``tedges`` parities
       flow; ``cout_tedges`` parities cout.
-
-    All shared physical checks fire on both paths. ``retardation_factor >= 1.0``
-    and ``flow >= 0`` in reverse are new vs. the previous inline prologues (issue
-    #187 documents the omissions). Every other error-message string is preserved
-    verbatim from the prior duplicated prologue so that ``match=`` regex tests do
-    not break.
 
     Raises
     ------
@@ -456,6 +451,50 @@ def _validate_diffusion_inputs(
         raise ValueError(msg)
 
 
+def _prepare_diffusion_arrays(
+    *,
+    flow: npt.ArrayLike,
+    aquifer_pore_volumes: npt.ArrayLike,
+    streamline_length: npt.ArrayLike,
+    molecular_diffusivity: npt.ArrayLike,
+    longitudinal_dispersivity: npt.ArrayLike,
+) -> tuple[
+    npt.NDArray[np.floating],
+    npt.NDArray[np.floating],
+    npt.NDArray[np.floating],
+    npt.NDArray[np.floating],
+    npt.NDArray[np.floating],
+]:
+    """Coerce flow / geometry / dispersion inputs to broadcasted float arrays.
+
+    Each per-streamtube parameter (``streamline_length``, ``molecular_diffusivity``,
+    ``longitudinal_dispersivity``) may be passed as a scalar; it is broadcast to one
+    value per pore volume. The returned arrays are read-only views when broadcast (none
+    is mutated downstream).
+
+    Returns
+    -------
+    tuple of ndarray
+        ``(flow, aquifer_pore_volumes, streamline_length, molecular_diffusivity,
+        longitudinal_dispersivity)`` as float arrays.
+    """
+    flow = np.asarray(flow, dtype=float)
+    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
+    streamline_length = np.atleast_1d(np.asarray(streamline_length, dtype=float))
+    molecular_diffusivity = np.atleast_1d(np.asarray(molecular_diffusivity, dtype=float))
+    longitudinal_dispersivity = np.atleast_1d(np.asarray(longitudinal_dispersivity, dtype=float))
+
+    n_pore_volumes = len(aquifer_pore_volumes)
+    if streamline_length.size == 1:
+        streamline_length = np.broadcast_to(streamline_length, (n_pore_volumes,))
+    if molecular_diffusivity.size == 1:
+        molecular_diffusivity = np.broadcast_to(molecular_diffusivity, (n_pore_volumes,))
+    if longitudinal_dispersivity.size == 1:
+        longitudinal_dispersivity = np.broadcast_to(longitudinal_dispersivity, (n_pore_volumes,))
+
+    return flow, aquifer_pore_volumes, streamline_length, molecular_diffusivity, longitudinal_dispersivity
+
+
 def _infiltration_to_extraction_coeff_matrix(
     *,
     flow: npt.NDArray[np.floating],
@@ -477,17 +516,17 @@ def _infiltration_to_extraction_coeff_matrix(
     Parameters
     ----------
     flow : ndarray
-        Flow rate of water [m3/day]. Already validated.
+        Flow rate of water [m³/day]. Already validated.
     tedges : DatetimeIndex
         Cin/flow time edges (not yet extended for spin-up).
     cout_tedges : DatetimeIndex
         Cout time edges.
     aquifer_pore_volumes : ndarray
-        Pore volumes [m3]. Already validated.
+        Pore volumes [m³]. Already validated.
     streamline_length : ndarray
         Travel distances [m]. Already validated.
     molecular_diffusivity : ndarray
-        Effective molecular diffusivities [m2/day]. Already broadcasted.
+        Effective molecular diffusivities [m²/day]. Already broadcasted.
         See :func:`infiltration_to_extraction` for physical interpretation.
     longitudinal_dispersivity : ndarray
         Longitudinal dispersivities [m]. Already broadcasted.
@@ -513,7 +552,7 @@ def _infiltration_to_extraction_coeff_matrix(
         ])
 
     # Compute the cumulative flow at tedges
-    cumulative_volume_at_cin_tedges = cumulative_flow_volume(flow, dt_to_days(tedges))  # m3
+    cumulative_volume_at_cin_tedges = cumulative_flow_volume(flow, dt_to_days(tedges))  # m³
 
     # Compute the cumulative flow at cout_tedges. Both edge arrays are first reduced to a shared
     # day axis: np.interp coerces each datetime64 operand to int64 in its own resolution, so a
@@ -573,8 +612,7 @@ def _infiltration_to_extraction_coeff_matrix(
 
         accumulated_coeff += coeff
 
-    coeff_matrix = accumulated_coeff / len(aquifer_pore_volumes)
-    coeff_matrix_filled = np.nan_to_num(coeff_matrix, nan=0.0)
+    coeff_matrix_filled = np.nan_to_num(accumulated_coeff / len(aquifer_pore_volumes), nan=0.0)
 
     return coeff_matrix_filled, valid_cout_bins
 
@@ -632,7 +670,7 @@ def infiltration_to_extraction(
         Length must match the number of time bins defined by tedges. The model assumes
         this value is constant over each interval ``[tedges[i], tedges[i+1])``.
     flow : array-like
-        Flow rate of water in the aquifer [m3/day].
+        Flow rate of water in the aquifer [m³/day].
         Length must match cin and the number of time bins defined by tedges. The model
         assumes this value is constant over each interval ``[tedges[i], tedges[i+1])``.
     tedges : pandas.DatetimeIndex
@@ -642,20 +680,20 @@ def infiltration_to_extraction(
         Time edges for output data bins. Has length of desired output + 1.
         The output concentration is averaged over each bin.
     aquifer_pore_volumes : array-like
-        Array of aquifer pore volumes [m3] representing the distribution
+        Array of aquifer pore volumes [m³] representing the distribution
         of flow paths. Each pore volume determines the residence time for
         that flow path: tau = V_pore / Q.
     streamline_length : array-like
         Array of travel distances [m] corresponding to each pore volume.
         Must have the same length as aquifer_pore_volumes.
     molecular_diffusivity : float or array-like
-        Effective (retarded-frame) molecular diffusivity [m2/day]. Can be a
+        Effective (retarded-frame) molecular diffusivity [m²/day]. Can be a
         scalar (same for all pore volumes) or an array with the same length as
         aquifer_pore_volumes. Must be non-negative. For solute transport, this is
-        the molecular diffusion coefficient D_m [m2/day] — typically ~1e-5 m2/day,
+        the molecular diffusion coefficient D_m [m²/day] — typically ~1e-5 m²/day,
         negligible compared to mechanical dispersion. For heat transport, pass the
-        thermal diffusivity D_th = lambda / (rho*c)_eff [m2/day], typically
-        0.01-0.1 m2/day.
+        thermal diffusivity D_th = lambda / (rho*c)_eff [m²/day], typically
+        0.01-0.1 m²/day.
 
         Internally, this contributes ``2 * molecular_diffusivity * tau`` to the
         variance, where ``tau`` is the elapsed time in days (no extra factor of
@@ -672,6 +710,12 @@ def infiltration_to_extraction(
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
         Values > 1.0 indicate slower transport due to sorption.
+    spinup : {'constant'} or None, optional
+        Spin-up policy (default ``'constant'``). ``'constant'`` extends tedges by
+        100 years on each side so that output bins near the boundary are always
+        informed. ``None`` disables the extension; output bins without sufficient
+        upstream data become NaN. Float fraction-threshold mode is not implemented
+        and raises ``NotImplementedError``.
 
     Returns
     -------
@@ -735,9 +779,9 @@ def infiltration_to_extraction(
     >>> # Input concentration (step function) and constant flow
     >>> cin = np.zeros(len(tedges) - 1)
     >>> cin[5:10] = 1.0  # Pulse of concentration
-    >>> flow = np.ones(len(tedges) - 1) * 100.0  # 100 m3/day
+    >>> flow = np.ones(len(tedges) - 1) * 100.0  # 100 m³/day
     >>>
-    >>> # Single pore volume of 500 m3, travel distance 100 m
+    >>> # Single pore volume of 500 m³, travel distance 100 m
     >>> aquifer_pore_volumes = np.array([500.0])
     >>> streamline_length = np.array([100.0])
     >>>
@@ -750,7 +794,7 @@ def infiltration_to_extraction(
     ...     cout_tedges=cout_tedges,
     ...     aquifer_pore_volumes=aquifer_pore_volumes,
     ...     streamline_length=streamline_length,
-    ...     molecular_diffusivity=1e-4,  # m2/day, same for all pore volumes
+    ...     molecular_diffusivity=1e-4,  # m²/day, same for all pore volumes
     ...     longitudinal_dispersivity=1.0,  # m, same for all pore volumes
     ... )
 
@@ -768,32 +812,23 @@ def infiltration_to_extraction(
     ...     cout_tedges=cout_tedges,
     ...     aquifer_pore_volumes=aquifer_pore_volumes,
     ...     streamline_length=streamline_length,
-    ...     molecular_diffusivity=1e-4,  # m2/day
+    ...     molecular_diffusivity=1e-4,  # m²/day
     ...     longitudinal_dispersivity=1.0,  # m
     ... )
     """
-    # Convert to pandas DatetimeIndex if needed
     cout_tedges = pd.DatetimeIndex(cout_tedges)
     tedges = pd.DatetimeIndex(tedges)
 
-    # Convert to arrays
     cin = np.asarray(cin, dtype=float)
-    flow = np.asarray(flow, dtype=float)
-    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
-    streamline_length = np.atleast_1d(np.asarray(streamline_length, dtype=float))
-
-    # Convert diffusion parameters to arrays and broadcast to pore volumes
-    n_pore_volumes = len(aquifer_pore_volumes)
-    molecular_diffusivity = np.atleast_1d(np.asarray(molecular_diffusivity, dtype=float))
-    longitudinal_dispersivity = np.atleast_1d(np.asarray(longitudinal_dispersivity, dtype=float))
-
-    # Broadcast scalar values to match pore volumes
-    if streamline_length.size == 1:
-        streamline_length = np.broadcast_to(streamline_length, (n_pore_volumes,)).copy()
-    if molecular_diffusivity.size == 1:
-        molecular_diffusivity = np.broadcast_to(molecular_diffusivity, (n_pore_volumes,)).copy()
-    if longitudinal_dispersivity.size == 1:
-        longitudinal_dispersivity = np.broadcast_to(longitudinal_dispersivity, (n_pore_volumes,)).copy()
+    flow, aquifer_pore_volumes, streamline_length, molecular_diffusivity, longitudinal_dispersivity = (
+        _prepare_diffusion_arrays(
+            flow=flow,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            streamline_length=streamline_length,
+            molecular_diffusivity=molecular_diffusivity,
+            longitudinal_dispersivity=longitudinal_dispersivity,
+        )
+    )
 
     _validate_diffusion_inputs(
         tedges=tedges,
@@ -819,12 +854,10 @@ def infiltration_to_extraction(
         extend_tedges=extend_tedges,
     )
 
-    # Matrix multiply: cout = W @ cin
     cout = coeff_matrix @ cin
 
-    # Mark output bins as invalid where no valid contributions exist:
-    # 1. Sum of coefficients near zero (no cin has broken through yet - spinup)
-    # 2. Output bin extends beyond input data range (from valid_cout_bins)
+    # Output bins are invalid where the coefficient sum is near zero (no cin has broken
+    # through yet) or the bin extends beyond the input data range (valid_cout_bins).
     total_coeff = np.sum(coeff_matrix, axis=1)
     no_valid_contribution = (total_coeff < EPSILON_COEFF_SUM) | ~valid_cout_bins
     cout[no_valid_contribution] = np.nan
@@ -862,7 +895,7 @@ def extraction_to_infiltration(
         Concentration of the compound in extracted water [concentration units].
         Length must match the number of time bins defined by cout_tedges.
     flow : array-like
-        Flow rate of water in the aquifer [m3/day].
+        Flow rate of water in the aquifer [m³/day].
         Length must match the number of time bins defined by tedges.
     tedges : pandas.DatetimeIndex
         Time edges defining bins for cin (output) and flow data.
@@ -871,14 +904,14 @@ def extraction_to_infiltration(
         Time edges for cout data bins. Has length of len(cout) + 1.
         Can have different time alignment and resolution than tedges.
     aquifer_pore_volumes : array-like
-        Array of aquifer pore volumes [m3] representing the distribution
+        Array of aquifer pore volumes [m³] representing the distribution
         of flow paths. Each pore volume determines the residence time for
         that flow path: tau = V_pore / Q.
     streamline_length : array-like
         Array of travel distances [m] corresponding to each pore volume.
         Must have the same length as aquifer_pore_volumes.
     molecular_diffusivity : float or array-like
-        Effective molecular diffusivity [m2/day]. Can be a scalar (same for all
+        Effective molecular diffusivity [m²/day]. Can be a scalar (same for all
         pore volumes) or an array with the same length as aquifer_pore_volumes.
         Must be non-negative. See :func:`infiltration_to_extraction` for
         details on the physical interpretation and the interaction with
@@ -894,6 +927,12 @@ def extraction_to_infiltration(
         Tikhonov regularization parameter λ. See
         :func:`gwtransport.advection.extraction_to_infiltration` for details.
         Default is 1e-10.
+    spinup : {'constant'} or None, optional
+        Spin-up policy (default ``'constant'``). ``'constant'`` extends tedges by
+        100 years on each side so that output bins near the boundary are always
+        informed. ``None`` disables the extension; output bins without sufficient
+        upstream data become NaN. Float fraction-threshold mode is not implemented
+        and raises ``NotImplementedError``.
 
     Returns
     -------
@@ -941,9 +980,9 @@ def extraction_to_infiltration(
     >>> # Extracted concentration and constant flow
     >>> cout = np.zeros(len(cout_tedges) - 1)
     >>> cout[5:10] = 1.0  # Observed pulse at extraction
-    >>> flow = np.ones(len(tedges) - 1) * 100.0  # 100 m3/day
+    >>> flow = np.ones(len(tedges) - 1) * 100.0  # 100 m³/day
     >>>
-    >>> # Single pore volume of 500 m3, travel distance 100 m
+    >>> # Single pore volume of 500 m³, travel distance 100 m
     >>> aquifer_pore_volumes = np.array([500.0])
     >>> streamline_length = np.array([100.0])
     >>>
@@ -959,28 +998,19 @@ def extraction_to_infiltration(
     ...     longitudinal_dispersivity=1.0,
     ... )
     """
-    # Convert to pandas DatetimeIndex if needed
     tedges = pd.DatetimeIndex(tedges)
     cout_tedges = pd.DatetimeIndex(cout_tedges)
 
-    # Convert to arrays
     cout = np.asarray(cout, dtype=float)
-    flow = np.asarray(flow, dtype=float)
-    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
-    streamline_length = np.atleast_1d(np.asarray(streamline_length, dtype=float))
-
-    # Convert diffusion parameters to arrays and broadcast to pore volumes
-    n_pore_volumes = len(aquifer_pore_volumes)
-    molecular_diffusivity = np.atleast_1d(np.asarray(molecular_diffusivity, dtype=float))
-    longitudinal_dispersivity = np.atleast_1d(np.asarray(longitudinal_dispersivity, dtype=float))
-
-    # Broadcast scalar values to match pore volumes
-    if streamline_length.size == 1:
-        streamline_length = np.broadcast_to(streamline_length, (n_pore_volumes,)).copy()
-    if molecular_diffusivity.size == 1:
-        molecular_diffusivity = np.broadcast_to(molecular_diffusivity, (n_pore_volumes,)).copy()
-    if longitudinal_dispersivity.size == 1:
-        longitudinal_dispersivity = np.broadcast_to(longitudinal_dispersivity, (n_pore_volumes,)).copy()
+    flow, aquifer_pore_volumes, streamline_length, molecular_diffusivity, longitudinal_dispersivity = (
+        _prepare_diffusion_arrays(
+            flow=flow,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            streamline_length=streamline_length,
+            molecular_diffusivity=molecular_diffusivity,
+            longitudinal_dispersivity=longitudinal_dispersivity,
+        )
+    )
 
     _validate_diffusion_inputs(
         tedges=tedges,
@@ -1052,7 +1082,7 @@ def gamma_infiltration_to_extraction(
     cin : array-like
         Concentration of the compound in infiltrating water.
     flow : array-like
-        Flow rate of water in the aquifer [m3/day].
+        Flow rate of water in the aquifer [m³/day].
     tedges : pandas.DatetimeIndex
         Time edges for cin and flow data. Has length len(cin) + 1.
     cout_tedges : pandas.DatetimeIndex
@@ -1076,13 +1106,19 @@ def gamma_infiltration_to_extraction(
         Travel distance through the aquifer [m]. Applied uniformly to all
         gamma-discretized pore volumes.
     molecular_diffusivity : float
-        Effective molecular diffusivity [m2/day]. Must be non-negative.
+        Effective molecular diffusivity [m²/day]. Must be non-negative.
         See :func:`infiltration_to_extraction` for details on the interaction
         with retardation_factor.
     longitudinal_dispersivity : float
         Longitudinal dispersivity [m]. Must be non-negative.
     retardation_factor : float, optional
         Retardation factor (default 1.0). Values > 1.0 indicate slower transport.
+    spinup : {'constant'} or None, optional
+        Spin-up policy (default ``'constant'``). ``'constant'`` extends tedges by
+        100 years on each side so that output bins near the boundary are always
+        informed. ``None`` disables the extension; output bins without sufficient
+        upstream data become NaN. Float fraction-threshold mode is not implemented
+        and raises ``NotImplementedError``.
 
     Returns
     -------
@@ -1187,7 +1223,7 @@ def gamma_extraction_to_infiltration(
     cout : array-like
         Concentration of the compound in extracted water.
     flow : array-like
-        Flow rate of water in the aquifer [m3/day].
+        Flow rate of water in the aquifer [m³/day].
     tedges : pandas.DatetimeIndex
         Time edges for cin (output) and flow data. Has length of len(flow) + 1.
     cout_tedges : pandas.DatetimeIndex
@@ -1211,7 +1247,7 @@ def gamma_extraction_to_infiltration(
         Travel distance through the aquifer [m]. Applied uniformly to all
         gamma-discretized pore volumes.
     molecular_diffusivity : float
-        Effective molecular diffusivity [m2/day]. Must be non-negative.
+        Effective molecular diffusivity [m²/day]. Must be non-negative.
         See :func:`infiltration_to_extraction` for details on the interaction
         with retardation_factor.
     longitudinal_dispersivity : float
@@ -1220,6 +1256,12 @@ def gamma_extraction_to_infiltration(
         Retardation factor (default 1.0). Values > 1.0 indicate slower transport.
     regularization_strength : float, optional
         Tikhonov regularization parameter. Default is 1e-10.
+    spinup : {'constant'} or None, optional
+        Spin-up policy (default ``'constant'``). ``'constant'`` extends tedges by
+        100 years on each side so that output bins near the boundary are always
+        informed. ``None`` disables the extension; output bins without sufficient
+        upstream data become NaN. Float fraction-threshold mode is not implemented
+        and raises ``NotImplementedError``.
 
     Returns
     -------
