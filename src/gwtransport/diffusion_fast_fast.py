@@ -171,7 +171,7 @@ def _summed_antideriv(
 
     x = (grid[None, :] - r_vpv[:, None]) * streamline_length[:, None] / r_vpv[:, None]
     dt_var = np.maximum(longitudinal_dispersivity[:, None] * np.maximum(x + streamline_length[:, None], 0.0), _DT_FLOOR)
-    antideriv, _, _ = _breakthrough_antideriv(x, dt_var)
+    antideriv = _breakthrough_antideriv(x, dt_var)
     ibar = ((r_vpv[:, None] / streamline_length[:, None]) * antideriv).mean(axis=0)
     return grid, ibar, mean_r_vpv, off_lo, off_hi
 

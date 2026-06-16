@@ -38,7 +38,15 @@ Reported outlet concentration: Kreft-Zuber (1978) flux concentration
 
 The outlet concentration reported by this module is the **flux concentration**
 
-    C_F(L, t) = C_R(L, t) - (D_L(t) / v(t)) * dC_R/dx |_{x=L}
+    C_F(L, t) = C_R(L, t) - (D_s / v_s) * dC_R/dx |_{x=L}
+
+with the solute-front (retarded-frame) velocity v_s = Q L / (R V_pore) and the
+dispersion D_s = D_m + alpha_L * v_s, so the flux coefficient is
+D_s / v_s = D_m / v_s + alpha_L = R D_m / v_fluid + alpha_L (with the fluid
+velocity v_fluid = Q L / V_pore). The resident profile C_R solves the retarded
+ADE with advection v_s and dispersion D_s, so its flux-vs-resident correction
+must use v_s — not v_fluid; pairing v_s with the moving-frame variance below is
+what conserves mass for R > 1 with D_m > 0.
 
 — the solute mass flux at the outlet divided by the volumetric fluid flux. This
 is what is measured when sampling the extracted fluid. The resident
@@ -140,7 +148,6 @@ def _cfrac_mean_volume(
     longitudinal_dispersivity: float,
     r_vpv: float,
     streamline_len: float,
-    aquifer_pore_volume: float,
 ) -> npt.NDArray[np.float64]:
     r"""Compute bin-averaged flux concentration at the outlet for each cell.
 
@@ -152,7 +159,7 @@ def _cfrac_mean_volume(
         \text{frac}_{i,j} = \frac{1}{\Delta V_i}
         \int_{V_i}^{V_{i+1}} C_F\!\left(L,\,V;\,t_j\right) dV
 
-    where :math:`C_F = C_R - (D_L / v) \, \partial_x C_R\big|_{x=L}` and
+    where :math:`C_F = C_R - (D_s / v_s) \, \partial_x C_R\big|_{x=L}` and
     :math:`C_R` is Bear's (1972) moving-frame solution:
 
     .. math::
@@ -162,13 +169,16 @@ def _cfrac_mean_volume(
         \xi_j(V) &= L \cdot (V - V_j) \,/\, (R\,V_\text{pore}) \\
         D_t(V) &= D_m\,\tau_j(V) + \alpha_L\,\xi_j(V),
             \quad \tau_j(V) = t(V) - t_j \\
-        D_L(t) &= D_m + \alpha_L\,v(t), \quad v(t) = Q(t)\,L\,/\,V_\text{pore}.
+        D_s &= D_m + \alpha_L\,v_s(t), \quad v_s(t) = Q(t)\,L\,/\,(R\,V_\text{pore}).
 
-    The added flux-correction term
+    The solute-front velocity :math:`v_s` (advection speed of the retarded ADE
+    that :math:`C_R` solves), not the fluid velocity :math:`Q L / V_\text{pore}`,
+    sets the flux coefficient :math:`D_s/v_s = D_m/v_s + \alpha_L`. The added
+    flux-correction term
 
     .. math::
 
-        \frac{D_L(t(V))}{v(t(V))} \cdot
+        \frac{D_s}{v_s(t(V))} \cdot
         \frac{1}{\sqrt{4\pi\,D_t(V)}}\,
         \exp\!\left( -\frac{(L - \xi_j(V))^2}{4\,D_t(V)} \right)
 
@@ -200,8 +210,8 @@ def _cfrac_mean_volume(
     tedges_days : ndarray, shape (n_cin_edges,)
         Flow time edges in days.
     molecular_diffusivity : float
-        Effective molecular diffusivity D_m [m²/day]. Contributes
-        ``D_m * tau`` to the dispersion product ``D_t``.
+        Effective (retarded-frame) molecular diffusivity D_m [m²/day].
+        Contributes ``D_m * tau`` to the dispersion product ``D_t``.
     longitudinal_dispersivity : float
         Longitudinal dispersivity alpha_L [m]. Contributes ``alpha_L * xi``
         to the dispersion product ``D_t``.
@@ -209,9 +219,6 @@ def _cfrac_mean_volume(
         Retardation factor times pore volume = R * V_pore [m³].
     streamline_len : float
         Streamline length L [m].
-    aquifer_pore_volume : float
-        Pore volume V_pore [m³]. Used to compute fluid velocity
-        ``v = Q * L / V_pore`` for the K-Z flux correction.
 
     Returns
     -------
@@ -245,13 +252,17 @@ def _cfrac_mean_volume(
         cr_no_disp = np.where(dx == 0.0, 0.5 + 0.5 * np.sign(x_lo), cr_no_disp)
         return np.where(is_valid, cr_no_disp, frac)
 
-    # --- Pre-compute fluid velocity and K-Z coefficient (D_L/v) per flow bin ---
+    # --- Pre-compute solute-front velocity and K-Z coefficient (D_s/v_s) per flow bin ---
     dv_per_bin = np.diff(cumulative_volume_at_cin_tedges)
     dt_per_bin = np.diff(tedges_days)
     with np.errstate(divide="ignore", invalid="ignore"):
         q_per_bin = np.where(dt_per_bin > 0, dv_per_bin / dt_per_bin, 0.0)
-        v_per_bin = q_per_bin * streamline_len / aquifer_pore_volume
-        # (D_L/v) = D_m/v + alpha_L. At v=0 the bin has dV=0 and is skipped below.
+        # Solute-front velocity v_s = Q L / (R V_pore) -- the advection speed of the retarded ADE
+        # that C_R actually solves. Kreft-Zuber requires the flux coefficient D_s/v_s = D_m/v_s +
+        # alpha_L to use THAT velocity (not the fluid velocity Q L / V_pore); pairing it with the
+        # moving-frame variance D_t = D_m tau + alpha_L xi is what conserves mass for R>1, D_m>0.
+        v_per_bin = q_per_bin * streamline_len / r_vpv
+        # (D_s/v_s) = D_m/v_s + alpha_L. At v_s=0 the bin has dV=0 and is skipped below.
         dl_over_v_per_bin = np.where(
             v_per_bin > 0,
             molecular_diffusivity / np.where(v_per_bin > 0, v_per_bin, 1.0) + longitudinal_dispersivity,
@@ -317,7 +328,7 @@ def _cfrac_mean_volume(
         erf_vals = np.where(np.isfinite(arg), special.erf(arg), np.sign(x_nodes))
         cr_vals = 0.5 * (1.0 + erf_vals)
 
-        # K-Z flux correction: FC = (D_L/v) * (1/sqrt(4 pi D_t)) * exp(-arg^2)
+        # K-Z flux correction: FC = (D_s/v_s) * (1/sqrt(4 pi D_t)) * exp(-arg^2)
         with np.errstate(divide="ignore", invalid="ignore"):
             gauss_vals = np.where(
                 dt_nodes > 0.0,
@@ -553,7 +564,6 @@ def _infiltration_to_extraction_coeff_matrix(
             longitudinal_dispersivity=float(longitudinal_dispersivity[i_pv]),
             r_vpv=r_vpv,
             streamline_len=streamline_length[i_pv],
-            aquifer_pore_volume=float(aquifer_pore_volumes[i_pv]),
         )
 
         frac_start = frac[:, :-1]
@@ -599,10 +609,11 @@ def infiltration_to_extraction(
     concentration** at the outlet, defined as the solute mass flux divided
     by the volumetric fluid flux. This is what is measured when sampling the
     outflowing fluid. Compared to Bear's leading-order resident concentration,
-    it includes the dispersive boundary flux ``-D_L * dC_R/dx`` at
-    ``x = L``, which is what makes the column-sum invariant
-    ``integral Q c_out dt = integral Q c_in dt`` hold exactly under variable
-    flow.
+    it includes the dispersive boundary flux ``-D_s * dC_R/dx`` at
+    ``x = L`` (with the solute-front dispersion ``D_s = D_m + alpha_L * v_s``
+    and velocity ``v_s = Q L / (R V_pore)``), which is what makes the column-sum
+    invariant ``integral Q c_out dt = integral Q c_in dt`` hold exactly under
+    variable flow.
 
     Longitudinal dispersion enters as the moving-frame variance
 
@@ -638,19 +649,21 @@ def infiltration_to_extraction(
         Array of travel distances [m] corresponding to each pore volume.
         Must have the same length as aquifer_pore_volumes.
     molecular_diffusivity : float or array-like
-        Effective molecular diffusivity [m2/day]. Can be a scalar (same for all
-        pore volumes) or an array with the same length as aquifer_pore_volumes.
-        Must be non-negative. For solute transport, this is the molecular
-        diffusion coefficient D_m [m2/day] — typically ~1e-5 m2/day, negligible
-        compared to mechanical dispersion. For heat transport, pass the thermal
-        diffusivity D_th = lambda / (rho*c)_eff [m2/day], typically 0.01-0.1
-        m2/day.
+        Effective (retarded-frame) molecular diffusivity [m2/day]. Can be a
+        scalar (same for all pore volumes) or an array with the same length as
+        aquifer_pore_volumes. Must be non-negative. For solute transport, this is
+        the molecular diffusion coefficient D_m [m2/day] — typically ~1e-5 m2/day,
+        negligible compared to mechanical dispersion. For heat transport, pass the
+        thermal diffusivity D_th = lambda / (rho*c)_eff [m2/day], typically
+        0.01-0.1 m2/day.
 
         Internally, this contributes ``2 * molecular_diffusivity * tau`` to the
         variance, where ``tau`` is the elapsed time in days (no extra factor of
-        R). For heat transport, the thermal diffusivity already represents the
-        effective diffusivity D_eff in the porous matrix; for solutes the
-        contribution is typically negligible.
+        R). The retardation factor instead enters the flux coefficient
+        ``D_s/v_s = R D_m / v_fluid + alpha_L`` through the solute-front velocity
+        ``v_s = Q L / (R V_pore)``. For heat transport, the thermal diffusivity
+        already represents the effective diffusivity D_eff in the porous matrix;
+        for solutes the contribution is typically negligible.
     longitudinal_dispersivity : float or array-like
         Longitudinal dispersivity [m]. Can be a scalar (same for all pore
         volumes) or an array with the same length as aquifer_pore_volumes.
@@ -702,7 +715,8 @@ def infiltration_to_extraction(
 
     4. Average coefficients across all pore volumes.
 
-    The K-Z flux-correction term in C_F = C_R - (D_L/v) * dC_R/dx is what
+    The K-Z flux-correction term in C_F = C_R - (D_s/v_s) * dC_R/dx (solute-front
+    velocity v_s = Q L / (R V_pore), dispersion D_s = D_m + alpha_L * v_s) is what
     makes the column-sum invariant exact under variable Q; see the module
     docstring for the derivation.
 
