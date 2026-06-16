@@ -69,7 +69,9 @@ jobs:
       - name: Check links in README.md, pyproject.toml, and FUNDING.yml
         uses: lycheeverse/lychee-action@v2
         with:
-          args: --verbose --no-progress README.md pyproject.toml .github/FUNDING.yml
+          # Exclude the coverage badge + htmlcov report: deploy-time artifacts that 404 until the
+          # coverage deploy publishes them (also listed in .lycheeignore for local runs).
+          args: --verbose --no-progress --exclude 'gwtransport\.github\.io/gwtransport/(coverage-badge\.svg|htmlcov)' README.md pyproject.toml .github/FUNDING.yml
 
   deploy-documentation:
     if: ${{ github.ref == 'refs/heads/main' }}
