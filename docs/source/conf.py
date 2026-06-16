@@ -170,3 +170,13 @@ ogp_type = "website"
 ogp_custom_meta_tags = [
     '<meta name="keywords" content="groundwater, transport, solutes, temperature, residence times, pathogen removal, timeseries analysis">',
 ]
+
+# -- Options for linkcheck --------------------------------------------------
+# The coverage badge and HTML coverage report are build artifacts published to the site by the
+# coverage-deploy step; they exist only after a successful deploy, so a pre-deploy linkcheck (or a
+# run whose coverage deploy lagged behind a red test run) sees a 404. They are self-referential
+# build outputs, not stable external URLs to validate, so exclude them from linkcheck.
+linkcheck_ignore = [
+    r"https://gwtransport\.github\.io/gwtransport/coverage-badge\.svg",
+    r"https://gwtransport\.github\.io/gwtransport/htmlcov/?",
+]
