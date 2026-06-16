@@ -35,7 +35,7 @@ def _dense_weights(**kwargs):
     to NaN to match the historical dense build. Tests that need the dense operator
     use this helper; the densified band equals the old dense matrix on its support.
     """
-    band_vals, col_start, _, _, spinup_row = compute_deposition_weights(**kwargs)
+    band_vals, col_start, _, spinup_row = compute_deposition_weights(**kwargs)
     n_cin = len(kwargs["tedges"]) - 1
     dense = _densify_weights(band_vals, col_start, n_cin)
     dense[spinup_row] = np.nan
@@ -464,8 +464,8 @@ def test_linearity_exact():
     valid_double = cout_double[~np.isnan(cout_double)]
 
     min_len = min(len(valid_base), len(valid_double))
-    if min_len >= 1:
-        np.testing.assert_allclose(valid_double[:min_len], 2.0 * valid_base[:min_len], rtol=1e-12, atol=0)
+    assert min_len >= 1, "setup must produce at least one valid cout bin"
+    np.testing.assert_allclose(valid_double[:min_len], 2.0 * valid_base[:min_len], rtol=1e-12, atol=0)
 
 
 def test_negative_deposition_linearity():
@@ -510,8 +510,8 @@ def test_negative_deposition_linearity():
     valid_neg = cout_negative[~np.isnan(cout_negative)]
 
     min_len = min(len(valid_pos), len(valid_neg))
-    if min_len >= 1:
-        np.testing.assert_allclose(valid_neg[:min_len], -valid_pos[:min_len], rtol=1e-12, atol=0)
+    assert min_len >= 1, "setup must produce at least one valid cout bin"
+    np.testing.assert_allclose(valid_neg[:min_len], -valid_pos[:min_len], rtol=1e-12, atol=0)
 
 
 def test_parameter_scaling_exact():
@@ -562,16 +562,23 @@ def test_parameter_scaling_exact():
     valid_2 = cout_2[~np.isnan(cout_2)]
 
     min_len = min(len(valid_1), len(valid_2))
-    if min_len >= 1:
-        for i in range(min_len):
-            ratio = valid_1[i] / valid_2[i]
-            expected_ratio = porosity_2 / porosity_1  # Should be 2.0
-            rel_error = abs(ratio - expected_ratio) / expected_ratio
-            assert rel_error < 1e-10, f"Porosity scaling failed: ratio={ratio:.6f}, expected={expected_ratio:.6f}"
+    assert min_len >= 1, "setup must produce at least one valid cout bin"
+    for i in range(min_len):
+        ratio = valid_1[i] / valid_2[i]
+        expected_ratio = porosity_2 / porosity_1  # Should be 2.0
+        rel_error = abs(ratio - expected_ratio) / expected_ratio
+        assert rel_error < 1e-10, f"Porosity scaling failed: ratio={ratio:.6f}, expected={expected_ratio:.6f}"
 
 
-def test_input_validation():
-    """Test input validation with exact error messages."""
+def test_input_validation_public_api_wires_validator():
+    """The public forward/inverse entry points invoke ``_validate_deposition_inputs``.
+
+    Per-message coverage of every ValueError branch lives in the parametrized
+    ``test_validate_deposition_inputs_raises_on_bad_input``; this test keeps only a
+    single forward and a single inverse public-API smoke check so the wiring
+    (entry point -> validator) stays pinned without duplicating the per-message
+    assertions.
+    """
     dates = pd.date_range("2020-01-01", "2020-01-04", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
@@ -582,44 +589,24 @@ def test_input_validation():
         "retardation_factor": 1.0,
     }
 
-    # Test tedges length mismatch
+    # Forward entry point surfaces a validator error (tedges/flow parity).
     with pytest.raises(ValueError, match="tedges must have one more element than flow"):
         deposition_to_extraction(
             dep=np.ones(3),
             flow=np.ones(4),
             tedges=tedges[:4],
             cout_tedges=tedges[1:3],
-            aquifer_pore_volume=params["aquifer_pore_volume"],
-            porosity=params["porosity"],
-            thickness=params["thickness"],
-            retardation_factor=params["retardation_factor"],
+            **params,
         )
 
-    # Test cout_tedges length mismatch in extraction_to_deposition
+    # Inverse entry point surfaces a validator error (cout_tedges/cout parity).
     with pytest.raises(ValueError, match="cout_tedges must have one more element than cout"):
         extraction_to_deposition(
             cout=np.ones(3),
             flow=np.ones(3),
             tedges=tedges[:4],
             cout_tedges=tedges[:3],
-            aquifer_pore_volume=params["aquifer_pore_volume"],
-            porosity=params["porosity"],
-            thickness=params["thickness"],
-            retardation_factor=params["retardation_factor"],
-        )
-
-    # Test NaN in flow (should be rejected)
-    flow_with_nan = np.array([50.0, np.nan, 60.0])
-    with pytest.raises(ValueError, match="flow array cannot contain NaN values"):
-        extraction_to_deposition(
-            cout=np.ones(2),
-            flow=flow_with_nan,
-            tedges=tedges[:4],
-            cout_tedges=tedges[1:4],
-            aquifer_pore_volume=params["aquifer_pore_volume"],
-            porosity=params["porosity"],
-            thickness=params["thickness"],
-            retardation_factor=params["retardation_factor"],
+            **params,
         )
 
 
@@ -799,6 +786,69 @@ def test_extraction_to_deposition_full_with_rcond(full_solver_overdetermined_set
     np.testing.assert_allclose(recovered, original_deposition, rtol=1e-10, atol=1e-10)
 
 
+def test_extraction_to_deposition_full_objective_selection_underdetermined():
+    """On an underdetermined system the two nullspace objectives select different fits.
+
+    The overdetermined fixtures collapse the nullspace to dimension zero, so the
+    objective argument is dead there -- both objectives return the same unique
+    least-squares solution and the selection logic is never exercised. Here 8
+    daily cin bins are observed through only 3 valid (coarse 2-day) cout bins, so
+    the nullspace has dimension 5 and the objective genuinely picks one solution
+    out of an affine family. We assert:
+
+    (a) each objective exactly fits the data on the valid rows
+        (``W_valid @ dep_rec == cout_valid`` to machine precision), confirming
+        both stay on the solution manifold, and
+    (b) the smooth (``squared_differences``) and sparse (``summed_differences``)
+        objectives land on genuinely different points of that manifold, proving
+        the objective selection is load-bearing.
+    """
+    n = 8
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    # Coarse 2-day cout edges -> 4 cout bins for 8 cin bins (underdetermined).
+    cout_tedges = pd.date_range("2020-01-01", periods=5, freq="2D")
+    flow = np.full(n, 100.0)
+    params = {
+        "aquifer_pore_volume": 150.0,  # RT = 1.5 days
+        "porosity": 0.25,
+        "thickness": 4.0,
+        "retardation_factor": 1.0,
+    }
+    dep_true = np.array([10.0, 20.0, 30.0, 25.0, 15.0, 35.0, 40.0, 30.0])
+
+    # spinup=None keeps the operator un-padded so the densified W matches the
+    # solver's matrix exactly (no warm-start prefix to slice off).
+    cout = deposition_to_extraction(
+        dep=dep_true, flow=flow, tedges=tedges, cout_tedges=cout_tedges, spinup=None, **params
+    )
+
+    dense = _dense_weights(flow=flow, tedges=tedges, cout_tedges=cout_tedges, **params)
+    valid = ~np.isnan(dense).any(axis=1) & (np.abs(dense).sum(axis=1) > 0)
+    # Genuinely underdetermined: fewer valid equations than unknowns.
+    assert 0 < valid.sum() < n, "setup must be underdetermined with at least one valid row"
+
+    recovered = {}
+    for objective, method in [("squared_differences", "BFGS"), ("summed_differences", "Nelder-Mead")]:
+        dep_rec = extraction_to_deposition_full(
+            cout=cout,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            nullspace_objective=objective,
+            optimization_method=method,
+            spinup=None,
+            **params,  # pyright: ignore[reportArgumentType]
+        )
+        recovered[objective] = dep_rec
+        # (a) Each objective exactly reproduces the observed cout on the valid rows.
+        np.testing.assert_allclose(
+            dense[valid] @ dep_rec, cout[valid], rtol=0, atol=1e-10, err_msg=f"objective={objective} data fit"
+        )
+
+    # (b) The two objectives genuinely disagree inside the nullspace.
+    assert np.max(np.abs(recovered["squared_differences"] - recovered["summed_differences"])) > 1e-3
+
+
 def test_roundtrip_varying_deposition():
     """Roundtrip with sinusoidal deposition on a longer time series.
 
@@ -887,97 +937,36 @@ def test_extraction_to_deposition_sparse_sampling_rank_deficient_no_warning():
 # =============================================================================
 
 
-def test_spinup_duration_constant_flow():
-    """Test spinup_duration with constant flow."""
-    dates = pd.date_range(start="2020-01-01", periods=100, freq="D")
-    tedges = pd.date_range(start="2020-01-01", periods=101, freq="D")
-    flow = np.ones(len(dates)) * 100.0  # m³/day
-    pore_volume = 5000.0  # m³
-    retardation_factor = 1.0
+@pytest.mark.parametrize(
+    ("flow_rate", "pore_volume", "retardation_factor"),
+    [
+        (100.0, 5000.0, 1.0),  # baseline: 50 days
+        (100.0, 5000.0, 2.0),  # R > 1 (temperature transport): 100 days
+        (500.0, 5000.0, 1.0),  # high flow: short spinup (10 days)
+        (20.0, 5000.0, 1.0),  # low flow: long spinup (250 days)
+        (100.0, 20000.0, 1.5),  # large pore volume + R > 1: 300 days
+    ],
+    ids=["baseline", "retardation", "high_flow", "low_flow", "large_pore_volume"],
+)
+def test_spinup_duration_constant_flow_closed_form(flow_rate, pore_volume, retardation_factor):
+    """Constant-flow spin-up equals the closed-form V*R/Q exactly.
+
+    Under constant flow the cumulative-flow inversion ``flow_cum(t*) = R*V_pore``
+    is algebraically exact, so the spin-up duration is ``pore_volume *
+    retardation_factor / flow``. The flow history is sized to always exceed the
+    target volume. The R > 1 cases keep the retardation factor exercised in the
+    ``target_cum`` computation.
+    """
+    expected_duration = pore_volume * retardation_factor / flow_rate
+    # Size the flow history so the cumulative volume exceeds R*V_pore.
+    n = int(np.ceil(expected_duration)) + 50
+    tedges = pd.date_range(start="2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, flow_rate)
 
     duration = spinup_duration(
-        flow=flow, flow_tedges=tedges, aquifer_pore_volume=pore_volume, retardation_factor=retardation_factor
+        flow=flow, tedges=tedges, aquifer_pore_volume=pore_volume, retardation_factor=retardation_factor
     )
 
-    # Spinup should equal residence time at first time point
-    # RT = pore_volume * retardation / flow = 5000 * 1.0 / 100 = 50 days
-    # Under constant flow, V*R/Q is algebraically exact.
-    expected_duration = pore_volume * retardation_factor / flow[0]
-    np.testing.assert_allclose(duration, expected_duration, rtol=0, atol=1e-12)
-
-
-def test_spinup_duration_with_retardation():
-    """Test spinup_duration with retardation factor > 1."""
-    # RT = 5000 * 2.0 / 100 = 100 days, so need at least 100 days of flow history
-    dates = pd.date_range(start="2020-01-01", periods=150, freq="D")
-    tedges = pd.date_range(start="2020-01-01", periods=151, freq="D")
-    flow = np.ones(len(dates)) * 100.0
-    pore_volume = 5000.0
-    retardation_factor = 2.0  # Temperature transport
-
-    duration = spinup_duration(
-        flow=flow, flow_tedges=tedges, aquifer_pore_volume=pore_volume, retardation_factor=retardation_factor
-    )
-
-    # Spinup should be longer with retardation
-    # RT = 5000 * 2.0 / 100 = 100 days
-    expected_duration = pore_volume * retardation_factor / flow[0]
-    np.testing.assert_allclose(duration, expected_duration, rtol=0, atol=1e-12)
-    assert duration > 50.0  # Longer than without retardation
-
-
-def test_spinup_duration_high_flow():
-    """Test spinup_duration with high flow (short spinup)."""
-    dates = pd.date_range(start="2020-01-01", periods=100, freq="D")
-    tedges = pd.date_range(start="2020-01-01", periods=101, freq="D")
-    flow = np.ones(len(dates)) * 500.0  # High flow
-    pore_volume = 5000.0
-    retardation_factor = 1.0
-
-    duration = spinup_duration(
-        flow=flow, flow_tedges=tedges, aquifer_pore_volume=pore_volume, retardation_factor=retardation_factor
-    )
-
-    # RT = 5000 * 1.0 / 500 = 10 days
-    expected_duration = pore_volume * retardation_factor / flow[0]
-    np.testing.assert_allclose(duration, expected_duration, rtol=0, atol=1e-12)
-    assert duration < 20.0  # Short spinup with high flow
-
-
-def test_spinup_duration_low_flow():
-    """Test spinup_duration with low flow (long spinup)."""
-    # RT = 5000 * 1.0 / 20 = 250 days, so need at least 250 days of flow history
-    dates = pd.date_range(start="2020-01-01", periods=300, freq="D")
-    tedges = pd.date_range(start="2020-01-01", periods=301, freq="D")
-    flow = np.ones(len(dates)) * 20.0  # Low flow
-    pore_volume = 5000.0
-    retardation_factor = 1.0
-
-    duration = spinup_duration(
-        flow=flow, flow_tedges=tedges, aquifer_pore_volume=pore_volume, retardation_factor=retardation_factor
-    )
-
-    # RT = 5000 * 1.0 / 20 = 250 days
-    expected_duration = pore_volume * retardation_factor / flow[0]
-    np.testing.assert_allclose(duration, expected_duration, rtol=0, atol=1e-12)
-    assert duration > 200.0  # Long spinup with low flow
-
-
-def test_spinup_duration_large_pore_volume():
-    """Test spinup_duration with large pore volume."""
-    # RT = 20000 * 1.5 / 100 = 300 days, so need at least 300 days of flow history
-    dates = pd.date_range(start="2020-01-01", periods=400, freq="D")
-    tedges = pd.date_range(start="2020-01-01", periods=401, freq="D")
-    flow = np.ones(len(dates)) * 100.0
-    pore_volume = 20000.0  # Large aquifer
-    retardation_factor = 1.5
-
-    duration = spinup_duration(
-        flow=flow, flow_tedges=tedges, aquifer_pore_volume=pore_volume, retardation_factor=retardation_factor
-    )
-
-    # RT = 20000 * 1.5 / 100 = 300 days
-    expected_duration = pore_volume * retardation_factor / flow[0]
     np.testing.assert_allclose(duration, expected_duration, rtol=0, atol=1e-12)
 
 
@@ -1000,7 +989,7 @@ def test_spinup_duration_variable_flow_uses_extraction_direction():
     slow_then_fast = np.concatenate([np.full(50, 50.0), np.full(50, 200.0)])
     duration = spinup_duration(
         flow=slow_then_fast,
-        flow_tedges=tedges,
+        tedges=tedges,
         aquifer_pore_volume=pore_volume,
         retardation_factor=retardation_factor,
     )
@@ -1010,7 +999,7 @@ def test_spinup_duration_variable_flow_uses_extraction_direction():
     fast_then_slow = np.concatenate([np.full(50, 200.0), np.full(50, 50.0)])
     duration_asym = spinup_duration(
         flow=fast_then_slow,
-        flow_tedges=tedges,
+        tedges=tedges,
         aquifer_pore_volume=pore_volume,
         retardation_factor=retardation_factor,
     )
@@ -1032,7 +1021,7 @@ def test_spinup_duration_with_zero_flow_plateau():
     flow = np.array([100.0, 0.0, 100.0])
     duration = spinup_duration(
         flow=flow,
-        flow_tedges=flow_tedges,
+        tedges=flow_tedges,
         aquifer_pore_volume=1.0,
         retardation_factor=200.0,
     )
@@ -1064,7 +1053,7 @@ def test_spinup_duration_nonuniform_flow_tedges_weights_by_dt():
 
     duration = spinup_duration(
         flow=flow,
-        flow_tedges=flow_tedges,
+        tedges=flow_tedges,
         aquifer_pore_volume=aquifer_pore_volume,
         retardation_factor=retardation_factor,
     )
@@ -1175,14 +1164,20 @@ def test_compute_deposition_weights_with_retardation():
     """Row-sum scales with R: sum(W[i,:]) * porosity * thickness == RT_i at both R=1 and R=2.
 
     Replaces the prior `not np.allclose(weights_r1, weights_r2)` diff-only
-    assertion, which a wrong-but-different implementation would pass.
+    assertion, which a wrong-but-different implementation would pass. The pore
+    volume is kept small (500 m³ -> RT_water = 5 days) and the cout window starts
+    well past the longest spin-up (R=2 -> RT = 10 days) so that the
+    extraction_to_infiltration residence time is fully defined for every cout
+    bin at both R; the row-sum invariant is then asserted on real (finite)
+    values rather than vacuously on NaN.
     """
     dates = pd.date_range(start="2020-01-01", periods=50, freq="D")
     tedges = pd.date_range(start="2020-01-01", periods=51, freq="D")
-    cout_tedges = pd.date_range(start="2020-01-12", periods=31, freq="D")
+    # Start after the R=2 spin-up (RT = 10 days) so all rows are finite at both R.
+    cout_tedges = pd.date_range(start="2020-01-21", periods=31, freq="D")
 
     flow = np.ones(len(dates)) * 100.0
-    aquifer_pore_volume = 5000.0
+    aquifer_pore_volume = 500.0  # RT_water = 5 days
     porosity = 0.35
     thickness = 3.0
 
@@ -1205,9 +1200,13 @@ def test_compute_deposition_weights_with_retardation():
             direction="extraction_to_infiltration",
         )[0]
         rt_per_bin = rt[:-1]
+        valid = np.isfinite(rt_per_bin) & ~np.isnan(weights).any(axis=1)
+        assert valid.sum() >= 1, f"setup must produce at least one finite row for R={retardation_factor}"
+        # Row sum scales linearly with R through RT_i; under R=2 the sums are
+        # twice the R=1 sums, so this is not vacuously satisfiable.
         np.testing.assert_allclose(
-            weights.sum(axis=1) * porosity * thickness,
-            rt_per_bin,
+            weights[valid].sum(axis=1) * porosity * thickness,
+            rt_per_bin[valid],
             rtol=0,
             atol=1e-12,
             err_msg=f"R={retardation_factor}",
@@ -1369,7 +1368,7 @@ def test_banded_full_band_independent_of_record_length():
     for n in (200, 800, 3200):
         tedges = pd.date_range("2019-12-31 12:00", periods=n + 1, freq="D")
         flow = np.full(n, 100.0)
-        band_vals, _, _, _, _ = compute_deposition_weights(
+        band_vals, _, _, _ = compute_deposition_weights(
             flow=flow,
             tedges=tedges,
             cout_tedges=tedges,
@@ -2002,7 +2001,7 @@ def test_spinup_duration_first_bin_zero_flow():
     flow = np.full(n, 100.0)
     flow[0:3] = 0.0  # 3 days of zero flow at start
 
-    duration = spinup_duration(flow=flow, flow_tedges=tedges, aquifer_pore_volume=500.0, retardation_factor=1.0)
+    duration = spinup_duration(flow=flow, tedges=tedges, aquifer_pore_volume=500.0, retardation_factor=1.0)
     np.testing.assert_allclose(duration, 8.0, rtol=0, atol=1e-12)
 
 
