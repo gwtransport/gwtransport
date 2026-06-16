@@ -79,9 +79,10 @@ class TestInfiltrationToExtractionDiffusion:
             molecular_diffusivity=0.0,
             longitudinal_dispersivity=0.0,
         )
-        # Only compare values after spin-up (where advection is not NaN)
+        # Only compare values after spin-up (where advection is not NaN). Under constant
+        # flow the two forward kernels are bit-identical, so require exact equality.
         valid_mask = ~np.isnan(cout_advection)
-        np.testing.assert_allclose(cout_advection[valid_mask], cout_diffusion[valid_mask])
+        np.testing.assert_array_equal(cout_advection[valid_mask], cout_diffusion[valid_mask])
 
     def test_small_diffusivity_close_to_advection(self, simple_setup):
         """Test that small diffusivity produces result close to advection."""
@@ -202,9 +203,18 @@ class TestInfiltrationToExtractionDiffusion:
         np.testing.assert_allclose(cout[valid], 5.0, rtol=1e-10)
 
     def test_multiple_pore_volumes(self):
-        """Test with multiple pore volumes (heterogeneous aquifer)."""
+        """Test with multiple pore volumes (heterogeneous aquifer).
+
+        Beyond shape and bounds, the multi-PV forward kernel must conserve mass:
+        under constant flow with matched edges the coefficient columns of the
+        interior cin bins (those that fully break through within the cout window)
+        sum to 1. See ``test_column_mass_conservation_multi_pore_volume`` for the
+        variable-flow invariant that additionally exercises the flux correction.
+        """
         tedges = pd.date_range(start="2020-01-01", end="2020-01-15", freq="D")
-        cout_tedges = pd.date_range(start="2020-01-01", end="2020-01-20", freq="D")
+        # Window long enough that the largest pore volume (600 m³ -> 6-day RT at
+        # 100 m³/day) and its dispersion tail fully break through.
+        cout_tedges = pd.date_range(start="2020-01-01", end="2020-02-15", freq="D")
 
         cin = np.zeros(len(tedges) - 1)
         cin[0:5] = 1.0
@@ -214,18 +224,18 @@ class TestInfiltrationToExtractionDiffusion:
         aquifer_pore_volumes = np.array([400.0, 500.0, 600.0])
         streamline_length = np.array([80.0, 100.0, 120.0])
 
-        cout = infiltration_to_extraction(
-            cin=cin,
+        coeff, _ = _infiltration_to_extraction_coeff_matrix(
             flow=flow,
             tedges=tedges,
             cout_tedges=cout_tedges,
             aquifer_pore_volumes=aquifer_pore_volumes,
             streamline_length=streamline_length,
-            molecular_diffusivity=1.0,
-            longitudinal_dispersivity=0.0,
+            molecular_diffusivity=np.full(3, 1.0),
+            longitudinal_dispersivity=np.full(3, 0.0),
+            retardation_factor=1.0,
         )
+        cout = coeff @ cin
 
-        # Should produce valid output
         assert cout.shape == (len(cout_tedges) - 1,)
         valid = ~np.isnan(cout)
         assert np.sum(valid) > 0
@@ -233,6 +243,11 @@ class TestInfiltrationToExtractionDiffusion:
         # Output should be bounded
         assert np.all(cout[valid] >= 0.0 - 1e-10)
         assert np.all(cout[valid] <= 1.0 + 1e-10)
+
+        # Mass conservation: interior cin columns sum to 1 (the first and last
+        # columns lump the 100-year warm-start tails, so exclude them).
+        column_sums = coeff.sum(axis=0)
+        np.testing.assert_allclose(column_sums[1:-1], 1.0, rtol=0, atol=1e-12)
 
     def test_heterogeneous_streamline_length(self):
         """Heterogeneous L (per-streamtube) yields distinct breakthrough vs single mean L.
@@ -496,8 +511,6 @@ class TestDiffusionMatchesApvdCombined:
         2. Have bounded concentrations
         3. Show appropriate spreading behavior
         """
-        np.random.seed(42)
-
         # System parameters
         streamline_length = 100.0  # L [m]
         mean_apv = 10000.0  # V_mean [m³]
@@ -571,48 +584,8 @@ class TestDiffusionMatchesApvdCombined:
             f"Peak at idx {peak_idx} should be near {expected_peak_relative}"
         )
 
-    def test_zero_dispersivity_matches_molecular_only(self):
-        """Test that zero dispersivity gives same result as molecular diffusion only."""
-        np.random.seed(42)
-
-        streamline_length = 100.0
-        mean_apv = 5000.0
-        std_apv = 500.0
-        mean_flow = 100.0
-        diffusivity_molecular = 0.1
-
-        n_days = 150
-        tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-        cout_tedges = tedges.copy()
-
-        cin = np.zeros(n_days)
-        cin[20] = 100.0
-        flow = np.full(n_days, mean_flow)
-
-        nbins = 1000
-        gbins = gamma_utils.bins(mean=mean_apv, std=std_apv, n_bins=nbins)
-        streamline_lengths = np.full(nbins, streamline_length)
-
-        # With zero dispersivity
-        cout_zero_disp = infiltration_to_extraction(
-            cin=cin,
-            flow=flow,
-            tedges=tedges,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volumes=gbins["expected_values"],
-            streamline_length=streamline_lengths,
-            molecular_diffusivity=diffusivity_molecular,
-            longitudinal_dispersivity=0.0,
-        )
-
-        # Should conserve mass exactly (forward matrix rows sum to 1)
-        mass = np.nansum(cout_zero_disp)
-        np.testing.assert_allclose(mass, 100.0, rtol=1e-10, err_msg="Mass should be conserved")
-
     def test_increased_dispersion_broadens_curve(self):
         """Test that higher dispersion causes broader, lower-peak breakthrough."""
-        np.random.seed(42)
-
         streamline_length = 100.0
         mean_apv = 5000.0
         std_apv = 500.0
@@ -968,40 +941,6 @@ class TestExtractionToInfiltrationDiffusion:
         np.testing.assert_allclose(cin[well_supported], 5.0, rtol=1e-10, atol=1e-10)
         assert np.sum(well_supported) > 0.85 * np.sum(valid)
 
-    def test_multiple_pore_volumes(self):
-        """Test with multiple pore volumes (heterogeneous aquifer)."""
-        tedges = pd.date_range(start="2020-01-01", end="2020-03-01", freq="D")
-        cout_tedges = pd.date_range(start="2020-01-10", end="2020-02-20", freq="D")
-
-        cout = np.zeros(len(cout_tedges) - 1)
-        cout[5:10] = 1.0
-        flow = np.ones(len(tedges) - 1) * 100.0
-
-        # Multiple pore volumes with corresponding travel distances
-        aquifer_pore_volumes = np.array([400.0, 500.0, 600.0])
-        streamline_length = np.array([80.0, 100.0, 120.0])
-
-        cin = extraction_to_infiltration(
-            cout=cout,
-            flow=flow,
-            tedges=tedges,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-            streamline_length=streamline_length,
-            molecular_diffusivity=1.0,
-            longitudinal_dispersivity=0.0,
-        )
-
-        # Should produce valid output
-        assert cin.shape == (len(tedges) - 1,)
-        valid = ~np.isnan(cin)
-        assert np.sum(valid) > 0
-
-        # Multi-PV deconvolution with underdetermined system can produce
-        # significant oscillations beyond input range
-        assert np.all(cin[valid] >= 0.0 - 3.0)
-        assert np.all(cin[valid] <= 1.0 + 3.0)
-
 
 class TestExtractionToInfiltrationDiffusionPhysics:
     """Physics-based tests for extraction_to_infiltration with diffusion."""
@@ -1039,13 +978,14 @@ class TestExtractionToInfiltrationDiffusionPhysics:
         # round-trip mass defect is the irreducible deconvolution ringing
         # (~2.0e-7 here), NOT machine precision -- the forward I->E twin at
         # ``TestInfiltrationToExtractionDiffusionPhysics.test_mass_approximately_conserved``
-        # is correctly pinned at 1e-10. A two-sided window pins the defect from
-        # both ends: it must not regress upward (a one-sided ``< 1e-6`` would
-        # silently tolerate that) and must not collapse toward zero (which would
-        # signal the ringing was spuriously altered), while still leaving
-        # headroom above the 2.0e-7 floor so the test does not flake.
+        # is correctly pinned at 1e-10. The upper bound guards against the ringing
+        # regressing upward (a one-sided ``< 1e-6`` would silently tolerate that).
+        # Only a strictly positive (non-machine-precision) defect is required at
+        # the low end -- a tighter lower bound would encode the exact reg=1e-10
+        # conditioning and would fail on any solver improvement, which is a strict
+        # gain rather than a regression.
         relative_defect = abs(mass_out - mass_in) / mass_in
-        assert 1.5e-7 < relative_defect < 3e-7
+        assert 1e-9 < relative_defect < 3e-7
 
     def test_retardation_shifts_reconstruction(self):
         """Test that retardation factor shifts the reconstruction timing."""
@@ -1173,104 +1113,37 @@ class TestDiffusionRoundTrip:
         cin_bin_centers = tedges[:-1] + (tedges[1:] - tedges[:-1]) / 2
         return (cin_bin_centers >= forward_spinup_end) & (cin_bin_centers <= backward_spinup_start)
 
-    def test_roundtrip_zero_diffusivity(self, roundtrip_setup):
-        """Test that cin -> cout -> cin_reconstructed matches with zero diffusivity."""
-        # Forward pass
-        cout = infiltration_to_extraction(
-            cin=roundtrip_setup["cin"],
-            flow=roundtrip_setup["flow"],
-            tedges=roundtrip_setup["tedges"],
-            cout_tedges=roundtrip_setup["cout_tedges"],
-            aquifer_pore_volumes=roundtrip_setup["aquifer_pore_volumes"],
-            streamline_length=roundtrip_setup["streamline_length"],
-            molecular_diffusivity=0.0,
-            longitudinal_dispersivity=0.0,
-        )
+    @pytest.mark.parametrize(
+        ("molecular_diffusivity", "longitudinal_dispersivity", "retardation_factor", "effective_diffusivity"),
+        [
+            (0.0, 0.0, 1.0, 0.0),  # zero diffusivity -- exact advective inverse
+            (1.0, 0.0, 1.0, 1.0),  # molecular diffusion only
+            (0.0, 1.0, 1.0, 20.0),  # dispersivity only: D_L = alpha_L * v = 1.0 * 20
+            (0.5, 0.5, 1.0, 10.5),  # combined: D_L = D_m + alpha_L * v = 0.5 + 0.5 * 20
+            (1.0, 0.0, 2.0, 1.0),  # molecular diffusion with retardation
+        ],
+    )
+    def test_roundtrip_recovers_cin(
+        self,
+        roundtrip_setup,
+        molecular_diffusivity,
+        longitudinal_dispersivity,
+        retardation_factor,
+        effective_diffusivity,
+    ):
+        """SOLVER-INVERSION check: cin -> cout -> cin_reconstructed recovers cin in the interior.
 
-        # Backward pass
-        cin_reconstructed = extraction_to_infiltration(
-            cout=cout,
-            flow=roundtrip_setup["flow"],
-            tedges=roundtrip_setup["tedges"],
-            cout_tedges=roundtrip_setup["cout_tedges"],
-            aquifer_pore_volumes=roundtrip_setup["aquifer_pore_volumes"],
-            streamline_length=roundtrip_setup["streamline_length"],
-            molecular_diffusivity=0.0,
-            longitudinal_dispersivity=0.0,
-        )
-
-        # Compute valid mask
-        valid_mask = self._compute_valid_mask(
-            roundtrip_setup["tedges"],
-            roundtrip_setup["cout_tedges"],
-            roundtrip_setup["aquifer_pore_volumes"],
-            roundtrip_setup["flow"],
-        )
-
-        # Compare in valid region - should be exact for zero diffusivity
-        assert np.sum(valid_mask) > 10, "Should have enough valid bins for comparison"
-        np.testing.assert_allclose(
-            cin_reconstructed[valid_mask],
-            roundtrip_setup["cin"][valid_mask],
-            rtol=1e-10,
-            atol=1e-10,
-        )
-
-    def test_roundtrip_molecular_diffusivity(self, roundtrip_setup):
-        """Test round-trip with molecular diffusivity only."""
-        # Forward pass
-        cout = infiltration_to_extraction(
-            cin=roundtrip_setup["cin"],
-            flow=roundtrip_setup["flow"],
-            tedges=roundtrip_setup["tedges"],
-            cout_tedges=roundtrip_setup["cout_tedges"],
-            aquifer_pore_volumes=roundtrip_setup["aquifer_pore_volumes"],
-            streamline_length=roundtrip_setup["streamline_length"],
-            molecular_diffusivity=1.0,
-            longitudinal_dispersivity=0.0,
-        )
-
-        # Backward pass
-        cin_reconstructed = extraction_to_infiltration(
-            cout=cout,
-            flow=roundtrip_setup["flow"],
-            tedges=roundtrip_setup["tedges"],
-            cout_tedges=roundtrip_setup["cout_tedges"],
-            aquifer_pore_volumes=roundtrip_setup["aquifer_pore_volumes"],
-            streamline_length=roundtrip_setup["streamline_length"],
-            molecular_diffusivity=1.0,
-            longitudinal_dispersivity=0.0,
-        )
-
-        # Compute valid mask — D_L = D_m = 1.0 m²/day
-        valid_mask = self._compute_valid_mask(
-            roundtrip_setup["tedges"],
-            roundtrip_setup["cout_tedges"],
-            roundtrip_setup["aquifer_pore_volumes"],
-            roundtrip_setup["flow"],
-            effective_diffusivity=1.0,
-            streamline_length=roundtrip_setup["streamline_length"],
-        )
-
-        # Compare in valid region
-        assert np.sum(valid_mask) > 10, "Should have enough valid bins for comparison"
-        np.testing.assert_allclose(
-            cin_reconstructed[valid_mask],
-            roundtrip_setup["cin"][valid_mask],
-            rtol=1e-10,
-            atol=1e-10,
-        )
-
-    def test_roundtrip_longitudinal_dispersivity(self, roundtrip_setup):
-        """Test round-trip with longitudinal dispersivity only.
-
-        The same forward matrix is used for both directions, so the roundtrip
-        is exact up to SVD numerical precision within the valid region.
-        Higher D_L requires wider margins because deconvolution edge errors
-        decay more slowly.
+        The reverse direction solves ``W_forward @ cin = cout`` with the SAME
+        ``W_forward`` the forward used, so this round-trip only verifies that the
+        Tikhonov/SVD solver inverts the matrix -- it is BLIND to the forward
+        physics (a wrong-but-invertible kernel still round-trips). Forward physics
+        is validated by independent oracles: ``test_cfrac_mean_volume_vs_quad``,
+        ``test_single_pv_matches_apvd_with_combined_std``,
+        ``test_single_pv_molecular_diffusion_variance_magnitude``, and the
+        ``test_column_mass_conservation_*`` family (single- and multi-PV,
+        retardation). This parametrization just exercises the molecular /
+        dispersivity / combined / retardation reverse code paths once each.
         """
-        # D_L = alpha_L * v = 1.0 * (L / tau) = 1.0 * (100 / 5) = 20 m²/day
-        # Forward pass
         cout = infiltration_to_extraction(
             cin=roundtrip_setup["cin"],
             flow=roundtrip_setup["flow"],
@@ -1278,11 +1151,10 @@ class TestDiffusionRoundTrip:
             cout_tedges=roundtrip_setup["cout_tedges"],
             aquifer_pore_volumes=roundtrip_setup["aquifer_pore_volumes"],
             streamline_length=roundtrip_setup["streamline_length"],
-            molecular_diffusivity=0.0,
-            longitudinal_dispersivity=1.0,
+            molecular_diffusivity=molecular_diffusivity,
+            longitudinal_dispersivity=longitudinal_dispersivity,
+            retardation_factor=retardation_factor,
         )
-
-        # Backward pass
         cin_reconstructed = extraction_to_infiltration(
             cout=cout,
             flow=roundtrip_setup["flow"],
@@ -1290,66 +1162,21 @@ class TestDiffusionRoundTrip:
             cout_tedges=roundtrip_setup["cout_tedges"],
             aquifer_pore_volumes=roundtrip_setup["aquifer_pore_volumes"],
             streamline_length=roundtrip_setup["streamline_length"],
-            molecular_diffusivity=0.0,
-            longitudinal_dispersivity=1.0,
+            molecular_diffusivity=molecular_diffusivity,
+            longitudinal_dispersivity=longitudinal_dispersivity,
+            retardation_factor=retardation_factor,
         )
 
-        # Compute valid mask — D_L = alpha_L * v = 1.0 * 20 = 20 m²/day
         valid_mask = self._compute_valid_mask(
             roundtrip_setup["tedges"],
             roundtrip_setup["cout_tedges"],
             roundtrip_setup["aquifer_pore_volumes"],
             roundtrip_setup["flow"],
-            effective_diffusivity=20.0,
+            retardation_factor=retardation_factor,
+            effective_diffusivity=effective_diffusivity,
             streamline_length=roundtrip_setup["streamline_length"],
         )
 
-        # Compare in valid region
-        assert np.sum(valid_mask) > 10, "Should have enough valid bins for comparison"
-        np.testing.assert_allclose(
-            cin_reconstructed[valid_mask],
-            roundtrip_setup["cin"][valid_mask],
-            rtol=1e-10,
-            atol=1e-10,
-        )
-
-    def test_roundtrip_combined_diffusion_dispersion(self, roundtrip_setup):
-        """Test round-trip with both molecular diffusivity and dispersivity."""
-        # Forward pass
-        cout = infiltration_to_extraction(
-            cin=roundtrip_setup["cin"],
-            flow=roundtrip_setup["flow"],
-            tedges=roundtrip_setup["tedges"],
-            cout_tedges=roundtrip_setup["cout_tedges"],
-            aquifer_pore_volumes=roundtrip_setup["aquifer_pore_volumes"],
-            streamline_length=roundtrip_setup["streamline_length"],
-            molecular_diffusivity=0.5,
-            longitudinal_dispersivity=0.5,
-        )
-
-        # Backward pass
-        cin_reconstructed = extraction_to_infiltration(
-            cout=cout,
-            flow=roundtrip_setup["flow"],
-            tedges=roundtrip_setup["tedges"],
-            cout_tedges=roundtrip_setup["cout_tedges"],
-            aquifer_pore_volumes=roundtrip_setup["aquifer_pore_volumes"],
-            streamline_length=roundtrip_setup["streamline_length"],
-            molecular_diffusivity=0.5,
-            longitudinal_dispersivity=0.5,
-        )
-
-        # Compute valid mask — D_L = D_m + alpha_L * v = 0.5 + 0.5 * 20 = 10.5 m²/day
-        valid_mask = self._compute_valid_mask(
-            roundtrip_setup["tedges"],
-            roundtrip_setup["cout_tedges"],
-            roundtrip_setup["aquifer_pore_volumes"],
-            roundtrip_setup["flow"],
-            effective_diffusivity=10.5,
-            streamline_length=roundtrip_setup["streamline_length"],
-        )
-
-        # Compare in valid region
         assert np.sum(valid_mask) > 10, "Should have enough valid bins for comparison"
         np.testing.assert_allclose(
             cin_reconstructed[valid_mask],
@@ -1359,11 +1186,13 @@ class TestDiffusionRoundTrip:
         )
 
     def test_roundtrip_multiple_pore_volumes(self):
-        """Test round-trip with multiple pore volumes.
+        """SOLVER-INVERSION check: regularized multi-PV round-trip recovers cin to ~0.9%.
 
-        With the combined forward-inverse approach, the same forward matrix
-        is used for both directions, enabling exact roundtrip recovery even
-        with multiple pore volumes.
+        The reverse uses the same forward matrix, so this only checks the
+        regularized solver inverts the (wider-nullspace) multi-PV matrix; it does
+        NOT constrain the forward physics. Multi-PV forward physics is verified by
+        ``test_column_mass_conservation_multi_pore_volume`` and
+        ``TestInfiltrationToExtractionDiffusion.test_multiple_pore_volumes``.
         """
         # Long time ranges to ensure sufficient valid region after margin exclusion
         tedges = pd.date_range(start="2020-01-01", end="2021-01-01", freq="D")
@@ -1424,56 +1253,6 @@ class TestDiffusionRoundTrip:
             atol=0.01,
         )
 
-    def test_roundtrip_with_retardation(self, roundtrip_setup):
-        """Test round-trip with retardation factor > 1."""
-        retardation = 2.0
-
-        # Forward pass
-        cout = infiltration_to_extraction(
-            cin=roundtrip_setup["cin"],
-            flow=roundtrip_setup["flow"],
-            tedges=roundtrip_setup["tedges"],
-            cout_tedges=roundtrip_setup["cout_tedges"],
-            aquifer_pore_volumes=roundtrip_setup["aquifer_pore_volumes"],
-            streamline_length=roundtrip_setup["streamline_length"],
-            molecular_diffusivity=1.0,
-            longitudinal_dispersivity=0.0,
-            retardation_factor=retardation,
-        )
-
-        # Backward pass
-        cin_reconstructed = extraction_to_infiltration(
-            cout=cout,
-            flow=roundtrip_setup["flow"],
-            tedges=roundtrip_setup["tedges"],
-            cout_tedges=roundtrip_setup["cout_tedges"],
-            aquifer_pore_volumes=roundtrip_setup["aquifer_pore_volumes"],
-            streamline_length=roundtrip_setup["streamline_length"],
-            molecular_diffusivity=1.0,
-            longitudinal_dispersivity=0.0,
-            retardation_factor=retardation,
-        )
-
-        # Compute valid mask with retardation — D_L = D_m = 1.0 m²/day
-        valid_mask = self._compute_valid_mask(
-            roundtrip_setup["tedges"],
-            roundtrip_setup["cout_tedges"],
-            roundtrip_setup["aquifer_pore_volumes"],
-            roundtrip_setup["flow"],
-            retardation_factor=retardation,
-            effective_diffusivity=1.0,
-            streamline_length=roundtrip_setup["streamline_length"],
-        )
-
-        # Compare in valid region
-        assert np.sum(valid_mask) > 10, "Should have enough valid bins for comparison"
-        np.testing.assert_allclose(
-            cin_reconstructed[valid_mask],
-            roundtrip_setup["cin"][valid_mask],
-            rtol=1e-10,
-            atol=1e-10,
-        )
-
 
 class TestFlowWeightedDiffusion:
     """Tests that verify flow-weighted output concentrations.
@@ -1486,7 +1265,12 @@ class TestFlowWeightedDiffusion:
 
     @pytest.mark.parametrize("retardation_factor", [1.0, 2.7, 5.0])
     def test_zero_diffusivity_varying_flow_matches_advection(self, retardation_factor):
-        """D=0 with varying flow: diffusion module must match pure advection across R values."""
+        """D=0 with varying flow: diffusion module must match pure advection across R values.
+
+        Agreement is ~2e-13 at worst (R=1.0; ~2e-16 at R=5.0), so the guard is
+        ``rtol=0, atol=1e-12`` -- tight to the achieved floor, not the hidden
+        default ``rtol=1e-7`` that would silently admit a 1e-9 regression.
+        """
         tedges = pd.date_range("2020-01-01", periods=31, freq="D")
         # Coarser output bins so that multiple flow bins fall inside one cout bin
         cout_tedges = pd.date_range("2020-01-01", periods=11, freq="3D")
@@ -1520,7 +1304,7 @@ class TestFlowWeightedDiffusion:
         )
 
         valid = ~np.isnan(cout_adv)
-        np.testing.assert_allclose(cout_adv[valid], cout_diff[valid])
+        np.testing.assert_allclose(cout_adv[valid], cout_diff[valid], rtol=0, atol=1e-12)
 
     def test_mass_conservation_varying_flow(self):
         """Coefficient rows must sum to ~1 for valid bins under varying flow."""
@@ -1607,6 +1391,93 @@ class TestFlowWeightedDiffusion:
         ratios = mass_out_per_cin[10:42] / v_in_interior
         np.testing.assert_allclose(ratios, 1.0, atol=1e-10, rtol=0)
 
+    @pytest.mark.parametrize("seed", [1, 3, 7, 42, 999])
+    @pytest.mark.parametrize(
+        ("d_m", "alpha_l"),
+        [
+            (0.0, 0.1),
+            (0.0, 0.3),
+            (1.0, 0.0),
+            (1.0, 0.3),
+        ],
+    )
+    def test_column_mass_conservation_multi_pore_volume(self, d_m, alpha_l, seed):
+        """Volume-weighted column sums equal infiltrated volume for a multi-PV aquifer.
+
+        The multi-PV path accumulates one Kreft-Zuber kernel per streamtube and
+        averages them. The flux-weighted invariant
+        ``sum_i W[i,j] * Q_out[i] * dt_out[i] == Q_in[j] * dt_in[j]`` must still
+        hold at machine precision under variable flow -- exercising the multi-PV
+        forward physics (the smoke test ``test_multiple_pore_volumes`` checks only
+        shape and bounds). Without the per-streamtube flux correction the column
+        sum drifts by O(1/Pe) under variable Q.
+        """
+        n = 120
+        tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+        cout_tedges = tedges
+
+        rng = np.random.default_rng(seed)
+        flow = 100.0 * np.exp(rng.normal(0.0, 0.3, n))
+        aquifer_pore_volumes = np.array([700.0, 1000.0, 1300.0])
+        streamline_length = np.array([80.0, 100.0, 120.0])
+
+        coeff, _ = _infiltration_to_extraction_coeff_matrix(
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            streamline_length=streamline_length,
+            molecular_diffusivity=np.full(3, d_m),
+            longitudinal_dispersivity=np.full(3, alpha_l),
+            retardation_factor=1.0,
+        )
+
+        # Interior cin bins 20..89 fully transit the cout window for the
+        # largest pore volume (RT ~ 13 days at Q=100) plus its dispersion tail.
+        dt = np.diff(tedges) / pd.Timedelta("1D")
+        v_out = flow * dt
+        v_in_interior = flow[20:90] * 1.0
+        mass_out_per_cin = (v_out[:, None] * coeff).sum(axis=0)
+        ratios = mass_out_per_cin[20:90] / v_in_interior
+        np.testing.assert_allclose(ratios, 1.0, atol=1e-10, rtol=0)
+
+    @pytest.mark.parametrize("retardation_factor", [1.0, 2.7])
+    def test_mass_conservation_retardation_with_molecular_diffusion(self, retardation_factor):
+        """Flux-weighted mass ``∫Q·c_out dt = ∫Q·c_in dt`` holds under variable flow for R>1 AND D_m>0.
+
+        Regression for the Kreft-Zuber flux coefficient: it must use the solute-front velocity
+        ``v_s = Q·L/(R·V_pore)`` (so ``D_s/v_s = R·D_m/v_fluid + alpha_L``), not the fluid velocity.
+        With the fluid velocity the molecular term breaks conservation for R>1, D_m>0 by O((R-1)·D_m)
+        under variable flow (≈ -6e-4 at R=2.7, D_m=0.5); R=1 and D_m=0 are unaffected, which is why the
+        defect stayed hidden. Fails on the pre-fix code.
+        """
+        n = 120
+        tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+        rng = np.random.default_rng(7)
+        flow = 60.0 + 40.0 * rng.random(n)  # variable, strictly positive
+        cin = np.zeros(n)
+        cin[20:25] = 10.0  # compact pulse well inside the record
+        dt = np.diff(tedges) / pd.Timedelta("1D")
+
+        cout = infiltration_to_extraction(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([300.0]),
+            streamline_length=np.array([20.0]),
+            molecular_diffusivity=0.5,
+            longitudinal_dispersivity=0.0,
+            retardation_factor=retardation_factor,
+            spinup=None,
+        )
+        valid = ~np.isnan(cout)
+        # The output window must capture all breakthrough mass (no leakage at the right edge).
+        assert np.allclose(cout[valid][-3:], 0.0, atol=1e-6), "breakthrough not fully captured in window"
+        m_in = np.nansum(flow * cin * dt)
+        m_out = np.nansum(flow[valid] * cout[valid] * dt[valid])
+        np.testing.assert_allclose(m_out, m_in, rtol=1e-10)
+
     def test_constant_cin_varying_flow_gives_constant_cout(self):
         """Constant cin with varying flow must produce constant cout."""
         tedges = pd.date_range("2020-01-01", periods=61, freq="D")
@@ -1648,15 +1519,17 @@ class TestFlowWeightedDiffusion:
         ``D_L = D_m + alpha_L * v(t)``.
 
         Tests several narrow cout cells covering pre-breakthrough, the
-        breakthrough front, and post-breakthrough. Cells are chosen narrow
-        enough that 16-point GL quadrature in V-space is precise to ~1e-12.
+        breakthrough front, and post-breakthrough. Cells are precise to ~1e-10:
+        the steep erfc breakthrough front leaves a ~1e-10 16-point GL quadrature
+        floor (the pre/post-breakthrough cells are exact to ~5e-16). The guard is
+        therefore ``rtol=0, atol=1e-9`` -- tight to the front floor, not the hidden
+        default ``rtol=1e-7``.
         """
         cum_cin = np.array([0.0, 50.0, 130.0, 220.0, 330.0, 500.0])
         tedges_days = np.array([0.0, 0.5, 1.4, 2.3, 3.4, 5.0])  # variable Q
 
-        r_vpv = 200.0
+        r_vpv = 200.0  # = R * V_pore; R = 1 here (no retardation), so v_s == v_fluid
         sl = 50.0
-        v_pore = 200.0  # = r_vpv when R = 1 (no retardation in this test)
 
         # Several narrow cout cells: pre, around, and post breakthrough for j=0
         cum_cout = np.array([60.0, 130.0, 200.0, 260.0, 330.0, 420.0, 480.0])
@@ -1673,12 +1546,11 @@ class TestFlowWeightedDiffusion:
             longitudinal_dispersivity=alpha_l,
             r_vpv=r_vpv,
             streamline_len=sl,
-            aquifer_pore_volume=v_pore,
         )
 
-        # Fluid velocity per flow bin
+        # Solute-front velocity per flow bin (v_pore == r_vpv here, i.e. R = 1, so v_s == v_fluid)
         q_per_bin = np.diff(cum_cin) / np.diff(tedges_days)
-        v_per_bin = q_per_bin * sl / v_pore
+        v_per_bin = q_per_bin * sl / r_vpv
 
         def _make_integrand(v_j_, t_j_):
             def integrand(v):
@@ -1719,7 +1591,7 @@ class TestFlowWeightedDiffusion:
                     continue
                 ref, _ = integrate.quad(_make_integrand(v_j, t_j), lower, upper, limit=500, epsabs=1e-13)
                 ref_mean = ref / (v_hi - v_lo)
-                np.testing.assert_allclose(result[i, j], ref_mean, atol=1e-12)
+                np.testing.assert_allclose(result[i, j], ref_mean, rtol=0, atol=1e-9)
 
 
 class TestGammaExtractionToInfiltrationDiffusion:
@@ -1803,22 +1675,35 @@ class TestGammaExtractionToInfiltrationDiffusion:
         assert np.sum(well_supported) > 50
         np.testing.assert_allclose(cin[well_supported], 7.0, rtol=1e-10, atol=1e-10)
 
-    def test_roundtrip_single_pore_volume_limit(self, gamma_setup):
-        """Roundtrip with very narrow gamma (single-PV-like) recovers cin.
+    @pytest.mark.parametrize(
+        "override",
+        [
+            {},  # narrow gamma -> effectively single pore volume
+            {"retardation_factor": 2.0},  # retardation code path
+            {"mean": 700.0, "loc": 200.0},  # loc-shift code path
+            {"longitudinal_dispersivity": 1.0},  # dispersivity code path
+        ],
+        ids=["narrow", "retardation", "loc", "dispersivity"],
+    )
+    def test_roundtrip_narrow_gamma_recovers_cin(self, gamma_setup, override):
+        """SOLVER-INVERSION check: narrow-gamma deconvolution recovers cin in the interior.
 
-        A gamma distribution with very small std relative to mean behaves
-        like a single pore volume. The roundtrip should recover the original
-        signal to machine precision in the well-supported interior.
+        A gamma with very small std relative to mean behaves like a single pore
+        volume, so the regularized reverse recovers cin to ~1e-9 in the interior.
+        Like all the round-trips, this uses the SAME forward matrix in both
+        directions and is therefore BLIND to the forward physics; it only
+        exercises the narrow-gamma reverse code paths (retardation / loc /
+        dispersivity) once each. Forward physics is checked by the oracle and
+        column-mass tests.
         """
-        # Very narrow gamma -> effectively single pore volume
-        narrow_std = 1.0  # std/mean = 0.002
         diffusion_kwargs = {
             "mean": gamma_setup["mean"],
-            "std": narrow_std,
+            "std": 1.0,  # std/mean = 0.002 -> near-delta
             "n_bins": 5,
             "streamline_length": gamma_setup["streamline_length"],
             "molecular_diffusivity": 1e-4,
             "longitudinal_dispersivity": 0.0,
+            **override,
         }
 
         cout = diffusion_gamma_i2e(
@@ -1828,7 +1713,6 @@ class TestGammaExtractionToInfiltrationDiffusion:
             cout_tedges=gamma_setup["cout_tedges"],
             **diffusion_kwargs,
         )
-
         cin_recovered = gamma_extraction_to_infiltration(
             cout=cout,
             flow=gamma_setup["flow"],
@@ -1837,21 +1721,13 @@ class TestGammaExtractionToInfiltrationDiffusion:
             **diffusion_kwargs,
         )
 
-        # Compute valid interior mask (exclude edges)
-        valid = ~np.isnan(cin_recovered) & ~np.isnan(
-            np.interp(
-                np.arange(len(cin_recovered)),
-                np.arange(len(cout)) + 5,  # offset for cout_tedges start
-                np.where(np.isnan(cout), 0, 1),
-            )
-        )
-        # Skip first and last 50 bins for edge effects
+        # Interior mask: drop the first/last 50 valid bins (deconvolution edges).
+        valid_indices = np.where(~np.isnan(cin_recovered))[0]
         interior = np.zeros(len(cin_recovered), dtype=bool)
-        valid_indices = np.where(valid)[0]
         if len(valid_indices) > 100:
             interior[valid_indices[50:-50]] = True
 
-        assert np.sum(interior) > 20
+        assert np.sum(interior) > 10
         np.testing.assert_allclose(
             cin_recovered[interior],
             gamma_setup["cin"][interior],
@@ -1898,49 +1774,6 @@ class TestGammaExtractionToInfiltrationDiffusion:
             gamma_setup["cin"][interior],
             rtol=5e-3,
             atol=0.01,
-        )
-
-    def test_roundtrip_with_retardation(self, gamma_setup):
-        """Roundtrip with retardation factor > 1 recovers cin in interior."""
-        retardation = 2.0
-        diffusion_kwargs = {
-            "mean": gamma_setup["mean"],
-            "std": 1.0,  # narrow gamma for near-exact recovery
-            "n_bins": 5,
-            "streamline_length": gamma_setup["streamline_length"],
-            "molecular_diffusivity": 1e-4,
-            "longitudinal_dispersivity": 0.0,
-            "retardation_factor": retardation,
-        }
-
-        cout = diffusion_gamma_i2e(
-            cin=gamma_setup["cin"],
-            flow=gamma_setup["flow"],
-            tedges=gamma_setup["tedges"],
-            cout_tedges=gamma_setup["cout_tedges"],
-            **diffusion_kwargs,
-        )
-
-        cin_recovered = gamma_extraction_to_infiltration(
-            cout=cout,
-            flow=gamma_setup["flow"],
-            tedges=gamma_setup["tedges"],
-            cout_tedges=gamma_setup["cout_tedges"],
-            **diffusion_kwargs,
-        )
-
-        valid = ~np.isnan(cin_recovered)
-        valid_indices = np.where(valid)[0]
-        interior = np.zeros(len(cin_recovered), dtype=bool)
-        if len(valid_indices) > 100:
-            interior[valid_indices[50:-50]] = True
-
-        assert np.sum(interior) > 10
-        np.testing.assert_allclose(
-            cin_recovered[interior],
-            gamma_setup["cin"][interior],
-            rtol=1e-9,
-            atol=1e-9,
         )
 
     def test_alpha_beta_matches_mean_std(self, gamma_setup):
@@ -2038,88 +1871,6 @@ class TestGammaExtractionToInfiltrationDiffusion:
         cin_default = gamma_extraction_to_infiltration(**common_kwargs)
         cin_loc_zero = gamma_extraction_to_infiltration(loc=0.0, **common_kwargs)
         np.testing.assert_array_equal(cin_default, cin_loc_zero)
-
-    def test_roundtrip_with_loc(self, gamma_setup):
-        """Forward->reverse roundtrip with loc > 0 recovers cin in the interior."""
-        diffusion_kwargs = {
-            "mean": gamma_setup["mean"] + 200.0,  # mean shifted to keep excess mean reasonable
-            "std": 1.0,  # near-delta
-            "loc": 200.0,
-            "n_bins": 5,
-            "streamline_length": gamma_setup["streamline_length"],
-            "molecular_diffusivity": 1e-4,
-            "longitudinal_dispersivity": 0.0,
-        }
-
-        cout = diffusion_gamma_i2e(
-            cin=gamma_setup["cin"],
-            flow=gamma_setup["flow"],
-            tedges=gamma_setup["tedges"],
-            cout_tedges=gamma_setup["cout_tedges"],
-            **diffusion_kwargs,
-        )
-        cin_recovered = gamma_extraction_to_infiltration(
-            cout=cout,
-            flow=gamma_setup["flow"],
-            tedges=gamma_setup["tedges"],
-            cout_tedges=gamma_setup["cout_tedges"],
-            **diffusion_kwargs,
-        )
-
-        valid = ~np.isnan(cin_recovered)
-        valid_indices = np.where(valid)[0]
-        interior = np.zeros(len(cin_recovered), dtype=bool)
-        if len(valid_indices) > 100:
-            interior[valid_indices[50:-50]] = True
-
-        assert np.sum(interior) > 20
-        np.testing.assert_allclose(
-            cin_recovered[interior],
-            gamma_setup["cin"][interior],
-            rtol=1e-9,
-            atol=1e-9,
-        )
-
-    def test_roundtrip_with_dispersivity(self, gamma_setup):
-        """Roundtrip with non-zero dispersivity recovers cin."""
-        diffusion_kwargs = {
-            "mean": gamma_setup["mean"],
-            "std": 1.0,  # narrow gamma
-            "n_bins": 5,
-            "streamline_length": gamma_setup["streamline_length"],
-            "molecular_diffusivity": 1e-4,
-            "longitudinal_dispersivity": 1.0,
-        }
-
-        cout = diffusion_gamma_i2e(
-            cin=gamma_setup["cin"],
-            flow=gamma_setup["flow"],
-            tedges=gamma_setup["tedges"],
-            cout_tedges=gamma_setup["cout_tedges"],
-            **diffusion_kwargs,
-        )
-
-        cin_recovered = gamma_extraction_to_infiltration(
-            cout=cout,
-            flow=gamma_setup["flow"],
-            tedges=gamma_setup["tedges"],
-            cout_tedges=gamma_setup["cout_tedges"],
-            **diffusion_kwargs,
-        )
-
-        valid = ~np.isnan(cin_recovered)
-        valid_indices = np.where(valid)[0]
-        interior = np.zeros(len(cin_recovered), dtype=bool)
-        if len(valid_indices) > 100:
-            interior[valid_indices[50:-50]] = True
-
-        assert np.sum(interior) > 10
-        np.testing.assert_allclose(
-            cin_recovered[interior],
-            gamma_setup["cin"][interior],
-            rtol=1e-9,
-            atol=1e-9,
-        )
 
 
 # =============================================================================
@@ -2248,7 +1999,7 @@ def test_validate_diffusion_inputs_silent_on_good_input_reverse():
 
 
 @pytest.mark.parametrize(
-    ("path", "mutate", "match_regex"),
+    ("_path", "mutate", "match_regex"),
     [
         # ---------------- forward path ----------------
         (
@@ -2409,9 +2160,12 @@ def test_validate_diffusion_inputs_silent_on_good_input_reverse():
         ),
     ],
 )
-def test_validate_diffusion_inputs_raises_on_bad_input(path, mutate, match_regex):
-    """Each ValueError branch raises with the exact historical message string."""
-    del path  # parametrize id only
+def test_validate_diffusion_inputs_raises_on_bad_input(_path, mutate, match_regex):
+    """Each ValueError branch raises with the exact historical message string.
+
+    ``_path`` ("forward"/"reverse") is unused by the body; it only labels the
+    parametrize id so failures point at the offending path.
+    """
     bad = mutate(_good_diffusion_inputs())
     with pytest.raises(ValueError, match=match_regex):
         _validate_diffusion_inputs(**bad)

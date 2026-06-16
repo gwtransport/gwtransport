@@ -45,12 +45,18 @@ class TestEventDataStructures:
         assert event.location == 250.0
 
     def test_event_ordering(self):
-        """Events are ordered by θ in the priority queue."""
+        """Events carry the θ the solver's ``(theta, counter, ...)`` queue orders by.
+
+        ``Event`` defines no ``__lt__``; the solver's priority queue sorts the
+        scheduling tuples, keyed on ``theta`` first. This asserts that ordering
+        key, not a (removed) ``Event``-level comparison operator.
+        """
         event1 = Event(theta=10.0, event_type=EventType.OUTLET_CROSSING, waves_involved=[], location=500.0)
         event2 = Event(theta=5.0, event_type=EventType.CHAR_CHAR_COLLISION, waves_involved=[], location=100.0)
 
-        assert event2 < event1
-        assert not (event1 < event2)
+        ordered = sorted([event1, event2], key=lambda e: e.theta)
+        assert ordered == [event2, event1]
+        assert event2.theta < event1.theta
 
     def test_event_type_enum(self):
         """Test EventType enum values."""
@@ -234,11 +240,18 @@ class TestRarefactionIntersections:
 
             results = find_rarefaction_boundary_intersections(raref, char, theta_current=10.0)
 
-            assert isinstance(results, list)
+            assert results, "Expected a boundary intersection for the n>1 head/tail-characteristic geometry"
             for theta, v, boundary in results:
                 assert boundary in {"head", "tail"}
                 assert theta >= 10.0
                 assert v >= 0
+                # The returned position must lie on the named boundary characteristic.
+                c_boundary = raref.c_head if boundary == "head" else raref.c_tail
+                v_boundary = characteristic_position(
+                    c_boundary, raref.sorption, raref.theta_start, raref.v_start, theta
+                )
+                assert v_boundary is not None
+                assert np.isclose(v_boundary, v, rtol=1e-14)
 
     def test_rarefaction_head_characteristic_invalid_and_valid_regimes(self, freundlich_sorption):
         """Regime-aware validity check: invalid for n<1, valid for n>1."""
@@ -255,7 +268,20 @@ class TestRarefactionIntersections:
             shock = ShockWave(theta_start=10.0, v_start=0.0, c_left=10.0, c_right=1.0, sorption=freundlich_sorption)
 
             results = find_rarefaction_boundary_intersections(raref, shock, theta_current=10.0)
-            assert isinstance(results, list)
+            assert results, "Expected the shock to intersect a rarefaction boundary for n>1"
+            for theta, v, boundary in results:
+                assert boundary in {"head", "tail"}
+                assert theta > 10.0
+                # The returned position lies on both the named boundary and the shock line.
+                c_boundary = raref.c_head if boundary == "head" else raref.c_tail
+                v_boundary = characteristic_position(
+                    c_boundary, raref.sorption, raref.theta_start, raref.v_start, theta
+                )
+                assert shock.speed is not None
+                v_shock = shock.v_start + shock.speed * (theta - shock.theta_start)
+                assert v_boundary is not None
+                assert np.isclose(v_boundary, v, rtol=1e-14)
+                assert np.isclose(v_shock, v, rtol=1e-14)
         else:
             with pytest.raises(ValueError, match="Not a rarefaction:"):
                 RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
@@ -339,26 +365,20 @@ class TestOutletCrossing:
         v_at_cross = shock.v_start + shock.speed * (theta_cross - shock.theta_start)
         assert np.isclose(v_at_cross, v_outlet, rtol=1e-14)
 
-    def test_rarefaction_outlet_crossing(self, freundlich_sorption):
-        """Rarefaction head crosses outlet at θ_head = V·R(c_head)."""
-        v_outlet = 500.0
-        theta_current = 0.0
+    def test_rarefaction_returns_none(self, freundlich_sorption):
+        """Rarefactions are not handled by find_outlet_crossing; it returns None.
 
+        Production routes rarefaction outlet crossings through the solver's
+        explicit head/tail boundary logic (``solver.find_next_event``) and
+        ``output.py``; ``find_outlet_crossing`` only covers characteristics,
+        shocks, and decaying shocks, returning ``None`` for a rarefaction.
+        """
         if freundlich_sorption.n < 1.0:
             with pytest.raises(ValueError, match="Not a rarefaction:"):
                 RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
         elif freundlich_sorption.n > 1.0:
             raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=5.0, c_tail=2.0, sorption=freundlich_sorption)
-
-            theta_cross = find_outlet_crossing(raref, v_outlet, theta_current)
-
-            assert theta_cross is not None, "Expected rarefaction head to cross outlet"
-
-            v_head = characteristic_position(
-                raref.c_head, raref.sorption, raref.theta_start, raref.v_start, theta_cross
-            )
-            assert v_head is not None
-            assert np.isclose(v_head, v_outlet, rtol=1e-14)
+            assert find_outlet_crossing(raref, v_outlet=500.0, theta_current=0.0) is None
 
     def test_wave_already_past_outlet(self, freundlich_sorption):
         """Wave already past outlet returns None."""

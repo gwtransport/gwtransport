@@ -50,6 +50,65 @@ def test_aquifer_pore_volumes_and_gamma_mutually_exclusive():
         )
 
 
+def test_cin_method_constant_produces_constant_noiseless_signal():
+    """cin_method='constant' must build cin around cin_mean (noiseless mean equals cin_mean)."""
+    df, _ = generate_example_data(cin_method="constant", cin_mean=7.0, measurement_noise=0.0, rng=0)
+    np.testing.assert_allclose(df["cin"].to_numpy(), 7.0)
+    assert df.attrs["cin_method"] == "constant"
+
+
+def test_unknown_cin_method_raises():
+    """An unrecognised cin_method must raise ValueError."""
+    with pytest.raises(ValueError, match="Unknown cin_method"):
+        generate_example_data(cin_method="not_a_method")
+
+
+@pytest.mark.parametrize(
+    ("molecular_diffusivity", "longitudinal_dispersivity", "streamline_length"),
+    [
+        (0.05, None, None),
+        (None, 1.0, None),
+        (None, None, 100.0),
+        (0.05, 1.0, None),
+    ],
+)
+def test_partial_diffusion_parameters_raise(molecular_diffusivity, longitudinal_dispersivity, streamline_length):
+    """Providing only some of the three diffusion parameters must raise ValueError."""
+    with pytest.raises(ValueError, match="must all be provided together"):
+        generate_example_data(
+            molecular_diffusivity=molecular_diffusivity,
+            longitudinal_dispersivity=longitudinal_dispersivity,
+            streamline_length=streamline_length,
+        )
+
+
+def test_discrete_aquifer_pore_volumes_advection_path():
+    """Discrete pore volumes (no diffusion) use the advection path and record the parameterization."""
+    pore_volumes = np.array([500.0, 1000.0, 1500.0])
+    df, tedges = generate_example_data(aquifer_pore_volumes=pore_volumes, rng=0)
+    assert df.attrs["aquifer_pore_volume_parameterization"] == "discrete"
+    np.testing.assert_array_equal(df.attrs["aquifer_pore_volumes"], pore_volumes)
+    assert "aquifer_pore_volume_gamma_alpha" not in df.attrs
+    assert len(df["cout"]) == len(df)
+    assert len(tedges) == len(df) + 1
+
+
+def test_discrete_aquifer_pore_volumes_diffusion_path():
+    """Discrete pore volumes with diffusion parameters use the diffusion path."""
+    pore_volumes = np.array([500.0, 1000.0, 1500.0])
+    df, _ = generate_example_data(
+        aquifer_pore_volumes=pore_volumes,
+        molecular_diffusivity=0.05,
+        longitudinal_dispersivity=1.0,
+        streamline_length=100.0,
+        rng=0,
+    )
+    assert df.attrs["aquifer_pore_volume_parameterization"] == "discrete"
+    np.testing.assert_array_equal(df.attrs["aquifer_pore_volumes"], pore_volumes)
+    assert df.attrs["molecular_diffusivity"] == 0.05
+    assert len(df["cout"]) == len(df)
+
+
 def test_event_decay_scale_zero_raises():
     """event_decay_scale=0 produced silent NaN before; pin the new explicit ValueError."""
     with pytest.raises(ValueError, match="event_decay_scale must be positive"):

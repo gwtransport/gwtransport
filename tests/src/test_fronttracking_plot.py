@@ -11,11 +11,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
+from matplotlib.figure import Figure
 
 from gwtransport.fronttracking.math import FreundlichSorption
 from gwtransport.fronttracking.plot import (
     plot_breakthrough_curve,
+    plot_front_tracking_summary,
     plot_inlet_concentration,
+    plot_sorption_comparison,
     plot_vt_diagram,
     plot_wave_interactions,
 )
@@ -154,4 +157,55 @@ class TestPlotSmoke:
     def test_plot_wave_interactions_does_not_raise(self, tracker_pulse):
         fig, ax = plt.subplots()
         plot_wave_interactions(tracker_pulse.state, ax=ax)
+        plt.close(fig)
+
+
+def _structure_from_tracker(tracker):
+    """Minimal ``structure`` dict mirroring infiltration_to_extraction_nonlinear_sorption output."""
+    return {
+        "tracker_state": tracker.state,
+        "theta_first_arrival": tracker.theta_first_arrival,
+        "waves": tracker.state.waves,
+        "events": tracker.state.events,
+    }
+
+
+class TestPlotSummaryAndComparisonSmoke:
+    """Multi-panel composites render and return the documented figure/axes containers."""
+
+    def test_plot_front_tracking_summary_returns_expected_axes(self, tracker_step):
+        structure = _structure_from_tracker(tracker_step)
+        cout_tedges = tracker_step.state.tedges
+        cout = np.full(len(cout_tedges) - 1, 5.0)
+
+        fig, axes = plot_front_tracking_summary(
+            structure,
+            tracker_step.state.tedges,
+            tracker_step.state.cin,
+            cout_tedges,
+            cout,
+        )
+
+        assert isinstance(fig, Figure)
+        assert set(axes.keys()) == {"vt", "inlet", "outlet"}
+        plt.close(fig)
+
+    def test_plot_sorption_comparison_returns_2x3_axes(self, tracker_pulse):
+        structure = _structure_from_tracker(tracker_pulse)
+        tedges = tracker_pulse.state.tedges
+        cin = tracker_pulse.state.cin
+
+        fig, axes = plot_sorption_comparison(
+            structure,
+            structure,
+            tedges,
+            cin,
+            structure,
+            structure,
+            tedges,
+            cin,
+        )
+
+        assert isinstance(fig, Figure)
+        assert axes.shape == (2, 3)
         plt.close(fig)

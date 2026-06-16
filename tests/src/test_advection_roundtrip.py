@@ -152,8 +152,8 @@ class TestRoundtripSameGrid:
         np.testing.assert_allclose(
             cin_reconstructed[middle_indices],
             cin_original[middle_indices],
-            rtol=1e-6,
-            err_msg="Same-resolution single pore volume roundtrip should reconstruct with < 1e-6 relative error",
+            rtol=1e-12,
+            err_msg="Integer-RT single pore volume roundtrip is a pure bin shift; recovery is exact",
         )
 
     def test_roundtrip_same_grid_multiple_pore_volumes(self):

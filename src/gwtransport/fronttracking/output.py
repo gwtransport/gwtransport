@@ -42,6 +42,8 @@ from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWav
 # Numerical tolerance constants
 EPSILON_VELOCITY = 1e-15  # Tolerance for checking if velocity is effectively zero
 EPSILON_TIME = 1e-15  # Tolerance for negligible time segments
+EPSILON_VOLUME = 1e-15  # Tolerance for negligible spatial-segment widths Δv [m³]
+EPSILON_POSITION = 1e-15  # Tolerance for shock-face proximity in position v [m³]
 
 
 def concentration_at_point(
@@ -159,9 +161,7 @@ def concentration_at_point(
         if isinstance(wave, ShockWave) and wave.was_active_at(theta):
             v_shock = wave.position_at_theta(theta)
             if v_shock is not None:
-                tol = 1e-15
-
-                if abs(v - v_shock) < tol:
+                if abs(v - v_shock) < EPSILON_POSITION:
                     return 0.5 * (wave.c_left + wave.c_right)
 
                 if abs(wave.speed) > EPSILON_VELOCITY:
@@ -178,7 +178,7 @@ def concentration_at_point(
     for wave in waves:
         if isinstance(wave, RarefactionWave) and wave.was_active_at(theta):
             v_tail = wave.tail_position_at_theta(theta)
-            if v_tail is not None and v_tail > v + 1e-15:
+            if v_tail is not None and v_tail > v + EPSILON_POSITION:
                 tail_speed = wave.tail_speed()
                 if tail_speed > EPSILON_VELOCITY:
                     theta_pass = wave.theta_start + (v - wave.v_start) / tail_speed
@@ -208,7 +208,7 @@ def concentration_at_point(
         if isinstance(wave, CharacteristicWave) and wave.was_active_at(theta):
             v_char_at_theta = wave.position_at_theta(theta)
 
-            if v_char_at_theta is not None and v_char_at_theta >= v - 1e-15:
+            if v_char_at_theta is not None and v_char_at_theta >= v - EPSILON_POSITION:
                 speed = wave.speed()
 
                 if speed > EPSILON_VELOCITY:
@@ -819,17 +819,22 @@ def compute_bin_averaged_concentration_exact(
 
     if cin is not None and theta_edges_inlet is not None:
         # Conservation form: c_avg = Δm_out/Δθ where m_out = m_in − m_dom.
-        m_out_at_edges = np.array([
-            compute_cumulative_outlet_mass(
-                theta=float(theta_edges_out[i]),
-                v_outlet=v_outlet,
-                waves=waves,
-                sorption=sorption,
-                cin=cin,
-                theta_edges=theta_edges_inlet,
-            )
-            for i in range(len(theta_edges_out))
+        # m_in is the piecewise-constant inlet integral up to each output edge —
+        # vectorized over all edges at once (one broadcast clip-and-sum rather
+        # than a per-edge ``compute_cumulative_inlet_mass`` call). m_dom is a
+        # per-θ spatial geometry query, so it stays a loop.
+        te_in = np.asarray(theta_edges_inlet, dtype=float)
+        cin_arr = np.asarray(cin, dtype=float)
+        widths_full = np.diff(te_in)
+        widths = np.clip(theta_edges_out[:, None] - te_in[None, :-1], 0.0, widths_full[None, :])
+        m_in_at_edges = widths @ cin_arr
+        m_dom_at_edges = np.array([
+            compute_domain_mass(theta=float(theta_e), v_outlet=v_outlet, waves=waves, sorption=sorption)
+            for theta_e in theta_edges_out
         ])
+        # ``compute_cumulative_outlet_mass`` short-circuits to 0 for θ ≤ 0;
+        # replicate that clamp so non-positive output edges contribute no mass.
+        m_out_at_edges = np.where(theta_edges_out <= 0.0, 0.0, m_in_at_edges - m_dom_at_edges)
         result = np.diff(m_out_at_edges) / np.diff(theta_edges_out)
         # FP-noise clamp: m_in − m_dom subtracts nearly-equal large numbers,
         # leaving ~1 ULP residuals on either sign. Clamp those to 0.
@@ -987,7 +992,7 @@ def compute_domain_mass(
         v_end = wave_positions[i + 1]
         dv = v_end - v_start
 
-        if dv < EPSILON_VELOCITY:
+        if dv < EPSILON_VOLUME:
             continue
 
         # Check whether the midpoint is inside any fan-bearing wave; the fan
@@ -1032,6 +1037,11 @@ def compute_domain_mass(
         if raref_wave is not None:
             mass_segment = _integrate_rarefaction_spatial_exact(raref_wave, v_start, v_end, theta, sorption)
         elif decaying_wave is not None:
+            # The decaying fan is bounded at its apex by the parent's tail concentration
+            # ``c_fan_tail`` (the sustained-inlet plateau), NOT the downstream ``c_fixed``.
+            # ``integrate_fan_spatial_exact`` then clamps the abandoned region at ``c_fan_tail``;
+            # passing ``c_fixed`` would integrate the unbounded self-similar fan to the apex and
+            # over-count the tail, breaking domain-mass conservation once a DSW forms.
             mass_segment = integrate_fan_spatial_exact(
                 decaying_wave.theta_origin,
                 decaying_wave.v_origin,
@@ -1039,7 +1049,7 @@ def compute_domain_mass(
                 v_end,
                 theta,
                 sorption,
-                c_apex=decaying_wave.c_fixed,
+                c_apex=decaying_wave.c_fan_tail,
             )
         else:
             # Constant region: c at midpoint is exact for the segment.
@@ -1376,6 +1386,8 @@ def compute_total_outlet_mass(
     cin_arr = np.asarray(cin, dtype=float)
     te = np.asarray(theta_edges, dtype=float)
     m_in_total = float(np.sum(cin_arr * np.diff(te)))
-    c_inf = float(cin_arr[-1]) if cin_arr.size > 0 else 0.0
+    # An empty cin is a malformed (no-bin) input by the cin/theta_edges contract;
+    # let cin_arr[-1] raise IndexError rather than masking it as c_inf=0.
+    c_inf = float(cin_arr[-1])
     m_dom_asymptotic = float(sorption.total_concentration(c_inf)) * v_outlet
     return m_in_total - m_dom_asymptotic

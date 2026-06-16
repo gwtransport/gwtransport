@@ -46,6 +46,14 @@ diffusion
    :undoc-members:
    :show-inheritance:
 
+examples
+========
+
+.. automodule:: gwtransport.examples
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 fronttracking
 =============
 
@@ -138,6 +146,14 @@ percolation
 ===========
 
 .. automodule:: gwtransport.percolation
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+recharge
+========
+
+.. automodule:: gwtransport.recharge
    :members:
    :undoc-members:
    :show-inheritance:

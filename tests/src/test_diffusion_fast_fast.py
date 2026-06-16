@@ -13,6 +13,7 @@ trip is self-consistent: machine-precision at constant flow R=1 and conditioning
 """
 
 import time
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,7 @@ from gwtransport.diffusion_fast_fast import (
     gamma_infiltration_to_extraction,
     infiltration_to_extraction,
 )
+from gwtransport.gamma import mean_std_loc_to_alpha_beta
 from gwtransport.utils import solve_inverse_transport
 
 SL = 80.0
@@ -90,6 +92,13 @@ def _smooth(n, freq=8.0):
 
 def _variable_flow(n, cv, seed):
     return 100.0 * np.exp(np.random.default_rng(seed).normal(0.0, cv, n))
+
+
+def _timed(fn):
+    """Wall-clock seconds for a single call to ``fn``."""
+    t0 = time.perf_counter()
+    fn()
+    return time.perf_counter() - t0
 
 
 # =============================================================================
@@ -389,9 +398,11 @@ def test_coarse_cout_grid_with_flow_out():
 
 def test_coarse_cout_grid_molecular_smear_uses_output_bin_width():
     """The molecular sigma must be converted with the OUTPUT-grid bin width, not the flow-grid width.
-    On a 4x-coarser cout grid with a non-negligible smear (large PV, moderate D_m), using the wrong
-    (flow-grid) width over-smears 4x and blows the error up to tens of percent; the correct width
-    matches diffusion_fast to ~1e-4. alpha_L>0 keeps step 1 exact so this isolates the smear width."""
+    Here sigma_bins ~0.1 on the cout grid (a sub-bin smear), so this test does NOT isolate a
+    load-bearing smear magnitude -- it isolates the 4x WIDTH error: using the wrong (flow-grid) width
+    inflates the kernel 4x, and with the sharp input that over-smear blows the error up to tens of
+    percent, whereas the correct output-grid width matches diffusion_fast to ~1e-4. alpha_L>0 keeps
+    step 1 exact so this isolates the smear width alone."""
     n = 360
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     flow = np.full(n, 100.0)
@@ -402,7 +413,7 @@ def test_coarse_cout_grid_molecular_smear_uses_output_bin_width():
         "flow": flow,
         "tedges": tedges,
         "cout_tedges": cout_tedges,
-        "aquifer_pore_volumes": np.array([1000.0]),  # sigma_bins ~ O(1) on the cout grid
+        "aquifer_pore_volumes": np.array([1000.0]),  # sigma_bins ~0.1 on the cout grid
         "streamline_length": SL,
         "molecular_diffusivity": 0.5,
         "longitudinal_dispersivity": 1.0,
@@ -595,24 +606,36 @@ def test_degenerate_flow_all_nan_like_diffusion_fast(flow_rate):
 
 
 def test_band_wider_than_series():
-    """Large PV / short series so the breakthrough band spans more than the record; the native build
-    must stay correct (warm-start baseline + masking) and match diffusion_fast."""
-    n = 12
+    """Large PV so the breakthrough band (front offset ~50 bins) spans more than the cin record, yet
+    the record is long enough that PART of the real (non-warm-start) cin signal breaks through. The
+    native build must reproduce diffusion_fast both on the flat warm-start region AND on the varying
+    region carried by the real signal -- so the assertion is pinned on the bins where cout deviates
+    from the constant warm-start value, not only on the preserved flat baseline. D_m=0 isolates the
+    wide native banded build (the molecular Gaussian would otherwise dominate this sharp corner)."""
+    n = 70
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    warm = 8.0  # warm-start value = cin[0]
+    cin = np.full(n, 2.0)
+    cin[:20] = warm  # a long high block, then a drop to 2.0 that breaks through near the tail
     kw = {
-        "cin": np.linspace(1.0, 5.0, n),
+        "cin": cin,
         "flow": np.full(n, 100.0),
         "tedges": tedges,
         "cout_tedges": tedges.copy(),
-        "aquifer_pore_volumes": np.array([5000.0]),  # residence ~50 bins >> n
+        "aquifer_pore_volumes": np.array([5000.0]),  # residence ~50 bins < n=70, band > record
         "streamline_length": SL,
-        "molecular_diffusivity": 0.1,
+        "molecular_diffusivity": 0.0,
         "longitudinal_dispersivity": 1.0,
     }
     cout_ff = infiltration_to_extraction(**kw)
     cout_df = df_i2e(**kw)
     assert np.array_equal(np.isnan(cout_ff), np.isnan(cout_df))
-    assert_allclose(cout_ff, cout_df, atol=1e-9, rtol=0, equal_nan=True)
+    # The real (varying) part of the signal must break through, not just the flat warm-start.
+    varying = ~np.isnan(cout_df) & (np.abs(cout_df - warm) > 1e-3)
+    assert varying.sum() > 10
+    peak_rel = np.nanmax(np.abs(cout_ff[varying] - cout_df[varying])) / np.nanmax(np.abs(cout_df[varying]))
+    assert peak_rel < 1e-4  # measured ~1.1e-6 (D_m=0 wide native band is near-exact)
+    assert_allclose(cout_ff, cout_df, atol=1e-3, rtol=0, equal_nan=True)
 
 
 # =============================================================================
@@ -688,6 +711,31 @@ def test_reverse_molecular_dominant_round_trip():
     assert _peak_rel(cin_rec, cin, skip=60) < 1e-3  # measured ~1.6e-5; drop-G mutant ~2.9e-3
 
 
+def test_forward_and_reverse_warning_clean():
+    """Both directions must be warning-clean on valid inputs (variable flow, R != 1, D_m > 0), even
+    though the internals use np.errstate-guarded divisions and a banded Cholesky. Encodes the
+    documented invariant that no warning suppression is needed around a normal call."""
+    n = 200
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cin = np.sin(np.linspace(0.0, 6.0 * np.pi, n)) + 5.0
+    common = {
+        "flow": _variable_flow(n, 0.3, seed=2),
+        "tedges": tedges,
+        "cout_tedges": tedges.copy(),
+        "aquifer_pore_volumes": _apv(25),
+        "streamline_length": SL,
+        "molecular_diffusivity": 0.1,
+        "longitudinal_dispersivity": 1.0,
+        "retardation_factor": 2.0,
+    }
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        cout = infiltration_to_extraction(cin=cin, **common)
+        cout_clean = np.where(np.isnan(cout), np.nanmean(cout), cout)
+        extraction_to_infiltration(cout=cout_clean, **common)
+    assert recorded == [], [str(w.message) for w in recorded]
+
+
 def test_reverse_banded_matches_dense_solve_of_same_operator():
     """Structural correctness: the banded assembly (W = G . M) + banded Tikhonov solve must match a
     DENSE solve of the SAME approximate operator. The dense operator is reconstructed from public
@@ -740,14 +788,15 @@ def test_reverse_much_faster_than_diffusion_fast():
         "retardation_factor": 2.0,
     }
     extraction_to_infiltration(**kw)  # warm-up / import jit
-    t0 = time.perf_counter()
-    extraction_to_infiltration(**kw)
-    t_fast = time.perf_counter() - t0
-    t0 = time.perf_counter()
-    df_e2i(**kw)
-    t_dense = time.perf_counter() - t0
+    df_e2i(**kw)  # warm-up the dense reference too
+
+    def best_of(fn, repeats=3):
+        return min(_timed(fn) for _ in range(repeats))
+
+    t_fast = best_of(lambda: extraction_to_infiltration(**kw))
+    t_dense = best_of(lambda: df_e2i(**kw))
     assert t_fast < 2.0  # generous: measured ~30ms; guards a quadratic regression
-    assert t_dense > 5.0 * t_fast  # measured ~25x; relative factor is CI-load-robust
+    assert t_dense > 5.0 * t_fast  # measured ~25x; min-of-3 timings are CI-load-robust
 
 
 def test_reverse_constant_cout_gives_constant_cin():
@@ -875,6 +924,32 @@ def test_gamma_forward_matches_diffusion_fast():
     assert _peak_rel(cout_ff, cout_df) < 5e-4  # measured ~4.5e-6
 
 
+def test_gamma_forward_matches_explicit():
+    """The gamma forward wrapper must equal an explicit infiltration_to_extraction call on the same
+    discretized bins, exactly. A coarse cout grid + variable flow_out + non-default R exercises every
+    transport pass-through, so dropping any of retardation_factor / flow_out / saturation_threshold
+    in the wrapper breaks the exact equality."""
+    n = 180
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = pd.date_range("2020-01-01", periods=n // 3 + 1, freq="3D")
+    flow_out = 100.0 * np.exp(np.random.default_rng(7).normal(0.0, 0.3, len(cout_tedges) - 1))
+    common = {
+        "cin": np.sin(np.linspace(0.0, 6.0 * np.pi, n)) + 4.0,
+        "flow": np.full(n, 100.0),
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "streamline_length": SL,
+        "molecular_diffusivity": 0.05,
+        "longitudinal_dispersivity": 1.0,
+        "retardation_factor": 2.7,  # non-default -> a dropped R pass-through breaks exact equality
+        "flow_out": flow_out,  # variable -> a dropped flow_out pass-through breaks exact equality
+    }
+    bins = gamma.bins(mean=501.3, std=100.0, n_bins=20)["expected_values"]
+    cout_gamma = gamma_infiltration_to_extraction(mean=501.3, std=100.0, n_bins=20, **common)
+    cout_explicit = infiltration_to_extraction(aquifer_pore_volumes=bins, **common)
+    assert_allclose(cout_gamma, cout_explicit, atol=0.0, rtol=0.0, equal_nan=True)
+
+
 def test_gamma_reverse_round_trip():
     """gamma forward then gamma reverse recovers cin (constant flow R=1 -> machine precision)."""
     tedges, cout_tedges, flow = _make_transport_data(n_days=200)
@@ -910,11 +985,40 @@ def test_gamma_reverse_matches_explicit():
         "streamline_length": SL,
         "molecular_diffusivity": 0.05,
         "longitudinal_dispersivity": 1.0,
+        "retardation_factor": 2.7,  # non-default -> a dropped R pass-through breaks exact equality
     }
     bins = gamma.bins(mean=501.3, std=100.0, n_bins=20)["expected_values"]
     cin_gamma = gamma_extraction_to_infiltration(cout=cout, mean=501.3, std=100.0, n_bins=20, **common)
     cin_explicit = extraction_to_infiltration(cout=cout, aquifer_pore_volumes=bins, **common)
     assert_allclose(cin_gamma, cin_explicit, atol=0.0, rtol=0.0, equal_nan=True)
+
+
+def test_gamma_wrappers_alpha_beta_equals_mean_std():
+    """The (alpha, beta) parameterization of both gamma wrappers must reproduce the equivalent
+    (mean, std) call (alpha/beta derived with the canonical mean_std_loc_to_alpha_beta converter)."""
+    tedges, cout_tedges, flow = _make_transport_data(n_days=150)
+    n = len(flow)
+    mean, std = 500.0, 120.0
+    alpha, beta = mean_std_loc_to_alpha_beta(mean=mean, std=std)
+    common = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "n_bins": 25,
+        "streamline_length": SL,
+        "molecular_diffusivity": 0.05,
+        "longitudinal_dispersivity": 1.0,
+        "retardation_factor": 2.0,
+    }
+    cin = np.sin(np.linspace(0.0, 6.0 * np.pi, n)) + 4.0
+    fwd_ms = gamma_infiltration_to_extraction(cin=cin, mean=mean, std=std, **common)
+    fwd_ab = gamma_infiltration_to_extraction(cin=cin, alpha=alpha, beta=beta, **common)
+    assert_allclose(fwd_ab, fwd_ms, atol=0.0, equal_nan=True)
+
+    cout = np.sin(np.linspace(0.0, 6.0 * np.pi, n)) + 5.0
+    rev_ms = gamma_extraction_to_infiltration(cout=cout, mean=mean, std=std, **common)
+    rev_ab = gamma_extraction_to_infiltration(cout=cout, alpha=alpha, beta=beta, **common)
+    assert_allclose(rev_ab, rev_ms, atol=0.0, equal_nan=True)
 
 
 # =============================================================================
