@@ -43,14 +43,6 @@ def test_different_flows_equal_distribution():
     assert_allclose(result, 3.431798275933005, rtol=1e-15)  # example in docstring
 
 
-def test_array_inputs_equal_distribution():
-    """Test with numpy array inputs for equal distribution."""
-    # NumPy arrays as input
-    result = parallel_mean(log_removals=np.array([3.0, 4.0, 5.0]))
-    expected = -np.log10((10 ** (-3.0) + 10 ** (-4.0) + 10 ** (-5.0)) / 3)
-    assert_allclose(result, expected, rtol=1e-15)
-
-
 def test_special_values_equal_distribution():
     """Test with special values like zero and large numbers with equal distribution."""
     # With log removal of 0 (no removal)
@@ -116,16 +108,6 @@ def test_weight_sum_behavior():
         parallel_mean(log_removals=log_removals, flow_fractions=[0.7, 0.2])  # Sum < 1
 
 
-def test_weighted_array_inputs():
-    """Test with numpy array inputs for weights."""
-    log_removals = np.array([3.0, 5.0])
-    weights = np.array([0.6, 0.4])
-
-    result = parallel_mean(log_removals=log_removals, flow_fractions=weights)
-    expected = -np.log10(0.6 * 10 ** (-3.0) + 0.4 * 10 ** (-5.0))
-    assert_allclose(result, expected, rtol=1e-15)
-
-
 def test_extreme_weights():
     """Test with extreme weight distributions."""
     # One weight is almost 1.0, others are tiny
@@ -163,9 +145,9 @@ def test_gamma_find_flow_for_target_mean(apv_alpha, apv_beta, log10_decay_rate, 
 
     # Verify the round-trip: flow -> residence time params -> gamma_mean == target.
     # apv_loc=0 takes the closed-form branch, so the round-trip is bit-exact.
-    rt_alpha = apv_alpha
-    rt_beta = apv_beta / required_flow
-    verification_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
+    verification_mean = gamma_mean(
+        rt_alpha=apv_alpha, rt_beta=apv_beta / required_flow, log10_decay_rate=log10_decay_rate
+    )
     assert_allclose(verification_mean, target_mean, rtol=1e-15)
 
 
@@ -329,19 +311,24 @@ def test_gamma_pdf_integrates_to_one():
     assert_allclose(result, 1.0, rtol=1e-10)  # quad-limited, do not tighten
 
 
-def test_gamma_cdf_approaches_one():
-    """Test that the gamma CDF approaches 1 for large r values."""
+def test_gamma_cdf_saturates_at_zero_and_one():
+    """gamma CDF is exactly 0.0 at r=0 and exactly 1.0 at saturating large r.
+
+    scipy's regularized incomplete gamma underflows the lower tail to 0.0 at the
+    distribution's support boundary and saturates the upper tail to 1.0 well past
+    breakthrough, so both endpoints are exact (not merely close).
+    """
     rt_alpha = 3.0
     rt_beta = 10.0
     log10_decay_rate = 0.2
 
-    # CDF at a very large r should be close to 1
+    # CDF at a very large r saturates to exactly 1.0
     result = gamma_cdf(r=1000.0, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
-    assert_allclose(result, 1.0, atol=1e-10)
+    assert result == 1.0
 
-    # CDF at 0 should be 0
+    # CDF at the support boundary r=0 is exactly 0.0
     result = gamma_cdf(r=0.0, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
-    assert_allclose(result, 0.0, atol=1e-10)
+    assert result == 0.0
 
 
 def test_gamma_cdf_is_scaled_gamma():
@@ -359,7 +346,8 @@ def test_gamma_cdf_is_scaled_gamma():
     cdf_values = gamma_cdf(r=r_values, rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
 
     expected = stats.gamma.cdf(r_values, a=rt_alpha, scale=log10_decay_rate * rt_beta)
-    assert_allclose(cdf_values, expected, rtol=1e-12)
+    # loc=0 means gamma_cdf calls the identical scipy routine; the plumbing is bit-exact.
+    np.testing.assert_array_equal(cdf_values, expected)
 
 
 @pytest.mark.parametrize(
@@ -460,19 +448,41 @@ def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow,
         (10.0, 5.0, 0.1),
         (2.0, 20.0, 0.5),
         (0.8, 100.0, 0.01),
+        (2.0, 5.0, 0.2),
+        (10.0, 2.0, 0.1),
+        (0.5, 10.0, 0.3),
+        (50.0, 1.0, 0.05),
     ],
 )
 def test_gamma_mean_less_than_arithmetic_mean(rt_alpha, rt_beta, log10_decay_rate):
-    """Test that effective parallel mean is less than arithmetic mean.
+    """Effective parallel (mixed-effluent) mean is strictly below the arithmetic mean.
 
-    The parallel mean is always less than the arithmetic mean because
-    short residence time paths contribute disproportionately to output
-    concentration.
+    This is Jensen's inequality applied to the convex function ``10^(-x)``: the
+    arithmetic mean of log removals is ``mu * rt_alpha * rt_beta`` (= mu * E[T]) while
+    the parallel mean is always strictly less because short-residence-time paths
+    contribute disproportionately to the output concentration. The gap is large
+    for non-degenerate gamma distributions, so the strict ``<`` holds without any
+    numerical slack.
     """
     effective_mean = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=log10_decay_rate)
     arithmetic_mean = log10_decay_rate * rt_alpha * rt_beta
 
     assert effective_mean < arithmetic_mean
+
+
+def test_gamma_mean_arithmetic_limit_small_argument():
+    """As ``beta*mu*ln(10) -> 0`` the effective mean approaches the arithmetic mean.
+
+    For tiny ``x = rt_beta*mu*ln(10)``, ``log10(1+x) -> x/ln(10)`` so
+    ``gamma_mean -> rt_alpha*rt_beta*mu``. The ``log1p`` spelling is what makes this
+    limit accurate to machine precision; the naive ``log10(1+x)`` form would lose
+    digits here.
+    """
+    rt_alpha = 2.0
+    rt_beta = 1e-3
+    mu = 1e-3
+    result = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, log10_decay_rate=mu)
+    assert_allclose(result, mu * rt_alpha * rt_beta, rtol=1e-5)
 
 
 def test_gamma_pdf_is_scaled_gamma():
@@ -486,29 +496,8 @@ def test_gamma_pdf_is_scaled_gamma():
 
     # R = mu*T, so R ~ Gamma(alpha, mu*beta)
     expected = stats.gamma.pdf(r_values, a=rt_alpha, scale=log10_decay_rate * rt_beta)
-    assert_allclose(pdf_values, expected, rtol=1e-12)
-
-
-@pytest.mark.parametrize(
-    ("alpha", "beta", "mu"),
-    [
-        (2.0, 5.0, 0.2),
-        (10.0, 2.0, 0.1),
-        (0.5, 10.0, 0.3),
-        (50.0, 1.0, 0.05),
-    ],
-)
-def test_gamma_mean_leq_arithmetic_mean(alpha, beta, mu):
-    """Test that gamma_mean (parallel mean) <= arithmetic mean (Jensen's inequality).
-
-    The arithmetic mean of log removals is mu * alpha * beta (= mu * E[T]).
-    The parallel (mixed-effluent) mean is always less due to Jensen's inequality
-    applied to the convex function 10^(-x).
-    """
-    parallel = gamma_mean(rt_alpha=alpha, rt_beta=beta, log10_decay_rate=mu)
-    arithmetic = mu * alpha * beta
-
-    assert parallel <= arithmetic + 1e-12  # Allow tiny numerical tolerance
+    # loc=0 means gamma_pdf calls the identical scipy routine; the plumbing is bit-exact.
+    np.testing.assert_array_equal(pdf_values, expected)
 
 
 @pytest.mark.parametrize(
@@ -642,21 +631,24 @@ def test_gamma_find_flow_for_target_mean_with_loc(apv_alpha, apv_beta, apv_loc, 
     )
     # The residence-time distribution at flow Q is a shifted gamma with
     # shape=apv_alpha, scale=apv_beta/Q, location=apv_loc/Q.
-    rt_alpha = apv_alpha
-    rt_beta = apv_beta / required_flow
-    rt_loc = apv_loc / required_flow
     verification_mean = gamma_mean(
-        rt_alpha=rt_alpha,
-        rt_beta=rt_beta,
-        rt_loc=rt_loc,
+        rt_alpha=apv_alpha,
+        rt_beta=apv_beta / required_flow,
+        rt_loc=apv_loc / required_flow,
         log10_decay_rate=log10_decay_rate,
     )
     # apv_loc>0 requires brentq, whose default tolerance limits the round-trip.
     assert_allclose(verification_mean, target_mean, rtol=1e-10)
 
 
-def test_gamma_find_flow_for_target_mean_loc_zero_matches_legacy():
-    """With apv_loc=0 the implementation must use the closed-form branch and match."""
+def test_gamma_find_flow_for_target_mean_loc_zero_matches_closed_form():
+    """With loc=0 the implementation must use the closed-form branch and match the formula.
+
+    Asserts the returned flow against the independently derived closed form
+    ``Q = apv_beta * mu * ln(10) / (10^(target_mean / apv_alpha) - 1)``. This pins the
+    closed-form branch directly and fails if its derivation changes. Also checks
+    that the default ``apv_loc`` and an explicit ``apv_loc=0.0`` agree bit-for-bit.
+    """
     apv_alpha = 3.0
     apv_beta = 10.0
     log10_decay_rate = 0.2
@@ -675,6 +667,9 @@ def test_gamma_find_flow_for_target_mean_loc_zero_matches_legacy():
         log10_decay_rate=log10_decay_rate,
     )
     assert flow_default == flow_loc_zero
+
+    expected = apv_beta * log10_decay_rate * np.log(10) / (10 ** (target_mean / apv_alpha) - 1)
+    assert_allclose(flow_default, expected, rtol=1e-15)
 
 
 def test_gamma_pdf_negative_loc_raises():
@@ -758,29 +753,6 @@ def test_gamma_find_flow_for_target_mean_invalid_alpha_beta_raises(apv_alpha, ap
             apv_loc=5.0,
             log10_decay_rate=0.1,
         )
-
-
-def test_gamma_mean_matches_parallel_mean_discretized():
-    """Test that gamma_mean matches parallel_mean computed from discretized bins."""
-    alpha = 5.0
-    beta = 3.0
-    mu = 0.15
-    n_bins = 500  # Large number for good approximation
-
-    # Compute gamma_mean (analytical via MGF)
-    result_analytical = gamma_mean(rt_alpha=alpha, rt_beta=beta, log10_decay_rate=mu)
-
-    # Compute via discretized bins
-    bins = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
-    log_removals = residence_time_to_log_removal(
-        residence_times=bins["expected_values"],
-        log10_decay_rate=mu,
-    )
-    result_discretized = parallel_mean(log_removals=log_removals)
-
-    # 500 equiprobable bins discretizing the gamma distribution have empirical
-    # relative error of ~1e-4 here; rtol=1e-3 is a tight bound.
-    assert_allclose(result_analytical, result_discretized, rtol=1e-3)
 
 
 # ---------------------------------------------------------------------------
