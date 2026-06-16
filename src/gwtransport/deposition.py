@@ -167,11 +167,11 @@ def compute_deposition_weights(
     bounded by ``R * aquifer_pore_volume`` in volume (independent of record
     length ``n_cin``). The window is located by :func:`numpy.searchsorted` on the
     cumulative flow volume ``flow_cum``; the per-cell math reuses
-    :func:`~gwtransport.deposition_utils._clipped_linear_integral` restricted to
+    ``gwtransport.deposition_utils._clipped_linear_integral`` restricted to
     the band columns, so each row sums to
     ``r_k = residence_time_k / (porosity * thickness)``. Reconstruct the dense
     ``(n_cout, n_cin)`` matrix with
-    :func:`~gwtransport.advection_utils._densify_weights` when a dense operator
+    ``gwtransport.advection_utils._densify_weights`` when a dense operator
     is required (the nullspace inverse).
 
     Parameters
@@ -211,7 +211,7 @@ def compute_deposition_weights(
 
     See Also
     --------
-    gwtransport.advection_utils._densify_weights : Reconstruct the dense matrix.
+    ``gwtransport.advection_utils._densify_weights`` : Reconstruct the dense matrix.
     """
     t0 = tedges[0]
     tedges_days = tedges_to_days(tedges, ref=t0)

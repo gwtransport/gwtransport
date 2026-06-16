@@ -6,13 +6,15 @@ translate user-facing time t → θ at the API boundary via
 
 Functions
 ---------
-concentration_at_point(v, theta, waves, sorption)
-compute_breakthrough_curve(theta_array, v_outlet, waves, sorption)
-compute_bin_averaged_concentration_exact(theta_bin_edges, v_outlet, waves, sorption, *, cin=None, theta_edges_inlet=None)
-compute_domain_mass(theta, v_outlet, waves, sorption)
-compute_cumulative_inlet_mass(theta, cin, theta_edges)
-compute_cumulative_outlet_mass(theta, v_outlet, waves, sorption, *, cin, theta_edges)
-compute_total_outlet_mass(v_outlet, sorption, *, cin, theta_edges) -> float
+::
+
+    concentration_at_point(v, theta, waves, sorption)
+    compute_breakthrough_curve(theta_array, v_outlet, waves, sorption)
+    compute_bin_averaged_concentration_exact(theta_bin_edges, v_outlet, waves, sorption, *, cin=None, theta_edges_inlet=None)
+    compute_domain_mass(theta, v_outlet, waves, sorption)
+    compute_cumulative_inlet_mass(theta, cin, theta_edges)
+    compute_cumulative_outlet_mass(theta, v_outlet, waves, sorption, *, cin, theta_edges)
+    compute_total_outlet_mass(v_outlet, sorption, *, cin, theta_edges) -> float
 
 Outlet-mass functions use the PDE conservation identity
 ``m_out(θ) = m_in(θ) − m_dom(θ)`` (Bear & Cheng 2010, Ch. 3: mass
@@ -305,7 +307,7 @@ def identify_outlet_segments(
             Segment end θ [m³]
         - 'type' : str
             ``'constant'``, ``'rarefaction'``, or ``'decaying_fan'``.
-            ``'decaying_fan'`` is owned by a :class:`DecayingShockWave` after
+            ``'decaying_fan'`` is owned by a :class:`~gwtransport.fronttracking.waves.DecayingShockWave` after
             its head crosses ``v_outlet``; c at ``v_outlet`` then follows the
             wave's self-similar fan profile.
         - 'concentration' : float
@@ -632,8 +634,8 @@ def integrate_fan_exact(
     """Exact θ-integral ``∫ c(θ) dθ`` for any self-similar fan at the outlet.
 
     Decoupled from the wave object so the same closed-form math applies to
-    both :class:`RarefactionWave` (apex = ``theta_start, v_start``) and
-    :class:`DecayingShockWave` (apex = ``theta_origin, v_origin``).
+    both :class:`~gwtransport.fronttracking.waves.RarefactionWave` (apex = ``theta_start, v_start``) and
+    :class:`~gwtransport.fronttracking.waves.DecayingShockWave` (apex = ``theta_origin, v_origin``).
 
     Parameters
     ----------
@@ -1115,8 +1117,8 @@ def integrate_fan_spatial_exact(
     """Exact spatial integral ``∫ C_total(v, θ) dv`` for any self-similar fan.
 
     Decoupled from the wave object so the same closed-form math applies to
-    :class:`RarefactionWave` (apex = ``theta_start, v_start``) and
-    :class:`DecayingShockWave` (apex = ``theta_origin, v_origin``).
+    :class:`~gwtransport.fronttracking.waves.RarefactionWave` (apex = ``theta_start, v_start``) and
+    :class:`~gwtransport.fronttracking.waves.DecayingShockWave` (apex = ``theta_origin, v_origin``).
 
     In (V, θ) the self-similar fan satisfies ``R(C) = (θ - θ_origin)/(v - v_origin)``;
     define ``kappa = θ - θ_origin`` and ``u = v - v_origin``. The dissolved and

@@ -428,7 +428,11 @@ class TestEndToEnd:
         assert partial.size == 1, f"expected exactly one partial bin in a clean 0→q0 step, got {partial.size}"
         k = int(partial[0])
         np.testing.assert_array_equal(q_wt[:k], np.zeros(k))
-        np.testing.assert_allclose(q_wt[k + 1 :], q0, rtol=1e-13)
+        # Plateau is cancellation-limited: the conservation-form bin average c=(m_in-m_dom)/Δθ amplifies
+        # ULP(m_in) by 1/(Δθ·q0) to an achieved floor ≈8e-14 that scatters cross-platform (BLAS/FMA) to
+        # ~1.2e-13. 1e-12 sits ~10x above the floor, matches the vG twin B7 below and the kernel's own
+        # 1e-12 clamp, and still fails a 1e-12 plateau bias (mutation-verified).
+        np.testing.assert_allclose(q_wt[k + 1 :], q0, rtol=1e-12)
 
     def test_b7_constant_flux_pure_shock_known_answer_vg(self):
         """B7 (vG): constant-flux pure-shock arrival for van Genuchten, own hardcoded literal.

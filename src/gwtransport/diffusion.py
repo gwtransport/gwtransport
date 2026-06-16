@@ -1,4 +1,4 @@
-"""
+r"""
 Analytical solutions for 1D advection-dispersion transport.
 
 This module implements analytical solutions for solute transport in 1D aquifer
@@ -38,7 +38,7 @@ Reported outlet concentration: Kreft-Zuber (1978) flux concentration
 
 The outlet concentration reported by this module is the **flux concentration**
 
-    C_F(L, t) = C_R(L, t) - (D_s / v_s) * dC_R/dx |_{x=L}
+    C_F(L, t) = C_R(L, t) - (D_s / v_s) * dC_R/dx \|_{x=L}
 
 with the solute-front (retarded-frame) velocity v_s = Q L / (R V_pore) and the
 dispersion D_s = D_m + alpha_L * v_s, so the flux coefficient is
@@ -742,6 +742,7 @@ def infiltration_to_extraction(
     The algorithm constructs a coefficient matrix W where cout = W @ cin:
 
     1. For each pore volume, build a cell grid in cumulative volume space:
+
        - cells span ``(V_cout[i], V_cout[i+1]) x V_cin[j]`` for each
          (cout-bin i, cin-edge j)
        - delta_volume = V_cout - V_cin - r_vpv encodes the parcel's offset
