@@ -417,9 +417,6 @@ def generate_temperature_example_data(
     streamline_length : float, default 100.0
         Travel distance along the streamline [m].
 
-    All other parameters are forwarded unchanged to :func:`generate_example_data`;
-    see that function for their descriptions.
-
     Returns
     -------
     tuple
@@ -429,6 +426,11 @@ def generate_temperature_example_data(
     --------
     generate_example_data : Generic version with full parameter control.
     generate_ec_example_data : Wrapper with EC transport defaults.
+
+    Notes
+    -----
+    All other parameters are forwarded unchanged to :func:`generate_example_data`;
+    see that function for their descriptions.
     """
     return generate_example_data(
         date_start=date_start,
@@ -518,9 +520,6 @@ def generate_ec_example_data(
     streamline_length : float, default 100.0
         Travel distance along the streamline [m].
 
-    All other parameters are forwarded unchanged to :func:`generate_example_data`;
-    see that function for their descriptions.
-
     Returns
     -------
     tuple
@@ -530,6 +529,11 @@ def generate_ec_example_data(
     --------
     generate_example_data : Generic version with full parameter control.
     generate_temperature_example_data : Wrapper with thermal transport defaults.
+
+    Notes
+    -----
+    All other parameters are forwarded unchanged to :func:`generate_example_data`;
+    see that function for their descriptions.
     """
     return generate_example_data(
         date_start=date_start,

@@ -418,14 +418,14 @@ def _banded_forward_matrix(
     n_cin: int,
     sigma_bins: float,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp]]:
-    """Assemble ``W = G . M`` as a per-row contiguous band for :func:`_solve_reverse_banded`.
+    """Assemble ``W = G . M`` as a per-row contiguous band for ``_solve_reverse_banded``.
 
     ``M`` (advection + macro + microdispersion) is scattered from the native band onto the real cin
     axis, folding the warm-start virtual columns into the boundary bins
     (``clip(cin_bin - int(extend), 0, n_cin - 1)``, so ``M @ cin`` equals the forward's
     ``coeff @ cin_ext`` exactly). ``G`` is the molecular time-Gaussian along the output-bin axis (the
     same ``mode="nearest"`` kernel the forward applies with :func:`scipy.ndimage.gaussian_filter1d`).
-    The returned band carries the forward operator verbatim; :func:`_solve_reverse_banded` masks the
+    The returned band carries the forward operator verbatim; ``_solve_reverse_banded`` masks the
     spin-up rows/columns and normalizes, so a forward-then-inverse round trip is self-consistent.
 
     Returns
@@ -619,7 +619,7 @@ def extraction_to_infiltration(
 
     Inverts the **same** approximate operator the forward applies: it assembles ``W = G . M`` (the
     advection+macro+micro band ``M`` times the molecular time-Gaussian ``G``) directly in banded form
-    and deconvolves it with banded Tikhonov regularization (:func:`_solve_reverse_banded` -- banded
+    and deconvolves it with banded Tikhonov regularization (``_solve_reverse_banded`` -- banded
     Cholesky on the normal equations, ``O(n * band**2)``). It builds ``W`` from one ``Ibar`` gather
     plus a sparse ``G . M`` product -- no per-pore-volume closed-form loop and no dense
     ``(n_cout, n_cin)`` matrix -- so it is much faster than

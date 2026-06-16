@@ -2,6 +2,7 @@
 Mathematical Foundation for Front Tracking with Nonlinear Sorption.
 
 This module provides exact analytical computations for:
+
 - Freundlich, Langmuir, and constant retardation models
 - Brooks-Corey and van Genuchten-Mualem unsaturated conductivity models
   (for Kinematic-Wave percolation, see :mod:`gwtransport.percolation`)
@@ -257,10 +258,12 @@ class FreundlichSorption(NonlinearSorption):
         Compute retardation factor R(C).
 
         The retardation factor relates concentration speed to pore water speed in
-        (V, θ) coordinates:
+        (V, θ) coordinates::
+
             dV/dθ = 1 / R(C)
 
-        For Freundlich sorption:
+        For Freundlich sorption::
+
             R(C) = 1 + (rho_b*k_f)/(n_por*n) * C^((1/n)-1)
 
         Parameters
@@ -1202,7 +1205,7 @@ def compute_first_front_arrival_theta(
 
        For ``n<1`` with ``c_min > 0`` (default ``c_min = 1e-12`` in
        :class:`FreundlichSorption`), the actual wave emitted is a
-       :class:`RarefactionWave` whose head (``c = c_min ≈ 0``) reaches the
+       :class:`~gwtransport.fronttracking.waves.RarefactionWave` whose head (``c = c_min ≈ 0``) reaches the
        outlet at θ ≈ ``V·R(c_min) ≈ V`` — *much* earlier than the value this
        function returns (which is the *tail* arrival ``V·R(c_first)``).
        The function returns "tail arrival" semantics: the returned θ is a

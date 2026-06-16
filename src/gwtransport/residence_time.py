@@ -1078,10 +1078,12 @@ def freundlich_retardation(
     The Freundlich isotherm relates sorbed concentration s to aqueous concentration C using the
     heterogeneity-index convention (matching :class:`gwtransport.fronttracking.math.FreundlichSorption`
     and :func:`gwtransport.advection.infiltration_to_extraction_nonlinear_sorption`, so a fitted
-    ``freundlich_n`` is portable across the package):
-        s = k_f * C^(1/n)
+    ``freundlich_n`` is portable across the package)::
 
-    The retardation factor is computed as:
+        s = k_f * C ^ (1 / n)
+
+    The retardation factor is computed as::
+
         R = 1 + (rho_b/θ) * ds/dC = 1 + (rho_b/θ) * k_f * (1/n) * C^(1/n - 1)
 
     Parameters

@@ -25,14 +25,8 @@ water-table depth ``z_wt``, the conversion is ``V_out = θ_s · z_wt``.
 The docstring of :func:`root_zone_to_water_table_kinematic_wave`
 spells out the recovery rule and the layered-porosity generalisation.
 
-References
-----------
-.. [1] Olsthoorn, T.N. (2026). Percolation through thick unsaturated
-   zones — Munsflow vs. the Kinematic Wave. *Stromingen* 32(1).
-.. [2] Heinen, M., Bakker, G., Wösten, J.M.H. (2020). Waterretentie en
-   Doorlatendheidskarakteristieken van boven- en ondergronden in
-   Nederland: de Staringreeks. Update 2018. Wageningen Environmental
-   Research, Report 2978.
+The full Kinematic-Wave derivation and the constitutive-curve references
+are documented on :func:`root_zone_to_water_table_kinematic_wave`.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -77,11 +71,11 @@ def root_zone_to_water_table_kinematic_wave(
 
     exactly via :class:`gwtransport.fronttracking.solver.FrontTracker`,
     using either a Brooks-Corey or a van Genuchten-Mualem constitutive
-    curve. Implements the Kinematic-Wave method described in
-    Olsthoorn (2026). The capillary term ``∂ψ/∂z`` is dropped (gravity
-    drainage only); real fronts are slightly smoothed by capillarity, so
-    if smoothing matters use the Munsflow-style approach in
-    :mod:`gwtransport.diffusion` instead.
+    curve. Implements the Kinematic-Wave method (see [3]_ for the general
+    theory) described in Olsthoorn (2026) [1]_. The capillary term
+    ``∂ψ/∂z`` is dropped (gravity drainage only); real fronts are slightly
+    smoothed by capillarity, so if smoothing matters use the Munsflow-style
+    approach in :mod:`gwtransport.diffusion` instead.
 
     Parameters
     ----------
@@ -107,7 +101,7 @@ def root_zone_to_water_table_kinematic_wave(
         layered porosity, ``∫₀^{z_wt} n_p(z') dz'``. The geometric depth
         is recovered as ``z_wt = V_out / θ_s`` (uniform case). Array-like
         to support a distribution of column lengths in parallel
-        (analogous to :func:`gamma_infiltration_to_extraction`); each
+        (analogous to :func:`gwtransport.advection.gamma_infiltration_to_extraction`); each
         entry must be positive.
     theta_r : float
         Residual volumetric moisture content [-]. Must satisfy
@@ -120,6 +114,7 @@ def root_zone_to_water_table_kinematic_wave(
     brooks_corey_lambda : float or None, optional
         Brooks-Corey pore-size distribution index [-]. Set to use the
         Brooks-Corey branch. Mutually exclusive with ``van_genuchten_n``.
+        Tabulated soil values are available in the Staringreeks [2]_.
     van_genuchten_n : float or None, optional
         Van Genuchten shape parameter ``n_vG > 1``. Set to use the
         van Genuchten-Mualem branch (numerical inversion via brentq).
@@ -164,7 +159,7 @@ def root_zone_to_water_table_kinematic_wave(
           ``n_characteristics`` — counts.
         - ``theta_current`` — final cumulative effective time.
         - ``sorption`` — the sorption object.
-        - ``tracker_state`` — complete :class:`FrontTrackerState` for the
+        - ``tracker_state`` — complete :class:`~gwtransport.fronttracking.solver.FrontTrackerState` for the
           column (use ``state.t_at_theta`` to translate ``θ → t``).
         - ``cumulative_pore_volume_outlet`` — the V_out for this column.
 

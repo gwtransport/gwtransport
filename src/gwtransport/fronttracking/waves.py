@@ -522,20 +522,20 @@ class DecayingShockWave(Wave):
     ``α := ρ_b · k_f / n_por`` for Freundlich, and ``u_d := c_decay^(1/n)``:
 
     - Freundlich, ``c_fixed = 0`` (general ``n > 0``, ``n ≠ 1``) — closed form:
-        invariant ``θ_local · u_d^n = K · (n · u_d^(n-1) + α)``,
-        position ``V_s(θ) = v_origin + n · K / u_d(θ)``.
+      invariant ``θ_local · u_d^n = K · (n · u_d^(n-1) + α)``,
+      position ``V_s(θ) = v_origin + n · K / u_d(θ)``.
     - Freundlich, ``c_fixed > 0``, ``n = 2`` and ``c_decay_initial > c_fixed``
       — closed form: invariant ``(u_d - u_R)² · θ_local = K · (2 u_d + α)``
-        with ``u_R := c_fixed^(1/2)``,
-        position ``V_s(θ) = v_origin + 2 K · u_d(θ) / (u_d - u_R)²``.
-        (The ``c_decay_initial < c_fixed`` mirror falls through to numerical.)
+      with ``u_R := c_fixed^(1/2)``,
+      position ``V_s(θ) = v_origin + 2 K · u_d(θ) / (u_d - u_R)²``.
+      (The ``c_decay_initial < c_fixed`` mirror falls through to numerical.)
     - Langmuir, ``c_fixed = 0`` — closed form:
-        invariant ``θ_local · c_d² = K · ((K_L + c_d)² + a)`` with
-        ``a := ρ_b · s_max · K_L / n_por``,
-        position ``V_s(θ) = v_origin + K · (K_L + c_d)² / c_d²``.
+      invariant ``θ_local · c_d² = K · ((K_L + c_d)² + a)`` with
+      ``a := ρ_b · s_max · K_L / n_por``,
+      position ``V_s(θ) = v_origin + K · (K_L + c_d)² / c_d²``.
     - Brooks-Corey, ``c_fixed = 0`` — closed form:
-        invariant ``θ_local ∝ R(c_decay)^{a/(a−1)}`` (``R·S = 1/a`` constant),
-        so ``R(c_d) = R(c0)·(θ_local/θ_local_coll)^{(a−1)/a}``.
+      invariant ``θ_local ∝ R(c_decay)^{a/(a−1)}`` (``R·S = 1/a`` constant),
+      so ``R(c_d) = R(c0)·(θ_local/θ_local_coll)^{(a−1)/a}``.
     - Every other ``(isotherm, c_fixed)`` combination (Freundlich ``c_fixed>0,
       n≠2``, Langmuir/Brooks-Corey ``c_fixed>0``, any van Genuchten) —
       numerical solver ``_c_decay_numerical``: the decay-agnostic invariant
@@ -582,13 +582,6 @@ class DecayingShockWave(Wave):
     is_active : bool, optional
         Activity flag. Default True.
 
-    Attributes
-    ----------
-    K : float
-        Invariant constant set in ``__post_init__`` (closed-form Freundlich
-        ``c_fixed=0``/``n≈2`` and Langmuir ``c_fixed=0`` cases; ``nan`` for
-        every numerical case).
-
     See Also
     --------
     ShockWave : Linear-θ shock (no decaying side).
@@ -610,7 +603,8 @@ class DecayingShockWave(Wave):
     sorption: NonlinearSorption
     """Sorption model (any concentration-dependent isotherm)."""
     K: float = field(init=False)
-    """Invariant constant from collision IC; set in ``__post_init__``."""
+    """Invariant constant set in ``__post_init__`` (closed-form Freundlich ``c_fixed=0``/``n≈2`` and Langmuir
+    ``c_fixed=0`` cases; ``nan`` for every numerical case)."""
 
     def __post_init__(self) -> None:
         """Validate inputs and compute the closed-form invariant K when applicable."""

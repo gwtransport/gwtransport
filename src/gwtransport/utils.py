@@ -225,7 +225,7 @@ def cumulative_flow_volume(
         Bin widths in days, length n (e.g. ``numpy.diff`` of edge days).
     strictly_monotone : bool, optional
         When ``True``, bump consecutive duplicates (plateaus from ``Q = 0``
-        bins) via :func:`_make_strictly_monotone` so the cumulative volume is
+        bins) via ``_make_strictly_monotone`` so the cumulative volume is
         strictly increasing. Required before a V → t inversion; leave ``False``
         when the plateaus must be preserved. Default is ``False``.
 
@@ -237,7 +237,7 @@ def cumulative_flow_volume(
 
     See Also
     --------
-    _make_strictly_monotone : Bump duplicates before V → t inversion.
+    ``_make_strictly_monotone`` : Bump duplicates before V → t inversion.
     """
     flow_cum = np.concatenate(([0.0], np.cumsum(np.asarray(flow) * np.asarray(dt_days))))
     return _make_strictly_monotone(flow_cum) if strictly_monotone else flow_cum
@@ -1752,7 +1752,7 @@ def solve_inverse_transport_banded(
     ----------
     band_vals : ndarray
         Banded forward weights of shape ``(n_obs, full_band)``. Rows the caller
-        considers invalid must already be zeroed (as :func:`_resolve_spinup_mask`
+        considers invalid must already be zeroed (as ``_resolve_spinup_mask``
         does); zero rows contribute nothing to the normal equations.
     col_start : ndarray of int
         First output-column index of each row's band, shape ``(n_obs,)``.
@@ -1782,7 +1782,7 @@ def solve_inverse_transport_banded(
     See Also
     --------
     solve_inverse_transport : Dense-matrix equivalent.
-    gwtransport.advection_utils._infiltration_to_extraction_weights : Banded builder.
+    ``gwtransport.advection_utils._infiltration_to_extraction_weights`` : Banded builder.
     """
     if regularization_strength <= 0:
         msg = "regularization_strength must be > 0 for the banded inverse (Tikhonov positive-definiteness)"
