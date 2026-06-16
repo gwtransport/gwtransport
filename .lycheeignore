@@ -1,0 +1,5 @@
+# Coverage badge + HTML coverage report: build artifacts published to the site by the coverage
+# deploy step. They exist only after a successful deploy, so a run whose coverage deploy lagged
+# (e.g. behind a red test run) sees a 404. Self-referential build outputs, not stable URLs.
+https://gwtransport\.github\.io/gwtransport/coverage-badge\.svg
+https://gwtransport\.github\.io/gwtransport/htmlcov/?
