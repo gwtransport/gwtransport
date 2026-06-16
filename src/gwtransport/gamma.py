@@ -33,8 +33,8 @@ gamma distribution.
 Available functions:
 
 - :func:`parse_parameters` - Parse and validate gamma distribution parameters from either
-  (mean, std, loc) or (alpha, beta, loc). Ensures exactly one parameter pair is provided
-  and validates positivity and ordering constraints.
+  (mean, std, loc) or (alpha, beta, loc). Requires exactly one parameter pair and raises
+  ``ValueError`` if both are supplied; validates positivity and ordering constraints.
 
 - :func:`mean_std_loc_to_alpha_beta` - Convert physically intuitive (mean, std, loc) parameters
   to gamma shape/scale parameters.
@@ -99,9 +99,9 @@ def parse_parameters(
     Raises
     ------
     ValueError
-        If neither ``(mean, std)`` nor ``(alpha, beta)`` is provided, if only one
-        of a pair is provided, if ``alpha`` or ``beta`` are not positive, if
-        ``loc`` is negative, or if ``mean <= loc``.
+        If neither ``(mean, std)`` nor ``(alpha, beta)`` is provided, if both pairs
+        are provided, if only one of a pair is provided, if ``alpha`` or ``beta`` are
+        not positive, if ``loc`` is negative, or if ``mean <= loc``.
     """
     if loc < 0:
         msg = "loc must be non-negative"
@@ -111,6 +111,12 @@ def parse_parameters(
         msg = "alpha and beta must both be provided or both be None."
         raise ValueError(msg)
 
+    if alpha is not None and (mean is not None or std is not None):
+        msg = "Provide either (alpha, beta) or (mean, std), not both."
+        raise ValueError(msg)
+
+    # The ``or beta is None`` is redundant at runtime (the check above pairs them) but lets the
+    # type checker narrow ``beta`` to a float on the fall-through return.
     if alpha is None or beta is None:
         if mean is None or std is None:
             msg = "Either (alpha, beta) or (mean, std) must be provided."
@@ -234,10 +240,10 @@ def alpha_beta_loc_to_mean_std(*, alpha: float, beta: float, loc: float = 0.0) -
     >>> alpha = 13.72  # shape parameter
     >>> beta = 2187.0  # scale parameter
     >>> mean, std = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta)
-    >>> print(f"Mean pore volume: {mean:.0f} m³")  # doctest: +ELLIPSIS
-    Mean pore volume: 3000... m³
-    >>> print(f"Std pore volume: {std:.0f} m³")  # doctest: +ELLIPSIS
-    Std pore volume: 810... m³
+    >>> print(f"Mean pore volume: {mean:.0f} m³")
+    Mean pore volume: 30006 m³
+    >>> print(f"Std pore volume: {std:.0f} m³")
+    Std pore volume: 8101 m³
     """
     parse_parameters(alpha=alpha, beta=beta, loc=loc)
     return alpha * beta + loc, np.sqrt(alpha) * beta
@@ -251,7 +257,7 @@ def bins(
     alpha: float | None = None,
     beta: float | None = None,
     n_bins: int = 100,
-    quantile_edges: np.ndarray | None = None,
+    quantile_edges: npt.ArrayLike | None = None,
 ) -> dict[str, npt.NDArray[np.floating]]:
     """
     Divide a (shifted) gamma distribution into bins and compute bin properties.
@@ -276,11 +282,11 @@ def bins(
     beta : float, optional
         Scale parameter of gamma distribution (must be > 0).
     n_bins : int, optional
-        Number of bins to divide the gamma distribution (must be > 1). Default is 100.
+        Number of bins to divide the gamma distribution (must be >= 2). Default is 100.
     quantile_edges : array-like, optional
-        Quantile edges for binning. Must be in the range [0, 1] and of size
-        ``n_bins + 1``. The first and last quantile edges must be 0 and 1, respectively.
-        If provided, ``n_bins`` is ignored.
+        Quantile edges for binning. Must be a 1-D, strictly increasing array of size
+        ``n_bins + 1`` with all entries in ``[0, 1]``; the first and last entries must
+        be exactly 0 and 1, respectively. If provided, ``n_bins`` is ignored.
 
     Returns
     -------
@@ -298,8 +304,9 @@ def bins(
     Raises
     ------
     ValueError
-        If ``n_bins`` is not greater than 1, or if parameter validation in
-        :func:`parse_parameters` fails.
+        If ``n_bins`` is not greater than 1, if ``quantile_edges`` is not a strictly
+        increasing 1-D array in ``[0, 1]`` with endpoints exactly 0 and 1, or if
+        parameter validation in :func:`parse_parameters` fails.
 
     See Also
     --------
@@ -334,6 +341,16 @@ def bins(
     alpha, beta, loc = parse_parameters(mean=mean, std=std, loc=loc, alpha=alpha, beta=beta)
 
     if quantile_edges is not None:
+        quantile_edges = np.asarray(quantile_edges, dtype=float)
+        if quantile_edges.ndim != 1:
+            msg = "quantile_edges must be a 1-D array."
+            raise ValueError(msg)
+        if not np.all(np.diff(quantile_edges) > 0):
+            msg = "quantile_edges must be strictly increasing."
+            raise ValueError(msg)
+        if quantile_edges[0] != 0.0 or quantile_edges[-1] != 1.0:
+            msg = "quantile_edges must start at 0 and end at 1."
+            raise ValueError(msg)
         n_bins = len(quantile_edges) - 1
     else:
         quantile_edges = np.linspace(0, 1, n_bins + 1)
@@ -351,7 +368,8 @@ def bins(
     # E[X | a <= X < b] for X ~ Gamma(alpha, beta) uses the identity
     #     E[X * 1_{a<=X<b}] = alpha * beta * (F_{alpha+1}(b/beta) - F_{alpha+1}(a/beta))
     # where F_{alpha+1} is the CDF of Gamma(alpha+1, beta).
-    diff_alpha_plus_1 = _bin_masses(alpha=alpha + 1, beta=beta, bin_edges=unshifted_edges)
+    cdf_alpha_plus_1 = gamma_dist.cdf(unshifted_edges, alpha + 1, scale=beta)
+    diff_alpha_plus_1 = cdf_alpha_plus_1[1:] - cdf_alpha_plus_1[:-1]
     expected_values = beta * alpha * diff_alpha_plus_1 / probability_mass + loc
 
     return {
@@ -361,18 +379,3 @@ def bins(
         "expected_values": expected_values,
         "probability_mass": probability_mass,
     }
-
-
-def _bin_masses(*, alpha: float, beta: float, bin_edges: npt.ArrayLike) -> npt.NDArray[np.floating]:
-    """Probability mass per bin for the unshifted Gamma(alpha, beta).
-
-    Internal helper. Callers must guarantee ``alpha, beta > 0`` and monotonically
-    increasing ``bin_edges >= 0`` with at least two entries.
-
-    Returns
-    -------
-    ndarray
-        Probability mass per bin, of length ``len(bin_edges) - 1``.
-    """
-    val = gamma_dist.cdf(np.asarray(bin_edges), alpha, scale=beta)
-    return val[1:] - val[:-1]
