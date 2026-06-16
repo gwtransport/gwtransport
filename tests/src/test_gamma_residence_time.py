@@ -303,12 +303,14 @@ def test_constant_spinup_matches_discrete(direction):
 
 
 def test_spinup_invalid_raises():
-    """A bad ``spinup`` (not "constant", not a float in [0, 1)) raises ValueError mentioning spinup."""
+    """A bad ``spinup`` (not "constant", None, or a float in [0, 1]) raises ValueError mentioning spinup."""
     flow, tedges = _constant_flow()
     with pytest.raises(ValueError, match="spinup"):
         gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, spinup="bad")
     with pytest.raises(ValueError, match="spinup"):
-        gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, spinup=1.0)
+        gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, spinup=1.5)
+    with pytest.raises(ValueError, match="spinup"):
+        gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, spinup=-0.1)
 
 
 @pytest.mark.parametrize("direction", DIRECTIONS)

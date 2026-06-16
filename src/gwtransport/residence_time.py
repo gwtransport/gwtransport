@@ -58,16 +58,21 @@ The spin-up therefore lengthens with both the pore volume and the retardation fa
 longest for the largest pore volumes of a distribution.
 
 What happens in that region is governed by a ``spinup`` policy, following the package convention
-(see :mod:`gwtransport.advection`); the default is ``"constant"`` everywhere:
+(see :mod:`gwtransport.advection`); :func:`residence_time_full`, :func:`residence_time` and
+:func:`gamma_residence_time` all share the contract ``spinup={'constant'} | None | float in
+[0, 1)`` and the default is ``"constant"`` everywhere:
 
-* :func:`residence_time_full` and :func:`residence_time` take ``spinup={'constant', None}``.
-  ``"constant"`` (default) **warm-starts** by extrapolating the boundary flow (flow held constant at
-  its first/last value), so no in-record output is ``NaN``; ``None`` is strict, marking a pore
-  volume ``NaN`` for any output bin its parcel leaves the record within (and :func:`residence_time`
-  then averages over the remaining informed streamtubes).
-* :func:`gamma_residence_time` takes ``spinup={'constant'} | float in [0, 1)``. ``"constant"``
-  (default) warm-starts identically; a ``float`` instead **renormalizes** over the covered
-  sub-mass, with ``0.0`` giving the exact covered-sub-mass conditional mean.
+* ``"constant"`` (default) **warm-starts** by extrapolating the boundary flow (flow held constant
+  at its first/last value), so no in-record output is ``NaN``.
+* ``None`` is strict (no extrapolation), marking a pore volume ``NaN`` for any output bin its parcel
+  leaves the record within. Where the pore-volume axis is collapsed -- :func:`residence_time` over a
+  discrete set, :func:`gamma_residence_time` over the continuum -- the bin mean then **renormalizes**
+  over the covered streamtubes / sub-mass, emitted wherever any coverage remains.
+* a ``float`` covered-fraction threshold is the strict mode with a minimum coverage gate: the
+  renormalized mean is emitted only where the covered streamtube fraction / sub-mass fraction is at
+  least ``spinup`` (``0.0`` matches ``None``; larger values demand more coverage). For the
+  per-pore-volume :func:`residence_time_full` there is no axis to collapse, so the ``float`` behaves
+  exactly like ``None``.
 * :func:`residence_time_series` (point samples) has no ``spinup`` policy: it always returns ``NaN``
   in the spin-up. It is the primitive behind :func:`fraction_explained`.
 
@@ -122,6 +127,48 @@ def _boundary_extrapolated_map(
         [tedges_days[-1] + pad * inv_q_last],
     ])
     return volume_map, time_map
+
+
+def _resolve_spinup(spinup: str | float | None) -> tuple[bool, float]:
+    """Normalize the residence-time ``spinup`` policy to ``(extrapolate, threshold)``.
+
+    The three sibling residence-time functions share one spin-up contract,
+    ``{'constant'} | None | float in [0, 1)``, matching the package convention (see
+    :mod:`gwtransport.advection`):
+
+    * ``'constant'`` -> ``(True, 0.0)`` -- warm-start by extrapolating the boundary flow.
+    * ``None`` -> ``(False, 0.0)`` -- strict map (no extrapolation); a collapsed mean is emitted
+      wherever any covered sub-mass / valid streamtube remains.
+    * ``float`` in ``[0, 1)`` -> ``(False, float)`` -- strict map, with the covered-fraction
+      threshold gating a collapsed mean. ``0.0`` matches ``None``; larger values require a larger
+      covered fraction before a bin is emitted.
+
+    Parameters
+    ----------
+    spinup : {'constant'}, None, or float in [0, 1)
+        Public spin-up policy.
+
+    Returns
+    -------
+    extrapolate : bool
+        Whether to warm-start by extrapolating the boundary flow.
+    threshold : float
+        Covered-fraction gate applied where the pore-volume axis is collapsed (ignored by the
+        per-pore-volume :func:`residence_time_full`, which is strict per bin).
+
+    Raises
+    ------
+    ValueError
+        If ``spinup`` is not ``'constant'``, ``None``, or a float in ``[0, 1)``.
+    """
+    if spinup == "constant":
+        return True, 0.0
+    if spinup is None:
+        return False, 0.0
+    if isinstance(spinup, int | float) and not isinstance(spinup, bool) and 0.0 <= spinup < 1.0:
+        return False, float(spinup)
+    msg = "spinup should be 'constant', None, or a float in [0, 1)"
+    raise ValueError(msg)
 
 
 def residence_time_series(
@@ -245,7 +292,7 @@ def residence_time_full(
     direction: str = "extraction_to_infiltration",
     retardation_factor: float = 1.0,
     weighting: str = "flow",
-    spinup: str | None = "constant",
+    spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     r"""
     Compute the mean residence time over output bins, per pore volume.
@@ -288,7 +335,7 @@ def residence_time_full(
           consume to compute a per-bin retarded velocity.
         * ``'time'``: time-weighted average -- uniform in clock time. Coincides with
           ``'flow'`` when flow is constant within an output bin.
-    spinup : {'constant'} or None, optional
+    spinup : {'constant'}, None, or float in [0, 1), optional
         How to treat the spin-up zone, where a pore volume's retarded look-back/forward parcel
         leaves the flow record. Matches the package convention (see :mod:`gwtransport.advection`).
 
@@ -296,8 +343,12 @@ def residence_time_full(
           the record at the boundary flow rates (flow held constant at its first/last value), so
           the residence time stays finite. No left-edge (extraction) or right-edge (infiltration)
           spin-up ``NaN``.
-        * ``None``: strict -- a pore volume whose parcel leaves the record at any point within an
-          output bin is ``NaN`` for that bin (all-or-nothing per bin), with no extrapolation.
+        * ``None`` or a ``float`` in ``[0, 1)``: strict -- a pore volume whose parcel leaves the
+          record at any point within an output bin is ``NaN`` for that bin (all-or-nothing per bin),
+          with no extrapolation. This function returns the full per-pore-volume array, so there is no
+          pore-volume axis to collapse; the ``float`` covered-fraction threshold therefore behaves
+          identically to ``None`` here and only takes effect once the axis is collapsed in
+          :func:`residence_time` / :func:`gamma_residence_time`.
 
         Output bins lying wholly outside ``tedges`` are ``NaN`` under either policy.
 
@@ -313,7 +364,7 @@ def residence_time_full(
         If ``tedges`` does not have exactly one more element than ``flow``. If
         ``direction`` is not ``'extraction_to_infiltration'`` or
         ``'infiltration_to_extraction'``. If ``weighting`` is not ``'flow'`` or ``'time'``. If
-        ``spinup`` is not ``'constant'`` or ``None``.
+        ``spinup`` is not ``'constant'``, ``None``, or a float in ``[0, 1)``.
 
     See Also
     --------
@@ -370,9 +421,7 @@ def residence_time_full(
     if weighting not in {"flow", "time"}:
         msg = "weighting should be 'flow' or 'time'"
         raise ValueError(msg)
-    if spinup not in {"constant", None}:
-        msg = "spinup should be 'constant' or None"
-        raise ValueError(msg)
+    extrapolate, _ = _resolve_spinup(spinup)
 
     aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
     tedges = pd.DatetimeIndex(tedges)
@@ -418,7 +467,7 @@ def residence_time_full(
     # anchor each end, padded by the largest reach R * max(V_p), is enough that a_grid never exceeds
     # the extended map, so the interpolation is an exact linear extrapolation. With spinup=None the
     # map is not extended and the out-of-record target yields NaN (strict, no extrapolation).
-    if spinup == "constant" and np.any(flow > 0.0):
+    if extrapolate and np.any(flow > 0.0):
         pad = retardation_factor * float(aquifer_pore_volumes.max())
         flow_cum_map, days_map = _boundary_extrapolated_map(flow, flow_cum, tedges_days, pad)
         days_grid = linear_interpolate(x_ref=flow_cum_map, y_ref=days_map, x_query=a_grid)
@@ -445,7 +494,7 @@ def residence_time(
     aquifer_pore_volumes: npt.ArrayLike,
     direction: str = "extraction_to_infiltration",
     retardation_factor: float = 1.0,
-    spinup: str | None = "constant",
+    spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     r"""
     Compute the mean residence time over output bins for a discrete APVD.
@@ -486,18 +535,23 @@ def residence_time(
         Default is 'extraction_to_infiltration'.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
-    spinup : {'constant'} or None, optional
-        Spin-up policy, forwarded to :func:`residence_time_full`. ``'constant'`` (default)
-        warm-starts by extrapolating the boundary flow so no in-record bin is ``NaN``; ``None``
-        leaves spin-up streamtubes ``NaN`` and the mean renormalizes over those that have broken
-        through. Use :func:`fraction_explained` to locate the spin-up region.
+    spinup : {'constant'}, None, or float in [0, 1), optional
+        Spin-up policy, sharing the contract of :func:`gamma_residence_time`. ``'constant'``
+        (default) warm-starts by extrapolating the boundary flow so no in-record bin is ``NaN``;
+        ``None`` leaves spin-up streamtubes ``NaN`` and the mean renormalizes over those that have
+        broken through (emitted wherever at least one streamtube is valid). A ``float`` in
+        ``[0, 1)`` is the covered-fraction threshold: the renormalized mean is emitted only where
+        the fraction of valid streamtubes is at least ``spinup`` (``0.0`` matches ``None``; larger
+        values demand more streamtubes to have broken through). Use :func:`fraction_explained` to
+        locate the spin-up region.
 
     Returns
     -------
     numpy.ndarray
         Mean residence time [days], shape ``(n_output_bins,)``. Output bins with no valid
         streamtube (outside the flow record, or -- with ``spinup=None`` -- fully in the spin-up
-        zone) are NaN.
+        zone) are NaN; with a ``float`` ``spinup`` so are bins whose valid-streamtube fraction is
+        below the threshold.
 
     See Also
     --------
@@ -534,6 +588,7 @@ def residence_time(
     >>> float(np.round(tau_bar[-1], 6))
     5.0
     """
+    _, threshold = _resolve_spinup(spinup)
     rt = residence_time_full(
         flow=flow,
         tedges=tedges,
@@ -547,10 +602,15 @@ def residence_time(
 
     # Mean over the streamtubes that are valid (non-NaN) in each output bin; bins with no valid
     # streamtube reduce to 0/0 and are NaN. With spinup='constant' every in-record streamtube is
-    # finite, so this is the plain mean; with spinup=None it renormalizes over the broken-through set.
+    # finite, so this is the plain mean; otherwise it renormalizes over the broken-through set and
+    # a float covered-fraction threshold further NaNs bins where too few streamtubes have arrived.
+    n_streamtubes = rt.shape[0]
     valid_count = np.isfinite(rt).sum(axis=0)
     with np.errstate(invalid="ignore"):
-        return np.nansum(rt, axis=0) / valid_count
+        mean = np.nansum(rt, axis=0) / valid_count
+    if threshold > 0.0:
+        mean = np.where(valid_count >= threshold * n_streamtubes, mean, np.nan)
+    return mean
 
 
 def gamma_residence_time(
@@ -565,7 +625,7 @@ def gamma_residence_time(
     beta: float | None = None,
     direction: str = "extraction_to_infiltration",
     retardation_factor: float = 1.0,
-    spinup: str | float = "constant",
+    spinup: str | float | None = "constant",
     _max_tile_elements: int = 1_000_000,
 ) -> npt.NDArray[np.floating]:
     r"""
@@ -614,17 +674,17 @@ def gamma_residence_time(
         Default is 'extraction_to_infiltration'.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
-    spinup : {'constant'} or float in [0, 1), optional
+    spinup : {'constant'}, None, or float in [0, 1), optional
         How to treat the spin-up zone, where part of the gamma APVD lacks flow history. Matches
-        the package convention (see :mod:`gwtransport.advection`); ``None`` is not offered because
-        a continuous distribution always has some covered sub-mass.
+        the package convention (see :mod:`gwtransport.advection`).
 
         * ``'constant'`` (default): warm-start -- extrapolate the cumulative-volume-to-time map past
           the record at the boundary flow rates (flow held constant at its first/last value) and
           integrate the full distribution, so no in-record bin is ``NaN``.
-        * ``float`` in ``[0, 1)``: renormalize the mean over the covered sub-mass, emitting a bin
-          only where the covered fraction of the distribution is at least ``spinup``. ``0.0`` gives
-          the exact covered-sub-mass conditional mean (emit whenever any sub-mass is covered).
+        * ``None`` or a ``float`` in ``[0, 1)``: renormalize the mean over the covered sub-mass,
+          emitting a bin only where the covered fraction of the distribution is at least the
+          threshold. ``None`` and ``0.0`` both give the exact covered-sub-mass conditional mean
+          (emit whenever any sub-mass is covered); larger values demand a larger covered fraction.
 
         Output bins lying wholly outside ``tedges`` are ``NaN`` under either policy.
 
@@ -640,8 +700,8 @@ def gamma_residence_time(
     ValueError
         If ``tedges`` does not have exactly one more element than ``flow``. If ``direction``
         is not ``'extraction_to_infiltration'`` or ``'infiltration_to_extraction'``. If ``spinup``
-        is not ``'constant'`` or a float in ``[0, 1)``. Gamma parameter validation is delegated to
-        :func:`gwtransport.gamma.parse_parameters`.
+        is not ``'constant'``, ``None``, or a float in ``[0, 1)``. Gamma parameter validation is
+        delegated to :func:`gwtransport.gamma.parse_parameters`.
 
     See Also
     --------
@@ -682,14 +742,7 @@ def gamma_residence_time(
     if direction not in {"extraction_to_infiltration", "infiltration_to_extraction"}:
         msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
         raise ValueError(msg)
-    extrapolate = spinup == "constant"
-    if extrapolate:
-        spinup_threshold = 0.0
-    elif isinstance(spinup, int | float) and not isinstance(spinup, bool) and 0.0 <= spinup < 1.0:
-        spinup_threshold = float(spinup)
-    else:
-        msg = "spinup should be 'constant' or a float in [0, 1)"
-        raise ValueError(msg)
+    extrapolate, spinup_threshold = _resolve_spinup(spinup)
 
     alpha, beta, loc = parse_parameters(mean=mean, std=std, loc=loc, alpha=alpha, beta=beta)
 
@@ -1022,11 +1075,14 @@ def freundlich_retardation(
     """
     Compute concentration-dependent retardation factors using Freundlich isotherm.
 
-    The Freundlich isotherm relates sorbed concentration S to aqueous concentration C:
-        S = k_f * C^n
+    The Freundlich isotherm relates sorbed concentration s to aqueous concentration C using the
+    heterogeneity-index convention (matching :class:`gwtransport.fronttracking.math.FreundlichSorption`
+    and :func:`gwtransport.advection.infiltration_to_extraction_nonlinear_sorption`, so a fitted
+    ``freundlich_n`` is portable across the package):
+        s = k_f * C^(1/n)
 
     The retardation factor is computed as:
-        R = 1 + (rho_b/θ) * dS/dC = 1 + (rho_b/θ) * k_f * n * C^(n-1)
+        R = 1 + (rho_b/θ) * ds/dC = 1 + (rho_b/θ) * k_f * (1/n) * C^(1/n - 1)
 
     Parameters
     ----------
@@ -1034,10 +1090,11 @@ def freundlich_retardation(
         Concentration of compound in water [mass/volume]. One value per time bin, consistent
         with the ``flow`` array passed to the transport function.
     freundlich_k : float
-        Freundlich coefficient [(m³/kg)^n] (under S = k_f * C^n with S dimensionless
+        Freundlich coefficient [(m³/kg)^(1/n)] (under s = k_f * C^(1/n) with s dimensionless
         and C in [kg/m³]).
     freundlich_n : float
-        Freundlich sorption exponent [dimensionless].
+        Freundlich sorption exponent [dimensionless] (heterogeneity index; ``n = 1`` recovers a
+        linear isotherm).
     bulk_density : float
         Bulk density of aquifer material [mass/volume].
     porosity : float
@@ -1054,7 +1111,7 @@ def freundlich_retardation(
     ValueError
         If ``porosity`` is not in ``(0, 1)``, if ``bulk_density`` is not positive, if
         ``freundlich_k`` is negative, or if any ``concentration`` is non-positive while
-        ``freundlich_n < 1`` (the retardation factor diverges as ``C -> 0``).
+        ``freundlich_n > 1`` (the retardation factor diverges as ``C -> 0``).
 
     See Also
     --------
@@ -1068,7 +1125,7 @@ def freundlich_retardation(
     >>> R = freundlich_retardation(
     ...     concentration=concentration,
     ...     freundlich_k=0.5,
-    ...     freundlich_n=0.9,
+    ...     freundlich_n=2.0,
     ...     bulk_density=1600,  # kg/m³
     ...     porosity=0.35,
     ... )
@@ -1086,12 +1143,13 @@ def freundlich_retardation(
         msg = f"Freundlich K must be non-negative, got {freundlich_k}"
         raise ValueError(msg)
 
-    # For n < 1 the Freundlich retardation factor 1 + (rho_b/theta) * k_f * n * C^(n-1)
-    # diverges as C -> 0. Silently clamping concentration would produce a very large but
-    # finite value that depends on an arbitrary regularization constant; instead, refuse
-    # the call so the user can decide how to handle non-positive concentrations.
-    if freundlich_n < 1.0 and np.any(concentration <= 0):
-        msg = "concentration must be strictly positive when freundlich_n < 1 (retardation diverges as C -> 0)"
+    # For n > 1 the Freundlich retardation factor 1 + (rho_b/theta) * k_f * (1/n) * C^(1/n-1)
+    # diverges as C -> 0 (the exponent 1/n - 1 < 0). Silently clamping concentration would produce
+    # a very large but finite value that depends on an arbitrary regularization constant; instead,
+    # refuse the call so the user can decide how to handle non-positive concentrations.
+    if freundlich_n > 1.0 and np.any(concentration <= 0):
+        msg = "concentration must be strictly positive when freundlich_n > 1 (retardation diverges as C -> 0)"
         raise ValueError(msg)
 
-    return 1.0 + (bulk_density / porosity) * freundlich_k * freundlich_n * concentration ** (freundlich_n - 1)
+    inv_n = 1.0 / freundlich_n
+    return 1.0 + (bulk_density / porosity) * freundlich_k * inv_n * concentration ** (inv_n - 1.0)

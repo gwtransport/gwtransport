@@ -184,6 +184,49 @@ def test_invalid_spinup_raises():
     flow, tedges = _constant_flow()
     with pytest.raises(ValueError, match="spinup"):
         residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=300.0, spinup="bad")
+    # The unified contract is {'constant'} | None | float in [0, 1): out-of-range floats raise.
+    with pytest.raises(ValueError, match="spinup"):
+        residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=300.0, spinup=1.0)
+    with pytest.raises(ValueError, match="spinup"):
+        residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=300.0, spinup=-0.1)
+
+
+@pytest.mark.parametrize("spinup", ["constant", None, 0.0, 0.5])
+def test_residence_time_accepts_unified_spinup_set(spinup):
+    """residence_time accepts each member of the shared {'constant', None, float in [0, 1)} set."""
+    flow, tedges = _constant_flow(n=40, q=100.0)
+    apv = np.array([200.0, 400.0, 600.0, 800.0])
+    got = residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=spinup)
+    assert got.shape == (40,)
+    # Deep in the record every streamtube has broken through, so the bin mean is the plain APV mean.
+    np.testing.assert_allclose(got[-1], apv.mean() / 100.0, rtol=1e-12)
+
+
+def test_residence_time_spinup_none_equals_zero_float():
+    """spinup=None and spinup=0.0 are the same lenient policy (emit wherever any streamtube valid)."""
+    flow, tedges = _variable_flow(n=60)
+    apv = np.array([200.0, 1500.0, 3000.0])
+    got_none = residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=None)
+    got_zero = residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=0.0)
+    np.testing.assert_array_equal(got_none, got_zero)  # bit-identical, including NaN placement
+
+
+def test_residence_time_float_threshold_gates_covered_fraction():
+    """A higher float threshold NaNs more spin-up bins (monotone in the covered-streamtube fraction).
+
+    Where a bin's mean is finite it is independent of the threshold (renormalization is unchanged);
+    the threshold only decides whether the bin is emitted at all.
+    """
+    flow, tedges = _constant_flow(n=40, q=100.0)
+    apv = np.array([200.0, 1500.0, 2800.0])  # staggered break-through inside the spin-up
+    got_zero = residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=0.0)
+    got_two_thirds = residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=0.7)
+    nan_zero = np.isnan(got_zero)
+    nan_high = np.isnan(got_two_thirds)
+    assert np.all(nan_zero <= nan_high)  # the stricter threshold is a NaN superset
+    assert nan_high.sum() > nan_zero.sum()  # and strictly NaNs more in the staggered spin-up
+    both_finite = ~nan_zero & ~nan_high
+    np.testing.assert_array_equal(got_zero[both_finite], got_two_thirds[both_finite])
 
 
 @pytest.mark.parametrize("direction", DIRECTIONS)
