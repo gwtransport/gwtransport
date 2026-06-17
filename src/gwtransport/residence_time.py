@@ -11,7 +11,7 @@ residence time).
 
 Available functions:
 
-- :func:`full` - Compute the flow- or time-weighted mean residence time over
+- :func:`full` - Compute the flow-weighted mean residence time over
   output bins, per pore volume (full ``(n_pore_volumes, n_bins)`` array). Follows the package's
   bin-edge convention and is the form consumed elsewhere in the package. Supports both forward
   (infiltration to extraction) and reverse (extraction to infiltration) directions.
@@ -92,7 +92,7 @@ from scipy.stats import gamma as gamma_dist
 
 from gwtransport._time import tedges_to_days
 from gwtransport.gamma import parse_parameters
-from gwtransport.utils import cumulative_flow_volume, linear_average, linear_interpolate
+from gwtransport.utils import cumulative_flow_volume, linear_interpolate
 
 
 def _boundary_extrapolated_map(
@@ -170,6 +170,74 @@ def _resolve_spinup(spinup: str | float | None) -> tuple[bool, float]:
     raise ValueError(msg)
 
 
+def _phi_setup(
+    flow: npt.NDArray[np.floating],
+    flow_cum: npt.NDArray[np.floating],
+    tedges_days: npt.NDArray[np.floating],
+    *,
+    extrapolate: bool,
+    pad: float,
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+    """Build the antiderivative ``phi(x) = int_0^x T(w) dw`` of the cumulative-volume -> time map ``T``.
+
+    ``T`` is piecewise-linear (knots at the cumulative-volume edges), so ``phi`` is piecewise-quadratic
+    with the same knots. With ``extrapolate`` the map is extended one anchor past each end of the record
+    at the boundary flow rate (padded by ``pad``) for the ``"constant"`` warm-start; otherwise it is the
+    raw record. Shared by :func:`full` and :func:`gamma`.
+
+    Returns
+    -------
+    phi_v : ndarray
+        Cumulative-volume knots of the map (extended by ``pad`` at each end when ``extrapolate``).
+    phi_t : ndarray
+        Time knots aligned with ``phi_v``.
+    phi_knot : ndarray
+        ``phi`` evaluated at each volume knot.
+    phi_rate : ndarray
+        Per-segment ``dV/dt`` (flow) rate between consecutive knots.
+    """
+    # pad == 0 (no spin-up reach, e.g. retardation_factor or all pore volumes 0) carries no
+    # extrapolation and would only add zero-width boundary segments (0/0 -> NaN phi_rate), so skip it.
+    if extrapolate and pad > 0.0 and np.any(flow > 0.0):
+        phi_v, phi_t = _boundary_extrapolated_map(flow, flow_cum, tedges_days, pad)
+    else:
+        phi_v, phi_t = flow_cum, tedges_days
+    phi_dv = phi_v[1:] - phi_v[:-1]
+    phi_rate = phi_dv / (phi_t[1:] - phi_t[:-1])
+    phi_knot = np.concatenate([[0.0], np.cumsum(phi_t[:-1] * phi_dv + phi_dv**2 / (2 * phi_rate))])
+    return phi_v, phi_t, phi_knot, phi_rate
+
+
+def _eval_phi(
+    x: npt.NDArray[np.floating],
+    phi_v: npt.NDArray[np.floating],
+    phi_t: npt.NDArray[np.floating],
+    phi_knot: npt.NDArray[np.floating],
+    phi_rate: npt.NDArray[np.floating],
+    *,
+    strict_nan: bool = False,
+) -> npt.NDArray[np.floating]:
+    """Evaluate the piecewise-quadratic antiderivative ``phi`` from :func:`_phi_setup` at ``x``.
+
+    ``x`` is clipped to the map range ``[phi_v[0], phi_v[-1]]`` (the warm-start extrapolation lives in
+    that range when padded). With ``strict_nan`` any ``x`` outside the range returns ``NaN`` instead --
+    used by :func:`full` so an output bin whose parcel leaves the record is ``NaN``.
+
+    Returns
+    -------
+    ndarray
+        ``phi`` evaluated at ``x``, with the same shape as ``x``.
+    """
+    x = np.asarray(x, dtype=float)
+    xc = np.clip(x, phi_v[0], phi_v[-1])
+    j = np.clip(np.searchsorted(phi_v, xc, side="right") - 1, 0, len(phi_rate) - 1)
+    dv = xc - phi_v[j]
+    out = phi_knot[j] + phi_t[j] * dv + dv * dv / (2 * phi_rate[j])
+    if strict_nan:
+        out = np.where((x < phi_v[0]) | (x > phi_v[-1]), np.nan, out)
+    return out
+
+
 def full(
     *,
     flow: npt.ArrayLike,
@@ -178,17 +246,17 @@ def full(
     aquifer_pore_volumes: npt.ArrayLike,
     direction: str = "extraction_to_infiltration",
     retardation_factor: float = 1.0,
-    weighting: str = "flow",
     spinup: str | float | None = "constant",
 ) -> npt.NDArray[np.floating]:
     r"""
     Compute the mean residence time over output bins, per pore volume.
 
-    The flow- or time-weighted mean residence time is computed over each output interval
+    The flow-weighted mean residence time is computed over each output interval
     ``[cout_tedges[i], cout_tedges[i + 1])`` and returned as the full
     ``(n_pore_volumes, n_output_bins)`` array -- one row per entry in
-    ``aquifer_pore_volumes``, without collapsing the pore-volume axis. This bin-average form
-    follows the package's bin-edge convention.
+    ``aquifer_pore_volumes``, without collapsing the pore-volume axis. The average is uniform in
+    cumulative throughflow volume, matching the package's bin-edge convention (and what the diffusion
+    modules consume to compute a per-bin retarded velocity).
 
     Parameters
     ----------
@@ -213,14 +281,6 @@ def full(
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless]. A value greater
         than 1.0 indicates the compound moves slower than water. Default is 1.0.
-    weighting : {'flow', 'time'}, optional
-        How the per-instant residence time is averaged over each output bin:
-
-        * ``'flow'`` (default): flow-weighted average -- uniform in cumulative volume,
-          matching the bin-edge convention of the package, and what the diffusion modules
-          consume to compute a per-bin retarded velocity.
-        * ``'time'``: time-weighted average -- uniform in clock time. Coincides with
-          ``'flow'`` when flow is constant within an output bin.
     spinup : {'constant'}, None, or float in [0, 1), optional
         How to treat the spin-up zone, where a pore volume's retarded look-back/forward parcel
         leaves the flow record. Matches the package convention (see :mod:`gwtransport.advection`).
@@ -249,8 +309,8 @@ def full(
     ValueError
         If ``tedges`` does not have exactly one more element than ``flow``. If
         ``direction`` is not ``'extraction_to_infiltration'`` or
-        ``'infiltration_to_extraction'``. If ``weighting`` is not ``'flow'`` or ``'time'``. If
-        ``spinup`` is not ``'constant'``, ``None``, or a float in ``[0, 1)``.
+        ``'infiltration_to_extraction'``. If ``spinup`` is not ``'constant'``, ``None``, or a float
+        in ``[0, 1)``.
 
     See Also
     --------
@@ -265,21 +325,26 @@ def full(
     ``spinup=None``) to locate the spin-up region. See the module docstring (``Spin-up period``)
     for the full rule.
 
-    Exact-zero flow bins produce a plateau in cumulative volume that is bumped up by one
-    float64 ulp per duplicate so the cumulative volume is strictly monotone; trapezoidal
-    integration over the resulting one-ulp-wide ramp recovers the underlying step
-    discontinuity in the residence time exactly. The flow vs time weighting choices are
+    The single-streamtube residence time :math:`\tau(V) = \mathrm{sign}\,[T(V + \mathrm{sign}\,R V_p)
+    - T(V)]` is piecewise-linear in cumulative throughflow volume :math:`V` (:math:`T` is the
+    volume :math:`\to` time map, :math:`\mathrm{sign} = -1` for ``extraction_to_infiltration`` and
+    :math:`+1` for ``infiltration_to_extraction``). Its flow-weighted bin average is therefore a
+    closed-form difference of the antiderivative :math:`\Phi(x) = \int_0^x T(w)\,dw` (piecewise-
+    quadratic), evaluated at four points per pore volume and output bin:
 
     .. math::
 
-        \bar\tau^{\mathrm{time}}
-        = \frac{1}{\Delta t}\int_{t_\mathrm{lo}}^{t_\mathrm{hi}} \tau(t)\,dt,
-        \qquad
-        \bar\tau^{\mathrm{flow}}
-        = \frac{1}{\Delta V}\int_{V_\mathrm{lo}}^{V_\mathrm{hi}} \tau(V)\,dV,
+        \bar\tau
+        = \frac{1}{\Delta V}\int_{V_\mathrm{lo}}^{V_\mathrm{hi}} \tau(V)\,dV
+        = \frac{\mathrm{sign}}{\Delta V}\bigl[
+            \Phi(V_\mathrm{hi} + \mathrm{sign}\,R V_p) - \Phi(V_\mathrm{lo} + \mathrm{sign}\,R V_p)
+            - \Phi(V_\mathrm{hi}) + \Phi(V_\mathrm{lo})\bigr],
 
-    where :math:`V` is cumulative throughflow volume (:math:`dV = Q\,dt`); they coincide
-    whenever :math:`Q` is constant within :math:`[t_\mathrm{lo}, t_\mathrm{hi}]`.
+    where :math:`V` is cumulative throughflow volume (:math:`dV = Q\,dt`). This avoids materialising a
+    per-streamtube integration grid, so memory and time scale as the output size
+    :math:`O(n_\mathrm{pore\ volumes}\cdot n_\mathrm{bins})`. A zero-throughflow output bin
+    (:math:`\Delta V \to 0`) has a fixed volume while output time advances, so it degenerates to the
+    pointwise residence time at the bin's time midpoint.
 
     Examples
     --------
@@ -303,72 +368,69 @@ def full(
     if direction not in {"extraction_to_infiltration", "infiltration_to_extraction"}:
         msg = "direction should be 'extraction_to_infiltration' or 'infiltration_to_extraction'"
         raise ValueError(msg)
-    if weighting not in {"flow", "time"}:
-        msg = "weighting should be 'flow' or 'time'"
-        raise ValueError(msg)
     extrapolate, _ = _resolve_spinup(spinup)
 
     aquifer_pore_volumes = np.atleast_1d(aquifer_pore_volumes)
     tedges = pd.DatetimeIndex(tedges)
     cout_tedges = pd.DatetimeIndex(cout_tedges)
     flow = np.asarray(flow, dtype=float)
+    n_pv = len(aquifer_pore_volumes)
+    n_out = len(cout_tedges) - 1
 
     if len(tedges) != len(flow) + 1:
         msg = "tedges must have one more element than flow"
         raise ValueError(msg)
-
     if np.any(flow < 0) or np.any(np.isnan(flow)):
-        return np.full((len(aquifer_pore_volumes), len(cout_tedges) - 1), np.nan)
+        return np.full((n_pv, n_out), np.nan)
 
     tedges_days = tedges_to_days(tedges)
     cout_tedges_days = tedges_to_days(cout_tedges, ref=tedges[0])
-    # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
-    # by the smallest representable amount so downstream np.interp resolves consistently.
+    # Plateaus in flow_cum from Q = 0 bins make the V -> t inversion multi-valued; bump duplicates by
+    # the smallest representable amount so the inverse map is single-valued.
     flow_cum = cumulative_flow_volume(flow, np.diff(tedges_days), strictly_monotone=True)
 
-    # Sign convention: with sign = -1 for extraction_to_infiltration and +1 for
-    # infiltration_to_extraction, the look-back/forward target volume is
-    # ``a = flow_cum + sign * R * V_p`` and the residence time is ``tau = sign * (days(a) - t)``.
+    # Sign convention: sign = -1 for extraction_to_infiltration, +1 for infiltration_to_extraction;
+    # the look-back/forward parcel sits at volume V + shift and tau(V) = sign * (T(V + shift) - T(V)) is
+    # piecewise-linear in V (T is the volume -> time map). Its flow-weighted bin average is a closed-
+    # form difference of the antiderivative phi(x) = int_0^x T(w) dw, so no per-streamtube integration
+    # grid is built (memory/time O(n_pore_volumes * n_bins), not O(n_pore_volumes^2 * n_flow)).
     sign = -1.0 if direction == "extraction_to_infiltration" else 1.0
+    shift = sign * retardation_factor * aquifer_pore_volumes  # (n_pv,)
 
-    # tau(t) is piecewise-linear in t (equivalently in cumulative volume V), but its
-    # breakpoints are not only at tedges: within a flow bin Q is constant, so as t advances
-    # the look-back parcel sweeps through V at a constant rate and crosses each interior flow_cum
-    # edge at a definite time. Sampling tau only at tedges would miss those kinks and bias
-    # the bin mean under regime changes; augment the integration grid by exactly those crossings.
-    target_volumes_at_kinks = flow_cum[None, :] - sign * retardation_factor * aquifer_pore_volumes[:, None]
-    kink_times = linear_interpolate(
-        x_ref=flow_cum, y_ref=tedges_days, x_query=target_volumes_at_kinks, left=np.nan, right=np.nan
-    )
-    augmented_grid = np.unique(np.concatenate([tedges_days, kink_times[np.isfinite(kink_times)]]))
+    # phi over the cumulative-volume -> time map. With spinup="constant" the map is extrapolated past
+    # the record at the boundary flow (padded by the largest reach R * max(V_p)) so phi warm-starts the
+    # spin-up; otherwise phi is NaN outside the record so a bin whose parcel leaves it becomes NaN.
+    pad = retardation_factor * float(aquifer_pore_volumes.max()) if aquifer_pore_volumes.size else 0.0
+    phi_v, phi_t, phi_knot, phi_rate = _phi_setup(flow, flow_cum, tedges_days, extrapolate=extrapolate, pad=pad)
+    # The map is only actually extended when there is a positive boundary flow to extrapolate; with
+    # all-zero flow (or spinup=None) it stays the raw record, so out-of-record look-backs are NaN.
+    strict = not (extrapolate and bool(np.any(flow > 0.0)))
 
-    flow_cum_at_grid = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=augmented_grid)
-    a_grid = flow_cum_at_grid[None, :] + sign * retardation_factor * aquifer_pore_volumes[:, None]
+    vol_out = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days, left=np.nan, right=np.nan)
+    v_lo = vol_out[:-1]
+    v_hi = vol_out[1:]
+    dvol = v_hi - v_lo
+    bins_within = np.isfinite(v_lo) & np.isfinite(v_hi)
 
-    # Spin-up handling. A parcel whose infiltration/extraction falls outside the flow record has an
-    # out-of-range look-back/forward target a_grid. With spinup="constant" the cumulative-volume ->
-    # time map is extrapolated past the record at the boundary flow rates (flow held constant at its
-    # first/last value), so the residence time stays finite (the package default warm-start). One
-    # anchor each end, padded by the largest reach R * max(V_p), is enough that a_grid never exceeds
-    # the extended map, so the interpolation is an exact linear extrapolation. With spinup=None the
-    # map is not extended and the out-of-record target yields NaN (strict, no extrapolation).
-    if extrapolate and np.any(flow > 0.0):
-        pad = retardation_factor * float(aquifer_pore_volumes.max())
-        flow_cum_map, days_map = _boundary_extrapolated_map(flow, flow_cum, tedges_days, pad)
-        days_grid = linear_interpolate(x_ref=flow_cum_map, y_ref=days_map, x_query=a_grid)
-    else:
-        days_grid = linear_interpolate(x_ref=flow_cum, y_ref=tedges_days, x_query=a_grid, left=np.nan, right=np.nan)
-    data_grid = sign * (days_grid - augmented_grid[None, :])
+    phi_base = _eval_phi(vol_out, phi_v, phi_t, phi_knot, phi_rate, strict_nan=strict)  # (n_out + 1,)
+    phi_shift = _eval_phi(vol_out[None, :] + shift[:, None], phi_v, phi_t, phi_knot, phi_rate, strict_nan=strict)
 
-    if weighting == "time":
-        return linear_average(x_data=augmented_grid, y_data=data_grid, x_edges=cout_tedges_days)
-
-    flow_cum_at_cout_tedges = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days)
-    result = linear_average(x_data=flow_cum_at_grid, y_data=data_grid, x_edges=flow_cum_at_cout_tedges)
-    bins_within = (cout_tedges_days[:-1] >= tedges_days[0]) & (cout_tedges_days[1:] <= tedges_days[-1])
-    if not np.all(bins_within):
-        result = np.where(bins_within[None, :], result, np.nan)
-    return result
+    # Zero-throughflow output bin (dvol -> 0): the volume is fixed while output time advances, so the
+    # flow-weighted average degenerates to the pointwise tau at the bin time midpoint, sign*(T(V_lo +
+    # shift) - t_mid). A direct ratio there would catastrophically cancel.
+    t_mid = 0.5 * (cout_tedges_days[:-1] + cout_tedges_days[1:])
+    nan_outside = np.nan if strict else None
+    tol = 1e6 * np.spacing(float(np.max(np.abs(flow_cum)))) if flow_cum.size else 0.0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        result = (
+            sign * ((phi_shift[:, 1:] - phi_shift[:, :-1]) - (phi_base[1:] - phi_base[:-1])[None, :]) / dvol[None, :]
+        )
+        t_lookback = linear_interpolate(
+            x_ref=phi_v, y_ref=phi_t, x_query=v_lo[None, :] + shift[:, None], left=nan_outside, right=nan_outside
+        )
+        point = sign * (t_lookback - t_mid[None, :])
+    result = np.where(dvol[None, :] > tol, result, point)
+    return np.where(bins_within[None, :], result, np.nan)
 
 
 def mean(
@@ -481,7 +543,6 @@ def mean(
         aquifer_pore_volumes=aquifer_pore_volumes,
         direction=direction,
         retardation_factor=retardation_factor,
-        weighting="flow",
         spinup=spinup,
     )
 
@@ -663,20 +724,9 @@ def gamma(
     # extended past the record at the boundary flow rates (one anchor each end, padded by the largest
     # reach r*support_hi) so phi extrapolates the spin-up; with a float spinup it stays clipped to
     # [0, v_end] (the covered sub-mass only).
-    if extrapolate and np.any(flow > 0.0):
-        phi_v, phi_t = _boundary_extrapolated_map(flow, flow_cum, tedges_days, r * support_hi)
-    else:
-        phi_v = flow_cum
-        phi_t = tedges_days
-    phi_dv = phi_v[1:] - phi_v[:-1]
-    phi_rate = phi_dv / (phi_t[1:] - phi_t[:-1])
-    phi_knot = np.concatenate([[0.0], np.cumsum(phi_t[:-1] * phi_dv + phi_dv**2 / (2 * phi_rate))])
-
-    def phi(v: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
-        v = np.clip(v, phi_v[0], phi_v[-1])
-        j = np.clip(np.searchsorted(phi_v, v, side="right") - 1, 0, len(phi_rate) - 1)
-        dv = v - phi_v[j]
-        return phi_knot[j] + phi_t[j] * dv + dv * dv / (2 * phi_rate[j])
+    phi_v, phi_t, phi_knot, phi_rate = _phi_setup(
+        flow, flow_cum, tedges_days, extrapolate=extrapolate, pad=r * support_hi
+    )
 
     cout_tedges_days = tedges_to_days(cout_tedges, ref=tedges[0])
     vol_out = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days, left=np.nan, right=np.nan)
@@ -747,8 +797,8 @@ def gamma(
                 v_start = np.maximum(vlo[None], r * nodes)
                 a_lo = np.maximum(vlo[None] - r * nodes, 0.0)
                 length = np.maximum(vhi[None] - v_start, 0.0)
-            phi_const = phi(v_hi)
-            phi_stack = phi(np.stack([v_start, a_hi, a_lo]))
+            phi_const = _eval_phi(v_hi, phi_v, phi_t, phi_knot, phi_rate)
+            phi_stack = _eval_phi(np.stack([v_start, a_hi, a_lo]), phi_v, phi_t, phi_knot, phi_rate)
             g = phi_const[None, :, None] - phi_stack[0] - phi_stack[1] + phi_stack[2]
         else:
             a_lo = vlo[None] + r * nodes
@@ -760,8 +810,8 @@ def gamma(
                 v_stop = np.minimum(vhi[None], v_end - r * nodes)
                 a_hi = np.minimum(vhi[None] + r * nodes, v_end)
                 length = np.maximum(v_stop - vlo[None], 0.0)
-            phi_const = phi(v_lo)
-            phi_stack = phi(np.stack([a_hi, a_lo, v_stop]))
+            phi_const = _eval_phi(v_lo, phi_v, phi_t, phi_knot, phi_rate)
+            phi_stack = _eval_phi(np.stack([a_hi, a_lo, v_stop]), phi_v, phi_t, phi_knot, phi_rate)
             g = phi_stack[0] - phi_stack[1] - phi_stack[2] + phi_const[None, :, None]
         g = np.where(length > 0, g, 0.0)
         length = np.where(length > 0, length, 0.0)

@@ -67,7 +67,6 @@ def test_discrete_equals_mean_over_valid_streamtubes(direction, r, spinup):
         aquifer_pore_volumes=apv,
         direction=direction,
         retardation_factor=r,
-        weighting="flow",
         spinup=spinup,
     )
     expected = _mean_over_valid(rt)
@@ -106,7 +105,7 @@ def test_single_pore_volume_reduces_to_full():
     """A one-element APVD collapses to that streamtube's full row."""
     flow, tedges = _variable_flow()
     got = mean(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=750.0)
-    ref = full(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=750.0, weighting="flow")[0]
+    ref = full(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=750.0)[0]
     np.testing.assert_array_equal(got, ref)
 
 
@@ -127,7 +126,6 @@ def test_spinup_none_drops_genuinely_partial_streamtube():
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=apv,
-        weighting="flow",
         spinup=None,
     )
     assert np.isfinite(rt[0][5]), "test setup: small streamtube must be informed in bin 5"

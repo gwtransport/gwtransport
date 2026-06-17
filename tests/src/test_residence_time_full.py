@@ -370,278 +370,289 @@ def test_spinup_policy_constant_vs_none():
 
 
 # ---------------------------------------------------------------------------
-# weighting={"flow","time"} parameter (issue #160)
+# Flow-weighted bin average -- closed-form phi antiderivative (issues #160, #165)
 # ---------------------------------------------------------------------------
 
 
-def test_constant_flow_weighting_equivalence(constant_flow_data):
-    """Flow- and time-weighting agree to machine precision when Q is constant.
+def _flow_weighted_reference(flow, tedges, cout_tedges, pore_volume, retardation_factor, direction):
+    """Independent exact flow-weighted bin average, reconstructed from the inverse volume->time map.
 
-    Under constant flow, integrating uniformly in cumulative volume and
-    integrating uniformly in time produce the same per-bin average. Any drift
-    here would indicate that the volume-coordinate path has lost an exact
-    invariant, e.g. via off-by-one indexing of ``flow_cum_at_cout_tedges``.
+    ``tau(V) = sign * (T(V + shift) - T(V))`` is piecewise-linear in cumulative volume ``V`` (``T`` is
+    the strictly-monotone inverse cumulative-volume map, ``shift = sign * R * V_p``), so its exact
+    flow-weighted average over ``[V_lo, V_hi]`` is the trapezoidal integral taken at the ``tau``
+    breakpoints (where ``V`` or ``V + shift`` crosses a flow edge). This calls neither ``full`` nor any
+    residence-time function -- only ``cumulative_flow_volume`` / ``linear_interpolate`` -- so it is a
+    genuinely independent oracle. A zero-throughflow output bin (fixed volume, advancing time)
+    degenerates to the pointwise ``tau`` at the bin time midpoint. Uses the strict (no warm-start) map,
+    so it matches ``full(..., spinup=None)``.
     """
-    flow_values, tedges = constant_flow_data
-    cout_tedges = pd.date_range(start="2023-01-01", end="2023-01-09", freq="1D")
-    pore_volumes = np.array([100.0, 200.0, 300.0])
+    sign = -1.0 if direction == "extraction_to_infiltration" else 1.0
+    shift = sign * retardation_factor * pore_volume
+    tdays = tedges_to_days(pd.DatetimeIndex(tedges))
+    flow_cum = cumulative_flow_volume(np.asarray(flow, dtype=float), np.diff(tdays), strictly_monotone=True)
+    cout_days = tedges_to_days(pd.DatetimeIndex(cout_tedges), ref=pd.DatetimeIndex(tedges)[0])
+    vol_out = linear_interpolate(x_ref=tdays, y_ref=flow_cum, x_query=cout_days, left=np.nan, right=np.nan)
 
-    common = {
-        "flow": flow_values,
-        "tedges": tedges,
-        "cout_tedges": cout_tedges,
-        "aquifer_pore_volumes": pore_volumes,
-        "direction": "extraction_to_infiltration",
-    }
-    rt_flow = full(**common, weighting="flow")
-    rt_time = full(**common, weighting="time")
-    np.testing.assert_array_equal(rt_flow, rt_time)  # exact, NaN-aware
+    def time_at(v):
+        return linear_interpolate(x_ref=flow_cum, y_ref=tdays, x_query=v, left=np.nan, right=np.nan)
 
-
-def test_default_weighting_is_flow():
-    """Calling without the ``weighting`` kwarg must behave like ``weighting='flow'``.
-
-    Uses the same Q = [1, 1, 2] scenario as ``test_analytical_variable_flow_weighting``
-    where the output bin spans a flow-step boundary -- without that, the two
-    weightings would coincide and the default-vs-explicit comparison would be
-    vacuous.
-    """
-    tedges = pd.DatetimeIndex(["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04"])
-    flow_values = np.array([1.0, 1.0, 2.0])
-    pore_volume = 0.5
-    cout_tedges = pd.DatetimeIndex(["2023-01-02", "2023-01-04"])
-
-    common = {
-        "flow": flow_values,
-        "tedges": tedges,
-        "cout_tedges": cout_tedges,
-        "aquifer_pore_volumes": pore_volume,
-        "direction": "extraction_to_infiltration",
-    }
-    rt_default = full(**common)
-    rt_flow = full(**common, weighting="flow")
-    rt_time = full(**common, weighting="time")
-    np.testing.assert_array_equal(rt_default, rt_flow)
-    # Sanity: the two weightings actually differ here, otherwise the assertion above
-    # would also be satisfied by the legacy time-weighted code path.
-    assert not np.isclose(rt_default[0, 0], rt_time[0, 0])
+    out = np.full(len(cout_days) - 1, np.nan)
+    width_tol = 1e-9 * max(1.0, abs(float(flow_cum[-1])))
+    for k in range(len(cout_days) - 1):
+        v_lo, v_hi = vol_out[k], vol_out[k + 1]
+        if not (np.isfinite(v_lo) and np.isfinite(v_hi)):
+            continue
+        if v_hi - v_lo <= width_tol:  # zero-throughflow bin: fixed volume, so the time midpoint
+            t_lb = time_at(np.array([v_lo + shift]))[0]
+            out[k] = sign * (t_lb - 0.5 * (cout_days[k] + cout_days[k + 1])) if np.isfinite(t_lb) else np.nan
+            continue
+        kinks_v = flow_cum[(flow_cum > v_lo) & (flow_cum < v_hi)]  # tau(V) kinks (interior flow edges)
+        kinks_shift = (flow_cum - shift)[(flow_cum - shift > v_lo) & (flow_cum - shift < v_hi)]  # tau(V+shift) kinks
+        bps = np.unique(np.concatenate([[v_lo, v_hi], kinks_v, kinks_shift]))
+        tau = sign * (time_at(bps + shift) - time_at(bps))
+        if np.any(np.isnan(tau)):
+            continue  # strict spin-up: the look-back/forward parcel leaves the record within the bin
+        out[k] = np.trapezoid(tau, bps) / (v_hi - v_lo)
+    return out
 
 
-def test_invalid_weighting(constant_flow_data):
-    """An unrecognised ``weighting`` value must raise ValueError."""
-    flow_values, tedges = constant_flow_data
-    cout_tedges = pd.date_range(start="2023-01-02", end="2023-01-09", freq="2D")
-
-    with pytest.raises(ValueError, match=r"weighting should be 'flow' or 'time'"):
-        full(
-            flow=flow_values,
-            tedges=tedges,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volumes=200.0,
-            weighting="invalid",
-        )
-
-
-def test_analytical_variable_flow_weighting():
+def test_analytical_variable_flow():
     """Closed-form check on a hand-computed three-bin variable-flow case.
 
-    Setup: piecewise-constant Q = [1, 1, 2] m^3/day over three 1-day bins
-    (total 3 days), V_p = 0.5 m^3, R = 1, direction = extraction_to_infiltration.
-    The look-back parcel crosses an internal flow edge at t* = 2.25 (kink), so
-    on the output bin [day 1, day 3] the residence-time signal is
+    Setup: piecewise-constant Q = [1, 1, 2] m^3/day over three 1-day bins (total 3 days),
+    V_p = 0.5 m^3, R = 1. Both directions are pinned to a from-first-principles literal (not the
+    oracle) so the direction-specific sign/shift is independently anchored.
 
-        tau(t) = 0.5,                   t in [1, 2]
-        tau(t) = 2.5 - t,               t in [2, 2.25]
-        tau(t) = 0.25,                  t in [2.25, 3].
+    extraction_to_infiltration, output bin [day 1, day 3]: the look-back parcel crosses an internal
+    flow edge at V = 2.5 (a kink in tau(V)), so
 
-    Hand calculation gives:
+        flow-weighted mean = (1/3) [int_{V=1}^{V=2} 0.5 dV + int_{V=2}^{V=2.5} linear(0.5, 0.25) dV
+                                     + int_{V=2.5}^{V=4} 0.25 dV]
+                           = (1/3) [0.5 + 0.1875 + 0.375] = 17/48 day.
 
-    - time-weighted mean = (1/2) [int_1^2 0.5 dt + int_2^{2.25}(2.5 - t) dt
-                                   + int_{2.25}^3 0.25 dt]
-                         = (1/2) [0.5 + 0.09375 + 0.1875] = 25/64 day.
-    - flow-weighted mean = (1/3) [int_{V=1}^{V=2} 0.5 dV + int_{V=2}^{V=2.5} linear(0.5, 0.25) dV
-                                   + int_{V=2.5}^{V=4} 0.25 dV]
-                         = (1/3) [0.5 + 0.1875 + 0.375] = 17/48 day.
+    infiltration_to_extraction, output bin [day 1, day 2] (V in [1, 2]): the look-forward parcel
+    crosses the flow edge at V = 1.5, so
+
+        flow-weighted mean = int_{V=1}^{V=1.5} 0.5 dV + int_{V=1.5}^{V=2} linear(0.5, 0.25) dV
+                           = 0.25 + 0.1875 = 7/16 day.
     """
     tedges = pd.DatetimeIndex(["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04"])
     flow_values = np.array([1.0, 1.0, 2.0])
-    pore_volume = 0.5
-    cout_tedges = pd.DatetimeIndex(["2023-01-02", "2023-01-04"])
-
-    common = {
-        "flow": flow_values,
-        "tedges": tedges,
-        "cout_tedges": cout_tedges,
-        "aquifer_pore_volumes": pore_volume,
-        "direction": "extraction_to_infiltration",
-    }
-    rt_time = full(**common, weighting="time")
-    rt_flow = full(**common, weighting="flow")
-
-    np.testing.assert_allclose(rt_time[0, 0], 25.0 / 64.0, atol=0, rtol=1e-13)
+    rt_flow = full(
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=pd.DatetimeIndex(["2023-01-02", "2023-01-04"]),
+        aquifer_pore_volumes=0.5,
+        direction="extraction_to_infiltration",
+    )
     np.testing.assert_allclose(rt_flow[0, 0], 17.0 / 48.0, atol=0, rtol=1e-13)
 
+    rt_i2e = full(
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=pd.DatetimeIndex(["2023-01-02", "2023-01-03"]),
+        aquifer_pore_volumes=0.5,
+        direction="infiltration_to_extraction",
+        spinup=None,
+    )
+    np.testing.assert_allclose(rt_i2e[0, 0], 7.0 / 16.0, atol=0, rtol=1e-13)
 
-def test_kink_handling_against_fine_grid():
-    """Recover the residence-time integral against a fine-grid reference.
 
-    Issue #165: ``full`` previously sampled tau only at
-    ``tedges`` and missed kinks within a flow bin where the look-back
-    parcel crosses an internal flow edge. Under the regime change
-    ``Q = [100, 100, 100, 100, 100, 10, 200]`` from the issue body, the legacy
-    edge-sampled estimate over the last bin overshoots the truth by ~70 %.
+def test_kink_handling_against_independent_reference():
+    """Recover the flow-weighted residence time against an independent breakpoint-exact reference.
 
-    This test pins the function against an independent fine-grid trapezoidal
-    average of the pointwise residence time, which is reconstructed inline from the
-    inverse cumulative-volume map (no residence-time function is called for the
-    reference, so it is genuinely independent of ``full``).
+    Issue #165: ``full`` previously sampled tau only at ``tedges`` and missed kinks within a flow bin
+    where the look-back parcel crosses an internal flow edge; under ``Q = [100, 100, 100, 100, 100,
+    10, 200]`` the legacy edge-sampled estimate over the last bin overshot the truth by ~70 %. The
+    reference reconstructs the piecewise-linear tau(V) from the inverse cumulative-volume map and
+    integrates it exactly, independently of ``full``.
     """
     tedges = pd.date_range(start="2023-01-01", periods=8, freq="D")
     flow_values = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 10.0, 200.0])
     pore_volume = 50.0
-    cout_tedges = tedges  # daily output bins, same as flow tedges
-    n_fine = 20001
-
-    # The fine-grid reference below uses the strict (no-warm-start) inverse map, which is
-    # NaN in the spin-up. Use spinup=None so full takes the matching strict path and the
-    # spin-up bin stays NaN in both.
-    rt_mean = full(
+    cout_tedges = tedges
+    rt = full(
         flow=flow_values,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=pore_volume,
         direction="extraction_to_infiltration",
-        weighting="time",
         spinup=None,
     )
+    expected = _flow_weighted_reference(
+        flow_values, tedges, cout_tedges, pore_volume, 1.0, "extraction_to_infiltration"
+    )
+    np.testing.assert_allclose(rt[0], expected, atol=0, rtol=1e-13, equal_nan=True)
 
-    # Independent reference: reconstruct the pointwise residence time from scratch via the
-    # inverse cumulative-volume map, then trapezoidal-average per output bin. This is exactly
-    # what the deleted residence_time_series computed, inlined here so the reference does not
-    # depend on any residence-time function.
-    sign = -1.0  # extraction_to_infiltration
-    tdays = tedges_to_days(pd.DatetimeIndex(tedges))
-    flow_cum = cumulative_flow_volume(flow_values, np.diff(tdays), strictly_monotone=True)
-    expected = np.full((1, len(cout_tedges) - 1), np.nan)
-    for k in range(len(cout_tedges) - 1):
-        t_dense = np.linspace(tdays[k], tdays[k + 1], n_fine)
-        index = tedges[0] + pd.to_timedelta(t_dense, unit="D")
-        idays = tedges_to_days(pd.DatetimeIndex(index), ref=pd.DatetimeIndex(tedges)[0])
-        v_at_index = linear_interpolate(x_ref=tdays, y_ref=flow_cum, x_query=idays, left=np.nan, right=np.nan)
-        a = v_at_index + sign * pore_volume  # retardation_factor = 1.0
-        days = linear_interpolate(x_ref=flow_cum, y_ref=tdays, x_query=a, left=np.nan, right=np.nan)
-        tau_dense = sign * (days - idays)
-        if np.any(np.isnan(tau_dense)):
-            expected[0, k] = np.nan
-        else:
-            expected[0, k] = np.trapezoid(tau_dense, t_dense) / (t_dense[-1] - t_dense[0])
 
-    np.testing.assert_allclose(rt_mean, expected, atol=0, rtol=1e-13, equal_nan=True)
+def test_zero_flow_plateau_in_lookback_matches_reference():
+    """Zero-flow plateaus crossed by the look-back/forward parcel: exact vs the independent reference.
+
+    The closed-form phi antiderivative integrates the step in tau exactly. The legacy augmented-grid
+    path smeared multi-plateau crossings (and at a zero-throughflow output bin returned the bin
+    endpoint rather than the time midpoint), drifting ~1e-2; this pins the fix against the
+    breakpoint-exact reference over both directions and several pore volumes.
+    """
+    tedges = pd.date_range(start="2023-01-01", periods=12, freq="D")
+    flow_values = np.array([40.0, 0.0, 25.0, 60.0, 0.0, 0.0, 80.0, 10.0, 0.0, 50.0, 30.0])
+    cout_tedges = tedges
+    for direction in ("extraction_to_infiltration", "infiltration_to_extraction"):
+        for pore_volume in (30.0, 120.0, 240.0):
+            rt = full(
+                flow=flow_values,
+                tedges=tedges,
+                cout_tedges=cout_tedges,
+                aquifer_pore_volumes=pore_volume,
+                direction=direction,
+                retardation_factor=1.3,
+                spinup=None,
+            )
+            expected = _flow_weighted_reference(flow_values, tedges, cout_tedges, pore_volume, 1.3, direction)
+            np.testing.assert_allclose(rt[0], expected, atol=0, rtol=1e-12, equal_nan=True)
 
 
 def test_zero_flow_plateau_extraction():
-    """Q = 0 over an upstream interval gives tau a step discontinuity at the kink time.
+    """Q = 0 over an upstream interval: the strictly-monotone regularization keeps the step exact.
 
-    Setup: ``flow = [100, 0, 0, 100]`` (m^3/day) over four 1-day bins, ``V_p = 50`` m^3,
-    ``R = 1``, extraction direction. Cumulative volume V(t) is flat at 100 over t in [1, 3].
-    For t in the output bin [3, 4]:
-
-        V(t)        = 100 + 100*(t - 3)
-        V(t) - 50   = 50 + 100*(t - 3)
-        t_in        = (V(t) - 50)/100  while V(t) - 50 < 100,
-                    = 3 + (V(t) - 150)/100 while V(t) - 50 > 100.
-        tau(t)      = 2.5 for t in [3, 3.5),
-                    = 0.5 for t in (3.5, 4].
-
-    The mean over [3, 4] is therefore 0.5 * 2.5 + 0.5 * 0.5 = 1.5 day for both flow- and
-    time-weighting (Q is constant on this output bin so they coincide). Without the zero-flow
-    regularization in :func:`full`, ``np.interp`` collapses the duplicate
-    ``flow_cum`` values and the trapezoidal grid smears the step into a linear ramp, returning
-    1.0 instead.
+    Setup: ``flow = [100, 0, 0, 100]`` (m^3/day) over four 1-day bins, ``V_p = 50`` m^3, ``R = 1``,
+    extraction direction. On the output bin [3, 4] the look-back crosses the upstream plateau at the
+    bin volume midpoint, so the flow-weighted mean is 0.5 * 2.5 + 0.5 * 0.5 = 1.5 day. Without the
+    strictly-monotone (ulp-bump) regularization the duplicate ``flow_cum`` values would collapse the
+    step into a ramp and return ~1.0. (The step here is symmetric, so the Phi quadratic term cancels;
+    Phi correctness itself is pinned by ``test_analytical_variable_flow`` and the kink test.)
     """
     tedges = pd.date_range(start="2023-01-01", periods=5, freq="D")
     flow_values = np.array([100.0, 0.0, 0.0, 100.0])
-    pore_volume = 50.0
     cout_tedges = tedges
-
-    common = {
-        "flow": flow_values,
-        "tedges": tedges,
-        "cout_tedges": cout_tedges,
-        "aquifer_pore_volumes": pore_volume,
-        "direction": "extraction_to_infiltration",
-    }
-    rt_time = full(**common, weighting="time")
-    rt_flow = full(**common, weighting="flow")
-
-    np.testing.assert_allclose(rt_time[0, 3], 1.5, atol=0, rtol=1e-13)
-    np.testing.assert_allclose(rt_flow[0, 3], 1.5, atol=0, rtol=1e-13)
-
-
-def test_zero_flow_plateau_offset_step():
-    """Q = 0 bin where the source kink does not sit at the output bin midpoint.
-
-    Setup: ``flow = [200, 0, 100]`` (m^3/day) over three 1-day bins, ``V_p = 50``, ``R = 1``.
-    The plateau in ``V(t)`` is at level 200 over t in [1, 2]; on the output bin t in [2, 3]
-    the look-back parcel crosses it at ``t* = 2.5`` (where V(t*) - 50 = 200).
-
-    For t in [2, 2.5), the source falls on the first flow bin (Q = 200): t_in =
-    (V(t) - 50)/200 = 0.75 + 0.5*(t - 2), so tau(t) = t - t_in = 0.5*t + 0.25 (range
-    [1.25, 1.5)). For t in (2.5, 3], the source falls on the third flow bin (Q = 100):
-    t_in = 2 + (V(t) - 250)/100 = t - 0.5, so tau(t) = 0.5. The jump at t* is from 1.5 down
-    to 0.5.
-
-    Time-weighted mean over [2, 3]:
-
-        (1/1) * [int_2^{2.5} (0.5*t + 0.25) dt + int_{2.5}^3 0.5 dt]
-        = (1.5625 + 0.625) - (1.0 + 0.5) + 0.25
-        = 0.9375 day.
-
-    Without regularization the legacy code returned 0.6875.
-    """
-    tedges = pd.date_range(start="2023-01-01", periods=4, freq="D")
-    flow_values = np.array([200.0, 0.0, 100.0])
-    pore_volume = 50.0
-    cout_tedges = tedges
-
-    rt_time = full(
+    rt_flow = full(
         flow=flow_values,
         tedges=tedges,
         cout_tedges=cout_tedges,
-        aquifer_pore_volumes=pore_volume,
+        aquifer_pore_volumes=50.0,
         direction="extraction_to_infiltration",
-        weighting="time",
     )
-    np.testing.assert_allclose(rt_time[0, 2], 0.9375, atol=0, rtol=1e-13)
+    np.testing.assert_allclose(rt_flow[0, 3], 1.5, atol=0, rtol=1e-13)
 
 
-def test_weighting_extrapolation_nan_consistency():
-    """Output bins extending beyond the flow record are NaN under both weightings.
+def test_zero_throughflow_output_bin_time_midpoint():
+    """A zero-throughflow output bin returns the pointwise tau at the bin time midpoint.
 
-    The volume path computes ``flow_cum_at_cout_tedges`` by clamping; without the
-    explicit bin-bounds mask in the implementation, those bins would yield a
-    finite (but meaningless) value instead of NaN.
+    With ``flow = [200, 0, 100]`` (V_p = 50, R = 1, extraction, spinup=None) the cumulative-volume
+    row is ``[0, 200, 200, 300]``. Output bin 0 ([day 0, day 1]) is in strict spin-up (look-back
+    leaves the record) -> NaN. Output bin 1 ([day 1, day 2]) has Q = 0, so its volume is fixed at 200
+    while output time advances: tau ramps with output time and its flow-weighted average is the value
+    at the bin TIME midpoint, sign*(T(200 - 50) - 1.5) = -(0.75 - 1.5) = 0.75 day -- distinct from the
+    left edge (0.25) and right edge (1.25), so the midpoint rule is pinned independently. Output bin 2
+    ([day 2, day 3], Q = 100) gives 0.9375 day. These literals are hand-derived, not from the oracle.
+    """
+    tedges = pd.date_range(start="2023-01-01", periods=4, freq="D")
+    flow_values = np.array([200.0, 0.0, 100.0])
+    rt = full(
+        flow=flow_values,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=50.0,
+        direction="extraction_to_infiltration",
+        spinup=None,
+    )
+    np.testing.assert_allclose(rt[0], [np.nan, 0.75, 0.9375], atol=0, rtol=1e-13, equal_nan=True)
+
+
+def test_extrapolation_nan_consistency():
+    """Output bins extending beyond the flow record are NaN.
+
+    The volume path computes ``vol_out`` by interpolating with NaN fill; without the bin-bounds mask
+    those bins would yield a finite (but meaningless) value instead of NaN.
     """
     tedges = pd.DatetimeIndex(["2023-01-01", "2023-01-02", "2023-01-03"])
     flow_values = np.array([1.0, 2.0])
-    # Output bin extends past the last flow edge.
-    cout_tedges = pd.DatetimeIndex(["2023-01-02", "2023-01-04"])
-
+    cout_tedges = pd.DatetimeIndex(["2023-01-02", "2023-01-04"])  # extends past the last flow edge
     rt_flow = full(
         flow=flow_values,
         tedges=tedges,
         cout_tedges=cout_tedges,
         aquifer_pore_volumes=0.25,
         direction="extraction_to_infiltration",
-        weighting="flow",
-    )
-    rt_time = full(
-        flow=flow_values,
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=0.25,
-        direction="extraction_to_infiltration",
-        weighting="time",
     )
     assert np.isnan(rt_flow[0, 0])
-    assert np.isnan(rt_time[0, 0])
+
+
+def _warmstart_reference(flow, tedges, cout_tedges, pore_volume, retardation_factor, direction):
+    """Independent warm-start ('constant' spin-up) reference: breakpoint-exact over the extended map.
+
+    Extends the cumulative-volume -> time map one anchor past each end at the FIRST and LAST
+    positive-flow rates (start slope 1/Q_first, end slope 1/Q_last -- distinct under variable flow),
+    then integrates the piecewise-linear tau(V) = sign*(T(V+shift) - T(V)) EXACTLY at its breakpoints
+    (where V or V+shift crosses a map knot). Calls no residence-time function, so a first/last
+    extrapolation-slope swap in ``full`` is caught at machine precision. Assumes positive throughflow
+    over each output bin (no zero-throughflow degeneracy), as the warm-start test uses.
+    """
+    sign = -1.0 if direction == "extraction_to_infiltration" else 1.0
+    shift = sign * retardation_factor * pore_volume
+    tdays = tedges_to_days(pd.DatetimeIndex(tedges))
+    flow = np.asarray(flow, dtype=float)
+    flow_cum = cumulative_flow_volume(flow, np.diff(tdays), strictly_monotone=True)
+    pad = retardation_factor * pore_volume
+    pos = flow[flow > 0.0]
+    map_v = np.concatenate([[flow_cum[0] - pad], flow_cum, [flow_cum[-1] + pad]])
+    map_t = np.concatenate([[tdays[0] - pad / pos[0]], tdays, [tdays[-1] + pad / pos[-1]]])
+    cout_days = tedges_to_days(pd.DatetimeIndex(cout_tedges), ref=pd.DatetimeIndex(tedges)[0])
+    vol_out = linear_interpolate(x_ref=tdays, y_ref=flow_cum, x_query=cout_days, left=np.nan, right=np.nan)
+
+    def time_at(v):
+        return linear_interpolate(x_ref=map_v, y_ref=map_t, x_query=v)  # clamps within the padded range
+
+    out = np.full(len(cout_days) - 1, np.nan)
+    for k in range(len(cout_days) - 1):
+        v_lo, v_hi = vol_out[k], vol_out[k + 1]
+        if not (np.isfinite(v_lo) and np.isfinite(v_hi)):
+            continue
+        kinks_v = map_v[(map_v > v_lo) & (map_v < v_hi)]  # tau(V) kinks
+        kinks_shift = (map_v - shift)[(map_v - shift > v_lo) & (map_v - shift < v_hi)]  # tau(V+shift) kinks
+        bps = np.unique(np.concatenate([[v_lo, v_hi], kinks_v, kinks_shift]))
+        tau = sign * (time_at(bps + shift) - time_at(bps))
+        out[k] = np.trapezoid(tau, bps) / (v_hi - v_lo)
+    return out
+
+
+def test_variable_flow_warmstart_against_extended_map():
+    """Warm-start ('constant' spin-up) under variable flow uses the boundary flow rate at each end.
+
+    With Q_first != Q_last the start (extraction) and end (infiltration) extrapolation slopes are
+    distinct numbers (1/Q_first vs 1/Q_last), so a first/last slope swap is invisible under constant
+    flow (the regime every other warm-start test uses). A pore volume large enough to push the parcel
+    out of the record at the boundary creates a genuine warm-started spin-up region; the result is
+    pinned against an independent boundary-extended fine-grid reference in both directions.
+    """
+    tedges = pd.date_range("2020-01-01", periods=17, freq="D")
+    flow_values = np.linspace(50.0, 300.0, 16)  # Q_first = 50 != Q_last = 300
+    pore_volume = 600.0  # large enough for a warm-started spin-up region at each record end
+    for direction in ("extraction_to_infiltration", "infiltration_to_extraction"):
+        rt = full(
+            flow=flow_values,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=pore_volume,
+            direction=direction,
+        )  # default spinup="constant"
+        assert not np.isnan(rt[0]).any(), "warm-start must leave no in-record NaN"
+        expected = _warmstart_reference(flow_values, tedges, tedges, pore_volume, 1.0, direction)
+        np.testing.assert_allclose(rt[0], expected, atol=0, rtol=1e-12)
+
+
+def test_zero_shift_returns_zero():
+    """Zero shift (retardation_factor = 0, or all pore volumes 0) gives exactly-zero residence time.
+
+    The look-back/forward parcel coincides with the parcel itself, so tau is 0 in every in-record bin.
+    Regression guard: a zero extrapolation pad (= R * max(V_p)) must not build degenerate boundary
+    knots whose 0/0 rate would poison the antiderivative to NaN (it returned all-NaN before the fix).
+    """
+    tedges = pd.date_range("2023-01-01", periods=9, freq="D")
+    flow_values = np.array([100.0, 110.0, 105.0, 95.0, 98.0, 102.0, 107.0, 103.0])
+    for kwargs in (
+        {"retardation_factor": 0.0, "aquifer_pore_volumes": 200.0},
+        {"retardation_factor": 1.0, "aquifer_pore_volumes": 0.0},
+    ):
+        for direction in ("extraction_to_infiltration", "infiltration_to_extraction"):
+            rt = full(flow=flow_values, tedges=tedges, cout_tedges=tedges, direction=direction, **kwargs)
+            np.testing.assert_array_equal(rt, np.zeros_like(rt))
