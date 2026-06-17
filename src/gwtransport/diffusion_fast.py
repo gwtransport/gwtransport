@@ -88,7 +88,7 @@ from gwtransport._diffusion_shared import (
     _validate_inputs,
 )
 from gwtransport._time import dt_to_days, tedges_to_days
-from gwtransport.residence_time import residence_time_series
+from gwtransport.residence_time import fraction_explained_full
 from gwtransport.utils import cumulative_flow_volume
 
 # Default saturation threshold U for the banded build: a cout/cin pair is only evaluated
@@ -340,16 +340,20 @@ def _closed_form_coeff_matrix(
         cumulative_volume_at_cin=cumulative_volume_at_cin,
     )
 
-    # Residence time identifies cout bins with complete breakthrough (NaN beyond data).
-    rt_at_cout_tedges = residence_time_series(
-        flow=flow,
-        tedges=work_tedges,
-        index=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=retardation_factor,
-        direction="extraction_to_infiltration",
+    # Output bin valid where every streamtube's advective look-back is in-record across the whole
+    # bin (advective coverage == 1 for all pore volumes; NaN outside the record -> invalid).
+    valid_cout_bins = np.all(
+        fraction_explained_full(
+            flow=flow,
+            tedges=work_tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            retardation_factor=retardation_factor,
+            direction="extraction_to_infiltration",
+        )
+        >= 1.0,
+        axis=0,
     )
-    valid_cout_bins = ~np.any(np.isnan(rt_at_cout_tedges[:, :-1]) | np.isnan(rt_at_cout_tedges[:, 1:]), axis=0)
 
     # Slowest cin-side flow rate, used to bound the broken-through band width (the slowest flow
     # gives the steepest dD_t/dx). Zero when flow is everywhere zero -> the band widens (capped

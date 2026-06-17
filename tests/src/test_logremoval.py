@@ -1,7 +1,6 @@
 import warnings
 
 import numpy as np
-import pandas as pd
 import pytest
 from numpy.testing import assert_allclose
 from scipy import integrate, stats
@@ -17,7 +16,6 @@ from gwtransport.logremoval import (
     parallel_mean,
     residence_time_to_log_removal,
 )
-from gwtransport.residence_time import residence_time_series as compute_residence_time
 
 
 def test_single_flow():
@@ -393,7 +391,7 @@ def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow,
 
     Uses the full pipeline:
     1. gamma.bins() to discretize aquifer pore volumes
-    2. residence_time.residence_time_series() to compute residence times from pore volumes and flow
+    2. residence times V_p / Q (constant flow) from the discretized pore volumes
     3. residence_time_to_log_removal() to compute log removals
     4. parallel_mean() to compute effective log removal
 
@@ -409,23 +407,9 @@ def test_gamma_mean_matches_discretized_parallel_mean(apv_alpha, apv_beta, flow,
     pore_volumes = b["expected_values"]
     flow_fractions = b["probability_mass"]
 
-    # Step 2: Compute residence times using residence_time module
-    # Create a constant flow time series long enough for the largest pore volume
-    max_residence_days = pore_volumes.max() / flow * 2
-    n_days = int(np.ceil(max_residence_days)) + 10
-    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
-    constant_flow = np.full(n_days, flow)
-
-    # Compute residence time at a single point (midpoint, far enough from edges)
-    index = pd.DatetimeIndex([tedges[0] + (tedges[-1] - tedges[0]) / 2])
-    rt_array = compute_residence_time(
-        flow=constant_flow,
-        tedges=tedges,
-        aquifer_pore_volumes=pore_volumes,
-        index=index,
-        direction="extraction_to_infiltration",
-    )
-    residence_times = rt_array[:, 0]  # shape (n_bins,)
+    # Step 2: Residence time of pore volume V_p under constant flow Q is exactly V_p / Q
+    # (the value the deleted advective point-sampler returned deep in the record).
+    residence_times = pore_volumes / flow
 
     # Step 3: Compute log removals
     log_removals = residence_time_to_log_removal(residence_times=residence_times, log10_decay_rate=log10_decay_rate)

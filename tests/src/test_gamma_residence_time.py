@@ -6,7 +6,7 @@ from scipy.stats import gamma as gamma_dist
 
 from gwtransport._time import tedges_to_days
 from gwtransport.gamma import bins as gamma_bins
-from gwtransport.residence_time import gamma_residence_time, residence_time, residence_time_full
+from gwtransport.residence_time import full, gamma, mean
 from gwtransport.utils import cumulative_flow_volume
 
 DIRECTIONS = ["extraction_to_infiltration", "infiltration_to_extraction"]
@@ -28,7 +28,7 @@ def test_constant_flow_deep_bin_equals_analytic(direction, mean, std, loc, r):
     """
     q = 100.0
     flow, tedges = _constant_flow(q=q)
-    tau = gamma_residence_time(
+    tau = gamma(
         flow=flow,
         tedges=tedges,
         cout_tedges=tedges,
@@ -52,7 +52,7 @@ def test_spinup_partial_bin_matches_direct_integral(direction):
     """
     q, mean, std, r, n = 100.0, 600.0, 200.0, 2.0, 40  # r != 1 exercises the coverage clamp
     flow, tedges = _constant_flow(n_days=n, q=q)
-    tau = gamma_residence_time(
+    tau = gamma(
         flow=flow,
         tedges=tedges,
         cout_tedges=tedges,
@@ -85,7 +85,7 @@ def test_narrow_gamma_reduces_to_single_pore_volume(direction):
     """A near-degenerate gamma (std -> 0) reduces to the single-pore-volume bin mean.
 
     Because the residence time is piecewise-linear in V_p, the mean over a narrow distribution
-    centred at ``mean`` equals the residence time at ``mean`` -- i.e. ``residence_time_full`` for
+    centred at ``mean`` equals the residence time at ``mean`` -- i.e. ``full`` for
     a single pore volume. This cross-checks the closed form against the per-pore-volume path.
     """
     rng = np.random.default_rng(0)
@@ -95,12 +95,8 @@ def test_narrow_gamma_reduces_to_single_pore_volume(direction):
     mean = 433.0  # generic value, not on a flow-edge breakpoint
     # std small enough that the std -> 0 limit is reached to ~3e-9 (residual scales with std^2);
     # loc != 0 exercises the loc shift in the partial moments.
-    tau = gamma_residence_time(
-        flow=flow, tedges=tedges, cout_tedges=tedges, mean=mean, std=0.05, loc=120.0, direction=direction
-    )
-    ref = residence_time_full(
-        flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=mean, direction=direction
-    )[0]
+    tau = gamma(flow=flow, tedges=tedges, cout_tedges=tedges, mean=mean, std=0.05, loc=120.0, direction=direction)
+    ref = full(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=mean, direction=direction)[0]
     mask = np.isfinite(tau) & np.isfinite(ref)
     assert mask.sum() > n // 2
     np.testing.assert_allclose(tau[mask], ref[mask], atol=1e-7, rtol=1e-7)
@@ -111,28 +107,28 @@ def test_alpha_beta_matches_mean_std():
     flow, tedges = _constant_flow()
     mean, std = 350.0, 90.0
     alpha, beta = (mean / std) ** 2, std**2 / mean
-    by_moments = gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=mean, std=std)
-    by_shape = gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, alpha=alpha, beta=beta)
+    by_moments = gamma(flow=flow, tedges=tedges, cout_tedges=tedges, mean=mean, std=std)
+    by_shape = gamma(flow=flow, tedges=tedges, cout_tedges=tedges, alpha=alpha, beta=beta)
     np.testing.assert_allclose(by_moments, by_shape, atol=0, rtol=1e-12, equal_nan=True)
 
 
 def test_invalid_direction_raises():
     flow, tedges = _constant_flow()
     with pytest.raises(ValueError, match="direction"):
-        gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, direction="bad")
+        gamma(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, direction="bad")
 
 
 def test_requires_gamma_parameters():
     flow, tedges = _constant_flow()
     with pytest.raises(ValueError):
-        gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges)
+        gamma(flow=flow, tedges=tedges, cout_tedges=tedges)
 
 
 def test_bins_outside_record_are_nan():
-    """Output bins extending beyond the flow record are NaN, like residence_time_full."""
+    """Output bins extending beyond the flow record are NaN, like full."""
     flow, tedges = _constant_flow(n_days=20)
     cout_tedges = pd.date_range("2023-01-01", periods=31, freq="D")  # 10 days past the record
-    tau = gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=cout_tedges, mean=300.0, std=80.0)
+    tau = gamma(flow=flow, tedges=tedges, cout_tedges=cout_tedges, mean=300.0, std=80.0)
     assert np.isnan(tau[-1])
 
 
@@ -203,7 +199,7 @@ def test_wide_gamma_matches_double_quad(direction):
     rng = np.random.default_rng(3)
     flow = np.clip(100.0 + 60.0 * np.sin(np.arange(n) / 3.0) + rng.normal(0, 10, n), 10.0, None)
     mean, std, loc, r = 700.0, 450.0, 50.0, 1.6
-    tau = gamma_residence_time(
+    tau = gamma(
         flow=flow,
         tedges=tedges,
         cout_tedges=tedges,
@@ -246,8 +242,8 @@ def test_tiling_boundary_invariance(direction):
         "direction": direction,
         "retardation_factor": 1.3,
     }
-    one_tile = gamma_residence_time(**common, _max_tile_elements=10**18)
-    tiny_tile = gamma_residence_time(**common, _max_tile_elements=1)
+    one_tile = gamma(**common, _max_tile_elements=10**18)
+    tiny_tile = gamma(**common, _max_tile_elements=1)
     # Tiling is a pure loop partition: each output bin's arithmetic is independent of the tile it
     # lands in, so the two results must be bit-for-bit identical, not merely close.
     np.testing.assert_array_equal(one_tile, tiny_tile)
@@ -265,7 +261,7 @@ def test_constant_spinup_constant_flow_exact(direction, r):
     q = 100.0
     mean, std = 300.0, 80.0
     flow, tedges = _constant_flow(q=q)
-    tau = gamma_residence_time(
+    tau = gamma(
         flow=flow,
         tedges=tedges,
         cout_tedges=tedges,
@@ -284,19 +280,17 @@ def test_constant_spinup_matches_discrete(direction):
 
     ``gamma.bins`` returns equal-probability-mass bins, so the simple average of their
     ``expected_values`` is an unbiased discretization of the gamma mean. With warm-start spin-up on
-    both sides, the closed-form gamma residence time and the discrete ``residence_time`` over those
+    both sides, the closed-form gamma residence time and the discrete ``mean`` over those
     pore volumes agree up to the discretization gap (300 bins).
     """
-    mean, std = 700.0, 250.0
+    mean_val, std = 700.0, 250.0
     n = 30
     tedges = pd.date_range("2021-01-01", periods=n + 1, freq="D")
     rng = np.random.default_rng(7)
     flow = np.clip(100.0 + 60.0 * np.sin(np.arange(n) / 3.0) + rng.normal(0, 10, n), 10.0, None)
-    tau = gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=mean, std=std, direction=direction)
-    expected_values = gamma_bins(mean=mean, std=std, n_bins=300)["expected_values"]
-    disc = residence_time(
-        flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=expected_values, direction=direction
-    )
+    tau = gamma(flow=flow, tedges=tedges, cout_tedges=tedges, mean=mean_val, std=std, direction=direction)
+    expected_values = gamma_bins(mean=mean_val, std=std, n_bins=300)["expected_values"]
+    disc = mean(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=expected_values, direction=direction)
     mask = np.isfinite(tau) & np.isfinite(disc)
     assert mask.any()
     np.testing.assert_allclose(tau[mask], disc[mask], atol=5e-3)
@@ -306,11 +300,11 @@ def test_spinup_invalid_raises():
     """A bad ``spinup`` (not "constant", None, or a float in [0, 1]) raises ValueError mentioning spinup."""
     flow, tedges = _constant_flow()
     with pytest.raises(ValueError, match="spinup"):
-        gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, spinup="bad")
+        gamma(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, spinup="bad")
     with pytest.raises(ValueError, match="spinup"):
-        gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, spinup=1.5)
+        gamma(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, spinup=1.5)
     with pytest.raises(ValueError, match="spinup"):
-        gamma_residence_time(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, spinup=-0.1)
+        gamma(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, spinup=-0.1)
 
 
 @pytest.mark.parametrize("direction", DIRECTIONS)
@@ -335,8 +329,8 @@ def test_spinup_zero_vs_constant_differ_in_spinup_agree_deep(direction):
         "direction": direction,
         "retardation_factor": 1.2,
     }
-    zero = gamma_residence_time(**common, spinup=0.0)
-    constant = gamma_residence_time(**common, spinup="constant")
+    zero = gamma(**common, spinup=0.0)
+    constant = gamma(**common, spinup="constant")
     deep_idx = -1 if direction == "extraction_to_infiltration" else 0
     spin_idx = 0 if direction == "extraction_to_infiltration" else -1
     assert np.isfinite(zero[spin_idx])
@@ -369,8 +363,8 @@ def test_float_spinup_threshold_gates_emission(direction):
         "direction": direction,
         "retardation_factor": 1.2,
     }
-    low = gamma_residence_time(**common, spinup=0.05)
-    high = gamma_residence_time(**common, spinup=0.6)
+    low = gamma(**common, spinup=0.05)
+    high = gamma(**common, spinup=0.6)
     nan_low = np.isnan(low)
     nan_high = np.isnan(high)
     # Monotone: every bin NaN at the low threshold stays NaN at the higher one.

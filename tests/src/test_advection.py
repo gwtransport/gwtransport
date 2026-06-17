@@ -11,12 +11,10 @@ from gwtransport._time import tedges_to_days
 from gwtransport.advection import (
     _validate_advection_inputs,
     extraction_to_infiltration,
-    extraction_to_infiltration_series,
     gamma_extraction_to_infiltration,
     gamma_infiltration_to_extraction,
     infiltration_to_extraction,
     infiltration_to_extraction_nonlinear_sorption,
-    infiltration_to_extraction_series,
 )
 from gwtransport.advection_utils import (
     _densify_weights,
@@ -29,9 +27,10 @@ from gwtransport.advection_utils import (
     _resolve_spinup_mask as _banded_mask,
 )
 from gwtransport.fronttracking.math import ConstantRetardation
-from gwtransport.residence_time import residence_time_series
 from gwtransport.utils import (
     compute_time_edges,
+    cumulative_flow_volume,
+    linear_interpolate,
     partial_isin,
     solve_inverse_transport,
     solve_inverse_transport_banded,
@@ -82,258 +81,6 @@ def gamma_params():
         "beta": 10.0,  # Scale parameter (gives mean = alpha * beta = 100)
         "n_bins": 10,  # Number of bins
     }
-
-
-# ===============================================================================
-# INFILTRATION_TO_EXTRACTION_SERIES FUNCTION TESTS
-# ===============================================================================
-
-
-def test_infiltration_to_extraction_series_output_structure():
-    """Test that infiltration_to_extraction_series returns correct DatetimeIndex structure."""
-    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    flow = np.ones(len(dates)) * 100.0
-
-    tedges_out = infiltration_to_extraction_series(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=500.0,
-    )
-
-    assert isinstance(tedges_out, pd.DatetimeIndex)
-    assert len(tedges_out) == len(tedges)
-    assert isinstance(tedges_out[0], pd.Timestamp)
-
-
-def test_infiltration_to_extraction_series_residence_time_shift():
-    """Time edges shift forward by exactly the residence time (pore_volume / flow)."""
-    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    flow = np.ones(len(dates)) * 100.0
-
-    tedges_out = infiltration_to_extraction_series(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=500.0,
-    )
-
-    # Time shift should be residence time = pore_volume / flow = 500 / 100 = 5 days
-    expected_shift = pd.Timedelta(days=5)
-    actual_shift = tedges_out[0] - tedges[0]
-    assert actual_shift == expected_shift
-
-
-def test_infiltration_to_extraction_series_retardation_factor():
-    """Test retardation factor doubles residence time."""
-    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    flow = np.ones(len(dates)) * 100.0
-
-    tedges_out_no_retard = infiltration_to_extraction_series(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=500.0,
-        retardation_factor=1.0,
-    )
-
-    tedges_out_retard = infiltration_to_extraction_series(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=500.0,
-        retardation_factor=2.0,
-    )
-
-    # Retardation factor of 2 should double time shift
-    shift_no_retard = tedges_out_no_retard[0] - tedges[0]
-    shift_retard = tedges_out_retard[0] - tedges[0]
-    assert shift_retard == shift_no_retard * 2
-
-
-def test_infiltration_to_extraction_series_pandas_series_input():
-    """Test function accepts pandas Series as input."""
-    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    flow = pd.Series(np.ones(len(dates)) * 100.0, index=dates)
-
-    tedges_out = infiltration_to_extraction_series(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=500.0,
-    )
-
-    assert isinstance(tedges_out, pd.DatetimeIndex)
-    assert len(tedges_out) == len(tedges)
-
-
-def test_infiltration_to_extraction_series_time_edges_consistency():
-    """Test output time edges are monotonically increasing (excluding NaT values)."""
-    dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    flow = np.ones(len(dates)) * 100.0
-
-    tedges_out = infiltration_to_extraction_series(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=500.0,
-    )
-
-    # Output time edges should be monotonically increasing (excluding NaT values)
-    time_diffs = tedges_out.to_series().diff().iloc[1:]
-    valid_diffs = time_diffs.dropna()
-    assert (valid_diffs > pd.Timedelta(0)).all(), "Valid output time edges must be monotonically increasing"
-
-
-# ===============================================================================
-# EXTRACTION_TO_INFILTRATION_SERIES FUNCTION TESTS
-# ===============================================================================
-
-
-def test_extraction_to_infiltration_series_output_structure():
-    """Test that extraction_to_infiltration_series returns correct DatetimeIndex structure."""
-    # Use dates starting later to ensure we have valid backward data
-    dates = pd.date_range(start="2020-01-10", end="2020-01-20", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    flow = np.ones(len(dates)) * 100.0
-
-    tedges_out = extraction_to_infiltration_series(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=500.0,
-    )
-
-    assert isinstance(tedges_out, pd.DatetimeIndex)
-    assert len(tedges_out) == len(tedges)
-    # Check that we have at least some valid timestamps (not all NaT)
-    assert tedges_out.notna().any()
-
-
-def test_extraction_to_infiltration_series_residence_time_shift():
-    """Time edges shift backward by exactly the residence time (pore_volume / flow)."""
-    dates = pd.date_range(start="2020-01-10", end="2020-01-20", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    flow = np.ones(len(dates)) * 100.0
-
-    tedges_out = extraction_to_infiltration_series(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=500.0,
-    )
-
-    # Time shift should be residence time = pore_volume / flow = 500 / 100 = 5 days (backward)
-    # Check using the last valid index instead of first (which may be NaT)
-    expected_shift = pd.Timedelta(days=5)
-    actual_shift = tedges[-1] - tedges_out[-1]
-    assert actual_shift == expected_shift
-
-
-def test_extraction_to_infiltration_series_retardation_factor():
-    """Test retardation factor doubles residence time (backward shift)."""
-    dates = pd.date_range(start="2020-01-15", end="2020-01-25", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    flow = np.ones(len(dates)) * 100.0
-
-    tedges_out_no_retard = extraction_to_infiltration_series(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=500.0,
-        retardation_factor=1.0,
-    )
-
-    tedges_out_retard = extraction_to_infiltration_series(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=500.0,
-        retardation_factor=2.0,
-    )
-
-    # Retardation factor of 2 should double time shift (backward)
-    # Check using the last valid index instead of first (which may be NaT)
-    shift_no_retard = tedges[-1] - tedges_out_no_retard[-1]
-    shift_retard = tedges[-1] - tedges_out_retard[-1]
-    assert shift_retard == shift_no_retard * 2
-
-
-def test_extraction_to_infiltration_series_pandas_series_input():
-    """Test function accepts pandas Series as input."""
-    # Use dates starting later to have enough backward data
-    dates = pd.date_range(start="2020-01-10", end="2020-01-20", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    flow = pd.Series(np.ones(len(dates)) * 100.0, index=dates)
-
-    tedges_out = extraction_to_infiltration_series(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=500.0,
-    )
-
-    assert isinstance(tedges_out, pd.DatetimeIndex)
-    assert len(tedges_out) == len(tedges)
-
-
-def test_extraction_to_infiltration_series_time_edges_consistency():
-    """Test output time edges are monotonically increasing (excluding NaT values)."""
-    # Use dates starting later to have sufficient backward data
-    dates = pd.date_range(start="2020-01-10", end="2020-01-20", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-    flow = np.ones(len(dates)) * 100.0
-
-    tedges_out = extraction_to_infiltration_series(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=500.0,
-    )
-
-    # Output time edges should be monotonically increasing (excluding NaT values)
-    time_diffs = tedges_out.to_series().diff().iloc[1:]
-    valid_diffs = time_diffs.dropna()
-    assert (valid_diffs > pd.Timedelta(0)).all(), "Valid output time edges must be monotonically increasing"
-
-
-def test_extraction_to_infiltration_series_symmetry_with_infiltration():
-    """Test symmetry: roundtrip time shift recovers original time edges in valid region."""
-    # Test that forward shift (infiltration → extraction) followed by
-    # backward shift (extraction → infiltration) recovers original time edges
-    # in the region where both operations have sufficient data (analytical solution)
-    dates = pd.date_range(start="2020-01-01", end="2020-01-30", freq="D")
-    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-
-    flow = np.ones(len(dates)) * 100.0
-    pore_volume = 500.0  # 5 days residence time
-    retardation_factor = 1.5  # 7.5 days effective residence time
-
-    # Forward: infiltration → extraction (shift forward in time)
-    tedges_extraction = infiltration_to_extraction_series(
-        flow=flow,
-        tedges=tedges,
-        aquifer_pore_volume=pore_volume,
-        retardation_factor=retardation_factor,
-    )
-
-    # Backward: extraction → infiltration (shift backward in time)
-    tedges_recovered = extraction_to_infiltration_series(
-        flow=flow,
-        tedges=tedges_extraction,
-        aquifer_pore_volume=pore_volume,
-        retardation_factor=retardation_factor,
-    )
-
-    # Find valid (non-NaT) region in recovered time edges
-    valid_mask = tedges_recovered.notna()
-
-    # In the valid region, roundtrip must recover original exactly (analytical solution)
-    # Verify at least some central portion is recovered (residence time is ~7.5 days,
-    # so we lose edges but keep center)
-    valid_count = valid_mask.sum()
-    assert valid_count >= 15, f"Expected at least 15 valid recovered time edges, got {valid_count}"
-
-    # Compare only valid elements - these must match exactly
-    pd.testing.assert_index_equal(
-        tedges_recovered[valid_mask],
-        tedges[valid_mask],
-        check_exact=True,
-        obj="Roundtrip time edges must exactly match original in valid region",
-    )
 
 
 def test_gamma_infiltration_to_extraction_basic_functionality():
@@ -3969,7 +3716,7 @@ def test_validate_advection_inputs_raises_on_bad_input(path, mutate, match_regex
 # instead of O(n_pv * n_cout * n_cin). Two independent oracles pin it:
 #
 #   _dense_weights_reference -- the relocated O(n_pv * N^2) dense full-overlap
-#       build (residence_time + partial_isin) the banded builder replaced. The
+#       build (inverse cumulative-volume map + partial_isin) the banded builder replaced. The
 #       builder reproduces it to float reordering noise (~1e-14); accumulated
 #       parity uses atol=1e-12 (two independent float paths), structure exactly.
 #   _exact_rational_advection -- fractions.Fraction overlap arithmetic on the
@@ -3984,10 +3731,10 @@ def test_validate_advection_inputs_raises_on_bad_input(path, mutate, match_regex
 def _dense_weights_reference(*, tedges, cout_tedges, aquifer_pore_volumes, flow, retardation_factor):
     """Relocated copy of the original dense full-overlap-matrix builder.
 
-    Loops over pore volumes, back-projects the cout edges with ``residence_time``,
-    and accumulates per-streamtube flow-normalized ``partial_isin`` overlap rows.
-    A streamtube whose source window leaves the cin range yields a NaN
-    residence-time edge -> NaN overlap row -> dropped (not counted, not clipped).
+    Loops over pore volumes, back-projects the cout edges via the inverse cumulative-volume map
+    (no residence-time function), and accumulates per-streamtube flow-normalized ``partial_isin``
+    overlap rows. A streamtube whose source window leaves the cin range yields a NaN look-back edge
+    -> NaN overlap row -> dropped (not counted, not clipped).
     Returns the same ``(accumulated_weights, contributing_bins, zero_flow_cout)``
     triple as the package builder.
     """
@@ -3998,15 +3745,17 @@ def _dense_weights_reference(*, tedges, cout_tedges, aquifer_pore_volumes, flow,
     cout_in_cin_overlap = partial_isin(bin_edges_in=cout_tedges_days, bin_edges_out=cin_tedges_days)
     zero_flow_cout = (cout_in_cin_overlap @ flow) == 0
 
-    rt_edges_2d = residence_time_series(
-        flow=flow,
-        tedges=tedges,
-        index=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=retardation_factor,
-        direction="extraction_to_infiltration",
+    # Back-project cout edges to infiltration times via the inverse cumulative-volume map, inline and
+    # independent of any residence-time function: extraction_to_infiltration look-back is
+    # T(V(cout_edge) - R*V_p), NaN where the look-back leaves the record.
+    flow_cum = cumulative_flow_volume(flow, np.diff(cin_tedges_days), strictly_monotone=True)
+    v_at_cout = linear_interpolate(
+        x_ref=cin_tedges_days, y_ref=flow_cum, x_query=cout_tedges_days, left=np.nan, right=np.nan
     )
-    infiltration_tedges_2d = cout_tedges_days[None, :] - rt_edges_2d
+    a = v_at_cout[None, :] - retardation_factor * np.atleast_1d(aquifer_pore_volumes)[:, None]
+    infiltration_tedges_2d = linear_interpolate(
+        x_ref=flow_cum, y_ref=cin_tedges_days, x_query=a, left=np.nan, right=np.nan
+    )
     valid_bins_2d = ~(np.isnan(infiltration_tedges_2d[:, :-1]) | np.isnan(infiltration_tedges_2d[:, 1:]))
     cin_min, cin_max = cin_tedges_days[0], cin_tedges_days[-1]
 
@@ -4173,8 +3922,8 @@ def test_banded_builder_triple_parity_vs_dense(apv_name):
     contributing_bins and zero_flow_cout match *exactly* (integer / bool);
     accumulated_weights matches to atol=1e-12 -- the builder runs the dense
     build's arithmetic on the nonzero band, so the only difference is float
-    reordering between the two paths (np.interp vs residence_time +
-    partial_isin). Sub-bin cout exactness is pinned tighter against the rational
+    reordering between the two paths (np.interp vs the inverse cumulative-volume
+    map + partial_isin). Sub-bin cout exactness is pinned tighter against the rational
     oracle in test_banded_builder_exact_vs_rational."""
     apv = _BANDED_APVD[apv_name]
     n = 60

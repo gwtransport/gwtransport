@@ -128,7 +128,7 @@ from gwtransport._validation import (
     _validate_scalar_or_matching_length,
     _validate_tedges_parity,
 )
-from gwtransport.residence_time import residence_time_series
+from gwtransport.residence_time import fraction_explained_full
 from gwtransport.utils import cumulative_flow_volume, solve_inverse_transport
 
 # Numerical tolerance for coefficient sum to determine valid output bins
@@ -564,18 +564,22 @@ def _infiltration_to_extraction_coeff_matrix(
         cout_tedges_days, tedges_days_arr, cumulative_volume_at_cin_tedges
     ).astype(float)
 
-    # Compute residence time at cout_tedges to identify valid output bins
-    # RT is NaN for cout_tedges beyond the input data range
-    rt_at_cout_tedges = residence_time_series(
-        flow=flow,
-        tedges=tedges,
-        index=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=retardation_factor,
-        direction="extraction_to_infiltration",
+    # Output bin valid where every streamtube's advective look-back is in-record across the whole
+    # bin -- i.e. advective coverage == 1 for all pore volumes (NaN outside the record -> invalid).
+    # This is the advective validity gate only; the dispersive informedness is the captured kernel
+    # mass (total_coeff) applied downstream.
+    valid_cout_bins = np.all(
+        fraction_explained_full(
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            retardation_factor=retardation_factor,
+            direction="extraction_to_infiltration",
+        )
+        >= 1.0,
+        axis=0,
     )
-    # Output bin i is valid if both cout_tedges[i] and cout_tedges[i+1] have valid RT for all pore volumes
-    valid_cout_bins = ~np.any(np.isnan(rt_at_cout_tedges[:, :-1]) | np.isnan(rt_at_cout_tedges[:, 1:]), axis=0)
 
     # Initialize coefficient matrix accumulator
     n_cout_bins = len(cout_tedges) - 1
