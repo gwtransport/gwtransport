@@ -438,8 +438,8 @@ class ConstantRetardation:
     - Shocks occur only at concentration discontinuities at inlet
     - Solution reduces to simple θ-shifting (and then t-shifting via the θ↔t map)
 
-    This is equivalent to using `infiltration_to_extraction_series` in the
-    gwtransport package.
+    This is equivalent to a single-pore-volume advective time-shift (the deterministic limit of
+    :func:`gwtransport.advection.infiltration_to_extraction`) in the gwtransport package.
 
     Examples
     --------

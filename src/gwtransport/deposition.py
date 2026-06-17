@@ -63,7 +63,6 @@ from gwtransport._validation import (
 )
 from gwtransport.advection_utils import _densify_weights, _resolve_spinup_inputs
 from gwtransport.deposition_utils import _clipped_linear_integral
-from gwtransport.residence_time import residence_time_series
 from gwtransport.utils import (
     cumulative_flow_volume,
     linear_interpolate,
@@ -218,25 +217,22 @@ def compute_deposition_weights(
     cout_tedges_days = tedges_to_days(cout_tedges, ref=t0)
 
     flow_values = np.asarray(flow, dtype=float)
-    cout_rt_at_edges = residence_time_series(
-        flow=flow_values,
-        tedges=tedges,
-        index=cout_tedges,
-        aquifer_pore_volumes=float(aquifer_pore_volume),
-        retardation_factor=retardation_factor,
-        direction="extraction_to_infiltration",
-    )
-    cout_tedges_days_infiltration = cout_tedges_days - cout_rt_at_edges.squeeze(axis=0)
-
     flow_cum = cumulative_flow_volume(flow_values, np.diff(tedges_days))
-    start_vol = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days_infiltration)
     end_vol = linear_interpolate(x_ref=tedges_days, y_ref=flow_cum, x_query=cout_tedges_days)
+    r_apv = retardation_factor * float(aquifer_pore_volume)
+
+    # Infiltration-side cumulative volume of each cout edge is its extraction-side volume minus the
+    # retarded pore volume -- the direct cumulative-volume identity, avoiding the residence-time
+    # round-trip. NaN where the cout edge is outside the flow record or the look-back precedes the
+    # record start (the spin-up NaN the round-trip produced).
+    in_record = (cout_tedges_days >= tedges_days[0]) & (cout_tedges_days <= tedges_days[-1])
+    start_vol = end_vol - r_apv
+    start_vol = np.where(in_record & (start_vol >= flow_cum[0]), start_vol, np.nan)
 
     n_cin = len(tedges) - 1
     n_cout = len(cout_tedges) - 1
     extracted_volume = np.diff(end_vol)
     dt = np.diff(tedges_days)
-    r_apv = retardation_factor * float(aquifer_pore_volume)
 
     # Row k's clipped trapezoid spans cout edges k (top: start_vol[k]) and k+1
     # (bottom: start_vol[k+1]). It is nonzero only on cin bins j whose cumulative

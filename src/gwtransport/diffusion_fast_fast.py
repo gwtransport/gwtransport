@@ -89,7 +89,7 @@ from gwtransport._diffusion_shared import (
 )
 from gwtransport._time import dt_to_days, tedges_to_days
 from gwtransport.diffusion_fast import _DEFAULT_SATURATION_THRESHOLD
-from gwtransport.residence_time import residence_time_series
+from gwtransport.residence_time import fraction_explained_full
 from gwtransport.utils import cumulative_flow_volume
 
 # Samples per native bin used to discretise the 1D breakthrough antiderivative ``Ibar``. Higher =
@@ -270,38 +270,6 @@ def _advection_micro_band(
     return coeff, cin_bin
 
 
-def _valid_cout_bins(
-    *,
-    flow: npt.NDArray[np.floating],
-    work_tedges: pd.DatetimeIndex,
-    cout_tedges: pd.DatetimeIndex,
-    aquifer_pore_volumes: npt.NDArray[np.floating],
-    retardation_factor: float,
-) -> npt.NDArray[np.bool_]:
-    """Output bins with complete breakthrough information for every streamtube.
-
-    Uses the same residence-time validity criterion as
-    :func:`gwtransport.diffusion_fast._closed_form_coeff_matrix`: a cout bin is valid when the
-    residence time is finite (not beyond the flow record) at both of its edges for all streamtubes.
-    ``work_tedges`` is the 100-year-extended grid when warm-starting (so spin-up bins are valid) and
-    the raw grid otherwise.
-
-    Returns
-    -------
-    ndarray of bool, shape (len(cout_tedges) - 1,)
-        True where the output bin is fully informed.
-    """
-    rt = residence_time_series(
-        flow=flow,
-        tedges=work_tedges,
-        index=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=retardation_factor,
-        direction="extraction_to_infiltration",
-    )
-    return ~np.any(np.isnan(rt[:, :-1]) | np.isnan(rt[:, 1:]), axis=0)
-
-
 def _build_forward_operator(
     *,
     flow: npt.NDArray[np.floating],
@@ -400,12 +368,19 @@ def _build_forward_operator(
         edge_values[0] -= delta
         edge_values[-1] += delta
         work_tedges = pd.DatetimeIndex(edge_values)
-    valid = _valid_cout_bins(
-        flow=flow,
-        work_tedges=work_tedges,
-        cout_tedges=cout_tedges,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        retardation_factor=retardation_factor,
+    # Output bin valid where every streamtube's advective look-back is in-record across the whole
+    # bin (advective coverage == 1 for all pore volumes; NaN outside the record -> invalid).
+    valid = np.all(
+        fraction_explained_full(
+            flow=flow,
+            tedges=work_tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            retardation_factor=retardation_factor,
+            direction="extraction_to_infiltration",
+        )
+        >= 1.0,
+        axis=0,
     )
     return coeff, cin_bin, sigma_bins, valid
 

@@ -10,11 +10,6 @@ factor >= 1.0), and water is extracted with concentration ``cout``.
 
 Available functions:
 
-- :func:`infiltration_to_extraction_series` - Single pore volume, time-shift only. Shifts
-  infiltration time edges forward by residence time. Concentration values remain unchanged
-  (cout = cin). No support for custom output time edges. Use case: Deterministic transport
-  with single flow path.
-
 - :func:`infiltration_to_extraction` - Arbitrary pore volume distribution, flow-weighted averaging.
   Supports explicit distribution of aquifer pore volumes with flow-weighted averaging.
   Flexible output time resolution via cout_tedges. Use case: Known pore volume distribution
@@ -36,11 +31,6 @@ compound (e.g., temperature with D_m ~ 0.1 m²/day) and used to predict another 
 solute with D_m ~ 1e-4 m²/day), the molecular diffusion contribution is baked into the
 calibrated std. The cleanest fix is to calibrate with :mod:`gwtransport.diffusion_fast`
 instead, which keeps the three contributions separate.
-
-- :func:`extraction_to_infiltration_series` - Single pore volume, time-shift only
-  (deconvolution). Shifts extraction time edges backward by residence time. Concentration
-  values remain unchanged (cin = cout). Symmetric inverse of infiltration_to_extraction_series.
-  Use case: Backward tracing with single flow path.
 
 - :func:`extraction_to_infiltration` - Arbitrary pore volume distribution, deconvolution.
   Inverts forward transport for arbitrary pore volume distributions. Symmetric inverse of
@@ -91,7 +81,6 @@ from gwtransport.fronttracking.math import (
 from gwtransport.fronttracking.output import compute_bin_averaged_concentration_exact
 from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
-from gwtransport.residence_time import residence_time_series
 from gwtransport.utils import solve_inverse_transport_banded
 
 
@@ -138,258 +127,6 @@ def _validate_advection_inputs(
     if retardation_factor < 1.0:
         msg = "retardation_factor must be >= 1.0"
         raise ValueError(msg)
-
-
-def infiltration_to_extraction_series(
-    *,
-    flow: npt.ArrayLike,
-    tedges: pd.DatetimeIndex,
-    aquifer_pore_volume: float,
-    retardation_factor: float = 1.0,
-) -> pd.DatetimeIndex:
-    """
-    Compute extraction time edges from infiltration time edges using residence time shifts.
-
-    This function shifts infiltration time edges forward in time based on residence
-    times computed from flow rates and aquifer properties. The concentration values remain
-    unchanged (cout equals cin), only the time edges are shifted. This assumes a single pore
-    volume (no distribution) and deterministic advective transport.
-
-    NOTE: This function is specifically designed for single aquifer pore volumes and does not
-    support custom output time edges (cout_tedges). For distributions of aquifer pore volumes
-    or custom output time grids, use `infiltration_to_extraction` instead.
-
-    Parameters
-    ----------
-    flow : array-like
-        Flow rate values in the aquifer [m³/day].
-        Length must match the number of time bins defined by tedges (len(tedges) - 1).
-    tedges : pandas.DatetimeIndex
-        Time edges defining bins for both cin and flow data. Has length of len(flow) + 1.
-    aquifer_pore_volume : float
-        Single aquifer pore volume [m³] used to compute residence times.
-    retardation_factor : float, optional
-        Retardation factor of the compound in the aquifer (default 1.0).
-        Values > 1.0 indicate slower transport due to sorption/interaction.
-
-    Returns
-    -------
-    pandas.DatetimeIndex
-        Time edges for the extracted water concentration. Same length as tedges.
-        The concentration values in the extracted water (cout) equal cin, but are
-        aligned with these shifted time edges.
-
-    Raises
-    ------
-    ValueError
-        If ``retardation_factor`` is less than 1.0.
-
-    See Also
-    --------
-    extraction_to_infiltration_series : Reverse operation (time-shift backward)
-    infiltration_to_extraction : Transport with a pore volume distribution
-    gwtransport.residence_time.residence_time_series : Compute residence times
-
-    Examples
-    --------
-    Basic usage with constant flow:
-
-    >>> import pandas as pd
-    >>> import numpy as np
-    >>> from gwtransport.utils import compute_time_edges
-    >>> from gwtransport.advection import infiltration_to_extraction_series
-    >>>
-    >>> # Create input data
-    >>> dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
-    >>> tedges = compute_time_edges(
-    ...     tedges=None, tstart=None, tend=dates, number_of_bins=len(dates)
-    ... )
-    >>>
-    >>> # Constant concentration and flow
-    >>> cin = np.ones(len(dates)) * 10.0
-    >>> flow = np.ones(len(dates)) * 100.0  # 100 m³/day
-    >>>
-    >>> # Run infiltration_to_extraction_series with 500 m³ pore volume
-    >>> tedges_out = infiltration_to_extraction_series(
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     aquifer_pore_volume=500.0,
-    ... )
-    >>> len(tedges_out)
-    11
-    >>> # Time shift should be residence time = pore_volume / flow = 500 / 100 = 5 days
-    >>> tedges_out[0] - tedges[0]
-    Timedelta('5 days 00:00:00')
-
-    Plotting the input and output concentrations:
-
-    >>> import matplotlib.pyplot as plt
-    >>> from gwtransport.utils import step_plot_coords
-    >>> plt.plot(
-    ...     *step_plot_coords(tedges, cin), label="Concentration of infiltrated water"
-    ... )  # doctest: +SKIP
-    >>>
-    >>> # cout equals cin, just with shifted time edges
-    >>> plt.plot(
-    ...     *step_plot_coords(tedges_out, cin), label="Concentration of extracted water"
-    ... )  # doctest: +SKIP
-    >>> plt.xlabel("Time")  # doctest: +SKIP
-    >>> plt.ylabel("Concentration")  # doctest: +SKIP
-    >>> plt.legend()  # doctest: +SKIP
-    >>> plt.show()  # doctest: +SKIP
-
-    With retardation factor:
-
-    >>> tedges_out = infiltration_to_extraction_series(
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     aquifer_pore_volume=500.0,
-    ...     retardation_factor=2.0,  # Doubles residence time
-    ... )
-    >>> # Time shift is doubled: 500 * 2.0 / 100 = 10 days
-    >>> tedges_out[0] - tedges[0]
-    Timedelta('10 days 00:00:00')
-    """
-    if retardation_factor < 1.0:
-        msg = "retardation_factor must be >= 1.0"
-        raise ValueError(msg)
-    rt_array = residence_time_series(
-        flow=flow,
-        tedges=tedges,
-        index=tedges,
-        aquifer_pore_volumes=aquifer_pore_volume,
-        retardation_factor=retardation_factor,
-        direction="infiltration_to_extraction",
-    )
-    return tedges + pd.to_timedelta(rt_array[0], unit="D", errors="coerce")
-
-
-def extraction_to_infiltration_series(
-    *,
-    flow: npt.ArrayLike,
-    tedges: pd.DatetimeIndex,
-    aquifer_pore_volume: float,
-    retardation_factor: float = 1.0,
-) -> pd.DatetimeIndex:
-    """
-    Compute infiltration time edges from extraction time edges (deconvolution).
-
-    This function shifts extraction time edges backward in time based on residence
-    times computed from flow rates and aquifer properties. The concentration values remain
-    unchanged (cin equals cout), only the time edges are shifted. This assumes a single pore
-    volume (no distribution) and deterministic advective transport. This is the inverse
-    operation of infiltration_to_extraction_series.
-
-    NOTE: This function is specifically designed for single aquifer pore volumes and does not
-    support custom output time edges for the infiltration time series. For distributions of
-    aquifer pore volumes or custom output time grids, use `extraction_to_infiltration` instead.
-
-    Parameters
-    ----------
-    flow : array-like
-        Flow rate values in the aquifer [m³/day].
-        Length must match the number of time bins defined by tedges (len(tedges) - 1).
-    tedges : pandas.DatetimeIndex
-        Time edges defining bins for both cout and flow data. Has length of len(flow) + 1.
-    aquifer_pore_volume : float
-        Single aquifer pore volume [m³] used to compute residence times.
-    retardation_factor : float, optional
-        Retardation factor of the compound in the aquifer (default 1.0).
-        Values > 1.0 indicate slower transport due to sorption/interaction.
-
-    Returns
-    -------
-    pandas.DatetimeIndex
-        Time edges for the infiltrating water concentration. Same length as tedges.
-        The concentration values in the infiltrating water (cin) equal cout, but are
-        aligned with these shifted time edges.
-
-    Raises
-    ------
-    ValueError
-        If ``retardation_factor`` is less than 1.0.
-
-    See Also
-    --------
-    infiltration_to_extraction_series : Forward operation (time-shift forward)
-    extraction_to_infiltration : Deconvolution with a pore volume distribution
-    gwtransport.residence_time.residence_time_series : Compute residence times
-
-    Examples
-    --------
-    Basic usage with constant flow:
-
-    >>> import pandas as pd
-    >>> import numpy as np
-    >>> from gwtransport.utils import compute_time_edges
-    >>> from gwtransport.advection import extraction_to_infiltration_series
-    >>>
-    >>> # Create input data
-    >>> dates = pd.date_range(start="2020-01-01", end="2020-01-10", freq="D")
-    >>> tedges = compute_time_edges(
-    ...     tedges=None, tstart=None, tend=dates, number_of_bins=len(dates)
-    ... )
-    >>>
-    >>> # Constant concentration and flow
-    >>> cout = np.ones(len(dates)) * 10.0
-    >>> flow = np.ones(len(dates)) * 100.0  # 100 m³/day
-    >>>
-    >>> # Run extraction_to_infiltration_series with 500 m³ pore volume
-    >>> tedges_out = extraction_to_infiltration_series(
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     aquifer_pore_volume=500.0,
-    ... )
-    >>> len(tedges_out)
-    11
-    >>> # Time shift should be residence time = pore_volume / flow = 500 / 100 = 5 days (backward)
-    >>> # First few elements are NaT due to insufficient history, check a valid index
-    >>> tedges[5] - tedges_out[5]
-    Timedelta('5 days 00:00:00')
-
-    Plotting the input and output concentrations:
-
-    >>> import matplotlib.pyplot as plt
-    >>> from gwtransport.utils import step_plot_coords
-    >>> plt.plot(
-    ...     *step_plot_coords(tedges, cout), label="Concentration of extracted water"
-    ... )  # doctest: +SKIP
-    >>>
-    >>> # cin equals cout, just with shifted time edges
-    >>> plt.plot(
-    ...     *step_plot_coords(tedges_out, cout),
-    ...     label="Concentration of infiltrated water",
-    ... )  # doctest: +SKIP
-    >>> plt.xlabel("Time")  # doctest: +SKIP
-    >>> plt.ylabel("Concentration")  # doctest: +SKIP
-    >>> plt.legend()  # doctest: +SKIP
-    >>> plt.show()  # doctest: +SKIP
-
-    With retardation factor:
-
-    >>> tedges_out = extraction_to_infiltration_series(
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     aquifer_pore_volume=500.0,
-    ...     retardation_factor=2.0,  # Doubles residence time
-    ... )
-    >>> # Time shift is doubled: 500 * 2.0 / 100 = 10 days (backward)
-    >>> # With longer residence time, more elements are NaT, check the last valid index
-    >>> tedges[10] - tedges_out[10]
-    Timedelta('10 days 00:00:00')
-    """
-    if retardation_factor < 1.0:
-        msg = "retardation_factor must be >= 1.0"
-        raise ValueError(msg)
-    rt_array = residence_time_series(
-        flow=flow,
-        tedges=tedges,
-        index=tedges,
-        aquifer_pore_volumes=aquifer_pore_volume,
-        retardation_factor=retardation_factor,
-        direction="extraction_to_infiltration",
-    )
-    return tedges - pd.to_timedelta(rt_array[0], unit="D", errors="coerce")
 
 
 def gamma_infiltration_to_extraction(
@@ -466,7 +203,7 @@ def gamma_infiltration_to_extraction(
     infiltration_to_extraction : Transport with explicit pore volume distribution
     gamma_extraction_to_infiltration : Reverse operation (deconvolution)
     gwtransport.gamma.bins : Create gamma distribution bins
-    gwtransport.residence_time.residence_time_series : Compute residence times
+    gwtransport.residence_time.full : Compute residence times
     gwtransport.diffusion.infiltration_to_extraction : Add microdispersion and molecular diffusion
     :ref:`concept-gamma-distribution` : Two-parameter pore volume model
     :ref:`assumption-gamma-distribution` : When gamma distribution is adequate
@@ -832,8 +569,7 @@ def infiltration_to_extraction(
     --------
     gamma_infiltration_to_extraction : Transport with gamma-distributed pore volumes
     extraction_to_infiltration : Reverse operation (deconvolution)
-    infiltration_to_extraction_series : Simple time-shift for single pore volume
-    gwtransport.residence_time.residence_time_series : Compute residence times from flow and pore volume
+    gwtransport.residence_time.full : Compute residence times from flow and pore volume
     gwtransport.residence_time.freundlich_retardation : Compute concentration-dependent retardation
     :ref:`concept-pore-volume-distribution` : Background on aquifer heterogeneity modeling
     :ref:`concept-transport-equation` : Flow-weighted averaging approach
@@ -1069,8 +805,7 @@ def extraction_to_infiltration(
     --------
     gamma_extraction_to_infiltration : Deconvolution with gamma-distributed pore volumes
     infiltration_to_extraction : Forward operation (flow-weighted averaging)
-    extraction_to_infiltration_series : Simple time-shift for single pore volume
-    gwtransport.residence_time.residence_time_series : Compute residence times from flow and pore volume
+    gwtransport.residence_time.full : Compute residence times from flow and pore volume
     gwtransport.utils.solve_tikhonov : Solver used for inversion
     :ref:`concept-pore-volume-distribution` : Background on aquifer heterogeneity modeling
     :ref:`concept-transport-equation` : Flow-weighted averaging approach

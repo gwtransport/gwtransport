@@ -50,7 +50,7 @@ where :math:`R` is the retardation factor. Residence time depends on:
 - **Flow rate** through the system (m³/day)
 - **Retardation factor** of the compound (dimensionless)
 
-The distribution of residence times directly reflects the pore volume distribution. Use :py:func:`gwtransport.residence_time.residence_time_full` to compute residence times from flow rates and pore volumes. See the :doc:`/examples/02_Residence_Time_Analysis` example for practical applications.
+The distribution of residence times directly reflects the pore volume distribution. Use :py:func:`gwtransport.residence_time.full` to compute residence times from flow rates and pore volumes. See the :doc:`/examples/02_Residence_Time_Analysis` example for practical applications.
 
 .. _concept-retardation-factor:
 

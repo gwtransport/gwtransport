@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from gwtransport._time import tedges_to_days
 from gwtransport.advection_utils import _densify_weights
 from gwtransport.deposition import (
     _validate_deposition_inputs,
@@ -22,8 +23,42 @@ from gwtransport.deposition import (
     extraction_to_deposition_full,
     spinup_duration,
 )
-from gwtransport.residence_time import residence_time_series
-from gwtransport.utils import compute_reverse_target, compute_time_edges, solve_tikhonov
+from gwtransport.utils import (
+    compute_reverse_target,
+    compute_time_edges,
+    cumulative_flow_volume,
+    linear_interpolate,
+    solve_tikhonov,
+)
+
+
+def _rt_series_reference(
+    *,
+    flow,
+    tedges,
+    index,
+    aquifer_pore_volumes,
+    retardation_factor=1.0,
+    direction="extraction_to_infiltration",
+):
+    """Independent point-sample residence time via the inverse cumulative-volume map.
+
+    Reconstructs -- without calling any residence-time function -- the per-(pore volume, instant)
+    point-sample residence time the removed ``residence_time_series`` returned:
+    ``tau = sign * (T(V(t) + sign * R * V_p) - t)``, NaN where the parcel leaves the flow record.
+    The deposition operator now back-projects via cumulative volumes directly, so comparing its
+    output against this reconstruction is an independent check.
+    """
+    pore_volumes = np.atleast_1d(aquifer_pore_volumes).astype(float)
+    tedges = pd.DatetimeIndex(tedges)
+    tdays = tedges_to_days(tedges)
+    flow_cum = cumulative_flow_volume(np.asarray(flow, dtype=float), np.diff(tdays), strictly_monotone=True)
+    idays = tedges_to_days(pd.DatetimeIndex(index), ref=tedges[0])
+    v_at_index = linear_interpolate(x_ref=tdays, y_ref=flow_cum, x_query=idays, left=np.nan, right=np.nan)
+    sign = -1.0 if direction == "extraction_to_infiltration" else 1.0
+    a = v_at_index[None, :] + sign * retardation_factor * pore_volumes[:, None]
+    days = linear_interpolate(x_ref=flow_cum, y_ref=tdays, x_query=a, left=np.nan, right=np.nan)
+    return sign * (days - idays[None, :])
 
 
 def _dense_weights(**kwargs):
@@ -82,7 +117,7 @@ def test_exact_analytical_constant_deposition():
     )
 
     # Calculate expected using exact formula
-    rt = residence_time_series(
+    rt = _rt_series_reference(
         flow=flow_values,
         tedges=tedges,
         index=cout_tedges,
@@ -135,7 +170,7 @@ def test_exact_analytical_varying_flow():
     )
 
     # Calculate expected using exact residence time
-    rt = residence_time_series(
+    rt = _rt_series_reference(
         flow=flow_values,
         tedges=tedges,
         index=cout_tedges,
@@ -211,7 +246,7 @@ def test_forward_pins_extraction_to_infiltration_direction_genuinely_variable_fl
     # extraction_to_infiltration direction (the residence time of the water
     # currently being extracted).
     midpoints = cout_tedges[:-1] + (cout_tedges[1:] - cout_tedges[:-1]) / 2
-    rt_mid = residence_time_series(
+    rt_mid = _rt_series_reference(
         flow=flow,
         tedges=tedges,
         index=midpoints,
@@ -261,7 +296,7 @@ def test_exact_analytical_retardation_factor():
             retardation_factor=params["retardation_factor"],
         )
 
-        rt = residence_time_series(
+        rt = _rt_series_reference(
             flow=flow_values,
             tedges=tedges,
             index=cout_tedges,
@@ -1104,7 +1139,7 @@ def test_compute_deposition_weights_structure():
     assert np.all(np.isfinite(weights))
 
     # Row-sum invariant: sum(W[i, :]) * porosity * thickness == RT_i
-    rt = residence_time_series(
+    rt = _rt_series_reference(
         flow=flow,
         tedges=tedges,
         index=cout_tedges,
@@ -1191,7 +1226,7 @@ def test_compute_deposition_weights_with_retardation():
             thickness=thickness,
             retardation_factor=retardation_factor,
         )
-        rt = residence_time_series(
+        rt = _rt_series_reference(
             flow=flow,
             tedges=tedges,
             index=cout_tedges,
@@ -1886,7 +1921,7 @@ def test_roundtrip_variable_retardation(retardation_factor):
 
     All prior roundtrip tests use R=1.0. With R=2 (RT_eff=10 days) and R=3.5
     (RT_eff=17.5 days) the residence-time-dependent code paths
-    (``residence_time_series(direction="extraction_to_infiltration")``, the
+    (``_rt_series_reference(direction="extraction_to_infiltration")``, the
     ``y_upper=R*V_pore`` clip in the banded weight builder) are exercised
     end-to-end with a per-element machine-precision recovery check.
     """
@@ -2088,7 +2123,7 @@ def test_row_normalization_pre_norm_row_sum_equals_rt_over_nb():
     }
 
     weights = _dense_weights(flow=flow, tedges=tedges, cout_tedges=cout_tedges, **params)
-    rt = residence_time_series(
+    rt = _rt_series_reference(
         flow=flow,
         tedges=tedges,
         index=cout_tedges,
