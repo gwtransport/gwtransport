@@ -830,17 +830,29 @@ def gamma(
         d2 = np.diff(f2, axis=1)
         m2 = alpha * (alpha + 1) * beta**2 * d2 + 2 * loc * alpha * beta * d1 + loc * loc * m0
 
+        # Piece-centred gamma moments mu_k = int (x - mid)^k f over each piece. They are formed by
+        # shifting the raw partial moments (m1 - mid m0, m2 - 2 mid m1 + mid^2 m0), which for R > 1
+        # subtracts large near-equal terms (|mid| up to support_hi, with m1/m2 carrying the matching
+        # mid powers) and catastrophically cancels on near-degenerate pieces. They are, however,
+        # bounded purely by the piece geometry -- |x - mid| <= half over the piece -- so clip each to
+        # its exact range: a well-conditioned value lies inside and is untouched, while cancellation
+        # noise (which otherwise pairs with the 1/half^2 second-difference below to manufacture a
+        # spurious contribution) is forced back into the physically valid band.
+        b0 = np.maximum(m0, 0.0)
+        mu1 = np.clip(m1 - mid * m0, -half * b0, half * b0)
+        mu2 = np.clip(m2 - 2 * mid * m1 + mid**2 * m0, 0.0, half**2 * b0)
+
         # G is quadratic per piece, L linear; reconstruct each from its three nodes (Lagrange-
         # exact) centred at mid and contract with the moments: int (a(x-mid)^2 + b(x-mid) + c) f
-        # = a (m2 - 2 mid m1 + mid^2 m0) + b (m1 - mid m0) + c m0. Zero-width pieces (duplicate
-        # breakpoints) divide by half == 0; their masked result is discarded by np.where.
+        # = a mu2 + b mu1 + c mu0. Zero-width pieces (duplicate breakpoints) divide by half == 0;
+        # their masked result is discarded by np.where.
         safe = half > 0
         with np.errstate(divide="ignore", invalid="ignore"):
             g_a = np.where(safe, (g_lo - 2 * g_mid + g_hi) / (2 * half**2), 0.0)
             g_b = np.where(safe, (g_hi - g_lo) / (2 * half), 0.0)
             l_b = np.where(safe, (l_hi - l_lo) / (2 * half), 0.0)
-        int_g = g_a * (m2 - 2 * mid * m1 + mid**2 * m0) + g_b * (m1 - mid * m0) + g_mid * m0
-        int_l = l_b * (m1 - mid * m0) + l_mid * m0
+        int_g = g_a * mu2 + g_b * mu1 + g_mid * m0
+        int_l = l_b * mu1 + l_mid * m0
 
         num = int_g.sum(axis=1)
         den = int_l.sum(axis=1)

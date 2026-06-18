@@ -375,3 +375,37 @@ def test_float_spinup_threshold_gates_emission(direction):
     both = ~nan_low & ~nan_high
     assert both.any()
     np.testing.assert_allclose(low[both], high[both], atol=0, rtol=1e-12)
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+@pytest.mark.parametrize("period", [364.0, 365.0, 180.0, 90.0])
+def test_retarded_periodic_flow_is_nonnegative_and_matches_mean(direction, period):
+    """Retardation + periodic flow must not produce negative / ~1e6-day residence times.
+
+    Regression for the catastrophic-cancellation resonance: with ``R > 1`` and periodic flow the
+    per-piece gamma central moments ``mu1 = m1 - mid m0`` and ``mu2 = m2 - 2 mid m1 + mid^2 m0`` are
+    differences of large near-equal terms (``mid`` reaches up to ``support_hi``), so on the
+    near-degenerate integration pieces created where breakpoints coincide they lose all significant
+    digits and -- paired with the ``1/half^2`` second-difference reconstruction -- manufactured huge
+    spurious contributions, flipping the bin mean negative or to ``+/-1e6`` days. The fix clips each
+    central moment to its exact geometric range (``|x - mid| <= half`` over the piece). The effect is
+    a resonance with the flow period (a sub-percent period change toggled it), so several periods are
+    swept. ``mean()`` over a finely discretised gamma APVD is stable on the identical inputs and is the
+    physical oracle here; the closed form must reproduce it within that discretisation error.
+    """
+    n = 730
+    tedges = pd.date_range("2019-01-01", periods=n + 1, freq="D")
+    flow = 100.0 * (1.0 + 0.5 * np.sin(2 * np.pi * np.arange(n) / period))  # strictly positive
+    mean_vp, std, loc, r = 5000.0, 1500.0, 300.0, 2.5
+    common = {"flow": flow, "tedges": tedges, "cout_tedges": tedges, "direction": direction, "retardation_factor": r}
+
+    tau = gamma(**common, mean=mean_vp, std=std, loc=loc)
+    # No physically impossible residence times: every in-record bin is finite and non-negative.
+    assert np.all(np.isfinite(tau)), "warm-start leaves no in-record bin NaN"
+    assert np.all(tau >= 0.0), f"negative residence times: min={np.nanmin(tau)}"
+
+    # Same discretised gamma APVD through the stable mean() path is the oracle. Its own discretisation
+    # error is O(1e-2 days) at this bin count, so compare to that, not machine precision.
+    apv = gamma_bins(mean=mean_vp, std=std, loc=loc, n_bins=4000)["expected_values"]
+    tau_mean = mean(**common, aquifer_pore_volumes=apv)
+    np.testing.assert_allclose(tau, tau_mean, atol=2e-2, rtol=0)
