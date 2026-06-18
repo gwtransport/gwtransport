@@ -1,21 +1,24 @@
-r"""Exact radial advection-dispersion transport for a single well (push-pull / single-cycle ASR).
+r"""Exact radial advection-dispersion transport for a single well (push-pull / ASR).
 
-Computes the extracted flux concentration ``cout`` at a single fully-penetrating well driven by a
-signed flow schedule (positive = injection, negative = extraction, zero = rest) and an arbitrary
-injected concentration ``cin``. The physics is the exact radial advection-dispersion solution of the
+Computes the extracted flux concentration ``cout`` at a single fully-penetrating well driven by an
+arbitrary signed flow schedule (positive = injection, negative = extraction, zero = rest) and an
+arbitrary injected concentration ``cin``. The physics is the exact radial advection-dispersion of the
 radial-ADE knowledge base: volume coordinate ``V(r) = pi b n (r^2 - r_w^2)``, Scheidegger
 velocity-dependent dispersion ``D = alpha_L |u| + D_m``, Kreft-Zuber flux boundary conditions, and
-the exact Airy per-phase kernel. Nothing is reduced to a Gaussian; the exact non-Gaussian
-breakthrough (with the correct skewness) is carried. The composed forward currently requires
-``D_m = 0`` (exact for the dominant near-well advective dispersion and for arbitrary variable flow);
-the exact Whittaker ``D_m > 0`` kernel is implemented and machine-precision-validated
-(:mod:`gwtransport._radial_kernels`) but its composition into ``cout`` is a follow-up.
+the exact Airy / Whittaker per-phase kernels. Nothing is reduced to a Gaussian; the exact
+non-Gaussian breakthrough (with the correct skewness) is carried.
+
+Two engines back the forward map. A single inject-then-extract cycle with ``D_m = 0`` uses the
+closed-form echo operator (:mod:`gwtransport._radial_compose`, KB Sec. 10a) -- exact for arbitrary
+within-phase variable flow, with the exact temporal moments. Any other signed-flow schedule (more
+reversals / multi-cycle ASR) and any ``D_m > 0`` case use an implicit finite-volume solve of the
+*same* exact conservative V-form PDE (:mod:`gwtransport._radial_fv`, KB Sec. 9) -- same equation,
+same boundary conditions, with a controlled ~1% discretization error (a spectral-domain accelerator
+for the multi-cycle case is a possible future optimization, not a different physics). The engine is
+chosen automatically; cycles are expressed through the flow sign pattern, not an argument.
 
 The reported ``cout`` is the flow-weighted average over each output bin -- defined on extraction bins
-(``flow < 0``) and ``NaN`` on injection / rest bins (nothing is recovered there). Cycles are not an
-argument: the caller expresses push-pull / ASR cycles through the sign pattern of ``flow``. This
-module covers a single inject-then-extract cycle (one flow reversal); schedules with further
-reversals raise (the multi-cycle composition is a separate engine).
+(``flow < 0``) and ``NaN`` on injection / rest bins (nothing is recovered there).
 
 Macrodispersion is an **ensemble over disk heights** (KB addendum Sec. A6): ``pore_height`` may be an
 array of disk thicknesses, each an independent radial cell carrying the full flow, and the output is
@@ -44,34 +47,29 @@ import pandas as pd
 
 from gwtransport import gamma
 from gwtransport._radial_compose import single_cycle_echo_matrix
+from gwtransport._radial_fv import fv_cout_deviation
 from gwtransport._time import dt_to_days
 
+# Finite-volume discretization for the general (multi-cycle / D_m>0) engine.
+_FV_N_CELLS = 400
+_FV_N_SUB = 8
 
-def _segment_single_cycle(flow: npt.NDArray[np.floating]) -> tuple[npt.NDArray[np.bool_], npt.NDArray[np.bool_]]:
-    """Validate a single inject-then-extract schedule and return the injection / extraction masks.
+
+def _is_single_cycle(flow: npt.NDArray[np.floating]) -> bool:
+    """Return True if the schedule is a single injection block followed by a single extraction block.
+
+    Such schedules (one flow reversal, injection first, ``D_m = 0``) use the exact closed-form echo
+    operator; any other signed-flow pattern (more reversals, extraction first) and any ``D_m > 0``
+    case fall to the finite-volume engine.
 
     Returns
     -------
-    inj_mask, ext_mask : ndarray of bool
-        Boolean masks (length ``len(flow)``) of the injection (``flow > 0``) and extraction
-        (``flow < 0``) bins.
-
-    Raises
-    ------
-    NotImplementedError
-        If the sign pattern is not a single injection block followed by a single extraction block
-        (further reversals are the multi-cycle composition, not implemented here).
+    bool
+        Whether ``flow`` is a single inject-then-extract cycle.
     """
     signs = np.sign(flow[flow != 0.0])
     n_changes = int(np.sum(np.diff(signs) != 0)) if signs.size else 0
-    if n_changes > 1 or (n_changes == 1 and signs[0] < 0):
-        msg = (
-            "radial_ade covers a single inject-then-extract cycle (one flow reversal, injection "
-            "first). The given flow has multiple reversals or starts with extraction; the "
-            "multi-cycle composition engine is required for that."
-        )
-        raise NotImplementedError(msg)
-    return flow > 0.0, flow < 0.0
+    return n_changes <= 1 and (signs.size == 0 or signs[0] > 0)
 
 
 def _validate(
@@ -121,14 +119,8 @@ def _validate(
     if longitudinal_dispersivity <= 0.0:
         msg = "longitudinal_dispersivity must be positive (the dispersion kernel requires alpha_L > 0)"
         raise ValueError(msg)
-    if molecular_diffusivity != 0.0:
-        msg = (
-            "molecular_diffusivity must be 0 in this version. The exact Whittaker (D_m > 0) kernel is "
-            "implemented and machine-precision-validated in _radial_kernels, but the composed D_m > 0 "
-            "forward still needs accuracy and performance work (the de Hoog front-scaling is tuned for "
-            "the D_m = 0 front and the mpmath sampling is slow). Use molecular_diffusivity = 0, which "
-            "is exact for the dominant near-well advective dispersion and for arbitrary variable flow."
-        )
+    if molecular_diffusivity < 0.0:
+        msg = "molecular_diffusivity must be non-negative"
         raise ValueError(msg)
     if retardation_factor < 1.0:
         msg = "retardation_factor must be >= 1.0"
@@ -160,7 +152,7 @@ def _forward_operator(
     inj_mask, ext_mask : ndarray of bool
         Injection (``flow > 0``) and extraction (``flow < 0``) bin masks.
     """
-    inj_mask, ext_mask = _segment_single_cycle(flow)
+    inj_mask, ext_mask = flow > 0.0, flow < 0.0
     dt = dt_to_days(tedges)
     inj_vol = np.concatenate(([0.0], np.cumsum((flow * dt)[inj_mask])))  # 0 .. S_inj
     ext_vol = np.concatenate(([0.0], np.cumsum((-flow * dt)[ext_mask])))  # 0 .. T_end
@@ -186,6 +178,98 @@ def _forward_operator(
     return w_ens / np.sum(w), inj_mask, ext_mask
 
 
+def _fv_forward(
+    *,
+    cin_deviation: npt.NDArray[np.floating],
+    flow: npt.NDArray[np.floating],
+    dt_days: npt.NDArray[np.floating],
+    pore_height: npt.NDArray[np.floating],
+    porosity: float,
+    well_radius: float,
+    longitudinal_dispersivity: float,
+    molecular_diffusivity: float,
+    retardation_factor: float,
+    weights: npt.NDArray[np.floating] | None,
+) -> npt.NDArray[np.floating]:
+    """Ensemble finite-volume extracted-flux deviation per bin (general signed flow / D_m > 0).
+
+    Runs the implicit FV solver once per disk and returns the weight-weighted average; NaN on
+    injection / rest bins.
+
+    Returns
+    -------
+    ndarray, shape (n,)
+        Weighted-average extracted-flux deviation; NaN on non-extraction bins.
+    """
+    heights = np.atleast_1d(np.asarray(pore_height, dtype=float))
+    w = np.ones(len(heights)) if weights is None else np.asarray(weights, dtype=float)
+    acc = np.zeros(len(flow))
+    for b_i, w_i in zip(heights, w, strict=True):
+        c_i = fv_cout_deviation(
+            cin_deviation=cin_deviation,
+            flow=flow,
+            dt_days=dt_days,
+            c_geo=np.pi * b_i * porosity,
+            r_w=well_radius,
+            alpha_l=longitudinal_dispersivity,
+            molecular_diffusivity=molecular_diffusivity,
+            retardation_factor=retardation_factor,
+            n_cells=_FV_N_CELLS,
+            n_sub=_FV_N_SUB,
+        )
+        acc += w_i * np.nan_to_num(c_i)
+    out = np.full(len(flow), np.nan)
+    ext_mask = flow < 0.0
+    out[ext_mask] = acc[ext_mask] / np.sum(w)
+    return out
+
+
+def _fv_operator(
+    *,
+    flow: npt.NDArray[np.floating],
+    dt_days: npt.NDArray[np.floating],
+    pore_height: npt.NDArray[np.floating],
+    porosity: float,
+    well_radius: float,
+    longitudinal_dispersivity: float,
+    molecular_diffusivity: float,
+    retardation_factor: float,
+    weights: npt.NDArray[np.floating] | None,
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool_], npt.NDArray[np.bool_]]:
+    """Build the dense forward operator ``W`` (``cout' = W @ cin'_inj``) by FV unit-pulse columns.
+
+    One ensemble FV solve per injection bin (a unit deviation pulse there) gives that column of the
+    linear forward map -- used by the reverse solve for the general signed-flow / ``D_m > 0`` engine.
+
+    Returns
+    -------
+    w : ndarray, shape (n_ext, n_inj)
+        Dense forward operator.
+    inj_mask, ext_mask : ndarray of bool
+        Injection / extraction bin masks.
+    """
+    inj_mask, ext_mask = flow > 0.0, flow < 0.0
+    inj_idx = np.flatnonzero(inj_mask)
+    w = np.zeros((int(np.sum(ext_mask)), len(inj_idx)))
+    for j, idx in enumerate(inj_idx):
+        pulse = np.zeros(len(flow))
+        pulse[idx] = 1.0
+        cout_dev = _fv_forward(
+            cin_deviation=pulse,
+            flow=flow,
+            dt_days=dt_days,
+            pore_height=pore_height,
+            porosity=porosity,
+            well_radius=well_radius,
+            longitudinal_dispersivity=longitudinal_dispersivity,
+            molecular_diffusivity=molecular_diffusivity,
+            retardation_factor=retardation_factor,
+            weights=weights,
+        )
+        w[:, j] = cout_dev[ext_mask]
+    return w, inj_mask, ext_mask
+
+
 def infiltration_to_extraction(
     *,
     cin: npt.ArrayLike,
@@ -202,7 +286,7 @@ def infiltration_to_extraction(
     background: float = 0.0,
     n_quad: int = 240,
 ) -> npt.NDArray[np.floating]:
-    """Compute the extracted flux concentration for a single inject-then-extract cycle at a radial well.
+    """Compute the extracted flux concentration at a radial well for a signed flow schedule.
 
     Parameters
     ----------
@@ -224,8 +308,8 @@ def infiltration_to_extraction(
     longitudinal_dispersivity : float
         Longitudinal dispersivity ``alpha_L`` [m].
     molecular_diffusivity : float, optional
-        Molecular diffusivity ``D_m`` [m^2/day]. Must be 0 in this version (the composed ``D_m > 0``
-        forward is a follow-up; the exact Whittaker kernel itself is implemented and validated).
+        Molecular diffusivity ``D_m`` [m^2/day]. Default 0. ``D_m > 0`` (and any multi-reversal
+        schedule) routes to the finite-volume engine (~1% discretization error).
     retardation_factor : float, optional
         Linear retardation ``R >= 1``. Default 1.
     weights : array-like, optional
@@ -258,9 +342,27 @@ def infiltration_to_extraction(
         retardation_factor=retardation_factor,
         weights=weights_arr,
     )
-    w_ens, inj_mask, ext_mask = _forward_operator(
+    if _is_single_cycle(flow) and molecular_diffusivity == 0.0:
+        w_ens, inj_mask, ext_mask = _forward_operator(
+            flow=flow,
+            tedges=tedges,
+            pore_height=pore_height,
+            porosity=porosity,
+            well_radius=well_radius,
+            longitudinal_dispersivity=longitudinal_dispersivity,
+            molecular_diffusivity=molecular_diffusivity,
+            retardation_factor=retardation_factor,
+            weights=weights_arr,
+            n_quad=n_quad,
+        )
+        cout = np.full(len(flow), np.nan)
+        cout[ext_mask] = background + w_ens @ (cin[inj_mask] - background)
+        return cout
+    # General signed-flow / D_m > 0 engine: implicit finite volume (one ensemble solve).
+    cout_dev = _fv_forward(
+        cin_deviation=cin - background,
         flow=flow,
-        tedges=tedges,
+        dt_days=dt_to_days(tedges),
         pore_height=pore_height,
         porosity=porosity,
         well_radius=well_radius,
@@ -268,11 +370,8 @@ def infiltration_to_extraction(
         molecular_diffusivity=molecular_diffusivity,
         retardation_factor=retardation_factor,
         weights=weights_arr,
-        n_quad=n_quad,
     )
-    cout = np.full(len(flow), np.nan)
-    cout[ext_mask] = background + w_ens @ (cin[inj_mask] - background)
-    return cout
+    return background + cout_dev
 
 
 def extraction_to_infiltration(
@@ -329,18 +428,31 @@ def extraction_to_infiltration(
         retardation_factor=retardation_factor,
         weights=weights_arr,
     )
-    w_ens, inj_mask, ext_mask = _forward_operator(
-        flow=flow,
-        tedges=tedges,
-        pore_height=pore_height,
-        porosity=porosity,
-        well_radius=well_radius,
-        longitudinal_dispersivity=longitudinal_dispersivity,
-        molecular_diffusivity=molecular_diffusivity,
-        retardation_factor=retardation_factor,
-        weights=weights_arr,
-        n_quad=n_quad,
-    )
+    if _is_single_cycle(flow) and molecular_diffusivity == 0.0:
+        w_ens, inj_mask, ext_mask = _forward_operator(
+            flow=flow,
+            tedges=tedges,
+            pore_height=pore_height,
+            porosity=porosity,
+            well_radius=well_radius,
+            longitudinal_dispersivity=longitudinal_dispersivity,
+            molecular_diffusivity=molecular_diffusivity,
+            retardation_factor=retardation_factor,
+            weights=weights_arr,
+            n_quad=n_quad,
+        )
+    else:
+        w_ens, inj_mask, ext_mask = _fv_operator(
+            flow=flow,
+            dt_days=dt_to_days(tedges),
+            pore_height=pore_height,
+            porosity=porosity,
+            well_radius=well_radius,
+            longitudinal_dispersivity=longitudinal_dispersivity,
+            molecular_diffusivity=molecular_diffusivity,
+            retardation_factor=retardation_factor,
+            weights=weights_arr,
+        )
     # Tikhonov least-squares min ||W x - (cout-bg)||^2 + lambda ||x||^2 via the stable augmented
     # system [W; sqrt(lambda) I] x = [cout-bg; 0]. The package's solve_inverse_transport assumes the
     # advection rows-sum-to-1 convention; the echo operator instead has column sums ~1 (mass
