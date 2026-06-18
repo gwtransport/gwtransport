@@ -400,12 +400,15 @@ def test_retarded_periodic_flow_is_nonnegative_and_matches_mean(direction, perio
     common = {"flow": flow, "tedges": tedges, "cout_tedges": tedges, "direction": direction, "retardation_factor": r}
 
     tau = gamma(**common, mean=mean_vp, std=std, loc=loc)
-    # No physically impossible residence times: every in-record bin is finite and non-negative.
-    assert np.all(np.isfinite(tau)), "warm-start leaves no in-record bin NaN"
+    # The bug emitted finite-but-impossible values (negatives, +/-1e6 days), so non-negativity is the
+    # load-bearing regression guard. (Finiteness is separately guaranteed by the spinup="constant"
+    # warm-start contract -- every in-record bin is finite -- and held even on the pre-fix baseline.)
+    assert np.all(np.isfinite(tau)), "warm-start contract: no in-record bin is NaN"
     assert np.all(tau >= 0.0), f"negative residence times: min={np.nanmin(tau)}"
 
-    # Same discretised gamma APVD through the stable mean() path is the oracle. Its own discretisation
-    # error is O(1e-2 days) at this bin count, so compare to that, not machine precision.
+    # Same discretised gamma APVD through the stable mean() path is the oracle. Its discretisation
+    # error at this bin count is O(1e-3 days) (measured against a 40k-bin reference), so compare to
+    # that floor -- tight enough to also catch a future gamma() accuracy regression, not just signs.
     apv = gamma_bins(mean=mean_vp, std=std, loc=loc, n_bins=4000)["expected_values"]
     tau_mean = mean(**common, aquifer_pore_volumes=apv)
-    np.testing.assert_allclose(tau, tau_mean, atol=2e-2, rtol=0)
+    np.testing.assert_allclose(tau, tau_mean, atol=5e-3, rtol=0)
