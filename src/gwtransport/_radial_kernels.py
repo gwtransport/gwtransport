@@ -35,13 +35,20 @@ import numpy as np
 import numpy.typing as npt
 from scipy.special import airye
 
-# Working precision (decimal digits) for the mpmath Whittaker (D_m > 0) branch. 50 digits is ample
-# for double-precision output and absorbs the cancellation in the U-function ratios.
-_WHITTAKER_DPS = 50
+# Working precision (decimal digits) for the mpmath Whittaker (D_m > 0) branch. 30 digits is ample
+# for double-precision output and absorbs the cancellation in the U-function ratios in the
+# physically relevant (appreciable-diffusion) regime.
+_WHITTAKER_DPS = 30
 
 # Injection / detection boundary types (Kreft-Zuber modes). "flux" applies the flux operator
 # F[psi] = psi - (G/A_0) psi'; any other value ("resident") uses psi directly.
 _FLUX = "flux"
+
+# Phase orientation for the interior two-point resolvent. "injection" is the divergent operator
+# (flow pushes outward, Robin/flux well BC); "extraction" is the convergent operator (flow pulls
+# inward, Danckwerts/Neumann well BC).
+_INJECTION = "injection"
+_EXTRACTION = "extraction"
 
 
 def _airy_amplitudes(
@@ -116,6 +123,51 @@ def _whittaker_phi_and_flux(
     dphi = -kappa * expf * (u + 2 * a * u1)
     flux = phi - (alpha_l + d_m_eff * r / a0_eff) * dphi
     return phi, flux
+
+
+def whittaker_resolvent_solutions(
+    s: complex, r: float, alpha_l: float, a0_eff: float, d_m_eff: float, sigma_a: int
+) -> tuple[mp.mpc, mp.mpc, mp.mpc, mp.mpc]:
+    r"""Return the two homogeneous solutions and their ``r``-derivatives for the ``D_m > 0`` resolvent.
+
+    The constant-Q ODE ``G C'' + (D_m - sigma_A A_0) C' - s r C = 0`` (KB Sec. 4) has, with
+    ``x = r + a*``, ``a* = alpha_L A_0/D_m``, ``kappa = sqrt(s/D_m)``, ``z = 2 kappa x``,
+    ``b = 1 - sigma_A A_0/D_m``, ``a = b/2 - kappa a*/2``:
+
+    * decaying solution ``u_inf = e^{-kappa x} U(a, b, z)`` (Tricomi ``U``), with
+      ``u_inf' = -kappa e^{-kappa x}[U + 2a U(a+1, b+1, z)]``;
+    * growing solution ``u_reg = e^{-kappa x} z^{1-b} M(a-b+1, 2-b, z)``. This second Kummer solution
+      is used **uniformly**: ``2-b = 1 + A_0/D_m > 1`` for both orientations, so it is always
+      regular (it sidesteps the integer-``b`` degeneracy at ``A_0/D_m in Z+`` where the plain ``M(a,b,z)``
+      is undefined) and yields the identical Green's function as ``M(a,b,z)`` where the latter exists.
+
+    Returns
+    -------
+    tuple of mpmath.mpc
+        ``(u_inf, u_inf', u_reg, u_reg')`` -- the decaying and growing solutions and their
+        ``r``-derivatives, at scalar ``s`` and ``r``.
+    """
+    kappa = mp.sqrt(s / d_m_eff)
+    astar = alpha_l * a0_eff / d_m_eff
+    b = 1 - sigma_a * a0_eff / d_m_eff
+    a = b / 2 - kappa * astar / 2
+    x = r + astar
+    z = 2 * kappa * x
+    expf = mp.e ** (-kappa * x)
+    # decaying branch (Tricomi U), dU/dz = -a U(a+1, b+1, z)
+    u = mp.hyperu(a, b, z)
+    u1 = mp.hyperu(a + 1, b + 1, z)
+    u_inf = expf * u
+    u_inf_p = -kappa * expf * (u + 2 * a * u1)
+    # growing branch: z^{c} M(ap, bp, z), c = 1-b, ap = a-b+1, bp = 2-b; d/dz[z^c M] = c z^{c-1} M + z^c (ap/bp) M(ap+1,bp+1)
+    c, ap, bp = 1 - b, a - b + 1, 2 - b
+    m = mp.hyp1f1(ap, bp, z)
+    m1 = mp.hyp1f1(ap + 1, bp + 1, z)
+    w_z = z**c * m
+    dw_z = c * z ** (c - 1) * m + z**c * (ap / bp) * m1
+    u_reg = expf * w_z
+    u_reg_p = -kappa * expf * w_z + expf * dw_z * (2 * kappa)
+    return u_inf, u_inf_p, u_reg, u_reg_p
 
 
 def transfer_function(
@@ -195,3 +247,151 @@ def transfer_function(
             denom = flux_w if inject == _FLUX else phi_w
             flat[i] = complex(numer / denom)
     return out
+
+
+def _resolvent_airy_pieces(
+    s: npt.NDArray[np.complexfloating],
+    r: npt.NDArray[np.floating] | float,
+    alpha_l: float,
+    a0_eff: float,
+    gauge_sign: float,
+) -> dict[str, npt.NDArray[np.complexfloating]]:
+    r"""Scaled-Airy building blocks for the interior two-point resolvent at radius ``r`` (``D_m = 0``).
+
+    The two homogeneous solutions of the constant-Q ODE (KB Sec. 4), in the gauge
+    ``e^{gauge_sign * r/(2 alpha_L)}`` (``+1`` divergent/injection, ``-1`` convergent/extraction):
+
+    * ``u_inf = s_inf * exp(gauge_sign r/2alpha_L - xi)`` -- the decaying branch (``Ai``),
+    * ``u_reg = s_reg * exp(gauge_sign r/2alpha_L + xiR)`` -- the growing branch (``Bi``),
+
+    with ``zeta = beta^{1/3} r + beta^{-2/3}/(4 alpha_L^2)``, ``beta = s/(alpha_L a0_eff)``,
+    ``xi = (2/3) zeta^{3/2}``. The scaled amplitudes ``s_inf = Aie``, ``s_reg = Bie`` and the
+    derivative amplitudes are O(1); the (possibly huge) gauge/Airy exponent is carried as the log
+    quantities ``xi`` and ``xiR``. **Crucially** ``scipy.special.airye`` scales ``Ai`` by
+    ``exp(+xi)`` but ``Bi`` by ``exp(-|Re xi|)``, so ``Ai = Aie exp(-xi)`` while ``Bi = Bie exp(+xiR)``
+    with ``xiR = |Re xi|``: the two differ for complex ``s`` (every de Hoog node), so they are tracked
+    separately. The caller forms only bounded exponent *differences* (no overflow to Pe ~ 600+).
+
+    Returns
+    -------
+    dict
+        ``s_inf, s_infp, s_reg, s_regp`` (scaled value and r-derivative amplitudes of ``u_inf``,
+        ``u_reg``) and the log-exponents ``xi`` (complex, for ``Ai``) and ``xiR`` (``|Re xi|``, ``Bi``).
+    """
+    beta = s / (alpha_l * a0_eff)
+    b13 = beta ** (1.0 / 3.0)
+    zeta = b13 * r + beta ** (-2.0 / 3.0) / (4.0 * alpha_l * alpha_l)
+    aie, aipe, bie, bipe = airye(zeta)
+    xi = (2.0 / 3.0) * zeta**1.5
+    g = gauge_sign / (2.0 * alpha_l)
+    return {
+        "s_inf": aie,
+        "s_infp": g * aie + b13 * aipe,
+        "s_reg": bie,
+        "s_regp": g * bie + b13 * bipe,
+        "xi": xi,
+        "xiR": np.abs(xi.real),
+    }
+
+
+def interior_resolvent(
+    *,
+    s: npt.NDArray[np.complexfloating],
+    r: float,
+    r_prime: npt.ArrayLike,
+    r_w: float,
+    alpha_l: float,
+    a0: float,
+    direction: str,
+) -> npt.NDArray[np.complexfloating]:
+    r"""Interior two-point Laplace resolvent ``Ghat(r, r'; s)`` of a constant-Q phase (``D_m = 0``).
+
+    ``Ghat`` is the kernel of the spatial resolvent ``(s - L)^{-1}`` of the per-phase generator ``L``
+    (KB Sec. 7 / addendum Sec. A3): the field after propagating an initial resident profile ``f`` for
+    flushed volume ``tau`` is ``f_resid(r) = L^{-1}_s[ int Ghat(r, r'; s) f(r') w(r') dr' ](tau)``, with
+    the Sturm-Liouville weight ``w(r') = (2 c_geo r'/alpha_L) e^{-gauge_sign r'/alpha_L} dr'`` supplied
+    by the caller. Built from the convergent/divergent Airy solutions with the physical well boundary
+    condition (Danckwerts/Neumann for extraction, Robin/flux for injection) and outgoing decay:
+
+    ``Ghat(r, r'; s) = -u_0(r_<) u_inf(r_>) / N(s)``,  ``N(s) = P(r)[u_0 u_inf' - u_0' u_inf]``,
+
+    ``u_inf`` the decaying solution, ``u_0`` the well-BC solution, ``r_< = min(r, r')``,
+    ``r_> = max(r, r')``, ``P = e^{-gauge_sign r/alpha_L}`` (``N`` is constant in ``r`` -- the SL Abel
+    identity). The leading minus sign and ``N`` are pinned by the KB Sec. 7 duality: the well-face
+    trace ``Ghat(r_w, r'; s) w(r')`` equals the extraction arrival kernel. The normalization is
+    factored out before exponentiating, so the scaled-Airy form is overflow-safe.
+
+    The Laplace variable enters only through ``beta = s/(alpha_L a0)`` (``D_m = 0``); for the
+    flushed-volume clock pass ``s = flow_scale * p``, ``a0 = flow_scale/(2 c_geo)`` so that
+    ``beta = 2 c_geo p/alpha_L`` is flow-magnitude independent. Retardation is a pure clock rescale
+    handled by the caller (propagate over ``tau/R``); ``Ghat`` itself is retardation-free.
+
+    Parameters
+    ----------
+    s : ndarray of complex
+        Laplace nodes (conjugate to flushed volume). Shape ``(n_s,)``.
+    r : float
+        Output radius (m), ``>= r_w``.
+    r_prime : array-like
+        Source radius/radii (m), ``>= r_w``. Scalar or shape ``(n_r',)``.
+    r_w : float
+        Well radius (m).
+    alpha_l : float
+        Longitudinal dispersivity (m).
+    a0 : float
+        Flow scale ``A_0`` setting ``beta = s/(alpha_L a0)``.
+    direction : {'injection', 'extraction'}
+        Phase orientation: divergent (Robin well BC) or convergent (Neumann well BC).
+
+    Returns
+    -------
+    ndarray of complex
+        ``Ghat(r, r'; s)``, shape ``(n_s, n_r')`` (broadcast of ``s`` and ``r_prime``).
+    """
+    gauge_sign = 1.0 if direction == _INJECTION else -1.0
+    s = np.asarray(s, dtype=complex).reshape(-1, 1)
+    rp = np.atleast_1d(np.asarray(r_prime, dtype=float)).reshape(1, -1)
+    r_a = np.minimum(r, rp)
+    r_b = np.maximum(r, rp)
+    piece_a = _resolvent_airy_pieces(s, r_a, alpha_l, a0, gauge_sign)
+    piece_b = _resolvent_airy_pieces(s, r_b, alpha_l, a0, gauge_sign)
+    piece_w = _resolvent_airy_pieces(s, r_w, alpha_l, a0, gauge_sign)
+    return assemble_airy_resolvent(piece_a, piece_b, piece_w, r_a + r_b, alpha_l, gauge_sign)
+
+
+def assemble_airy_resolvent(
+    piece_a: dict[str, npt.NDArray[np.complexfloating]],
+    piece_b: dict[str, npt.NDArray[np.complexfloating]],
+    piece_w: dict[str, npt.NDArray[np.complexfloating]],
+    r_sum: npt.NDArray[np.floating],
+    alpha_l: float,
+    gauge_sign: float,
+) -> npt.NDArray[np.complexfloating]:
+    r"""Assemble ``Ghat(r, r'; s) = -(pref_a e^{ea} - pref_b e^{eb})`` from precomputed scaled-Airy pieces.
+
+    ``piece_a``, ``piece_b`` are :func:`_resolvent_airy_pieces` at ``r_< = min(r, r')`` and
+    ``r_> = max(r, r')``; ``piece_w`` at ``r_w``; ``r_sum = r_< + r_> = r + r'`` (the radii enter the
+    bounded exponents only through their sum). The normalization ``N`` (with its huge exponent) is
+    factored into the bounded exponents ``ea, eb``, so the result is overflow-safe (Sec. 1b of the
+    plan). Splitting piece computation from assembly lets a caller evaluate the scaled Airy on a grid
+    of radii once and assemble every output node from prefix selection -- the ``O(n^2) -> O(n)``
+    saving the field propagator relies on.
+
+    Returns
+    -------
+    ndarray of complex
+        ``Ghat(r, r'; s)``, same broadcast shape as the input pieces.
+    """
+    g = gauge_sign / (2.0 * alpha_l)
+    if gauge_sign < 0:  # extraction: Danckwerts -> zero dispersive flux -> Neumann u_0'(r_w) = 0
+        bc_inf, bc_reg = piece_w["s_infp"], piece_w["s_regp"]
+    else:  # injection: Robin/flux F[u_0](r_w) = 0, F[u] = u - alpha_L u'
+        bc_inf = piece_w["s_inf"] - alpha_l * piece_w["s_infp"]
+        bc_reg = piece_w["s_reg"] - alpha_l * piece_w["s_regp"]
+    # denom0 = scaled Wronskian piece at r_w (= b13/pi up to gauge).
+    denom0 = piece_w["s_regp"] * piece_w["s_inf"] - piece_w["s_infp"] * piece_w["s_reg"]
+    pref_a = bc_reg * piece_a["s_inf"] * piece_b["s_inf"] / (bc_inf * denom0)
+    pref_b = piece_a["s_reg"] * piece_b["s_inf"] / denom0
+    exp_a = g * r_sum - (piece_a["xi"] + piece_b["xi"] - 2.0 * piece_w["xi"])
+    exp_b = g * r_sum + (piece_a["xiR"] - piece_w["xiR"]) - (piece_b["xi"] - piece_w["xi"])
+    return -(pref_a * np.exp(exp_a) - pref_b * np.exp(exp_b))

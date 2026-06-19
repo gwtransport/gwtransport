@@ -14,8 +14,9 @@ import pandas as pd
 import pytest
 from scipy.special import erfc
 
+from _radial_fv_oracle import fv_cout_deviation  # ty: ignore[unresolved-import]  # tests/src on path via conftest
+
 from gwtransport._radial_dehoog import dehoog_inverse
-from gwtransport._radial_fv import fv_cout_deviation
 from gwtransport._radial_kernels import _whittaker_phi_and_flux, transfer_function
 from gwtransport.radial_ade import (
     extraction_to_infiltration,

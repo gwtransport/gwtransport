@@ -8,14 +8,18 @@ velocity-dependent dispersion ``D = alpha_L |u| + D_m``, Kreft-Zuber flux bounda
 the exact Airy / Whittaker per-phase kernels. Nothing is reduced to a Gaussian; the exact
 non-Gaussian breakthrough (with the correct skewness) is carried.
 
-Two engines back the forward map. A single inject-then-extract cycle with ``D_m = 0`` uses the
-closed-form echo operator (:mod:`gwtransport._radial_compose`, KB Sec. 10a) -- exact for arbitrary
-within-phase variable flow, with the exact temporal moments. Any other signed-flow schedule (more
-reversals / multi-cycle ASR) and any ``D_m > 0`` case use an implicit finite-volume solve of the
-*same* exact conservative V-form PDE (:mod:`gwtransport._radial_fv`, KB Sec. 9) -- same equation,
-same boundary conditions, with a controlled ~1% discretization error (a spectral-domain accelerator
-for the multi-cycle case is a possible future optimization, not a different physics). The engine is
-chosen automatically; cycles are expressed through the flow sign pattern, not an argument.
+The forward map is **grid-free** end to end -- no PDE is discretized, so none of the finite-volume
+artefacts appear. A single inject-then-extract cycle uses the closed-form echo operator
+(:mod:`gwtransport._radial_compose`, KB Sec. 10a) -- exact for arbitrary within-phase variable flow,
+with the exact temporal moments. Any other signed-flow schedule (more reversals / multi-cycle ASR)
+uses the grid-free multi-cycle engine (:mod:`gwtransport._radial_gridfree`, KB addendum Sec. A1-A4),
+which composes the exact per-phase Airy / Whittaker kernels through the interior two-point Green's
+functions. The molecular-diffusion regime is handled basis-by-regime (KB addendum Sec. A6): the Airy
+branch (exact for ``D_m = 0``, fast) wherever molecular diffusion is sub-dominant within the plume,
+the Whittaker branch where it is appreciable. The only numerical steps are Gauss-Legendre quadrature
+and de Hoog Laplace inversion of exact special-function kernels. An independent finite-volume solve of
+the same PDE (``tests/src/_radial_fv_oracle.py``, KB Sec. 9) is retained only as a test oracle. The
+engine is chosen automatically; cycles are expressed through the flow sign pattern, not an argument.
 
 The reported ``cout`` is the flow-weighted average over each output bin -- defined on extraction bins
 (``flow < 0``) and ``NaN`` on injection / rest bins (nothing is recovered there).
@@ -47,12 +51,8 @@ import pandas as pd
 
 from gwtransport import gamma
 from gwtransport._radial_compose import single_cycle_echo_matrix
-from gwtransport._radial_fv import fv_cout_deviation
+from gwtransport._radial_gridfree import gridfree_cout_deviation
 from gwtransport._time import dt_to_days
-
-# Finite-volume discretization for the general (multi-cycle / D_m>0) engine.
-_FV_N_CELLS = 400
-_FV_N_SUB = 8
 
 
 def _is_single_cycle(flow: npt.NDArray[np.floating]) -> bool:
@@ -178,7 +178,7 @@ def _forward_operator(
     return w_ens / np.sum(w), inj_mask, ext_mask
 
 
-def _fv_forward(
+def _gridfree_forward(
     *,
     cin_deviation: npt.NDArray[np.floating],
     flow: npt.NDArray[np.floating],
@@ -190,11 +190,12 @@ def _fv_forward(
     molecular_diffusivity: float,
     retardation_factor: float,
     weights: npt.NDArray[np.floating] | None,
+    n_quad: int,
 ) -> npt.NDArray[np.floating]:
-    """Ensemble finite-volume extracted-flux deviation per bin (general signed flow / D_m > 0).
+    """Ensemble grid-free extracted-flux deviation per bin (general signed flow / multi-cycle / D_m).
 
-    Runs the implicit FV solver once per disk and returns the weight-weighted average; NaN on
-    injection / rest bins.
+    Runs the grid-free multi-cycle engine once per disk and returns the weight-weighted average; NaN
+    on injection / rest bins.
 
     Returns
     -------
@@ -205,7 +206,7 @@ def _fv_forward(
     w = np.ones(len(heights)) if weights is None else np.asarray(weights, dtype=float)
     acc = np.zeros(len(flow))
     for b_i, w_i in zip(heights, w, strict=True):
-        c_i = fv_cout_deviation(
+        c_i = gridfree_cout_deviation(
             cin_deviation=cin_deviation,
             flow=flow,
             dt_days=dt_days,
@@ -214,8 +215,7 @@ def _fv_forward(
             alpha_l=longitudinal_dispersivity,
             molecular_diffusivity=molecular_diffusivity,
             retardation_factor=retardation_factor,
-            n_cells=_FV_N_CELLS,
-            n_sub=_FV_N_SUB,
+            n_quad=n_quad,
         )
         acc += w_i * np.nan_to_num(c_i)
     out = np.full(len(flow), np.nan)
@@ -224,7 +224,7 @@ def _fv_forward(
     return out
 
 
-def _fv_operator(
+def _gridfree_operator(
     *,
     flow: npt.NDArray[np.floating],
     dt_days: npt.NDArray[np.floating],
@@ -235,11 +235,12 @@ def _fv_operator(
     molecular_diffusivity: float,
     retardation_factor: float,
     weights: npt.NDArray[np.floating] | None,
+    n_quad: int,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool_], npt.NDArray[np.bool_]]:
-    """Build the dense forward operator ``W`` (``cout' = W @ cin'_inj``) by FV unit-pulse columns.
+    """Build the dense forward operator ``W`` (``cout' = W @ cin'_inj``) by grid-free unit-pulse columns.
 
-    One ensemble FV solve per injection bin (a unit deviation pulse there) gives that column of the
-    linear forward map -- used by the reverse solve for the general signed-flow / ``D_m > 0`` engine.
+    One ensemble grid-free solve per injection bin (a unit deviation pulse there) gives that column of
+    the linear forward map -- used by the reverse solve for the general signed-flow / multi-cycle engine.
 
     Returns
     -------
@@ -254,7 +255,7 @@ def _fv_operator(
     for j, idx in enumerate(inj_idx):
         pulse = np.zeros(len(flow))
         pulse[idx] = 1.0
-        cout_dev = _fv_forward(
+        cout_dev = _gridfree_forward(
             cin_deviation=pulse,
             flow=flow,
             dt_days=dt_days,
@@ -265,6 +266,7 @@ def _fv_operator(
             molecular_diffusivity=molecular_diffusivity,
             retardation_factor=retardation_factor,
             weights=weights,
+            n_quad=n_quad,
         )
         w[:, j] = cout_dev[ext_mask]
     return w, inj_mask, ext_mask
@@ -342,7 +344,7 @@ def infiltration_to_extraction(
         retardation_factor=retardation_factor,
         weights=weights_arr,
     )
-    if _is_single_cycle(flow) and molecular_diffusivity == 0.0:
+    if _is_single_cycle(flow):
         w_ens, inj_mask, ext_mask = _forward_operator(
             flow=flow,
             tedges=tedges,
@@ -358,8 +360,8 @@ def infiltration_to_extraction(
         cout = np.full(len(flow), np.nan)
         cout[ext_mask] = background + w_ens @ (cin[inj_mask] - background)
         return cout
-    # General signed-flow / D_m > 0 engine: implicit finite volume (one ensemble solve).
-    cout_dev = _fv_forward(
+    # General signed-flow / multi-cycle engine: grid-free composition (one ensemble solve).
+    cout_dev = _gridfree_forward(
         cin_deviation=cin - background,
         flow=flow,
         dt_days=dt_to_days(tedges),
@@ -370,6 +372,7 @@ def infiltration_to_extraction(
         molecular_diffusivity=molecular_diffusivity,
         retardation_factor=retardation_factor,
         weights=weights_arr,
+        n_quad=n_quad,
     )
     return background + cout_dev
 
@@ -428,7 +431,7 @@ def extraction_to_infiltration(
         retardation_factor=retardation_factor,
         weights=weights_arr,
     )
-    if _is_single_cycle(flow) and molecular_diffusivity == 0.0:
+    if _is_single_cycle(flow):
         w_ens, inj_mask, ext_mask = _forward_operator(
             flow=flow,
             tedges=tedges,
@@ -442,7 +445,7 @@ def extraction_to_infiltration(
             n_quad=n_quad,
         )
     else:
-        w_ens, inj_mask, ext_mask = _fv_operator(
+        w_ens, inj_mask, ext_mask = _gridfree_operator(
             flow=flow,
             dt_days=dt_to_days(tedges),
             pore_height=pore_height,
@@ -452,6 +455,7 @@ def extraction_to_infiltration(
             molecular_diffusivity=molecular_diffusivity,
             retardation_factor=retardation_factor,
             weights=weights_arr,
+            n_quad=n_quad,
         )
     # Tikhonov least-squares min ||W x - (cout-bg)||^2 + lambda ||x||^2 via the stable augmented
     # system [W; sqrt(lambda) I] x = [cout-bg; 0]. The package's solve_inverse_transport assumes the

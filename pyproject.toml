@@ -85,6 +85,9 @@ addopts = [
     "-n=auto",
     "--doctest-modules",
 ]
+markers = [
+    "slow: marks tests that are slow (the mpmath Whittaker D_m>0 path); run by default, deselect with -m 'not slow'",
+]
 filterwarnings = [
     "ignore:.*Jupyter is migrating.*:DeprecationWarning",
 ]

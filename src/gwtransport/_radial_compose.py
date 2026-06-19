@@ -160,6 +160,12 @@ def single_cycle_echo_matrix(
     # mu_FR(r_max) ~ 4 S_inj covers the support (integrand ~0 beyond -- verified by mass conservation
     # int f dV' = S_inj to the de Hoog + quadrature floor).
     r_max = np.sqrt((4.0 * s_inj / (retardation_factor * c_geo)) + r_w**2)
+    # Basis-by-regime (KB addendum Sec. A6): use the Airy form (the exact O(D_m/alpha_L|u|) reduction)
+    # when the molecular crossover radius a* = alpha_L A_0/D_m lies beyond the plume reach -- there the
+    # Whittaker branch is unnecessary and numerically intractable (large-parameter confluent
+    # hypergeometric). A_0 = inj_flow_scale/(2 c_geo).
+    if molecular_diffusivity > 0.0 and alpha_l * (inj_flow_scale / (2.0 * c_geo)) / molecular_diffusivity >= r_max:
+        molecular_diffusivity = 0.0
     v_max = c_geo * (r_max**2 - r_w**2)
     nodes, weights = np.polynomial.legendre.leggauss(n_quad)
     v_nodes = 0.5 * v_max * (nodes + 1.0)
@@ -191,4 +197,7 @@ def single_cycle_echo_matrix(
         f_contrib = g_inj[:-1] - g_inj[1:]  # length n_inj: resident-profile contribution of each cin bin
         ext_avg = (g_ext[1:] - g_ext[:-1]) / dt  # length n_ext: bin-averaged arrival per output bin
         w += vw * np.outer(ext_avg, f_contrib)
-    return w
+    # Retardation amplitude: the mobile profile integrates to S_inj/R (sorbed mass is immobile) and the
+    # arrival kernel's CDF plateaus at 1, so the bare readout under-recovers by 1/R. Each extracted
+    # mobile parcel mobilizes its sorbed companion (total solute = R x mobile), so scale the readout by R.
+    return retardation_factor * w
