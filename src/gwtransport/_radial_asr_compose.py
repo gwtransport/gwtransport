@@ -1,7 +1,7 @@
 r"""Composition of constant-Q radial phases into the well observable (single cycle).
 
 For a single inject-then-extract cycle at one well (no intermediate flow reversal) the extracted
-flux concentration is built grid-free from the per-phase kernels of :mod:`gwtransport._radial_kernels`
+flux concentration is built grid-free from the per-phase kernels of :mod:`gwtransport._radial_asr_kernels`
 (the KB Sec. 10a pipeline), with everything carried in the flushed-volume clock so that arbitrary
 within-phase variable flow is exact for ``D_m = 0`` (the S-clock convolution theorem):
 
@@ -35,8 +35,8 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import numpy.typing as npt
 
-from gwtransport._radial_dehoog import dehoog_inverse
-from gwtransport._radial_kernels import transfer_function
+from gwtransport._radial_asr_dehoog import dehoog_inverse
+from gwtransport._radial_asr_kernels import _molecular_regime, transfer_function
 
 # de Hoog series length and the front-anchored scaling margin for the FR step response. The half-period
 # is set per V' to ~ the FR arrival-volume mean (where the breakthrough front sits), which keeps the
@@ -160,12 +160,11 @@ def single_cycle_echo_matrix(
     # mu_FR(r_max) ~ 4 S_inj covers the support (integrand ~0 beyond -- verified by mass conservation
     # int f dV' = S_inj to the de Hoog + quadrature floor).
     r_max = np.sqrt((4.0 * s_inj / (retardation_factor * c_geo)) + r_w**2)
-    # Basis-by-regime (KB addendum Sec. A6): use the Airy form (the exact O(D_m/alpha_L|u|) reduction)
-    # when the molecular crossover radius a* = alpha_L A_0/D_m lies beyond the plume reach -- there the
-    # Whittaker branch is unnecessary and numerically intractable (large-parameter confluent
-    # hypergeometric). A_0 = inj_flow_scale/(2 c_geo).
-    if molecular_diffusivity > 0.0 and alpha_l * (inj_flow_scale / (2.0 * c_geo)) / molecular_diffusivity >= r_max:
-        molecular_diffusivity = 0.0
+    # Basis-by-regime molecular dispatch (KB addendum Sec. A6): Airy reduction where molecular diffusion
+    # is sub-dominant within the plume reach (or its Whittaker treatment intractable), else exact Whittaker.
+    molecular_diffusivity = _molecular_regime(
+        molecular_diffusivity, inj_flow_scale / (2.0 * c_geo), alpha_l, float(r_max)
+    )
     v_max = c_geo * (r_max**2 - r_w**2)
     nodes, weights = np.polynomial.legendre.leggauss(n_quad)
     v_nodes = 0.5 * v_max * (nodes + 1.0)

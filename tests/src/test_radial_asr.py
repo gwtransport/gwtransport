@@ -12,13 +12,12 @@ import mpmath as mp
 import numpy as np
 import pandas as pd
 import pytest
+from _radial_asr_fv_oracle import fv_cout_deviation  # ty: ignore[unresolved-import]  # tests/src on path via conftest
 from scipy.special import erfc
 
-from _radial_fv_oracle import fv_cout_deviation  # ty: ignore[unresolved-import]  # tests/src on path via conftest
-
-from gwtransport._radial_dehoog import dehoog_inverse
-from gwtransport._radial_kernels import _whittaker_phi_and_flux, transfer_function
-from gwtransport.radial_ade import (
+from gwtransport._radial_asr_dehoog import dehoog_inverse
+from gwtransport._radial_asr_kernels import _whittaker_phi_and_flux, transfer_function
+from gwtransport.radial_asr import (
     extraction_to_infiltration,
     gamma_infiltration_to_extraction,
     infiltration_to_extraction,
@@ -192,7 +191,7 @@ class TestWhittakerKernel:
 def _scenario(n_inj=10, n_ext=30, inj_rate=100.0):
     tedges = pd.date_range("2024-01-01", periods=n_inj + n_ext + 1, freq="D")
     flow = np.array([inj_rate] * n_inj + [-inj_rate] * n_ext)
-    geom = {"pore_height": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
+    geom = {"pore_heights": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
     return tedges, flow, geom
 
 
@@ -232,8 +231,8 @@ class TestForward:
         n_inj, n_ext, rate = 6, 60, 100.0
         tedges = pd.date_range("2024-01-01", periods=n_inj + n_ext + 1, freq="D")
         flow = np.array([rate] * n_inj + [-rate] * n_ext)
-        geom = {"pore_height": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
-        c_geo = np.pi * geom["pore_height"] * geom["porosity"]
+        geom = {"pore_heights": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
+        c_geo = np.pi * geom["pore_heights"] * geom["porosity"]
         s_inj, a_l, r_w = rate * n_inj, geom["longitudinal_dispersivity"], geom["well_radius"]
         t_centers = (np.arange(n_ext) + 0.5) * rate  # extracted-volume bin centers
 
@@ -267,7 +266,7 @@ class TestEnsemble:
         cin = np.where(flow > 0, 1.0, 0.0)
         kw = {"flow": flow, "tedges": tedges, "cout_tedges": tedges, "n_quad": 160}
         scalar = infiltration_to_extraction(cin=cin, **geom, **kw)
-        arr = infiltration_to_extraction(cin=cin, **{**geom, "pore_height": [10.0]}, **kw)
+        arr = infiltration_to_extraction(cin=cin, **{**geom, "pore_heights": [10.0]}, **kw)
         np.testing.assert_array_equal(scalar, arr)
 
     def test_height_spread_increases_macrodispersion(self):
@@ -276,7 +275,7 @@ class TestEnsemble:
         cin = np.where(flow > 0, 1.0, 0.0)
         kw = {"cin": cin, "flow": flow, "tedges": tedges, "cout_tedges": tedges, "n_quad": 160}
         sharp = infiltration_to_extraction(**geom, **kw)
-        spread = infiltration_to_extraction(**{**geom, "pore_height": [6.0, 10.0, 14.0]}, **kw)
+        spread = infiltration_to_extraction(**{**geom, "pore_heights": [6.0, 10.0, 14.0]}, **kw)
         assert np.nanmax(spread) < np.nanmax(sharp)
 
 
@@ -304,8 +303,8 @@ class TestGammaWrapper:
             porosity=geom["porosity"],
             well_radius=geom["well_radius"],
             longitudinal_dispersivity=geom["longitudinal_dispersivity"],
-            mean=10.0,
-            std=3.0,
+            screen_height=10.0,
+            velocity_cv=0.3,
             n_bins=8,
             n_quad=120,
         )
@@ -322,7 +321,7 @@ class TestValidation:
                 flow=np.ones(5),
                 tedges=tedges,
                 cout_tedges=tedges,
-                pore_height=10.0,
+                pore_heights=10.0,
                 porosity=0.3,
                 well_radius=0.5,
                 longitudinal_dispersivity=0.5,
@@ -344,12 +343,12 @@ class TestGeneralEngine:
     """Multi-cycle and D_m>0 route to the implicit finite-volume solve of the exact PDE (KB Sec. 9)."""
 
     def test_fv_matches_analytic_single_cycle(self):
-        # Independent engines: FV discretizes the PDE, the analytic path inverts the Laplace kernel.
-        # They must agree to the FV first-order discretization floor (~1%).
+        # Independent engines: finite-volume discretizes the PDE, the analytic path inverts the Laplace kernel.
+        # They must agree to the finite-volume first-order discretization floor (~1%).
         tedges, flow, geom = _scenario()
         cin = np.where(flow > 0, 1.0, 0.0)
         ana = infiltration_to_extraction(cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, n_quad=300)
-        c_geo = np.pi * geom["pore_height"] * geom["porosity"]
+        c_geo = np.pi * geom["pore_heights"] * geom["porosity"]
         fv = fv_cout_deviation(
             cin_deviation=cin,
             flow=flow,
@@ -363,11 +362,11 @@ class TestGeneralEngine:
         np.testing.assert_allclose(fv[flow < 0], ana[flow < 0], atol=2e-2)
 
     def test_fv_converges_to_analytic(self):
-        # First-order convergence of the FV to the exact analytic confirms the FV is correct.
+        # First-order convergence of the finite-volume to the exact analytic confirms the finite-volume is correct.
         tedges, flow, geom = _scenario()
         cin = np.where(flow > 0, 1.0, 0.0)
         ana = infiltration_to_extraction(cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, n_quad=300)
-        c_geo = np.pi * geom["pore_height"] * geom["porosity"]
+        c_geo = np.pi * geom["pore_heights"] * geom["porosity"]
         ext = flow < 0
 
         def err(n_cells, n_sub):
@@ -389,14 +388,14 @@ class TestGeneralEngine:
         flow = np.array([100.0] * 6 + [-100.0] * 10 + [100.0] * 6 + [-100.0] * 14)
         tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
         cin = np.where(flow > 0, 1.0, 0.0)
-        geom = {"pore_height": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
+        geom = {"pore_heights": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
         cout = infiltration_to_extraction(cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom)
         ext = flow < 0
         np.testing.assert_array_equal(np.isnan(cout), flow >= 0.0)
         assert np.all(cout[ext] >= -1e-3)
         assert np.all(cout[ext] <= 1.0 + 1e-2)
         recovered = np.sum(cout[ext] * (-flow[ext])) / np.sum(cin[flow > 0] * flow[flow > 0])
-        assert 0.9 < recovered <= 1.0 + 1e-3  # near-full recovery, up to the buffer + FV floor
+        assert 0.9 < recovered <= 1.0 + 1e-3  # near-full recovery, up to the buffer + finite-volume floor
 
     def test_dm_positive_forward_conserves(self):
         tedges, flow, geom = _scenario()
@@ -411,7 +410,7 @@ class TestGeneralEngine:
         flow = np.array([100.0] * 6 + [-100.0] * 10 + [100.0] * 6 + [-100.0] * 14)
         tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
         cin = np.where(flow > 0, 1.0, 0.0)
-        geom = {"pore_height": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
+        geom = {"pore_heights": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
         cout = infiltration_to_extraction(cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom)
         rec = extraction_to_infiltration(
             cout=cout, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, regularization_strength=1e-6

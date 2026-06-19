@@ -1,7 +1,7 @@
 r"""Exact per-phase (constant-Q) Laplace kernels for radial advection-dispersion.
 
 This private module holds the closed-form Laplace-domain transfer functions for a single
-fully-penetrating well in an infinite aquifer (the theory of the radial-ADE knowledge base). For a
+fully-penetrating well in an infinite aquifer (the theory of the radial ASR knowledge base). For a
 constant-Q phase the volume-coordinate PDE ``d_t C + Q d_V C = d_V(D_V d_V C)`` has, in the Laplace
 domain ``t -> s``, the ODE ``G(r) C'' + (D_m - sigma_A A_0) C' - s r C = 0`` with
 ``G(r) = alpha_L A_0 + D_m r``. The decaying branch on ``[r_w, inf)`` gives the resident solution
@@ -30,6 +30,8 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+import warnings
+
 import mpmath as mp
 import numpy as np
 import numpy.typing as npt
@@ -40,6 +42,52 @@ from scipy.special import airye
 # physically relevant (appreciable-diffusion) regime.
 _WHITTAKER_DPS = 30
 
+# Tractability cap for the Whittaker (D_m > 0) branch. Its confluent-hypergeometric parameter is
+# b = 1 +/- A_0/D_m and its argument scales with a* = alpha_L A_0/D_m; for A_0/D_m beyond this the
+# mpmath evaluation (especially the near-well de Hoog nodes) becomes impractically slow. Above the cap
+# the Airy reduction is used with a warning (see _molecular_regime).
+_WHITTAKER_MAX_RATIO = 10.0
+
+
+def _molecular_regime(molecular_diffusivity: float, a0: float, alpha_l: float, plume_reach: float) -> float:
+    """Basis-by-regime molecular-diffusion dispatch (KB addendum Sec. A6); returns the D_m to use.
+
+    With the molecular crossover radius ``a* = alpha_L A_0/D_m`` (beyond which molecular diffusion
+    dominates the mechanical dispersion ``alpha_L |u|``):
+
+    * ``D_m = 0`` or ``a* >= plume_reach`` -- molecular diffusion is sub-dominant everywhere the tracer
+      goes; use the exact Airy reduction (``D_m := 0``). Its error is ``O(D_m/alpha_L|u|)``: measured
+      ``< ~4%`` at the boundary ``a* ~ plume_reach``, falling below ``1%`` for ``a* > 4 plume_reach`` and
+      to ``~1e-5`` for realistic groundwater ``D_m`` (where ``a*`` is orders of magnitude past the plume).
+    * ``a* < plume_reach`` and ``A_0/D_m <= _WHITTAKER_MAX_RATIO`` -- molecular diffusion is appreciable
+      and the Whittaker branch is tractable; keep ``D_m`` (exact, slow).
+    * ``a* < plume_reach`` and ``A_0/D_m > _WHITTAKER_MAX_RATIO`` -- molecular diffusion is appreciable
+      but the large-parameter Whittaker branch is intractable; fall back to the Airy reduction and warn
+      (it neglects an appreciable molecular term -- the relative error grows with ``plume_reach/a*``).
+
+    Returns
+    -------
+    float
+        The molecular diffusivity to use: the input value (Whittaker branch) or ``0.0`` (Airy branch).
+    """
+    if molecular_diffusivity <= 0.0:
+        return 0.0
+    a_star = alpha_l * a0 / molecular_diffusivity
+    if a_star >= plume_reach:
+        return 0.0
+    if a0 / molecular_diffusivity > _WHITTAKER_MAX_RATIO:
+        warnings.warn(
+            f"Molecular diffusion is appreciable (crossover a*={a_star:.1f} m is within the plume reach "
+            f"{plume_reach:.1f} m) but the exact Whittaker branch is intractable for A_0/D_m="
+            f"{a0 / molecular_diffusivity:.0f} (> {_WHITTAKER_MAX_RATIO:.0f}). Falling back to the Airy "
+            f"reduction, which neglects molecular diffusion; the relative error grows with "
+            f"plume_reach/a* = {plume_reach / a_star:.1f}. Reduce D_m if physically justified.",
+            stacklevel=2,
+        )
+        return 0.0
+    return molecular_diffusivity
+
+
 # Injection / detection boundary types (Kreft-Zuber modes). "flux" applies the flux operator
 # F[psi] = psi - (G/A_0) psi'; any other value ("resident") uses psi directly.
 _FLUX = "flux"
@@ -48,7 +96,6 @@ _FLUX = "flux"
 # (flow pushes outward, Robin/flux well BC); "extraction" is the convergent operator (flow pulls
 # inward, Danckwerts/Neumann well BC).
 _INJECTION = "injection"
-_EXTRACTION = "extraction"
 
 
 def _airy_amplitudes(
@@ -159,7 +206,8 @@ def whittaker_resolvent_solutions(
     u1 = mp.hyperu(a + 1, b + 1, z)
     u_inf = expf * u
     u_inf_p = -kappa * expf * (u + 2 * a * u1)
-    # growing branch: z^{c} M(ap, bp, z), c = 1-b, ap = a-b+1, bp = 2-b; d/dz[z^c M] = c z^{c-1} M + z^c (ap/bp) M(ap+1,bp+1)
+    # growing branch: z^{c} M(ap, bp, z), c = 1-b, ap = a-b+1, bp = 2-b;
+    # d/dz[z^c M] = c z^{c-1} M + z^c (ap/bp) M(ap+1, bp+1)
     c, ap, bp = 1 - b, a - b + 1, 2 - b
     m = mp.hyp1f1(ap, bp, z)
     m1 = mp.hyp1f1(ap + 1, bp + 1, z)

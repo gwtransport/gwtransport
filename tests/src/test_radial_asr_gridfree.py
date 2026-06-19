@@ -3,20 +3,20 @@
 Precision discipline (see each test): closed-form / mpmath gates are checked to machine precision
 (~1e-12); quantities that pass through the de Hoog numerical Laplace inversion carry its floor
 (~1e-7..1e-9, tightened by ``n_terms``); the finite-volume oracle is FIRST-ORDER (``O(1/n_cells)``),
-so grid-free-vs-FV agreement is ~1% and FV is shown to *converge to* the grid-free reference -- the
-grid-free engine is the reference, not FV.
+so grid-free-vs-finite-volume agreement is ~1% and the finite-volume solve is shown to *converge to*
+the grid-free reference -- the grid-free engine is the reference, not finite-volume.
 """
 
 import mpmath as mp
 import numpy as np
 import pandas as pd
 import pytest
-from _radial_fv_oracle import fv_cout_deviation  # ty: ignore[unresolved-import]  # tests/src on path via conftest
+from _radial_asr_fv_oracle import fv_cout_deviation  # ty: ignore[unresolved-import]  # tests/src on path via conftest
 
-from gwtransport._radial_compose import single_cycle_echo_matrix
-from gwtransport._radial_gridfree import gridfree_cout_deviation
-from gwtransport._radial_kernels import interior_resolvent, whittaker_resolvent_solutions
-from gwtransport.radial_ade import infiltration_to_extraction
+from gwtransport._radial_asr_compose import single_cycle_echo_matrix
+from gwtransport._radial_asr_gridfree import gridfree_cout_deviation
+from gwtransport._radial_asr_kernels import interior_resolvent, whittaker_resolvent_solutions
+from gwtransport.radial_asr import infiltration_to_extraction
 
 
 @pytest.fixture(autouse=True)
@@ -202,26 +202,26 @@ class TestGridfreeEngine:
         np.testing.assert_allclose(gf[flow < 0], echo, atol=1e-8)  # de Hoog floor (achieved ~2e-10)
 
     def test_multi_cycle_self_convergence(self):
-        # The grid-free engine self-converges in n_quad to the de Hoog floor (it IS converged; the
-        # remaining error vs FV below is the oracle's, not the engine's).
+        # The grid-free engine is n_quad-INSENSITIVE once converged: Gauss-Legendre on the smooth
+        # resident-profile integrand reaches the de Hoog inversion floor (~1e-9) by a modest node count,
+        # so coarser grids already agree with a fine reference to that floor (the remaining ~1% gap vs
+        # finite-volume below is the oracle's discretization, not the engine's). The errors at this floor are
+        # de-Hoog noise (non-monotone), so the meaningful assertion is that every grid sits at the floor.
         flow = np.array([100.0] * 6 + [-100.0] * 10 + [100.0] * 6 + [-100.0] * 14)
         dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
         ext = flow < 0
-        ref = gridfree_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, n_quad=320, **GEOM)
-        err = [
-            np.max(
+        ref = gridfree_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, n_quad=400, **GEOM)
+        for nq in (120, 240):
+            err = np.max(
                 np.abs(
                     gridfree_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, n_quad=nq, **GEOM)[ext] - ref[ext]
                 )
             )
-            for nq in (120, 240)
-        ]
-        assert err[1] < 0.2 * err[0]  # converging (rate), not merely monotone
-        assert err[1] < 1e-8  # converged to the de Hoog floor (achieved ~3e-9)
+            assert err < 1e-8  # at the de Hoog floor regardless of n_quad (engine is converged)
 
     def test_fv_converges_to_gridfree_first_order(self):
-        # FV is a FIRST-ORDER oracle: its error vs the grid-free reference halves as n_cells doubles,
-        # proving the ~1% gap is FV's discretization, not the grid-free engine's.
+        # finite-volume is a FIRST-ORDER oracle: its error vs the grid-free reference halves as n_cells doubles,
+        # proving the ~1% gap is finite-volume's discretization, not the grid-free engine's.
         flow = np.array([100.0] * 6 + [-100.0] * 10 + [100.0] * 6 + [-100.0] * 14)
         dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
         ext = flow < 0
@@ -236,7 +236,7 @@ class TestGridfreeEngine:
 
     def test_retardation_recovers_mass_and_matches_echo(self):
         # Retardation R>1: the readout must restore the desorbing sorbed mass (factor R), so total
-        # recovery stays ~1. Anchored on the closed-form echo (machine precision); the FV oracle is
+        # recovery stays ~1. Anchored on the closed-form echo (machine precision); the finite-volume oracle is
         # unvalidated under R, so it is NOT used here. Exercises the xR in both single_cycle_echo_matrix
         # and _cout_phase (the grid-free engine run directly on a single cycle).
         flow, dt, cin = _scenario(8, 24)
@@ -263,7 +263,7 @@ class TestGridfreeEngine:
 
     def test_ensemble_equals_weighted_mean_of_disks(self):
         # Multi-cycle ensemble over disk heights = weighted mean of per-disk grid-free solves (the
-        # _gridfree_forward averaging loop), to machine precision (pure averaging, no new inversion).
+        # _gridfree_ensemble averaging), to machine precision (pure averaging, no new inversion).
         flow = np.array([100.0] * 4 + [-100.0] * 8 + [100.0] * 4 + [-100.0] * 10)
         tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
         cin = np.where(flow > 0, 1.0, 0.0)
@@ -271,7 +271,7 @@ class TestGridfreeEngine:
         porosity, heights = 0.3, np.array([6.0, 10.0, 14.0])
         geom = {"porosity": porosity, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
         ens = infiltration_to_extraction(
-            cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, pore_height=heights, n_quad=120, **geom
+            cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, pore_heights=heights, n_quad=120, **geom
         )
         manual = np.mean(
             [
@@ -299,7 +299,7 @@ class TestMolecularRegime:
         flow = np.array([100.0] * 4 + [-100.0] * 8 + [100.0] * 4 + [-100.0] * 10)
         tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
         cin = np.where(flow > 0, 1.0, 0.0)
-        geom = {"pore_height": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
+        geom = {"pore_heights": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
         kw = {"cin": cin, "flow": flow, "tedges": tedges, "cout_tedges": tedges, "n_quad": 120, **geom}
         base = infiltration_to_extraction(**kw)
         small = infiltration_to_extraction(molecular_diffusivity=1e-3, **kw)
@@ -308,7 +308,7 @@ class TestMolecularRegime:
     @pytest.mark.slow
     def test_appreciable_dm_multicycle_vs_fv(self):
         # Appreciable molecular diffusion routes to the exact Whittaker branch; cross-check vs the
-        # FV oracle (~1% first-order floor). Tiny problem -- the mpmath Whittaker path is slow.
+        # finite-volume oracle (~1% first-order floor). Tiny problem -- the mpmath Whittaker path is slow.
         flow = np.array([100.0] * 3 + [-100.0] * 5 + [100.0] * 3 + [-100.0] * 6)
         dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
         ext = flow < 0
@@ -319,4 +319,4 @@ class TestMolecularRegime:
         fv = fv_cout_deviation(
             cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=d_m, n_cells=1000, n_sub=20, **GEOM
         )
-        assert np.max(np.abs(gf[ext] - fv[ext])) < 3e-2  # FV first-order floor at n_cells=1000
+        assert np.max(np.abs(gf[ext] - fv[ext])) < 3e-2  # finite-volume first-order floor at n_cells=1000

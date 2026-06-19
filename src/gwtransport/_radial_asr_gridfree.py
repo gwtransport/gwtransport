@@ -1,11 +1,15 @@
-r"""Grid-free multi-cycle / general signed-flow radial advection-dispersion engine (``D_m = 0``).
+r"""Grid-free multi-cycle / general signed-flow radial advection-dispersion engine (any ``D_m``).
 
 This is the exact, mesh-free engine for signed-flow schedules with more than one flow reversal
-(multi-cycle ASR / SWIW). It composes the per-phase closed-form pieces of the radial-ADE knowledge
+(multi-cycle ASR / SWIW). It composes the per-phase closed-form pieces of the radial ASR knowledge
 base (KB Sec. 4-7, addendum Sec. A1-A4) -- no PDE is discretized, so none of the finite-volume
-artefacts (CFL/Courant limit, numerical dispersion, Crank-Nicolson ringing) appear. The only
-numerical operations are Gauss-Legendre quadrature over the resident profile and de Hoog Laplace
-inversion of the exact Airy kernels.
+artefacts (CFL/Courant limit, numerical dispersion, Crank-Nicolson ringing) appear. The only numerical
+operations are Gauss-Legendre quadrature over the resident profile and de Hoog Laplace inversion of the
+exact special-function kernels: the Airy interior Green's functions for ``D_m = 0`` (flushed-volume
+clock, vectorized) and the Whittaker interior Green's functions for appreciable ``D_m > 0`` (wall-clock
+time, mpmath -- the molecular-diffusion regime is chosen by :func:`_molecular_regime`, KB addendum
+Sec. A6). The spectral-domain acceleration of the composition (KB addendum Sec. A4-A7) is not
+implemented here.
 
 State machine (deviation ``c' = c - c_bg``, initial condition 0)
 ---------------------------------------------------------------
@@ -36,20 +40,22 @@ import mpmath as mp
 import numpy as np
 import numpy.typing as npt
 
-from gwtransport._radial_compose import _fr_step_response
-from gwtransport._radial_dehoog import dehoog_inverse
-from gwtransport._radial_kernels import _resolvent_airy_pieces, assemble_airy_resolvent, whittaker_resolvent_solutions
+from gwtransport._radial_asr_compose import _fr_step_response
+from gwtransport._radial_asr_dehoog import dehoog_inverse
+from gwtransport._radial_asr_kernels import (
+    _molecular_regime,
+    _resolvent_airy_pieces,
+    assemble_airy_resolvent,
+    whittaker_resolvent_solutions,
+)
 
 # Working precision (decimal digits) for the mpmath Whittaker (D_m > 0) field propagation.
 _WHITTAKER_DPS = 30
 
 # de Hoog series length for the field-propagation inversion and the front-anchored scaling margin
-# (matched to the FR step response in _radial_compose).
+# (matched to the FR step response in _radial_asr_compose).
 _DEHOOG_TERMS = 44
 _SCALE_MARGIN = 1.3
-# Outer-radius safety factor: the field grid spans to where the plume volume reaches this multiple of
-# the peak net injected volume, plus a dispersive reach, so the (zero) far field is never clipped.
-_R_MAX_VOLUME_FACTOR = 3.0
 
 
 def _phase_slices(flow: npt.NDArray[np.floating]) -> list[tuple[int, slice]]:
@@ -73,10 +79,18 @@ def _field_grid(
     c_geo: float,
     r_w: float,
     alpha_l: float,
-    retardation_factor: float,
+    molecular_diffusivity: float,
     n_quad: int,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]]:
-    """Radial Gauss-Legendre quadrature grid spanning the full plume reach.
+    """Radial Gauss-Legendre quadrature grid spanning the plume front plus its dispersive tail.
+
+    The grid is kept **tight**: it covers the advective front radius ``r_front`` (where the plume
+    volume ``V(r) = peak net injected volume``) plus a margin of breakthrough widths (radial std
+    ``~ sqrt(alpha_L r_front)``) and a molecular reach, and no further. An over-extended grid would
+    push the Peclet so high that the divergent (injection) interior Green's function, which grows as
+    ``e^{+r/alpha_L}`` before its ``e^{-r/alpha_L}`` Sturm-Liouville weight tames the product, overflows
+    double precision; the resident profile is ``~0`` beyond the tail anyway (verified by mass
+    conservation). Retardation rescales the clock, not the radius, so it does not enter ``r_max``.
 
     Returns
     -------
@@ -89,8 +103,10 @@ def _field_grid(
     """
     net_volume = np.concatenate(([0.0], np.cumsum(flow * dt_days)))
     peak_volume = max(float(net_volume.max()), 0.0)
-    dispersive_reach = 6.0 * alpha_l * np.sqrt(max(retardation_factor * peak_volume / c_geo, 1.0))
-    r_max = np.sqrt(r_w**2 + _R_MAX_VOLUME_FACTOR * peak_volume / c_geo) + dispersive_reach + r_w
+    r_front = np.sqrt(r_w**2 + peak_volume / c_geo)  # advective plume-front radius
+    total_time = float(np.sum(dt_days))
+    reach = 12.0 * np.sqrt(alpha_l * r_front + alpha_l**2) + 6.0 * np.sqrt(molecular_diffusivity * total_time)
+    r_max = r_front + reach + r_w
     nodes, weights = np.polynomial.legendre.leggauss(n_quad)
     r_nodes = 0.5 * (r_max - r_w) * (nodes + 1.0) + r_w
     dr_weights = 0.5 * (r_max - r_w) * weights
@@ -391,17 +407,16 @@ def gridfree_cout_deviation(
         Extracted-flux deviation per bin; ``NaN`` on injection / rest bins.
     """
     flushed = np.abs(flow) * dt_days
-    r_nodes, v_nodes, dr_weights = _field_grid(flow, dt_days, c_geo, r_w, alpha_l, retardation_factor, n_quad)
-    # Basis-by-regime (KB addendum Sec. A6): molecular diffusion only dominates mechanical dispersion
-    # beyond the crossover radius a* = alpha_L A_0/D_m. The threshold a* >= r_max is the TRACTABILITY
-    # boundary -- beyond it the Whittaker branch is a large-parameter confluent hypergeometric that
-    # mpmath cannot evaluate -- so the Airy O(D_m/alpha_L|u|) reduction is used there. For physically
-    # realistic D_m (a* >> r_max, the usual case) the dropped molecular term is utterly negligible; only
-    # right at a* ~ r_max (which needs unphysically large D_m) is the dropped term a few percent.
-    if molecular_diffusivity > 0.0:
-        a0_repr = float(np.mean(np.abs(flow[flow != 0.0]))) / (2.0 * c_geo)
-        if alpha_l * a0_repr / molecular_diffusivity >= float(r_nodes.max()):
-            molecular_diffusivity = 0.0
+    # Build the advective (D_m-independent) grid first -- its reach is what the basis-by-regime decision
+    # compares against, and the molecular reach is only a grid detail once D_m is known to matter.
+    r_nodes, v_nodes, dr_weights = _field_grid(flow, dt_days, c_geo, r_w, alpha_l, 0.0, n_quad)
+    # Basis-by-regime (KB addendum Sec. A6): the Airy reduction where molecular diffusion is
+    # sub-dominant within the plume (or its exact Whittaker treatment intractable), the exact Whittaker
+    # branch where it is appreciable and tractable -- compared against the advective plume reach.
+    a0_repr = float(np.mean(np.abs(flow[flow != 0.0]))) / (2.0 * c_geo) if np.any(flow != 0.0) else 0.0
+    molecular_diffusivity = _molecular_regime(molecular_diffusivity, a0_repr, alpha_l, float(r_nodes.max()))
+    if molecular_diffusivity > 0.0:  # appreciable + tractable: widen the grid to the molecular reach
+        r_nodes, v_nodes, dr_weights = _field_grid(flow, dt_days, c_geo, r_w, alpha_l, molecular_diffusivity, n_quad)
     dv_weights = 2.0 * c_geo * r_nodes * dr_weights  # dV' = 2 c_geo r' dr' (cout readout measure)
     # Airy Sturm-Liouville propagation weights w_pm(r') dr' = (2 c_geo r'/alpha_L) e^{-/+ r'/alpha_L} dr'
     # (D_m = 0); the D_m > 0 weight is flow-dependent and built inside _propagate_whittaker.

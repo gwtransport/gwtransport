@@ -126,6 +126,7 @@ For an in-depth discussion of the core modeling approach, see :doc:`user_guide/c
    examples/10_Advection_with_non_linear_sorption.nblink
    examples/11_Percolation_Unsaturated_Zone.nblink
    examples/12_Bank_Filtration_Rainwater_Fraction.nblink
+   examples/13_Aquifer_Storage_Recovery.nblink
 
 .. toctree::
    :maxdepth: 2

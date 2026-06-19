@@ -14,7 +14,7 @@ import pytest
 
 from gwtransport.utils import compute_time_edges
 
-# Make tests-only helper modules (e.g. the finite-volume oracle _radial_fv_oracle) importable by bare
+# Make tests-only helper modules (e.g. the finite-volume oracle _radial_asr_fv_oracle) importable by bare
 # name under the importlib import mode.
 sys.path.insert(0, str(Path(__file__).parent))
 

@@ -3,7 +3,7 @@ r"""Vectorized double-precision de Hoog numerical Laplace inversion.
 This private module provides :func:`dehoog_inverse`, an implementation of the de Hoog, Knight &
 Stokes (1982) accelerated Fourier-series method for inverting a Laplace transform
 :math:`\bar f(s) \to f(t)`. It is the foundational numerical primitive of the exact radial
-advection-dispersion module: the per-phase transfer functions (:mod:`gwtransport._radial_kernels`)
+advection-dispersion module: the per-phase transfer functions (:mod:`gwtransport._radial_asr_kernels`)
 are known in closed form only in the Laplace domain, and the bin-level observable needs the
 real-time (here: real-flushed-volume) kernel and its antiderivatives, obtained by inverting
 :math:`\hat g/s` and :math:`\hat g/s^2`.
