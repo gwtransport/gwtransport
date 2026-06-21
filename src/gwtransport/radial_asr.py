@@ -49,8 +49,41 @@ Available functions:
 
 References
 ----------
+The references below give the published closed-form solutions for the **single-phase** radial *injection*
+problem (steady divergent flow from one well) -- the per-phase forward kernel this module composes. The
+convergent-extraction dual (KB Sec. 7) and the multi-cycle push-pull / ASR composition across flow
+reversals are built on top of those kernels here and are not in the single-injection references. All
+share the assumptions used here: a single fully-penetrating well in a homogeneous medium with steady
+divergent flow ``v = Q / (2 pi b n r)``, plus retardation.
+
+The ``D_m = 0`` kernel (velocity-proportional mechanical dispersion ``D = alpha_L |u|``, Airy functions)
+is the classical radial-dispersion problem: Tang & Babu (1979) under a Dirichlet (resident-concentration)
+well boundary, and Chen (1987) under the Cauchy / third-type (flux) boundary used here -- explicitly the
+Kreft-Zuber flux concentration, with transfer function ``Ai(Y) / [Ai(Y0)/2 - p^(1/3) Ai'(Y0)]`` equal to
+the flux operator this module evaluates. The ``D_m > 0`` kernel (``D = alpha_L |u| + D_m``, Kummer /
+confluent-hypergeometric functions) under the same flux boundary, with retardation, is Aichi & Akitaya
+(2018) -- whose well operator ``U(a,b) + 2a U(a+1,b+1)`` is this module's Whittaker flux boundary; they
+record the ``D_m -> 0`` reduction to Chen (1987) as an open problem, which this module performs as its
+basis-by-regime Airy/Whittaker dispatch. The ``alpha_L = 0`` limit (constant diffusion, drift-dominated
+radial transport, Whittaker equation) is Akanji & Falade (2019). Each is an injection-only solution; none
+treats extraction or multi-cycle push-pull.
+
 Kreft, A., & Zuber, A. (1978). On the physical meaning of the dispersion equation and its solutions
 for different initial and boundary conditions. Chemical Engineering Science, 33(11), 1471-1480.
+
+Tang, D. H., & Babu, D. K. (1979). Analytical solution of a velocity dependent dispersion problem.
+Water Resources Research, 15(6), 1471-1478.
+
+Chen, C.-S. (1987). Analytical solutions for radial dispersion with Cauchy boundary at injection well.
+Water Resources Research, 23(7), 1217-1224.
+
+Aichi, M., & Akitaya, K. (2018). Analytical solution for a radial advection-dispersion equation
+including both mechanical dispersion and molecular diffusion for a steady-state flow field in a
+horizontal aquifer caused by a constant rate injection from a well. Hydrological Research Letters,
+12(3), 23-27.
+
+Akanji, L. T., & Falade, G. K. (2019). Closed-form solution of radial transport of tracers in porous
+media influenced by linear drift. Energies, 12(1), 29.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
