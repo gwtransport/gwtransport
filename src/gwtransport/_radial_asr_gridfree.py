@@ -25,12 +25,18 @@ read out ``cout``:
   flux concentration, read from the current field via the KB Sec. 7 duality kernel (the same FR step
   response); if more pumping follows, the residual field is propagated inward by the convergent
   interior Green's function ``G_-`` (Danckwerts/Neumann well BC) for the next phase.
-* **Rest** (``Q = 0``, ``D_m = 0``): identity (no transport).
+* **Rest** (``Q = 0``): pure molecular diffusion. Advection and mechanical dispersion vanish; only
+  ``D_m`` acts, on the wall-clock clock (KB Sec. 3 -- the molecular clock keeps running while the flow
+  is off), so the field is propagated by the order-0 modified Bessel interior Green's function
+  (``rest_resolvent``). For ``D_m = 0`` rest is identity. This is the dominant mixing for seasonal
+  storage / ATES (long rests, large thermal ``D_m``) and uses the physical ``D_m`` regardless of the
+  pumping-phase basis-by-regime choice (the Bessel branch has no Whittaker tractability cap).
 
-Everything is carried in the flushed-volume clock, so arbitrary within-phase variable flow is exact
-(the S-clock convolution theorem, KB Sec. 3). Retardation ``R`` is a pure clock rescale (propagate
-over flushed-volume ``/R``). The across-reversal field hand-off ``G_+ / G_-`` (addendum Sec. A3) is the
-``O(n_quad^2)`` part; it runs once per intermediate reversal.
+The pumping phases are carried in the flushed-volume clock, so arbitrary within-phase variable flow is
+exact (the S-clock convolution theorem, KB Sec. 3); rest phases run in wall-clock time. Retardation
+``R`` is a pure clock rescale (flushed-volume ``/R`` for pumping; ``D_m -> D_m/R`` for rest). The
+across-reversal field hand-off ``G_+ / G_-`` (addendum Sec. A3) is the ``O(n_quad^2)`` part; it runs
+once per intermediate reversal.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -46,6 +52,7 @@ from gwtransport._radial_asr_kernels import (
     _molecular_regime,
     _resolvent_airy_pieces,
     assemble_airy_resolvent,
+    rest_resolvent,
     whittaker_resolvent_solutions,
 )
 
@@ -359,6 +366,44 @@ def _propagate_whittaker(
     return out
 
 
+def _propagate_rest(
+    field: npt.NDArray[np.floating],
+    r_nodes: npt.NDArray[np.floating],
+    dr_weights: npt.NDArray[np.floating],
+    tau: float,
+    *,
+    r_w: float,
+    d_m_eff: float,
+) -> npt.NDArray[np.floating]:
+    r"""Propagate a resident field by wall-clock time ``tau`` through a rest phase (pure diffusion).
+
+    During rest ``Q = 0``: advection and mechanical dispersion vanish, only molecular diffusion acts,
+    on the wall-clock clock (KB Sec. 3). The field is propagated by the order-0 modified Bessel interior
+    Green's function (:func:`gwtransport._radial_asr_kernels.rest_resolvent`) with the Sturm-Liouville
+    source measure ``w(r') dr' = (r'/D_m) dr'`` (pinned by mass conservation against the finite-volume
+    oracle): ``f_resid(r_i) = L^{-1}_s[ sum_k Ghat(r_i, r_k; s) field_k (r_k/D_m) dr_k ](tau)``, one de
+    Hoog inversion per output node. Retardation enters as ``d_m_eff = D_m/R`` (the storage rescale), so
+    the kernel and measure both use ``d_m_eff``.
+
+    Returns
+    -------
+    ndarray
+        Propagated resident deviation at each node, shape ``(n_quad,)``.
+    """
+    weighted = field * (r_nodes / d_m_eff) * dr_weights
+    if not np.any(weighted != 0.0):
+        return np.zeros_like(field)
+    scaling = _SCALE_MARGIN * tau
+    out = np.empty(len(r_nodes))
+    for i in range(len(r_nodes)):
+
+        def f_hat(p: npt.NDArray[np.complexfloating], i: int = i) -> npt.NDArray[np.complexfloating]:
+            return rest_resolvent(s=p, r=float(r_nodes[i]), r_prime=r_nodes, r_w=r_w, d_m=d_m_eff) @ weighted
+
+        out[i] = dehoog_inverse(f_hat=f_hat, t=np.array([tau]), n_terms=_DEHOOG_TERMS, scaling=scaling)[0]
+    return out
+
+
 def gridfree_cout_deviation(
     *,
     cin_deviation: npt.NDArray[np.floating],
@@ -407,16 +452,23 @@ def gridfree_cout_deviation(
         Extracted-flux deviation per bin; ``NaN`` on injection / rest bins.
     """
     flushed = np.abs(flow) * dt_days
-    # Build the advective (D_m-independent) grid first -- its reach is what the basis-by-regime decision
-    # compares against, and the molecular reach is only a grid detail once D_m is known to matter.
+    d_m_physical = molecular_diffusivity  # rest phases always diffuse with the physical D_m (Bessel branch)
+    # Build the advective (D_m-independent) grid first -- its reach is what the pumping-kernel
+    # basis-by-regime decision compares against (the molecular reach is only a grid detail).
     r_nodes, v_nodes, dr_weights = _field_grid(flow, dt_days, c_geo, r_w, alpha_l, 0.0, n_quad)
-    # Basis-by-regime (KB addendum Sec. A6): the Airy reduction where molecular diffusion is
-    # sub-dominant within the plume (or its exact Whittaker treatment intractable), the exact Whittaker
-    # branch where it is appreciable and tractable -- compared against the advective plume reach.
+    # Pumping-kernel basis-by-regime (KB addendum Sec. A6): the Airy reduction where molecular diffusion
+    # is sub-dominant within the plume (or its exact Whittaker treatment intractable), the exact Whittaker
+    # branch where it is appreciable and tractable. This governs ONLY the inject/extract kernels; rest
+    # diffusion below always uses the physical D_m (the Bessel branch has no tractability cap).
     a0_repr = float(np.mean(np.abs(flow[flow != 0.0]))) / (2.0 * c_geo) if np.any(flow != 0.0) else 0.0
-    molecular_diffusivity = _molecular_regime(molecular_diffusivity, a0_repr, alpha_l, float(r_nodes.max()))
-    if molecular_diffusivity > 0.0:  # appreciable + tractable: widen the grid to the molecular reach
-        r_nodes, v_nodes, dr_weights = _field_grid(flow, dt_days, c_geo, r_w, alpha_l, molecular_diffusivity, n_quad)
+    molecular_diffusivity = _molecular_regime(d_m_physical, a0_repr, alpha_l, float(r_nodes.max()))
+    has_rest = bool(np.any(flow == 0.0))
+    # Widen the grid to the molecular reach only where molecular diffusion is actually modelled: Whittaker
+    # pumping (molecular_diffusivity > 0) or a rest phase (Bessel, uses d_m_physical). Airy pumping with no
+    # rest models no molecular diffusion, so the advective grid suffices and the result stays bit-identical
+    # to D_m = 0 (the basis-by-regime reduction is exact there).
+    if molecular_diffusivity > 0.0 or (d_m_physical > 0.0 and has_rest):
+        r_nodes, v_nodes, dr_weights = _field_grid(flow, dt_days, c_geo, r_w, alpha_l, d_m_physical, n_quad)
     dv_weights = 2.0 * c_geo * r_nodes * dr_weights  # dV' = 2 c_geo r' dr' (cout readout measure)
     # Airy Sturm-Liouville propagation weights w_pm(r') dr' = (2 c_geo r'/alpha_L) e^{-/+ r'/alpha_L} dr'
     # (D_m = 0); the D_m > 0 weight is flow-dependent and built inside _propagate_whittaker.
@@ -459,7 +511,16 @@ def gridfree_cout_deviation(
     for idx, (sign, sl) in enumerate(phases):
         phase_flushed = flushed[sl]
         phase_volume = float(phase_flushed.sum())
-        if phase_volume == 0.0:  # rest (D_m = 0): identity
+        if phase_volume == 0.0:  # rest: pure molecular diffusion on the wall-clock clock (D_m = 0 -> identity)
+            if d_m_physical > 0.0:
+                field = _propagate_rest(
+                    field,
+                    r_nodes,
+                    dr_weights,
+                    float(np.sum(dt_days[sl])),
+                    r_w=r_w,
+                    d_m_eff=d_m_physical / retardation_factor,
+                )
             continue
         flow_scale = float(np.mean(np.abs(flow[sl])))
         phase_time = float(np.sum(dt_days[sl]))

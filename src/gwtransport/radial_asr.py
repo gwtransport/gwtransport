@@ -9,14 +9,18 @@ the exact Airy / Whittaker per-phase kernels. Nothing is reduced to a Gaussian; 
 non-Gaussian breakthrough (with the correct skewness) is carried.
 
 The forward map is **grid-free** end to end -- no PDE is discretized, so none of the finite-volume
-artefacts appear. A single inject-then-extract cycle uses the closed-form echo operator
+artefacts appear. A single inject-then-extract cycle with no intervening rest uses the closed-form echo operator
 (``gwtransport._radial_asr_compose``, KB Sec. 10a) -- exact for arbitrary within-phase variable flow,
-with the exact temporal moments. Any other signed-flow schedule (more reversals / multi-cycle ASR)
-uses the grid-free multi-cycle engine (``gwtransport._radial_asr_gridfree``, KB addendum Sec. A1-A4),
-which composes the exact per-phase Airy / Whittaker kernels through the interior two-point Green's
-functions. Molecular diffusion is handled basis-by-regime (KB addendum Sec. A6): the exact Whittaker
-branch where it is appreciable within the plume, and its exact Airy reduction (dispatch and error
-quantified in ``gwtransport._radial_asr_kernels._molecular_regime``) where it is sub-dominant. The only
+with the exact temporal moments. Any other signed-flow schedule (more reversals / multi-cycle ASR, or a
+single cycle with a rest under nonzero ``D_m``) uses the grid-free multi-cycle engine
+(``gwtransport._radial_asr_gridfree``, KB addendum Sec. A1-A4), which composes the exact per-phase
+Airy / Whittaker kernels through the interior two-point Green's functions. Molecular diffusion during
+pumping is handled basis-by-regime (KB addendum Sec. A6): the exact Whittaker branch where it is
+appreciable within the plume, and its exact Airy reduction (dispatch and error quantified in
+``gwtransport._radial_asr_kernels._molecular_regime``) where it is sub-dominant. During a **rest**
+(``Q = 0``) advection and mechanical dispersion vanish and molecular diffusion acts alone on the
+wall-clock clock; it is carried exactly by the order-0 modified Bessel pure-diffusion kernel (no
+tractability cap), the dominant mixing for seasonal storage / ATES. The only
 numerical steps are Gauss-Legendre quadrature and de Hoog Laplace inversion of exact special-function
 kernels. An independent finite-volume solve of the same PDE (``tests/src/_radial_asr_fv_oracle.py``,
 KB Sec. 9) is retained only as a test oracle. The spectral-domain acceleration of the multi-cycle
@@ -338,7 +342,11 @@ def infiltration_to_extraction(
     )
     c_geos = np.pi * pore_heights * porosity
     cout = np.full(len(flow), np.nan)
-    if _is_single_cycle(flow):
+    # A rest phase combined with molecular diffusion (seasonal storage / ATES) cannot use the
+    # flushed-volume echo operator, which is blind to a rest's wall-clock diffusion; route it to the
+    # grid-free engine (which propagates the rest with the Bessel pure-diffusion kernel).
+    use_echo = _is_single_cycle(flow) and not (molecular_diffusivity > 0.0 and np.any(flow == 0.0))
+    if use_echo:
         w_ens, inj_mask, ext_mask = _echo_operator(
             flow=flow,
             tedges=tedges,
@@ -425,7 +433,9 @@ def extraction_to_infiltration(
         weights=None if weights is None else weights_arr,
     )
     c_geos = np.pi * pore_heights * porosity
-    if _is_single_cycle(flow):
+    # A rest phase with molecular diffusion routes to the grid-free engine (see the forward function).
+    use_echo = _is_single_cycle(flow) and not (molecular_diffusivity > 0.0 and np.any(flow == 0.0))
+    if use_echo:
         w_ens, inj_mask, ext_mask = _echo_operator(
             flow=flow,
             tedges=tedges,

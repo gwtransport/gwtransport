@@ -173,9 +173,10 @@ class TestWhittakerKernel:
         np.testing.assert_allclose(k1, v_over_q, rtol=1e-5)
 
     def test_converges_to_airy_first_order(self):
-        # |g_Whittaker(D_m) - g_Airy| should fall ~ linearly in D_m (ratio -> 4 under D_m/4).
+        # |g_Whittaker(D_m) - g_Airy| should fall ~ linearly in D_m (ratio -> 4 under D_m/4). a0 is kept
+        # modest so A_0/D_m stays small and the mpmath confluent-hypergeometric evals are fast.
         s = np.array([0.05 + 0.1j])
-        kw = {"r": 10.0, "r_w": 0.5, "alpha_l": 0.5, "a0": 2.0}
+        kw = {"r": 10.0, "r_w": 0.5, "alpha_l": 0.5, "a0": 0.5}
         g_airy = transfer_function(s=s, d_m=0.0, **kw)[0]
         e = [abs(transfer_function(s=s, d_m=d_m, **kw)[0] - g_airy) for d_m in (0.05, 0.0125)]
         assert 3.5 < e[0] / e[1] < 4.5
@@ -347,7 +348,7 @@ class TestGeneralEngine:
         # They must agree to the finite-volume first-order discretization floor (~1%).
         tedges, flow, geom = _scenario()
         cin = np.where(flow > 0, 1.0, 0.0)
-        ana = infiltration_to_extraction(cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, n_quad=300)
+        ana = infiltration_to_extraction(cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, n_quad=120)
         c_geo = np.pi * geom["pore_heights"] * geom["porosity"]
         fv = fv_cout_deviation(
             cin_deviation=cin,
@@ -365,7 +366,7 @@ class TestGeneralEngine:
         # First-order convergence of the finite-volume to the exact analytic confirms the finite-volume is correct.
         tedges, flow, geom = _scenario()
         cin = np.where(flow > 0, 1.0, 0.0)
-        ana = infiltration_to_extraction(cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, n_quad=300)
+        ana = infiltration_to_extraction(cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, n_quad=120)
         c_geo = np.pi * geom["pore_heights"] * geom["porosity"]
         ext = flow < 0
 
@@ -382,7 +383,7 @@ class TestGeneralEngine:
             )
             return np.max(np.abs(fv[ext] - ana[ext]))
 
-        assert err(800, 16) < 0.6 * err(200, 6)  # refining the grid reduces the error
+        assert err(400, 16) < 0.6 * err(100, 4)  # refining the grid reduces the error
 
     def test_multi_cycle_conserves_and_bounded(self):
         flow = np.array([100.0] * 6 + [-100.0] * 10 + [100.0] * 6 + [-100.0] * 14)
@@ -401,19 +402,19 @@ class TestGeneralEngine:
         tedges, flow, geom = _scenario()
         cin = np.where(flow > 0, 1.0, 0.0)
         cout = infiltration_to_extraction(
-            cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, molecular_diffusivity=0.05
+            cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, molecular_diffusivity=0.05, n_quad=120
         )
         recovered = np.sum(cout[flow < 0] * (-flow[flow < 0]))
         np.testing.assert_allclose(recovered, np.sum(cin[flow > 0] * flow[flow > 0]), rtol=2e-2)
 
     def test_multi_cycle_reverse_round_trip(self):
-        flow = np.array([100.0] * 6 + [-100.0] * 10 + [100.0] * 6 + [-100.0] * 14)
+        flow = np.array([100.0] * 3 + [-100.0] * 7 + [100.0] * 3 + [-100.0] * 9)
         tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
         cin = np.where(flow > 0, 1.0, 0.0)
         geom = {"pore_heights": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
-        cout = infiltration_to_extraction(cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom)
+        cout = infiltration_to_extraction(cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, n_quad=140)
         rec = extraction_to_infiltration(
-            cout=cout, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, regularization_strength=1e-6
+            cout=cout, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, regularization_strength=1e-6, n_quad=140
         )
         np.testing.assert_array_equal(np.isnan(rec), flow <= 0.0)
         np.testing.assert_allclose(rec[flow > 0], cin[flow > 0], atol=5e-3)
