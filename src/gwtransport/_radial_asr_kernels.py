@@ -39,17 +39,38 @@ import numpy.typing as npt
 from flint import acb, ctx
 from scipy.special import airye, ive, kve
 
-# Working precision (bits) for the flint (python-flint / Arb) Whittaker (D_m > 0) branch. 512 bits keeps
-# the confluent-hypergeometric values exact (Arb's error ball stays below the double-precision floor) and
-# the divergent-normalization cancellation clean up to A_0/D_m ~ 200. Arb returns a rigorous enclosure, so
-# any precision loss is detectable rather than silent.
-_WHITTAKER_PREC = 512
+# Working precision (bits) for the flint (python-flint / Arb) Whittaker (D_m > 0) branch. The decaying
+# U(a, b, z) carries a divergent gauge (~ z^{-a}, a ~ -A_0/(2 D_m)); resolving its cancellation in the
+# FF / resolvent RATIO needs ~ kappa a* bits (kappa = sqrt(|s|/D_m), a* = alpha_L A_0/D_m). The precision
+# is SCALED to that magnitude by _whittaker_prec (a fixed 512 bits was a precision artifact that made the
+# kernel non-finite past A_0/D_m ~ 300 -- Arb's U itself is finite there, only the under-resolved ratio
+# was not). _WHITTAKER_PREC_MAX caps the cost; near-well nodes that would need more carry resident
+# profile ~0, so the cap is harmless there.
+_WHITTAKER_PREC_BASE = 256
+_WHITTAKER_PREC_MAX = 12000
 
-# Tractability cap for the Whittaker (D_m > 0) branch. b = 1 +/- A_0/D_m and the argument scales with
-# a* = alpha_L A_0/D_m; the Arb confluent-hypergeometric evaluation returns non-finite balls once |b| is
-# extreme (A_0/D_m beyond ~250-300, independent of precision). The cap is set safely below that; above it
-# the Airy reduction is used (its O(D_m/alpha_L|u|) error is < 1% there and keeps shrinking with A_0/D_m).
-_WHITTAKER_MAX_RATIO = 150.0
+# Cap on A_0/D_m for the exact Whittaker branch. Below it, adaptive precision keeps flint machine-exact;
+# above it the required precision (~kappa a* bits) exceeds _WHITTAKER_PREC_MAX and the per-node cost is
+# impractical, so the Airy reduction is used (its O(D_m/alpha_L|u|) error is < ~0.5% there and keeps
+# shrinking with A_0/D_m). This is a performance boundary, not the old fixed-precision wall.
+_WHITTAKER_MAX_RATIO = 1000.0
+
+
+def _whittaker_prec(s_abs: float, alpha_l: float, a0_eff: float, d_m_eff: float) -> int:
+    """Adaptive flint working precision (bits) for the Whittaker branch at Laplace magnitude ``|s|``.
+
+    Scales with the divergent gauge cancellation ``~ kappa a*`` (``kappa = sqrt(|s|/D_m)``,
+    ``a* = alpha_L A_0/D_m``) so the FF / resolvent ratios stay machine-exact at any ``A_0/D_m`` up to the
+    cap; bounded by ``_WHITTAKER_PREC_MAX``.
+
+    Returns
+    -------
+    int
+        Working precision in bits.
+    """
+    kappa = (s_abs / d_m_eff) ** 0.5
+    astar = alpha_l * a0_eff / d_m_eff
+    return min(_WHITTAKER_PREC_MAX, _WHITTAKER_PREC_BASE + int(2.0 * kappa * astar / np.log(2.0)))
 
 
 def _molecular_regime(molecular_diffusivity: float, a0: float, alpha_l: float, plume_reach: float) -> float:
@@ -65,9 +86,9 @@ def _molecular_regime(molecular_diffusivity: float, a0: float, alpha_l: float, p
     * ``a* < plume_reach`` and ``A_0/D_m <= _WHITTAKER_MAX_RATIO`` -- molecular diffusion is appreciable
       within the plume and the flint (Arb) Whittaker branch is exact and tractable; keep ``D_m`` (exact).
     * ``a* < plume_reach`` and ``A_0/D_m > _WHITTAKER_MAX_RATIO`` -- molecular diffusion is appreciable but
-      the Arb confluent-hypergeometric evaluation returns non-finite balls (``b = 1 - A_0/D_m`` too extreme
-      for the evaluator); fall back to the Airy reduction and warn (relative error grows with
-      ``plume_reach/a*``).
+      the precision the exact Whittaker would need (``~kappa a*`` bits; see :func:`_whittaker_prec`) exceeds
+      the budget and the per-node cost is impractical; fall back to the Airy reduction and warn (its
+      relative error is < ~0.5% there and grows with ``plume_reach/a*``).
 
     Returns
     -------
@@ -82,10 +103,10 @@ def _molecular_regime(molecular_diffusivity: float, a0: float, alpha_l: float, p
     if a0 / molecular_diffusivity > _WHITTAKER_MAX_RATIO:
         warnings.warn(
             f"Molecular diffusion is appreciable (crossover a*={a_star:.1f} m is within the plume reach "
-            f"{plume_reach:.1f} m) but the exact flint Whittaker is non-finite for A_0/D_m="
-            f"{a0 / molecular_diffusivity:.0f} (> {_WHITTAKER_MAX_RATIO:.0f}; b too extreme for Arb). "
-            f"Falling back to the Airy reduction, which neglects molecular diffusion; the relative error "
-            f"grows with plume_reach/a* = {plume_reach / a_star:.1f}. Reduce D_m if physically justified.",
+            f"{plume_reach:.1f} m) but the exact flint Whittaker would need impractical precision for "
+            f"A_0/D_m={a0 / molecular_diffusivity:.0f} (> {_WHITTAKER_MAX_RATIO:.0f}). Falling back to the "
+            f"Airy reduction, which neglects molecular diffusion; the relative error grows with "
+            f"plume_reach/a* = {plume_reach / a_star:.1f}. Reduce D_m if physically justified.",
             stacklevel=2,
         )
         return 0.0
@@ -165,7 +186,7 @@ def _whittaker_phi_and_flux(
     flux : flint.acb
         Flux-operator image ``F[phi_s](r)``.
     """
-    ctx.prec = _WHITTAKER_PREC
+    ctx.prec = _whittaker_prec(abs(s), alpha_l, a0_eff, d_m_eff)
     kappa = (acb(s.real, s.imag) / d_m_eff).sqrt()
     astar = alpha_l * a0_eff / d_m_eff
     b = 1 - sigma_a * a0_eff / d_m_eff
@@ -204,7 +225,7 @@ def whittaker_resolvent_solutions(
         ``r``-derivatives, at scalar ``s`` and ``r`` (as ``acb`` so the caller's divergent-normalization
         cancellation runs in Arb extended precision before rounding).
     """
-    ctx.prec = _WHITTAKER_PREC
+    ctx.prec = _whittaker_prec(abs(s), alpha_l, a0_eff, d_m_eff)
     kappa = (acb(s.real, s.imag) / d_m_eff).sqrt()
     astar = alpha_l * a0_eff / d_m_eff
     b = 1 - sigma_a * a0_eff / d_m_eff
