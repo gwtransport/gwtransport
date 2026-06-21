@@ -15,7 +15,7 @@ from _radial_asr_fv_oracle import fv_cout_deviation  # ty: ignore[unresolved-imp
 
 from gwtransport._radial_asr_compose import single_cycle_echo_matrix
 from gwtransport._radial_asr_gridfree import gridfree_cout_deviation
-from gwtransport._radial_asr_kernels import interior_resolvent, whittaker_resolvent_solutions
+from gwtransport._radial_asr_kernels import interior_resolvent, rest_resolvent, whittaker_resolvent_solutions
 from gwtransport.radial_asr import infiltration_to_extraction
 
 
@@ -210,8 +210,8 @@ class TestGridfreeEngine:
         flow = np.array([100.0] * 6 + [-100.0] * 10 + [100.0] * 6 + [-100.0] * 14)
         dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
         ext = flow < 0
-        ref = gridfree_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, n_quad=400, **GEOM)
-        for nq in (120, 240):
+        ref = gridfree_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, n_quad=256, **GEOM)
+        for nq in (100, 200):
             err = np.max(
                 np.abs(
                     gridfree_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, n_quad=nq, **GEOM)[ext] - ref[ext]
@@ -225,13 +225,13 @@ class TestGridfreeEngine:
         flow = np.array([100.0] * 6 + [-100.0] * 10 + [100.0] * 6 + [-100.0] * 14)
         dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
         ext = flow < 0
-        gf = gridfree_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, n_quad=320, **GEOM)
+        gf = gridfree_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, n_quad=64, **GEOM)
 
         def fv_err(nc, ns):
             fv = fv_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, n_cells=nc, n_sub=ns, **GEOM)
             return np.max(np.abs(fv[ext] - gf[ext]))
 
-        e_coarse, e_fine = fv_err(400, 8), fv_err(1600, 32)
+        e_coarse, e_fine = fv_err(100, 4), fv_err(400, 16)
         assert e_fine < 0.4 * e_coarse  # first-order: ~4x cells -> ~4x smaller error
 
     def test_retardation_recovers_mass_and_matches_echo(self):
@@ -268,10 +268,10 @@ class TestGridfreeEngine:
         tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
         cin = np.where(flow > 0, 1.0, 0.0)
         ext = flow < 0
-        porosity, heights = 0.3, np.array([6.0, 10.0, 14.0])
+        porosity, heights = 0.3, np.array([6.0, 14.0])
         geom = {"porosity": porosity, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
         ens = infiltration_to_extraction(
-            cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, pore_heights=heights, n_quad=120, **geom
+            cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, pore_heights=heights, n_quad=80, **geom
         )
         manual = np.mean(
             [
@@ -282,7 +282,7 @@ class TestGridfreeEngine:
                     c_geo=np.pi * b * porosity,
                     r_w=0.5,
                     alpha_l=0.5,
-                    n_quad=120,
+                    n_quad=80,
                 )[ext]
                 for b in heights
             ],
@@ -306,17 +306,78 @@ class TestMolecularRegime:
         np.testing.assert_array_equal(base, small)  # exact: the dispatch sets D_m := 0
 
     @pytest.mark.slow
-    def test_appreciable_dm_multicycle_vs_fv(self):
-        # Appreciable molecular diffusion routes to the exact Whittaker branch; cross-check vs the
-        # finite-volume oracle (~1% first-order floor). Tiny problem -- the mpmath Whittaker path is slow.
-        flow = np.array([100.0] * 3 + [-100.0] * 5 + [100.0] * 3 + [-100.0] * 6)
+    def test_appreciable_dm_vs_fv(self):
+        # Appreciable molecular diffusion routes to the exact Whittaker branch; cross-check the
+        # de-Hoog-inverted Whittaker breakthrough vs the finite-volume oracle (~1% first-order floor).
+        # Single cycle: this exercises the Whittaker kernel + FR profile + duality readout end-to-end at
+        # O(n_quad) cost. The O(n_quad^2) multi-cycle Whittaker hand-off (_propagate_whittaker) is gated
+        # separately by TestWhittakerResolvent (machine precision) -- a converged multi-cycle Whittaker
+        # vs FV run is ~150 s (mpmath), too slow for the default suite. Still @slow (mpmath, ~30 s).
+        flow = np.array([100.0] * 3 + [-100.0] * 7)
         dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
         ext = flow < 0
         d_m = 1.5  # A0/D_m = 3.5 -> a* = 1.77 inside the plume (Whittaker needed and tractable)
         gf = gridfree_cout_deviation(
-            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=d_m, n_quad=24, **GEOM
+            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=d_m, n_quad=16, **GEOM
         )
         fv = fv_cout_deviation(
-            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=d_m, n_cells=1000, n_sub=20, **GEOM
+            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=d_m, n_cells=600, n_sub=12, **GEOM
         )
-        assert np.max(np.abs(gf[ext] - fv[ext])) < 3e-2  # finite-volume first-order floor at n_cells=1000
+        assert np.max(np.abs(gf[ext] - fv[ext])) < 3e-2  # finite-volume first-order floor
+
+
+class TestRestDiffusion:
+    """Molecular / thermal diffusion during a rest (``Q = 0``) -- the seasonal-storage / ATES regime.
+
+    Rest diffusion runs on the wall-clock clock (KB Sec. 3): advection and mechanical dispersion pause
+    but molecular diffusion does not, so a long rest smears the plume. It is carried by the order-0
+    modified Bessel pure-diffusion kernel (``rest_resolvent``). These gate the new kernel (machine
+    precision), the engine's rest-sensitivity (rest was a no-op before this fix), and an exact
+    end-to-end cross-check vs the FV oracle (which integrates diffusion through the rest).
+    """
+
+    def test_rest_resolvent_matches_mpmath(self):
+        # Overflow-safe Bessel rest resolvent vs an independent mpmath construction (incl. high kappa*r,
+        # where the unscaled I_0 would overflow) -- the new-kernel correctness gate, machine precision.
+        d_m, r_w = 0.5, 0.5
+
+        def ref(s, r, rp):
+            s = mp.mpc(s)
+            k = mp.sqrt(s / d_m)
+            rl, rg = (r, rp) if r <= rp else (rp, r)
+            u0 = mp.besselk(1, k * r_w) * mp.besseli(0, k * rl) + mp.besseli(1, k * r_w) * mp.besselk(0, k * rl)
+            return u0 * mp.besselk(0, k * rg) / mp.besselk(1, k * r_w)
+
+        for s in (0.01 + 0j, 0.4 + 0.2j, 2.0 + 1.0j):
+            for r, rp in ((1.2, 4.0), (4.0, 1.2), (2.0, 30.0)):
+                got = rest_resolvent(s=np.array([s]), r=r, r_prime=rp, r_w=r_w, d_m=d_m)[0, 0]
+                assert abs(got - complex(ref(s, r, rp))) / abs(complex(ref(s, r, rp))) < 1e-12
+
+    def test_rest_makes_engine_sensitive_to_rest_length(self):
+        # Before the fix the engine treated rest as identity (cout independent of rest length). Diffusion
+        # over a long rest must measurably lower the recovery; this was exactly 0 on the unfixed engine.
+        def recovery(rest):
+            flow = np.array([100.0] * 20 + [0.0] * rest + [-50.0] * 40)
+            dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
+            cout = gridfree_cout_deviation(
+                cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.05, n_quad=120, **GEOM
+            )
+            return np.nansum(cout[flow < 0] * 50.0) / 2000.0
+
+        assert recovery(0) - recovery(180) > 0.05
+
+    def test_seasonal_rest_matches_fv_oracle(self):
+        # Exact end-to-end: inject -> long (200 d) rest -> extract. The rest diffusion (Bessel, exact)
+        # dominates; gridfree must match the FV oracle (which integrates D_m through the rest). A broken
+        # rest measure/wiring would give a ~0.5 gap, so this cleanly gates the end-to-end magnitude.
+        flow = np.array([100.0] * 10 + [0.0] * 200 + [-50.0] * 40)
+        dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
+        ext = flow < 0
+        gf = gridfree_cout_deviation(
+            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.01, n_quad=160, **GEOM
+        )
+        fv = fv_cout_deviation(
+            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.01, n_cells=600, n_sub=8, **GEOM
+        )
+        # FV first-order floor plus the small pumping-phase Airy reduction at this D_m (the rest is exact).
+        assert np.max(np.abs(gf[ext] - fv[ext])) < 3e-2

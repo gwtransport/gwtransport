@@ -35,7 +35,7 @@ import warnings
 import mpmath as mp
 import numpy as np
 import numpy.typing as npt
-from scipy.special import airye
+from scipy.special import airye, ive, kve
 
 # Working precision (decimal digits) for the mpmath Whittaker (D_m > 0) branch. 30 digits is ample
 # for double-precision output and absorbs the cancellation in the U-function ratios in the
@@ -443,3 +443,66 @@ def assemble_airy_resolvent(
     exp_a = g * r_sum - (piece_a["xi"] + piece_b["xi"] - 2.0 * piece_w["xi"])
     exp_b = g * r_sum + (piece_a["xiR"] - piece_w["xiR"]) - (piece_b["xi"] - piece_w["xi"])
     return -(pref_a * np.exp(exp_a) - pref_b * np.exp(exp_b))
+
+
+def rest_resolvent(
+    *,
+    s: npt.NDArray[np.complexfloating],
+    r: float,
+    r_prime: npt.ArrayLike,
+    r_w: float,
+    d_m: float,
+) -> npt.NDArray[np.complexfloating]:
+    r"""Interior two-point resolvent ``Ghat(r, r'; s)`` of a rest (``Q = 0``) phase -- pure diffusion.
+
+    With no flow the constant-Q ODE (KB Sec. 4) loses its advective and mechanical-dispersion terms and
+    collapses to the order-0 modified Bessel equation ``C'' + C'/r - (s/D_m) C = 0`` with
+    ``kappa = sqrt(s/D_m)``. The resident solution decaying as ``r -> inf`` is ``u_inf = K_0(kappa r)``;
+    the no-dispersive-flux (Danckwerts/Neumann) well solution is
+    ``u_0(r) = K_1(kappa r_w) I_0(kappa r) + I_1(kappa r_w) K_0(kappa r)`` (so ``u_0'(r_w) = 0``). The
+    Sturm-Liouville Wronskian normalization is ``N(s) = r [u_0 u_inf' - u_0' u_inf] = -K_1(kappa r_w)``
+    (constant in ``r``), giving
+
+    ``Ghat(r, r'; s) = -u_0(r_<) u_inf(r_>) / N(s) = u_0(r_<) K_0(kappa r_>) / K_1(kappa r_w)``,
+
+    ``r_< = min(r, r')``, ``r_> = max(r, r')``. It is evaluated overflow-safe with the exponentially
+    scaled modified Bessel functions (``scipy.special.ive``/``kve``): each term is a ratio whose scaling
+    exponents difference to a bounded value, so the growing ``I_0`` never overflows at high ``kappa r``.
+    The clock is wall-clock time (molecular diffusion is autonomous in ``t``); pair with the source
+    measure ``w(r') dr' = (r'/D_m) dr'`` (the Sturm-Liouville weight) when superposing a resident field.
+
+    Parameters
+    ----------
+    s : ndarray of complex
+        Laplace nodes (conjugate to wall-clock time). Shape ``(n_s,)``.
+    r : float
+        Output radius (m), ``>= r_w``.
+    r_prime : array-like
+        Source radius/radii (m), ``>= r_w``. Scalar or shape ``(n_r',)``.
+    r_w : float
+        Well radius (m).
+    d_m : float
+        Molecular diffusivity (m^2/day), ``> 0``.
+
+    Returns
+    -------
+    ndarray of complex
+        ``Ghat(r, r'; s)``, shape ``(n_s, n_r')`` (broadcast of ``s`` and ``r_prime``).
+    """
+    s = np.asarray(s, dtype=complex).reshape(-1, 1)
+    rp = np.atleast_1d(np.asarray(r_prime, dtype=float)).reshape(1, -1)
+    kappa = np.sqrt(s / d_m)  # principal root; Re(s) > 0 on the Bromwich contour gives Re(kappa) > 0
+    r_lt = np.minimum(r, rp)
+    r_gt = np.maximum(r, rp)
+    z_lt, z_gt, z_w = kappa * r_lt, kappa * r_gt, kappa * r_w
+    # Ghat = [I_0(z_<) + (I_1(z_w)/K_1(z_w)) K_0(z_<)] K_0(z_>); split so the scaled-Bessel scaling
+    # exponents (ive scales by e^{-|Re z|}, kve by e^{+z}) difference to bounded values -- no overflow.
+    term_inner = ive(0, z_lt) * kve(0, z_gt) * np.exp(np.abs(z_lt.real) - z_gt)
+    term_outer = (
+        (ive(1, z_w) / kve(1, z_w))
+        * np.exp(np.abs(z_w.real) + z_w)
+        * kve(0, z_lt)
+        * kve(0, z_gt)
+        * np.exp(-z_lt - z_gt)
+    )
+    return term_inner + term_outer
