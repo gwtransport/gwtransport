@@ -12,10 +12,17 @@ import numpy as np
 import pandas as pd
 import pytest
 from _radial_asr_fv_oracle import fv_cout_deviation  # ty: ignore[unresolved-import]  # tests/src on path via conftest
+from flint import acb
 
 from gwtransport._radial_asr_compose import single_cycle_echo_matrix
 from gwtransport._radial_asr_gridfree import gridfree_cout_deviation
-from gwtransport._radial_asr_kernels import interior_resolvent, rest_resolvent, whittaker_resolvent_solutions
+from gwtransport._radial_asr_kernels import (
+    _WHITTAKER_MAX_RATIO,
+    _molecular_regime,
+    interior_resolvent,
+    rest_resolvent,
+    whittaker_resolvent_solutions,
+)
 from gwtransport.radial_asr import infiltration_to_extraction
 
 
@@ -122,11 +129,10 @@ class TestLaplaceMassBalance:
 class TestWhittakerResolvent:
     """D_m > 0 interior Green's function: SL constancy and the KB Sec. 7 duality.
 
-    ``whittaker_resolvent_solutions`` takes float (double) parameters -- the engine passes doubles --
-    so although it evaluates the confluent-hypergeometric functions in mpmath, the arguments ``a, b, z``
-    are double-precision, and these high-precision identities therefore hold only to the double floor
-    (~1e-13), not mpmath's ~1e-36 (which holds for the underlying math, checked with mpmath parameters
-    during development). The double floor is the honest accuracy of the production function.
+    ``whittaker_resolvent_solutions`` returns flint ``acb`` (Arb) values at ``_WHITTAKER_PREC`` bits. The
+    divergent normalization ``N`` is carried in ``acb`` and only the bounded ratios are cast to double, so
+    these identities hold to the double floor (~1e-13, achieved ~1e-16) -- the honest accuracy of the
+    double-precision production output.
     """
 
     def _greens(self, s, r, rp, r_w, alpha_l, a0, d_m, sigma_a):
@@ -140,7 +146,8 @@ class TestWhittakerResolvent:
         u0 = bc_reg * u_inf - bc_inf * u_reg
         u0p = bc_reg * u_inf_p - bc_inf * u_reg_p
         b = 1 - sigma_a * a0 / d_m
-        n_s = (alpha_l * a0 + d_m * r) ** b * (u0 * u_inf_p - u0p * u_inf)
+        # N carries the divergent G^b gauge -- keep it in acb (cast only the bounded ratios below).
+        n_s = acb(alpha_l * a0 + d_m * r) ** acb(b) * (u0 * u_inf_p - u0p * u_inf)
         ui_rp = whittaker_resolvent_solutions(s, rp, alpha_l, a0, d_m, sigma_a)[0]
         u0_rp = bc_reg * ui_rp - bc_inf * whittaker_resolvent_solutions(s, rp, alpha_l, a0, d_m, sigma_a)[2]
         u0_lt = u0 if r <= rp else u0_rp
@@ -149,28 +156,24 @@ class TestWhittakerResolvent:
 
     @pytest.mark.parametrize("sigma_a", [-1, 1])
     def test_sl_constancy(self, sigma_a):
-        # N(s) = P W is constant in r (SL Abel identity).
+        # N(s) = P W is constant in r (SL Abel identity); the divergent N is compared via bounded ratios.
         a0, d_m, alpha_l, r_w = 2.0, 0.6, 0.5, 0.5
-        ns = [
-            self._greens(mp.mpc("0.1", "0.05"), mp.mpf(r), mp.mpf("3.0"), r_w, alpha_l, a0, d_m, sigma_a)[1]
-            for r in ("1.0", "8.0", "25.0")
-        ]
-        spread = max(abs(n - ns[0]) for n in ns) / abs(ns[0])
-        assert float(spread) < 1e-13  # double-precision floor of the float-parameter resolvent (achieved ~1e-16)
+        ns = [self._greens(0.1 + 0.05j, r, 3.0, r_w, alpha_l, a0, d_m, sigma_a)[1] for r in (1.0, 8.0, 25.0)]
+        spread = max(abs(complex((n - ns[0]) / ns[0])) for n in ns)
+        assert spread < 1e-13  # double-precision floor of the float-parameter resolvent (achieved ~1e-16)
 
     def test_duality_normalization(self):
         # Well-face trace matches the KB Sec. 7 duality cout-readout kernel (pins the normalization).
         a0, d_m, alpha_l, r_w, c_geo = 2.0, 0.6, 0.5, 0.5, np.pi * 10 * 0.3
-        for rp in (mp.mpf("2.0"), mp.mpf("12.0")):
-            s = mp.mpc("0.08", "0.04")
+        for rp in (2.0, 12.0):
+            s = 0.08 + 0.04j
             ghat_wf = self._greens(s, r_w, rp, r_w, alpha_l, a0, d_m, -1)[0]
             w_minus = rp * (alpha_l * a0 + d_m * rp) ** (a0 / d_m)
-            phi, _, _, _phi_p = whittaker_resolvent_solutions(s, rp, alpha_l, a0, d_m, 1)
-            phi_w, phi_w_p, _, _ = whittaker_resolvent_solutions(s, r_w, alpha_l, a0, d_m, 1)
+            phi = whittaker_resolvent_solutions(s, rp, alpha_l, a0, d_m, 1)[0]
+            phi_w, phi_w_p = whittaker_resolvent_solutions(s, r_w, alpha_l, a0, d_m, 1)[:2]
             flux_w = phi_w - (alpha_l + d_m * r_w / a0) * phi_w_p
-            qmag = 2 * c_geo * a0
-            rhs = phi * (2 * c_geo * rp) / (qmag * flux_w)
-            assert float(abs(ghat_wf * w_minus - rhs) / abs(rhs)) < 1e-13  # double-precision floor (achieved ~1e-16)
+            rhs = phi * (2 * c_geo * rp) / (2 * c_geo * a0 * flux_w)
+            assert float(abs(complex(ghat_wf * w_minus - rhs)) / abs(complex(rhs))) < 1e-13
 
 
 # --- engine-level gates -------------------------------------------------------------------------
@@ -293,8 +296,8 @@ class TestGridfreeEngine:
 
 class TestMolecularRegime:
     def test_small_dm_uses_airy_reduction(self):
-        # Negligible molecular diffusion (crossover a* beyond the plume) drops to the exact O(D_m)
-        # Airy reduction: identical to D_m = 0 and fast (the Whittaker branch would be intractable). A
+        # Negligible molecular diffusion (crossover a* far beyond the plume) drops to the exact O(D_m)
+        # Airy reduction: identical to D_m = 0 (the reduction is exact to O(D_m/alpha_L|u|) here). A
         # MULTI-CYCLE schedule routes through the grid-free engine's own dispatch (not the echo path).
         flow = np.array([100.0] * 4 + [-100.0] * 8 + [100.0] * 4 + [-100.0] * 10)
         tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
@@ -311,8 +314,8 @@ class TestMolecularRegime:
         # de-Hoog-inverted Whittaker breakthrough vs the finite-volume oracle (~1% first-order floor).
         # Single cycle: this exercises the Whittaker kernel + FR profile + duality readout end-to-end at
         # O(n_quad) cost. The O(n_quad^2) multi-cycle Whittaker hand-off (_propagate_whittaker) is gated
-        # separately by TestWhittakerResolvent (machine precision) -- a converged multi-cycle Whittaker
-        # vs FV run is ~150 s (mpmath), too slow for the default suite. Still @slow (mpmath, ~30 s).
+        # separately by TestWhittakerResolvent (machine precision). Still @slow (~6 s) -- the flint
+        # confluent-hypergeometric is evaluated per node (a converged multi-cycle Whittaker-vs-FV is ~20 s).
         flow = np.array([100.0] * 3 + [-100.0] * 7)
         dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
         ext = flow < 0
@@ -324,6 +327,35 @@ class TestMolecularRegime:
             cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=d_m, n_cells=600, n_sub=12, **GEOM
         )
         assert np.max(np.abs(gf[ext] - fv[ext])) < 3e-2  # finite-volume first-order floor
+
+    def test_cap_extends_whittaker_to_heat_regime(self):
+        # The flint cap (_WHITTAKER_MAX_RATIO=150) keeps the exact Whittaker kernel for heat-scale A0/D_m
+        # up to 150, where the old mpmath cap (10) dropped molecular diffusion. a* < reach & ratio <= cap
+        # -> keep D_m exact; ratio > cap -> Airy + warn (flint non-finite); a* >= reach -> Airy.
+        a0, alpha_l, reach = 5.3, 0.1, 40.0
+        d_m_heat = a0 / 100.0  # ratio 100 (a* = 5.3 m < reach): dropped at the old cap of 10, now kept
+        assert _WHITTAKER_MAX_RATIO >= 100.0
+        assert _molecular_regime(d_m_heat, a0, alpha_l, reach) == d_m_heat  # exact flint Whittaker kept
+        assert _molecular_regime(0.1, a0, alpha_l, 2.0) == 0.0  # a* >= reach -> Airy (molecular sub-dominant)
+        with pytest.warns(UserWarning, match="non-finite"):
+            assert _molecular_regime(a0 / 300.0, a0, alpha_l, reach) == 0.0  # ratio 300 > cap -> Airy
+
+    @pytest.mark.slow
+    def test_heat_pumping_diffusion_is_modeled(self):
+        # End-to-end Bug-2 fix: at A0/D_m ~ 100 (heat; a* inside the plume) the pumping-phase D_m was a
+        # no-op at the old cap (cout identical to D_m=0); the flint Whittaker kernel now carries it, so
+        # cout depends on D_m. (alpha_l small so a* < plume reach; the FV cross-check is the test above.)
+        geom = {"c_geo": np.pi * 10 * 0.3, "r_w": 0.5, "alpha_l": 0.1}
+        flow = np.array([100.0] * 20 + [-100.0] * 40)
+        dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
+        ext = flow < 0
+        dry = gridfree_cout_deviation(
+            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.0, n_quad=16, **geom
+        )
+        wet = gridfree_cout_deviation(
+            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=5.3 / 100.0, n_quad=16, **geom
+        )
+        assert np.max(np.abs(wet[ext] - dry[ext])) > 1e-2  # pumping molecular diffusion now modeled (was 0)
 
 
 class TestRestDiffusion:
@@ -356,15 +388,17 @@ class TestRestDiffusion:
     def test_rest_makes_engine_sensitive_to_rest_length(self):
         # Before the fix the engine treated rest as identity (cout independent of rest length). Diffusion
         # over a long rest must measurably lower the recovery; this was exactly 0 on the unfixed engine.
+        # D_m = 0.02 keeps pumping in the Airy regime (a* > plume reach), isolating the rest Bessel
+        # propagator (Bug 1) from the pumping Whittaker path -- so this stays fast.
         def recovery(rest):
             flow = np.array([100.0] * 20 + [0.0] * rest + [-50.0] * 40)
             dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
             cout = gridfree_cout_deviation(
-                cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.05, n_quad=120, **GEOM
+                cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.02, n_quad=80, **GEOM
             )
             return np.nansum(cout[flow < 0] * 50.0) / 2000.0
 
-        assert recovery(0) - recovery(180) > 0.05
+        assert recovery(0) - recovery(365) > 0.05
 
     def test_seasonal_rest_matches_fv_oracle(self):
         # Exact end-to-end: inject -> long (200 d) rest -> extract. The rest diffusion (Bessel, exact)

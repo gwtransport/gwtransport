@@ -16,10 +16,12 @@ Two evaluation regimes
   Peclet ``r/alpha_L`` beyond ~200 (the prefactor overflows while ``Ai`` underflows). All transfer
   functions are *ratios* of ``phi_s`` / ``F[phi_s]`` at ``r`` and ``r_w``; evaluating them with the
   Airy scaling factored into a single bounded log-amplitude keeps the ratio finite at any Peclet.
-* ``D_m > 0`` (molecular diffusion present): the confluent-hypergeometric (Whittaker) branch,
-  sampled exactly with ``mpmath.whitw`` at the Laplace nodes. No library provides a vectorized
-  complex double-precision Whittaker, so this path is slower; it is used only where molecular
-  diffusion is appreciable (basis-by-regime -- elsewhere the Airy form is exact to O(D_m/alpha_L|u|)).
+* ``D_m > 0`` (molecular diffusion present): the confluent-hypergeometric (Tricomi-U / Whittaker)
+  branch, sampled exactly with ``flint.acb.hypgeom_u`` (python-flint / Arb compiled arbitrary-precision
+  ball arithmetic) at the Laplace nodes -- exact and ~1e3x faster than mpmath, with a rigorous error
+  enclosure. It is sampled per node (no vectorized complex Whittaker exists) but evaluated only where
+  molecular diffusion is appreciable within the plume and ``A_0/D_m`` is below the tractability cap
+  (basis-by-regime -- elsewhere the Airy form is exact to O(D_m/alpha_L|u|)).
 
 Retardation enters by the standard linear-sorption rescaling of the constant-Q operator: dividing the
 retarded equation ``R d_t C + ... `` by ``R`` is the unretarded equation with ``A_0 -> A_0/R`` and
@@ -32,21 +34,22 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 
 import warnings
 
-import mpmath as mp
 import numpy as np
 import numpy.typing as npt
+from flint import acb, ctx
 from scipy.special import airye, ive, kve
 
-# Working precision (decimal digits) for the mpmath Whittaker (D_m > 0) branch. 30 digits is ample
-# for double-precision output and absorbs the cancellation in the U-function ratios in the
-# physically relevant (appreciable-diffusion) regime.
-_WHITTAKER_DPS = 30
+# Working precision (bits) for the flint (python-flint / Arb) Whittaker (D_m > 0) branch. 512 bits keeps
+# the confluent-hypergeometric values exact (Arb's error ball stays below the double-precision floor) and
+# the divergent-normalization cancellation clean up to A_0/D_m ~ 200. Arb returns a rigorous enclosure, so
+# any precision loss is detectable rather than silent.
+_WHITTAKER_PREC = 512
 
-# Tractability cap for the Whittaker (D_m > 0) branch. Its confluent-hypergeometric parameter is
-# b = 1 +/- A_0/D_m and its argument scales with a* = alpha_L A_0/D_m; for A_0/D_m beyond this the
-# mpmath evaluation (especially the near-well de Hoog nodes) becomes impractically slow. Above the cap
-# the Airy reduction is used with a warning (see _molecular_regime).
-_WHITTAKER_MAX_RATIO = 10.0
+# Tractability cap for the Whittaker (D_m > 0) branch. b = 1 +/- A_0/D_m and the argument scales with
+# a* = alpha_L A_0/D_m; the Arb confluent-hypergeometric evaluation returns non-finite balls once |b| is
+# extreme (A_0/D_m beyond ~250-300, independent of precision). The cap is set safely below that; above it
+# the Airy reduction is used (its O(D_m/alpha_L|u|) error is < 1% there and keeps shrinking with A_0/D_m).
+_WHITTAKER_MAX_RATIO = 150.0
 
 
 def _molecular_regime(molecular_diffusivity: float, a0: float, alpha_l: float, plume_reach: float) -> float:
@@ -60,10 +63,11 @@ def _molecular_regime(molecular_diffusivity: float, a0: float, alpha_l: float, p
       ``< ~4%`` at the boundary ``a* ~ plume_reach``, falling below ``1%`` for ``a* > 4 plume_reach`` and
       to ``~1e-5`` for realistic groundwater ``D_m`` (where ``a*`` is orders of magnitude past the plume).
     * ``a* < plume_reach`` and ``A_0/D_m <= _WHITTAKER_MAX_RATIO`` -- molecular diffusion is appreciable
-      and the Whittaker branch is tractable; keep ``D_m`` (exact, slow).
-    * ``a* < plume_reach`` and ``A_0/D_m > _WHITTAKER_MAX_RATIO`` -- molecular diffusion is appreciable
-      but the large-parameter Whittaker branch is intractable; fall back to the Airy reduction and warn
-      (it neglects an appreciable molecular term -- the relative error grows with ``plume_reach/a*``).
+      within the plume and the flint (Arb) Whittaker branch is exact and tractable; keep ``D_m`` (exact).
+    * ``a* < plume_reach`` and ``A_0/D_m > _WHITTAKER_MAX_RATIO`` -- molecular diffusion is appreciable but
+      the Arb confluent-hypergeometric evaluation returns non-finite balls (``b = 1 - A_0/D_m`` too extreme
+      for the evaluator); fall back to the Airy reduction and warn (relative error grows with
+      ``plume_reach/a*``).
 
     Returns
     -------
@@ -78,10 +82,10 @@ def _molecular_regime(molecular_diffusivity: float, a0: float, alpha_l: float, p
     if a0 / molecular_diffusivity > _WHITTAKER_MAX_RATIO:
         warnings.warn(
             f"Molecular diffusion is appreciable (crossover a*={a_star:.1f} m is within the plume reach "
-            f"{plume_reach:.1f} m) but the exact Whittaker branch is intractable for A_0/D_m="
-            f"{a0 / molecular_diffusivity:.0f} (> {_WHITTAKER_MAX_RATIO:.0f}). Falling back to the Airy "
-            f"reduction, which neglects molecular diffusion; the relative error grows with "
-            f"plume_reach/a* = {plume_reach / a_star:.1f}. Reduce D_m if physically justified.",
+            f"{plume_reach:.1f} m) but the exact flint Whittaker is non-finite for A_0/D_m="
+            f"{a0 / molecular_diffusivity:.0f} (> {_WHITTAKER_MAX_RATIO:.0f}; b too extreme for Arb). "
+            f"Falling back to the Airy reduction, which neglects molecular diffusion; the relative error "
+            f"grows with plume_reach/a* = {plume_reach / a_star:.1f}. Reduce D_m if physically justified.",
             stacklevel=2,
         )
         return 0.0
@@ -139,8 +143,8 @@ def _airy_amplitudes(
 
 def _whittaker_phi_and_flux(
     s: complex, r: float, alpha_l: float, a0_eff: float, d_m_eff: float, sigma_a: int
-) -> tuple[mp.mpc, mp.mpc]:
-    r"""``(phi_s(r), F[phi_s](r))`` for the ``D_m > 0`` branch, in mpmath at scalar ``s``.
+) -> tuple[acb, acb]:
+    r"""``(phi_s(r), F[phi_s](r))`` for the ``D_m > 0`` branch, as flint ``acb`` at scalar ``s``.
 
     With ``x = r + a*``, ``a* = alpha_L A_0/D_m``, ``kappa = sqrt(s/D_m)``, the decaying resident
     solution is ``phi_s = e^{-kappa x} U(a, b, 2 kappa x)`` (Tricomi U -- regular through the
@@ -150,22 +154,27 @@ def _whittaker_phi_and_flux(
     ``F[phi_s] = phi_s - (alpha_L + D_m r/A_0) phi_s'`` is evaluated analytically (no numerical
     differentiation). All quantities use the retardation-effective ``A_0``/``D_m``.
 
+    ``U`` is evaluated with ``flint.acb.hypgeom_u`` (Arb arbitrary-precision ball arithmetic) at
+    ``_WHITTAKER_PREC`` bits. ``phi`` and ``flux`` are returned as ``acb`` (not cast to ``complex``)
+    so the caller can take their ratio -- where the divergent gauge factors cancel -- before rounding.
+
     Returns
     -------
-    phi : mpmath.mpc
+    phi : flint.acb
         Resident solution ``phi_s(r)``.
-    flux : mpmath.mpc
+    flux : flint.acb
         Flux-operator image ``F[phi_s](r)``.
     """
-    kappa = mp.sqrt(s / d_m_eff)
+    ctx.prec = _WHITTAKER_PREC
+    kappa = (acb(s.real, s.imag) / d_m_eff).sqrt()
     astar = alpha_l * a0_eff / d_m_eff
     b = 1 - sigma_a * a0_eff / d_m_eff
     a = b / 2 - kappa * astar / 2
     x = r + astar
     z = 2 * kappa * x
-    u = mp.hyperu(a, b, z)
-    u1 = mp.hyperu(a + 1, b + 1, z)  # U(a+1, b+1, z) for dU/dz = -a U(a+1,b+1,z)
-    expf = mp.e ** (-kappa * x)
+    u = z.hypgeom_u(a, acb(b))
+    u1 = z.hypgeom_u(a + 1, acb(b + 1))  # U(a+1, b+1, z) for dU/dz = -a U(a+1,b+1,z)
+    expf = (-(kappa * x)).exp()
     phi = expf * u
     dphi = -kappa * expf * (u + 2 * a * u1)
     flux = phi - (alpha_l + d_m_eff * r / a0_eff) * dphi
@@ -174,7 +183,7 @@ def _whittaker_phi_and_flux(
 
 def whittaker_resolvent_solutions(
     s: complex, r: float, alpha_l: float, a0_eff: float, d_m_eff: float, sigma_a: int
-) -> tuple[mp.mpc, mp.mpc, mp.mpc, mp.mpc]:
+) -> tuple[acb, acb, acb, acb]:
     r"""Return the two homogeneous solutions and their ``r``-derivatives for the ``D_m > 0`` resolvent.
 
     The constant-Q ODE ``G C'' + (D_m - sigma_A A_0) C' - s r C = 0`` (KB Sec. 4) has, with
@@ -190,29 +199,31 @@ def whittaker_resolvent_solutions(
 
     Returns
     -------
-    tuple of mpmath.mpc
+    tuple of flint.acb
         ``(u_inf, u_inf', u_reg, u_reg')`` -- the decaying and growing solutions and their
-        ``r``-derivatives, at scalar ``s`` and ``r``.
+        ``r``-derivatives, at scalar ``s`` and ``r`` (as ``acb`` so the caller's divergent-normalization
+        cancellation runs in Arb extended precision before rounding).
     """
-    kappa = mp.sqrt(s / d_m_eff)
+    ctx.prec = _WHITTAKER_PREC
+    kappa = (acb(s.real, s.imag) / d_m_eff).sqrt()
     astar = alpha_l * a0_eff / d_m_eff
     b = 1 - sigma_a * a0_eff / d_m_eff
     a = b / 2 - kappa * astar / 2
     x = r + astar
     z = 2 * kappa * x
-    expf = mp.e ** (-kappa * x)
+    expf = (-(kappa * x)).exp()
     # decaying branch (Tricomi U), dU/dz = -a U(a+1, b+1, z)
-    u = mp.hyperu(a, b, z)
-    u1 = mp.hyperu(a + 1, b + 1, z)
+    u = z.hypgeom_u(a, acb(b))
+    u1 = z.hypgeom_u(a + 1, acb(b + 1))
     u_inf = expf * u
     u_inf_p = -kappa * expf * (u + 2 * a * u1)
     # growing branch: z^{c} M(ap, bp, z), c = 1-b, ap = a-b+1, bp = 2-b;
     # d/dz[z^c M] = c z^{c-1} M + z^c (ap/bp) M(ap+1, bp+1)
     c, ap, bp = 1 - b, a - b + 1, 2 - b
-    m = mp.hyp1f1(ap, bp, z)
-    m1 = mp.hyp1f1(ap + 1, bp + 1, z)
-    w_z = z**c * m
-    dw_z = c * z ** (c - 1) * m + z**c * (ap / bp) * m1
+    m = z.hypgeom_1f1(ap, acb(bp))
+    m1 = z.hypgeom_1f1(ap + 1, acb(bp + 1))
+    w_z = z ** acb(c) * m
+    dw_z = c * z ** acb(c - 1) * m + z ** acb(c) * (ap / bp) * m1
     u_reg = expf * w_z
     u_reg_p = -kappa * expf * w_z + expf * dw_z * (2 * kappa)
     return u_inf, u_inf_p, u_reg, u_reg_p
@@ -284,16 +295,16 @@ def transfer_function(
         denom = flux_w if inject == _FLUX else res_w
         return np.exp(log_r - log_w) * (numer / denom)
 
-    # Whittaker branch (D_m > 0): exact mpmath sampling per node (divergent orientation sigma_A = +1).
+    # Whittaker branch (D_m > 0): exact flint (Arb) sampling per node (divergent orientation sigma_A = +1).
+    # phi/flux are returned as acb; the detect/inject ratio cancels the divergent gauge before rounding.
     out = np.empty(s.shape, dtype=complex)
     flat = out.reshape(-1)
-    with mp.workdps(_WHITTAKER_DPS):
-        for i, sv in enumerate(s.reshape(-1)):
-            phi_r, flux_r = _whittaker_phi_and_flux(complex(sv), r, alpha_l, a0_eff, d_m_eff, +1)
-            phi_w, flux_w = _whittaker_phi_and_flux(complex(sv), r_w, alpha_l, a0_eff, d_m_eff, +1)
-            numer = flux_r if detect == _FLUX else phi_r
-            denom = flux_w if inject == _FLUX else phi_w
-            flat[i] = complex(numer / denom)
+    for i, sv in enumerate(s.reshape(-1)):
+        phi_r, flux_r = _whittaker_phi_and_flux(complex(sv), r, alpha_l, a0_eff, d_m_eff, +1)
+        phi_w, flux_w = _whittaker_phi_and_flux(complex(sv), r_w, alpha_l, a0_eff, d_m_eff, +1)
+        numer = flux_r if detect == _FLUX else phi_r
+        denom = flux_w if inject == _FLUX else phi_w
+        flat[i] = complex(numer / denom)
     return out
 
 

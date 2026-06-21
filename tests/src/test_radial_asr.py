@@ -16,7 +16,7 @@ from _radial_asr_fv_oracle import fv_cout_deviation  # ty: ignore[unresolved-imp
 from scipy.special import erfc
 
 from gwtransport._radial_asr_dehoog import dehoog_inverse
-from gwtransport._radial_asr_kernels import _whittaker_phi_and_flux, transfer_function
+from gwtransport._radial_asr_kernels import transfer_function
 from gwtransport.radial_asr import (
     extraction_to_infiltration,
     gamma_infiltration_to_extraction,
@@ -159,18 +159,29 @@ class TestWhittakerKernel:
             np.testing.assert_allclose(g.real, 1.0, atol=1e-3)
 
     def test_mean_is_v_over_q(self):
+        # Whittaker FF mean = V/Q (KB Sec. 6). Fit the cumulants of an INDEPENDENT mpmath Whittaker
+        # reference (the production kernel is now flint), then confirm the production flint kernel matches
+        # that reference to machine precision -- so the production mean is V/Q too.
         r, r_w, a_l, a0, d_m = 10.0, 0.5, 0.5, 2.0, 0.2  # A0/Dm = 10 (variance exists, fit well-conditioned)
         v_over_q = (r**2 - r_w**2) / (2 * a0)
 
-        def ghat(s):
-            a0e, dme = a0, d_m
-            return (
-                _whittaker_phi_and_flux(s, r, a_l, a0e, dme, +1)[1]
-                / _whittaker_phi_and_flux(s, r_w, a_l, a0e, dme, +1)[1]
-            )
+        def ghat_mp(s):  # independent mpmath Whittaker flux-flux transfer function
+            def flux(rr):
+                kappa = mp.sqrt(mp.mpc(s) / d_m)
+                astar = a_l * a0 / d_m
+                b = 1 - a0 / d_m
+                a = b / 2 - kappa * astar / 2
+                z = 2 * kappa * (rr + astar)
+                u, u1 = mp.hyperu(a, b, z), mp.hyperu(a + 1, b + 1, z)
+                expf = mp.e ** (-kappa * (rr + astar))
+                return expf * u - (a_l + d_m * rr / a0) * (-kappa * expf * (u + 2 * a * u1))
 
-        k1, _, _ = _cumulants_mp(ghat, mp.mpf(v_over_q))
+            return flux(r) / flux(r_w)
+
+        k1, _, _ = _cumulants_mp(ghat_mp, mp.mpf(v_over_q))
         np.testing.assert_allclose(k1, v_over_q, rtol=1e-5)
+        g_prod = transfer_function(s=np.array([0.05 + 0.1j]), r=r, r_w=r_w, alpha_l=a_l, a0=a0, d_m=d_m)[0]
+        np.testing.assert_allclose(g_prod, complex(ghat_mp(0.05 + 0.1j)), rtol=1e-12)
 
     def test_converges_to_airy_first_order(self):
         # |g_Whittaker(D_m) - g_Airy| should fall ~ linearly in D_m (ratio -> 4 under D_m/4). a0 is kept
