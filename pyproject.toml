@@ -62,6 +62,9 @@ test = [
 ]
 docs = [
   "jupyter",
+  "jupyterlite-core>=0.6",
+  "jupyterlite-pyodide-kernel>=0.6,<0.7",
+  "jupyterlite-sphinx>=0.22",
   "nbsphinx",
   "nbsphinx-link",
   "sphinx>=9.0,<10.0",
