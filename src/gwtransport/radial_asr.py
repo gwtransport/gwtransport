@@ -307,7 +307,7 @@ def infiltration_to_extraction(
     molecular_diffusivity : float, optional
         Molecular diffusivity ``D_m`` [m^2/day]. Default 0. ``D_m > 0`` is carried exactly by the
         Whittaker branch where molecular diffusion is appreciable, and by its exact Airy reduction
-        where it is sub-dominant within the plume (basis-by-regime; the Whittaker path is slow).
+        where it is sub-dominant within the plume (basis-by-regime; the Whittaker branch uses flint/Arb).
     retardation_factor : float, optional
         Linear retardation ``R >= 1``. Default 1.
     weights : array-like, optional

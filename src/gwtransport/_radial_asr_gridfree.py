@@ -7,7 +7,7 @@ artefacts (CFL/Courant limit, numerical dispersion, Crank-Nicolson ringing) appe
 operations are Gauss-Legendre quadrature over the resident profile and de Hoog Laplace inversion of the
 exact special-function kernels: the Airy interior Green's functions for ``D_m = 0`` (flushed-volume
 clock, vectorized) and the Whittaker interior Green's functions for appreciable ``D_m > 0`` (wall-clock
-time, mpmath -- the molecular-diffusion regime is chosen by :func:`_molecular_regime`, KB addendum
+time, flint/Arb -- the molecular-diffusion regime is chosen by :func:`_molecular_regime`, KB addendum
 Sec. A6). The spectral-domain acceleration of the composition (KB addendum Sec. A4-A7) is not
 implemented here.
 
@@ -42,22 +42,20 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
-import mpmath as mp
 import numpy as np
 import numpy.typing as npt
+from flint import acb, ctx
 
 from gwtransport._radial_asr_compose import _fr_step_response
 from gwtransport._radial_asr_dehoog import dehoog_inverse
 from gwtransport._radial_asr_kernels import (
+    _WHITTAKER_PREC,
     _molecular_regime,
     _resolvent_airy_pieces,
     assemble_airy_resolvent,
     rest_resolvent,
     whittaker_resolvent_solutions,
 )
-
-# Working precision (decimal digits) for the mpmath Whittaker (D_m > 0) field propagation.
-_WHITTAKER_DPS = 30
 
 # de Hoog series length for the field-propagation inversion and the front-anchored scaling margin
 # (matched to the FR step response in _radial_asr_compose).
@@ -292,12 +290,12 @@ def _propagate_whittaker(
     Same superposition as :func:`_propagate` but with the Whittaker interior Green's function (KB
     Sec. 4 ``D_m > 0`` branch) and the wall-clock time clock (the volume clock is not autonomous when
     ``D_m > 0`` -- the no-go lemma). No vectorized complex Whittaker exists, so the solutions are
-    sampled in mpmath; the cost is contained by (a) evaluating them ONCE per de Hoog node and grid
+    sampled with flint (Arb); the cost is contained by (a) evaluating them ONCE per de Hoog node and grid
     radius and (b) assembling every output node from prefix/suffix sums of the source superposition
     ``F(s)_i = -[u_inf(r_i) sum_{j<=i} u_0(r_j) w_j + u_0(r_i) sum_{j>i} u_inf(r_j) w_j]/N(s)`` (using
-    the symmetric SL split at ``r_i``), keeping the whole build at ``O(n_nodes * n_quad)`` mpmath
-    evaluations. mpmath carries the growing-solution magnitude exactly, and only the bounded ``F(s)_i``
-    is cast to double. ``src_measure_k = w(r_k) dr_weights_k`` with the ``D_m > 0`` weight
+    the symmetric SL split at ``r_i``), keeping the whole build at ``O(n_nodes * n_quad)`` Arb
+    evaluations. Arb carries the divergent growing-solution magnitude exactly (the ``N = G^b`` gauge),
+    and only the bounded ``F(s)_i`` -- where it cancels -- is cast to double. ``src_measure_k = w(r_k) dr_weights_k`` with the ``D_m > 0`` weight
     ``w_pm(r) = r G(r)^{-/+ A_0/D_m}`` (``G = alpha_L A_0 + D_m r``).
 
     Returns
@@ -322,35 +320,36 @@ def _propagate_whittaker(
 
     def build(p: npt.NDArray[np.complexfloating]) -> npt.NDArray[np.complexfloating]:
         f_mat = np.empty((len(p), n), dtype=complex)
-        with mp.workdps(_WHITTAKER_DPS):
-            b_exp = 1 - sigma_a * a0_eff / d_m_eff
-            for k, pk in enumerate(p):
-                sk = complex(pk)
-                uiw, uiwp, urw, urwp = whittaker_resolvent_solutions(sk, r_w, alpha_l, a0_eff, d_m_eff, sigma_a)
-                if sigma_a < 0:  # extraction: Danckwerts/Neumann u_0'(r_w) = 0
-                    bc_reg, bc_inf = urwp, uiwp
-                else:  # injection: Robin F[u]=u-(G/A_0)u', F[u_0](r_w)=0
-                    fac = alpha_l + d_m_eff * r_w / a0_eff  # = G(r_w)/A_0
-                    bc_reg, bc_inf = urw - fac * urwp, uiw - fac * uiwp
-                u0w = bc_reg * uiw - bc_inf * urw
-                u0wp = bc_reg * uiwp - bc_inf * urwp
-                n_s = (alpha_l * a0_eff + d_m_eff * r_w) ** b_exp * (u0w * uiwp - u0wp * uiw)
-                u_inf_g, u0_g = [], []
-                for r in r_nodes:
-                    ui, _, ur, _ = whittaker_resolvent_solutions(sk, float(r), alpha_l, a0_eff, d_m_eff, sigma_a)
-                    u_inf_g.append(ui)
-                    u0_g.append(bc_reg * ui - bc_inf * ur)
-                wj = [mp.mpc(complex(weighted[m])) for m in range(n)]
-                prefix, acc = [mp.mpc(0)] * n, mp.mpc(0)
-                for m in range(n):  # inclusive prefix sum_{j<=m} u_0(r_j) w_j
-                    acc += u0_g[m] * wj[m]
-                    prefix[m] = acc
-                suffix, acc = [mp.mpc(0)] * n, mp.mpc(0)
-                for m in range(n - 1, -1, -1):  # exclusive suffix sum_{j>m} u_inf(r_j) w_j
-                    suffix[m] = acc
-                    acc += u_inf_g[m] * wj[m]
-                for i in range(n):
-                    f_mat[k, i] = complex(-(u_inf_g[i] * prefix[i] + u0_g[i] * suffix[i]) / n_s)
+        ctx.prec = _WHITTAKER_PREC
+        b_exp = 1 - sigma_a * a0_eff / d_m_eff
+        g_well = acb(alpha_l * a0_eff + d_m_eff * r_w) ** acb(b_exp)  # divergent N gauge; cancels in F(s)_i
+        for k, pk in enumerate(p):
+            sk = complex(pk)
+            uiw, uiwp, urw, urwp = whittaker_resolvent_solutions(sk, r_w, alpha_l, a0_eff, d_m_eff, sigma_a)
+            if sigma_a < 0:  # extraction: Danckwerts/Neumann u_0'(r_w) = 0
+                bc_reg, bc_inf = urwp, uiwp
+            else:  # injection: Robin F[u]=u-(G/A_0)u', F[u_0](r_w)=0
+                fac = alpha_l + d_m_eff * r_w / a0_eff  # = G(r_w)/A_0
+                bc_reg, bc_inf = urw - fac * urwp, uiw - fac * uiwp
+            u0w = bc_reg * uiw - bc_inf * urw
+            u0wp = bc_reg * uiwp - bc_inf * urwp
+            n_s = g_well * (u0w * uiwp - u0wp * uiw)
+            u_inf_g, u0_g = [], []
+            for r in r_nodes:
+                ui, _, ur, _ = whittaker_resolvent_solutions(sk, float(r), alpha_l, a0_eff, d_m_eff, sigma_a)
+                u_inf_g.append(ui)
+                u0_g.append(bc_reg * ui - bc_inf * ur)
+            wj = [acb(float(weighted[m].real), float(weighted[m].imag)) for m in range(n)]
+            prefix, acc = [acb(0)] * n, acb(0)
+            for m in range(n):  # inclusive prefix sum_{j<=m} u_0(r_j) w_j
+                acc += u0_g[m] * wj[m]
+                prefix[m] = acc
+            suffix, acc = [acb(0)] * n, acb(0)
+            for m in range(n - 1, -1, -1):  # exclusive suffix sum_{j>m} u_inf(r_j) w_j
+                suffix[m] = acc
+                acc += u_inf_g[m] * wj[m]
+            for i in range(n):
+                f_mat[k, i] = complex(-(u_inf_g[i] * prefix[i] + u0_g[i] * suffix[i]) / n_s)
         return f_mat
 
     out = np.empty(n)
@@ -420,7 +419,7 @@ def gridfree_cout_deviation(
 
     Composes the exact per-phase kernels through the multi-cycle state machine (see the module
     docstring): the Airy branch for ``D_m = 0`` (vectorized, flushed-volume clock) and the Whittaker
-    branch for ``D_m > 0`` (mpmath, wall-clock time -- the volume clock is not autonomous when
+    branch for ``D_m > 0`` (flint/Arb, wall-clock time -- the volume clock is not autonomous when
     ``D_m > 0``). Returns the flow-weighted bin average of the well-face flux concentration deviation
     on extraction bins, ``NaN`` on injection / rest bins.
 
