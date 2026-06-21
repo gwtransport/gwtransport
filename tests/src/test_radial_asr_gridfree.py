@@ -329,16 +329,16 @@ class TestMolecularRegime:
         assert np.max(np.abs(gf[ext] - fv[ext])) < 3e-2  # finite-volume first-order floor
 
     def test_cap_extends_whittaker_to_heat_regime(self):
-        # The flint cap (_WHITTAKER_MAX_RATIO=150) keeps the exact Whittaker kernel for heat-scale A0/D_m
-        # up to 150, where the old mpmath cap (10) dropped molecular diffusion. a* < reach & ratio <= cap
-        # -> keep D_m exact; ratio > cap -> Airy + warn (flint non-finite); a* >= reach -> Airy.
-        a0, alpha_l, reach = 5.3, 0.1, 40.0
-        d_m_heat = a0 / 100.0  # ratio 100 (a* = 5.3 m < reach): dropped at the old cap of 10, now kept
-        assert _WHITTAKER_MAX_RATIO >= 100.0
-        assert _molecular_regime(d_m_heat, a0, alpha_l, reach) == d_m_heat  # exact flint Whittaker kept
-        assert _molecular_regime(0.1, a0, alpha_l, 2.0) == 0.0  # a* >= reach -> Airy (molecular sub-dominant)
-        with pytest.warns(UserWarning, match="non-finite"):
-            assert _molecular_regime(a0 / 300.0, a0, alpha_l, reach) == 0.0  # ratio 300 > cap -> Airy
+        # Adaptive precision keeps the exact Whittaker kernel machine-exact for heat-scale A0/D_m up to
+        # _WHITTAKER_MAX_RATIO=1000 (the old fixed-precision cap was 10, then 150). a* < reach & ratio <=
+        # cap -> keep D_m exact; ratio > cap -> Airy + warn (precision cost impractical); a* >= reach -> Airy.
+        a0, alpha_l = 5.3, 0.1
+        assert _WHITTAKER_MAX_RATIO >= 1000.0
+        for ratio in (100, 300, 900):  # all dropped at the old cap (10/150); now kept exact (a* = 0.1*ratio < reach)
+            assert _molecular_regime(a0 / ratio, a0, alpha_l, plume_reach=200.0) == a0 / ratio
+        assert _molecular_regime(0.1, a0, alpha_l, plume_reach=2.0) == 0.0  # a* >= reach -> Airy (sub-dominant)
+        with pytest.warns(UserWarning, match="impractical precision"):
+            assert _molecular_regime(a0 / 2000.0, a0, alpha_l, plume_reach=300.0) == 0.0  # ratio 2000 > cap
 
     @pytest.mark.slow
     def test_heat_pumping_diffusion_is_modeled(self):

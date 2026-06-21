@@ -49,9 +49,9 @@ from flint import acb, ctx
 from gwtransport._radial_asr_compose import _fr_step_response
 from gwtransport._radial_asr_dehoog import dehoog_inverse
 from gwtransport._radial_asr_kernels import (
-    _WHITTAKER_PREC,
     _molecular_regime,
     _resolvent_airy_pieces,
+    _whittaker_prec,
     assemble_airy_resolvent,
     rest_resolvent,
     whittaker_resolvent_solutions,
@@ -320,11 +320,11 @@ def _propagate_whittaker(
 
     def build(p: npt.NDArray[np.complexfloating]) -> npt.NDArray[np.complexfloating]:
         f_mat = np.empty((len(p), n), dtype=complex)
-        ctx.prec = _WHITTAKER_PREC
         b_exp = 1 - sigma_a * a0_eff / d_m_eff
-        g_well = acb(alpha_l * a0_eff + d_m_eff * r_w) ** acb(b_exp)  # divergent N gauge; cancels in F(s)_i
         for k, pk in enumerate(p):
             sk = complex(pk)
+            ctx.prec = _whittaker_prec(abs(sk), alpha_l, a0_eff, d_m_eff)  # adaptive: ~kappa a* bits
+            g_well = acb(alpha_l * a0_eff + d_m_eff * r_w) ** acb(b_exp)  # divergent N gauge; cancels in F(s)_i
             uiw, uiwp, urw, urwp = whittaker_resolvent_solutions(sk, r_w, alpha_l, a0_eff, d_m_eff, sigma_a)
             if sigma_a < 0:  # extraction: Danckwerts/Neumann u_0'(r_w) = 0
                 bc_reg, bc_inf = urwp, uiwp
