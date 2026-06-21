@@ -91,7 +91,6 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-import requests
 from scipy.linalg import cho_solve_banded, cholesky_banded, null_space
 from scipy.optimize import minimize
 
@@ -1132,6 +1131,11 @@ def get_soil_temperature(*, station_number: int = 260, interpolate_missing_value
         " TXB1": "float32",
         " TXB2": "float32",
     }
+
+    # Imported lazily so the rest of the module remains importable in environments
+    # without ``requests`` (e.g. Pyodide/JupyterLite, where this KNMI download is the
+    # only feature that cannot run client-side).
+    import requests  # noqa: PLC0415
 
     # Download the ZIP file
     with requests.get(url, params={"download": "zip"}, timeout=10) as response:

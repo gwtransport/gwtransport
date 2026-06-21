@@ -32,6 +32,13 @@ jobs:
       - name: Build documentation with sphinx and uv
         run: |
           uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b html docs/source docs/build/html
+      - name: Publish the gwtransport wheel into the docs site
+        # The interactive (JupyterLite/Pyodide) examples install gwtransport from this wheel via
+        # micropip, so the in-browser code runs the exact version the docs were built from.
+        run: |
+          uv build --wheel --out-dir dist
+          mkdir -p docs/build/html/_static/wheels
+          cp dist/gwtransport-*-py3-none-any.whl docs/build/html/_static/wheels/
       - name: Zip documentation
         run: |
           mv docs/build/html coverage

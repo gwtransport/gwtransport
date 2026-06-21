@@ -189,3 +189,11 @@ target/
 # OS-specific
 # =============================================================================
 **/.DS_Store
+
+# =============================================================================
+# JupyterLite / jupyterlite-sphinx (client-side interactive docs)
+# =============================================================================
+docs/source/_interactive/
+docs/source/_contents/
+docs/source/.jupyterlite.doit.db
+.jupyterlite.doit.db

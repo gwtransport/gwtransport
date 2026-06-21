@@ -6,6 +6,8 @@ import types
 from datetime import date
 from pathlib import Path
 
+import nbformat
+
 # nbsphinx-link 1.3.1 imports SafeString/ErrorString from
 # docutils.utils.error_reporting, which was removed in docutils 0.22 (required
 # by Sphinx 9). Those were Python 2 unicode-coercion helpers; str() is a safe
@@ -43,6 +45,9 @@ extensions = [
     "sphinxext.opengraph",
     "sphinx.ext.viewcode",
     "sphinx_copybutton",
+    # Must be listed after sphinx.ext.napoleon: its "autodoc-process-docstring" hook reads
+    # napoleon's processed output to inject the "Try it live" button into Examples sections.
+    "jupyterlite_sphinx",
 ]
 
 # Napoleon settings for numpy-style docstrings
@@ -77,7 +82,10 @@ napoleon_type_aliases = {
 }
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+# "_interactive" holds the Pyodide-ready notebook copies generated below; "_contents" is
+# where jupyterlite-sphinx stages notebooks for its build. Exclude both so nbsphinx does
+# not also try to render them as standalone pages.
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "_interactive", "_contents"]
 
 # -- Options for HTML output -------------------------------------------------
 html_theme = "sphinx_book_theme"
@@ -150,14 +158,68 @@ intersphinx_mapping = {
     "matplotlib": ("https://matplotlib.org/stable/", None),
 }
 
+# -- Options for jupyterlite-sphinx (client-side interactive examples) -------
+# Docstring "Examples" blocks (via try_examples) and the Pyodide-compatible example
+# notebooks run entirely in the reader's browser through a JupyterLite/Pyodide kernel --
+# no server. gwtransport is installed from the wheel published alongside these docs, so
+# the interactive code runs the exact version the docs were built from (the dev version
+# on the docs branch), not the last PyPI release.
+jupyterlite_dev_wheel_url = (
+    f"https://gwtransport.github.io/gwtransport/_static/wheels/gwtransport-{release}-py3-none-any.whl"
+)
+
+# Install gwtransport from the docs-site wheel (deps=False: numpy/scipy/pandas/matplotlib
+# ship with Pyodide and requests is not needed client-side), then preload the
+# Pyodide-native packages that gwtransport imports transitively.
+_jupyterlite_install = (
+    "import micropip\n"
+    f"await micropip.install({jupyterlite_dev_wheel_url!r}, deps=False)\n"
+    "import numpy, scipy, pandas, matplotlib, mpmath  # noqa: F401\n"
+)
+
+# Example notebooks that run client-side. Excludes 01/02/03 (KNMI soil-temperature
+# download via requests, blocked by browser CORS) and 08 (timflow -> numba, which has
+# no WebAssembly build).
+jupyterlite_interactive_notebooks = [
+    "04_Deposition_Analysis_Bank_Filtration",
+    "10_Advection_with_non_linear_sorption",
+    "11_Percolation_Unsaturated_Zone",
+    "12_Bank_Filtration_Rainwater_Fraction",
+]
+
+# nbsphinx already renders every .ipynb page; keep it that way (do not let
+# jupyterlite-sphinx claim the .ipynb source suffix).
+jupyterlite_bind_ipynb_suffix = False
+jupyterlite_silence = True
+
+# "Try it live" button on every NumPy-style Examples block.
+global_enable_try_examples = True
+try_examples_global_button_text = "Try it live"
+try_examples_global_warning_text = (
+    "The first run downloads the scientific Python stack (tens of MB) into your browser "
+    "and may take 10-30 s; it is cached for subsequent runs."
+)
+try_examples_preamble = _jupyterlite_install
+
 # -- Options for nbsphinx ---------------------------------------------------
 nbsphinx_execute = "never"
 nbsphinx_allow_errors = True
 nbsphinx_kernel_name = "python3"
-nbsphinx_prolog = """
-.. note::
-   This notebook is located in the ./examples directory of the gwtransport repository.
-"""
+# Jinja2 template (nbsphinx exposes ``env``). Every notebook keeps the location note;
+# the four Pyodide-compatible notebooks additionally get a lazy "Launch interactive
+# notebook" button pointing at their generated _interactive/ copy.
+nbsphinx_prolog = (
+    "{% set nbname = env.docname.split('/')|last %}\n"
+    "\n"
+    ".. note::\n"
+    "   This notebook is located in the ./examples directory of the gwtransport repository.\n"
+    "\n"
+    "{% if nbname in " + repr(jupyterlite_interactive_notebooks) + " %}\n"
+    ".. notebooklite:: /_interactive/{{ nbname }}.ipynb\n"
+    "   :prompt: Launch interactive notebook (runs in your browser)\n"
+    "   :height: 800px\n"
+    "{% endif %}\n"
+)
 
 # -- Options for copybutton -------------------------------------------------
 copybutton_prompt_text = r">>> |\.\.\. |\$ |In \[\d*\]: | {2,5}\.\.\.: | {5,8}: "
@@ -179,4 +241,43 @@ ogp_custom_meta_tags = [
 linkcheck_ignore = [
     r"https://gwtransport\.github\.io/gwtransport/coverage-badge\.svg",
     r"https://gwtransport\.github\.io/gwtransport/htmlcov/?",
+    # The interactive-docs wheel is published into the site by the docs build itself, so
+    # it does not exist at link-check time.
+    r"https://gwtransport\.github\.io/gwtransport/_static/wheels/.*\.whl",
 ]
+
+
+# -- Client-side interactive notebooks --------------------------------------
+def _generate_interactive_notebooks(app):
+    """Write Pyodide-ready copies of the launchable example notebooks.
+
+    Each copy gets a leading cell that installs gwtransport from the docs-site wheel and
+    preloads its Pyodide-native dependencies. The original notebooks -- rendered statically
+    by nbsphinx and executed by the test suite -- are left untouched.
+
+    Parameters
+    ----------
+    app : sphinx.application.Sphinx
+        The Sphinx application, used to locate the source and ``examples`` directories.
+    """
+    examples_dir = Path(app.srcdir).parent.parent / "examples"
+    out_dir = Path(app.srcdir) / "_interactive"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name in jupyterlite_interactive_notebooks:
+        nb = nbformat.read(examples_dir / f"{name}.ipynb", as_version=4)
+        install_cell = nbformat.v4.new_code_cell(
+            "# Auto-added for the in-browser (JupyterLite/Pyodide) build of this notebook.\n" + _jupyterlite_install
+        )
+        nb.cells.insert(0, install_cell)
+        nbformat.write(nb, out_dir / f"{name}.ipynb")
+
+
+def setup(app):
+    """Register the interactive-notebook generator with Sphinx.
+
+    Parameters
+    ----------
+    app : sphinx.application.Sphinx
+        The Sphinx application to connect the ``builder-inited`` handler to.
+    """
+    app.connect("builder-inited", _generate_interactive_notebooks)
