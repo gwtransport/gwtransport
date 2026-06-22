@@ -63,7 +63,12 @@ napoleon_numpy_docstring = True
 napoleon_include_init_with_doc = False
 napoleon_include_private_with_doc = False
 napoleon_include_special_with_doc = True
-napoleon_use_admonition_for_examples = True
+# MUST stay False. With True, napoleon emits ".. admonition:: Examples" and indents the
+# example body 3 spaces; jupyterlite-sphinx's try_examples parser only treats lines that
+# literally start with ">>>" as code, so the indented block collapses into a single inert
+# markdown cell instead of runnable code cells. Rubric output (False) keeps ">>>" at column
+# 0 and converts correctly.
+napoleon_use_admonition_for_examples = False
 napoleon_use_admonition_for_notes = True
 napoleon_use_admonition_for_references = True
 napoleon_use_ivar = False
@@ -205,10 +210,9 @@ jupyterlite_silence = True
 # "Try it live" button on every NumPy-style Examples block.
 global_enable_try_examples = True
 try_examples_global_button_text = "Try it live"
-try_examples_global_warning_text = (
-    "The scientific Python stack (tens of MB) is preloaded in the background while you read; "
-    "the first run may still take a few seconds to finish loading, and is cached afterwards."
-)
+# No warning banner cell at the top of the interactive frame (try_examples_global_warning_text
+# defaults to None -> no banner). The Pyodide stack is still prefetched in the background; see
+# the prewarm config below.
 try_examples_preamble = _jupyterlite_install
 
 # Background preloading: on pages that expose interactive examples, a small generated script
@@ -228,8 +232,10 @@ nbsphinx_execute = "never"
 nbsphinx_allow_errors = True
 nbsphinx_kernel_name = "python3"
 # Jinja2 template (nbsphinx exposes ``env``). Every notebook keeps the location note;
-# the four Pyodide-compatible notebooks additionally get a lazy "Launch interactive
-# notebook" button pointing at their generated _interactive/ copy.
+# the Pyodide-compatible notebooks additionally get a button that opens their generated
+# _interactive/ copy in a new browser tab (`:new_tab:`), rather than embedding a live
+# iframe at the top of the static page. The button reuses jupyterlite-sphinx's
+# `try_examples_button` class, so it matches the "Try it live" docstring buttons.
 nbsphinx_prolog = (
     "{% set nbname = env.docname.split('/')|last %}\n"
     "\n"
@@ -238,8 +244,8 @@ nbsphinx_prolog = (
     "\n"
     "{% if nbname in " + repr(jupyterlite_interactive_notebooks) + " %}\n"
     ".. notebooklite:: /_interactive/{{ nbname }}.ipynb\n"
-    "   :prompt: Launch interactive notebook (runs in your browser)\n"
-    "   :height: 800px\n"
+    "   :new_tab: true\n"
+    "   :new_tab_button_text: Open this notebook live in a new tab\n"
     "{% endif %}\n"
 )
 

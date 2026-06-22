@@ -248,6 +248,8 @@ def root_zone_to_water_table_kinematic_wave(
 
     Examples
     --------
+    .. disable_try_examples
+
     Reproduce a 10-year step-response for the article's soil O05
     (coarse sand, Brooks-Corey)::
 

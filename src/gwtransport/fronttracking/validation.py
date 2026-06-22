@@ -147,6 +147,8 @@ def verify_physics(
 
     Examples
     --------
+    .. disable_try_examples
+
     ::
 
         results = verify_physics(structure, cout, cout_tedges, cin, verbose=False)

@@ -256,6 +256,8 @@ def compute_breakthrough_curve(
 
     Examples
     --------
+    .. disable_try_examples
+
     ::
 
         theta_array = np.linspace(0.0, tracker.state.theta_edges[-1], 1000)
@@ -940,6 +942,8 @@ def compute_domain_mass(
 
     Examples
     --------
+    .. disable_try_examples
+
     ::
 
         mass = compute_domain_mass(
@@ -1265,6 +1269,8 @@ def compute_cumulative_inlet_mass(
 
     Examples
     --------
+    .. disable_try_examples
+
     ::
 
         mass_in = compute_cumulative_inlet_mass(
@@ -1321,6 +1327,8 @@ def compute_cumulative_outlet_mass(
 
     Examples
     --------
+    .. disable_try_examples
+
     ::
 
         mass_out = compute_cumulative_outlet_mass(
