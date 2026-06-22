@@ -122,7 +122,7 @@ include = ["tests/notebooks/**/*.ipynb"]
 unresolved-reference = "ignore"
 
 [[tool.ty.overrides]]
-include = ["docs/**"]
+include = ["docs/source/conf.py"]
 
 [tool.ty.overrides.rules]
 # conf.py imports docs-only packages (e.g. jupyterlite_pyodide_kernel) behind a
