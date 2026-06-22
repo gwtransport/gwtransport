@@ -57,6 +57,10 @@ test = [
   "pytest-xdist>=3.0.0",
   "ruff==0.15.6",
   "timflow>=0.3",
+  # numba arrives transitively via timflow; floor it at the first release with
+  # cp314 wheels so resolution can't backtrack to a pre-3.10 numba (which would
+  # otherwise win because its numpy bound is open and accepts numpy>=2.5).
+  "numba>=0.63",
   "ty",
   "validate-pyproject[all,store]",
 ]
