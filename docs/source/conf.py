@@ -183,10 +183,13 @@ _jupyterlite_install = (
     "import numpy, scipy, pandas, matplotlib, mpmath  # noqa: F401\n"
 )
 
-# Example notebooks that run client-side. Excludes 01/02/03 (KNMI soil-temperature
-# download via requests, blocked by browser CORS) and 08 (timflow -> numba, which has
-# no WebAssembly build).
+# Example notebooks that run client-side. 01/02/03 use the inline KNMI soil-temperature data
+# embedded in gwtransport.examples, so they no longer need network access. Only 08 is excluded
+# (timflow -> numba, which has no WebAssembly build).
 jupyterlite_interactive_notebooks = [
+    "01_Aquifer_Characterization_Temperature",
+    "02_Residence_Time_Analysis",
+    "03_Pathogen_Removal_Bank_Filtration",
     "04_Deposition_Analysis_Bank_Filtration",
     "10_Advection_with_non_linear_sorption",
     "11_Percolation_Unsaturated_Zone",
