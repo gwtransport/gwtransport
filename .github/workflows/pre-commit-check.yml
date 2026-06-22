@@ -15,7 +15,7 @@ jobs:
     name: pre-commit hook is up to date
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Run pre-commit hook
         run: .githooks/pre-commit
       - name: Verify hook produced no changes
