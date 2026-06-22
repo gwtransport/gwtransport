@@ -65,9 +65,20 @@ test = [
   "validate-pyproject[all,store]",
 ]
 docs = [
-  "jupyter",
+  # Do NOT add the "jupyter" metapackage (or "notebook"/"jupyterlab") here. The docs
+  # build does not need the JupyterLab/Notebook apps: nbsphinx renders with
+  # nbsphinx_execute="never", and the in-browser examples use the JupyterLite app
+  # bundled by jupyterlite-core. The hazard: "jupyter lite build" federates EVERY
+  # labextension present in the env, so an externally-installed lab-extension built
+  # against a different JupyterLab than the JupyterLite app (jupyterlite-core and
+  # jupyterlite-pyodide-kernel ship as a version-matched pair providing one JupyterLab
+  # base) can request a shared @jupyterlab/* singleton the app cannot satisfy, breaking
+  # the interactive examples with a module-federation error (RUNTIME-012, "getter for
+  # the shared module is not a function"). That is exactly what "jupyter" caused: it
+  # pulls in notebook, whose @jupyter-notebook/lab-extension targets a newer JupyterLab
+  # than the bundled app. Keeping these apps out of the env avoids it.
   "jupyterlite-core>=0.6",
-  "jupyterlite-pyodide-kernel>=0.6,<0.7",
+  "jupyterlite-pyodide-kernel>=0.6",
   "jupyterlite-sphinx>=0.22",
   "nbsphinx",
   "nbsphinx-link",
@@ -125,8 +136,8 @@ unresolved-reference = "ignore"
 include = ["docs/source/conf.py"]
 
 [tool.ty.overrides.rules]
-# conf.py imports docs-only packages (e.g. jupyterlite_pyodide_kernel) behind a
-# try/except; the linting env installs only --extra test, so they don't resolve.
+# conf.py imports docs-only packages (e.g. jupyterlite_pyodide_kernel); the linting
+# env installs only --extra test, so they don't resolve here.
 unresolved-import = "ignore"
 
 [tool.coverage.report]

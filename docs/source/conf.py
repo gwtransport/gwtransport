@@ -9,10 +9,11 @@ from pathlib import Path
 
 import nbformat
 
-try:
-    from jupyterlite_pyodide_kernel.constants import PYODIDE_VERSION
-except ImportError:  # pragma: no cover - fallback if the constant moves upstream
-    PYODIDE_VERSION = "0.27.6"
+# PYODIDE_VERSION tracks the installed (unpinned) jupyterlite-pyodide-kernel; conf.py runs
+# only under sphinx-build with the docs extras, so a direct import is safe and a future
+# upstream rename fails loudly here instead of silently prefetching a stale Pyodide for the
+# CDN prewarm. (ty lints conf.py without the docs extras; see [tool.ty.overrides].)
+from jupyterlite_pyodide_kernel.constants import PYODIDE_VERSION
 
 # nbsphinx-link 1.3.1 imports SafeString/ErrorString from
 # docutils.utils.error_reporting, which was removed in docutils 0.22 (required
@@ -217,6 +218,10 @@ try_examples_preamble = _jupyterlite_install
 pyodide_cdn_base = f"https://cdn.jsdelivr.net/pyodide/v{PYODIDE_VERSION}/full/"
 # Config (generated, sets window.gwtPrewarmConfig) must load before the prefetch logic.
 html_js_files = ["js/pyodide-prewarm-config.js", "js/pyodide-prewarm.js"]
+
+# jupyterlite-sphinx ships no CSS for the interactive-example buttons; this styles
+# them to match the sphinx-book-theme (see _static/css/try-examples.css).
+html_css_files = ["css/try-examples.css"]
 
 # -- Options for nbsphinx ---------------------------------------------------
 nbsphinx_execute = "never"
