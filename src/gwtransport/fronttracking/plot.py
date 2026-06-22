@@ -150,6 +150,8 @@ def plot_vt_diagram(
 
     Examples
     --------
+    .. disable_try_examples
+
     ::
 
         from gwtransport.fronttracking.solver import FrontTracker
@@ -368,6 +370,8 @@ def plot_breakthrough_curve(
 
     Examples
     --------
+    .. disable_try_examples
+
     ::
 
         from gwtransport.fronttracking.solver import FrontTracker
@@ -486,6 +490,8 @@ def plot_wave_interactions(
 
     Examples
     --------
+    .. disable_try_examples
+
     ::
 
         from gwtransport.fronttracking.solver import FrontTracker
