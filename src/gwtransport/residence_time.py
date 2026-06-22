@@ -835,9 +835,11 @@ def gamma(
         # subtracts large near-equal terms (|mid| up to support_hi, with m1/m2 carrying the matching
         # mid powers) and catastrophically cancels on near-degenerate pieces. They are, however,
         # bounded purely by the piece geometry -- |x - mid| <= half over the piece -- so clip each to
-        # its exact range: a well-conditioned value lies inside and is untouched, while cancellation
-        # noise (which otherwise pairs with the 1/half^2 second-difference below to manufacture a
-        # spurious contribution) is forced back into the physically valid band.
+        # its exact range. This is not a strict no-op on well-conditioned pieces (a raw value may sit
+        # a rounding step outside the tight bound; clamping it back is a negligible correction). It
+        # earns its place on the near-degenerate pieces, where the cancellation noise -- which
+        # otherwise pairs with the 1/half^2 second-difference below to manufacture a spurious
+        # contribution -- is forced back into the physically valid band.
         b0 = np.maximum(m0, 0.0)
         mu1 = np.clip(m1 - mid * m0, -half * b0, half * b0)
         mu2 = np.clip(m2 - 2 * mid * m1 + mid**2 * m0, 0.0, half**2 * b0)
