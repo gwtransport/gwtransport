@@ -197,3 +197,4 @@ docs/source/_interactive/
 docs/source/_contents/
 docs/source/.jupyterlite.doit.db
 .jupyterlite.doit.db
+docs/source/_static/js/pyodide-prewarm-config.js
