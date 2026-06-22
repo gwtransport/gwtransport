@@ -121,6 +121,14 @@ include = ["tests/notebooks/**/*.ipynb"]
 # Intentionally broken notebook for testing error handling
 unresolved-reference = "ignore"
 
+[[tool.ty.overrides]]
+include = ["docs/**"]
+
+[tool.ty.overrides.rules]
+# conf.py imports docs-only packages (e.g. jupyterlite_pyodide_kernel) behind a
+# try/except; the linting env installs only --extra test, so they don't resolve.
+unresolved-import = "ignore"
+
 [tool.coverage.report]
 exclude_lines = [
     "def __repr__",
