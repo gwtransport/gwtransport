@@ -12,16 +12,20 @@ import numpy as np
 import pandas as pd
 import pytest
 from _radial_asr_fv_oracle import fv_cout_deviation  # ty: ignore[unresolved-import]  # tests/src on path via conftest
-from flint import acb
+from _radial_asr_whittaker_oracle import (  # ty: ignore[unresolved-import]  # flint oracle, tests/src on path
+    resolvent_oracle,
+    transfer_function_oracle,
+    whittaker_resolvent_solutions,
+)
+from flint import acb  # ty: ignore[unresolved-import]  # python-flint is a test-only dependency
 
 from gwtransport._radial_asr_compose import single_cycle_echo_matrix
 from gwtransport._radial_asr_gridfree import gridfree_cout_deviation
 from gwtransport._radial_asr_kernels import (
-    _WHITTAKER_MAX_RATIO,
-    _molecular_regime,
+    _transfer_riccati,
     interior_resolvent,
+    resolvent_riccati,
     rest_resolvent,
-    whittaker_resolvent_solutions,
 )
 from gwtransport.radial_asr import infiltration_to_extraction
 
@@ -127,12 +131,13 @@ class TestLaplaceMassBalance:
 
 
 class TestWhittakerResolvent:
-    """D_m > 0 interior Green's function: SL constancy and the KB Sec. 7 duality.
+    """D_m > 0 interior Green's function: SL constancy and the KB Sec. 7 duality of the flint ORACLE.
 
-    ``whittaker_resolvent_solutions`` returns flint ``acb`` (Arb) values at ``_WHITTAKER_PREC`` bits. The
+    These validate the tests-only flint/Arb Whittaker oracle (``_radial_asr_whittaker_oracle``), the
+    machine-precision ground truth the production Riccati path is checked against (in
+    ``TestRiccatiVsOracle``). ``whittaker_resolvent_solutions`` returns flint ``acb`` (Arb) values; the
     divergent normalization ``N`` is carried in ``acb`` and only the bounded ratios are cast to double, so
-    these identities hold to the double floor (~1e-13, achieved ~1e-16) -- the honest accuracy of the
-    double-precision production output.
+    these identities hold to the double floor (~1e-13, achieved ~1e-16).
     """
 
     def _greens(self, s, r, rp, r_w, alpha_l, a0, d_m, sigma_a):
@@ -174,6 +179,92 @@ class TestWhittakerResolvent:
             flux_w = phi_w - (alpha_l + d_m * r_w / a0) * phi_w_p
             rhs = phi * (2 * c_geo * rp) / (2 * c_geo * a0 * flux_w)
             assert float(abs(complex(ghat_wf * w_minus - rhs)) / abs(complex(rhs))) < 1e-13
+
+
+class TestRiccatiVsOracle:
+    """The production D_m > 0 Riccati path matches the independent flint Whittaker oracle to ~machine precision.
+
+    The Riccati log-derivative kernel (production, pure double precision) is checked against the flint/Arb
+    Whittaker oracle (tests-only ground truth) for the transfer function (the four Kreft-Zuber modes) and
+    the interior resolvent (both flow orientations). Extraction uses NON-integer A_0/D_m, where the
+    oracle's growing-M branch is defined; the production Riccati has no such degeneracy, covered separately
+    by :meth:`test_extraction_integer_ratio_is_finite`.
+    """
+
+    @pytest.mark.parametrize(("inject", "detect"), [("flux", "flux"), ("flux", "resident")])
+    @pytest.mark.parametrize("a0", [5.0, 20.0])  # A_0/D_m = 50, 200
+    def test_transfer_matches_oracle(self, inject, detect, a0):
+        alpha_l, d_m, r_w, r = 0.5, 0.1, 0.5, 4.0
+        s = np.array([0.02 + 0.05j, 0.02 + 0.4j, 0.05 + 1.5j, 0.1 + 6.0j])
+        ric = _transfer_riccati(s, r, r_w, alpha_l, a0, d_m, inject, detect)
+        ref = transfer_function_oracle(s=s, r=r, r_w=r_w, alpha_l=alpha_l, a0=a0, d_m=d_m, inject=inject, detect=detect)
+        np.testing.assert_allclose(ric, ref, rtol=1e-11)  # double-precision agreement vs the Arb oracle
+
+    @pytest.mark.parametrize("direction", ["injection", "extraction"])
+    @pytest.mark.parametrize(
+        ("a0", "s"),
+        [
+            # ratio 50: the oracle's growing-M branch is robust across the whole |s| range (incl. small |s|)
+            (5.03, np.array([0.02 + 0.05j, 0.05 + 0.4j, 0.1 + 2.0j, 0.2 + 6.0j])),
+            # ratio ~120: the oracle is valid only for moderate |s| (its M branch loses precision at large
+            # |s| and high ratio -- a production bug the Riccati removes; high-ratio finiteness across all
+            # |s| is covered by test_high_ratio_no_cap and the FV oracle).
+            (12.03, np.array([0.03 + 0.1j, 0.05 + 0.4j, 0.1 + 2.0j])),
+        ],
+    )
+    def test_resolvent_matches_oracle(self, direction, a0, s):
+        alpha_l, d_m, r_w = 0.5, 0.1, 0.5
+        rng = np.random.default_rng(0)
+        r_nodes = np.linspace(r_w + 0.1, 5.5, 16)
+        dr = np.gradient(r_nodes)
+        field = rng.standard_normal(16)
+        ric = resolvent_riccati(
+            s=s,
+            field=field,
+            r_nodes=r_nodes,
+            dr_weights=dr,
+            r_w=r_w,
+            alpha_l=alpha_l,
+            a0_eff=a0,
+            d_m_eff=d_m,
+            direction=direction,
+        )
+        ref = resolvent_oracle(s, field, r_nodes, dr, r_w, alpha_l, a0, d_m, direction)
+        np.testing.assert_allclose(ric, ref, rtol=1e-11)  # log-space gauge agreement vs the Arb oracle
+
+    @pytest.mark.parametrize(("d_m", "r"), [(20.0, 2.05), (5.0, 2.05), (1.0, 0.65)])
+    def test_transfer_near_well_high_dm_vs_oracle(self, d_m, r):
+        # Regression for the r_far IC washout: at high D_m, near the well, and small |s| the decaying-branch
+        # asymptotic IC must wash out before r reaches r_w. r_far is decay-length-aware (extended by ~22
+        # decay lengths of the slowest node), so these match the oracle to ~machine precision -- with the
+        # old fixed r_far = 8 r_max the worst case was ~6e-3.
+        r_w = 0.5
+        s = np.array([0.01 + 0.0j, 0.03 + 0.01j, 0.05 + 0.4j, 0.1 + 2.0j])  # incl tiny-|s| / real nodes
+        ric = _transfer_riccati(s, r, r_w, 0.5, 2.0, d_m, "flux", "resident")
+        ref = transfer_function_oracle(
+            s=s, r=r, r_w=r_w, alpha_l=0.5, a0=2.0, d_m=d_m, inject="flux", detect="resident"
+        )
+        np.testing.assert_allclose(ric, ref, rtol=1e-9)
+
+    @pytest.mark.slow
+    def test_extraction_integer_ratio_is_finite(self):
+        # Regression: the flint extraction resolvent returns NaN at integer A_0/D_m (the growing-M branch
+        # hits a non-positive-integer pole); the Riccati path has no degeneracy. Compare the engine cout at
+        # an exactly-integer ratio to a slightly-perturbed ratio -- finite and continuous through the pole.
+        geom = {"c_geo": np.pi * 10 * 0.3, "r_w": 0.5, "alpha_l": 0.5}
+        flow = np.array([100.0] * 4 + [-100.0] * 6 + [100.0] * 4 + [-100.0] * 8)  # multi-cycle exercises the resolvent
+        dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
+        ext = flow < 0
+        a0 = 100.0 / (2.0 * geom["c_geo"])
+        d_m_int = a0 / 3.0  # A_0/D_m = 3 exactly (oracle NaN); d_m_off perturbs off the pole
+        on = gridfree_cout_deviation(
+            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=d_m_int, n_quad=8, **geom
+        )
+        off = gridfree_cout_deviation(
+            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=a0 / 3.02, n_quad=8, **geom
+        )
+        assert np.all(np.isfinite(on[ext]))
+        np.testing.assert_allclose(on[ext], off[ext], atol=5e-3)  # continuous through the integer-ratio pole
 
 
 # --- engine-level gates -------------------------------------------------------------------------
@@ -294,28 +385,14 @@ class TestGridfreeEngine:
         np.testing.assert_allclose(ens[ext], manual, rtol=1e-12)
 
 
-class TestMolecularRegime:
-    def test_small_dm_uses_airy_reduction(self):
-        # Negligible molecular diffusion (crossover a* far beyond the plume) drops to the exact O(D_m)
-        # Airy reduction: identical to D_m = 0 (the reduction is exact to O(D_m/alpha_L|u|) here). A
-        # MULTI-CYCLE schedule routes through the grid-free engine's own dispatch (not the echo path).
-        flow = np.array([100.0] * 4 + [-100.0] * 8 + [100.0] * 4 + [-100.0] * 10)
-        tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
-        cin = np.where(flow > 0, 1.0, 0.0)
-        geom = {"pore_heights": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
-        kw = {"cin": cin, "flow": flow, "tedges": tedges, "cout_tedges": tedges, "n_quad": 120, **geom}
-        base = infiltration_to_extraction(**kw)
-        small = infiltration_to_extraction(molecular_diffusivity=1e-3, **kw)
-        np.testing.assert_array_equal(base, small)  # exact: the dispatch sets D_m := 0
-
+class TestMolecularDiffusion:
     @pytest.mark.slow
     def test_appreciable_dm_vs_fv(self):
-        # Appreciable molecular diffusion routes to the exact Whittaker branch; cross-check the
-        # de-Hoog-inverted Whittaker breakthrough vs the finite-volume oracle (~1% first-order floor).
-        # Single cycle: this exercises the Whittaker kernel + FR profile + duality readout end-to-end at
-        # O(n_quad) cost. The O(n_quad^2) multi-cycle Whittaker hand-off (_propagate_whittaker) is gated
-        # separately by TestWhittakerResolvent (machine precision). Still @slow (~6 s) -- the flint
-        # confluent-hypergeometric is evaluated per node (a converged multi-cycle Whittaker-vs-FV is ~20 s).
+        # Appreciable molecular diffusion routes to the D_m > 0 Riccati branch; cross-check the
+        # de-Hoog-inverted breakthrough vs the finite-volume oracle (~1% first-order floor). Single cycle:
+        # this exercises the Riccati kernel + FR profile + duality readout end-to-end. The multi-cycle
+        # resolvent hand-off (_propagate_diffusive) is gated separately by TestRiccatiVsOracle (machine
+        # precision vs the flint oracle). Still @slow -- the per-node ODE solve at appreciable A_0/D_m.
         flow = np.array([100.0] * 3 + [-100.0] * 7)
         dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
         ext = flow < 0
@@ -328,34 +405,40 @@ class TestMolecularRegime:
         )
         assert np.max(np.abs(gf[ext] - fv[ext])) < 3e-2  # finite-volume first-order floor
 
-    def test_cap_extends_whittaker_to_heat_regime(self):
-        # Adaptive precision keeps the exact Whittaker kernel machine-exact for heat-scale A0/D_m up to
-        # _WHITTAKER_MAX_RATIO=1000 (the old fixed-precision cap was 10, then 150). a* < reach & ratio <=
-        # cap -> keep D_m exact; ratio > cap -> Airy + warn (precision cost impractical); a* >= reach -> Airy.
-        a0, alpha_l = 5.3, 0.1
-        assert _WHITTAKER_MAX_RATIO >= 1000.0
-        for ratio in (100, 300, 900):  # all dropped at the old cap (10/150); now kept exact (a* = 0.1*ratio < reach)
-            assert _molecular_regime(a0 / ratio, a0, alpha_l, plume_reach=200.0) == a0 / ratio
-        assert _molecular_regime(0.1, a0, alpha_l, plume_reach=2.0) == 0.0  # a* >= reach -> Airy (sub-dominant)
-        with pytest.warns(UserWarning, match="impractical precision"):
-            assert _molecular_regime(a0 / 2000.0, a0, alpha_l, plume_reach=300.0) == 0.0  # ratio 2000 > cap
-
-    @pytest.mark.slow
-    def test_heat_pumping_diffusion_is_modeled(self):
-        # End-to-end Bug-2 fix: at A0/D_m ~ 100 (heat; a* inside the plume) the pumping-phase D_m was a
-        # no-op at the old cap (cout identical to D_m=0); the flint Whittaker kernel now carries it, so
-        # cout depends on D_m. (alpha_l small so a* < plume reach; the FV cross-check is the test above.)
-        geom = {"c_geo": np.pi * 10 * 0.3, "r_w": 0.5, "alpha_l": 0.1}
-        flow = np.array([100.0] * 20 + [-100.0] * 40)
-        dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
-        ext = flow < 0
-        dry = gridfree_cout_deviation(
-            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.0, n_quad=16, **geom
-        )
-        wet = gridfree_cout_deviation(
-            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=5.3 / 100.0, n_quad=16, **geom
-        )
-        assert np.max(np.abs(wet[ext] - dry[ext])) > 1e-2  # pumping molecular diffusion now modeled (was 0)
+    def test_high_ratio_no_cap(self):
+        # No A_0/D_m cap any more, and no small-|s| NaN with it: the Riccati kernel is finite and
+        # non-trivial at heat / seasonal-storage ratios (A_0/D_m = 1000) where the old flint kernel hit its
+        # precision wall and NaN'd at the small-|s| de Hoog nodes. Both orientations, small AND large |s|.
+        alpha_l, d_m, r_w = 0.5, 0.1, 0.5
+        rng = np.random.default_rng(1)
+        r_nodes = np.linspace(r_w + 0.1, 6.0, 20)
+        dr, field = np.gradient(r_nodes), rng.standard_normal(20)
+        s = np.array([0.02 + 0.01j, 0.05 + 0.4j, 0.2 + 6.0j])  # incl small |s| (the old flint NaN regime)
+        a0 = 1000.0 * d_m  # A_0/D_m = 1000, far beyond the old cap (150, then 1000)
+        for direction in ("injection", "extraction"):
+            f = resolvent_riccati(
+                s=s,
+                field=field,
+                r_nodes=r_nodes,
+                dr_weights=dr,
+                r_w=r_w,
+                alpha_l=alpha_l,
+                a0_eff=a0,
+                d_m_eff=d_m,
+                direction=direction,
+            )
+            assert np.all(np.isfinite(f))
+            assert np.max(np.abs(f)) > 0.0  # non-trivial (not silently zeroed)
+        g = _transfer_riccati(s, 5.0, r_w, alpha_l, a0, d_m, "flux", "resident")
+        assert np.all(np.isfinite(g))
+        assert np.all(np.abs(g) > 0.0)
+        # value-pin at ratio 1000: the transfer oracle (Tricomi-U) IS finite/correct for moderate |s|
+        # (only its resolvent M-branch overflows there), so the transfer can be checked exactly, not just
+        # for finiteness.
+        s_mod = np.array([0.05 + 0.4j, 0.1 + 1.0j, 0.2 + 6.0j])
+        gp = _transfer_riccati(s_mod, 5.0, r_w, alpha_l, a0, d_m, "flux", "flux")
+        ref = transfer_function_oracle(s=s_mod, r=5.0, r_w=r_w, alpha_l=alpha_l, a0=a0, d_m=d_m)
+        np.testing.assert_allclose(gp, ref, rtol=1e-11)
 
 
 class TestRestDiffusion:
@@ -385,33 +468,19 @@ class TestRestDiffusion:
                 got = rest_resolvent(s=np.array([s]), r=r, r_prime=rp, r_w=r_w, d_m=d_m)[0, 0]
                 assert abs(got - complex(ref(s, r, rp))) / abs(complex(ref(s, r, rp))) < 1e-12
 
-    def test_rest_makes_engine_sensitive_to_rest_length(self):
-        # Before the fix the engine treated rest as identity (cout independent of rest length). Diffusion
-        # over a long rest must measurably lower the recovery; this was exactly 0 on the unfixed engine.
-        # D_m = 0.02 keeps pumping in the Airy regime (a* > plume reach), isolating the rest Bessel
-        # propagator (Bug 1) from the pumping Whittaker path -- so this stays fast.
-        def recovery(rest):
-            flow = np.array([100.0] * 20 + [0.0] * rest + [-50.0] * 40)
-            dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
-            cout = gridfree_cout_deviation(
-                cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.02, n_quad=80, **GEOM
-            )
-            return np.nansum(cout[flow < 0] * 50.0) / 2000.0
-
-        assert recovery(0) - recovery(365) > 0.05
-
+    @pytest.mark.slow
     def test_seasonal_rest_matches_fv_oracle(self):
         # Exact end-to-end: inject -> long (200 d) rest -> extract. The rest diffusion (Bessel, exact)
         # dominates; gridfree must match the FV oracle (which integrates D_m through the rest). A broken
         # rest measure/wiring would give a ~0.5 gap, so this cleanly gates the end-to-end magnitude.
+        # @slow: the D_m>0 pumping phases now go through the per-node Riccati ODE (no more Airy reduction).
         flow = np.array([100.0] * 10 + [0.0] * 200 + [-50.0] * 40)
         dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
         ext = flow < 0
         gf = gridfree_cout_deviation(
-            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.01, n_quad=160, **GEOM
+            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.05, n_quad=24, **GEOM
         )
         fv = fv_cout_deviation(
-            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.01, n_cells=600, n_sub=8, **GEOM
+            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.05, n_cells=600, n_sub=8, **GEOM
         )
-        # FV first-order floor plus the small pumping-phase Airy reduction at this D_m (the rest is exact).
-        assert np.max(np.abs(gf[ext] - fv[ext])) < 3e-2
+        assert np.max(np.abs(gf[ext] - fv[ext])) < 3e-2  # FV first-order floor (the gridfree side is exact)

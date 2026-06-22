@@ -5,7 +5,8 @@ arbitrary signed flow schedule (positive = injection, negative = extraction, zer
 arbitrary injected concentration ``cin``. The physics is the exact radial advection-dispersion of the
 radial ASR knowledge base: volume coordinate ``V(r) = pi b n (r^2 - r_w^2)``, Scheidegger
 velocity-dependent dispersion ``D = alpha_L |u| + D_m``, Kreft-Zuber flux boundary conditions, and
-the exact Airy / Whittaker per-phase kernels. Nothing is reduced to a Gaussian; the exact
+the exact per-phase kernels (Airy for ``D_m = 0``; the log-derivative Riccati ODE for ``D_m > 0``).
+Nothing is reduced to a Gaussian; the exact
 non-Gaussian breakthrough (with the correct skewness) is carried.
 
 The forward map is **grid-free** end to end -- no PDE is discretized, so none of the finite-volume
@@ -14,13 +15,13 @@ artefacts appear. A single inject-then-extract cycle with no intervening rest us
 with the exact temporal moments. Any other signed-flow schedule (more reversals / multi-cycle ASR, or a
 single cycle with a rest under nonzero ``D_m``) uses the grid-free multi-cycle engine
 (``gwtransport._radial_asr_gridfree``, KB addendum Sec. A1-A4), which composes the exact per-phase
-Airy / Whittaker kernels through the interior two-point Green's functions. Molecular diffusion during
-pumping is handled basis-by-regime (KB addendum Sec. A6): the exact Whittaker branch where it is
-appreciable within the plume, and its exact Airy reduction (dispatch and error quantified in
-``gwtransport._radial_asr_kernels._molecular_regime``) where it is sub-dominant. During a **rest**
-(``Q = 0``) advection and mechanical dispersion vanish and molecular diffusion acts alone on the
-wall-clock clock; it is carried exactly by the order-0 modified Bessel pure-diffusion kernel (no
-tractability cap), the dominant mixing for seasonal storage / ATES. The only
+kernels (Airy / Riccati) through the interior two-point Green's functions. Molecular diffusion during
+pumping (the ``D_m > 0`` Whittaker kernel) is evaluated through the log-derivative Riccati ODE
+(``gwtransport._radial_asr_kernels.resolvent_riccati``) -- exact to the de Hoog inversion floor at any
+``A_0/D_m``, with no special-function precision cap, and reducing continuously to the Airy branch as
+``D_m -> 0``. During a **rest** (``Q = 0``) advection and mechanical dispersion vanish and molecular
+diffusion acts alone on the wall-clock clock; it is carried exactly by the order-0 modified Bessel
+pure-diffusion kernel, the dominant mixing for seasonal storage / ATES. The only
 numerical steps are Gauss-Legendre quadrature and de Hoog Laplace inversion of exact special-function
 kernels. An independent finite-volume solve of the same PDE (``tests/src/_radial_asr_fv_oracle.py``,
 KB Sec. 9) is retained only as a test oracle. The spectral-domain acceleration of the multi-cycle
@@ -67,10 +68,10 @@ Kreft-Zuber flux concentration, with transfer function ``Ai(Y) / [Ai(Y0)/2 - p^(
 the flux operator this module evaluates. The ``D_m > 0`` kernel (``D = alpha_L |u| + D_m``, Kummer /
 confluent-hypergeometric functions) under the same flux boundary, with retardation, is Aichi & Akitaya
 (2018) -- whose well operator ``U(a,b) + 2a U(a+1,b+1)`` is this module's Whittaker flux boundary; they
-record the ``D_m -> 0`` reduction to Chen (1987) as an open problem, which this module performs as its
-basis-by-regime Airy/Whittaker dispatch. The ``alpha_L = 0`` limit (constant diffusion, drift-dominated
-radial transport, Whittaker equation) is Akanji & Falade (2019). Each is an injection-only solution; none
-treats extraction or multi-cycle push-pull.
+record the ``D_m -> 0`` reduction to Chen (1987) as an open problem, which this module performs
+continuously -- the log-derivative Riccati kernel reduces smoothly to the Airy branch as ``D_m -> 0``.
+The ``alpha_L = 0`` limit (constant diffusion, drift-dominated radial transport, Whittaker equation) is
+Akanji & Falade (2019). Each is an injection-only solution; none treats extraction or multi-cycle push-pull.
 
 Kreft, A., & Zuber, A. (1978). On the physical meaning of the dispersion equation and its solutions
 for different initial and boundary conditions. Chemical Engineering Science, 33(11), 1471-1480.
@@ -305,9 +306,9 @@ def infiltration_to_extraction(
     longitudinal_dispersivity : float
         Longitudinal dispersivity ``alpha_L`` [m].
     molecular_diffusivity : float, optional
-        Molecular diffusivity ``D_m`` [m^2/day]. Default 0. ``D_m > 0`` is carried exactly by the
-        Whittaker branch where molecular diffusion is appreciable, and by its exact Airy reduction
-        where it is sub-dominant within the plume (basis-by-regime; the Whittaker branch uses flint/Arb).
+        Molecular diffusivity ``D_m`` [m^2/day]. Default 0. ``D_m = 0`` uses the vectorized Airy branch;
+        ``D_m > 0`` uses the log-derivative Riccati kernel -- exact to the de Hoog floor at any ``A_0/D_m``
+        with no precision cap, reducing continuously to the Airy branch as ``D_m -> 0``.
     retardation_factor : float, optional
         Linear retardation ``R >= 1``. Default 1.
     weights : array-like, optional

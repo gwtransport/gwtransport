@@ -6,10 +6,10 @@ base (KB Sec. 4-7, addendum Sec. A1-A4) -- no PDE is discretized, so none of the
 artefacts (CFL/Courant limit, numerical dispersion, Crank-Nicolson ringing) appear. The only numerical
 operations are Gauss-Legendre quadrature over the resident profile and de Hoog Laplace inversion of the
 exact special-function kernels: the Airy interior Green's functions for ``D_m = 0`` (flushed-volume
-clock, vectorized) and the Whittaker interior Green's functions for appreciable ``D_m > 0`` (wall-clock
-time, flint/Arb -- the molecular-diffusion regime is chosen by :func:`_molecular_regime`, KB addendum
-Sec. A6). The spectral-domain acceleration of the composition (KB addendum Sec. A4-A7) is not
-implemented here.
+clock, vectorized) and the ``D_m > 0`` molecular-diffusion Green's functions (wall-clock time),
+evaluated through the log-derivative Riccati ODE (:func:`gwtransport._radial_asr_kernels.resolvent_riccati`) -- exact at any ``A_0/D_m``
+with no special-function precision cap. The spectral-domain acceleration of the composition (KB
+addendum Sec. A4-A7) is not implemented here.
 
 State machine (deviation ``c' = c - c_bg``, initial condition 0)
 ---------------------------------------------------------------
@@ -29,8 +29,8 @@ read out ``cout``:
   ``D_m`` acts, on the wall-clock clock (KB Sec. 3 -- the molecular clock keeps running while the flow
   is off), so the field is propagated by the order-0 modified Bessel interior Green's function
   (``rest_resolvent``). For ``D_m = 0`` rest is identity. This is the dominant mixing for seasonal
-  storage / ATES (long rests, large thermal ``D_m``) and uses the physical ``D_m`` regardless of the
-  pumping-phase basis-by-regime choice (the Bessel branch has no Whittaker tractability cap).
+  storage / ATES (long rests, large thermal ``D_m``) and uses the physical ``D_m`` on the wall-clock
+  clock.
 
 The pumping phases are carried in the flushed-volume clock, so arbitrary within-phase variable flow is
 exact (the S-clock convolution theorem, KB Sec. 3); rest phases run in wall-clock time. Retardation
@@ -44,17 +44,14 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 
 import numpy as np
 import numpy.typing as npt
-from flint import acb, ctx
 
 from gwtransport._radial_asr_compose import _fr_step_response
 from gwtransport._radial_asr_dehoog import dehoog_inverse
 from gwtransport._radial_asr_kernels import (
-    _molecular_regime,
     _resolvent_airy_pieces,
-    _whittaker_prec,
     assemble_airy_resolvent,
+    resolvent_riccati,
     rest_resolvent,
-    whittaker_resolvent_solutions,
 )
 
 # de Hoog series length for the field-propagation inversion and the front-anchored scaling margin
@@ -271,7 +268,7 @@ def _propagate(
     return out
 
 
-def _propagate_whittaker(
+def _propagate_diffusive(
     field: npt.NDArray[np.floating],
     r_nodes: npt.NDArray[np.floating],
     dr_weights: npt.NDArray[np.floating],
@@ -285,18 +282,18 @@ def _propagate_whittaker(
     molecular_diffusivity: float,
     retardation_factor: float,
 ) -> npt.NDArray[np.floating]:
-    r"""Propagate a resident field by wall-clock time ``tau`` with the ``D_m > 0`` Whittaker resolvent.
+    r"""Propagate a resident field by wall-clock time ``tau`` with the ``D_m > 0`` (Riccati) resolvent.
 
-    Same superposition as :func:`_propagate` but with the Whittaker interior Green's function (KB
-    Sec. 4 ``D_m > 0`` branch) and the wall-clock time clock (the volume clock is not autonomous when
-    ``D_m > 0`` -- the no-go lemma). No vectorized complex Whittaker exists, so the solutions are
-    sampled with flint (Arb); the cost is contained by (a) evaluating them ONCE per de Hoog node and grid
-    radius and (b) assembling every output node from prefix/suffix sums of the source superposition
-    ``F(s)_i = -[u_inf(r_i) sum_{j<=i} u_0(r_j) w_j + u_0(r_i) sum_{j>i} u_inf(r_j) w_j]/N(s)`` (using
-    the symmetric SL split at ``r_i``), keeping the whole build at ``O(n_nodes * n_quad)`` Arb
-    evaluations. Arb carries the divergent growing-solution magnitude exactly (the ``N = G^b`` gauge),
-    and only the bounded ``F(s)_i`` -- where it cancels -- is cast to double. ``src_measure_k = w(r_k) dr_weights_k`` with the ``D_m > 0`` weight
-    ``w_pm(r) = r G(r)^{-/+ A_0/D_m}`` (``G = alpha_L A_0 + D_m r``).
+    Same superposition as :func:`_propagate` but with the molecular-diffusion interior Green's function
+    (KB Sec. 4 ``D_m > 0`` branch) and the wall-clock time clock (the volume clock is not autonomous
+    when ``D_m > 0`` -- the no-go lemma). The Green's function is assembled by :func:`gwtransport._radial_asr_kernels.resolvent_riccati`
+    from the log-derivatives of the decaying and well-regular solutions: every output node is built from
+    prefix/suffix sums of the source superposition
+    ``F(s)_i = -[u_inf(r_i) sum_{j<=i} u_0(r_j) w_j + u_0(r_i) sum_{j>i} u_inf(r_j) w_j]/N(s)`` (the
+    symmetric SL split at ``r_i``), with the divergent ``N = G^b`` gauge carried in log space so the
+    assembly stays in double precision at any ``A_0/D_m`` -- no special-function precision cap.
+    ``src_measure_k = w(r_k) dr_weights_k`` with the ``D_m > 0`` weight ``w_pm(r) = r G(r)^{b-1}``
+    (``b = 1 - sigma_A A_0/D_m``, ``G = alpha_L A_0 + D_m r``), built inside :func:`gwtransport._radial_asr_kernels.resolvent_riccati`.
 
     Returns
     -------
@@ -305,13 +302,7 @@ def _propagate_whittaker(
     """
     a0_eff = (flow_scale / (2.0 * c_geo)) / retardation_factor
     d_m_eff = molecular_diffusivity / retardation_factor
-    sigma_a = 1 if direction == "injection" else -1
-    # Sturm-Liouville weight w_pm(r) = r G^{b-1}, b-1 = -sigma_A a0/d_m (G = alpha_L a0 + d_m r),
-    # matched to the resolvent normalization N = G^b W (the constant in P/w cancels in G_SL * w).
-    g_eff = alpha_l * a0_eff + d_m_eff * r_nodes
-    sl_weight = r_nodes * g_eff ** (-sigma_a * a0_eff / d_m_eff)
-    weighted = (field * sl_weight * dr_weights).astype(complex)
-    if not np.any(weighted != 0.0):
+    if not np.any(field != 0.0):
         return np.zeros_like(field)
     n = len(r_nodes)
     mu_t = c_geo * ((float(r_nodes.max()) + alpha_l) ** 2 + alpha_l**2 - r_w**2) / flow_scale
@@ -319,38 +310,18 @@ def _propagate_whittaker(
     cache: dict[bytes, npt.NDArray[np.complexfloating]] = {}
 
     def build(p: npt.NDArray[np.complexfloating]) -> npt.NDArray[np.complexfloating]:
-        f_mat = np.empty((len(p), n), dtype=complex)
-        b_exp = 1 - sigma_a * a0_eff / d_m_eff
-        for k, pk in enumerate(p):
-            sk = complex(pk)
-            ctx.prec = _whittaker_prec(abs(sk), alpha_l, a0_eff, d_m_eff)  # adaptive: ~kappa a* bits
-            g_well = acb(alpha_l * a0_eff + d_m_eff * r_w) ** acb(b_exp)  # divergent N gauge; cancels in F(s)_i
-            uiw, uiwp, urw, urwp = whittaker_resolvent_solutions(sk, r_w, alpha_l, a0_eff, d_m_eff, sigma_a)
-            if sigma_a < 0:  # extraction: Danckwerts/Neumann u_0'(r_w) = 0
-                bc_reg, bc_inf = urwp, uiwp
-            else:  # injection: Robin F[u]=u-(G/A_0)u', F[u_0](r_w)=0
-                fac = alpha_l + d_m_eff * r_w / a0_eff  # = G(r_w)/A_0
-                bc_reg, bc_inf = urw - fac * urwp, uiw - fac * uiwp
-            u0w = bc_reg * uiw - bc_inf * urw
-            u0wp = bc_reg * uiwp - bc_inf * urwp
-            n_s = g_well * (u0w * uiwp - u0wp * uiw)
-            u_inf_g, u0_g = [], []
-            for r in r_nodes:
-                ui, _, ur, _ = whittaker_resolvent_solutions(sk, float(r), alpha_l, a0_eff, d_m_eff, sigma_a)
-                u_inf_g.append(ui)
-                u0_g.append(bc_reg * ui - bc_inf * ur)
-            wj = [acb(float(weighted[m].real), float(weighted[m].imag)) for m in range(n)]
-            prefix, acc = [acb(0)] * n, acb(0)
-            for m in range(n):  # inclusive prefix sum_{j<=m} u_0(r_j) w_j
-                acc += u0_g[m] * wj[m]
-                prefix[m] = acc
-            suffix, acc = [acb(0)] * n, acb(0)
-            for m in range(n - 1, -1, -1):  # exclusive suffix sum_{j>m} u_inf(r_j) w_j
-                suffix[m] = acc
-                acc += u_inf_g[m] * wj[m]
-            for i in range(n):
-                f_mat[k, i] = complex(-(u_inf_g[i] * prefix[i] + u0_g[i] * suffix[i]) / n_s)
-        return f_mat
+        # F(s)_{k,i} = sum_j Ghat(r_i, r_j; s_k) field_j w_j via the log-derivative resolvent (log-space gauge)
+        return resolvent_riccati(
+            s=p,
+            field=field,
+            r_nodes=r_nodes,
+            dr_weights=dr_weights,
+            r_w=r_w,
+            alpha_l=alpha_l,
+            a0_eff=a0_eff,
+            d_m_eff=d_m_eff,
+            direction=direction,
+        )
 
     out = np.empty(n)
     for i in range(n):
@@ -418,8 +389,8 @@ def gridfree_cout_deviation(
     """Extracted-flux deviation per bin for a general signed-flow schedule, grid-free.
 
     Composes the exact per-phase kernels through the multi-cycle state machine (see the module
-    docstring): the Airy branch for ``D_m = 0`` (vectorized, flushed-volume clock) and the Whittaker
-    branch for ``D_m > 0`` (flint/Arb, wall-clock time -- the volume clock is not autonomous when
+    docstring): the Airy branch for ``D_m = 0`` (vectorized, flushed-volume clock) and the Riccati
+    log-derivative branch for ``D_m > 0`` (wall-clock time -- the volume clock is not autonomous when
     ``D_m > 0``). Returns the flow-weighted bin average of the well-face flux concentration deviation
     on extraction bins, ``NaN`` on injection / rest bins.
 
@@ -438,8 +409,8 @@ def gridfree_cout_deviation(
     alpha_l : float
         Longitudinal dispersivity [m].
     molecular_diffusivity : float, optional
-        Molecular diffusivity [m^2/day]. ``0`` selects the Airy branch; ``> 0`` the Whittaker branch.
-        Default 0.
+        Molecular diffusivity [m^2/day]. ``0`` selects the Airy branch; ``> 0`` the Riccati
+        log-derivative branch. Default 0.
     retardation_factor : float, optional
         Linear retardation ``R >= 1``. Default 1.
     n_quad : int, optional
@@ -451,34 +422,21 @@ def gridfree_cout_deviation(
         Extracted-flux deviation per bin; ``NaN`` on injection / rest bins.
     """
     flushed = np.abs(flow) * dt_days
-    d_m_physical = molecular_diffusivity  # rest phases always diffuse with the physical D_m (Bessel branch)
-    # Build the advective (D_m-independent) grid first -- its reach is what the pumping-kernel
-    # basis-by-regime decision compares against (the molecular reach is only a grid detail).
-    r_nodes, v_nodes, dr_weights = _field_grid(flow, dt_days, c_geo, r_w, alpha_l, 0.0, n_quad)
-    # Pumping-kernel basis-by-regime (KB addendum Sec. A6): the Airy reduction where molecular diffusion
-    # is sub-dominant within the plume (or its exact Whittaker treatment intractable), the exact Whittaker
-    # branch where it is appreciable and tractable. This governs ONLY the inject/extract kernels; rest
-    # diffusion below always uses the physical D_m (the Bessel branch has no tractability cap).
-    a0_repr = float(np.mean(np.abs(flow[flow != 0.0]))) / (2.0 * c_geo) if np.any(flow != 0.0) else 0.0
-    molecular_diffusivity = _molecular_regime(d_m_physical, a0_repr, alpha_l, float(r_nodes.max()))
-    has_rest = bool(np.any(flow == 0.0))
-    # Widen the grid to the molecular reach only where molecular diffusion is actually modelled: Whittaker
-    # pumping (molecular_diffusivity > 0) or a rest phase (Bessel, uses d_m_physical). Airy pumping with no
-    # rest models no molecular diffusion, so the advective grid suffices and the result stays bit-identical
-    # to D_m = 0 (the basis-by-regime reduction is exact there).
-    if molecular_diffusivity > 0.0 or (d_m_physical > 0.0 and has_rest):
-        r_nodes, v_nodes, dr_weights = _field_grid(flow, dt_days, c_geo, r_w, alpha_l, d_m_physical, n_quad)
+    # Field grid: the advective (D_m-independent) reach for D_m = 0, widened to the molecular reach for
+    # D_m > 0 (both the diffusive pumping kernel and the rest Bessel branch model molecular spreading).
+    # D_m = 0 keeps the advective grid and is bit-identical to the pure-mechanical case.
+    r_nodes, v_nodes, dr_weights = _field_grid(flow, dt_days, c_geo, r_w, alpha_l, molecular_diffusivity, n_quad)
     dv_weights = 2.0 * c_geo * r_nodes * dr_weights  # dV' = 2 c_geo r' dr' (cout readout measure)
-    # Airy Sturm-Liouville propagation weights w_pm(r') dr' = (2 c_geo r'/alpha_L) e^{-/+ r'/alpha_L} dr'
-    # (D_m = 0); the D_m > 0 weight is flow-dependent and built inside _propagate_whittaker.
-    sl_inj = (2.0 * c_geo * r_nodes / alpha_l) * np.exp(-r_nodes / alpha_l) * dr_weights
-    sl_ext = (2.0 * c_geo * r_nodes / alpha_l) * np.exp(r_nodes / alpha_l) * dr_weights
 
     def propagate(
         field: npt.NDArray[np.floating], direction: str, flow_scale: float, phase_volume: float, phase_time: float
     ) -> npt.NDArray[np.floating]:
         if molecular_diffusivity == 0.0:  # Airy: flushed-volume clock, retardation rescales the clock
-            sl = sl_inj if direction == "injection" else sl_ext
+            # Airy SL propagation weight w_pm(r') dr' = (2 c_geo r'/alpha_L) e^{-/+ r'/alpha_L} dr', built only
+            # on this branch (the e^{+r/alpha_L} extraction weight overflows at extreme Peclet; D_m > 0 uses
+            # the log-space weight inside _propagate_diffusive instead).
+            gauge = -1.0 if direction == "injection" else 1.0
+            sl = (2.0 * c_geo * r_nodes / alpha_l) * np.exp(gauge * r_nodes / alpha_l) * dr_weights
             return _propagate(
                 field,
                 r_nodes,
@@ -490,7 +448,7 @@ def gridfree_cout_deviation(
                 flow_scale=flow_scale,
                 c_geo=c_geo,
             )
-        return _propagate_whittaker(  # Whittaker: wall-clock time, retardation rescales A_0, D_m
+        return _propagate_diffusive(  # D_m > 0: wall-clock time, retardation rescales A_0, D_m
             field,
             r_nodes,
             dr_weights,
@@ -511,14 +469,14 @@ def gridfree_cout_deviation(
         phase_flushed = flushed[sl]
         phase_volume = float(phase_flushed.sum())
         if phase_volume == 0.0:  # rest: pure molecular diffusion on the wall-clock clock (D_m = 0 -> identity)
-            if d_m_physical > 0.0:
+            if molecular_diffusivity > 0.0:
                 field = _propagate_rest(
                     field,
                     r_nodes,
                     dr_weights,
                     float(np.sum(dt_days[sl])),
                     r_w=r_w,
-                    d_m_eff=d_m_physical / retardation_factor,
+                    d_m_eff=molecular_diffusivity / retardation_factor,
                 )
             continue
         flow_scale = float(np.mean(np.abs(flow[sl])))

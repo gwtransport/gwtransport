@@ -36,7 +36,7 @@ import numpy as np
 import numpy.typing as npt
 
 from gwtransport._radial_asr_dehoog import dehoog_inverse
-from gwtransport._radial_asr_kernels import _molecular_regime, transfer_function
+from gwtransport._radial_asr_kernels import transfer_function
 
 # de Hoog series length and the front-anchored scaling margin for the FR step response. The half-period
 # is set per V' to ~ the FR arrival-volume mean (where the breakthrough front sits), which keeps the
@@ -160,11 +160,8 @@ def single_cycle_echo_matrix(
     # mu_FR(r_max) ~ 4 S_inj covers the support (integrand ~0 beyond -- verified by mass conservation
     # int f dV' = S_inj to the de Hoog + quadrature floor).
     r_max = np.sqrt((4.0 * s_inj / (retardation_factor * c_geo)) + r_w**2)
-    # Basis-by-regime molecular dispatch (KB addendum Sec. A6): Airy reduction where molecular diffusion
-    # is sub-dominant within the plume reach (or its Whittaker treatment intractable), else exact Whittaker.
-    molecular_diffusivity = _molecular_regime(
-        molecular_diffusivity, inj_flow_scale / (2.0 * c_geo), alpha_l, float(r_max)
-    )
+    # D_m dispatch is inside transfer_function: the vectorized Airy branch for D_m = 0, the Riccati
+    # log-derivative branch for D_m > 0 (exact at any A_0/D_m, no precision cap).
     v_max = c_geo * (r_max**2 - r_w**2)
     nodes, weights = np.polynomial.legendre.leggauss(n_quad)
     v_nodes = 0.5 * v_max * (nodes + 1.0)

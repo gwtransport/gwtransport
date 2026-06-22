@@ -16,12 +16,16 @@ Two evaluation regimes
   Peclet ``r/alpha_L`` beyond ~200 (the prefactor overflows while ``Ai`` underflows). All transfer
   functions are *ratios* of ``phi_s`` / ``F[phi_s]`` at ``r`` and ``r_w``; evaluating them with the
   Airy scaling factored into a single bounded log-amplitude keeps the ratio finite at any Peclet.
-* ``D_m > 0`` (molecular diffusion present): the confluent-hypergeometric (Tricomi-U / Whittaker)
-  branch, sampled exactly with ``flint.acb.hypgeom_u`` (python-flint / Arb compiled arbitrary-precision
-  ball arithmetic) at the Laplace nodes -- exact and ~1e3x faster than mpmath, with a rigorous error
-  enclosure. It is sampled per node (no vectorized complex Whittaker exists) but evaluated only where
-  molecular diffusion is appreciable within the plume and ``A_0/D_m`` is below the tractability cap
-  (basis-by-regime -- elsewhere the Airy form is exact to O(D_m/alpha_L|u|)).
+* ``D_m > 0`` (molecular diffusion present): the decaying solution is the confluent-hypergeometric
+  (Tricomi-U / Whittaker) function, but it is evaluated through its LOG-DERIVATIVE ``L = phi'/phi`` -- a
+  vector Riccati ODE ``L' = -L^2 - ((D_m - sigma_A A_0)/G) L + s r/G`` integrated over the Laplace nodes
+  (:func:`_integrate_logderiv`). ``L`` is ``O(kappa)`` (bounded -- no 10^900 special-function
+  magnitudes), so the transfer functions (:func:`_transfer_riccati`) and the interior resolvent
+  (:func:`resolvent_riccati`) are assembled from O(1) quantities, with the divergent Sturm-Liouville
+  gauge carried in log space. This is exact to the de Hoog inversion floor at ANY ``A_0/D_m`` -- no
+  special-function precision cap, no arbitrary-precision dependency -- and continuously becomes the Airy
+  branch as ``D_m -> 0``. The exact flint/Arb Whittaker evaluation it replaced is retained as a
+  machine-precision test oracle (``tests/src/_radial_asr_whittaker_oracle.py``).
 
 Retardation enters by the standard linear-sorption rescaling of the constant-Q operator: dividing the
 retarded equation ``R d_t C + ... `` by ``R`` is the unretarded equation with ``A_0 -> A_0/R`` and
@@ -32,86 +36,10 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
-import warnings
-
 import numpy as np
 import numpy.typing as npt
-from flint import acb, ctx
+from scipy.integrate import solve_ivp
 from scipy.special import airye, ive, kve
-
-# Working precision (bits) for the flint (python-flint / Arb) Whittaker (D_m > 0) branch. The decaying
-# U(a, b, z) carries a divergent gauge (~ z^{-a}, a ~ -A_0/(2 D_m)); resolving its cancellation in the
-# FF / resolvent RATIO needs ~ kappa a* bits (kappa = sqrt(|s|/D_m), a* = alpha_L A_0/D_m). The precision
-# is SCALED to that magnitude by _whittaker_prec (a fixed 512 bits was a precision artifact that made the
-# kernel non-finite past A_0/D_m ~ 300 -- Arb's U itself is finite there, only the under-resolved ratio
-# was not). _WHITTAKER_PREC_MAX caps the cost; near-well nodes that would need more carry resident
-# profile ~0, so the cap is harmless there.
-_WHITTAKER_PREC_BASE = 256
-_WHITTAKER_PREC_MAX = 12000
-
-# Cap on A_0/D_m for the exact Whittaker branch. Below it, adaptive precision keeps flint machine-exact;
-# above it the required precision (~kappa a* bits) exceeds _WHITTAKER_PREC_MAX and the per-node cost is
-# impractical, so the Airy reduction is used (its O(D_m/alpha_L|u|) error is < ~0.5% there and keeps
-# shrinking with A_0/D_m). This is a performance boundary, not the old fixed-precision wall.
-_WHITTAKER_MAX_RATIO = 1000.0
-
-
-def _whittaker_prec(s_abs: float, alpha_l: float, a0_eff: float, d_m_eff: float) -> int:
-    """Adaptive flint working precision (bits) for the Whittaker branch at Laplace magnitude ``|s|``.
-
-    Scales with the divergent gauge cancellation ``~ kappa a*`` (``kappa = sqrt(|s|/D_m)``,
-    ``a* = alpha_L A_0/D_m``) so the FF / resolvent ratios stay machine-exact at any ``A_0/D_m`` up to the
-    cap; bounded by ``_WHITTAKER_PREC_MAX``.
-
-    Returns
-    -------
-    int
-        Working precision in bits.
-    """
-    kappa = (s_abs / d_m_eff) ** 0.5
-    astar = alpha_l * a0_eff / d_m_eff
-    return min(_WHITTAKER_PREC_MAX, _WHITTAKER_PREC_BASE + int(2.0 * kappa * astar / np.log(2.0)))
-
-
-def _molecular_regime(molecular_diffusivity: float, a0: float, alpha_l: float, plume_reach: float) -> float:
-    """Basis-by-regime molecular-diffusion dispatch (KB addendum Sec. A6); returns the D_m to use.
-
-    With the molecular crossover radius ``a* = alpha_L A_0/D_m`` (beyond which molecular diffusion
-    dominates the mechanical dispersion ``alpha_L |u|``):
-
-    * ``D_m = 0`` or ``a* >= plume_reach`` -- molecular diffusion is sub-dominant everywhere the tracer
-      goes; use the exact Airy reduction (``D_m := 0``). Its error is ``O(D_m/alpha_L|u|)``: measured
-      ``< ~4%`` at the boundary ``a* ~ plume_reach``, falling below ``1%`` for ``a* > 4 plume_reach`` and
-      to ``~1e-5`` for realistic groundwater ``D_m`` (where ``a*`` is orders of magnitude past the plume).
-    * ``a* < plume_reach`` and ``A_0/D_m <= _WHITTAKER_MAX_RATIO`` -- molecular diffusion is appreciable
-      within the plume and the flint (Arb) Whittaker branch is exact and tractable; keep ``D_m`` (exact).
-    * ``a* < plume_reach`` and ``A_0/D_m > _WHITTAKER_MAX_RATIO`` -- molecular diffusion is appreciable but
-      the precision the exact Whittaker would need (``~kappa a*`` bits; see :func:`_whittaker_prec`) exceeds
-      the budget and the per-node cost is impractical; fall back to the Airy reduction and warn (its
-      relative error is < ~0.5% there and grows with ``plume_reach/a*``).
-
-    Returns
-    -------
-    float
-        The molecular diffusivity to use: the input value (Whittaker branch) or ``0.0`` (Airy branch).
-    """
-    if molecular_diffusivity <= 0.0:
-        return 0.0
-    a_star = alpha_l * a0 / molecular_diffusivity
-    if a_star >= plume_reach:
-        return 0.0
-    if a0 / molecular_diffusivity > _WHITTAKER_MAX_RATIO:
-        warnings.warn(
-            f"Molecular diffusion is appreciable (crossover a*={a_star:.1f} m is within the plume reach "
-            f"{plume_reach:.1f} m) but the exact flint Whittaker would need impractical precision for "
-            f"A_0/D_m={a0 / molecular_diffusivity:.0f} (> {_WHITTAKER_MAX_RATIO:.0f}). Falling back to the "
-            f"Airy reduction, which neglects molecular diffusion; the relative error grows with "
-            f"plume_reach/a* = {plume_reach / a_star:.1f}. Reduce D_m if physically justified.",
-            stacklevel=2,
-        )
-        return 0.0
-    return molecular_diffusivity
-
 
 # Injection / detection boundary types (Kreft-Zuber modes). "flux" applies the flux operator
 # F[psi] = psi - (G/A_0) psi'; any other value ("resident") uses psi directly.
@@ -162,94 +90,6 @@ def _airy_amplitudes(
     return log_amp, psi_resident, psi_flux
 
 
-def _whittaker_phi_and_flux(
-    s: complex, r: float, alpha_l: float, a0_eff: float, d_m_eff: float, sigma_a: int
-) -> tuple[acb, acb]:
-    r"""``(phi_s(r), F[phi_s](r))`` for the ``D_m > 0`` branch, as flint ``acb`` at scalar ``s``.
-
-    With ``x = r + a*``, ``a* = alpha_L A_0/D_m``, ``kappa = sqrt(s/D_m)``, the decaying resident
-    solution is ``phi_s = e^{-kappa x} U(a, b, 2 kappa x)`` (Tricomi U -- regular through the
-    integer-``b`` degeneracy where the Kummer ``M`` is undefined), with ``b = 1 - sigma_A A_0/D_m``,
-    ``a = b/2 - kappa a*/2``. Using ``dU/dz = -a U(a+1, b+1, z)``, the derivative is
-    ``phi_s'(r) = -kappa e^{-kappa x}[U(a,b,z) + 2 a U(a+1,b+1,z)]`` so the flux operator
-    ``F[phi_s] = phi_s - (alpha_L + D_m r/A_0) phi_s'`` is evaluated analytically (no numerical
-    differentiation). All quantities use the retardation-effective ``A_0``/``D_m``.
-
-    ``U`` is evaluated with ``flint.acb.hypgeom_u`` (Arb arbitrary-precision ball arithmetic) at
-    ``_WHITTAKER_PREC`` bits. ``phi`` and ``flux`` are returned as ``acb`` (not cast to ``complex``)
-    so the caller can take their ratio -- where the divergent gauge factors cancel -- before rounding.
-
-    Returns
-    -------
-    phi : flint.acb
-        Resident solution ``phi_s(r)``.
-    flux : flint.acb
-        Flux-operator image ``F[phi_s](r)``.
-    """
-    ctx.prec = _whittaker_prec(abs(s), alpha_l, a0_eff, d_m_eff)
-    kappa = (acb(s.real, s.imag) / d_m_eff).sqrt()
-    astar = alpha_l * a0_eff / d_m_eff
-    b = 1 - sigma_a * a0_eff / d_m_eff
-    a = b / 2 - kappa * astar / 2
-    x = r + astar
-    z = 2 * kappa * x
-    u = z.hypgeom_u(a, acb(b))
-    u1 = z.hypgeom_u(a + 1, acb(b + 1))  # U(a+1, b+1, z) for dU/dz = -a U(a+1,b+1,z)
-    expf = (-(kappa * x)).exp()
-    phi = expf * u
-    dphi = -kappa * expf * (u + 2 * a * u1)
-    flux = phi - (alpha_l + d_m_eff * r / a0_eff) * dphi
-    return phi, flux
-
-
-def whittaker_resolvent_solutions(
-    s: complex, r: float, alpha_l: float, a0_eff: float, d_m_eff: float, sigma_a: int
-) -> tuple[acb, acb, acb, acb]:
-    r"""Return the two homogeneous solutions and their ``r``-derivatives for the ``D_m > 0`` resolvent.
-
-    The constant-Q ODE ``G C'' + (D_m - sigma_A A_0) C' - s r C = 0`` (KB Sec. 4) has, with
-    ``x = r + a*``, ``a* = alpha_L A_0/D_m``, ``kappa = sqrt(s/D_m)``, ``z = 2 kappa x``,
-    ``b = 1 - sigma_A A_0/D_m``, ``a = b/2 - kappa a*/2``:
-
-    * decaying solution ``u_inf = e^{-kappa x} U(a, b, z)`` (Tricomi ``U``), with
-      ``u_inf' = -kappa e^{-kappa x}[U + 2a U(a+1, b+1, z)]``;
-    * growing solution ``u_reg = e^{-kappa x} z^{1-b} M(a-b+1, 2-b, z)``. This second Kummer solution
-      is used **uniformly**: ``2-b = 1 + A_0/D_m > 1`` for both orientations, so it is always
-      regular (it sidesteps the integer-``b`` degeneracy at ``A_0/D_m in Z+`` where the plain ``M(a,b,z)``
-      is undefined) and yields the identical Green's function as ``M(a,b,z)`` where the latter exists.
-
-    Returns
-    -------
-    tuple of flint.acb
-        ``(u_inf, u_inf', u_reg, u_reg')`` -- the decaying and growing solutions and their
-        ``r``-derivatives, at scalar ``s`` and ``r`` (as ``acb`` so the caller's divergent-normalization
-        cancellation runs in Arb extended precision before rounding).
-    """
-    ctx.prec = _whittaker_prec(abs(s), alpha_l, a0_eff, d_m_eff)
-    kappa = (acb(s.real, s.imag) / d_m_eff).sqrt()
-    astar = alpha_l * a0_eff / d_m_eff
-    b = 1 - sigma_a * a0_eff / d_m_eff
-    a = b / 2 - kappa * astar / 2
-    x = r + astar
-    z = 2 * kappa * x
-    expf = (-(kappa * x)).exp()
-    # decaying branch (Tricomi U), dU/dz = -a U(a+1, b+1, z)
-    u = z.hypgeom_u(a, acb(b))
-    u1 = z.hypgeom_u(a + 1, acb(b + 1))
-    u_inf = expf * u
-    u_inf_p = -kappa * expf * (u + 2 * a * u1)
-    # growing branch: z^{c} M(ap, bp, z), c = 1-b, ap = a-b+1, bp = 2-b;
-    # d/dz[z^c M] = c z^{c-1} M + z^c (ap/bp) M(ap+1, bp+1)
-    c, ap, bp = 1 - b, a - b + 1, 2 - b
-    m = z.hypgeom_1f1(ap, acb(bp))
-    m1 = z.hypgeom_1f1(ap + 1, acb(bp + 1))
-    w_z = z ** acb(c) * m
-    dw_z = c * z ** acb(c - 1) * m + z ** acb(c) * (ap / bp) * m1
-    u_reg = expf * w_z
-    u_reg_p = -kappa * expf * w_z + expf * dw_z * (2 * kappa)
-    return u_inf, u_inf_p, u_reg, u_reg_p
-
-
 def transfer_function(
     *,
     s: npt.NDArray[np.complexfloating],
@@ -292,7 +132,8 @@ def transfer_function(
     a0 : float
         Physical flow scale ``A_0 = |Q| / (2 pi b n)`` (m^2/day).
     d_m : float, optional
-        Molecular diffusivity (m^2/day). ``0`` selects the Airy branch; ``> 0`` the Whittaker branch.
+        Molecular diffusivity (m^2/day). ``0`` selects the Airy branch; ``> 0`` the Riccati
+        log-derivative branch.
     retardation_factor : float, optional
         Linear retardation ``R >= 1``. Default 1.
     inject, detect : {'flux', 'resident'}, optional
@@ -316,17 +157,9 @@ def transfer_function(
         denom = flux_w if inject == _FLUX else res_w
         return np.exp(log_r - log_w) * (numer / denom)
 
-    # Whittaker branch (D_m > 0): exact flint (Arb) sampling per node (divergent orientation sigma_A = +1).
-    # phi/flux are returned as acb; the detect/inject ratio cancels the divergent gauge before rounding.
-    out = np.empty(s.shape, dtype=complex)
-    flat = out.reshape(-1)
-    for i, sv in enumerate(s.reshape(-1)):
-        phi_r, flux_r = _whittaker_phi_and_flux(complex(sv), r, alpha_l, a0_eff, d_m_eff, +1)
-        phi_w, flux_w = _whittaker_phi_and_flux(complex(sv), r_w, alpha_l, a0_eff, d_m_eff, +1)
-        numer = flux_r if detect == _FLUX else phi_r
-        denom = flux_w if inject == _FLUX else phi_w
-        flat[i] = complex(numer / denom)
-    return out
+    # D_m > 0: Riccati log-derivative (numerical ODE on the log-derivative L = phi'/phi; exact to the
+    # de Hoog floor at any A_0/D_m, no special-function precision cap). Divergent orientation sigma_A = +1.
+    return _transfer_riccati(s.reshape(-1), r, r_w, alpha_l, a0_eff, d_m_eff, inject, detect).reshape(s.shape)
 
 
 def _resolvent_airy_pieces(
@@ -457,6 +290,17 @@ def assemble_airy_resolvent(
     of radii once and assemble every output node from prefix selection -- the ``O(n^2) -> O(n)``
     saving the field propagator relies on.
 
+    Parameters
+    ----------
+    piece_a, piece_b, piece_w : dict of ndarray
+        :func:`_resolvent_airy_pieces` at ``r_<``, ``r_>`` and ``r_w`` respectively.
+    r_sum : ndarray
+        ``r_< + r_> = r + r'`` (the radii enter the bounded exponents only through their sum).
+    alpha_l : float
+        Longitudinal dispersivity (m).
+    gauge_sign : float
+        ``+1`` divergent (injection, Robin well BC) / ``-1`` convergent (extraction, Neumann well BC).
+
     Returns
     -------
     ndarray of complex
@@ -538,3 +382,191 @@ def rest_resolvent(
         * np.exp(-z_lt - z_gt)
     )
     return term_inner + term_outer
+
+
+# ---------------------------------------------------------------------------
+# D_m > 0 branch: Riccati log-derivative (numerical ODE, double precision)
+# ---------------------------------------------------------------------------
+# The decaying resident solution and the well-regular solution are tracked by their log-derivative
+# L = C'/C of the constant-Q ODE, integrated as a vector ODE over the Laplace nodes. L is O(kappa)
+# (bounded -- no 10^900 special-function magnitudes), so the transfer functions and the
+# Sturm-Liouville interior resolvent are assembled from O(1) quantities. This is exact to the de Hoog
+# inversion floor at ANY A_0/D_m -- no special-function precision blow-up, no tractability cap -- and
+# continuously becomes the Airy branch as D_m -> 0.
+_RICCATI_RTOL = 1e-12
+_RICCATI_ATOL = 1e-13
+# Outer boundary for the inward (decaying) integration. The truncated asymptotic IC at r_far washes out
+# because the recessive solution is the inward attractor (damping ~ e^{-2 Re(kappa)(r_far - r)}), but the
+# slowest (smallest Re(kappa)) Laplace node also needs r_far far enough that its z = 2 kappa r_far is in
+# the large-z asymptotic. So r_far is extended by ~_RICCATI_RFAR_DECAY decay lengths 1/Re(kappa_min)
+# beyond the field, floored at _RICCATI_RFAR_MULT * r_max and cost-capped at _RICCATI_RFAR_CAP * r_max
+# (the floor on Re(kappa_min) keeps z at the cap ~ 2 * _RICCATI_RFAR_DECAY, large enough for any node).
+_RICCATI_RFAR_MULT = 8.0
+_RICCATI_RFAR_DECAY = 22.0
+_RICCATI_RFAR_CAP = 500.0
+
+
+def _integrate_logderiv(
+    s: npt.NDArray[np.complexfloating],
+    radii: npt.ArrayLike,
+    r_w: float,
+    alpha_l: float,
+    a0_eff: float,
+    d_m_eff: float,
+    sigma_a: int,
+    branch: str,
+) -> tuple[npt.NDArray[np.complexfloating], npt.NDArray[np.complexfloating]]:
+    r"""Vector Riccati integration of the log-derivative ``L = C'/C`` for the ``D_m > 0`` branch.
+
+    Solves ``L' = -L^2 - ((D_m - sigma_A A_0)/G) L + s r/G`` (``G = alpha_L A_0 + D_m r``) over all
+    Laplace nodes ``s`` at once, carrying the running integral ``J = int_{r_w}^{r} L dr``.
+
+    * ``branch='decaying'``: inward from ``r_far`` with the recessive asymptotic IC
+      ``L(r_far) = -kappa - a/x`` (``kappa = sqrt(s/D_m)``, ``x = r_far + a*``, ``a* = alpha_L A_0/D_m``,
+      ``a = b/2 - kappa a*/2``, ``b = 1 - sigma_A A_0/D_m``). The decaying solution is the inward
+      attractor, so the result is insensitive to ``r_far``.
+    * ``branch='regular'``: outward from ``r_w`` with the well-BC IC ``L(r_w) = A_0/G(r_w)`` (injection,
+      Robin ``F[u_0](r_w)=0``) or ``0`` (extraction, Neumann ``u_0'(r_w)=0``) -- both ``s``-independent.
+
+    ``sigma_a`` is ``+1`` divergent (injection) / ``-1`` convergent (extraction); ``radii`` (all ``>= r_w``)
+    are where ``L`` and ``J`` are returned.
+
+    Returns
+    -------
+    ld : ndarray of complex, shape (n_s, n_radii)
+        Log-derivative ``L`` at each requested radius.
+    jj : ndarray of complex, shape (n_s, n_radii)
+        ``int_{r_w}^{r} L dr`` at each requested radius.
+    """
+    s = np.asarray(s, dtype=complex).reshape(-1)
+    n = s.size
+    radii = np.atleast_1d(np.asarray(radii, dtype=float))
+    r_max = max(float(radii.max()), r_w)
+
+    def rhs(r: float, y: npt.NDArray[np.complexfloating]) -> npt.NDArray[np.complexfloating]:
+        ld = y[:n]
+        g = alpha_l * a0_eff + d_m_eff * r
+        d_ld = -(ld * ld) - ((d_m_eff - sigma_a * a0_eff) / g) * ld + s * r / g
+        return np.concatenate([d_ld, ld])
+
+    if branch == "decaying":
+        astar = alpha_l * a0_eff / d_m_eff
+        kappa = np.sqrt(s / d_m_eff)
+        # r_far must put the slowest node deep in the large-z asymptotic so the truncated IC washes out:
+        # extend by ~_RICCATI_RFAR_DECAY decay lengths 1/Re(kappa_min) (Re(kappa) floored so the extension
+        # is cost-capped at _RICCATI_RFAR_CAP * r_max while z = 2 kappa r_far stays large there).
+        re_kmin = max(float(kappa.real.min()), _RICCATI_RFAR_DECAY / (_RICCATI_RFAR_CAP * r_max))
+        r_far = max(_RICCATI_RFAR_MULT * r_max, r_max + _RICCATI_RFAR_DECAY / re_kmin)
+        a = (1.0 - sigma_a * a0_eff / d_m_eff) / 2.0 - kappa * astar / 2.0
+        y0 = np.concatenate([-kappa - a / (r_far + astar), np.zeros(n, dtype=complex)])
+        sol = solve_ivp(
+            rhs, [r_far, r_w], y0, rtol=_RICCATI_RTOL, atol=_RICCATI_ATOL, dense_output=True, method="DOP853"
+        )
+        y = sol.sol(radii)  # dense output at all radii at once -> shape (2n, n_radii)
+        j_w = sol.sol(r_w)[n:, None]  # re-anchor J to int_{r_w}^{r} (the IC put J(r_far) = 0)
+        return y[:n], y[n:] - j_w
+
+    # regular branch: outward from r_w to r_max -- the growing solution is the stable outward attractor and
+    # the well-BC IC (s-independent) is exact, so no washout is needed; it need only reach the field.
+    ld0 = a0_eff / (alpha_l * a0_eff + d_m_eff * r_w) if sigma_a > 0 else 0.0
+    y0 = np.concatenate([np.full(n, ld0, dtype=complex), np.zeros(n, dtype=complex)])
+    sol = solve_ivp(rhs, [r_w, r_max], y0, rtol=_RICCATI_RTOL, atol=_RICCATI_ATOL, dense_output=True, method="DOP853")
+    y = sol.sol(radii)
+    return y[:n], y[n:]
+
+
+def _transfer_riccati(
+    s: npt.NDArray[np.complexfloating],
+    r: float,
+    r_w: float,
+    alpha_l: float,
+    a0_eff: float,
+    d_m_eff: float,
+    inject: str,
+    detect: str,
+) -> npt.NDArray[np.complexfloating]:
+    r"""Four Kreft-Zuber transfer modes for the ``D_m > 0`` branch via the decaying log-derivative.
+
+    With ``E = phi(r)/phi(r_w) = exp(int_{r_w}^{r} L)`` and the flux factor ``f(r) = 1 - (alpha_L +
+    D_m r/A_0) L(r)`` (so ``F[phi](r) = phi(r) f(r)``), the modes are ``FF = E f(r)/f(r_w)``,
+    ``FR = E/f(r_w)``, ``RF = E f(r)``, ``RR = E``. ``sigma_A = +1`` (the divergent operator). ``inject``
+    / ``detect`` select the Kreft-Zuber well / detection boundary ('flux' or 'resident').
+
+    Returns
+    -------
+    ndarray of complex
+        ``g_hat(s)`` for the requested ``(inject, detect)`` mode, shape ``(n_s,)``.
+    """
+    ld, jj = _integrate_logderiv(s, [r, r_w], r_w, alpha_l, a0_eff, d_m_eff, +1, "decaying")
+    l_r, l_w = ld[:, 0], ld[:, 1]
+    e = np.exp(jj[:, 0])  # phi(r)/phi(r_w)
+    f_r = 1.0 - (alpha_l + d_m_eff * r / a0_eff) * l_r
+    f_w = 1.0 - (alpha_l + d_m_eff * r_w / a0_eff) * l_w
+    numer = e * (f_r if detect == _FLUX else 1.0)
+    denom = f_w if inject == _FLUX else 1.0
+    return numer / denom
+
+
+def resolvent_riccati(
+    *,
+    s: npt.NDArray[np.complexfloating],
+    field: npt.NDArray[np.floating],
+    r_nodes: npt.NDArray[np.floating],
+    dr_weights: npt.NDArray[np.floating],
+    r_w: float,
+    alpha_l: float,
+    a0_eff: float,
+    d_m_eff: float,
+    direction: str,
+) -> npt.NDArray[np.complexfloating]:
+    r"""Interior Sturm-Liouville resolvent applied to a source ``field``, ``D_m > 0``, via log-derivatives.
+
+    Returns ``F(s)_{k,i} = sum_j Ghat(r_i, r_j; s_k) field_j w_j`` with the SL measure
+    ``w_j = r_j G(r_j)^{b-1} dr_j`` (``b = 1 - sigma_A A_0/D_m``). The Green's function
+    ``Ghat = phi_+(r_<) phi_-(r_>)/(-pW)`` is built from the decaying (``phi_-``, inward) and
+    well-regular (``phi_+``, outward) solutions normalized at ``r_w``; ``pW = G(r_w)^b (L_-(r_w) -
+    L_+(r_w))``. The divergent gauge ``G(r_w)^b`` (``b ~ -A_0/D_m``) is carried in LOG space
+    (``LG_j = b ln(G(r_j)/G(r_w)) - ln G(r_j)``, bounded as ``A_0/D_m -> inf``) so it never
+    underflows -- the assembly stays in double precision at any ``A_0/D_m``.
+
+    Parameters
+    ----------
+    s : ndarray of complex
+        Laplace nodes (conjugate to wall-clock time).
+    field : ndarray
+        Source resident-deviation profile on ``r_nodes``.
+    r_nodes : ndarray
+        Radial quadrature nodes (m), increasing, ``> r_w``.
+    dr_weights : ndarray
+        Quadrature weights for ``r_nodes`` (the ``dr`` measure).
+    r_w : float
+        Well radius (m).
+    alpha_l, a0_eff, d_m_eff : float
+        Dispersivity and the retardation-effective ``A_0`` / ``D_m``.
+    direction : {'injection', 'extraction'}
+        Phase orientation (divergent Robin / convergent Neumann well BC).
+
+    Returns
+    -------
+    ndarray of complex
+        ``F(s)_{k,i}`` -- the resolvent applied to ``field``, shape ``(n_s, n_nodes)``.
+    """
+    sigma_a = 1 if direction == _INJECTION else -1
+    s = np.asarray(s, dtype=complex).reshape(-1)
+    b = 1.0 - sigma_a * a0_eff / d_m_eff
+    rad = np.concatenate(([r_w], r_nodes))
+    ld_m, jj_m = _integrate_logderiv(s, rad, r_w, alpha_l, a0_eff, d_m_eff, sigma_a, "decaying")
+    lm_w = ld_m[:, 0]  # L_-(r_w)
+    im = jj_m[:, 1:]  # int_{r_w}^{r_i} L_-  (n_s, n)
+    _, ip = _integrate_logderiv(s, r_nodes, r_w, alpha_l, a0_eff, d_m_eff, sigma_a, "regular")  # int L_+
+    lp_w = a0_eff / (alpha_l * a0_eff + d_m_eff * r_w) if sigma_a > 0 else 0.0
+    g_nodes = alpha_l * a0_eff + d_m_eff * r_nodes
+    g_w = alpha_l * a0_eff + d_m_eff * r_w
+    lg = b * np.log(g_nodes / g_w) - np.log(g_nodes)  # bounded gauge in log space
+    c = field * r_nodes * dr_weights
+    pmat = c[None, :] * np.exp(ip + lg[None, :])  # (n_s, n)
+    smat = c[None, :] * np.exp(im + lg[None, :])
+    prefix = np.cumsum(pmat, axis=1)  # sum_{j<=i}
+    suffix = np.cumsum(smat[:, ::-1], axis=1)[:, ::-1] - smat  # sum_{j>i}
+    denom = (lm_w - lp_w)[:, None]
+    return -(np.exp(im) * prefix + np.exp(ip) * suffix) / denom

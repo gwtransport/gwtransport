@@ -160,8 +160,8 @@ class TestWhittakerKernel:
 
     def test_mean_is_v_over_q(self):
         # Whittaker FF mean = V/Q (KB Sec. 6). Fit the cumulants of an INDEPENDENT mpmath Whittaker
-        # reference (the production kernel is now flint), then confirm the production flint kernel matches
-        # that reference to machine precision -- so the production mean is V/Q too.
+        # reference, then confirm the production Riccati (log-derivative) kernel matches that reference to
+        # ~machine precision -- so the production mean is V/Q too.
         r, r_w, a_l, a0, d_m = 10.0, 0.5, 0.5, 2.0, 0.2  # A0/Dm = 10 (variance exists, fit well-conditioned)
         v_over_q = (r**2 - r_w**2) / (2 * a0)
 
@@ -197,6 +197,18 @@ class TestWhittakerKernel:
         a0 = 2.0
         g = transfer_function(s=np.array([0.1 + 0.05j]), r=10.0, r_w=0.5, alpha_l=0.5, a0=a0, d_m=a0 / ratio)[0]
         assert np.isfinite(g)
+
+    def test_retardation_rescale_dm(self):
+        # Retardation on the D_m > 0 branch is the exact operator rescale A_0 -> A_0/R, D_m -> D_m/R
+        # (alpha_L geometric, unchanged): g_hat(a0, d_m, R) must equal g_hat(a0/R, d_m/R, R=1) to machine
+        # precision. Catches a one-sided rescale (e.g. A_0 scaled but not D_m) that the advective-only
+        # moment tests miss. Every other retardation test is D_m = 0.
+        s = np.array([0.05 + 0.1j, 0.1 + 0.5j, 0.2 + 2.0j])
+        kw = {"s": s, "r": 10.0, "r_w": 0.5, "alpha_l": 0.5}
+        for r_fac in (2.0, 3.5):
+            with_r = transfer_function(a0=2.0, d_m=0.2, retardation_factor=r_fac, **kw)
+            rescaled = transfer_function(a0=2.0 / r_fac, d_m=0.2 / r_fac, **kw)
+            np.testing.assert_allclose(with_r, rescaled, rtol=0, atol=1e-13)
 
 
 # --- forward / reverse / ensemble public API ----------------------------------------------------
@@ -409,11 +421,14 @@ class TestGeneralEngine:
         recovered = np.sum(cout[ext] * (-flow[ext])) / np.sum(cin[flow > 0] * flow[flow > 0])
         assert 0.9 < recovered <= 1.0 + 1e-3  # near-full recovery, up to the buffer + finite-volume floor
 
+    @pytest.mark.slow
     def test_dm_positive_forward_conserves(self):
+        # @slow: D_m>0 multi-cycle now runs the per-node Riccati ODE. The conservation assertion is
+        # n_quad-insensitive (verified identical at n_quad 8/16/120), so n_quad=16 suffices.
         tedges, flow, geom = _scenario()
         cin = np.where(flow > 0, 1.0, 0.0)
         cout = infiltration_to_extraction(
-            cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, molecular_diffusivity=0.05, n_quad=120
+            cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, molecular_diffusivity=0.05, n_quad=16
         )
         recovered = np.sum(cout[flow < 0] * (-flow[flow < 0]))
         np.testing.assert_allclose(recovered, np.sum(cin[flow > 0] * flow[flow > 0]), rtol=2e-2)

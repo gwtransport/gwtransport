@@ -44,7 +44,6 @@ dependencies = [
   "mpmath>=1.3.0",
   "numpy>=2.0.0",
   "pandas>=2.2.2",
-  "python-flint>=0.8.0",
   "requests>=2.19.0",
   "scipy>=1.13.0",
 ]
@@ -56,6 +55,7 @@ test = [
   "pytest>=6.2.5",
   "pytest-cov>=2.3.1",
   "pytest-xdist>=3.0.0",
+  "python-flint>=0.8.0",
   "ruff==0.15.6",
   "timflow>=0.3",
   "ty",
@@ -87,7 +87,7 @@ addopts = [
     "--doctest-modules",
 ]
 markers = [
-    "slow: marks tests that are slow (the mpmath Whittaker D_m>0 path); run by default, deselect with -m 'not slow'",
+    "slow: marks tests that are slow (D_m>0 Riccati / FV-oracle cross-checks); run by default, deselect with -m 'not slow'",
 ]
 filterwarnings = [
     "ignore:.*Jupyter is migrating.*:DeprecationWarning",
