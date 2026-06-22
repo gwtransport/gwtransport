@@ -375,3 +375,87 @@ def test_float_spinup_threshold_gates_emission(direction):
     both = ~nan_low & ~nan_high
     assert both.any()
     np.testing.assert_allclose(low[both], high[both], atol=0, rtol=1e-12)
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+@pytest.mark.parametrize("period", [364.0, 365.0, 180.0, 90.0])
+def test_retarded_periodic_flow_is_nonnegative_and_matches_mean(direction, period):
+    """Retardation + periodic flow must not produce negative / ~1e6-day residence times.
+
+    Regression for the catastrophic-cancellation resonance: with ``R > 1`` and periodic flow the
+    per-piece gamma central moments ``mu1 = m1 - mid m0`` and ``mu2 = m2 - 2 mid m1 + mid^2 m0`` are
+    differences of large near-equal terms (``mid`` reaches up to ``support_hi``), so on the
+    near-degenerate integration pieces created where breakpoints coincide they lose all significant
+    digits and -- paired with the ``1/half^2`` second-difference reconstruction -- manufactured huge
+    spurious contributions, flipping the bin mean negative or to ``+/-1e6`` days. The fix clips each
+    central moment to its exact geometric range (``|x - mid| <= half`` over the piece). The effect is
+    a resonance with the flow period (a sub-percent period change toggled it), so several periods are
+    swept. ``mean()`` over a finely discretised gamma APVD is stable on the identical inputs and is the
+    physical oracle here; the closed form must reproduce it within that discretisation error.
+    """
+    n = 730
+    tedges = pd.date_range("2019-01-01", periods=n + 1, freq="D")
+    flow = 100.0 * (1.0 + 0.5 * np.sin(2 * np.pi * np.arange(n) / period))  # strictly positive
+    mean_vp, std, loc, r = 5000.0, 1500.0, 300.0, 2.5
+    common = {"flow": flow, "tedges": tedges, "cout_tedges": tedges, "direction": direction, "retardation_factor": r}
+
+    tau = gamma(**common, mean=mean_vp, std=std, loc=loc)
+    # The bug emitted finite-but-impossible values (negatives, +/-1e6 days), so non-negativity is the
+    # load-bearing regression guard. (Finiteness is separately guaranteed by the spinup="constant"
+    # warm-start contract -- every in-record bin is finite -- and held even on the pre-fix baseline.)
+    assert np.all(np.isfinite(tau)), "warm-start contract: no in-record bin is NaN"
+    assert np.all(tau >= 0.0), f"negative residence times: min={np.nanmin(tau)}"
+
+    # Same discretised gamma APVD through the stable mean() path is the oracle. Its discretisation
+    # error at this bin count is O(1e-3 days) (measured against a 40k-bin reference), so compare to
+    # that floor -- tight enough to also catch a future gamma() accuracy regression, not just signs.
+    apv = gamma_bins(mean=mean_vp, std=std, loc=loc, n_bins=4000)["expected_values"]
+    tau_mean = mean(**common, aquifer_pore_volumes=apv)
+    np.testing.assert_allclose(tau, tau_mean, atol=5e-3, rtol=0)
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_retarded_periodic_flow_matches_double_quad(direction):
+    """Retardation + periodic flow: bins match an independent double-quadrature reference to ~1e-7.
+
+    The tight, oracle-anchored half of the #272 regression. The non-negativity sweep above pins the
+    gross failure (negative / ~1e6-day spikes); this pins *accuracy*. On the resonance that triggered
+    #272 (periodic flow, ``R = 2.5``) the closed form must reproduce :func:`_quad_bin_moments` -- the
+    ``scipy.quad``-over-(cumulative volume x gamma density) reference, structurally independent of the
+    phi/clip machinery and of ``mean()`` -- at the quadrature floor (``rtol=1e-7``), five-plus orders
+    tighter than the ``mean()`` discretisation check. The catastrophic cancellation lives in the
+    per-piece moment contraction shared by every spin-up policy, so ``spinup=0.0`` (the covered-sub-mass
+    mode the reference integrates) exercises the same buggy path. The default ``spinup="constant"`` mode
+    (the regime #272 was reported in) spikes identically on the baseline and is guarded by the
+    non-negativity/``mean()`` sweep above; this test adds the tight independent accuracy bound. A short
+    record with a sub-annual period reproduces the breakpoint-coincidence resonance while keeping the
+    reference quadrature fast. Verified to fail on the pre-fix baseline (4/5 tested bins per direction
+    exceed ``rtol=1e-7``, by factors up to ~1e3); the fix clears it with ~20x headroom (~4e-9).
+    """
+    n, period = 120, 20.0
+    tedges = pd.date_range("2021-01-01", periods=n + 1, freq="D")
+    flow = 100.0 * (1.0 + 0.5 * np.sin(2 * np.pi * np.arange(n) / period))  # strictly positive
+    mean_vp, std, loc, r = 1500.0, 500.0, 100.0, 2.5
+    tau = gamma(
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        mean=mean_vp,
+        std=std,
+        loc=loc,
+        direction=direction,
+        retardation_factor=r,
+        spinup=0.0,  # covered-sub-mass mode integrated by the quad reference; shares the buggy machinery
+    )
+    flow_cum = cumulative_flow_volume(flow, np.diff(tedges_to_days(tedges)), strictly_monotone=True)
+    tested = 0
+    # The wide look-back band puts ~10^2 kinks in the reference's inner quadrature, so its floor is
+    # ~1e-6 on the last few bins; sample the bulk of the record (where the floor is ~1e-8) and skip
+    # the tiny-covered-sub-mass bins, exactly as test_wide_gamma_matches_double_quad does.
+    for b in range(10, n - 10, 20):
+        num, den = _quad_bin_moments(flow, tedges, flow_cum[b], flow_cum[b + 1], mean_vp, std, loc, r, direction)
+        if den < 1e-3 or not np.isfinite(tau[b]):
+            continue
+        np.testing.assert_allclose(tau[b], num / den, rtol=1e-7)
+        tested += 1
+    assert tested >= 4, "resonance reference should validate several substantial-mass bins"
