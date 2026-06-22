@@ -55,6 +55,7 @@ test = [
   "pytest>=6.2.5",
   "pytest-cov>=2.3.1",
   "pytest-xdist>=3.0.0",
+  "python-flint>=0.8.0",
   "ruff==0.15.6",
   "timflow>=0.3",
   # numba arrives transitively via timflow; floor it at the first release with
@@ -102,6 +103,9 @@ addopts = [
     "--import-mode=importlib",
     "-n=auto",
     "--doctest-modules",
+]
+markers = [
+    "slow: marks tests that are slow (D_m>0 Riccati / FV-oracle cross-checks); run by default, deselect with -m 'not slow'",
 ]
 filterwarnings = [
     "ignore:.*Jupyter is migrating.*:DeprecationWarning",

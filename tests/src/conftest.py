@@ -5,11 +5,18 @@ This module provides common fixtures used across multiple test files to reduce
 code duplication and improve test maintainability.
 """
 
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from gwtransport.utils import compute_time_edges
+
+# Make tests-only helper modules (e.g. the finite-volume oracle _radial_asr_fv_oracle) importable by bare
+# name under the importlib import mode.
+sys.path.insert(0, str(Path(__file__).parent))
 
 # ============================================================================
 # Time Series Fixtures
