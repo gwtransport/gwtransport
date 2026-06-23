@@ -1,9 +1,9 @@
 r"""Independent finite-volume oracle for the radial advection-dispersion engine (tests only).
 
 This is the **test oracle**, not a production engine: an independent PDE discretization used to
-cross-check the grid-free engine (:mod:`gwtransport._radial_asr_gridfree`). It deliberately reintroduces
-discretization choices the grid-free engine avoids, so it carries a first-order (``~1%``, ``O(1/n_cells)``)
-error -- the grid-free engine is the reference, and this solver is expected to *converge to it* under
+cross-check the radial advection-dispersion engine (:mod:`gwtransport._radial_asr_reuse`). It deliberately
+reintroduces discretization choices the grid-free engine avoids, so it carries a first-order (``~1%``,
+``O(1/n_cells)``) error -- the grid-free engine is the reference, and this solver is expected to *converge to it* under
 refinement. It integrates the exact conservative V-coordinate PDE
 
     d_t C + Q d_V C = d_V(D_V d_V C),   D_V = 2 alpha_L |Q| sqrt(pi b n (V+V_w)) + 4 pi b n D_m (V+V_w),

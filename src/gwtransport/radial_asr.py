@@ -13,9 +13,13 @@ The forward map is **grid-free** end to end -- no PDE is discretized, so none of
 artefacts appear. A single inject-then-extract cycle with no intervening rest uses the closed-form echo operator
 (``gwtransport._radial_asr_compose``, KB Sec. 10a) -- exact for arbitrary within-phase variable flow,
 with the exact temporal moments. Any other signed-flow schedule (more reversals / multi-cycle ASR, or a
-single cycle with a rest under nonzero ``D_m``) uses the grid-free multi-cycle engine
-(``gwtransport._radial_asr_gridfree``, KB addendum Sec. A1-A4), which composes the exact per-phase
-kernels (Airy / Riccati) through the interior two-point Green's functions. Molecular diffusion during
+single cycle with a rest under nonzero ``D_m``) uses the reused-propagator-matrix engine
+(``gwtransport._radial_asr_reuse``, KB addendum Sec. A1-A7), which composes the exact per-phase kernels
+(Airy / Riccati / Bessel) through the interior two-point Green's functions. Each per-reversal field
+hand-off ``f_out = P @ f`` is a bounded linear operator; its matrix ``P`` is built once per distinct
+``(direction, phase volume)`` from a single batched de Hoog inversion and reused at every recurrence, so
+the special-function + inversion cost is ``O(distinct phase volumes)`` rather than ``O(reversals)``. It is
+bit-equivalent, to the de Hoog floor, to the per-reversal grid-free composition. Molecular diffusion during
 pumping (the ``D_m > 0`` Whittaker kernel) is evaluated through the log-derivative Riccati ODE
 (``gwtransport._radial_asr_kernels.resolvent_riccati``) -- exact to the de Hoog inversion floor at any
 ``A_0/D_m``, with no special-function precision cap, and reducing continuously to the Airy branch as
@@ -24,10 +28,10 @@ diffusion acts alone on the wall-clock clock; it is carried exactly by the order
 pure-diffusion kernel, the dominant mixing for seasonal storage / ATES. The only
 numerical steps are Gauss-Legendre quadrature and de Hoog Laplace inversion of exact special-function
 kernels. An independent finite-volume solve of the same PDE (``tests/src/_radial_asr_fv_oracle.py``,
-KB Sec. 9) is retained only as a test oracle. The spectral-domain acceleration of the multi-cycle
-composition (precomputed connection matrices, KB addendum Sec. A4-A7 "Route B") is a documented future
-optimization, not implemented here. The engine is chosen automatically; cycles are expressed through
-the flow sign pattern, not an argument.
+KB Sec. 9) is used only as a test oracle. The propagator matrices are assembled on the Bromwich
+contour (``Re s > 0``), where the field hand-off is well-conditioned at any Peclet. The engine is chosen
+automatically; cycles are expressed through the flow sign pattern, not
+an argument.
 
 The reported ``cout`` is the flow-weighted average over each output bin -- defined on extraction bins
 (``flow < 0``) and ``NaN`` on injection / rest bins (nothing is recovered there).
@@ -100,7 +104,7 @@ import pandas as pd
 
 from gwtransport import gamma
 from gwtransport._radial_asr_compose import single_cycle_echo_matrix
-from gwtransport._radial_asr_gridfree import gridfree_cout_deviation
+from gwtransport._radial_asr_reuse import cout_deviation
 from gwtransport._time import dt_to_days
 
 
@@ -108,7 +112,7 @@ def _is_single_cycle(flow: npt.NDArray[np.floating]) -> bool:
     """Return True if the schedule is a single injection block followed by a single extraction block.
 
     Such schedules (one flow reversal, injection first) use the exact closed-form echo operator; any
-    other signed-flow pattern (more reversals, extraction first) uses the grid-free multi-cycle engine.
+    other signed-flow pattern (more reversals, extraction first) uses the reused-propagator-matrix engine.
 
     Returns
     -------
@@ -225,7 +229,7 @@ def _echo_operator(
     return w_ens / np.sum(weights), inj_mask, ext_mask
 
 
-def _gridfree_ensemble(
+def _reuse_ensemble(
     cin_deviation: npt.NDArray[np.floating],
     *,
     flow: npt.NDArray[np.floating],
@@ -238,10 +242,11 @@ def _gridfree_ensemble(
     weights: npt.NDArray[np.floating],
     n_quad: int,
 ) -> npt.NDArray[np.floating]:
-    """Weight-averaged multi-cycle grid-free extracted-flux deviation over the streamtubes.
+    """Weight-averaged multi-cycle extracted-flux deviation over the streamtubes.
 
-    Runs the grid-free multi-cycle engine once per streamtube (geometry constant ``c_geo = pi b n``)
-    and averages by ``weights``. Used by the forward (with ``cin``) and the reverse (with unit pulses).
+    Runs the reused-propagator-matrix multi-cycle engine once per streamtube (geometry constant
+    ``c_geo = pi b n``) and averages by ``weights``. Used by the forward (with ``cin``) and the reverse
+    (with unit pulses).
 
     Returns
     -------
@@ -251,7 +256,7 @@ def _gridfree_ensemble(
     acc = np.zeros(len(flow))
     for c_geo, w_i in zip(c_geos, weights, strict=True):
         acc += w_i * np.nan_to_num(
-            gridfree_cout_deviation(
+            cout_deviation(
                 cin_deviation=cin_deviation,
                 flow=flow,
                 dt_days=dt_days,
@@ -345,7 +350,7 @@ def infiltration_to_extraction(
     cout = np.full(len(flow), np.nan)
     # A rest phase combined with molecular diffusion (seasonal storage / ATES) cannot use the
     # flushed-volume echo operator, which is blind to a rest's wall-clock diffusion; route it to the
-    # grid-free engine (which propagates the rest with the Bessel pure-diffusion kernel).
+    # reuse engine (which propagates the rest with the Bessel pure-diffusion kernel).
     use_echo = _is_single_cycle(flow) and not (molecular_diffusivity > 0.0 and np.any(flow == 0.0))
     if use_echo:
         w_ens, inj_mask, ext_mask = _echo_operator(
@@ -362,7 +367,7 @@ def infiltration_to_extraction(
         cout[ext_mask] = background + w_ens @ (cin[inj_mask] - background)
         return cout
     ext_mask = flow < 0.0
-    cout_dev = _gridfree_ensemble(
+    cout_dev = _reuse_ensemble(
         cin - background,
         flow=flow,
         dt_days=dt_to_days(tedges),
@@ -434,7 +439,7 @@ def extraction_to_infiltration(
         weights=None if weights is None else weights_arr,
     )
     c_geos = np.pi * pore_heights * porosity
-    # A rest phase with molecular diffusion routes to the grid-free engine (see the forward function).
+    # A rest phase with molecular diffusion routes to the reuse engine (see the forward function).
     use_echo = _is_single_cycle(flow) and not (molecular_diffusivity > 0.0 and np.any(flow == 0.0))
     if use_echo:
         w_ens, inj_mask, ext_mask = _echo_operator(
@@ -449,7 +454,7 @@ def extraction_to_infiltration(
             n_quad=n_quad,
         )
     else:
-        # Build the dense forward operator W by grid-free unit-pulse columns (one ensemble solve per
+        # Build the dense forward operator W by reuse-engine unit-pulse columns (one ensemble solve per
         # injection bin); the reverse cannot reuse the cheap single-solve forward path.
         inj_mask, ext_mask = flow > 0.0, flow < 0.0
         inj_idx = np.flatnonzero(inj_mask)
@@ -458,7 +463,7 @@ def extraction_to_infiltration(
         for j, idx in enumerate(inj_idx):
             pulse = np.zeros(len(flow))
             pulse[idx] = 1.0
-            col = _gridfree_ensemble(
+            col = _reuse_ensemble(
                 pulse,
                 flow=flow,
                 dt_days=dt_days,
@@ -472,7 +477,7 @@ def extraction_to_infiltration(
             )
             w_ens[:, j] = col[ext_mask]
     # Tikhonov least-squares min ||W x - (cout-bg)||^2 + lambda ||x||^2 via the stable augmented
-    # system [W; sqrt(lambda) I] x = [cout-bg; 0]. The echo / grid-free operator has column sums ~1
+    # system [W; sqrt(lambda) I] x = [cout-bg; 0]. The echo / reuse operator has column sums ~1
     # (mass conservation per injection bin) and overdetermined rows, so a direct Tikhonov fit is used.
     n_inj = w_ens.shape[1]
     augmented = np.vstack([w_ens, np.sqrt(regularization_strength) * np.eye(n_inj)])

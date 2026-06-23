@@ -7,11 +7,21 @@ so grid-free-vs-finite-volume agreement is ~1% and the finite-volume solve is sh
 the grid-free reference -- the grid-free engine is the reference, not finite-volume.
 """
 
+import contextlib
+
 import mpmath as mp
 import numpy as np
 import pandas as pd
 import pytest
 from _radial_asr_fv_oracle import fv_cout_deviation  # ty: ignore[unresolved-import]  # tests/src on path via conftest
+from _radial_asr_gridfree_oracle import (  # ty: ignore[unresolved-import]  # per-reversal reference, tests/src on path
+    _cout_phase,
+    _fr_profile,
+    _propagate,
+    _propagate_diffusive,
+    _propagate_rest,
+    gridfree_cout_deviation,
+)
 from _radial_asr_whittaker_oracle import (  # ty: ignore[unresolved-import]  # flint oracle, tests/src on path
     resolvent_oracle,
     transfer_function_oracle,
@@ -20,12 +30,20 @@ from _radial_asr_whittaker_oracle import (  # ty: ignore[unresolved-import]  # f
 from flint import acb  # ty: ignore[unresolved-import]  # python-flint is a test-only dependency
 
 from gwtransport._radial_asr_compose import single_cycle_echo_matrix
-from gwtransport._radial_asr_gridfree import gridfree_cout_deviation
 from gwtransport._radial_asr_kernels import (
     _transfer_riccati,
     interior_resolvent,
     resolvent_riccati,
     rest_resolvent,
+)
+from gwtransport._radial_asr_reuse import (
+    _airy_propagator_matrix,
+    _cout_readout_matrix,
+    _field_grid,
+    _fr_source_matrix,
+    _rest_propagator_matrix,
+    _riccati_propagator_matrix,
+    cout_deviation,
 )
 from gwtransport.radial_asr import infiltration_to_extraction
 
@@ -369,7 +387,7 @@ class TestGridfreeEngine:
         )
         manual = np.mean(
             [
-                gridfree_cout_deviation(
+                cout_deviation(
                     cin_deviation=cin,
                     flow=flow,
                     dt_days=np.ones(len(flow)),
@@ -382,7 +400,267 @@ class TestGridfreeEngine:
             ],
             axis=0,
         )
+        # The ensemble is a pure weighted average of the per-disk engine (no new inversion), so it equals
+        # the manual mean of the same production engine (cout_deviation) to machine precision.
         np.testing.assert_allclose(ens[ext], manual, rtol=1e-12)
+
+
+@contextlib.contextmanager
+def _tight_dehoog():
+    """Force the per-reversal field-propagation de Hoog (oracle namespace) to (64, 1e-13).
+
+    Patches only the public ``dehoog_inverse`` the per-reversal ``_propagate*`` use, forcing tight terms
+    regardless of the passed ``n_terms``/``tol``, so the per-reversal engine matches a matrix builder /
+    ``cout_deviation`` run at ``n_terms=64, tol=1e-13`` -- the two then agree to the genuine de Hoog floor
+    (no Pade-nonlinearity gap), the matched-settings machine-precision contract.
+    """
+    import _radial_asr_gridfree_oracle as _ga  # ty: ignore[unresolved-import]  # noqa: PLC0415 -- tests/src on path
+
+    import gwtransport._radial_asr_dehoog as _dh  # noqa: PLC0415
+
+    orig_inv = _ga.dehoog_inverse
+
+    def tight_inv(*, f_hat, t, n_terms=64, scaling=None, alpha=0.0, tol=1e-13):  # noqa: ARG001 -- force tight terms
+        return _dh.dehoog_inverse(f_hat=f_hat, t=t, n_terms=64, scaling=scaling, alpha=alpha, tol=1e-13)
+
+    _ga.dehoog_inverse = tight_inv
+    try:
+        yield
+    finally:
+        _ga.dehoog_inverse = orig_inv
+
+
+def _gridfree_tight(**kw):
+    """``gridfree_cout_deviation`` with its field-propagation de Hoog forced to (64, 1e-13)."""
+    with _tight_dehoog():
+        return gridfree_cout_deviation(**kw)
+
+
+class TestReuseEngine:
+    """The reused-propagator-matrix engine (``cout_deviation``) reproduces the per-reversal grid-free engine
+    (``gridfree_cout_deviation``) by caching each phase's field-propagator as a matrix and reusing it. The
+    load-bearing identity is that each matrix COLUMN is exactly the per-reversal ``_propagate`` of a unit
+    source -- the same single de Hoog inversion of the same kernel -- so the matrix *is* the per-reversal
+    operator (bit-exact, independent of Peclet). End-to-end, ``P @ field`` then equals the per-reversal
+    ``_propagate(field)`` to the de Hoog floor (the only gap is the Pade acceleration's mild nonlinearity,
+    ``invert-then-sum`` vs ``sum-then-invert``, which tightens with ``n_terms``/``tol`` and is never an
+    accuracy regression)."""
+
+    def test_single_cycle_is_exact(self):
+        # K=1 never invokes the propagator (inject builds the field, extract reads it -- no inter-phase
+        # hand-off), so the reuse engine equals the per-reversal engine to machine precision: the readout is
+        # the same FR step response applied as M_cout @ field (a matrix-multiply) rather than a loop sum, so
+        # it agrees up to the BLAS-vs-loop summation order (~1e-15), not via a fresh de Hoog inversion.
+        flow, dt, cin = _scenario(8, 24)
+        gf = gridfree_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, n_quad=120, **GEOM)
+        re = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, n_quad=120, **GEOM)
+        np.testing.assert_allclose(re, gf, rtol=1e-13, atol=1e-14, equal_nan=True)
+
+    def test_readout_matrices_match_loops(self):
+        # The injection-source M_fr (cin->field) and cout-readout M_cout (field->cout) operators reproduce the
+        # per-phase _fr_profile / _cout_phase loops they replace, to machine precision -- the same FR step
+        # response applied as a matrix-multiply rather than a loop sum. This pins the readout-matrix reuse
+        # directly, independent of how a schedule composes phases.
+        flow, dt = np.array([100.0] * 4 + [-100.0] * 4), np.ones(8)
+        r_nodes, v_nodes, dr = _field_grid(flow, dt, CG, 0.5, 0.5, 0.0, 60)
+        dv = 2.0 * CG * r_nodes * dr
+        ro = {
+            "c_geo": CG,
+            "r_w": 0.5,
+            "alpha_l": 0.5,
+            "retardation_factor": 1.0,
+            "flow_scale": 100.0,
+            "molecular_diffusivity": 0.0,
+        }
+        edges = np.array([0.0, 100.0, 200.0, 300.0, 400.0])  # 4 within-phase volume bins
+        cin = np.array([1.0, -0.5, 0.3, 0.8])
+        field = np.random.default_rng(0).standard_normal(60)
+        m_fr = _fr_source_matrix(v_nodes, edges, **ro)
+        np.testing.assert_allclose(m_fr @ cin, _fr_profile(v_nodes, cin, edges, **ro), atol=1e-14, rtol=1e-12)
+        m_cout = _cout_readout_matrix(v_nodes, dv, edges, **ro)
+        np.testing.assert_allclose(m_cout @ field, _cout_phase(field, v_nodes, dv, edges, **ro), atol=1e-13, rtol=1e-11)
+
+    @pytest.mark.parametrize("direction", ["injection", "extraction"])
+    def test_airy_matrix_is_per_reversal_operator(self, direction):
+        # THE correctness identity (D_m=0): each cached-matrix column equals the per-reversal _propagate of a
+        # unit source at that node -- the same single de Hoog inversion of the same Airy kernel. Bit-exact,
+        # Peclet-independent (the matrix IS the operator; end-to-end gaps are only the de Hoog nonlinearity).
+        flow, dt = np.array([100.0] * 4 + [-100.0] * 4), np.ones(8)
+        r_nodes, _, dr = _field_grid(flow, dt, CG, 0.5, 0.5, 0.0, 60)
+        tau, flow_scale = 400.0, 100.0  # flushed-volume tau = phase_volume
+        gauge = -1.0 if direction == "injection" else 1.0
+        sl = (2.0 * CG * r_nodes / 0.5) * np.exp(gauge * r_nodes / 0.5) * dr
+        pmat = _airy_propagator_matrix(
+            direction, tau, r_nodes, dr, r_w=0.5, alpha_l=0.5, c_geo=CG, flow_scale=flow_scale, n_terms=44, tol=1e-9
+        )
+        for j in (5, 30, 55):
+            e = np.zeros(60)
+            e[j] = 1.0
+            col = _propagate(e, r_nodes, sl, direction, tau, r_w=0.5, alpha_l=0.5, flow_scale=flow_scale, c_geo=CG)
+            # Bit-identical: the matrix column and _propagate of a unit source feed the SAME Ghat*sl input
+            # (the one-hot contraction adds only zeros, exact in IEEE) through the SAME de Hoog code.
+            np.testing.assert_array_equal(pmat[:, j], col)
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize(("direction", "r_fac"), [("injection", 1.0), ("extraction", 1.0), ("extraction", 2.0)])
+    def test_riccati_matrix_is_per_reversal_operator(self, direction, r_fac):
+        # D_m>0 correctness identity: each Riccati matrix column equals the per-reversal _propagate_diffusive
+        # of a unit source. This per-column anchor is REQUIRED -- the end-to-end differential is sign-blind
+        # (injection/extraction propagations pair per cycle, so an overall sign flip cancels). The outer-product
+        # vs resolvent_riccati cumsum reorder differs at ~1e-15, amplified by the de Hoog condition (~1e8) to
+        # ~1e-7 at matched-tight settings, so a sign or structural error (col_err ~ |col|) is caught with a
+        # ~1e5 margin below.
+        flow, dt = np.array([100.0] * 4 + [-100.0] * 4), np.ones(8)
+        r_nodes, _, dr = _field_grid(flow, dt, CG, 0.5, 0.5, 1.0, 24)
+        tau, flow_scale = 4.0, 100.0  # wall-clock tau = phase_time
+        pmat = _riccati_propagator_matrix(
+            direction,
+            tau,
+            r_nodes,
+            dr,
+            r_w=0.5,
+            alpha_l=0.5,
+            c_geo=CG,
+            flow_scale=flow_scale,
+            molecular_diffusivity=1.0,
+            retardation_factor=r_fac,
+            n_terms=64,
+            tol=1e-13,
+        )
+        for j in (3, 12, 21):
+            e = np.zeros(24)
+            e[j] = 1.0
+            with _tight_dehoog():  # match _propagate_diffusive's de Hoog to the matrix's (64, 1e-13)
+                col = _propagate_diffusive(
+                    e,
+                    r_nodes,
+                    dr,
+                    direction,
+                    tau,
+                    r_w=0.5,
+                    alpha_l=0.5,
+                    flow_scale=flow_scale,
+                    c_geo=CG,
+                    molecular_diffusivity=1.0,
+                    retardation_factor=r_fac,
+                )
+            np.testing.assert_allclose(pmat[:, j], col, atol=1e-6, rtol=1e-5)
+
+    @pytest.mark.parametrize(
+        ("alpha_l", "r_fac"),
+        [(0.25, 1.0), (0.5, 1.0), (1.0, 1.0), (0.5, 2.0)],  # front-Peclet ~45 / 22 / 11; last adds D_m=0 R>1
+    )
+    def test_matches_per_reversal(self, alpha_l, r_fac):
+        # D_m=0 multi-cycle end-to-end correctness anchor. At MATCHED-TIGHT de Hoog the reuse engine equals the
+        # per-reversal engine to the shared-code floor; the only residual is the Pade nonlinearity of the
+        # intermediate field hand-offs (invert-then-sum P@field vs sum-then-invert _propagate), which closes as
+        # n_terms tightens and is Peclet-dependent (~1e-11 at Pe~45 down to ~5e-8 at Pe~11). R>1 exercises the
+        # Airy tau=V/R clock rescale and the M_cout xR readout. (The column-identity test pins each matrix
+        # bit-exactly; this gate adds caching + composition. The shipped-settings gap is the same Pade residual,
+        # below the de Hoog floor itself, so comparing at matched-tight is both stricter and non-fragile.)
+        flow = np.array(([100.0] * 4 + [-100.0] * 4) * 3)
+        dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
+        ext = flow < 0
+        geom = {**GEOM, "alpha_l": alpha_l}
+        gf = _gridfree_tight(cin_deviation=cin, flow=flow, dt_days=dt, retardation_factor=r_fac, n_quad=120, **geom)
+        re = cout_deviation(
+            cin_deviation=cin,
+            flow=flow,
+            dt_days=dt,
+            retardation_factor=r_fac,
+            n_quad=120,
+            n_terms=64,
+            tol=1e-13,
+            **geom,
+        )
+        assert np.max(np.abs(re[ext] - gf[ext])) < 1e-6
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("r_fac", [1.0, 2.0])
+    def test_dm_positive_matches_per_reversal(self, r_fac):
+        # D_m>0 (Riccati branch) multi-cycle end-to-end: the reused matrix reproduces the per-reversal
+        # _propagate_diffusive hand-off to the matched-tight de Hoog floor (the column-identity test above
+        # pins the matrix bit-exactly; this gate adds caching + composition). R=1 and R>1 via the wall-clock
+        # rescale. n_quad small -- the cost is the per-de-Hoog-node Riccati ODE.
+        flow = np.array(([100.0] * 4 + [-100.0] * 4) * 2)
+        dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
+        ext = flow < 0
+        gf = _gridfree_tight(
+            cin_deviation=cin,
+            flow=flow,
+            dt_days=dt,
+            molecular_diffusivity=1.0,
+            retardation_factor=r_fac,
+            n_quad=8,
+            **GEOM,
+        )
+        re = cout_deviation(
+            cin_deviation=cin,
+            flow=flow,
+            dt_days=dt,
+            molecular_diffusivity=1.0,
+            retardation_factor=r_fac,
+            n_quad=8,
+            n_terms=64,
+            tol=1e-13,
+            **GEOM,
+        )
+        assert np.max(np.abs(re[ext] - gf[ext])) < 1e-5  # diffusive (high-ratio D_m) de Hoog floor
+
+    @pytest.mark.slow
+    def test_seasonal_matches_per_reversal(self):
+        # D_m>0 with Q=0 rest phases (seasonal storage / ATES, inject -> rest -> extract): the Riccati and
+        # Bessel-rest matrices are both reused across cycles and reproduce the per-reversal engine end-to-end
+        # to the matched-tight de Hoog floor (the per-branch matrices are pinned bit-exactly above).
+        flow = np.array(([100.0] * 4 + [0.0] * 3 + [-100.0] * 4) * 2)
+        dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
+        ext = flow < 0
+        gf = _gridfree_tight(cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=1.0, n_quad=8, **GEOM)
+        re = cout_deviation(
+            cin_deviation=cin,
+            flow=flow,
+            dt_days=dt,
+            molecular_diffusivity=1.0,
+            n_quad=8,
+            n_terms=64,
+            tol=1e-13,
+            **GEOM,
+        )
+        assert np.max(np.abs(re[ext] - gf[ext])) < 1e-5  # diffusive + rest de Hoog floor
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("d_m_eff", [1.0, 2.0])  # d_m_eff != 1 exercises the 1/d_m_eff source measure
+    def test_rest_matrix_is_per_reversal_operator(self, d_m_eff):
+        # Rest (Q=0) Bessel branch: each matrix column equals _propagate_rest of a unit source (seasonal
+        # storage / ATES wall-clock molecular diffusion). Shares rest_resolvent with _propagate_rest, so the
+        # column is bit-exact (the SL measure r'/d_m_eff is identity at d_m_eff=1, so d_m_eff=2 pins it).
+        flow, dt = np.array([100.0] * 4 + [0.0] * 3 + [-100.0] * 4), np.ones(11)
+        r_nodes, _, dr = _field_grid(flow, dt, CG, 0.5, 0.5, 1.0, 40)
+        tau = 3.0  # wall-clock rest duration
+        pmat = _rest_propagator_matrix(tau, r_nodes, dr, r_w=0.5, d_m_eff=d_m_eff, n_terms=44, tol=1e-9)
+        for j in (5, 20, 35):
+            e = np.zeros(40)
+            e[j] = 1.0
+            col = _propagate_rest(e, r_nodes, dr, tau, r_w=0.5, d_m_eff=d_m_eff)
+            np.testing.assert_allclose(pmat[:, j], col, atol=1e-9, rtol=1e-8)
+
+    def test_multi_cycle_converges_to_finite_volume(self):
+        # Fully independent end-to-end anchor for the accelerated path: a finite-volume solve of the SAME PDE
+        # (shares NO Laplace-kernel / de Hoog / FR-step-response code) CONVERGES first-order to the reuse engine
+        # on a multi-cycle schedule that actually exercises the propagator-matrix reuse. Every other reuse test
+        # compares against the kernel-sharing per-reversal engine; this closes the validation chain through the
+        # accelerated path itself. The reuse engine is the reference; FV is first-order O(1/n_cells), so refining
+        # the grid drives the error toward zero (a wrong engine would leave a non-vanishing offset, ratio -> 1).
+        flow = np.array(([100.0] * 4 + [-100.0] * 4) * 2)
+        dt, cin = np.ones(len(flow)), np.where(flow > 0, 1.0, 0.0)
+        ext = flow < 0
+        re = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, n_quad=120, **GEOM)
+
+        def err(n_cells, n_sub):
+            fv = fv_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, n_cells=n_cells, n_sub=n_sub, **GEOM)
+            return np.max(np.abs(fv[ext] - re[ext]))
+
+        assert err(800, 16) < 0.6 * err(200, 8)  # refining 4x reduces the FV error toward the reuse engine
 
 
 class TestMolecularDiffusion:

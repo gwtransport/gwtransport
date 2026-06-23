@@ -1,15 +1,21 @@
-r"""Grid-free multi-cycle / general signed-flow radial advection-dispersion engine (any ``D_m``).
+r"""Per-reversal grid-free radial advection-dispersion reference -- the test oracle for the reuse engine.
 
-This is the exact, mesh-free engine for signed-flow schedules with more than one flow reversal
-(multi-cycle ASR / SWIW). It composes the per-phase closed-form pieces of the radial ASR knowledge
-base (KB Sec. 4-7, addendum Sec. A1-A4) -- no PDE is discretized, so none of the finite-volume
-artefacts (CFL/Courant limit, numerical dispersion, Crank-Nicolson ringing) appear. The only numerical
-operations are Gauss-Legendre quadrature over the resident profile and de Hoog Laplace inversion of the
-exact special-function kernels: the Airy interior Green's functions for ``D_m = 0`` (flushed-volume
-clock, vectorized) and the ``D_m > 0`` molecular-diffusion Green's functions (wall-clock time),
-evaluated through the log-derivative Riccati ODE (:func:`gwtransport._radial_asr_kernels.resolvent_riccati`) -- exact at any ``A_0/D_m``
-with no special-function precision cap. The spectral-domain acceleration of the composition (KB
-addendum Sec. A4-A7) is not implemented here.
+This is the exact, mesh-free per-reversal composition for signed-flow schedules with more than one flow
+reversal (multi-cycle ASR / SWIW): it performs one de Hoog inversion of the interior resolvent at each
+reversal. It composes the per-phase closed-form pieces of the radial ASR knowledge base (KB Sec. 4-7,
+addendum Sec. A1-A4) -- no PDE is discretized, so none of the finite-volume artefacts (CFL/Courant limit,
+numerical dispersion, Crank-Nicolson ringing) appear. The only numerical operations are Gauss-Legendre
+quadrature over the resident profile and de Hoog Laplace inversion of the exact special-function kernels:
+the Airy interior Green's functions for ``D_m = 0`` (flushed-volume clock, vectorized) and the ``D_m > 0``
+molecular-diffusion Green's functions (wall-clock time), evaluated through the log-derivative Riccati ODE
+(:func:`gwtransport._radial_asr_kernels.resolvent_riccati`) -- exact at any ``A_0/D_m`` with no
+special-function precision cap.
+
+The production dispatch (:mod:`gwtransport.radial_asr`) runs the bit-equivalent reused-propagator-matrix
+accelerator (:mod:`gwtransport._radial_asr_reuse`), which caches and reuses each per-reversal field
+propagator as a Bromwich-contour matrix. This per-reversal composition is retained here, in the test suite,
+as the reference oracle that accelerator is validated against (alongside the finite-volume and Whittaker
+oracles), and is not part of the shipped package.
 
 State machine (deviation ``c' = c - c_bg``, initial condition 0)
 ---------------------------------------------------------------
@@ -45,7 +51,7 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import numpy.typing as npt
 
-from gwtransport._radial_asr_compose import _fr_step_response
+from gwtransport._radial_asr_compose import _DEHOOG_TERMS, _SCALE_MARGIN, _fr_step_response
 from gwtransport._radial_asr_dehoog import dehoog_inverse
 from gwtransport._radial_asr_kernels import (
     _resolvent_airy_pieces,
@@ -53,67 +59,7 @@ from gwtransport._radial_asr_kernels import (
     resolvent_riccati,
     rest_resolvent,
 )
-
-# de Hoog series length for the field-propagation inversion and the front-anchored scaling margin
-# (matched to the FR step response in _radial_asr_compose).
-_DEHOOG_TERMS = 44
-_SCALE_MARGIN = 1.3
-
-
-def _phase_slices(flow: npt.NDArray[np.floating]) -> list[tuple[int, slice]]:
-    """Group the schedule into maximal one-signed phases.
-
-    Returns
-    -------
-    list of (sign, slice)
-        ``sign`` in ``{+1, -1, 0}`` (injection / extraction / rest) and the contiguous bin slice.
-    """
-    signs = np.sign(flow).astype(int)
-    edges = np.flatnonzero(np.diff(signs) != 0) + 1
-    starts = np.concatenate(([0], edges))
-    stops = np.concatenate((edges, [len(flow)]))
-    return [(int(signs[a]), slice(a, b)) for a, b in zip(starts, stops, strict=True)]
-
-
-def _field_grid(
-    flow: npt.NDArray[np.floating],
-    dt_days: npt.NDArray[np.floating],
-    c_geo: float,
-    r_w: float,
-    alpha_l: float,
-    molecular_diffusivity: float,
-    n_quad: int,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]]:
-    """Radial Gauss-Legendre quadrature grid spanning the plume front plus its dispersive tail.
-
-    The grid is kept **tight**: it covers the advective front radius ``r_front`` (where the plume
-    volume ``V(r) = peak net injected volume``) plus a margin of breakthrough widths (radial std
-    ``~ sqrt(alpha_L r_front)``) and a molecular reach, and no further. An over-extended grid would
-    push the Peclet so high that the divergent (injection) interior Green's function, which grows as
-    ``e^{+r/alpha_L}`` before its ``e^{-r/alpha_L}`` Sturm-Liouville weight tames the product, overflows
-    double precision; the resident profile is ``~0`` beyond the tail anyway (verified by mass
-    conservation). Retardation rescales the clock, not the radius, so it does not enter ``r_max``.
-
-    Returns
-    -------
-    r_nodes : ndarray
-        Radial nodes (m), shape ``(n_quad,)``.
-    v_nodes : ndarray
-        Volume coordinate ``V(r) = c_geo (r^2 - r_w^2)`` at the nodes.
-    dr_weights : ndarray
-        Gauss-Legendre weights in ``r`` (so ``int g dr ~ sum g(r_k) dr_weights_k``).
-    """
-    net_volume = np.concatenate(([0.0], np.cumsum(flow * dt_days)))
-    peak_volume = max(float(net_volume.max()), 0.0)
-    r_front = np.sqrt(r_w**2 + peak_volume / c_geo)  # advective plume-front radius
-    total_time = float(np.sum(dt_days))
-    reach = 12.0 * np.sqrt(alpha_l * r_front + alpha_l**2) + 6.0 * np.sqrt(molecular_diffusivity * total_time)
-    r_max = r_front + reach + r_w
-    nodes, weights = np.polynomial.legendre.leggauss(n_quad)
-    r_nodes = 0.5 * (r_max - r_w) * (nodes + 1.0) + r_w
-    dr_weights = 0.5 * (r_max - r_w) * weights
-    v_nodes = c_geo * (r_nodes**2 - r_w**2)
-    return r_nodes, v_nodes, dr_weights
+from gwtransport._radial_asr_reuse import _field_grid, _phase_slices
 
 
 def _fr_profile(
@@ -286,14 +232,15 @@ def _propagate_diffusive(
 
     Same superposition as :func:`_propagate` but with the molecular-diffusion interior Green's function
     (KB Sec. 4 ``D_m > 0`` branch) and the wall-clock time clock (the volume clock is not autonomous
-    when ``D_m > 0`` -- the no-go lemma). The Green's function is assembled by :func:`gwtransport._radial_asr_kernels.resolvent_riccati`
-    from the log-derivatives of the decaying and well-regular solutions: every output node is built from
-    prefix/suffix sums of the source superposition
-    ``F(s)_i = -[u_inf(r_i) sum_{j<=i} u_0(r_j) w_j + u_0(r_i) sum_{j>i} u_inf(r_j) w_j]/N(s)`` (the
-    symmetric SL split at ``r_i``), with the divergent ``N = G^b`` gauge carried in log space so the
+    when ``D_m > 0`` -- the no-go lemma). The Green's function is assembled by
+    :func:`gwtransport._radial_asr_kernels.resolvent_riccati` from the log-derivatives of the decaying
+    and well-regular solutions: every output node is built from prefix/suffix sums of the source
+    superposition ``F(s)_i = -[u_inf(r_i) sum_{j<=i} u_0(r_j) w_j + u_0(r_i) sum_{j>i} u_inf(r_j) w_j]/N(s)``
+    (the symmetric SL split at ``r_i``), with the divergent ``N = G^b`` gauge carried in log space so the
     assembly stays in double precision at any ``A_0/D_m`` -- no special-function precision cap.
     ``src_measure_k = w(r_k) dr_weights_k`` with the ``D_m > 0`` weight ``w_pm(r) = r G(r)^{b-1}``
-    (``b = 1 - sigma_A A_0/D_m``, ``G = alpha_L A_0 + D_m r``), built inside :func:`gwtransport._radial_asr_kernels.resolvent_riccati`.
+    (``b = 1 - sigma_A A_0/D_m``, ``G = alpha_L A_0 + D_m r``), built inside
+    :func:`gwtransport._radial_asr_kernels.resolvent_riccati`.
 
     Returns
     -------

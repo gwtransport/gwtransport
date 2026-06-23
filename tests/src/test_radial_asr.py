@@ -17,8 +17,11 @@ from scipy.special import erfc
 
 from gwtransport._radial_asr_dehoog import dehoog_inverse
 from gwtransport._radial_asr_kernels import transfer_function
+from gwtransport._radial_asr_reuse import cout_deviation
+from gwtransport._time import dt_to_days
 from gwtransport.radial_asr import (
     extraction_to_infiltration,
+    gamma_extraction_to_infiltration,
     gamma_infiltration_to_extraction,
     infiltration_to_extraction,
 )
@@ -93,6 +96,34 @@ class TestDeHoog:
         assert np.all(got >= -1e-6)
         assert np.all(got <= 1.0 + 1e-6)
         np.testing.assert_allclose(got, erfc(1.0 / (2.0 * np.sqrt(t))), atol=1e-5)
+
+    def test_batch_axis_equals_scalar_loop(self):
+        # The batch generalization (f_hat may return (n_nodes, *batch)) must invert every batch entry in one
+        # QD/continued-fraction pass identically to a per-entry scalar inversion -- the core contract of the
+        # batched de Hoog the propagator-matrix builders rely on. Pin it both ways: vs the scalar loop
+        # (bit-exact) and vs the analytic sum-of-exponentials.
+        coeffs = np.array([[1.0, 2.0], [0.5, 1.5], [3.0, 0.25]])  # (3, 2)
+        poles = np.array([[0.5, 1.0], [2.0, 0.3], [1.2, 0.8]])
+        t = np.array([0.4, 1.1, 2.7])
+        batched = dehoog_inverse(f_hat=lambda s: coeffs / (s[:, None, None] + poles), t=t, n_terms=32, scaling=6.0)
+        scalar = np.empty((t.size, 3, 2))
+        for a in range(3):
+            for b in range(2):
+                scalar[:, a, b] = dehoog_inverse(
+                    f_hat=lambda s, a=a, b=b: coeffs[a, b] / (s + poles[a, b]), t=t, n_terms=32, scaling=6.0
+                )
+        np.testing.assert_allclose(batched, scalar, rtol=0, atol=0)  # bit-exact vs the per-entry loop
+        analytic = coeffs[None] * np.exp(-poles[None] * t[:, None, None])
+        np.testing.assert_allclose(batched, analytic, atol=1e-5)
+
+    def test_nonpositive_t_returns_zero(self):
+        # de Hoog is defined only for t > 0; the t<=0 guard returns exactly 0 there (keeping the internal
+        # scaling finite) while still inverting the positive entries. Unreachable from the reuse engine
+        # (every phase has tau > 0), but the primitive must stay safe.
+        t = np.array([-1.0, 0.0, 2.0])
+        got = dehoog_inverse(f_hat=lambda s: 1.0 / (s + 1.0), t=t, n_terms=32, scaling=4.0)
+        np.testing.assert_array_equal(got[:2], 0.0)
+        np.testing.assert_allclose(got[2], np.exp(-2.0), atol=1e-5)
 
 
 # --- Airy kernel + KB Sec. 6 moments ------------------------------------------------------------
@@ -335,6 +366,32 @@ class TestGammaWrapper:
         recovered = np.sum(cout[flow < 0] * (-flow[flow < 0]))
         np.testing.assert_allclose(recovered, np.sum(cin[flow > 0] * flow[flow > 0]), rtol=1e-2)
 
+    @pytest.mark.slow
+    def test_gamma_multi_cycle_round_trip(self):
+        # Both gamma (screen-velocity ensemble) wrappers on a MULTI-CYCLE schedule, so they route through the
+        # reuse engine: the forward as a weighted streamtube ensemble, the reverse as the dense ensemble
+        # round-trip. (Single-cycle gamma uses the echo operator; only multi-cycle exercises the reuse path.)
+        flow = np.array([100.0] * 4 + [-100.0] * 6 + [100.0] * 4 + [-100.0] * 8)
+        tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
+        cin = np.where(flow > 0, 1.0, 0.0)
+        gargs = {
+            "porosity": 0.3,
+            "well_radius": 0.5,
+            "longitudinal_dispersivity": 0.5,
+            "screen_height": 10.0,
+            "velocity_cv": 0.3,
+            "n_bins": 6,
+            "n_quad": 60,
+        }
+        cout = gamma_infiltration_to_extraction(cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **gargs)
+        recovered = np.sum(cout[flow < 0] * (-flow[flow < 0])) / np.sum(cin[flow > 0] * flow[flow > 0])
+        assert 0.9 < recovered <= 1.0 + 1e-3
+        rec = gamma_extraction_to_infiltration(
+            cout=cout, flow=flow, tedges=tedges, cout_tedges=tedges, regularization_strength=1e-6, **gargs
+        )
+        np.testing.assert_array_equal(np.isnan(rec), flow <= 0.0)
+        np.testing.assert_allclose(rec[flow > 0], cin[flow > 0], atol=5e-3)
+
 
 class TestValidation:
     def test_bad_lengths_raise(self):
@@ -364,7 +421,8 @@ class TestValidation:
 
 
 class TestGeneralEngine:
-    """Multi-cycle and D_m>0 route to the implicit finite-volume solve of the exact PDE (KB Sec. 9)."""
+    """Multi-cycle schedules route to the reused-propagator-matrix engine; an independent finite-volume
+    solve of the exact PDE (KB Sec. 9) is the cross-check oracle."""
 
     def test_fv_matches_analytic_single_cycle(self):
         # Independent engines: finite-volume discretizes the PDE, the analytic path inverts the Laplace kernel.
@@ -423,8 +481,9 @@ class TestGeneralEngine:
 
     @pytest.mark.slow
     def test_dm_positive_forward_conserves(self):
-        # @slow: D_m>0 multi-cycle now runs the per-node Riccati ODE. The conservation assertion is
-        # n_quad-insensitive (verified identical at n_quad 8/16/120), so n_quad=16 suffices.
+        # Single inject->extract cycle (no rest) with D_m>0 routes to the closed-form echo operator; this
+        # checks that path conserves mass under molecular diffusion. The multi-cycle reuse-engine D_m>0 path
+        # is covered by test_dm_positive_multi_cycle_round_trip. n_quad-insensitive (verified 8/16/120).
         tedges, flow, geom = _scenario()
         cin = np.where(flow > 0, 1.0, 0.0)
         cout = infiltration_to_extraction(
@@ -444,3 +503,56 @@ class TestGeneralEngine:
         )
         np.testing.assert_array_equal(np.isnan(rec), flow <= 0.0)
         np.testing.assert_allclose(rec[flow > 0], cin[flow > 0], atol=5e-3)
+
+    @pytest.mark.slow
+    def test_dm_positive_multi_cycle_round_trip(self):
+        # D_m>0 forward AND reverse through the reuse engine's Riccati branch on a multi-cycle schedule. The
+        # public single-cycle D_m>0 path routes to the echo operator, so only a multi-cycle schedule drives
+        # the Riccati propagator matrices (forward) and the dense-column ensemble reverse. @slow: the per-node
+        # Riccati ODE dominates and the reverse rebuilds it per injection column, so the schedule and n_quad
+        # are kept minimal (two single-injection cycles -> a 2-column dense reverse).
+        flow = np.array([100.0] * 1 + [-100.0] * 2 + [100.0] * 1 + [-100.0] * 2)
+        tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
+        cin = np.where(flow > 0, 1.0, 0.0)
+        geom = {"pore_heights": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
+        cout = infiltration_to_extraction(
+            cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, molecular_diffusivity=0.05, n_quad=10
+        )
+        rec = extraction_to_infiltration(
+            cout=cout,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            **geom,
+            molecular_diffusivity=0.05,
+            regularization_strength=1e-6,
+            n_quad=10,
+        )
+        np.testing.assert_array_equal(np.isnan(rec), flow <= 0.0)
+        np.testing.assert_allclose(rec[flow > 0], cin[flow > 0], atol=2e-3)
+
+    @pytest.mark.slow
+    def test_single_cycle_rest_dm_routes_to_reuse_engine(self):
+        # A single inject->rest->extract cycle under D_m>0 must NOT use the rest-blind echo operator: the
+        # dispatch carve-out routes it to the reuse engine (Bessel rest branch). Pin the routing by matching
+        # the public result to a direct single-streamtube engine call -- they agree to machine precision iff
+        # the public dispatch routed there (the echo operator would drop the rest-phase diffusion entirely).
+        flow = np.array([100.0] * 4 + [0.0] * 3 + [-100.0] * 4)
+        tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
+        cin = np.where(flow > 0, 1.0, 0.0)
+        geom = {"pore_heights": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
+        pub = infiltration_to_extraction(
+            cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, molecular_diffusivity=1.0, n_quad=24
+        )
+        eng = cout_deviation(
+            cin_deviation=cin,
+            flow=flow,
+            dt_days=dt_to_days(tedges),
+            c_geo=np.pi * geom["pore_heights"] * geom["porosity"],
+            r_w=geom["well_radius"],
+            alpha_l=geom["longitudinal_dispersivity"],
+            molecular_diffusivity=1.0,
+            n_quad=24,
+        )
+        ext = flow < 0
+        np.testing.assert_allclose(pub[ext], eng[ext], rtol=1e-12, atol=1e-12)
