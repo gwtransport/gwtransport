@@ -30,7 +30,7 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import numpy.typing as npt
 
-from gwtransport._radial_asr_compose import _fr_step_response
+from gwtransport._radial_asr_compose import _DEHOOG_TERMS, _SCALE_MARGIN, _fr_step_response
 from gwtransport._radial_asr_dehoog import dehoog_inverse
 from gwtransport._radial_asr_kernels import (
     _integrate_logderiv,
@@ -40,11 +40,6 @@ from gwtransport._radial_asr_kernels import (
 )
 
 _INJECTION = "injection"
-
-# de Hoog series length for the field-propagation inversion and the front-anchored scaling margin
-# (matched to the FR step response in _radial_asr_compose).
-_DEHOOG_TERMS = 44
-_SCALE_MARGIN = 1.3
 
 
 def _phase_slices(flow: npt.NDArray[np.floating]) -> list[tuple[int, slice]]:

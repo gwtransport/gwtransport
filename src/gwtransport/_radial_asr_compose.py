@@ -38,9 +38,9 @@ import numpy.typing as npt
 from gwtransport._radial_asr_dehoog import dehoog_inverse
 from gwtransport._radial_asr_kernels import transfer_function
 
-# de Hoog series length and the front-anchored scaling margin for the FR step response. The half-period
-# is set per V' to ~ the FR arrival-volume mean (where the breakthrough front sits), which keeps the
-# front well-resolved regardless of how far the corner volumes extend (KB / de Hoog scaling note).
+# Default de Hoog series length and front-anchored scaling margin for the radial-ASR inversions: the FR
+# step response (here) and the field propagators (_radial_asr_reuse) both import these so the two never
+# silently desync on de Hoog resolution.
 _DEHOOG_TERMS = 44
 _SCALE_MARGIN = 1.3
 

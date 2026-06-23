@@ -51,7 +51,7 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import numpy.typing as npt
 
-from gwtransport._radial_asr_compose import _fr_step_response
+from gwtransport._radial_asr_compose import _DEHOOG_TERMS, _SCALE_MARGIN, _fr_step_response
 from gwtransport._radial_asr_dehoog import dehoog_inverse
 from gwtransport._radial_asr_kernels import (
     _resolvent_airy_pieces,
@@ -59,7 +59,7 @@ from gwtransport._radial_asr_kernels import (
     resolvent_riccati,
     rest_resolvent,
 )
-from gwtransport._radial_asr_reuse import _DEHOOG_TERMS, _SCALE_MARGIN, _field_grid, _phase_slices
+from gwtransport._radial_asr_reuse import _field_grid, _phase_slices
 
 
 def _fr_profile(
