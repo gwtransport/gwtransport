@@ -55,18 +55,20 @@ def dehoog_inverse(
     alpha: float = 0.0,
     tol: float = 1e-9,
 ) -> npt.NDArray[np.floating]:
-    r"""Invert a single Laplace transform at an array of times via the de Hoog method.
+    r"""Invert a Laplace transform -- optionally a whole batch of them -- at an array of times.
 
     The transform ``f_hat`` is sampled once on ``2 * n_terms + 1`` complex Bromwich nodes; the
-    continued-fraction acceleration and its evaluation are vectorized over ``t``. Only ``t > 0`` is
-    meaningful; ``t <= 0`` returns ``0`` (the inverse of a one-sided transform vanishes for negative
-    time, and the series is undefined at ``t = 0``).
+    continued-fraction acceleration and its evaluation are vectorized over ``t`` and over any trailing
+    batch axes ``f_hat`` carries, so one call inverts every entry of a propagator matrix in a single
+    QD/continued-fraction pass. Only ``t > 0`` is meaningful; ``t <= 0`` returns ``0`` (the inverse of a
+    one-sided transform vanishes for negative time, and the series is undefined at ``t = 0``).
 
     Parameters
     ----------
     f_hat : callable
         Vectorized Laplace transform :math:`\bar f(s)`. Receives a complex ``ndarray`` of shape
-        ``(2 * n_terms + 1,)`` and must return a complex ``ndarray`` of the same shape.
+        ``(2 * n_terms + 1,)`` and returns a complex ``ndarray`` whose leading axis is ``2 * n_terms + 1``,
+        optionally with trailing batch axes (e.g. all ``n_quad**2`` entries of a propagator matrix).
     t : array-like
         Evaluation times (same clock as the inverse, e.g. flushed volume). 1-D or scalar.
     n_terms : int, optional
@@ -86,12 +88,13 @@ def dehoog_inverse(
     Returns
     -------
     ndarray
-        Real inverse ``f(t)``, same shape as ``t`` (0-d input yields a 0-d array).
+        Real inverse ``f(t)``, shape ``t.shape + batch`` where ``batch`` is the trailing shape of
+        ``f_hat``'s output (a scalar ``t`` with no batch yields a 0-d array).
 
     Raises
     ------
     ValueError
-        If ``f_hat`` does not return an array of shape ``(2 * n_terms + 1,)``.
+        If ``f_hat``'s returned array does not have leading axis ``2 * n_terms + 1``.
 
     Notes
     -----
@@ -109,29 +112,39 @@ def dehoog_inverse(
     t_arr = np.asarray(t, dtype=float)
     scalar_input = t_arr.ndim == 0
     t_flat = np.atleast_1d(t_arr)
+    n_t = t_flat.size
 
     m = int(n_terms)
     n_nodes = 2 * m + 1
     t_max = float(np.max(t_flat)) if t_flat.size else 1.0
-    if t_max <= 0.0:
-        # No positive evaluation times: the one-sided inverse is identically zero there.
-        out = np.zeros_like(t_flat)
-        return out.reshape(t_arr.shape) if not scalar_input else out[0]
     big_t = float(scaling) if scaling is not None else 2.0 * t_max
+    if big_t <= 0.0:
+        big_t = 1.0  # all t <= 0: the result is masked to 0 below, this only keeps the nodes finite
     gamma = alpha - np.log(tol) / (2.0 * big_t)
 
-    # Sample the transform on the Bromwich nodes s_k = gamma + i k pi / T, k = 0 .. 2M.
+    # Sample the transform on the Bromwich nodes s_k = gamma + i k pi / T, k = 0 .. 2M. ``f_hat`` may
+    # carry a trailing batch shape; the QD/continued-fraction pass below broadcasts over it, so one call
+    # inverts a whole batch (e.g. every entry of a propagator matrix) at once.
     k = np.arange(n_nodes)
     s = gamma + 1j * k * np.pi / big_t
     a = np.asarray(f_hat(s), dtype=complex)
-    if a.shape != (n_nodes,):
-        msg = f"f_hat must return shape ({n_nodes},), got {a.shape}"
+    if a.shape[0] != n_nodes:
+        msg = f"f_hat must return leading axis {n_nodes}, got {a.shape}"
         raise ValueError(msg)
+    batch = a.shape[1:]
+    nb = len(batch)
+    if t_max <= 0.0:
+        # No positive evaluation times: the one-sided inverse is identically zero there.
+        out = np.zeros((n_t, *batch))
+        if scalar_input:
+            return out[0]
+        return out.reshape(t_arr.shape + batch)
     a = a.copy()
     a[0] *= 0.5
 
-    # Quotient-difference algorithm -> continued-fraction coefficients d[0 .. 2M].
-    d = np.empty(n_nodes, dtype=complex)
+    # Quotient-difference algorithm -> continued-fraction coefficients d[0 .. 2M] (per batch entry; the
+    # rhombus rules slice the leading node axis and broadcast over the trailing batch).
+    d = np.empty((n_nodes, *batch), dtype=complex)
     d[0] = a[0]
     q = a[1:] / a[:-1]  # q_1^{(i)}, length 2M
     d[1] = -q[0]
@@ -143,18 +156,19 @@ def dehoog_inverse(
         e = e[1:-1] + q[1:] - q[:-1]  # e_r^{(i)}, length 2M-2r+1
         d[2 * r] = -e[0]
 
-    # Evaluate the continued fraction at z = exp(i pi t / T), vectorized over t, by the three-term
-    # recurrence A_n = A_{n-1} + d_n z A_{n-2}, B_n = B_{n-1} + d_n z B_{n-2}. The loop stops one
-    # coefficient early (n up to 2M-1) so the de Hoog tail remainder can replace the bare last
-    # coefficient d_{2M} in the final convergent -- the "improved" estimate of the truncated
-    # continued-fraction tail. Keeping the two trailing convergents avoids any division when forming it.
-    z = np.exp(1j * np.pi * t_flat / big_t)
-    a_pp = np.zeros_like(z)  # A_{-1}
-    b_pp = np.ones_like(z)  # B_{-1}
-    a_p = np.full_like(z, d[0])  # A_0
-    b_p = np.ones_like(z)  # B_0
+    # Evaluate the continued fraction at z = exp(i pi t / T) by the three-term recurrence
+    # A_n = A_{n-1} + d_n z A_{n-2}, B_n = B_{n-1} + d_n z B_{n-2}, broadcasting time (leading axis) against
+    # the batch (trailing axes). The loop stops one coefficient early (n up to 2M-1) so the de Hoog tail
+    # remainder can replace the bare last coefficient d_{2M} in the final convergent -- the "improved"
+    # estimate of the truncated tail. Keeping the two trailing convergents avoids any division forming it.
+    time_shape = (n_t, *([1] * nb))  # broadcast the leading time axis against the trailing batch
+    z = np.exp(1j * np.pi * t_flat / big_t).reshape(time_shape)  # (n_t, 1..1)
+    a_pp = np.zeros((n_t, *batch), dtype=complex)  # A_{-1}
+    b_pp = np.ones((n_t, *batch), dtype=complex)  # B_{-1}
+    a_p = np.broadcast_to(d[0], (n_t, *batch)).astype(complex).copy()  # A_0
+    b_p = np.ones((n_t, *batch), dtype=complex)  # B_0
     for n in range(1, n_nodes - 1):
-        dz = d[n] * z
+        dz = d[n] * z  # d[n] (batch) broadcasts against z (time, 1..1) -> (n_t, *batch)
         a_pp, a_p = a_p, a_p + dz * a_pp
         b_pp, b_p = b_p, b_p + dz * b_pp
     # a_p, b_p hold the (2M-1) convergent; a_pp, b_pp the (2M-2) convergent.
@@ -163,6 +177,8 @@ def dehoog_inverse(
     a_final = a_p + rem * a_pp
     b_final = b_p + rem * b_pp
 
-    result = (np.exp(gamma * t_flat) / big_t) * np.real(a_final / b_final)
-    result = np.where(t_flat > 0.0, result, 0.0)
-    return result.reshape(t_arr.shape) if scalar_input else result
+    result = (np.exp(gamma * t_flat).reshape(time_shape) / big_t) * np.real(a_final / b_final)
+    result = np.where(t_flat.reshape(time_shape) > 0.0, result, 0.0)
+    if scalar_input:
+        return result[0]
+    return result.reshape(t_arr.shape + batch)

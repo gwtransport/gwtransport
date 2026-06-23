@@ -64,6 +64,7 @@ convention = "numpy"
     "DOC201",  # Test functions returning None don't need Returns docs
     "DOC501",  # Test functions don't need Raises docs
     "DOC502",  # Test helpers may document exceptions not directly raised
+    "PLC2701",  # Test code (incl. oracle helpers) may import package internals
 ]
 "src/gwtransport/deposition.py" = [
     "DOC502",  # Public entry points document ValueError; the raises happen inside _validate_deposition_inputs
@@ -93,7 +94,6 @@ convention = "numpy"
     "PLR2004",
     "PLR6301",  # Tests may be grouped in classes for clarity
     "INP001",  # __init__.py is not needed for the test folders
-    "PLC2701",  # Private functions may also be tested
     "RUF002",  # Greek / math unicode in physics-module test docstrings (matches fronttracking source ignore)
     "RUF003",  # Same rationale in comments
 ]
