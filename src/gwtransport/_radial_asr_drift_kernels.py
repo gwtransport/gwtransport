@@ -40,15 +40,19 @@ _INJECTION = "injection"
 
 # Riccati integration tolerances (matched to the scalar log-derivative kernel) and the drift-specific
 # outer-boundary policy: the recessive initial condition is set at r_far and washed inward; r_far is
-# floored well past the field but hard-capped below the stagnation radius r_s = |A_0|/v_d (eps(r_far) < 1),
-# where the coordinate finite-escape of the matrix Riccati would otherwise blow up (see the plan's r_far
-# policy: min(washout, 0.6 r_s)). The grid r_max is kept strictly inside r_far by _RFAR_GRID_FRAC.
+# floored well past the field but hard-capped below the stagnation radius r_s = |A_0|/v_d, where the
+# coordinate finite-escape of the matrix Riccati would otherwise blow up (the plan's r_far <= 0.6 r_s).
+# The slow-drift envelope is honest: the SIGNIFICANT plume (front + _PLUME_WIDTHS breakthrough widths,
+# where the resident field has decayed to ~1% of peak) must fit below that cap, else the engine raises
+# rather than silently truncate it. Only the negligible far tail beyond r_far is dropped (the recessive
+# IC washes it out anyway). At v_d = 0 (r_s = inf) the cap is inactive and this is the scalar grid.
 _RICCATI_RTOL = 1e-9
 _RICCATI_ATOL = 1e-10
 _RFAR_FIELD_MULT = 8.0
 _RFAR_DECAY = 44.0
 _RS_FRAC = 0.6
-_RFAR_GRID_FRAC = 0.85
+_GRID_WIDTHS = 12.0
+_PLUME_WIDTHS = 3.0
 
 
 def _toeplitz_from_theta(f_theta: npt.NDArray[np.floating], n_modes: int) -> npt.NDArray[np.complexfloating]:
@@ -170,13 +174,16 @@ def field_grid(
     r"""Radial Gauss-Legendre grid and recessive-IC radius ``r_far`` for the drift block engine.
 
     The grid spans the advective plume front ``r_front = sqrt(r_w^2 + V_peak/c_geo)`` plus a margin of
-    breakthrough widths (radial std ``~ sqrt(alpha_L r_front)``), exactly as the scalar engine -- but for
-    drift the whole grid (and the recessive initial condition at ``r_far``) must stay inside the stagnation
-    radius ``r_s = |A_0|/v_d``. The matrix Riccati has a coordinate finite-escape once ``eps(r) = v_d r/A_0``
-    approaches 1, so ``r_far`` is hard-capped at ``_RS_FRAC * r_s`` (``eps(r_far) <= 0.6 < 1``) and the
-    quadrature ``r_max`` is held at ``_RFAR_GRID_FRAC * r_far`` so every field node lies within the range
-    where the recessive solution was integrated. At ``v_d = 0`` (``r_s = inf``) this reduces to the scalar
-    grid with the scalar ``r_far`` washout policy.
+    breakthrough widths (radial std ``~ sqrt(alpha_L r_front)``), exactly as the scalar engine. For drift,
+    the recessive initial condition at ``r_far`` must stay inside the stagnation radius ``r_s = |A_0|/v_d``
+    (the matrix Riccati has a coordinate finite-escape as ``eps(r) = v_d r/A_0 -> 1``), so ``r_far`` is
+    hard-capped at ``_RS_FRAC * r_s``. The envelope is enforced **honestly**: the *significant* plume
+    (front + ``_PLUME_WIDTHS`` breakthrough widths, where the resident field has fallen to ~1% of peak) must
+    fit below that cap -- otherwise a ``ValueError`` is raised rather than the plume being silently
+    truncated. The quadrature spans the *significant* plume up to ``r_far`` (a generous ``_GRID_WIDTHS``-width
+    field grid clipped at ``r_far``); only the negligible tail beyond ``r_far`` is dropped, which the
+    recessive IC washes out anyway. At ``v_d = 0`` (``r_s = inf``) the cap is inactive and the grid is the
+    scalar grid. ``a0`` should be the **smallest** per-phase ``|A_0|`` (the most restrictive ``r_s``).
 
     Returns
     -------
@@ -186,15 +193,33 @@ def field_grid(
         Gauss-Legendre weights in ``r``.
     r_far : float
         Outer radius (m) where the recessive (decaying) block initial condition is imposed.
+
+    Raises
+    ------
+    ValueError
+        If the significant plume reaches the stagnation radius (``r_front + _PLUME_WIDTHS * width + r_w >
+        _RS_FRAC * r_s``) -- the drift is too strong for the radial engine's contained-plume assumption.
     """
     net_volume = np.concatenate(([0.0], np.cumsum(flow * dt_days)))
     peak_volume = max(float(net_volume.max()), 0.0)
     r_front = np.sqrt(r_w**2 + peak_volume / c_geo)
-    reach = 12.0 * np.sqrt(alpha_l * r_front + alpha_l**2)
-    r_max_phys = r_front + reach + r_w
+    width = np.sqrt(alpha_l * r_front + alpha_l**2)
+    r_significant = r_front + _PLUME_WIDTHS * width + r_w
+    r_grid = r_front + _GRID_WIDTHS * width + r_w
     r_s = abs(a0) / abs(v_d) if v_d != 0.0 else np.inf
-    r_far = min(max(_RFAR_FIELD_MULT * r_max_phys, r_max_phys + _RFAR_DECAY * alpha_l), _RS_FRAC * r_s)
-    r_max = min(r_max_phys, _RFAR_GRID_FRAC * r_far)
+    r_far_cap = _RS_FRAC * r_s
+    if r_significant > r_far_cap:
+        eps_front = abs(v_d) * r_front / abs(a0)
+        msg = (
+            f"drift too strong for the radial engine: the plume (front r_front={r_front:.2f} m, "
+            f"eps_front={eps_front:.2f}) reaches the stagnation radius r_s={r_s:.2f} m; the slow-drift "
+            "envelope requires the plume to stay well inside r_s = |A_0|/|v_d|"
+        )
+        raise ValueError(msg)
+    # r_far >= r_significant (the cap was not exceeded and the washout floor is >= r_grid >= r_significant),
+    # so clipping the generous grid at r_far drops only the negligible far tail, not the significant plume.
+    r_far = min(max(_RFAR_FIELD_MULT * r_grid, r_grid + _RFAR_DECAY * alpha_l), r_far_cap)
+    r_max = min(r_grid, r_far)
     nodes, weights = np.polynomial.legendre.leggauss(n_quad)
     r_nodes = 0.5 * (r_max - r_w) * (nodes + 1.0) + r_w
     dr_weights = 0.5 * (r_max - r_w) * weights
@@ -228,11 +253,13 @@ def _block_solutions(
     * **regular** (well boundary): outward from ``r_w`` with the block-diagonal well IC
       (``L_+ = A_0/(alpha_L A_0 + D_m r_w) I`` injection Robin / ``0`` extraction Neumann). Gives ``L_+``.
 
-    The recessive / regular fundamental matrices ``Y_-`` , ``Y_+`` (normalized to ``I`` at ``r_w``) are
-    carried as **de-scaled transitions** ``Psi_hat`` with a scalar log-amplitude ``phi = int_{r_w}^r L[m0,m0]``
-    factored out (``Y = Psi_hat e^{phi}``); this keeps ``Psi_hat`` ``O(1)`` while the divergent
-    Sturm-Liouville exponent lives in ``phi`` (the matrix analogue of the scalar kernel's bounded
-    log-difference), so the resolvent assembly never overflows at high Peclet.
+    The recessive / regular fundamental matrices ``Y_-`` , ``Y_+`` (both normalized to ``I`` at ``r_w``) are
+    carried as **de-scaled transitions** ``Psi_hat`` with a scalar log-amplitude
+    ``phi = int_{r_w}^r L[m0,m0]`` factored out (``Y = Psi_hat e^{phi}``); this keeps ``Psi_hat`` ``O(1)``
+    while the divergent Sturm-Liouville exponent lives in ``phi`` (the matrix analogue of the scalar
+    kernel's bounded log-difference), so the resolvent assembly never overflows at high Peclet. The
+    recessive ``L_-`` is integrated inward from ``r_far`` (its stable direction); its transition is then
+    propagated outward from ``r_w`` through the dense ``L_-`` interpolant.
 
     ``a0`` is the unsigned flow scale ``|A_0|``; the phase ``direction`` sets the operator orientation.
     Retardation enters as the explicit ``R`` in the ``R s`` term (the ODE keeps the physical ``A_0``/``D_m``).
@@ -244,6 +271,12 @@ def _block_solutions(
         ``r_nodes``, ``(n_quad, n_s, nm, nm)``), ``Psm``/``Psp`` (de-scaled recessive/regular transitions at
         ``r_nodes``), ``phim``/``phip`` (log-amplitudes, ``(n_quad, n_s)``) and ``A_n`` (the ``s``-independent
         principal part at ``r_nodes``, ``(n_quad, nm, nm)``).
+
+    Raises
+    ------
+    RuntimeError
+        If a matrix Riccati integration does not reach every requested radius (the log-derivative hit a
+        pole, typically the coordinate finite-escape near the stagnation radius).
     """
     s = np.asarray(s, dtype=complex).reshape(-1)
     n_s = s.size
@@ -260,13 +293,18 @@ def _block_solutions(
         )
         return a_m[0], b_m[0], s0_m[0]
 
+    n_block = n_s * nm * nm
+
     def riccati_rhs(r: float, y: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         ld = y.view(complex).reshape(n_s, nm, nm)
         a_m, b_m, s0_m = coupling(r)
         a_inv = np.linalg.inv(a_m)
-        ai_b = a_inv @ b_m
-        ai_s0 = a_inv @ s0_m
-        d_ld = -(ld @ ld) - (ai_b[None] @ ld) - ai_s0[None] - (retardation_factor * s)[:, None, None] * a_inv[None]
+        d_ld = (
+            -(ld @ ld)
+            - ((a_inv @ b_m)[None] @ ld)
+            - (a_inv @ s0_m)[None]
+            - (retardation_factor * s)[:, None, None] * a_inv[None]
+        )
         return d_ld.reshape(-1).view(float)
 
     # recessive IC at r_far (block-diagonal; scalar per-mode decaying log-derivative)
@@ -291,10 +329,6 @@ def _block_solutions(
         dense_output=True,
         method="DOP853",
     )
-
-    def l_minus(r: float) -> npt.NDArray[np.complexfloating]:
-        return sol_m.sol(r).view(complex).reshape(n_s, nm, nm)
-
     lp_w = a0_signed / (alpha_l * abs(a0) + d_m * r_w) if sigma_a > 0 else 0.0
     lp0 = (lp_w * eye[None] * np.ones((n_s, 1, 1))).astype(complex)
     sol_p = solve_ivp(
@@ -306,15 +340,25 @@ def _block_solutions(
         dense_output=True,
         method="DOP853",
     )
+    if not (sol_m.success and sol_p.success):
+        msg = "block Riccati integration failed (the matrix log-derivative likely hit a pole near stagnation)"
+        raise RuntimeError(msg)
+
+    def l_minus(r: float) -> npt.NDArray[np.complexfloating]:
+        return sol_m.sol(r).view(complex).reshape(n_s, nm, nm)
 
     def l_plus(r: float) -> npt.NDArray[np.complexfloating]:
         return sol_p.sol(r).view(complex).reshape(n_s, nm, nm)
 
-    # de-scaled transitions Psi_hat (Psi_hat' = (L - L[m0,m0] I) Psi_hat) and log-amplitude phi = int L[m0,m0]
+    # De-scaled transitions Psi_hat (Psi_hat' = (L - L[m0,m0] I) Psi_hat) with the log-amplitude
+    # phi = int_{r_w}^r L[m0,m0] factored out. Both branches are pivoted at r_w (integrated outward from
+    # r_w), which keeps phi small over [r_w, r_max] so the assembly's exp(+-phi) stay bounded -- the
+    # recessive L is still integrated inward (its stable direction); only its de-scaled transition is
+    # propagated outward through the dense L interpolant.
     def transition_rhs(l_fun):
         def rhs(r: float, y: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
             yc = y.view(complex)
-            psih = yc[: n_s * nm * nm].reshape(n_s, nm, nm)
+            psih = yc[:n_block].reshape(n_s, nm, nm)
             ld = l_fun(r)
             ell = ld[:, m0, m0]
             d_psih = (ld - ell[:, None, None] * eye[None]) @ psih
@@ -327,39 +371,33 @@ def _block_solutions(
         transition_rhs(l_minus),
         [r_w, r_max],
         y0,
+        t_eval=r_nodes,
         rtol=_RICCATI_RTOL,
         atol=_RICCATI_ATOL,
-        dense_output=True,
         method="DOP853",
     )
     tr_p = solve_ivp(
         transition_rhs(l_plus),
         [r_w, r_max],
         y0,
+        t_eval=r_nodes,
         rtol=_RICCATI_RTOL,
         atol=_RICCATI_ATOL,
-        dense_output=True,
         method="DOP853",
     )
+    if not (tr_m.success and tr_p.success):
+        msg = "block transition integration failed"
+        raise RuntimeError(msg)
 
-    def unpack(sol, r: float) -> tuple[npt.NDArray, npt.NDArray]:
-        yc = sol.sol(r).view(complex)
-        return yc[: n_s * nm * nm].reshape(n_s, nm, nm), yc[n_s * nm * nm :]
+    def transitions(tr) -> tuple[npt.NDArray, npt.NDArray]:
+        yc = np.ascontiguousarray(tr.y.T).view(complex)  # (n_quad, n_block + n_s)
+        return yc[:, :n_block].reshape(-1, n_s, nm, nm), yc[:, n_block:].reshape(-1, n_s)
 
-    n_q = len(r_nodes)
-    psm = np.empty((n_q, n_s, nm, nm), complex)
-    psp = np.empty_like(psm)
-    phim = np.empty((n_q, n_s), complex)
-    phip = np.empty_like(phim)
-    lm_n = np.empty((n_q, n_s, nm, nm), complex)
-    lp_n = np.empty_like(lm_n)
-    a_n = np.empty((n_q, nm, nm), complex)
-    for i, r in enumerate(r_nodes):
-        psm[i], phim[i] = unpack(tr_m, float(r))
-        psp[i], phip[i] = unpack(tr_p, float(r))
-        lm_n[i] = l_minus(float(r))
-        lp_n[i] = l_plus(float(r))
-        a_n[i] = coupling(float(r))[0]
+    psm, phim = transitions(tr_m)
+    psp, phip = transitions(tr_p)
+    lm_n = np.stack([l_minus(float(r)) for r in r_nodes])
+    lp_n = np.stack([l_plus(float(r)) for r in r_nodes])
+    a_n = np.stack([coupling(float(r))[0] for r in r_nodes])
     return {
         "Lm_w": l_minus(r_w),
         "Lm_n": lm_n,
@@ -587,19 +625,27 @@ def block_cout_deviation(
 
     Raises
     ------
-    ValueError
-        If the drift is too strong for the field grid (``eps(r_far) = |v_d| r_far / |A_0| >= 1``), i.e.
-        the plume reaches the stagnation radius -- outside the slow-drift envelope.
+    NotImplementedError
+        If the schedule contains a rest phase (``flow == 0``) together with nonzero drift -- the
+        rest-with-drift propagator (translation + anisotropic Gaussian spreading) is not yet implemented;
+        the field would otherwise be silently frozen across the rest, which is wrong under drift.
+
+    Notes
+    -----
+    Propagates a ``ValueError`` from :func:`field_grid` when the significant plume reaches the stagnation
+    radius (drift too strong for the radial engine), and a ``RuntimeError`` from :func:`_block_solutions`
+    if a per-phase matrix Riccati integration fails.
     """
     flow = np.asarray(flow, dtype=float)
     dt_days = np.asarray(dt_days, dtype=float)
     cin_deviation = np.asarray(cin_deviation, dtype=float)
-    flushed = np.abs(flow) * dt_days
-    a0_ref = float(np.mean(np.abs(flow[flow != 0.0]))) / (2.0 * c_geo)
-    r_nodes, dr_weights, r_far = field_grid(flow, dt_days, c_geo, r_w, alpha_l, v_d, a0_ref, n_quad)
-    if abs(v_d) * r_far / abs(a0_ref) >= 1.0:
-        msg = f"drift too strong for the field grid: eps(r_far) = {abs(v_d) * r_far / abs(a0_ref):.3f} >= 1"
-        raise ValueError(msg)
+    if np.any(flow == 0.0):
+        msg = "rest phases (flow == 0) with regional drift are not yet supported (rest-with-drift kernel)"
+        raise NotImplementedError(msg)
+    # The stagnation radius r_s = |A_0|/|v_d| is smallest for the weakest pumping phase, so size the grid
+    # cap on the minimum per-phase |A_0| (the most restrictive envelope).
+    a0_min = float(np.min(np.abs(flow[flow != 0.0]))) / (2.0 * c_geo)
+    r_nodes, dr_weights, r_far = field_grid(flow, dt_days, c_geo, r_w, alpha_l, v_d, a0_min, n_quad)
     nm = 2 * n_modes + 1
 
     def solutions(s: npt.NDArray[np.complexfloating], a0: float, direction: str) -> dict:
@@ -625,11 +671,8 @@ def block_cout_deviation(
 
     field = np.zeros((n_quad, nm))
     cout = np.full(len(flow), np.nan)
-    phases = _phase_slices(flow)
+    phases = _phase_slices(flow)  # rest phases are excluded above (raised); every phase here pumps
     for idx, (sign, sl) in enumerate(phases):
-        phase_volume = float(flushed[sl].sum())
-        if phase_volume == 0.0:
-            continue  # rest: handled by the rest-with-drift kernel (added separately); D_m=0 -> identity
         a0 = float(np.mean(np.abs(flow[sl]))) / (2.0 * c_geo)
         t_phase = float(np.sum(dt_days[sl]))
         if sign > 0:  # injection: propagate the buffer, then add the freshly injected resident profile

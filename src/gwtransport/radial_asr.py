@@ -419,7 +419,8 @@ def infiltration_to_extraction(
         value engages the azimuthal-mode block engine, which captures the drift-induced recovery loss
         (the down-gradient plume is partly swept past the well). The slow-drift envelope requires the
         plume to stay well inside the stagnation radius ``r_s = |A_0| / |v_d|`` (a ``ValueError`` is raised
-        otherwise).
+        otherwise). Rest phases (``flow == 0``) combined with nonzero drift are not yet supported
+        (``NotImplementedError``); the rest-with-drift propagator is future work.
     n_modes : int, optional
         Azimuthal truncation ``M`` for the drift engine (keeps modes ``-M .. M``). Default ``None``
         auto-sizes ``M`` from the plume-front drift ratio ``eps = v_d R_b / A_0`` (clamped to ``[2, 6]``).
