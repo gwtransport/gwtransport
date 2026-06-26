@@ -140,21 +140,31 @@ def dehoog_inverse(
             return out[0]
         return out.reshape(t_arr.shape + batch)
     a = a.copy()
+    # Batch entries whose transform is identically zero (e.g. a decoupled azimuthal mode with no source)
+    # invert to zero; the quotient-difference recurrence would otherwise form 0/0 and poison them with NaN.
+    # Park such columns at a unit sentinel through the QD pass and overwrite their output with 0 below.
+    zero_cols = ~np.any(a != 0.0, axis=0)
+    if np.any(zero_cols):
+        a[:, zero_cols] = 1.0
     a[0] *= 0.5
 
     # Quotient-difference algorithm -> continued-fraction coefficients d[0 .. 2M] (per batch entry; the
-    # rhombus rules slice the leading node axis and broadcast over the trailing batch).
+    # rhombus rules slice the leading node axis and broadcast over the trailing batch). A batch entry whose
+    # transform underflows toward zero at the high-frequency nodes (a heavily damped azimuthal mode at the
+    # outer field nodes) yields degenerate quotients here; the resulting non-finite intermediates do not
+    # reach a meaningful (non-negligible) output, so the rhombus divisions are evaluated under errstate.
     d = np.empty((n_nodes, *batch), dtype=complex)
     d[0] = a[0]
-    q = a[1:] / a[:-1]  # q_1^{(i)}, length 2M
-    d[1] = -q[0]
-    e = q[1:] - q[:-1]  # e_1^{(i)} = e_0^{(i+1)} + q_1^{(i+1)} - q_1^{(i)}, length 2M-1
-    d[2] = -e[0]
-    for r in range(2, m + 1):
-        q = q[1:-1] * e[1:] / e[:-1]  # q_r^{(i)}, length 2M-2r+2
-        d[2 * r - 1] = -q[0]
-        e = e[1:-1] + q[1:] - q[:-1]  # e_r^{(i)}, length 2M-2r+1
-        d[2 * r] = -e[0]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        q = a[1:] / a[:-1]  # q_1^{(i)}, length 2M
+        d[1] = -q[0]
+        e = q[1:] - q[:-1]  # e_1^{(i)} = e_0^{(i+1)} + q_1^{(i+1)} - q_1^{(i)}, length 2M-1
+        d[2] = -e[0]
+        for r in range(2, m + 1):
+            q = q[1:-1] * e[1:] / e[:-1]  # q_r^{(i)}, length 2M-2r+2
+            d[2 * r - 1] = -q[0]
+            e = e[1:-1] + q[1:] - q[:-1]  # e_r^{(i)}, length 2M-2r+1
+            d[2 * r] = -e[0]
 
     # Evaluate the continued fraction at z = exp(i pi t / T) by the three-term recurrence
     # A_n = A_{n-1} + d_n z A_{n-2}, B_n = B_{n-1} + d_n z B_{n-2}, broadcasting time (leading axis) against
@@ -172,13 +182,15 @@ def dehoog_inverse(
         a_pp, a_p = a_p, a_p + dz * a_pp
         b_pp, b_p = b_p, b_p + dz * b_pp
     # a_p, b_p hold the (2M-1) convergent; a_pp, b_pp the (2M-2) convergent.
-    rem = 0.5 * (1.0 + z * (d[n_nodes - 2] - d[n_nodes - 1]))
-    rem = -rem * (1.0 - np.sqrt(1.0 + z * d[n_nodes - 1] / (rem * rem)))
-    a_final = a_p + rem * a_pp
-    b_final = b_p + rem * b_pp
-
-    result = (np.exp(gamma * t_flat).reshape(time_shape) / big_t) * np.real(a_final / b_final)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rem = 0.5 * (1.0 + z * (d[n_nodes - 2] - d[n_nodes - 1]))
+        rem = -rem * (1.0 - np.sqrt(1.0 + z * d[n_nodes - 1] / (rem * rem)))
+        a_final = a_p + rem * a_pp
+        b_final = b_p + rem * b_pp
+        result = (np.exp(gamma * t_flat).reshape(time_shape) / big_t) * np.real(a_final / b_final)
     result = np.where(t_flat.reshape(time_shape) > 0.0, result, 0.0)
+    if np.any(zero_cols):
+        result[..., zero_cols] = 0.0  # identically-zero transforms invert to zero (parked above)
     if scalar_input:
         return result[0]
     return result.reshape(t_arr.shape + batch)
