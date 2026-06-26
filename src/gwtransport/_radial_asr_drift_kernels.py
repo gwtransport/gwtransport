@@ -32,6 +32,7 @@ from scipy.integrate import solve_ivp
 from scipy.special import airye
 
 from gwtransport._radial_asr_dehoog import dehoog_inverse
+from gwtransport._radial_asr_reuse import _phase_slices  # generic signed-schedule grouping (shared)
 
 # Per-phase orientation. Injection (Q > 0) is the divergent operator (Robin/flux well BC); extraction
 # (Q < 0) the convergent operator (Danckwerts/Neumann well BC). The signed well strength A_0 carries the
@@ -119,14 +120,13 @@ def block_coupling_matrices(
         The coefficient matrices at each radius.
     """
     r = np.atleast_1d(np.asarray(r, dtype=float))
-    nm = 2 * n_modes + 1
     nth = n_theta if n_theta is not None else 8 * n_modes + 48
     theta = np.arange(nth) * (2.0 * np.pi / nth)
     cos_t, sin_t = np.cos(theta), np.sin(theta)
 
     rr = r[:, None]  # (n_r, 1) broadcast against theta
     v_r = a0 / rr + v_d * cos_t[None, :]  # (n_r, nth)
-    v_th = -v_d * sin_t[None, :] * np.ones_like(rr)
+    v_th = -v_d * sin_t[None, :]  # theta-only (r-independent); broadcasts against the (n_r, .) factors
     speed = np.sqrt(v_r**2 + v_th**2)
     speed = np.where(speed == 0.0, 1.0, speed)  # a0=v_d=0 never reached here (alpha_L>0 guard upstream)
 
@@ -160,9 +160,8 @@ def block_coupling_matrices(
         + _toeplitz_from_theta(-d_tt / rr**2, n_modes) * (-m2)[None, None, :]
     )
 
-    if r.shape[0] == 1:
-        return a_mat, b_mat, s0_mat
-    return a_mat.reshape(-1, nm, nm), b_mat.reshape(-1, nm, nm), s0_mat.reshape(-1, nm, nm)
+    # _toeplitz_from_theta always returns (n_r, nm, nm) and r is atleast_1d, so the shape is uniform.
+    return a_mat, b_mat, s0_mat
 
 
 def field_grid(
@@ -507,6 +506,16 @@ def _readout_laplace(
     ``Psi_hat_+(r_w) = I`` , ``phi_+(r_w) = 0``, so the trace is
     ``cout_hat(s) = [sum_k Psi_hat_+(r_k)^{-1} H_k e^{-phi_+(r_k)} (R dr_k) field_k]_{m0}``.
 
+    Note: the extracted concentration is the inflow-flux-weighted azimuthal average (``v_r(r_w, theta)``
+    carries an ``m = +-1`` modulation), which differs from a naive plain ``m = 0`` average of the resident
+    field by an ``O(eps_w · eps) = O(eps^2)`` term -- the same order as the drift loss itself. The ``m = 0``
+    component of the *extraction interior-resolvent trace* used here is NOT that naive average: the
+    convergent-flow Green's function carries the inflow weighting (the same duality by which the scalar
+    engine's resolvent readout returns the Kreft-Zuber flux concentration). It is validated against the 2-D
+    finite-volume oracle's own flux-weighted extracted concentration (the recovery loss matches to ~4e-4 in
+    the standard scenario, within the oracle's first-order floor; a plain-averaged FV readout disagrees by
+    the full ``O(eps^2)`` term). The residual at large ``eps_w`` is at the FV noise floor.
+
     Returns
     -------
     ndarray
@@ -516,21 +525,6 @@ def _readout_laplace(
     # r_w lies below every node, so the well-face trace is the full regular-branch sum (Psi_hat_+(r_w)=I).
     _, term_p = _resolvent_terms(d, source.astype(complex))
     return term_p.sum(axis=0)[:, n_modes]
-
-
-def _phase_slices(flow: npt.NDArray[np.floating]) -> list[tuple[int, slice]]:
-    """Group a signed schedule into maximal one-signed phases ``(sign in {+1,-1,0}, slice)``.
-
-    Returns
-    -------
-    list of (int, slice)
-        Per-phase sign and contiguous bin slice.
-    """
-    signs = np.sign(flow).astype(int)
-    edges = np.flatnonzero(np.diff(signs) != 0) + 1
-    starts = np.concatenate(([0], edges))
-    stops = np.concatenate((edges, [len(flow)]))
-    return [(int(signs[a]), slice(a, b)) for a, b in zip(starts, stops, strict=True)]
 
 
 def block_cout_deviation(
@@ -565,8 +559,16 @@ def block_cout_deviation(
     matrix Riccati ODEs, Gauss-Legendre quadrature and de Hoog Laplace inversion. The interior resolvent is
     applied per reversal (prefix/suffix accumulation) rather than as a materialized propagator, so memory
     stays ``O((2M+1)^2 n_quad)``. At ``v_d = 0`` the modes decouple and the ``m = 0`` block reproduces the
-    scalar engine to the de Hoog floor (the public API dispatches ``v_d = 0`` to the scalar path for the
-    bit-for-bit guarantee).
+    scalar engine to the de Hoog floor *for constant-per-phase flow* (the public API dispatches ``v_d = 0``
+    to the scalar path for the bit-for-bit guarantee).
+
+    Within-phase variable flow is **approximate**: each phase is clocked in wall-clock time at its mean
+    magnitude ``a0 = mean(|flow[phase]|)`` (the drift breaks the flushed-volume-clock autonomy the scalar
+    ``D_m = 0`` path exploits for exact variable flow, and matches the scalar ``D_m > 0`` path's same mean-
+    flow approximation). It is exact for piecewise-constant flow, and also for constant ``cin`` over a phase
+    at any flow profile (the resident profile then depends only on the total injected volume). The error
+    appears only for *variable cin AND variable flow* (the cin bins are placed at time corners rather than
+    exact volume edges) and grows with the within-phase variation; use finer phases if needed.
 
     Parameters
     ----------
@@ -583,7 +585,8 @@ def block_cout_deviation(
     alpha_l : float
         Longitudinal dispersivity [m].
     v_d : float
-        Regional drift seepage velocity ``U / n`` [m/day], ``!= 0``.
+        Regional drift seepage velocity ``U / n`` [m/day]. ``0`` is the radial-symmetric limit (the modes
+        decouple); the public API dispatches that to the scalar engine, but this function handles it too.
     molecular_diffusivity : float, optional
         Molecular diffusivity [m^2/day]. Default 0.
     retardation_factor : float, optional
@@ -621,9 +624,10 @@ def block_cout_deviation(
     if np.any(flow == 0.0):
         msg = "rest phases (flow == 0) with regional drift are not yet supported (rest-with-drift kernel)"
         raise NotImplementedError(msg)
-    # The stagnation radius r_s = |A_0|/|v_d| is smallest for the weakest pumping phase, so size the grid
-    # cap on the minimum per-phase |A_0| (the most restrictive envelope).
-    a0_min = float(np.min(np.abs(flow[flow != 0.0]))) / (2.0 * c_geo)
+    phases = _phase_slices(flow)  # rest phases are excluded above (raised); every phase here pumps
+    # Each phase is clocked at its mean magnitude, so its A_0 = mean(|flow[phase]|)/(2 c_geo); the stagnation
+    # radius r_s = |A_0|/|v_d| is smallest for the weakest phase, so size the grid cap on that (worst-case).
+    a0_min = min(float(np.mean(np.abs(flow[sl]))) for _, sl in phases) / (2.0 * c_geo)
     r_nodes, dr_weights, r_far = field_grid(flow, dt_days, c_geo, r_w, alpha_l, v_d, a0_min, n_quad)
     nm = 2 * n_modes + 1
 
@@ -650,7 +654,6 @@ def block_cout_deviation(
 
     field = np.zeros((n_quad, nm))
     cout = np.full(len(flow), np.nan)
-    phases = _phase_slices(flow)  # rest phases are excluded above (raised); every phase here pumps
     for idx, (sign, sl) in enumerate(phases):
         a0 = float(np.mean(np.abs(flow[sl]))) / (2.0 * c_geo)
         t_phase = float(np.sum(dt_days[sl]))

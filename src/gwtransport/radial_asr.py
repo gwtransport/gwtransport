@@ -305,20 +305,20 @@ def _auto_n_modes(
     The mode amplitudes decay geometrically, ``|c_m| ~ eps^|m|``, so keeping modes ``-M .. M`` truncates the
     azimuthal field at ``O(eps^{M+1})``. ``M`` is chosen so that tail is below ``~5e-3`` and clamped to
     ``[2, 6]`` (the slow-drift envelope -- beyond ``eps ~ 0.6`` the far-field escape this engine does not
-    model dominates anyway). ``A_0`` uses the mean pumping magnitude, ``R_b`` the peak net injected radius.
+    model dominates anyway). ``A_0`` uses the **smallest** pumping magnitude (the worst-case largest ``eps``,
+    consistent with the stagnation-radius envelope guard), ``R_b`` the peak net injected radius. This
+    function is only reached for nonzero drift, so ``eps > 0`` and the ``[2, 6]`` clamp covers the rest.
 
     Returns
     -------
     int
         Azimuthal truncation ``M``.
     """
-    a0 = float(np.mean(np.abs(flow[flow != 0.0]))) / (2.0 * c_geo)
+    a0 = float(np.min(np.abs(flow[flow != 0.0]))) / (2.0 * c_geo)
     net_volume = np.concatenate(([0.0], np.cumsum(flow * dt_days)))
     peak_volume = max(float(net_volume.max()), 0.0)
     r_b = np.sqrt(well_radius**2 + peak_volume / c_geo)
     eps = min(abs(v_d) * r_b / abs(a0), 0.6)
-    if eps <= 0.0:
-        return 2
     return int(np.clip(np.ceil(np.log(5e-3) / np.log(eps)), 2, 6))
 
 

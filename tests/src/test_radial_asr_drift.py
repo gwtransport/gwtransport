@@ -17,7 +17,12 @@ from _radial_asr_drift_kernels_check import real_space_coupling  # ty: ignore[un
 
 from gwtransport._radial_asr_drift_kernels import block_coupling_matrices, block_cout_deviation
 from gwtransport._radial_asr_reuse import cout_deviation
-from gwtransport.radial_asr import extraction_to_infiltration, infiltration_to_extraction
+from gwtransport.radial_asr import (
+    extraction_to_infiltration,
+    gamma_extraction_to_infiltration,
+    gamma_infiltration_to_extraction,
+    infiltration_to_extraction,
+)
 
 # --- a small shared scenario -------------------------------------------------------------------
 _POROSITY, _B, _R_W, _ALPHA_L, _Q = 0.3, 10.0, 0.5, 0.5, 100.0
@@ -142,8 +147,10 @@ def test_block_path_reduces_to_scalar_with_diffusion():
 # --- exact U != 0 anchors that exercise the drift coupling ---------------------------------------
 def test_drift_reversal_symmetry():
     """cout(+U) == cout(-U): a 180 deg rotation maps the +x drift to -x with a symmetric IC and an m=0
-    observable, so the extracted concentration is exactly even in the drift -- a machine-precision anchor
-    that the slow-drift FV comparison cannot provide and that genuinely exercises the mode coupling."""
+    observable, so the extracted concentration is exactly even in the drift -- a machine-precision structural
+    anchor. NB this evenness is covariant under (v_d, theta) -> (-v_d, theta + pi) for any operator built
+    from this velocity field, so it pins the theta-grid parity and the m=0 readout, NOT the coupling
+    magnitude (the coupling-vs-generator and eps-scaling tests do that)."""
     flow, dt, cin = _single_cycle()
     ext = flow < 0
     r_b = np.sqrt(_R_W**2 + _Q * 6 / _C_GEO)
@@ -163,6 +170,54 @@ def test_drift_reversal_symmetry():
     cp = block_cout_deviation(v_d=v_d, **kw)
     cm = block_cout_deviation(v_d=-v_d, **kw)
     np.testing.assert_allclose(cp[ext], cm[ext], atol=1e-8)
+
+
+def test_drift_loss_quadratic_in_eps():
+    """Within the slow-drift envelope the recovery loss is analytic O(eps^2): loss(2 eps)/loss(eps) -> 4.
+
+    This pins the coupling MAGNITUDE end-to-end (the reversal test only pins parity), and documents that the
+    non-analytic O(|eps|) straggler loss -- which needs the plume to reach the stagnation radius -- is
+    exponentially suppressed below r_s, so it does NOT appear here (ratio 4, not the strong-drift ratio 2)."""
+    flow, dt, cin = _single_cycle()
+    ext = flow < 0
+    r_b = np.sqrt(_R_W**2 + _Q * 6 / _C_GEO)
+
+    def loss(eps):
+        v_d = _eps_to_vd(eps, r_b)
+        re0 = np.nansum(
+            block_cout_deviation(
+                cin_deviation=cin,
+                flow=flow,
+                dt_days=dt,
+                c_geo=_C_GEO,
+                r_w=_R_W,
+                alpha_l=_ALPHA_L,
+                v_d=1e-9,
+                n_modes=4,
+                n_quad=90,
+                n_terms=40,
+                tol=1e-10,
+            )[ext]
+        )
+        re = np.nansum(
+            block_cout_deviation(
+                cin_deviation=cin,
+                flow=flow,
+                dt_days=dt,
+                c_geo=_C_GEO,
+                r_w=_R_W,
+                alpha_l=_ALPHA_L,
+                v_d=v_d,
+                n_modes=4,
+                n_quad=90,
+                n_terms=40,
+                tol=1e-10,
+            )[ext]
+        )
+        return float(re0 - re)
+
+    ratio = loss(0.2) / loss(0.1)
+    assert 3.7 < ratio < 4.3, f"loss(2 eps)/loss(eps) = {ratio:.3f}, expected ~4 (quadratic)"
 
 
 def test_retardation_rescale_in_drift():
@@ -221,9 +276,11 @@ def test_coupling_matrices_match_real_space_generator():
     for v_d, d_m in [(0.2, 0.0), (0.35, 0.4)]:
         a_fft, b_fft, s0_fft = block_coupling_matrices(r, alpha_l=_ALPHA_L, a0=_A0, v_d=v_d, d_m=d_m, n_modes=3)
         a_rs, b_rs, s0_rs = real_space_coupling(r, alpha_l=_ALPHA_L, a0=_A0, v_d=v_d, d_m=d_m, n_modes=3)
-        np.testing.assert_allclose(a_fft, a_rs, atol=1e-9)
-        np.testing.assert_allclose(b_fft, b_rs, atol=1e-9)
-        np.testing.assert_allclose(s0_fft, s0_rs, atol=1e-9)
+        # the two methods agree to FFT round-off (~1e-16); the 1e-12 floor guards the production n_theta
+        # default against an aliasing regression (8*M+8 would leave a ~1e-2 alias at the envelope edge).
+        np.testing.assert_allclose(a_fft, a_rs, atol=1e-12)
+        np.testing.assert_allclose(b_fft, b_rs, atol=1e-12)
+        np.testing.assert_allclose(s0_fft, s0_rs, atol=1e-12)
 
 
 # --- honest envelope guards ----------------------------------------------------------------------
@@ -290,6 +347,41 @@ def test_public_u0_dispatch_bit_for_bit():
     np.testing.assert_array_equal(base[ext], drift0[ext])
 
 
+def test_public_u0_dispatch_all_entry_points():
+    """regional_flux=0.0 is bit-for-bit identical to the default for ALL four entry points (forward,
+    reverse, and both gamma wrappers) -- the U=0 guarantee is wired everywhere, not just the forward."""
+    flow, _, cin = _single_cycle()
+    tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
+    geom = {
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "well_radius": _R_W,
+        "longitudinal_dispersivity": _ALPHA_L,
+        "porosity": _POROSITY,
+        "n_quad": 50,
+    }
+    direct = {**geom, "flow": flow, "pore_heights": _B}
+    np.testing.assert_array_equal(
+        infiltration_to_extraction(cin=cin, **direct),
+        infiltration_to_extraction(cin=cin, regional_flux=0.0, **direct),
+    )
+    cout = np.nan_to_num(infiltration_to_extraction(cin=cin, **direct))
+    np.testing.assert_array_equal(
+        extraction_to_infiltration(cout=cout, **direct),
+        extraction_to_infiltration(cout=cout, regional_flux=0.0, **direct),
+    )
+    gkw = {**geom, "flow": flow, "screen_height": _B, "velocity_cv": 0.3, "n_bins": 4}
+    np.testing.assert_array_equal(
+        gamma_infiltration_to_extraction(cin=cin, **gkw),
+        gamma_infiltration_to_extraction(cin=cin, regional_flux=0.0, **gkw),
+    )
+    cout_g = np.nan_to_num(gamma_infiltration_to_extraction(cin=cin, **gkw))
+    np.testing.assert_array_equal(
+        gamma_extraction_to_infiltration(cout=cout_g, **gkw),
+        gamma_extraction_to_infiltration(cout=cout_g, regional_flux=0.0, **gkw),
+    )
+
+
 def test_public_drift_background_linearity():
     """Drift transport is linear in the deviation: cout(bg) == bg + cout_dev(bg=0) on extraction bins."""
     flow, _, cin = _single_cycle()
@@ -316,7 +408,9 @@ def test_public_drift_background_linearity():
 def test_reverse_round_trip_under_drift():
     """The paired reverse (extraction_to_infiltration) under drift inverts the forward operator: feeding it
     the forward drift cout recovers the injected cin on the injection bins (Tikhonov, near-exact at the tiny
-    default regularization). This exercises the drift forward operator's invertibility, not just the forward."""
+    default regularization). This pins the drift forward operator's INVERTIBILITY and the reverse plumbing /
+    conditioning -- not the forward physics (the reverse rebuilds the operator from the same engine, so a
+    forward physics error cancels in F^-1 F); the FV-loss and coupling tests guard the forward physics."""
     flow, _, cin = _single_cycle()
     inj = flow > 0
     tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
@@ -345,14 +439,117 @@ def test_public_single_streamtube_ensemble_equals_engine():
     tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
     u = 0.05
     public = infiltration_to_extraction(
-        cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, pore_heights=_B, porosity=_POROSITY,
-        well_radius=_R_W, longitudinal_dispersivity=_ALPHA_L, regional_flux=u, n_modes=3, n_quad=70,
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        pore_heights=_B,
+        porosity=_POROSITY,
+        well_radius=_R_W,
+        longitudinal_dispersivity=_ALPHA_L,
+        regional_flux=u,
+        n_modes=3,
+        n_quad=70,
     )
     engine = block_cout_deviation(
-        cin_deviation=cin, flow=flow, dt_days=dt, c_geo=np.pi * _B * _POROSITY, r_w=_R_W, alpha_l=_ALPHA_L,
-        v_d=u / _POROSITY, n_modes=3, n_quad=70,
+        cin_deviation=cin,
+        flow=flow,
+        dt_days=dt,
+        c_geo=np.pi * _B * _POROSITY,
+        r_w=_R_W,
+        alpha_l=_ALPHA_L,
+        v_d=u / _POROSITY,
+        n_modes=3,
+        n_quad=70,
     )
     np.testing.assert_allclose(public[ext], engine[ext], atol=1e-12)
+
+
+def test_public_multi_streamtube_ensemble_averaging():
+    """The velocity-heterogeneity macrodispersion ensemble under drift is the weight-averaged engine over
+    streamtubes: cout = sum_i w_i engine(c_geo_i; shared v_d) / sum_i w_i, with v_d = U/n shared and
+    A_0 ~ 1/c_geo per tube. Uses unequal weights summing != 1, which the single-tube test cannot probe."""
+    flow, dt, cin = _single_cycle()
+    ext = flow < 0
+    tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
+    u, heights, weights = 0.05, np.array([10.0, 5.0]), np.array([2.0, 1.0])
+    public = infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        pore_heights=heights,
+        weights=weights,
+        porosity=_POROSITY,
+        well_radius=_R_W,
+        longitudinal_dispersivity=_ALPHA_L,
+        regional_flux=u,
+        n_modes=3,
+        n_quad=60,
+    )
+    per_tube = [
+        block_cout_deviation(
+            cin_deviation=cin,
+            flow=flow,
+            dt_days=dt,
+            c_geo=np.pi * h * _POROSITY,
+            r_w=_R_W,
+            alpha_l=_ALPHA_L,
+            v_d=u / _POROSITY,
+            n_modes=3,
+            n_quad=60,
+        )
+        for h in heights
+    ]
+    manual = (weights[0] * per_tube[0] + weights[1] * per_tube[1]) / weights.sum()
+    np.testing.assert_allclose(public[ext], manual[ext], atol=1e-12)
+
+
+def test_variable_within_phase_flow_is_bounded_mean_flow_approximation():
+    """Within-phase variable flow is the mean-flow approximation: the drift engine clocks each phase at its
+    mean magnitude (placing the cin bins at time corners, not exact volume edges), unlike the scalar D_m=0
+    path which is volume-exact. Measured cleanly at v_d=0 vs the scalar engine:
+    constant cin is exact to the de Hoog floor for any flow profile (the resident profile depends only on
+    total injected volume); only variable cin AND variable flow expose the misplacement (~7% of peak for a
+    +-20% flow ramp with ramped cin) -- nonzero but bounded. Finer phases or constant flow recover exactness.
+    """
+    n_inj, n_ext = 6, 10
+    ramp_flow = 100.0 * np.linspace(0.8, 1.2, n_inj)  # +-20% flow ramp within the injection phase
+    flow = np.concatenate([ramp_flow, np.full(n_ext, -100.0)])
+    flow_const = np.concatenate([np.full(n_inj, 100.0), np.full(n_ext, -100.0)])
+    ramp_cin = np.concatenate([np.linspace(0.2, 1.8, n_inj), np.zeros(n_ext)])  # cin varies within the phase
+    const_cin = np.concatenate([np.ones(n_inj), np.zeros(n_ext)])
+    dt = np.ones(n_inj + n_ext)
+    ext = flow < 0
+    kw = {"dt_days": dt, "c_geo": _C_GEO, "r_w": _R_W, "alpha_l": _ALPHA_L, "n_quad": 80, "n_terms": 40, "tol": 1e-11}
+
+    def gap(flow, cin):
+        sc = cout_deviation(cin_deviation=cin, flow=flow, **kw)
+        bk = block_cout_deviation(cin_deviation=cin, flow=flow, v_d=1e-9, n_modes=2, **kw)
+        return float(np.nanmax(np.abs(bk[ext] - sc[ext])))
+
+    assert gap(flow_const, ramp_cin) < 1e-6  # constant flow: exact for any cin (de Hoog floor)
+    assert gap(flow, const_cin) < 1e-6  # constant cin: exact for any flow (profile = total volume only)
+    assert 1e-3 < gap(flow, ramp_cin) < 0.12  # variable flow AND cin: the mean-flow approximation appears
+
+
+def test_degenerate_schedules():
+    """All-injection -> all-NaN cout; a single extraction phase (no prior field) -> ~0; no crashes."""
+    dt = np.ones(4)
+    u = 0.05
+    common = {
+        "dt_days": dt,
+        "c_geo": _C_GEO,
+        "r_w": _R_W,
+        "alpha_l": _ALPHA_L,
+        "v_d": u / _POROSITY,
+        "n_modes": 2,
+        "n_quad": 50,
+    }
+    all_inj = block_cout_deviation(cin_deviation=np.ones(4), flow=np.full(4, 100.0), **common)
+    assert np.all(np.isnan(all_inj))
+    only_ext = block_cout_deviation(cin_deviation=np.zeros(4), flow=np.full(4, -100.0), **common)
+    np.testing.assert_allclose(only_ext, 0.0, atol=1e-9)
 
 
 # --- finite-volume oracle: the drift recovery loss --------------------------------------------------
