@@ -107,7 +107,11 @@ def block_coupling_matrices(
     n_modes : int
         Azimuthal truncation ``M`` (keeps modes ``-M .. M``).
     n_theta : int, optional
-        Azimuthal FFT grid size (defaults to ``8 n_modes + 8``, comfortably unaliased).
+        Azimuthal FFT grid size. The needed Fourier coefficients ``|k| <= 2 n_modes`` of the tensor
+        components decay like ``eps^|k|`` and a coefficient ``k`` aliases the ``k +- n_theta`` harmonic
+        (``~ eps^(n_theta - 2 n_modes)``); the default ``8 n_modes + 48`` keeps that alias below ~1e-12
+        across the slow-drift envelope (``eps <= 0.6`` at the grid edge), where ``8 n_modes + 8`` would
+        leave a ~1e-2 alias at the envelope's strong end.
 
     Returns
     -------
@@ -116,7 +120,7 @@ def block_coupling_matrices(
     """
     r = np.atleast_1d(np.asarray(r, dtype=float))
     nm = 2 * n_modes + 1
-    nth = n_theta if n_theta is not None else 8 * n_modes + 8
+    nth = n_theta if n_theta is not None else 8 * n_modes + 48
     theta = np.arange(nth) * (2.0 * np.pi / nth)
     cos_t, sin_t = np.cos(theta), np.sin(theta)
 
