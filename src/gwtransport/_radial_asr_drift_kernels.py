@@ -291,22 +291,18 @@ def _block_solutions(
     a0_signed = sigma_a * abs(a0)
     r_max = float(np.max(r_nodes))
 
-    def coupling(r: float) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
-        a_m, b_m, s0_m = block_coupling_matrices(
-            np.array([r]), alpha_l=alpha_l, a0=a0_signed, v_d=v_d, d_m=d_m, n_modes=n_modes
-        )
-        return a_m[0], b_m[0], s0_m[0]
-
     n_block = n_s * nm * nm
 
     def riccati_rhs(r: float, y: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         ld = y.view(complex).reshape(n_s, nm, nm)
-        a_m, b_m, s0_m = coupling(r)
-        a_inv = np.linalg.inv(a_m)
+        a_m, b_m, s0_m = block_coupling_matrices(
+            np.array([r]), alpha_l=alpha_l, a0=a0_signed, v_d=v_d, d_m=d_m, n_modes=n_modes
+        )
+        a_inv = np.linalg.inv(a_m[0])
         d_ld = (
             -(ld @ ld)
-            - ((a_inv @ b_m)[None] @ ld)
-            - (a_inv @ s0_m)[None]
+            - ((a_inv @ b_m[0])[None] @ ld)
+            - (a_inv @ s0_m[0])[None]
             - (retardation_factor * s)[:, None, None] * a_inv[None]
         )
         return d_ld.reshape(-1).view(float)
@@ -397,11 +393,14 @@ def _block_solutions(
         yc = np.ascontiguousarray(tr.y.T).view(complex)  # (n_quad, n_block + n_s)
         return yc[:, :n_block].reshape(-1, n_s, nm, nm), yc[:, n_block:].reshape(-1, n_s)
 
+    def l_at(sol) -> npt.NDArray[np.complexfloating]:  # dense interpolant at all nodes at once
+        return np.ascontiguousarray(sol.sol(r_nodes).T).view(complex).reshape(-1, n_s, nm, nm)
+
     psm, phim = transitions(tr_m)
     psp, phip = transitions(tr_p)
-    lm_n = np.stack([l_minus(float(r)) for r in r_nodes])
-    lp_n = np.stack([l_plus(float(r)) for r in r_nodes])
-    a_n = np.stack([coupling(float(r))[0] for r in r_nodes])
+    lm_n = l_at(sol_m)
+    lp_n = l_at(sol_p)
+    a_n = block_coupling_matrices(r_nodes, alpha_l=alpha_l, a0=a0_signed, v_d=v_d, d_m=d_m, n_modes=n_modes)[0]
     return {
         "Lm_w": l_minus(r_w),
         "Lm_n": lm_n,
@@ -440,44 +439,6 @@ def _resident_laplace(
     return np.einsum("qsab,sb->sqa", d["Psm"], gamma) * np.exp(d["phim"]).T[:, :, None]
 
 
-def _resolvent_prefix_suffix(
-    d: dict[str, npt.NDArray[np.complexfloating]], source: npt.NDArray[np.complexfloating]
-) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray, npt.NDArray]:
-    r"""Per-node de-scaled left factors and prefix/suffix accumulations of the interior block resolvent.
-
-    The interior Green's function of the constant-Q block operator is, with recessive ``Y_-`` and
-    well-regular ``Y_+`` and the matrix Wronskian ``H(r') = [A(r')(L_-(r') - L_+(r'))]^{-1}``,
-
-        Ghat(r, r') = Y_-(r) Y_-(r')^{-1} H(r')   (r >= r'),   Y_+(r) Y_+(r')^{-1} H(r')   (r <= r'),
-
-    so applying it to a source measure ``source_j = (R dr_j) f_j`` separates into a prefix (``j <= i``,
-    recessive branch) and a suffix (``j > i``, regular branch):
-
-        F_i = Psi_hat_-(r_i) e^{phi_-(r_i)} sum_{j<=i} Psi_hat_-(r_j)^{-1} H_j e^{-phi_-(r_j)} source_j
-            + Psi_hat_+(r_i) e^{phi_+(r_i)} sum_{j>i}  Psi_hat_+(r_j)^{-1} H_j e^{-phi_+(r_j)} source_j .
-
-    The ``e^{+-phi}`` factors are paired so each ``Ghat`` block is bounded (the recessive branch differences
-    ``phi_-(r_i) - phi_-(r_j) <= 0`` for ``j <= i``), the matrix analogue of the scalar resolvent's bounded
-    log-difference. Returns the building blocks so the caller forms ``F`` for the field hand-off (all nodes)
-    or the ``r_w`` well-face trace (suffix only).
-
-    Returns
-    -------
-    left_m, left_p : ndarray
-        De-scaled left factors ``Psi_hat_-(r_i) e^{phi_-(r_i)}`` / ``Psi_hat_+(r_i) e^{phi_+(r_i)}``,
-        each ``(n_quad, n_s, nm, nm)``.
-    prefix, suffix : ndarray
-        Inclusive prefix ``sum_{j<=i}`` and exclusive suffix ``sum_{j>i}`` of the de-scaled source
-        contributions, each ``(n_quad, n_s, nm)``.
-    """
-    term_m, term_p = _resolvent_terms(d, source)
-    prefix = np.cumsum(term_m, axis=0)  # sum_{j<=i}
-    suffix = np.cumsum(term_p[::-1], axis=0)[::-1] - term_p  # sum_{j>i}
-    left_m = d["Psm"] * np.exp(d["phim"])[..., None, None]
-    left_p = d["Psp"] * np.exp(d["phip"])[..., None, None]
-    return left_m, left_p, prefix, suffix
-
-
 def _resolvent_terms(
     d: dict[str, npt.NDArray[np.complexfloating]], source: npt.NDArray[np.complexfloating]
 ) -> tuple[npt.NDArray, npt.NDArray]:
@@ -503,16 +464,30 @@ def _resolvent_field_laplace(
 ) -> npt.NDArray[np.complexfloating]:
     r"""Laplace-domain resident field after one constant-Q phase propagates ``field`` (all nodes).
 
-    ``F_i = Psi_hat_-(r_i) e^{phi_-(r_i)} prefix_i + Psi_hat_+(r_i) e^{phi_+(r_i)} suffix_i`` -- the interior
-    block resolvent applied to the resident profile with source measure ``(R dr_j) field_j``.
+    The interior Green's function of the constant-Q block operator, with recessive ``Y_-`` and well-regular
+    ``Y_+`` and the matrix Wronskian ``H(r') = [A(r')(L_-(r') - L_+(r'))]^{-1}``, is
+    ``Ghat(r, r') = Y_-(r) Y_-(r')^{-1} H(r')`` for ``r >= r'`` and ``Y_+(r) Y_+(r')^{-1} H(r')`` for
+    ``r <= r'``, so applying it to the source measure ``(R dr_j) field_j`` separates into a recessive prefix
+    (``j <= i``) and a regular suffix (``j > i``):
+
+        F_i = Psi_hat_-(r_i) e^{phi_-(r_i)} sum_{j<=i} term_-(r_j)  +  Psi_hat_+(r_i) e^{phi_+(r_i)} sum_{j>i} term_+(r_j),
+
+    with the de-scaled contributions ``term_+-(r_j) = Psi_hat_+-(r_j)^{-1} H_j e^{-phi_+-(r_j)} source_j``
+    (:func:`_resolvent_terms`). The ``e^{+-phi}`` are paired so each ``Ghat`` block stays bounded (the
+    recessive differences ``phi_-(r_i) - phi_-(r_j) <= 0`` for ``j <= i``) -- the matrix analogue of the
+    scalar resolvent's bounded log-difference.
 
     Returns
     -------
     ndarray
         Propagated field ``(n_s, n_quad, nm)``.
     """
-    source = (retardation_factor * dr_weights)[:, None] * field  # (n_quad, nm)
-    left_m, left_p, prefix, suffix = _resolvent_prefix_suffix(d, source.astype(complex))
+    source = ((retardation_factor * dr_weights)[:, None] * field).astype(complex)  # (n_quad, nm)
+    term_m, term_p = _resolvent_terms(d, source)
+    prefix = np.cumsum(term_m, axis=0)  # sum_{j<=i}
+    suffix = np.cumsum(term_p[::-1], axis=0)[::-1] - term_p  # sum_{j>i}
+    left_m = d["Psm"] * np.exp(d["phim"])[..., None, None]
+    left_p = d["Psp"] * np.exp(d["phip"])[..., None, None]
     f = np.einsum("qsab,qsb->qsa", left_m, prefix) + np.einsum("qsab,qsb->qsa", left_p, suffix)
     return np.transpose(f, (1, 0, 2))  # (n_s, n_quad, nm)
 

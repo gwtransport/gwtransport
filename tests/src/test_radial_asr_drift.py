@@ -17,7 +17,7 @@ from _radial_asr_drift_kernels_check import real_space_coupling  # ty: ignore[un
 
 from gwtransport._radial_asr_drift_kernels import block_coupling_matrices, block_cout_deviation
 from gwtransport._radial_asr_reuse import cout_deviation
-from gwtransport.radial_asr import infiltration_to_extraction
+from gwtransport.radial_asr import extraction_to_infiltration, infiltration_to_extraction
 
 # --- a small shared scenario -------------------------------------------------------------------
 _POROSITY, _B, _R_W, _ALPHA_L, _Q = 0.3, 10.0, 0.5, 0.5, 100.0
@@ -311,6 +311,48 @@ def test_public_drift_background_linearity():
     base = infiltration_to_extraction(cin=cin, background=0.0, **kw)
     shifted = infiltration_to_extraction(cin=cin + bg, background=bg, **kw)
     np.testing.assert_allclose(shifted[ext], bg + base[ext], atol=1e-9)
+
+
+def test_reverse_round_trip_under_drift():
+    """The paired reverse (extraction_to_infiltration) under drift inverts the forward operator: feeding it
+    the forward drift cout recovers the injected cin on the injection bins (Tikhonov, near-exact at the tiny
+    default regularization). This exercises the drift forward operator's invertibility, not just the forward."""
+    flow, _, cin = _single_cycle()
+    inj = flow > 0
+    tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
+    kw = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "pore_heights": _B,
+        "porosity": _POROSITY,
+        "well_radius": _R_W,
+        "longitudinal_dispersivity": _ALPHA_L,
+        "regional_flux": 0.05,
+        "n_modes": 3,
+        "n_quad": 70,
+    }
+    cout = infiltration_to_extraction(cin=cin, **kw)
+    recovered = extraction_to_infiltration(cout=np.where(flow < 0, cout, 0.0), **kw)
+    np.testing.assert_allclose(recovered[inj], cin[inj], atol=1e-4)
+
+
+def test_public_single_streamtube_ensemble_equals_engine():
+    """The public drift path with one streamtube is exactly the block engine on that streamtube's c_geo
+    (the velocity-CV ensemble is a weighted average that reduces to a single engine call here)."""
+    flow, dt, cin = _single_cycle()
+    ext = flow < 0
+    tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
+    u = 0.05
+    public = infiltration_to_extraction(
+        cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, pore_heights=_B, porosity=_POROSITY,
+        well_radius=_R_W, longitudinal_dispersivity=_ALPHA_L, regional_flux=u, n_modes=3, n_quad=70,
+    )
+    engine = block_cout_deviation(
+        cin_deviation=cin, flow=flow, dt_days=dt, c_geo=np.pi * _B * _POROSITY, r_w=_R_W, alpha_l=_ALPHA_L,
+        v_d=u / _POROSITY, n_modes=3, n_quad=70,
+    )
+    np.testing.assert_allclose(public[ext], engine[ext], atol=1e-12)
 
 
 # --- finite-volume oracle: the drift recovery loss --------------------------------------------------

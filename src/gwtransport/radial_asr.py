@@ -49,6 +49,18 @@ height ``b`` has velocity ``proportional to 1/b`` (its pore volume to radius ``r
 height and the spread by a velocity coefficient of variation. This is the velocity-distribution
 analogue of the package's pore-volume APVD.
 
+Regional background flow (drift)
+--------------------------------
+With a steady uniform regional Darcy flux ``regional_flux`` (``U``, drift seepage ``v_d = U/n``) the well
+field is superimposed on a regional gradient, so the stored bubble drifts and recovery degrades. The
+radial symmetry is broken and the transport is solved by an **azimuthal Fourier-mode** expansion
+``c(r, theta) = sum_m c_m(r) e^{i m theta}`` (``m = 0`` is the radial engine; drift couples ``m`` to
+``m +- 1``), composed through the same per-phase interior Green's functions
+(``gwtransport._radial_asr_drift_kernels``). ``regional_flux = 0`` (default) dispatches to the radial path
+bit-for-bit. The engine is for the **slow-drift** envelope -- the plume must stay well inside the
+stagnation radius ``r_s = |A_0|/|v_d|`` (else a ``ValueError``); rest phases under drift are not yet
+supported. The drift-induced recovery loss is validated against an independent 2-D finite-volume oracle.
+
 Available functions:
 
 - :func:`infiltration_to_extraction` -- forward transport (cin -> cout).
