@@ -1,12 +1,11 @@
 """
-Advective Transport Modeling for 1D Aquifer Systems.
+Advective Transport Modeling Along Aquifer Pore Volumes.
 
-This module provides functions to model compound transport by advection in one-dimensional
-aquifer systems, enabling prediction of solute or temperature concentrations in extracted
-water based on infiltration data and aquifer properties. The model assumes one-dimensional
-groundwater flow where water infiltrates with concentration ``cin``, flows through the aquifer
-with pore volume distribution, compounds are transported with retarded velocity (retardation
-factor >= 1.0), and water is extracted with concentration ``cout``.
+Water infiltrates and is transported in parallel along multiple aquifer pore volumes to
+extraction. For each aquifer pore volume, transport is 1D advection with linear or non-linear
+sorption; there is no microdispersion or molecular diffusion, while the spread across aquifer
+pore volumes provides macrodispersion. Forward and backward modeling are supported. No assumption
+is made about whether the flow is radial or orthogonal.
 
 Available functions:
 
@@ -47,7 +46,8 @@ instead, which keeps the three contributions separate.
   using analytical integration of shock and rarefaction waves. Machine-precision physics (no
   numerical dispersion). Returns bin-averaged concentrations together with the full piecewise
   analytical structure (events, segments, wave list) for downstream analysis. Use case: Sharp
-  concentration fronts with exact mass balance required, single deterministic flow path.
+  concentration fronts with exact mass balance required, across a distribution of aquifer
+  pore volumes (macrodispersion). Forward modeling only; nonlinear sorption has no inverse.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.

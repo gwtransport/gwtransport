@@ -1,10 +1,15 @@
 r"""Exact radial advection-dispersion transport for a single well (push-pull / ASR).
 
+Water is injected in an infinite aquifer at a single fully-penetrating well and later recovered at
+the same well under a signed flow schedule (push-pull / ASR). Transport is radial advection with
+microdispersion, molecular diffusion, and linear sorption; the spread of velocities across the well
+screen provides macrodispersion. Forward and backward modeling are supported.
+
 Computes the extracted flux concentration ``cout`` at a single fully-penetrating well driven by an
 arbitrary signed flow schedule (positive = injection, negative = extraction, zero = rest) and an
 arbitrary injected concentration ``cin``. The physics is the exact radial advection-dispersion of the
 radial ASR knowledge base: volume coordinate ``V(r) = pi b n (r^2 - r_w^2)``, Scheidegger
-velocity-dependent dispersion ``D = alpha_L |u| + D_m``, Kreft-Zuber flux boundary conditions, and
+velocity-dependent dispersion ``D = alpha_L |u| + D_m`` (microdispersion ``alpha_L |u|`` plus molecular diffusion ``D_m``), Kreft-Zuber flux boundary conditions, and
 the exact per-phase kernels (Airy for ``D_m = 0``; the log-derivative Riccati ODE for ``D_m > 0``).
 Nothing is reduced to a Gaussian; the exact
 non-Gaussian breakthrough (with the correct skewness) is carried.
@@ -23,7 +28,7 @@ bit-equivalent, to the de Hoog floor, to the per-reversal grid-free composition.
 pumping (the ``D_m > 0`` Whittaker kernel) is evaluated through the log-derivative Riccati ODE
 (``gwtransport._radial_asr_kernels.resolvent_riccati``) -- exact to the de Hoog inversion floor at any
 ``A_0/D_m``, with no special-function precision cap, and reducing continuously to the Airy branch as
-``D_m -> 0``. During a **rest** (``Q = 0``) advection and mechanical dispersion vanish and molecular
+``D_m -> 0``. During a **rest** (``Q = 0``) advection and microdispersion vanish and molecular
 diffusion acts alone on the wall-clock clock; it is carried exactly by the order-0 modified Bessel
 pure-diffusion kernel, the dominant mixing for seasonal storage / ATES. The only
 numerical steps are Gauss-Legendre quadrature and de Hoog Laplace inversion of exact special-function
@@ -46,8 +51,8 @@ height ``b`` has velocity ``proportional to 1/b`` (its pore volume to radius ``r
 ``pi b n (r^2 - r_w^2)``), so smaller ``b`` means faster breakthrough.
 :func:`gamma_infiltration_to_extraction` builds this ensemble from a gamma distribution of the layer
 **velocity** within the fixed screen height (see that function); the mean velocity is set by the screen
-height and the spread by a velocity coefficient of variation. This is the velocity-distribution
-analogue of the package's pore-volume APVD.
+height and the spread by a velocity coefficient of variation. The spread is a within-screen velocity
+distribution -- velocity heterogeneity across the well screen -- not an aquifer pore-volume distribution.
 
 Available functions:
 
@@ -65,7 +70,7 @@ reversals are built on top of those kernels here and are not in the single-injec
 share the assumptions used here: a single fully-penetrating well in a homogeneous medium with steady
 divergent flow ``v = Q / (2 pi b n r)``, plus retardation.
 
-The ``D_m = 0`` kernel (velocity-proportional mechanical dispersion ``D = alpha_L |u|``, Airy functions)
+The ``D_m = 0`` kernel (velocity-proportional microdispersion ``D = alpha_L |u|``, Airy functions)
 is the classical radial-dispersion problem: Tang & Babu (1979) under a Dirichlet (resident-concentration)
 well boundary, and Chen (1987) under the Cauchy / third-type (flux) boundary used here -- explicitly the
 Kreft-Zuber flux concentration, with transfer function ``Ai(Y) / [Ai(Y0)/2 - p^(1/3) Ai'(Y0)]`` equal to

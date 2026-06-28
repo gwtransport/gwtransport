@@ -161,6 +161,13 @@ nitpick_ignore = [
     ("py:class", "numpy.float64"),
 ]
 
+# numpy.typing.ArrayLike / NDArray expand to private ``numpy._typing`` internals (e.g.
+# ``numpy._typing._array_like.GenericAlias`` / ``NDArray``) that are not exposed in the numpy
+# intersphinx inventory; they render correctly but trip nitpicky mode, so ignore the namespace.
+nitpick_ignore_regex = [
+    ("py:class", r"numpy\._typing\..*"),
+]
+
 # -- Options for intersphinx -------------------------------------------------
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3/", None),

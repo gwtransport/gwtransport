@@ -1,11 +1,14 @@
 """
 Recharge-Driven Transport for Aquifers with Areal Recharge.
 
-This module models solute (or heat) transport to a single extraction well in an
-aquifer that receives uniform areal recharge. The recharge infiltrates with
-concentration ``cin_recharge`` and mixes instantaneously over the saturated
-thickness; transport is purely advective (no microdispersion or molecular
-diffusion). Two conceptual models share one entry point:
+Concentration at extraction has two sources. 1) Water infiltrates and is
+transported through an aquifer with constant thickness to extraction. 2) During
+transport, rainfall is mixed instantaneously over the height of the aquifer. In
+an unbounded aquifer all extracted water originates as recharge. Transport is
+advective with linear sorption; there is no microdispersion, molecular diffusion,
+or macrodispersion. Only forward modeling is supported. No assumption is made
+about whether the flow is radial or orthogonal. Two conceptual models share one
+entry point:
 
 - **Unbounded aquifer** (``aquifer_pore_volume=None``): all extracted water
   originates as recharge. The residence-time distribution is exponential with
