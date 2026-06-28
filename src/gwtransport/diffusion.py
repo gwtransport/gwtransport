@@ -1,13 +1,19 @@
 r"""
 Analytical solutions for 1D advection-dispersion transport.
 
-This module implements analytical solutions for solute transport in 1D aquifer
-systems, combining advection with longitudinal dispersion.
+Water infiltrates and is transported in parallel along multiple aquifer pore volumes to
+extraction. For each aquifer pore volume, transport is 1D advection with microdispersion,
+molecular diffusion, and linear sorption; the spread across aquifer pore volumes provides
+macrodispersion. Forward and backward modeling are supported. The flow is assumed orthogonal.
+
+The orthogonal-flow (Cartesian) geometry is what makes the Kreft-Zuber breakthrough the exact
+1D solution used below.
 
 Key functions:
 
-- :func:`infiltration_to_extraction` - Main transport function combining advection and dispersion
-  with explicit pore volume distribution and streamline lengths.
+- :func:`infiltration_to_extraction` - Main transport function combining advection,
+  microdispersion, and molecular diffusion with explicit pore volume distribution and
+  streamline lengths.
 
 - :func:`extraction_to_infiltration` - Inverse operation (deconvolution with dispersion).
 
@@ -95,7 +101,7 @@ Streamtube assumption (no cross-sectional area parameter)
 
 Each entry in ``aquifer_pore_volumes`` is treated as an independent 1D streamtube. There is
 no cross-sectional area parameter: the variance budget uses ``2 D_m tau`` (molecular
-diffusion in time) and ``2 alpha_L xi`` (mechanical dispersion in travelled distance), with
+diffusion in time) and ``2 alpha_L xi`` (microdispersion in travelled distance), with
 the streamline length ``L`` and the pore volume ``V_pore`` together fixing the implicit
 streamtube cross-section ``A = V_pore / L``. Callers who need distributed-area effects must
 provide multiple streamtubes (via ``aquifer_pore_volumes`` or the gamma-parameterised
@@ -510,7 +516,7 @@ def _infiltration_to_extraction_coeff_matrix(
     """Build the forward coefficient matrix for diffusion transport.
 
     Constructs the matrix W such that ``cout = W @ cin``, accounting for
-    advection and longitudinal dispersion. NaN entries in the raw coefficient
+    advection, microdispersion, and molecular diffusion. NaN entries in the raw coefficient
     matrix are replaced with zero.
 
     Parameters
@@ -635,17 +641,21 @@ def infiltration_to_extraction(
     spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
-    Compute extracted concentration with advection and longitudinal dispersion.
+    Compute extracted concentration with advection, microdispersion, and molecular diffusion.
 
-    This function models 1D solute transport through an aquifer system,
-    combining advective transport (based on residence times) with longitudinal
-    dispersion (diffusive spreading during transport).
+    This function models 1D solute transport through an aquifer system along orthogonal
+    (Cartesian) flow paths. Each aquifer pore volume is an independent streamline carrying
+    advection with microdispersion (alpha_L) and molecular diffusion (D_m); the spread across
+    the pore volume distribution provides macrodispersion. Linear sorption enters via the
+    retardation factor.
 
     The physical model assumes:
+
     1. Water infiltrates with concentration cin at time t_in
     2. Water travels distance L through aquifer with residence time tau = V_pore / Q
-    3. During transport, longitudinal dispersion causes spreading
-    4. At extraction, the concentration is a diffused breakthrough curve
+    3. During transport, microdispersion and molecular diffusion spread each streamline,
+       while the spread across pore volumes provides macrodispersion
+    4. At extraction, the concentration is a dispersed breakthrough curve
 
     The reported extracted concentration is the Kreft-Zuber (1978) **flux
     concentration** at the outlet, defined as the solute mass flux divided
@@ -657,7 +667,7 @@ def infiltration_to_extraction(
     invariant ``integral Q c_out dt = integral Q c_in dt`` hold exactly under
     variable flow.
 
-    Longitudinal dispersion enters as the moving-frame variance
+    Microdispersion and molecular diffusion enter as the moving-frame variance
 
         sigma^2(V) = 2 * D_m * tau(V) + 2 * alpha_L * xi(V),
 
@@ -695,7 +705,7 @@ def infiltration_to_extraction(
         scalar (same for all pore volumes) or an array with the same length as
         aquifer_pore_volumes. Must be non-negative. For solute transport, this is
         the molecular diffusion coefficient D_m [m²/day] — typically ~1e-5 m²/day,
-        negligible compared to mechanical dispersion. For heat transport, pass the
+        negligible compared to microdispersion. For heat transport, pass the
         thermal diffusivity D_th = lambda / (rho*c)_eff [m²/day], typically
         0.01-0.1 m²/day.
 
@@ -709,8 +719,8 @@ def infiltration_to_extraction(
     longitudinal_dispersivity : float or array-like
         Longitudinal dispersivity [m]. Can be a scalar (same for all pore
         volumes) or an array with the same length as aquifer_pore_volumes.
-        Must be non-negative. Represents microdispersion (mechanical dispersion
-        from pore-scale velocity variations). Set to 0 for pure molecular diffusion.
+        Must be non-negative. Represents microdispersion from pore-scale velocity variations.
+        Set to 0 for pure molecular diffusion.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
         Values > 1.0 indicate slower transport due to sorption.
@@ -1073,10 +1083,10 @@ def gamma_infiltration_to_extraction(
     spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
-    Compute extracted concentration with advection-dispersion for gamma-distributed pore volumes.
+    Compute extracted concentration with advection and dispersion for gamma-distributed pore volumes.
 
-    Combines advective transport (based on gamma-distributed pore volumes) with
-    longitudinal dispersion (diffusive spreading during transport). This is a
+    Combines advection with microdispersion and molecular diffusion along each streamline
+    (gamma-distributed pore volumes, whose spread provides macrodispersion). This is a
     convenience wrapper around :func:`infiltration_to_extraction` that parameterizes
     the aquifer pore volume distribution as a (shifted) gamma distribution.
 

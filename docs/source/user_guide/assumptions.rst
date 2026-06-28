@@ -24,6 +24,10 @@ Module Reference
      - :py:func:`~gwtransport.residence_time.full`, :py:func:`~gwtransport.residence_time.mean`, :py:func:`~gwtransport.residence_time.gamma`, :py:func:`~gwtransport.residence_time.fraction_explained_full`, :py:func:`~gwtransport.residence_time.fraction_explained_mean`, :py:func:`~gwtransport.residence_time.fraction_explained_gamma`, :py:func:`~gwtransport.residence_time.freundlich_retardation`
    * - ``deposition``
      - :py:func:`~gwtransport.deposition.deposition_to_extraction`, :py:func:`~gwtransport.deposition.extraction_to_deposition`
+   * - ``recharge``
+     - :py:func:`~gwtransport.recharge.recharge_to_extraction`
+   * - ``radial_asr``
+     - :py:func:`~gwtransport.radial_asr.infiltration_to_extraction`, :py:func:`~gwtransport.radial_asr.extraction_to_infiltration`, :py:func:`~gwtransport.radial_asr.gamma_infiltration_to_extraction`, :py:func:`~gwtransport.radial_asr.gamma_extraction_to_infiltration`
    * - ``logremoval``
      - :py:func:`~gwtransport.logremoval.residence_time_to_log_removal`, :py:func:`~gwtransport.logremoval.gamma_mean`, :py:func:`~gwtransport.logremoval.parallel_mean`
    * - ``diffusion_fast``
@@ -43,13 +47,13 @@ Physical/Hydrogeological Assumptions
 1. Advection-Dominated Transport
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Assumption:** Microdispersion (mechanical dispersion) and molecular diffusion are negligible compared to macrodispersion (advective spreading from aquifer heterogeneity captured by the APVD).
+**Assumption:** Microdispersion and molecular diffusion are negligible compared to macrodispersion (advective spreading from aquifer heterogeneity captured by the APVD).
 
-**Applies to:** ``advection`` module (all functions), ``residence_time``, ``deposition``, ``logremoval``
+**Applies to:** ``advection`` module (all functions), ``residence_time``, ``deposition``, ``recharge``, ``logremoval``
 
-**Does NOT apply when using:** ``diffusion_fast`` or ``diffusion`` modules (which explicitly add diffusive spreading)
+**Does NOT apply when using:** ``diffusion_fast``, ``diffusion``, or ``radial_asr`` modules (which explicitly add diffusive spreading)
 
-**What this means:** The spreading of solute plumes is dominated by macrodispersion (variation in flow path lengths — different streamlines have different travel times), not by microdispersion and molecular diffusion (processes within individual streamlines).
+**What this means:** The spreading of solute plumes is dominated by macrodispersion (variation in flow path lengths — different streamlines have different travel times), not by microdispersion and molecular diffusion (processes within individual streamlines). The ``deposition`` and ``recharge`` modules carry no dispersion of any kind — neither macrodispersion, microdispersion, nor molecular diffusion — so they satisfy this assumption trivially. (In ``recharge``, the exponential spread of residence times comes from the areal entry and instantaneous vertical mixing of rainfall, a geometric mixing effect, not dispersion.)
 
 **When it holds:**
 
@@ -79,7 +83,7 @@ What appears as "dispersion" at one scale becomes "advection through heterogenei
 When using the ``advection`` module alone, only macrodispersion (spreading from the pore volume distribution) is modeled. To add microdispersion (:math:`\alpha_L`) and molecular diffusion (:math:`D_m`), use either :mod:`gwtransport.diffusion_fast` or :mod:`gwtransport.diffusion`. Both implement the *same* physics — the Kreft-Zuber flux concentration on a bundle of 1D streamtubes, with retardation and the moving-frame variance :math:`D_t = D_m \tau + \alpha_L \xi` — and both accept per-streamtube :math:`L`, :math:`D_m` and :math:`\alpha_L` arrays (one value per aquifer pore volume). They differ only in how the bin-averaged breakthrough is evaluated:
 
 - **Choose** :mod:`gwtransport.diffusion_fast` **by default.** It evaluates the breakthrough in closed form on only the non-zero breakthrough band, is roughly 80–90× faster (more at the weak-to-moderate dispersion of realistic problems), and reproduces :mod:`gwtransport.diffusion` to machine precision when the output (``cout``) grid is at or finer than the flow grid.
-- **Choose** :mod:`gwtransport.diffusion_fast_fast` **when you want a fast approximate forward result and can tolerate a small error** (regularly-sampled monitoring data, exploratory or ensemble runs). It applies advection, macrodispersion, and microdispersion (:math:`\alpha_L`) *exactly* on the native cumulative-volume grid and treats molecular diffusion (:math:`D_m`) as a time-domain Gaussian, in one fast pass for *any* flow (constant or variable — no fallback). It is accurate to ~3e-4 whenever mechanical dispersion is present (:math:`\alpha_L > 0`, the usual case, and flow-independent), degrading to ~1e-2 for sharp inputs in the molecular-diffusion-dominated regime (:math:`\alpha_L \approx 0`). It is **approximate** — it does *not* reproduce :mod:`gwtransport.diffusion_fast` to machine precision; use :mod:`gwtransport.diffusion_fast` when you need exact results, especially in the molecular-dominated regime. Its reverse (deconvolution) inverts the *same* approximate operator in banded form (banded Tikhonov, no dense matrix and no per-pore-volume closed-form loop), so it is much faster than :mod:`gwtransport.diffusion_fast`'s reverse and a forward-then-inverse round trip is self-consistent.
+- **Choose** :mod:`gwtransport.diffusion_fast_fast` **when you want a fast approximate forward result and can tolerate a small error** (regularly-sampled monitoring data, exploratory or ensemble runs). It applies advection, macrodispersion, and microdispersion (:math:`\alpha_L`) *exactly* on the native cumulative-volume grid and treats molecular diffusion (:math:`D_m`) as a time-domain Gaussian, in one fast pass for *any* flow (constant or variable — no fallback). It is accurate to ~3e-4 whenever microdispersion is present (:math:`\alpha_L > 0`, the usual case, and flow-independent), degrading to ~1e-2 for sharp inputs in the molecular-diffusion-dominated regime (:math:`\alpha_L \approx 0`). It is **approximate** — it does *not* reproduce :mod:`gwtransport.diffusion_fast` to machine precision; use :mod:`gwtransport.diffusion_fast` when you need exact results, especially in the molecular-dominated regime. Its reverse (deconvolution) inverts the *same* approximate operator in banded form (banded Tikhonov, no dense matrix and no per-pore-volume closed-form loop), so it is much faster than :mod:`gwtransport.diffusion_fast`'s reverse and a forward-then-inverse round trip is self-consistent.
 - **Choose** :mod:`gwtransport.diffusion` **only when the output (``cout``) grid is coarser than the flow detail:** it integrates the full ``tedges``-resolution flow within each output bin, whereas ``diffusion_fast`` treats the through-flow as constant within each output bin — a ~0.1%-of-peak difference for a rapidly-varying ``cin`` over wide output bins under variable flow. Otherwise the two are machine-precision identical in *every* regime, including retardation (:math:`R \neq 1`) together with molecular diffusion (:math:`D_m > 0`).
 
 .. _assumption-steady-streamlines:
@@ -89,7 +93,7 @@ When using the ``advection`` module alone, only macrodispersion (spreading from 
 
 **Assumption:** The geometry of flow paths (streamlines) remains fixed over time; only flow rates vary.
 
-**Applies to:** All modules (``advection``, ``residence_time``, ``deposition``, ``logremoval``, ``diffusion``)
+**Applies to:** All modules (``advection``, ``residence_time``, ``deposition``, ``recharge``, ``logremoval``, ``diffusion``, ``radial_asr``)
 
 **What this means:** When pumping rate doubles, water moves twice as fast along the same paths—the paths themselves don't change. The pore volume distribution (see :ref:`concept-pore-volume-distribution`) is only well-defined and time-invariant under this assumption: it is a property of the aquifer *for a given streamline configuration*. If boundary conditions change in a way that redirects flow, the streamlines rearrange and the APVD itself changes.
 
@@ -538,7 +542,7 @@ The assumptions can be organized into testable categories:
      - Not testable - defines when to use gwtransport
    * - Transport Physics
      - :ref:`Advection-dominated <assumption-advection-dominated>`
-     - All except ``diffusion``
+     - All except the ``diffusion`` family (``diffusion``, ``diffusion_fast``, ``diffusion_fast_fast``) and ``radial_asr``
      - Variance ratio
    * - Transport Physics
      - :ref:`Steady streamlines <assumption-steady-streamlines>`, :ref:`No transverse mixing <assumption-no-transverse-mixing>`, :ref:`Incompressible <assumption-incompressible-flow>`
@@ -592,6 +596,9 @@ Quick Reference: Assumptions by Module
    * - ``deposition``
      - :ref:`Steady streamlines <assumption-steady-streamlines>`, :ref:`Linear R <assumption-linear-retardation>`, :ref:`No decay <assumption-no-reactions>`
      - —
+   * - ``recharge``
+     - :ref:`Steady streamlines <assumption-steady-streamlines>`, :ref:`Linear R <assumption-linear-retardation>`, :ref:`No decay <assumption-no-reactions>`
+     - — (forward-only)
    * - ``logremoval``
      - :ref:`Steady streamlines <assumption-steady-streamlines>`
      - — (adds empirical decay)
@@ -604,3 +611,6 @@ Quick Reference: Assumptions by Module
    * - ``diffusion``
      - :ref:`Steady streamlines <assumption-steady-streamlines>`
      - — (quadrature, relaxes advection-only assumption)
+   * - ``radial_asr``
+     - :ref:`Steady streamlines <assumption-steady-streamlines>`, :ref:`Linear R <assumption-linear-retardation>`
+     - — (radial; models dispersion across the well screen)

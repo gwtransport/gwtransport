@@ -1,28 +1,27 @@
 """
 Deposition Analysis for 1D Aquifer Systems.
 
-This module models compound *source enrichment* in 1D groundwater flow: a deposition rate
-[ng/m²/day] supplies mass from the aquifer matrix into the water along the flow path,
-increasing the extracted concentration. The model is a *source* term (positive deposition
-adds mass to the water); it does NOT model removal processes such as pathogen attachment,
-particle filtration, or chemical precipitation, which would remove mass from the water and
-require an opposite sign convention. Example physical scenarios: dissolution of a sparingly
-soluble mineral coating from the matrix, leaching of a stored solute, mass release from a
-distributed contaminant source on the matrix surface. The module follows advection module
-patterns for consistency in forward (deposition to extraction) and reverse (extraction to
-deposition) calculations.
+Areal deposition supplies mass to the groundwater, mixed instantaneously over the height of the
+aquifer. The aquifer has a constant thickness with a finite pore volume; water with zero
+concentration infiltrates at one end and is extracted at the other, whether the flow is radial or
+orthogonal. Transport is 1D advection with linear sorption; there is no microdispersion, molecular
+diffusion, or macrodispersion. Forward and backward modeling are supported.
+
+The model is a *source* term (positive deposition adds mass to the water); it does NOT model removal
+processes such as pathogen attachment, particle filtration, or chemical precipitation, which would
+remove mass from the water and require the opposite sign convention.
 
 Available functions:
 
 - :func:`deposition_to_extraction` - Compute concentrations from deposition rates (convolution).
-  Given deposition rate time series [ng/m²/day], computes resulting concentration changes in
-  extracted water [ng/m³]. Uses flow-weighted integration over contact area between water and
-  aquifer matrix. Accounts for aquifer geometry (porosity, thickness) and residence time
-  distribution.
+  Given deposition rate time series [g/m²/day], computes resulting concentration changes in
+  extracted water [g/m³]. The areal deposition flux is mixed instantaneously over the aquifer
+  thickness, so a parcel's concentration gain is proportional to its residence time. Accounts for
+  aquifer geometry (porosity, thickness) and residence time distribution.
 
 - :func:`extraction_to_deposition` - Compute deposition rates from concentration changes
-  (deconvolution). Given concentration change time series in extracted water [ng/m³], estimates
-  deposition rate history [ng/m²/day] that produced those changes. Uses Tikhonov regularization
+  (deconvolution). Given concentration change time series in extracted water [g/m³], estimates
+  deposition rate history [g/m²/day] that produced those changes. Uses Tikhonov regularization
   toward a physically motivated target (transpose-and-normalize of the forward matrix). Handles
   NaN values in concentration data by excluding corresponding time periods.
 
@@ -34,8 +33,9 @@ Available functions:
 - :func:`compute_deposition_weights` - Build the banded weight operator relating deposition
   rates to concentration changes in a compact banded layout. Useful for custom inverse solvers.
   Used by deposition_to_extraction (forward), extraction_to_deposition (reverse), and
-  extraction_to_deposition_full. Calculates contact area between water parcels and aquifer
-  matrix based on streamline geometry and residence times.
+  extraction_to_deposition_full. Each weight is a water parcel's residence-time contribution to
+  its concentration gain under areal deposition mixed over the aquifer thickness, independent of
+  whether the flow geometry is radial or orthogonal.
 
 - :func:`spinup_duration` - Compute spinup duration for deposition modeling. Returns the
   earliest extraction time at which the extracted water was infiltrated at the start of the
@@ -269,9 +269,10 @@ def compute_deposition_weights(
 
     # _clipped_linear_integral returns the volume*time measure (m³*day) of the
     # parcel's residence-window overlap with each cin bin; dividing by
-    # (porosity*thickness) converts that overlap to contact area * time. The bin
-    # width is already folded into the integral, so do NOT multiply by widths
-    # again.
+    # (porosity*thickness) converts that overlap to plan-area * time, the areal
+    # footprint (and duration) over which the areal deposition flux is mixed down
+    # through the aquifer thickness. The bin width is already folded into the
+    # integral, so do NOT multiply by widths again.
     top_integral = _clipped_linear_integral(y_top[:, :-1], y_top[:, 1:], widths, 0.0, r_apv)
     bottom_integral = _clipped_linear_integral(y_bot[:, :-1], y_bot[:, 1:], widths, 0.0, r_apv)
     contact_volume_time = np.maximum(top_integral - bottom_integral, 0.0)
@@ -300,7 +301,7 @@ def deposition_to_extraction(
     Parameters
     ----------
     dep : array-like
-        Deposition rates [ng/m²/day]. Length must equal len(tedges) - 1.
+        Deposition rates [g/m²/day]. Length must equal len(tedges) - 1.
     flow : array-like
         Flow rates in aquifer [m³/day]. Length must equal len(tedges) - 1. The model
         assumes this value is constant over each interval ``[tedges[i], tedges[i+1])``.
@@ -329,7 +330,7 @@ def deposition_to_extraction(
     Returns
     -------
     numpy.ndarray
-        Concentration changes [ng/m³] with length len(cout_tedges) - 1.
+        Concentration changes [g/m³] with length len(cout_tedges) - 1.
 
     Raises
     ------
@@ -371,8 +372,8 @@ def deposition_to_extraction(
     ...     porosity=0.3,
     ...     thickness=10.0,
     ... )
-    >>> print(f"First finite cout: {cout[np.isfinite(cout)][0]:.4f} ng/m³")
-    First finite cout: 1.6667 ng/m³
+    >>> print(f"First finite cout: {cout[np.isfinite(cout)][0]:.4f} g/m³")
+    First finite cout: 1.6667 g/m³
     """
     tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
     dep_values, flow_values = np.asarray(dep), np.asarray(flow)
@@ -445,7 +446,7 @@ def extraction_to_deposition(
     Parameters
     ----------
     cout : array-like
-        Concentration changes in extracted water [ng/m³]. Length must equal
+        Concentration changes in extracted water [g/m³]. Length must equal
         len(cout_tedges) - 1. May contain NaN values, which will be excluded
         from the computation along with corresponding rows in the weight matrix.
         The model assumes this value is constant over each interval
@@ -490,7 +491,7 @@ def extraction_to_deposition(
     Returns
     -------
     numpy.ndarray
-        Mean deposition rates [ng/m²/day] between tedges. Length equals
+        Mean deposition rates [g/m²/day] between tedges. Length equals
         len(tedges) - 1.
 
     Raises
@@ -546,7 +547,7 @@ def extraction_to_deposition(
     >>> cout_tedges = pd.date_range("2020-01-03 12:00", "2020-01-12 12:00", freq="D")
     >>>
     >>> flow = np.full(len(dates), 100.0)  # m³/day
-    >>> cout = np.ones(len(cout_tedges) - 1) * 10.0  # ng/m³
+    >>> cout = np.ones(len(cout_tedges) - 1) * 10.0  # g/m³
     >>>
     >>> dep = extraction_to_deposition(
     ...     cout=cout,
@@ -559,8 +560,8 @@ def extraction_to_deposition(
     ... )
     >>> print(f"Deposition rates shape: {dep.shape}")
     Deposition rates shape: (10,)
-    >>> print(f"Mean deposition rate: {np.nanmean(dep):.2f} ng/m²/day")
-    Mean deposition rate: 6.00 ng/m²/day
+    >>> print(f"Mean deposition rate: {np.nanmean(dep):.2f} g/m²/day")
+    Mean deposition rate: 6.00 g/m²/day
     """
     tedges, cout_tedges = pd.DatetimeIndex(tedges), pd.DatetimeIndex(cout_tedges)
     cout_values, flow_values = np.asarray(cout), np.asarray(flow)
@@ -648,7 +649,7 @@ def extraction_to_deposition_full(
     Parameters
     ----------
     cout : array-like
-        Concentration changes in extracted water [ng/m³]. Length must equal
+        Concentration changes in extracted water [g/m³]. Length must equal
         len(cout_tedges) - 1. May contain NaN values, which will be excluded
         from the computation along with corresponding rows in the weight matrix.
     flow : array-like
@@ -694,7 +695,7 @@ def extraction_to_deposition_full(
     Returns
     -------
     numpy.ndarray
-        Mean deposition rates [ng/m²/day] between tedges. Length equals
+        Mean deposition rates [g/m²/day] between tedges. Length equals
         len(tedges) - 1.
 
     Raises

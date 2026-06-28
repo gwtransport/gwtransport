@@ -32,7 +32,7 @@ Available functions:
   was infiltrated/extracted inside the record. ``full`` returns one row per pore volume, ``mean``
   the equal-weight discrete-APVD mean, and ``gamma`` the closed-form (shifted) gamma-APVD value,
   mirroring :func:`full` / :func:`mean` / :func:`gamma`. These are **purely advective** -- molecular
-  diffusion and longitudinal dispersion spread each bin over a range of infiltration times that is
+  diffusion and microdispersion spread each bin over a range of infiltration times that is
   not captured here, so no bin is fully informed once dispersion is present (for that dispersive
   informed fraction use the captured kernel mass of the diffusion coefficient matrix).
 
@@ -74,6 +74,7 @@ What happens in that region is governed by a ``spinup`` policy, following the pa
   least ``spinup`` (``0.0`` matches ``None``; larger values demand more coverage). For the
   per-pore-volume :func:`full` there is no axis to collapse, so the ``float`` behaves
   exactly like ``None``.
+
 Output bins lying wholly outside ``tedges`` are ``NaN`` under every policy.
 
 The :func:`fraction_explained_full` / :func:`fraction_explained_mean` /

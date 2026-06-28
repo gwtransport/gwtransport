@@ -495,7 +495,7 @@ def generate_ec_example_data(
     Typical parameter values for EC (dissolved ion) transport in various sand
     types. The molecular diffusivity represents effective ionic diffusion in
     porous media (free-water D_0 reduced by porosity/tortuosity). It is
-    negligible compared to mechanical dispersion at field scale.
+    negligible compared to microdispersion at field scale.
 
     +---------------------------------+----------------+----------------+--------------------+
     | Parameter                       | Fine sand      | Medium sand    | Coarse sand/gravel |
