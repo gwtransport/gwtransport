@@ -19,21 +19,7 @@ Calibration refers to the estimation of the aquifer pore volume distribution. On
 - **Enable early warning systems** as digital twins for drinking water protection
 - **Backwards model** to estimate infiltration concentrations from extracted concentrations
 
-## Transport models
-
-`gwtransport` covers five transport settings. Choose the module by how the solute enters the aquifer:
-
-- **Infiltrating surface water**, flowing through to a well (bank filtration)
-  - `advection` — advection and macrodispersion
-  - `diffusion` — also microdispersion and molecular diffusion
-- **Areal rainfall recharge** to a pumping well (optionally with upstream surface water)
-  - `recharge` — advection; rainfall mixed vertically over the water column, giving an exponential residence-time distribution
-- **Areal deposition** from the surface
-  - `deposition` — advection; areal source mixed vertically over the water column
-- **Water injected at a well**, then recovered (push-pull / ASR)
-  - `radial_asr` — radial advection with microdispersion and molecular diffusion
-
-**Shared building blocks:** `residence_time`, `logremoval`, and `gamma`. The [full overview](https://gwtransport.github.io/gwtransport/user_guide/modules.html) lists each module's mechanisms, directions, and limitations.
+Various conceptual models are available, depending on how the solute enters the aquifer and dominant transport mechanisms: [full overview](https://gwtransport.github.io/gwtransport/user_guide/modules.html).
 
 ## Two ways to obtain model parameters
 
