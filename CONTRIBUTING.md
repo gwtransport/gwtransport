@@ -4,7 +4,7 @@ Thanks for your interest. Contributions of code, tests, docs, and examples are w
 
 ## Contributor License Agreement
 
-Every contribution needs an accepted [CLA](CLA.md). It exists so `gwtransport` can stay AGPL-3.0 _and_ be commercially licensed to organizations that cannot use AGPL — the commercial side funds the open project. You keep the copyright in your contribution; you just grant the rights needed to distribute it under both licenses.
+Every contribution needs an accepted [CLA](CLA.md). It exists so `gwtransport` can stay AGPL-3.0 _and_ be commercially licensed to organizations, fow example to organizations that cannot use AGPL — the commercial side funds the open project. You keep the copyright in your contribution; you just grant the rights needed to distribute it under both licenses.
 
 You accept the CLA by checking the box in the [pull request template](.github/PULL_REQUEST_TEMPLATE.md). One acceptance covers all your future contributions.
 
