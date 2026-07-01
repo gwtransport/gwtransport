@@ -57,9 +57,10 @@ radial symmetry is broken and the transport is solved by an **azimuthal Fourier-
 ``c(r, theta) = sum_m c_m(r) e^{i m theta}`` (``m = 0`` is the radial engine; drift couples ``m`` to
 ``m +- 1``), composed through the same per-phase interior Green's functions
 (``gwtransport._radial_asr_drift_kernels``). ``regional_flux = 0`` (default) dispatches to the radial path
-bit-for-bit. The engine is for the **slow-drift** envelope -- the plume must stay well inside the
-stagnation radius ``r_s = |A_0|/|v_d|`` (else a ``ValueError``); rest phases under drift are not yet
-supported. The drift-induced recovery loss is validated against an independent 2-D finite-volume oracle.
+bit-for-bit. The engine is for the **slow-drift** envelope -- the plume (including its rest-phase drift
+displacement) must stay well inside the stagnation radius ``r_s = |A_0|/|v_d|`` (else a ``ValueError``).
+Rest phases (``flow == 0``) are propagated by the exact free-space drift kernel (translate + anisotropic
+spread). The drift-induced recovery loss is validated against an independent 2-D finite-volume oracle.
 
 Available functions:
 
@@ -298,28 +299,40 @@ def _auto_n_modes(
     dt_days: npt.NDArray[np.floating],
     c_geo: float,
     well_radius: float,
+    longitudinal_dispersivity: float,
     v_d: float,
 ) -> int:
-    r"""Azimuthal truncation ``M`` sized from the plume-front drift ratio ``eps(R_b) = v_d R_b / A_0``.
+    r"""Azimuthal truncation ``M`` sized from the drift ratio ``eps`` and the rest-phase displacement.
 
-    The mode amplitudes decay geometrically, ``|c_m| ~ eps^|m|``, so keeping modes ``-M .. M`` truncates the
-    azimuthal field at ``O(eps^{M+1})``. ``M`` is chosen so that tail is below ``~5e-3`` and clamped to
-    ``[2, 6]`` (the slow-drift envelope -- beyond ``eps ~ 0.6`` the far-field escape this engine does not
-    model dominates anyway). ``A_0`` uses the **smallest** pumping magnitude (the worst-case largest ``eps``,
-    consistent with the stagnation-radius envelope guard), ``R_b`` the peak net injected radius. This
-    function is only reached for nonzero drift, so ``eps > 0`` and the ``[2, 6]`` clamp covers the rest.
+    The pumping-phase mode amplitudes decay geometrically, ``|c_m| ~ eps^|m|`` with
+    ``eps = v_d R_b / A_0``, so keeping modes ``-M .. M`` truncates the azimuthal field at
+    ``O(eps^{M+1})``; ``M`` is chosen so that tail is below ``~5e-3``. A rest phase additionally
+    translates the plume by ``delta = v_d t_rest`` (``R = 1``, conservative), which populates harmonics up
+    to ``~ delta / width`` (``width`` the radial breakthrough std) -- the second bound. The result is
+    clamped to ``[2, 8]`` (the slow-drift envelope -- beyond ``eps ~ 0.6`` the far-field escape this
+    engine does not model dominates anyway); the rest kernel's honest spectral-tail guard raises if a long
+    rest still outruns the clamp (pass ``n_modes`` explicitly then). ``A_0`` uses the **smallest** pumping
+    magnitude (the worst-case largest ``eps``, consistent with the stagnation-radius envelope guard),
+    ``R_b`` the peak net injected radius. This function is only reached for nonzero drift.
 
     Returns
     -------
     int
         Azimuthal truncation ``M``.
     """
-    a0 = float(np.min(np.abs(flow[flow != 0.0]))) / (2.0 * c_geo)
+    pumping = np.abs(flow[flow != 0.0])
+    if pumping.size == 0:  # all-rest schedule: nothing pumps; the engine returns all-NaN downstream
+        return 2
+    a0 = float(np.min(pumping)) / (2.0 * c_geo)
     net_volume = np.concatenate(([0.0], np.cumsum(flow * dt_days)))
     peak_volume = max(float(net_volume.max()), 0.0)
     r_b = np.sqrt(well_radius**2 + peak_volume / c_geo)
-    eps = min(abs(v_d) * r_b / abs(a0), 0.6)
-    return int(np.clip(np.ceil(np.log(5e-3) / np.log(eps)), 2, 6))
+    delta = abs(v_d) * float(np.sum(dt_days[flow == 0.0]))
+    eps = min(abs(v_d) * (r_b + delta) / abs(a0), 0.6)
+    m_eps = int(np.ceil(np.log(5e-3) / np.log(eps))) if eps > 0.0 else 2
+    width = np.sqrt(longitudinal_dispersivity * r_b + longitudinal_dispersivity**2)
+    m_shift = int(np.ceil(delta / width)) + 2 if delta > 0.0 else 2
+    return int(np.clip(max(m_eps, m_shift), 2, 8))
 
 
 def _block_ensemble(
@@ -344,17 +357,24 @@ def _block_ensemble(
     once per streamtube (geometry constant ``c_geo = pi b n``) and averages by ``weights``. The drift
     seepage ``v_d = U / n`` is the same for every streamtube (a regional Darcy flux through the porosity);
     only the radial strength ``A_0 ~ 1/c_geo`` varies, so faster (thinner) streamtubes see a smaller drift
-    ratio. ``n_modes`` is auto-sized per streamtube from its drift ratio when not given.
+    ratio. ``n_modes`` is auto-sized per streamtube from its drift ratio when not given. ``cin_deviation``
+    may be ``(n,)`` or ``(n, k)`` -- a column batch is transported through one engine pass per streamtube
+    (used by the reverse operator build).
 
     Returns
     -------
-    ndarray, shape (n,)
-        Weight-averaged extracted-flux deviation on extraction bins, ``0`` elsewhere.
+    ndarray, shape (n,) or (n, k)
+        Weight-averaged extracted-flux deviation on extraction bins (matching ``cin_deviation``), ``0``
+        elsewhere.
     """
     v_d = regional_flux / porosity
-    acc = np.zeros(len(flow))
+    acc = np.zeros(np.shape(cin_deviation))
     for c_geo, w_i in zip(c_geos, weights, strict=True):
-        m = n_modes if n_modes is not None else _auto_n_modes(flow, dt_days, c_geo, well_radius, v_d)
+        m = (
+            n_modes
+            if n_modes is not None
+            else _auto_n_modes(flow, dt_days, c_geo, well_radius, longitudinal_dispersivity, v_d)
+        )
         acc += w_i * np.nan_to_num(
             block_cout_deviation(
                 cin_deviation=cin_deviation,
@@ -430,13 +450,14 @@ def infiltration_to_extraction(
         ``v_d = U / n``). ``0`` (default) reproduces the radial-symmetric engine bit-for-bit. A nonzero
         value engages the azimuthal-mode block engine, which captures the drift-induced recovery loss
         (the down-gradient plume is partly swept past the well). The slow-drift envelope requires the
-        plume to stay well inside the stagnation radius ``r_s = |A_0| / |v_d|`` (a ``ValueError`` is raised
-        otherwise). Rest phases (``flow == 0``) combined with nonzero drift are not yet supported
-        (``NotImplementedError``); the rest-with-drift propagator is future work.
+        plume -- including its rest-phase drift displacement -- to stay well inside the stagnation radius
+        ``r_s = |A_0| / |v_d|`` (a ``ValueError`` is raised otherwise). Rest phases (``flow == 0``) are
+        propagated by the exact free-space drift kernel (translation ``v_d t / R`` plus anisotropic
+        Gaussian spread, with a Neumann-image closure at the shut well face).
     n_modes : int, optional
         Azimuthal truncation ``M`` for the drift engine (keeps modes ``-M .. M``). Default ``None``
-        auto-sizes ``M`` from the plume-front drift ratio ``eps = v_d R_b / A_0`` (clamped to ``[2, 6]``).
-        Ignored when ``regional_flux == 0``.
+        auto-sizes ``M`` from the plume-front drift ratio ``eps = v_d R_b / A_0`` and the rest-phase
+        displacement (clamped to ``[2, 8]``). Ignored when ``regional_flux == 0``.
     n_quad : int, optional
         Gauss-Legendre node count for the resident-profile superposition. Default 240.
 
@@ -599,32 +620,36 @@ def extraction_to_infiltration(
             n_quad=n_quad,
         )
     else:
-        # Build the dense forward operator W by reuse-engine unit-pulse columns (one ensemble solve per
-        # injection bin); the reverse cannot reuse the cheap single-solve forward path.
+        # Build the dense forward operator W by unit-pulse columns; the reverse cannot reuse the cheap
+        # single-solve forward path. The block (drift) engine transports all pulse columns in ONE pass
+        # (the per-phase kernels are shared across columns); the scalar reuse engine solves per column.
         inj_mask, ext_mask = flow > 0.0, flow < 0.0
         inj_idx = np.flatnonzero(inj_mask)
         dt_days = dt_to_days(tedges)
-        w_ens = np.zeros((int(np.sum(ext_mask)), len(inj_idx)))
-        for j, idx in enumerate(inj_idx):
-            pulse = np.zeros(len(flow))
-            pulse[idx] = 1.0
-            if regional_flux != 0.0:
-                col = _block_ensemble(
-                    pulse,
-                    flow=flow,
-                    dt_days=dt_days,
-                    c_geos=c_geos,
-                    porosity=porosity,
-                    well_radius=well_radius,
-                    longitudinal_dispersivity=longitudinal_dispersivity,
-                    molecular_diffusivity=molecular_diffusivity,
-                    retardation_factor=retardation_factor,
-                    regional_flux=regional_flux,
-                    n_modes=n_modes,
-                    weights=weights_arr,
-                    n_quad=n_quad,
-                )
-            else:
+        if regional_flux != 0.0:
+            pulses = np.zeros((len(flow), len(inj_idx)))
+            pulses[inj_idx, np.arange(len(inj_idx))] = 1.0
+            cols = _block_ensemble(
+                pulses,
+                flow=flow,
+                dt_days=dt_days,
+                c_geos=c_geos,
+                porosity=porosity,
+                well_radius=well_radius,
+                longitudinal_dispersivity=longitudinal_dispersivity,
+                molecular_diffusivity=molecular_diffusivity,
+                retardation_factor=retardation_factor,
+                regional_flux=regional_flux,
+                n_modes=n_modes,
+                weights=weights_arr,
+                n_quad=n_quad,
+            )
+            w_ens = cols[ext_mask, :]
+        else:
+            w_ens = np.zeros((int(np.sum(ext_mask)), len(inj_idx)))
+            for j, idx in enumerate(inj_idx):
+                pulse = np.zeros(len(flow))
+                pulse[idx] = 1.0
                 col = _reuse_ensemble(
                     pulse,
                     flow=flow,
@@ -637,7 +662,7 @@ def extraction_to_infiltration(
                     weights=weights_arr,
                     n_quad=n_quad,
                 )
-            w_ens[:, j] = col[ext_mask]
+                w_ens[:, j] = col[ext_mask]
     # Tikhonov least-squares min ||W x - (cout-bg)||^2 + lambda ||x||^2 via the stable augmented
     # system [W; sqrt(lambda) I] x = [cout-bg; 0]. The echo / reuse operator has column sums ~1
     # (mass conservation per injection bin) and overdetermined rows, so a direct Tikhonov fit is used.

@@ -26,9 +26,12 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+from collections.abc import Callable
+
 import numpy as np
 import numpy.typing as npt
 from scipy.integrate import solve_ivp
+from scipy.interpolate import BarycentricInterpolator
 from scipy.special import airye
 
 from gwtransport._radial_asr_dehoog import dehoog_inverse
@@ -54,6 +57,15 @@ _RFAR_DECAY = 44.0
 _RS_FRAC = 0.6
 _GRID_WIDTHS = 12.0
 _PLUME_WIDTHS = 3.0
+# Rest-with-drift kernel: Gauss-Hermite quadrature size for the Gaussian spread, and the honest azimuthal
+# truncation guard -- the relative spectral tail (harmonics M < |m| <= 2M after reprojection) above which
+# the translated plume is declared too eccentric for the kept modes (raise, never silently fold the tail).
+_REST_HERMITE = 20
+_REST_TAIL_MAX = 1e-2
+# Per-call cap on cached per-phase kernel solutions (each entry is O(n_quad n_s (2M+1)^2) complex, ~70 MB
+# at the defaults; a periodic schedule needs one entry per pumping direction, so the cap only sheds
+# entries on long aperiodic schedules, where nothing recurs anyway).
+_SOLUTIONS_CACHE_MAX = 8
 
 
 def _toeplitz_from_theta(f_theta: npt.NDArray[np.floating], n_modes: int) -> npt.NDArray[np.complexfloating]:
@@ -173,20 +185,25 @@ def field_grid(
     v_d: float,
     a0: float,
     n_quad: int,
+    d_m: float = 0.0,
+    drift_shift: float = 0.0,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating], float]:
     r"""Radial Gauss-Legendre grid and recessive-IC radius ``r_far`` for the drift block engine.
 
     The grid spans the advective plume front ``r_front = sqrt(r_w^2 + V_peak/c_geo)`` plus a margin of
-    breakthrough widths (radial std ``~ sqrt(alpha_L r_front)``), exactly as the scalar engine. For drift,
-    the recessive initial condition at ``r_far`` must stay inside the stagnation radius ``r_s = |A_0|/v_d``
-    (the matrix Riccati has a coordinate finite-escape as ``eps(r) = v_d r/A_0 -> 1``), so ``r_far`` is
-    hard-capped at ``_RS_FRAC * r_s``. The envelope is enforced **honestly**: the *significant* plume
-    (front + ``_PLUME_WIDTHS`` breakthrough widths, where the resident field has fallen to ~1% of peak) must
-    fit below that cap -- otherwise a ``ValueError`` is raised rather than the plume being silently
-    truncated. The quadrature spans the *significant* plume up to ``r_far`` (a generous ``_GRID_WIDTHS``-width
-    field grid clipped at ``r_far``); only the negligible tail beyond ``r_far`` is dropped, which the
-    recessive IC washes out anyway. At ``v_d = 0`` (``r_s = inf``) the cap is inactive and the grid is the
-    scalar grid. ``a0`` should be the **smallest** per-phase ``|A_0|`` (the most restrictive ``r_s``).
+    breakthrough widths (radial std ``~ sqrt(alpha_L r_front)``), the molecular reach
+    ``~ sqrt(D_m * total_time)`` (as the scalar engine's grid), and the total rest-phase drift
+    displacement ``drift_shift`` (the rest kernel translates the plume down-gradient; the grid must
+    contain it). For drift, the recessive initial condition at ``r_far`` must stay inside the stagnation
+    radius ``r_s = |A_0|/v_d`` (the matrix Riccati has a coordinate finite-escape as
+    ``eps(r) = v_d r/A_0 -> 1``), so ``r_far`` is hard-capped at ``_RS_FRAC * r_s``. The envelope is
+    enforced **honestly**: the *significant* plume (front + ``_PLUME_WIDTHS`` breakthrough widths + the
+    rest displacement, where the resident field has fallen to ~1% of peak) must fit below that cap --
+    otherwise a ``ValueError`` is raised rather than the plume being silently truncated. The quadrature
+    spans the *significant* plume up to ``r_far`` (a generous ``_GRID_WIDTHS``-width field grid clipped at
+    ``r_far``); only the negligible tail beyond ``r_far`` is dropped, which the recessive IC washes out
+    anyway. At ``v_d = 0`` (``r_s = inf``) the cap is inactive and the grid is the scalar grid. ``a0``
+    should be the **smallest** per-phase ``|A_0|`` (the most restrictive ``r_s``).
 
     Returns
     -------
@@ -200,15 +217,21 @@ def field_grid(
     Raises
     ------
     ValueError
-        If the significant plume reaches the stagnation radius (``r_front + _PLUME_WIDTHS * width + r_w >
-        _RS_FRAC * r_s``) -- the drift is too strong for the radial engine's contained-plume assumption.
+        If the significant plume reaches the stagnation radius (``r_front + _PLUME_WIDTHS * (width +
+        reach_dm) + drift_shift + r_w > _RS_FRAC * r_s``, with ``width`` carrying the rest kernel's
+        mechanical spread in quadrature and ``reach_dm = sqrt(D_m * total_time)``) -- the drift is too
+        strong for the radial engine's contained-plume assumption.
     """
     net_volume = np.concatenate(([0.0], np.cumsum(flow * dt_days)))
     peak_volume = max(float(net_volume.max()), 0.0)
+    total_time = float(np.sum(dt_days))
     r_front = np.sqrt(r_w**2 + peak_volume / c_geo)
-    width = np.sqrt(alpha_l * r_front + alpha_l**2)
-    r_significant = r_front + _PLUME_WIDTHS * width + r_w
-    r_grid = r_front + _GRID_WIDTHS * width + r_w
+    # radial breakthrough variance ~ alpha_L r_front (+ alpha_L^2), plus -- in quadrature -- the rest
+    # kernel's own mechanical spread sigma_x^2 = 2 alpha_L v_d t_rest / R = 2 alpha_L drift_shift
+    width = np.sqrt(alpha_l * r_front + alpha_l**2 + 2.0 * alpha_l * drift_shift)
+    reach_dm = np.sqrt(d_m * total_time)
+    r_significant = r_front + _PLUME_WIDTHS * (width + reach_dm) + drift_shift + r_w
+    r_grid = r_front + _GRID_WIDTHS * width + 2.0 * _PLUME_WIDTHS * reach_dm + drift_shift + r_w
     r_s = abs(a0) / abs(v_d) if v_d != 0.0 else np.inf
     r_far_cap = _RS_FRAC * r_s
     if r_significant > r_far_cap:
@@ -229,6 +252,62 @@ def field_grid(
     return r_nodes, dr_weights, r_far
 
 
+def _interval_transitions(
+    l_dense: Callable[[npt.NDArray[np.floating]], npt.NDArray[np.complexfloating]],
+    r_from: npt.NDArray[np.floating],
+    r_to: npt.NDArray[np.floating],
+    n_s: int,
+    nm: int,
+) -> npt.NDArray[np.complexfloating]:
+    r"""Fundamental transitions ``Psi(r_to[i], r_from[i])`` of ``Y' = L(r) Y`` for a batch of intervals.
+
+    All intervals are integrated in lockstep on a common ``tau in [0, 1]`` clock (``r = r_from +
+    tau (r_to - r_from)``, signed widths), with the log-derivative field ``L`` evaluated through its dense
+    ODE interpolant, chunked to bound memory. Every interval spans adjacent quadrature radii, so each
+    transition stays within a few e-foldings of unity -- which is what keeps the prefix/suffix
+    Green's-function recursions built from them unconditionally well-conditioned, where a globally
+    pivoted fundamental matrix accumulates the full mode-split Sturm-Liouville exponent across the grid
+    and overflows / colinearizes.
+
+    Returns
+    -------
+    ndarray of complex, shape (n_intervals, n_s, nm, nm)
+        The per-interval transition matrices.
+
+    Raises
+    ------
+    RuntimeError
+        If an interval-transition integration fails.
+    """
+    n_int = r_from.size
+    eye = np.eye(nm, dtype=complex)
+    out = np.empty((n_int, n_s, nm, nm), dtype=complex)
+    chunk = 64  # bounds the ODE state (and DOP853's stage copies) to ~chunk * n_s * nm^2 complex
+    for lo in range(0, n_int, chunk):
+        hi = min(lo + chunk, n_int)
+        start, width = r_from[lo:hi], r_to[lo:hi] - r_from[lo:hi]
+        nc = hi - lo
+
+        def rhs(tau: float, y: npt.NDArray[np.floating], start=start, width=width, nc=nc) -> npt.NDArray[np.floating]:
+            psi = y.view(complex).reshape(nc, n_s, nm, nm)
+            ld = l_dense(start + tau * width)  # (nc, n_s, nm, nm)
+            return (width[:, None, None, None] * (ld @ psi)).reshape(-1).view(float)
+
+        sol = solve_ivp(
+            rhs,
+            [0.0, 1.0],
+            np.tile(eye.reshape(-1), nc * n_s).view(float),
+            rtol=_RICCATI_RTOL,
+            atol=_RICCATI_ATOL,
+            method="DOP853",
+        )
+        if not sol.success:
+            msg = "block interval-transition integration failed"
+            raise RuntimeError(msg)
+        out[lo:hi] = np.ascontiguousarray(sol.y[:, -1]).view(complex).reshape(nc, n_s, nm, nm)
+    return out
+
+
 def _block_solutions(
     s: npt.NDArray[np.complexfloating],
     r_nodes: npt.NDArray[np.floating],
@@ -243,26 +322,31 @@ def _block_solutions(
     direction: str,
     r_far: float,
 ) -> dict[str, npt.NDArray[np.complexfloating]]:
-    r"""Batched block log-derivative + de-scaled transition solutions of one constant-Q phase.
+    r"""Batched block log-derivative + per-interval transition solutions of one constant-Q phase.
 
     Integrates, for every Laplace node ``s`` at once (the coefficient matrices ``A, B, S0`` are
     ``s``-independent -- only the ``R s A^{-1}`` term carries ``s`` -- so one vectorized ODE pass covers
     all nodes), the matrix Riccati ``L' = -L^2 - A^{-1} B L - A^{-1}(S0 + R s I)`` (``L = c' c^{-1}``) on
-    two branches and the de-scaled fundamental transitions used to assemble the interior resolvent:
+    two branches:
 
     * **decaying** (recessive as ``r -> inf``): inward from ``r_far`` with a block-diagonal recessive IC
       (the scalar per-mode decaying log-derivative on every diagonal -- exact at ``v_d = 0`` and washed in
       by the inward attractor otherwise). Gives ``L_-`` at ``r_nodes`` and ``r_w``.
     * **regular** (well boundary): outward from ``r_w`` with the block-diagonal well IC
-      (``L_+ = A_0/(alpha_L A_0 + D_m r_w) I`` injection Robin / ``0`` extraction Neumann). Gives ``L_+``.
+      (``L_+ = A_0/(alpha_L A_0 + D_m r_w) I`` injection Robin / ``0`` extraction Neumann; the exact
+      block flux operator has ``O(eps_w) = O(v_d r_w / A_0)`` off-diagonal coupling at the face, dropped
+      at the same order as the neglected well-face drift modulation of the injected flux). Gives ``L_+``.
 
-    The recessive / regular fundamental matrices ``Y_-`` , ``Y_+`` (both normalized to ``I`` at ``r_w``) are
-    carried as **de-scaled transitions** ``Psi_hat`` with a scalar log-amplitude
-    ``phi = int_{r_w}^r L[m0,m0]`` factored out (``Y = Psi_hat e^{phi}``); this keeps ``Psi_hat`` ``O(1)``
-    while the divergent Sturm-Liouville exponent lives in ``phi`` (the matrix analogue of the scalar
-    kernel's bounded log-difference), so the resolvent assembly never overflows at high Peclet. The
-    recessive ``L_-`` is integrated inward from ``r_far`` (its stable direction); its transition is then
-    propagated outward from ``r_w`` through the dense ``L_-`` interpolant.
+    The recessive / regular fundamental solutions enter the interior resolvent only through
+    **per-interval transitions** ``Psi_-(r_i, r_{i-1})`` (outward hops) and ``Psi_+(r_{i-1}, r_i)``
+    (inward hops), with ``r_{-1} = r_w``, integrated through the dense ``L`` interpolants
+    (:func:`_interval_transitions`). Each hop spans a few e-foldings at most, so the prefix/suffix
+    resolvent recursions (:func:`_resolvent_field_laplace`, :func:`_readout_laplace`,
+    :func:`_resident_laplace`) stay bounded and well-conditioned at any Peclet, Laplace frequency, and
+    azimuthal truncation. A single fundamental matrix pivoted at ``r_w`` -- even de-scaled by a scalar
+    log-amplitude -- accumulates the full mode-split Sturm-Liouville exponent across the grid and
+    overflows / colinearizes (observed as singular resolvent blocks for phases with small ``A_0`` or
+    short durations), which is why the hops are the stored representation.
 
     ``a0`` is the unsigned flow scale ``|A_0|``; the phase ``direction`` sets the operator orientation.
     Retardation enters as the explicit ``R`` in the ``R s`` term (the ODE keeps the physical ``A_0``/``D_m``).
@@ -270,27 +354,23 @@ def _block_solutions(
     Returns
     -------
     dict of ndarray
-        ``Lm_w`` (``L_-`` at ``r_w``, shape ``(n_s, nm, nm)``), ``Lm_n``/``Lp_n`` (``L_-``/``L_+`` at
-        ``r_nodes``, ``(n_quad, n_s, nm, nm)``), ``Psm``/``Psp`` (de-scaled recessive/regular transitions at
-        ``r_nodes``), ``phim``/``phip`` (log-amplitudes, ``(n_quad, n_s)``) and ``A_n`` (the ``s``-independent
-        principal part at ``r_nodes``, ``(n_quad, nm, nm)``).
+        ``Lm_w`` (``L_-`` at ``r_w``, shape ``(n_s, nm, nm)``), ``H`` (the Wronskian blocks
+        ``[A (L_- - L_+)]^{-1}`` at ``r_nodes``, ``(n_quad, n_s, nm, nm)``) and ``Tm``/``Tp`` (recessive
+        outward / regular inward per-interval transitions, ``(n_quad, n_s, nm, nm)``).
 
     Raises
     ------
     RuntimeError
-        If a matrix Riccati integration does not reach every requested radius (the log-derivative hit a
-        pole, typically the coordinate finite-escape near the stagnation radius).
+        If a matrix Riccati or interval-transition integration does not succeed (the log-derivative hit
+        a pole, typically the coordinate finite-escape near the stagnation radius).
     """
     s = np.asarray(s, dtype=complex).reshape(-1)
     n_s = s.size
     nm = 2 * n_modes + 1
-    m0 = n_modes
     eye = np.eye(nm)
     sigma_a = 1.0 if direction == _INJECTION else -1.0
     a0_signed = sigma_a * abs(a0)
     r_max = float(np.max(r_nodes))
-
-    n_block = n_s * nm * nm
 
     def riccati_rhs(r: float, y: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         ld = y.view(complex).reshape(n_s, nm, nm)
@@ -343,72 +423,23 @@ def _block_solutions(
         msg = "block Riccati integration failed (the matrix log-derivative likely hit a pole near stagnation)"
         raise RuntimeError(msg)
 
-    def l_minus(r: float) -> npt.NDArray[np.complexfloating]:
-        return sol_m.sol(r).view(complex).reshape(n_s, nm, nm)
+    def l_minus_at(r: npt.NDArray[np.floating]) -> npt.NDArray[np.complexfloating]:
+        return np.ascontiguousarray(sol_m.sol(r).T).view(complex).reshape(np.size(r), n_s, nm, nm)
 
-    def l_plus(r: float) -> npt.NDArray[np.complexfloating]:
-        return sol_p.sol(r).view(complex).reshape(n_s, nm, nm)
+    def l_plus_at(r: npt.NDArray[np.floating]) -> npt.NDArray[np.complexfloating]:
+        return np.ascontiguousarray(sol_p.sol(r).T).view(complex).reshape(np.size(r), n_s, nm, nm)
 
-    # De-scaled transitions Psi_hat (Psi_hat' = (L - L[m0,m0] I) Psi_hat) with the log-amplitude
-    # phi = int_{r_w}^r L[m0,m0] factored out. Both branches are pivoted at r_w (integrated outward from
-    # r_w), which keeps phi small over [r_w, r_max] so the assembly's exp(+-phi) stay bounded -- the
-    # recessive L is still integrated inward (its stable direction); only its de-scaled transition is
-    # propagated outward through the dense L interpolant.
-    def transition_rhs(l_fun):
-        def rhs(r: float, y: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
-            yc = y.view(complex)
-            psih = yc[:n_block].reshape(n_s, nm, nm)
-            ld = l_fun(r)
-            ell = ld[:, m0, m0]
-            d_psih = (ld - ell[:, None, None] * eye[None]) @ psih
-            return np.concatenate([d_psih.reshape(-1), ell]).view(float)
-
-        return rhs
-
-    y0 = np.concatenate([np.tile(eye.reshape(-1), n_s).astype(complex), np.zeros(n_s, complex)]).view(float)
-    tr_m = solve_ivp(
-        transition_rhs(l_minus),
-        [r_w, r_max],
-        y0,
-        t_eval=r_nodes,
-        rtol=_RICCATI_RTOL,
-        atol=_RICCATI_ATOL,
-        method="DOP853",
-    )
-    tr_p = solve_ivp(
-        transition_rhs(l_plus),
-        [r_w, r_max],
-        y0,
-        t_eval=r_nodes,
-        rtol=_RICCATI_RTOL,
-        atol=_RICCATI_ATOL,
-        method="DOP853",
-    )
-    if not (tr_m.success and tr_p.success):
-        msg = "block transition integration failed"
-        raise RuntimeError(msg)
-
-    def transitions(tr) -> tuple[npt.NDArray, npt.NDArray]:
-        yc = np.ascontiguousarray(tr.y.T).view(complex)  # (n_quad, n_block + n_s)
-        return yc[:, :n_block].reshape(-1, n_s, nm, nm), yc[:, n_block:].reshape(-1, n_s)
-
-    def l_at(sol) -> npt.NDArray[np.complexfloating]:  # dense interpolant at all nodes at once
-        return np.ascontiguousarray(sol.sol(r_nodes).T).view(complex).reshape(-1, n_s, nm, nm)
-
-    psm, phim = transitions(tr_m)
-    psp, phip = transitions(tr_p)
-    lm_n = l_at(sol_m)
-    lp_n = l_at(sol_p)
+    prev = np.concatenate(([r_w], r_nodes[:-1]))
     a_n = block_coupling_matrices(r_nodes, alpha_l=alpha_l, a0=a0_signed, v_d=v_d, d_m=d_m, n_modes=n_modes)[0]
+    # The log-derivative branches enter the resolvent only through the Wronskian block
+    # H(r') = [A(r')(L_-(r') - L_+(r'))]^{-1} -- bounded wherever the recessive and regular subspaces are
+    # transverse -- so H is materialized once here (and cached with the phase) instead of its factors.
+    h = np.linalg.inv(a_n[:, None] @ (l_minus_at(r_nodes) - l_plus_at(r_nodes)))
     return {
-        "Lm_w": l_minus(r_w),
-        "Lm_n": lm_n,
-        "Lp_n": lp_n,
-        "Psm": psm,
-        "Psp": psp,
-        "phim": phim,
-        "phip": phip,
-        "A_n": a_n,
+        "Lm_w": l_minus_at(np.array([r_w]))[0],
+        "H": h,
+        "Tm": _interval_transitions(l_minus_at, prev, r_nodes, n_s, nm),  # Psi_-(r_i, r_{i-1}), outward hops
+        "Tp": _interval_transitions(l_plus_at, r_nodes, prev, n_s, nm),  # Psi_+(r_{i-1}, r_i), inward hops
     }
 
 
@@ -419,10 +450,10 @@ def _resident_laplace(
 
     The injected water enters through the azimuthally symmetric (``m = 0``) Kreft-Zuber flux boundary;
     the recessive (decaying) block solution carries it outward and drift couples it into the neighbouring
-    modes. With the de-scaled recessive transition ``Psi_hat_-`` and the block well-flux operator
-    ``F_w = I - (alpha_L + D_m r_w/|A_0|) L_-(r_w)`` the resident field at the nodes is
-    ``c(r) = Psi_hat_-(r) e^{phi_-(r)} F_w^{-1} e_0`` (``e_0`` the unit ``m = 0`` source). Reduces to the
-    scalar FR resident transfer ``E / f_w`` at ``v_d = 0``.
+    modes. With the block well-flux operator ``F_w = I - (alpha_L + D_m r_w/|A_0|) L_-(r_w)`` the resident
+    field is ``c(r_i) = Y_-(r_i) F_w^{-1} e_0`` (``e_0`` the unit ``m = 0`` source, ``Y_-`` normalized to
+    ``I`` at ``r_w``), evaluated by the stable outward hops ``c(r_i) = Psi_-(r_i, r_{i-1}) c(r_{i-1})``.
+    Reduces to the scalar FR resident transfer ``E / f_w`` at ``v_d = 0``.
 
     Returns
     -------
@@ -434,25 +465,33 @@ def _resident_laplace(
     e0 = np.zeros(nm, dtype=complex)
     e0[n_modes] = 1.0
     fw = np.eye(nm)[None] - (alpha_l + d_m * r_w / abs(a0)) * d["Lm_w"]  # (n_s, nm, nm)
-    gamma = np.linalg.solve(fw, np.broadcast_to(e0, (n_s, nm))[..., None])[..., 0]  # (n_s, nm)
-    return np.einsum("qsab,sb->sqa", d["Psm"], gamma) * np.exp(d["phim"]).T[:, :, None]
+    y = np.linalg.solve(fw, np.broadcast_to(e0, (n_s, nm))[..., None])  # (n_s, nm, 1)
+    tm = d["Tm"]
+    c = np.empty((tm.shape[0], n_s, nm), dtype=complex)
+    for i in range(tm.shape[0]):
+        y = tm[i] @ y
+        c[i] = y[..., 0]
+    return np.transpose(c, (1, 0, 2))
 
 
-def _resolvent_terms(
-    d: dict[str, npt.NDArray[np.complexfloating]], source: npt.NDArray[np.complexfloating]
-) -> tuple[npt.NDArray, npt.NDArray]:
-    r"""De-scaled per-node source contributions ``Psi_hat_+-(r_j)^{-1} H_j e^{-phi_+-(r_j)} source_j``.
+def _source_blocks(
+    d: dict[str, npt.NDArray[np.complexfloating]],
+    field: npt.NDArray[np.floating],
+    dr_weights: npt.NDArray[np.floating],
+    retardation_factor: float,
+) -> npt.NDArray[np.complexfloating]:
+    r"""Wronskian-weighted source contributions ``H_j (R dr_j) field_j`` of the interior resolvent.
+
+    ``H(r') = [A(r')(L_-(r') - L_+(r'))]^{-1}`` is the matrix Wronskian block of the interior Green's
+    function, materialized with the per-phase solutions (:func:`_block_solutions`).
 
     Returns
     -------
-    term_m, term_p : ndarray
-        Recessive- and regular-branch de-scaled contributions, each ``(n_quad, n_s, nm)``.
+    ndarray
+        ``H_j source_j``, shape ``(n_quad, n_s, nm, k)`` for a ``(n_quad, nm, k)`` mode-field batch.
     """
-    h = np.linalg.inv(d["A_n"][:, None] @ (d["Lm_n"] - d["Lp_n"]))  # (n_quad, n_s, nm, nm)
-    hg = np.einsum("qsab,qb->qsa", h, source)  # (n_quad, n_s, nm)
-    term_m = np.linalg.solve(d["Psm"], hg[..., None])[..., 0] * np.exp(-d["phim"])[..., None]
-    term_p = np.linalg.solve(d["Psp"], hg[..., None])[..., 0] * np.exp(-d["phip"])[..., None]
-    return term_m, term_p
+    src = ((retardation_factor * dr_weights)[:, None, None] * field).astype(complex)  # (n_quad, nm, k)
+    return d["H"] @ src[:, None]  # (n_quad, n_s, nm, k)
 
 
 def _resolvent_field_laplace(
@@ -466,29 +505,38 @@ def _resolvent_field_laplace(
     The interior Green's function of the constant-Q block operator, with recessive ``Y_-`` and well-regular
     ``Y_+`` and the matrix Wronskian ``H(r') = [A(r')(L_-(r') - L_+(r'))]^{-1}``, is
     ``Ghat(r, r') = Y_-(r) Y_-(r')^{-1} H(r')`` for ``r >= r'`` and ``Y_+(r) Y_+(r')^{-1} H(r')`` for
-    ``r <= r'``, so applying it to the source measure ``(R dr_j) field_j`` separates into a recessive prefix
-    (``j <= i``) and a regular suffix (``j > i``):
+    ``r <= r'``. Applied to the source measure ``(R dr_j) field_j`` it separates into a recessive prefix
+    (``j <= i``) and a regular suffix (``j > i``), both evaluated as first-order recursions over the
+    per-interval transitions (``hs_j = H_j source_j``):
 
-        F_i = Psi_hat_-(r_i) e^{phi_-(r_i)} sum_{j<=i} term_-(r_j)  +  Psi_hat_+(r_i) e^{phi_+(r_i)} sum_{j>i} term_+(r_j),
+        P_0 = hs_0,        P_i = Psi_-(r_i, r_{i-1}) P_{i-1} + hs_i,
+        S_{n-1} = 0,       S_{i-1} = Psi_+(r_{i-1}, r_i) (S_i + hs_i),
+        F_i = P_i + S_i.
 
-    with the de-scaled contributions ``term_+-(r_j) = Psi_hat_+-(r_j)^{-1} H_j e^{-phi_+-(r_j)} source_j``
-    (:func:`_resolvent_terms`). The ``e^{+-phi}`` are paired so each ``Ghat`` block stays bounded (the
-    recessive differences ``phi_-(r_i) - phi_-(r_j) <= 0`` for ``j <= i``) -- the matrix analogue of the
-    scalar resolvent's bounded log-difference.
+    Every factor is a short-interval transition (a few e-foldings) or a bounded Wronskian block, so the
+    recursion is well-conditioned at any Peclet and Laplace frequency: distant contributions fade by
+    repeated bounded multiplication exactly as the physical Green's function does, with no globally
+    accumulated exponent to overflow or colinearize.
 
     Returns
     -------
     ndarray
-        Propagated field ``(n_s, n_quad, nm)``.
+        Propagated mode-field batch, shape ``(n_s, n_quad, nm, k)`` for a ``(n_quad, nm, k)`` ``field``.
     """
-    source = ((retardation_factor * dr_weights)[:, None] * field).astype(complex)  # (n_quad, nm)
-    term_m, term_p = _resolvent_terms(d, source)
-    prefix = np.cumsum(term_m, axis=0)  # sum_{j<=i}
-    suffix = np.cumsum(term_p[::-1], axis=0)[::-1] - term_p  # sum_{j>i}
-    left_m = d["Psm"] * np.exp(d["phim"])[..., None, None]
-    left_p = d["Psp"] * np.exp(d["phip"])[..., None, None]
-    f = np.einsum("qsab,qsb->qsa", left_m, prefix) + np.einsum("qsab,qsb->qsa", left_p, suffix)
-    return np.transpose(f, (1, 0, 2))  # (n_s, n_quad, nm)
+    hs = _source_blocks(d, field, dr_weights, retardation_factor)  # (n_quad, n_s, nm, k)
+    tm, tp = d["Tm"], d["Tp"]
+    n_quad = hs.shape[0]
+    f = np.empty_like(hs)
+    p = hs[0]
+    f[0] = p
+    for i in range(1, n_quad):
+        p = tm[i] @ p + hs[i]
+        f[i] = p
+    s_acc = np.zeros_like(p)
+    for i in range(n_quad - 1, 0, -1):
+        s_acc = tp[i] @ (s_acc + hs[i])
+        f[i - 1] += s_acc
+    return np.transpose(f, (1, 0, 2, 3))  # (n_s, n_quad, nm, k)
 
 
 def _readout_laplace(
@@ -502,9 +550,9 @@ def _readout_laplace(
 
     The extracted Kreft-Zuber flux concentration under the Danckwerts (zero dispersive flux) well boundary
     equals the resident concentration at the face, i.e. the extraction interior resolvent evaluated at
-    ``r_w``. Since ``r_w`` lies below every node, only the regular (suffix) branch contributes and
-    ``Psi_hat_+(r_w) = I`` , ``phi_+(r_w) = 0``, so the trace is
-    ``cout_hat(s) = [sum_k Psi_hat_+(r_k)^{-1} H_k e^{-phi_+(r_k)} (R dr_k) field_k]_{m0}``.
+    ``r_w``. Since ``r_w`` lies below every node, only the regular (suffix) branch contributes:
+    ``cout_hat(s) = [sum_j Y_+(r_w) Y_+(r_j)^{-1} H_j (R dr_j) field_j]_{m0}``, evaluated by running the
+    suffix recursion of :func:`_resolvent_field_laplace` one extra inward hop to ``r_w``.
 
     Note: the extracted concentration is the inflow-flux-weighted azimuthal average (``v_r(r_w, theta)``
     carries an ``m = +-1`` modulation), which differs from a naive plain ``m = 0`` average of the resident
@@ -519,12 +567,126 @@ def _readout_laplace(
     Returns
     -------
     ndarray
-        ``cout_hat(s)`` (the ``m = 0`` component), shape ``(n_s,)``.
+        ``cout_hat(s)`` (the ``m = 0`` component), shape ``(n_s, k)`` for a ``(n_quad, nm, k)`` ``field``.
     """
-    source = (retardation_factor * dr_weights)[:, None] * field
-    # r_w lies below every node, so the well-face trace is the full regular-branch sum (Psi_hat_+(r_w)=I).
-    _, term_p = _resolvent_terms(d, source.astype(complex))
-    return term_p.sum(axis=0)[:, n_modes]
+    hs = _source_blocks(d, field, dr_weights, retardation_factor)  # (n_quad, n_s, nm, k)
+    tp = d["Tp"]
+    s_acc = np.zeros_like(hs[0])
+    for i in range(hs.shape[0] - 1, 0, -1):
+        s_acc = tp[i] @ (s_acc + hs[i])
+    return (tp[0] @ (s_acc + hs[0]))[:, n_modes, :]
+
+
+def _rest_drift_field(
+    field: npt.NDArray[np.floating],
+    r_nodes: npt.NDArray[np.floating],
+    dr_weights: npt.NDArray[np.floating],
+    r_w: float,
+    *,
+    alpha_l: float,
+    v_d: float,
+    d_m: float,
+    retardation_factor: float,
+    t_rest: float,
+    n_modes: int,
+) -> npt.NDArray[np.floating]:
+    r"""Advance the resident mode-field through a rest phase (``Q = 0``) under drift.
+
+    With the well shut the velocity field is the bare uniform drift ``v = v_d x_hat``, so the
+    advection-dispersion kernel is exact in free space and constant-coefficient: the field translates
+    down-gradient by ``delta = v_d t / R`` and spreads by the anisotropic Gaussian with
+    ``sigma_x^2 = 2 (alpha_L |v_d| + D_m) t / R`` along the drift and ``sigma_y^2 = 2 D_m t / R`` across
+    it (rank-1 Scheidegger tensor, ``alpha_T = 0``). The kernel is applied in real space:
+
+    1. the mode-field is evaluated at the Gauss-Hermite-shifted source points of every polar target node
+       (barycentric interpolation on the radial Legendre nodes -- spectrally accurate for the smooth
+       resident field -- times the azimuthal phase sum);
+    2. Gauss-Hermite quadrature (``_REST_HERMITE`` nodes per Gaussian axis) averages the spread;
+    3. the updated real-space samples are reprojected onto the modes by FFT over a uniform theta grid.
+
+    The shut well is closed by a **radial Neumann image**: source points falling inside the well disk are
+    folded back across the face (``r' -> 2 r_w - r'``), the leading-order zero-dispersive-flux closure,
+    which conserves the near-well mass (a zeroed disk would swallow ``O(sigma r_w / R_b^2)`` of the plume).
+    The residual is the circle-vs-line curvature of the image and the neglected ``O(r_w^2/r^2)`` dipole
+    distortion of the drift around the cylinder -- at ``v_d = 0``, ``D_m > 0`` the kernel agrees with the
+    scalar engine's exact well-respecting Bessel rest kernel to ~4e-4 in ``cout`` for a stored plume (the
+    public API dispatches ``v_d = 0`` to the scalar path anyway). Source points outside the radial grid
+    carry no mass by the grid's containment guarantee (:func:`field_grid` provisions for the rest
+    displacement).
+
+    An **honest truncation guard** protects the azimuthal representation: after reprojection, the energy
+    in the harmonics just above the kept band (``M < |m| <= 2M``, available from the FFT grid) measures
+    the translated field's spectral tail; if it exceeds ``_REST_TAIL_MAX`` of the field, the translated
+    plume is too eccentric for the kept modes and a ``ValueError`` asks for a larger ``n_modes`` rather
+    than silently folding the tail.
+
+    Returns
+    -------
+    ndarray
+        The advanced mode-field, shape ``(n_quad, nm, k)`` (matching ``field``).
+
+    Raises
+    ------
+    ValueError
+        If the translated field's azimuthal spectral tail exceeds the truncation guard (increase
+        ``n_modes``).
+    """
+    delta = v_d * t_rest / retardation_factor
+    sig_x = np.sqrt(2.0 * (alpha_l * abs(v_d) + d_m) * t_rest / retardation_factor)
+    sig_y = np.sqrt(2.0 * d_m * t_rest / retardation_factor)
+    if delta == 0.0 and sig_x == 0.0:
+        return field  # v_d = 0 and D_m = 0: a rest phase is the identity
+    n_quad, nm, k = field.shape
+    modes = np.arange(-n_modes, n_modes + 1)
+    nth = 8 * n_modes + 48
+    theta = np.arange(nth) * (2.0 * np.pi / nth)
+    x = r_nodes[:, None] * np.cos(theta)[None, :]  # (n_quad, nth)
+    y = r_nodes[:, None] * np.sin(theta)[None, :]
+    interp = BarycentricInterpolator(r_nodes, field.reshape(n_quad, nm * k))
+    r_hi = float(r_nodes[-1])
+
+    def field_at(xp: npt.NDArray[np.floating], yp: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        rp = np.hypot(xp, yp).ravel()
+        thp = np.arctan2(yp, xp).ravel()
+        # Source points inside the shut well are folded back across the face (radial Neumann image,
+        # r' -> 2 r_w - r'): the leading-order zero-dispersive-flux closure at the well, which conserves
+        # the near-well mass that a zeroed disk would silently swallow.
+        rp = np.where(rp < r_w, 2.0 * r_w - rp, rp)
+        inside = rp <= r_hi  # beyond the grid: no mass (containment guaranteed by field_grid)
+        vals = np.zeros((rp.size, nm * k))
+        vals[inside] = interp(rp[inside])
+        phase = np.exp(1j * thp[:, None] * modes[None, :])  # (n_pts, nm)
+        return np.einsum("pmk,pm->pk", vals.reshape(-1, nm, k), phase).real.reshape(*xp.shape, k)
+
+    zh, wh = np.polynomial.hermite.hermgauss(_REST_HERMITE)
+    f_new = np.zeros((n_quad, nth, k))
+    if sig_y == 0.0:  # D_m = 0: the Gaussian spread is 1-D along the drift
+        for za, wa in zip(zh, wh, strict=True):
+            f_new += wa * field_at(x - delta - np.sqrt(2.0) * sig_x * za, y)
+        f_new /= np.sqrt(np.pi)
+    else:
+        for za, wa in zip(zh, wh, strict=True):
+            x_shift = x - delta - np.sqrt(2.0) * sig_x * za
+            for zb, wb in zip(zh, wh, strict=True):
+                f_new += (wa * wb) * field_at(x_shift, y - np.sqrt(2.0) * sig_y * zb)
+        f_new /= np.pi
+    coeffs = np.fft.fft(f_new, axis=1) / nth  # (n_quad, nth, k); c_m at index m mod nth
+    measure = (r_nodes * dr_weights)[:, None, None]  # radial area measure for the spectral-tail energy
+    tail_idx = np.concatenate([np.arange(n_modes + 1, 2 * n_modes + 1), -np.arange(n_modes + 1, 2 * n_modes + 1)])
+    band_idx = np.concatenate([tail_idx, modes])
+    # Per COLUMN, not aggregated: a batched build (the reverse operator's unit pulses) must not let one
+    # column's excess tail hide in the energy of the others.
+    e_tail = np.sum(measure * np.abs(coeffs[:, tail_idx % nth]) ** 2, axis=(0, 1))  # (k,)
+    e_band = np.sum(measure * np.abs(coeffs[:, band_idx % nth]) ** 2, axis=(0, 1))
+    ratios = np.sqrt(np.divide(e_tail, e_band, out=np.zeros_like(e_tail), where=e_band > 0.0))
+    if np.any(ratios > _REST_TAIL_MAX):
+        msg = (
+            f"rest drift displacement (delta = {delta:.2f} m over {t_rest:.1f} d) makes the plume too "
+            f"eccentric for the kept azimuthal modes (spectral tail {float(ratios.max()):.2%} > "
+            f"{_REST_TAIL_MAX:.0%}); increase n_modes"
+        )
+        raise ValueError(msg)
+    return coeffs[:, modes % nth].real
 
 
 def block_cout_deviation(
@@ -546,34 +708,48 @@ def block_cout_deviation(
     r"""Multi-cycle extracted-flux deviation with steady regional drift, via the azimuthal-mode block engine.
 
     Generalizes the scalar reused-propagator engine (:func:`gwtransport._radial_asr_reuse.cout_deviation`)
-    to the coupled azimuthal modes. The resident state is a mode-field ``field[r_node, mode]``; each
-    constant-Q phase advances it with the exact per-phase block kernels (:func:`_block_solutions`):
+    to the coupled azimuthal modes. The resident state is a mode-field batch ``field[r_node, mode, column]``
+    (one column per independent ``cin_deviation`` column); each constant-Q phase advances it with the exact
+    per-phase block kernels (:func:`_block_solutions`):
 
     * **injection** -- the existing field is propagated by the injection-direction interior resolvent
       (:func:`_resolvent_field_laplace`), then the freshly injected resident profile is added via the
       ``m = 0`` Kreft-Zuber flux transfer (:func:`_resident_laplace`) superposed over the injection bins;
     * **extraction** -- the ``m = 0`` well-face flux concentration is read out (:func:`_readout_laplace`)
-      and bin-averaged into ``cout``; the residual field is then propagated for any following phase.
+      and bin-averaged into ``cout``; the residual field is then propagated for any following phase;
+    * **rest** (``flow == 0``) -- the field is advanced by the exact free-space drift kernel
+      (:func:`_rest_drift_field`): translation by ``v_d t/R`` plus the anisotropic Gaussian spread, with
+      a Neumann-image closure at the shut well face and an honest guard on the azimuthal truncation of
+      the translated plume.
 
     Every per-phase operator is grid-free in ``(r, theta)`` (no PDE mesh): the only numerics are the radial
     matrix Riccati ODEs, Gauss-Legendre quadrature and de Hoog Laplace inversion. The interior resolvent is
-    applied per reversal (prefix/suffix accumulation) rather than as a materialized propagator, so memory
-    stays ``O((2M+1)^2 n_quad)``. At ``v_d = 0`` the modes decouple and the ``m = 0`` block reproduces the
-    scalar engine to the de Hoog floor *for constant-per-phase flow* (the public API dispatches ``v_d = 0``
-    to the scalar path for the bit-for-bit guarantee).
+    applied per reversal (prefix/suffix recursions over the per-interval transitions) rather than as a
+    materialized propagator, so memory stays ``O((2M+1)^2 n_quad)`` per phase kernel, and the per-phase
+    kernel solutions are cached across recurring phases -- the block analogue of the scalar engine's reused
+    propagator matrices, making the ODE cost ``O(distinct phases)`` instead of ``O(reversals)``. At
+    ``v_d = 0`` the modes decouple and the ``m = 0`` block reproduces the scalar engine to the de Hoog
+    floor *for constant-per-phase flow* (the public API dispatches ``v_d = 0`` to the scalar path for the
+    bit-for-bit guarantee).
 
     Within-phase variable flow is **approximate**: each phase is clocked in wall-clock time at its mean
     magnitude ``a0 = mean(|flow[phase]|)`` (the drift breaks the flushed-volume-clock autonomy the scalar
     ``D_m = 0`` path exploits for exact variable flow, and matches the scalar ``D_m > 0`` path's same mean-
-    flow approximation). It is exact for piecewise-constant flow, and also for constant ``cin`` over a phase
-    at any flow profile (the resident profile then depends only on the total injected volume). The error
-    appears only for *variable cin AND variable flow* (the cin bins are placed at time corners rather than
-    exact volume edges) and grows with the within-phase variation; use finer phases if needed.
+    flow approximation). It is exact for piecewise-constant flow. At ``v_d = 0`` it is additionally exact
+    for constant ``cin`` over a phase at any flow profile (the resident profile then depends only on the
+    total injected volume), leaving only the *variable cin AND variable flow* cin-placement error (bins at
+    time corners rather than exact volume edges). Under drift no such exactness survives for any
+    within-phase flow variation: the mode coupling integrates ``eps(r(t))`` on the wall clock, so two flow
+    profiles with equal volume and duration end in different fields (an FV differencing of a constant-cin
+    ``+-60%`` flow ramp against constant flow shifts the drift recovery loss by ~14% of the loss). The
+    error grows with the within-phase variation; use finer phases if needed.
 
     Parameters
     ----------
-    cin_deviation : ndarray, shape (n,)
-        Injected concentration deviation per bin (used on injection bins, ``flow > 0``).
+    cin_deviation : ndarray, shape (n,) or (n, k)
+        Injected concentration deviation per bin (used on injection bins, ``flow > 0``). A 2-D input
+        transports ``k`` independent deviation columns through one engine pass sharing the per-phase
+        kernels (used to build the reverse operator's column block in a single run).
     flow : ndarray, shape (n,)
         Signed flow per bin [m^3/day]: ``> 0`` injection, ``< 0`` extraction, ``0`` rest.
     dt_days : ndarray, shape (n,)
@@ -602,49 +778,73 @@ def block_cout_deviation(
 
     Returns
     -------
-    ndarray, shape (n,)
-        Extracted-flux deviation per bin; ``NaN`` on injection / rest bins.
-
-    Raises
-    ------
-    NotImplementedError
-        If the schedule contains a rest phase (``flow == 0``) together with nonzero drift -- the
-        rest-with-drift propagator (translation + anisotropic Gaussian spreading) is not yet implemented;
-        the field would otherwise be silently frozen across the rest, which is wrong under drift.
+    ndarray, shape (n,) or (n, k)
+        Extracted-flux deviation per bin (matching ``cin_deviation``); ``NaN`` on injection / rest bins.
 
     Notes
     -----
-    Propagates a ``ValueError`` from :func:`field_grid` when the significant plume reaches the stagnation
-    radius (drift too strong for the radial engine), and a ``RuntimeError`` from :func:`_block_solutions`
-    if a per-phase matrix Riccati integration fails.
+    Propagates a ``ValueError`` from :func:`field_grid` when the significant plume (including the
+    rest-phase drift displacement) reaches the stagnation radius (drift too strong for the radial
+    engine), or from :func:`_rest_drift_field` when a rest translation makes the plume too eccentric for
+    the kept azimuthal modes (increase ``n_modes``); and a ``RuntimeError`` from :func:`_block_solutions`
+    if a per-phase matrix Riccati or interval-transition integration fails.
     """
     flow = np.asarray(flow, dtype=float)
     dt_days = np.asarray(dt_days, dtype=float)
     cin_deviation = np.asarray(cin_deviation, dtype=float)
-    if np.any(flow == 0.0):
-        msg = "rest phases (flow == 0) with regional drift are not yet supported (rest-with-drift kernel)"
-        raise NotImplementedError(msg)
-    phases = _phase_slices(flow)  # rest phases are excluded above (raised); every phase here pumps
-    # Each phase is clocked at its mean magnitude, so its A_0 = mean(|flow[phase]|)/(2 c_geo); the stagnation
-    # radius r_s = |A_0|/|v_d| is smallest for the weakest phase, so size the grid cap on that (worst-case).
-    a0_min = min(float(np.mean(np.abs(flow[sl]))) for _, sl in phases) / (2.0 * c_geo)
-    r_nodes, dr_weights, r_far = field_grid(flow, dt_days, c_geo, r_w, alpha_l, v_d, a0_min, n_quad)
+    vector_input = cin_deviation.ndim == 1
+    cin_cols = cin_deviation[:, None] if vector_input else cin_deviation  # (n, k)
+    n_rhs = cin_cols.shape[1]
+    phases = _phase_slices(flow)
+    pumping = [(sign, sl) for sign, sl in phases if sign != 0]
+    if not pumping:  # all-rest schedule: nothing is injected or extracted
+        cout_empty = np.full((len(flow), n_rhs), np.nan)
+        return cout_empty[:, 0] if vector_input else cout_empty
+    while phases[-1][0] == 0:  # trailing rest phases cannot affect any output; don't propagate or guard them
+        phases.pop()
+    # Each pumping phase is clocked at its mean magnitude, so its A_0 = mean(|flow[phase]|)/(2 c_geo); the
+    # stagnation radius r_s = |A_0|/|v_d| is smallest for the weakest phase, so size the grid cap on that
+    # (worst-case). Interior rest phases translate the plume by v_d t/R; the grid provisions for their
+    # total shift. Leading rests act on an empty field and trailing rests are dropped above, so neither
+    # counts -- idle padding must not inflate the envelope guard or dilute the radial resolution.
+    a0_min = min(float(np.mean(np.abs(flow[sl]))) for _, sl in pumping) / (2.0 * c_geo)
+    nz = np.flatnonzero(flow != 0.0)
+    interior = slice(nz[0], nz[-1] + 1)
+    rest_time = float(np.sum(dt_days[interior][flow[interior] == 0.0]))
+    drift_shift = abs(v_d) * rest_time / retardation_factor
+    r_nodes, dr_weights, r_far = field_grid(
+        flow, dt_days, c_geo, r_w, alpha_l, v_d, a0_min, n_quad, d_m=molecular_diffusivity, drift_shift=drift_shift
+    )
     nm = 2 * n_modes + 1
 
+    # The per-phase block solutions are a pure function of (direction, |A_0|, s) -- every other input is
+    # fixed for the call -- and the de Hoog nodes depend only on max(t), so the 2-3 inversions within one
+    # phase (propagate / resident / readout all span the same phase duration) and every recurrence of the
+    # phase across a periodic schedule share one Riccati + transition solve. Caching them is the block
+    # analogue of the scalar engine's reused propagator matrices: the ODE cost becomes O(distinct phases)
+    # instead of O(reversals). FIFO-capped: an entry holds O(n_quad n_s (2M+1)^2) complex (~70 MB at the
+    # defaults), and a periodic schedule needs only one entry per pumping direction.
+    solutions_cache: dict[tuple[str, float, bytes], dict] = {}
+
     def solutions(s: npt.NDArray[np.complexfloating], a0: float, direction: str) -> dict:
-        return _block_solutions(
-            s,
-            r_nodes,
-            r_w,
-            alpha_l=alpha_l,
-            a0=a0,
-            v_d=v_d,
-            d_m=molecular_diffusivity,
-            retardation_factor=retardation_factor,
-            n_modes=n_modes,
-            direction=direction,
-            r_far=r_far,
-        )
+        key = (direction, a0, s.tobytes())
+        if key not in solutions_cache:
+            if len(solutions_cache) >= _SOLUTIONS_CACHE_MAX:
+                solutions_cache.pop(next(iter(solutions_cache)))
+            solutions_cache[key] = _block_solutions(
+                s,
+                r_nodes,
+                r_w,
+                alpha_l=alpha_l,
+                a0=a0,
+                v_d=v_d,
+                d_m=molecular_diffusivity,
+                retardation_factor=retardation_factor,
+                n_modes=n_modes,
+                direction=direction,
+                r_far=r_far,
+            )
+        return solutions_cache[key]
 
     def propagate(field: npt.NDArray[np.floating], a0: float, direction: str, t_phase: float) -> npt.NDArray:
         def f_hat(s):
@@ -652,15 +852,33 @@ def block_cout_deviation(
 
         return dehoog_inverse(f_hat=f_hat, t=t_phase, n_terms=n_terms, tol=tol)
 
-    field = np.zeros((n_quad, nm))
-    cout = np.full(len(flow), np.nan)
+    field = np.zeros((n_quad, nm, n_rhs))
+    cout = np.full((len(flow), n_rhs), np.nan)
     for idx, (sign, sl) in enumerate(phases):
+        # One cumulative-time base per phase: the propagate / resident / readout inversions then share
+        # bitwise-identical de Hoog nodes (max(t) equal), so the solutions cache hits within the phase.
+        csum = np.cumsum(dt_days[sl])
+        t_phase = float(csum[-1])
+        if sign == 0:  # rest: free-space translate + anisotropic-spread kernel (Neumann image at the well)
+            if np.any(field):
+                field = _rest_drift_field(
+                    field,
+                    r_nodes,
+                    dr_weights,
+                    r_w,
+                    alpha_l=alpha_l,
+                    v_d=v_d,
+                    d_m=molecular_diffusivity,
+                    retardation_factor=retardation_factor,
+                    t_rest=t_phase,
+                    n_modes=n_modes,
+                )
+            continue
         a0 = float(np.mean(np.abs(flow[sl]))) / (2.0 * c_geo)
-        t_phase = float(np.sum(dt_days[sl]))
         if sign > 0:  # injection: propagate the buffer, then add the freshly injected resident profile
             if np.any(field):
                 field = propagate(field, a0, _INJECTION, t_phase)
-            corners = t_phase - np.concatenate(([0.0], np.cumsum(dt_days[sl])))  # descending, last is 0
+            corners = t_phase - np.concatenate(([0.0], csum))  # descending, last is 0
 
             def f_hat_resident(s, a0=a0):
                 return (
@@ -676,17 +894,18 @@ def block_cout_deviation(
                 )
 
             g1 = dehoog_inverse(f_hat=f_hat_resident, t=corners, n_terms=n_terms, tol=tol)  # (n_corner, n_quad, nm)
-            field += np.einsum("b,bqm->qm", cin_deviation[sl], g1[:-1] - g1[1:])
+            field += np.einsum("bk,bqm->qmk", cin_cols[sl], g1[:-1] - g1[1:])
         else:  # extraction: read the m=0 well-face flux, then propagate the residual if more phases follow
-            ext_corners = np.concatenate(([0.0], np.cumsum(dt_days[sl])))
+            ext_corners = np.concatenate(([0.0], csum))
 
             def f_hat_readout(s, a0=a0, field=field):
                 return (
-                    _readout_laplace(solutions(s, a0, "extraction"), field, dr_weights, retardation_factor, n_modes) / s
+                    _readout_laplace(solutions(s, a0, "extraction"), field, dr_weights, retardation_factor, n_modes)
+                    / s[:, None]
                 )
 
-            cdf = dehoog_inverse(f_hat=f_hat_readout, t=ext_corners, n_terms=n_terms, tol=tol)
-            cout[sl] = (cdf[1:] - cdf[:-1]) / np.diff(ext_corners)
+            cdf = dehoog_inverse(f_hat=f_hat_readout, t=ext_corners, n_terms=n_terms, tol=tol)  # (n_corner, k)
+            cout[sl] = (cdf[1:] - cdf[:-1]) / np.diff(ext_corners)[:, None]
             if idx != len(phases) - 1:
                 field = propagate(field, a0, "extraction", t_phase)
-    return cout
+    return cout[:, 0] if vector_input else cout

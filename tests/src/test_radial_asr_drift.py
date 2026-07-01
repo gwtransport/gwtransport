@@ -4,6 +4,9 @@ Precision discipline mirrors the radial engine: U=0 reductions and exact symmetr
 de Hoog precision (~1e-8, the matrix-Riccati + de Hoog floor); finite-volume comparisons are
 first-order (``O(1/n_cells)``), so engine-vs-FV agreement is judged on the *drift recovery loss* (which
 cancels the common FV bias) at ~1-2%, with the finite-volume solve shown to converge toward the engine.
+The rest-with-drift kernel has its own anchors: the t -> 0 identity, drift-reversal evenness through the
+rest, the v_d = 0 reduction to the scalar Bessel rest kernel (to the Neumann-image closure residual), an
+FV drift-loss cross-check of an inject-rest-extract cycle, and the honest spectral-tail guard.
 
 Memory note: the block solutions scale as ``n_quad * n_s * (2 n_modes + 1)^2``; these tests deliberately
 keep ``n_quad`` small and ``n_modes`` low so the suite stays light.
@@ -15,9 +18,11 @@ import pytest
 from _radial_asr_drift_fv_oracle import fv2d_cout_deviation  # ty: ignore[unresolved-import]  # tests/src on path
 from _radial_asr_drift_kernels_check import real_space_coupling  # ty: ignore[unresolved-import]
 
+from gwtransport._radial_asr_dehoog import dehoog_inverse
 from gwtransport._radial_asr_drift_kernels import block_coupling_matrices, block_cout_deviation
 from gwtransport._radial_asr_reuse import cout_deviation
 from gwtransport.radial_asr import (
+    _auto_n_modes,
     extraction_to_infiltration,
     gamma_extraction_to_infiltration,
     gamma_infiltration_to_extraction,
@@ -304,14 +309,15 @@ def test_strong_drift_raises():
         )
 
 
-def test_rest_with_drift_raises():
-    """A rest phase under drift is not silently frozen (the plume translates and disperses during rest)."""
-    flow = np.array([_Q] * 4 + [0.0] * 3 + [-_Q] * 6)
+def test_rest_long_translation_raises():
+    """A rest translation that outruns the kept azimuthal modes raises (honest spectral-tail guard) rather
+    than silently folding the eccentric plume's harmonics back into the truncated band."""
+    flow = np.array([_Q] * 6 + [0.0] * 40 + [-_Q] * 10)
     dt = np.ones(len(flow))
     cin = np.where(flow > 0, 1.0, 0.0)
-    r_b = np.sqrt(_R_W**2 + _Q * 4 / _C_GEO)
+    r_b = np.sqrt(_R_W**2 + _Q * 6 / _C_GEO)
     v_d = _eps_to_vd(0.2, r_b)
-    with pytest.raises(NotImplementedError, match="rest"):
+    with pytest.raises(ValueError, match="n_modes"):
         block_cout_deviation(
             cin_deviation=cin,
             flow=flow,
@@ -320,9 +326,142 @@ def test_rest_with_drift_raises():
             r_w=_R_W,
             alpha_l=_ALPHA_L,
             v_d=v_d,
-            n_modes=2,
+            n_modes=3,
             n_quad=60,
         )
+
+
+# --- rest phases under drift: the free-space translate + spread kernel ----------------------------
+def test_rest_tiny_duration_reduces_to_no_rest():
+    """A vanishing rest phase is a no-op: the translate+spread kernel reduces to the identity (t -> 0),
+    exercising the full real-space evaluate / Gauss-Hermite / FFT-reproject round trip at delta ~ 0."""
+    kw = {"c_geo": _C_GEO, "r_w": _R_W, "alpha_l": _ALPHA_L, "n_modes": 3, "n_quad": 80, "n_terms": 40, "tol": 1e-10}
+    r_b = np.sqrt(_R_W**2 + _Q * 6 / _C_GEO)
+    v_d = _eps_to_vd(0.2, r_b)
+    flow_r = np.array([_Q] * 6 + [0.0] + [-_Q] * 10)
+    dt_r = np.ones(len(flow_r))
+    dt_r[6] = 1e-9
+    cin_r = np.where(flow_r > 0, 1.0, 0.0)
+    flow_n = np.array([_Q] * 6 + [-_Q] * 10)
+    c_rest = block_cout_deviation(cin_deviation=cin_r, flow=flow_r, dt_days=dt_r, v_d=v_d, **kw)
+    c_none = block_cout_deviation(
+        cin_deviation=np.where(flow_n > 0, 1.0, 0.0), flow=flow_n, dt_days=np.ones(len(flow_n)), v_d=v_d, **kw
+    )
+    np.testing.assert_allclose(c_rest[flow_r < 0], c_none[flow_n < 0], atol=1e-8)
+
+
+def test_rest_drift_reversal_symmetry():
+    """cout(+U) == cout(-U) with a rest phase: the rest kernel's translation direction covaries with the
+    drift sign under the 180-degree rotation, so the evenness anchor extends through the rest kernel."""
+    flow = np.array([_Q] * 6 + [0.0] * 3 + [-_Q] * 10)
+    dt = np.ones(len(flow))
+    cin = np.where(flow > 0, 1.0, 0.0)
+    ext = flow < 0
+    r_b = np.sqrt(_R_W**2 + _Q * 6 / _C_GEO)
+    v_d = _eps_to_vd(0.2, r_b)
+    kw = {
+        "cin_deviation": cin,
+        "flow": flow,
+        "dt_days": dt,
+        "c_geo": _C_GEO,
+        "r_w": _R_W,
+        "alpha_l": _ALPHA_L,
+        "n_modes": 3,
+        "n_quad": 80,
+        "n_terms": 40,
+        "tol": 1e-10,
+    }
+    cp = block_cout_deviation(v_d=v_d, **kw)
+    cm = block_cout_deviation(v_d=-v_d, **kw)
+    np.testing.assert_allclose(cp[ext], cm[ext], atol=1e-8)
+    # the rest translation strictly degrades recovery relative to the no-rest schedule (drift keeps acting)
+    flow_n = np.array([_Q] * 6 + [-_Q] * 10)
+    c_none = block_cout_deviation(
+        cin_deviation=np.where(flow_n > 0, 1.0, 0.0),
+        flow=flow_n,
+        dt_days=np.ones(len(flow_n)),
+        c_geo=_C_GEO,
+        r_w=_R_W,
+        alpha_l=_ALPHA_L,
+        v_d=v_d,
+        n_modes=3,
+        n_quad=80,
+        n_terms=40,
+        tol=1e-10,
+    )
+    assert np.nansum(cp[ext]) < np.nansum(c_none[flow_n < 0])
+
+
+def test_rest_dm_reduces_to_scalar_bessel():
+    """At v_d=0 with D_m>0 the rest kernel (isotropic free-space Gaussian + Neumann image at the well)
+    matches the scalar engine's exact well-respecting Bessel rest kernel to the image-closure residual
+    (~4e-4, the circle-vs-line curvature of the image at the r_w scale) -- an independent exact anchor for
+    the Gaussian-spread half of the kernel."""
+    flow = np.array([_Q] * 6 + [0.0] * 3 + [-_Q] * 10)
+    dt = np.ones(len(flow))
+    cin = np.where(flow > 0, 1.0, 0.0)
+    ext = flow < 0
+    kw = {"c_geo": _C_GEO, "r_w": _R_W, "alpha_l": _ALPHA_L, "n_quad": 90, "n_terms": 40, "tol": 1e-10}
+    blk = block_cout_deviation(
+        cin_deviation=cin, flow=flow, dt_days=dt, v_d=0.0, molecular_diffusivity=0.5, n_modes=3, **kw
+    )
+    sca = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.5, **kw)
+    np.testing.assert_allclose(blk[ext], sca[ext], atol=1e-3)
+
+
+def test_rest_drift_loss_matches_fv_oracle():
+    """The rest-phase drift loss matches the independent 2-D FV oracle: an inject-rest-extract cycle at
+    eps=0.25 with a 4-day rest, judged on the drift recovery loss (RE(U~0) - RE(U)), which the rest phase
+    roughly doubles relative to the no-rest schedule -- the seasonal-storage effect the kernel exists for."""
+    n_inj, n_rest, n_ext = 6, 4, 10
+    flow = np.concatenate([np.full(n_inj, _Q), np.zeros(n_rest), np.full(n_ext, -_Q)])
+    dt = np.ones(len(flow))
+    cin = np.where(flow > 0, 1.0, 0.0)
+    ext = flow < 0
+    r_b = np.sqrt(_R_W**2 + _Q * n_inj / _C_GEO)
+    v_d = _eps_to_vd(0.25, r_b)
+    u = v_d * _POROSITY
+
+    def block_re(vd):
+        c = block_cout_deviation(
+            cin_deviation=cin,
+            flow=flow,
+            dt_days=dt,
+            c_geo=_C_GEO,
+            r_w=_R_W,
+            alpha_l=_ALPHA_L,
+            v_d=vd,
+            n_modes=4,
+            n_quad=90,
+            n_terms=40,
+            tol=1e-10,
+        )
+        return float(np.nansum(c[ext]) / n_inj)
+
+    block_loss = block_re(1e-9) - block_re(v_d)
+
+    def fv_loss(n_r):
+        re = {}
+        for u_flux in (0.0, u):
+            c = fv2d_cout_deviation(
+                cin_deviation=cin,
+                flow=flow,
+                dt_days=dt,
+                b=_B,
+                porosity=_POROSITY,
+                r_w=_R_W,
+                alpha_l=_ALPHA_L,
+                regional_flux=u_flux,
+                n_r=n_r,
+                n_theta=48,
+                n_sub=8,
+            )
+            re[u_flux] = float(np.sum(c[ext]) / n_inj)
+        return re[0.0] - re[u]
+
+    fv = (fv_loss(220) * (1 / 140) - fv_loss(140) * (1 / 220)) / (1 / 140 - 1 / 220)  # Richardson
+    assert abs(block_loss - fv) < 0.1 * abs(fv) + 2e-3
+    assert block_loss > 0.0
 
 
 # --- public API dispatch -------------------------------------------------------------------------
@@ -382,6 +521,49 @@ def test_public_u0_dispatch_all_entry_points():
     )
 
 
+def test_auto_n_modes_sizing():
+    """_auto_n_modes: the eps^{M+1} tail bound (eps = 0.3 -> M = 5), the [2, .] floor at vanishing drift,
+    the rest-displacement growth (a rest phase raises M via the displaced-radius eps and the delta/width
+    harmonic bound), the [., 8] cap for long rests, and the all-rest floor (nothing pumps -> 2, letting
+    the engine's graceful all-NaN branch run instead of an opaque empty-reduction crash)."""
+    flow, dt, _ = _single_cycle()
+    r_b = np.sqrt(_R_W**2 + _Q * 6 / _C_GEO)
+    assert _auto_n_modes(flow, dt, _C_GEO, _R_W, _ALPHA_L, 0.3 * _A0 / r_b) == 5  # ceil(ln 5e-3 / ln 0.3)
+    assert _auto_n_modes(flow, dt, _C_GEO, _R_W, _ALPHA_L, 1e-9 * _A0 / r_b) == 2  # floor
+    v_d = _eps_to_vd(0.2, r_b)
+    flow_rest = np.concatenate([flow[:6], np.zeros(30), flow[6:]])
+    m_rest = _auto_n_modes(flow_rest, np.ones(len(flow_rest)), _C_GEO, _R_W, _ALPHA_L, v_d)
+    assert m_rest > _auto_n_modes(flow, dt, _C_GEO, _R_W, _ALPHA_L, v_d)
+    flow_long = np.concatenate([flow[:6], np.zeros(300), flow[6:]])
+    assert _auto_n_modes(flow_long, np.ones(len(flow_long)), _C_GEO, _R_W, _ALPHA_L, v_d) == 8  # cap
+    assert _auto_n_modes(np.zeros(5), np.ones(5), _C_GEO, _R_W, _ALPHA_L, v_d) == 2  # all-rest
+
+
+def test_public_auto_n_modes_dispatch():
+    """n_modes=None (the default) auto-sizes the truncation: the public result is bit-for-bit the explicit
+    call at the _auto_n_modes value -- the default drift path is exercised end to end."""
+    flow, dt, cin = _single_cycle()
+    tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
+    u = 0.05
+    m = _auto_n_modes(flow, dt, _C_GEO, _R_W, _ALPHA_L, u / _POROSITY)
+    kw = {
+        "cin": cin,
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "pore_heights": _B,
+        "porosity": _POROSITY,
+        "well_radius": _R_W,
+        "longitudinal_dispersivity": _ALPHA_L,
+        "regional_flux": u,
+        "n_quad": 60,
+    }
+    np.testing.assert_array_equal(
+        infiltration_to_extraction(**kw),
+        infiltration_to_extraction(n_modes=m, **kw),
+    )
+
+
 def test_public_drift_background_linearity():
     """Drift transport is linear in the deviation: cout(bg) == bg + cout_dev(bg=0) on extraction bins."""
     flow, _, cin = _single_cycle()
@@ -433,8 +615,11 @@ def test_reverse_round_trip_under_drift():
 
 def test_public_single_streamtube_ensemble_equals_engine():
     """The public drift path with one streamtube is exactly the block engine on that streamtube's c_geo
-    (the velocity-CV ensemble is a weighted average that reduces to a single engine call here)."""
-    flow, dt, cin = _single_cycle()
+    (the velocity-CV ensemble is a weighted average that reduces to a single engine call here). The
+    schedule includes a rest phase, so the public dispatch of rest-with-drift is exercised too."""
+    flow = np.array([_Q] * 6 + [0.0] * 2 + [-_Q] * 10)
+    dt = np.ones(len(flow))
+    cin = np.where(flow > 0, 1.0, 0.0)
     ext = flow < 0
     tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
     u = 0.05
@@ -512,6 +697,12 @@ def test_variable_within_phase_flow_is_bounded_mean_flow_approximation():
     constant cin is exact to the de Hoog floor for any flow profile (the resident profile depends only on
     total injected volume); only variable cin AND variable flow expose the misplacement (~7% of peak for a
     +-20% flow ramp with ramped cin) -- nonzero but bounded. Finer phases or constant flow recover exactness.
+
+    NB the constant-cin exactness is a v_d = 0 statement only: under drift the mode coupling integrates
+    eps(r(t)) on the wall clock, so equal-volume equal-duration flow profiles end in different fields (an
+    FV differencing of a constant-cin +-60% ramp against constant flow shifts the drift recovery loss by
+    ~14% of the loss) while the mean-flow engine returns identical results for both. Under drift the
+    mean-flow approximation therefore applies to ANY within-phase variation, constant cin included.
     """
     n_inj, n_ext = 6, 10
     ramp_flow = 100.0 * np.linspace(0.8, 1.2, n_inj)  # +-20% flow ramp within the injection phase
@@ -531,6 +722,80 @@ def test_variable_within_phase_flow_is_bounded_mean_flow_approximation():
     assert gap(flow_const, ramp_cin) < 1e-6  # constant flow: exact for any cin (de Hoog floor)
     assert gap(flow, const_cin) < 1e-6  # constant cin: exact for any flow (profile = total volume only)
     assert 1e-3 < gap(flow, ramp_cin) < 0.12  # variable flow AND cin: the mean-flow approximation appears
+
+
+def test_nonuniform_phase_schedule():
+    """Schedules with unequal per-phase durations AND magnitudes work and reduce to the scalar engine at
+    v_d ~ 0. Regression: the de-scaled global-transition resolvent overflowed/colinearized on exactly this
+    shape (small A_0, short phases push the mode-split Sturm-Liouville exponent past double precision) and
+    crashed with a singular-matrix error; the per-interval transition recursions stay conditioned."""
+    flow = np.concatenate([np.full(4, 80.0), np.full(5, -60.0), np.full(3, 120.0), np.full(6, -90.0)])
+    dt = np.ones(len(flow))
+    cin = np.where(flow > 0, 1.0, 0.0)
+    ext = flow < 0
+    kw = {"c_geo": _C_GEO, "r_w": _R_W, "alpha_l": _ALPHA_L, "n_quad": 80, "n_terms": 40, "tol": 1e-11}
+    scalar = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, **kw)
+    block0 = block_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, v_d=1e-9, n_modes=2, **kw)
+    # 1e-6, not the uniform-schedule 1e-7: the mixed durations/magnitudes give the two engines different
+    # de Hoog scalings per phase, so the comparison floor is the Pade-acceleration nonlinearity (~2e-7).
+    np.testing.assert_allclose(block0[ext], scalar[ext], atol=1e-6)
+    r_b = np.sqrt(_R_W**2 + 80.0 * 4 / _C_GEO)
+    v_d = 0.15 * (60.0 / (2.0 * _C_GEO)) / r_b  # eps relative to the WEAKEST phase (the binding envelope)
+    drift = block_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, v_d=v_d, n_modes=3, **kw)
+    assert np.isfinite(drift[ext]).all()
+    assert np.all(drift[ext] > -1e-9)
+    assert np.nansum(drift[ext]) < np.nansum(block0[ext])  # drift strictly reduces recovery
+
+
+def test_batched_columns_match_vector_runs():
+    """A (n, k) cin batch equals the k separate vector runs to the de Hoog floor (the per-phase kernels are
+    bit-shared; only BLAS blocking differs), a zero column returns exactly zero (no cross-column leakage),
+    and a power-of-two scaled column is exactly scaled (the whole pipeline is linear per column)."""
+    flow, dt, cin = _single_cycle()
+    ext = flow < 0
+    r_b = np.sqrt(_R_W**2 + _Q * 6 / _C_GEO)
+    kw = {
+        "flow": flow,
+        "dt_days": dt,
+        "c_geo": _C_GEO,
+        "r_w": _R_W,
+        "alpha_l": _ALPHA_L,
+        "v_d": _eps_to_vd(0.2, r_b),
+        "n_modes": 2,
+        "n_quad": 60,
+        "n_terms": 40,
+        "tol": 1e-10,
+    }
+    other = np.roll(cin, 1) * 0.7
+    batched = block_cout_deviation(cin_deviation=np.stack([cin, other, np.zeros_like(cin), 2.0 * cin], axis=1), **kw)
+    np.testing.assert_allclose(batched[ext, 0], block_cout_deviation(cin_deviation=cin, **kw)[ext], atol=1e-9)
+    np.testing.assert_allclose(batched[ext, 1], block_cout_deviation(cin_deviation=other, **kw)[ext], atol=1e-9)
+    np.testing.assert_array_equal(batched[ext, 2], 0.0)  # exact: no cross-column contamination
+    np.testing.assert_array_equal(batched[ext, 3], 2.0 * batched[ext, 0])  # exact: linearity per column
+    # the rest kernel carries the batch axis too (the reverse build feeds pulse columns through rests)
+    flow_r = np.array([_Q] * 6 + [0.0] * 2 + [-_Q] * 10)
+    cin_r = np.where(flow_r > 0, 1.0, 0.0)
+    kw_r = {**kw, "flow": flow_r, "dt_days": np.ones(len(flow_r))}
+    ext_r = flow_r < 0
+    batched_r = block_cout_deviation(cin_deviation=np.stack([cin_r, np.zeros_like(cin_r)], axis=1), **kw_r)
+    np.testing.assert_allclose(batched_r[ext_r, 0], block_cout_deviation(cin_deviation=cin_r, **kw_r)[ext_r], atol=1e-9)
+    np.testing.assert_array_equal(batched_r[ext_r, 1], 0.0)
+
+
+def test_dehoog_zero_and_mixed_batch_columns():
+    """An identically-zero transform inverts to exactly zero without poisoning its batch neighbours: the
+    quotient-difference recurrence would form 0/0 on the zero column (a decoupled azimuthal mode with no
+    source), so dehoog_inverse parks such columns and restores exact zeros -- while the nonzero columns
+    still invert to their analytic values."""
+    t = np.array([0.5, 1.0, 2.0])
+
+    def f_hat(s):
+        return np.stack([1.0 / (s + 1.0), np.zeros_like(s), 1.0 / s], axis=-1)  # e^{-t}, 0, 1
+
+    out = dehoog_inverse(f_hat=f_hat, t=t, n_terms=24, tol=1e-10)
+    np.testing.assert_allclose(out[:, 0], np.exp(-t), atol=1e-8)
+    np.testing.assert_array_equal(out[:, 1], 0.0)
+    np.testing.assert_allclose(out[:, 2], 1.0, atol=1e-8)
 
 
 def test_degenerate_schedules():
