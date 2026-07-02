@@ -78,3 +78,42 @@ def real_space_coupling(
             toeplitz(v_th / rv - d_drt / rv - dth_dtt / rv**2) * i_m[None, :] + toeplitz(-d_tt / rv**2) * (-m2)[None, :]
         )
     return a_mat, b_mat, s0_mat
+
+
+def real_space_face(
+    r_w: float,
+    *,
+    alpha_l: float,
+    a0: float,
+    v_d: float,
+    d_m: float,
+    n_modes: int,
+    n_theta: int = 4096,
+) -> tuple[npt.NDArray[np.complexfloating], npt.NDArray[np.complexfloating], npt.NDArray[np.complexfloating]]:
+    """Well-face matrices ``M[v_r]``, ``M[D_rr]``, ``M[D_rtheta]`` at ``r = r_w`` by direct quadrature.
+
+    Independent reference for the face operators that carry the flux-modulated Robin/Danckwerts
+    conditions, the injected-flux source, and the flux-weighted readout: analytic tensor components and
+    rectangle-rule Fourier coefficients, sharing no FFT machinery or grid choice with production.
+
+    Returns
+    -------
+    m_vr, m_drr, m_drt : ndarray of complex, each shape (2 n_modes + 1, 2 n_modes + 1)
+        The face coupling matrices.
+    """
+    modes = np.arange(-n_modes, n_modes + 1)
+    diff = modes[:, None] - modes[None, :]
+    theta = np.linspace(0.0, 2.0 * np.pi, n_theta, endpoint=False)
+
+    def toeplitz(f_theta: npt.NDArray[np.floating]) -> npt.NDArray[np.complexfloating]:
+        ck = np.array([np.mean(f_theta * np.exp(-1j * k * theta)) for k in range(-2 * n_modes, 2 * n_modes + 1)])
+        return ck[diff + 2 * n_modes]
+
+    v_r = a0 / r_w + v_d * np.cos(theta)
+    v_th = -v_d * np.sin(theta)
+    speed = np.sqrt(v_r**2 + v_th**2)
+    return (
+        toeplitz(v_r),
+        toeplitz(alpha_l * v_r**2 / speed + d_m),
+        toeplitz(alpha_l * v_r * v_th / speed),
+    )

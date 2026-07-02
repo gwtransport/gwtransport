@@ -306,8 +306,9 @@ def _auto_n_modes(
 
     The pumping-phase mode amplitudes decay geometrically, ``|c_m| ~ eps^|m|`` with
     ``eps = v_d R_b / A_0``, so keeping modes ``-M .. M`` truncates the azimuthal field at
-    ``O(eps^{M+1})``; ``M`` is chosen so that tail is below ``~5e-3``. A rest phase additionally
-    translates the plume by ``delta = v_d t_rest`` (``R = 1``, conservative), which populates harmonics up
+    ``O(eps^{M+1})``; ``M`` is chosen so that tail is below ``~5e-3``. An interior rest phase
+    additionally translates the plume by ``delta = v_d t_rest`` (``R = 1``, conservative; idle bins
+    before the first or after the last pumping do not move the field), populating harmonics up
     to ``~ delta / width`` (``width`` the radial breakthrough std) -- the second bound. The result is
     clamped to ``[2, 8]`` (the slow-drift envelope -- beyond ``eps ~ 0.6`` the far-field escape this
     engine does not model dominates anyway); the rest kernel's honest spectral-tail guard raises if a long
@@ -327,7 +328,9 @@ def _auto_n_modes(
     net_volume = np.concatenate(([0.0], np.cumsum(flow * dt_days)))
     peak_volume = max(float(net_volume.max()), 0.0)
     r_b = np.sqrt(well_radius**2 + peak_volume / c_geo)
-    delta = abs(v_d) * float(np.sum(dt_days[flow == 0.0]))
+    nz = np.flatnonzero(flow != 0.0)
+    interior = slice(nz[0], nz[-1] + 1)  # leading/trailing idle bins do not move the field
+    delta = abs(v_d) * float(np.sum(dt_days[interior][flow[interior] == 0.0]))
     eps = min(abs(v_d) * (r_b + delta) / abs(a0), 0.6)
     m_eps = int(np.ceil(np.log(5e-3) / np.log(eps))) if eps > 0.0 else 2
     width = np.sqrt(longitudinal_dispersivity * r_b + longitudinal_dispersivity**2)

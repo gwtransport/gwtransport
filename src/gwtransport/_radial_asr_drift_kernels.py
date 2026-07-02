@@ -88,6 +88,46 @@ def _toeplitz_from_theta(f_theta: npt.NDArray[np.floating], n_modes: int) -> npt
     return coeffs[..., diff % n]
 
 
+def _theta_grid(n_modes: int) -> npt.NDArray[np.floating]:
+    r"""Uniform azimuthal FFT grid sized for the eps-banded harmonics.
+
+    The needed Fourier coefficients ``|k| <= 2 n_modes`` of the tensor components decay like
+    ``eps^|k|`` and coefficient ``k`` aliases the ``k +- n_theta`` harmonic; ``8 n_modes + 48`` keeps
+    that alias below ~1e-12 across the slow-drift envelope (``eps <= 0.6`` at the grid edge).
+
+    Returns
+    -------
+    ndarray
+        Grid angles, shape ``(8 n_modes + 48,)``.
+    """
+    nth = 8 * n_modes + 48
+    return np.arange(nth) * (2.0 * np.pi / nth)
+
+
+def _tensor_components(
+    rr: npt.NDArray[np.floating], theta: npt.NDArray[np.floating], *, alpha_l: float, a0: float, v_d: float, d_m: float
+) -> tuple[npt.NDArray[np.floating], ...]:
+    r"""Velocity and rank-1 Scheidegger tensor components on an ``(r, theta)`` product grid.
+
+    The single source of the drift field's tensor sampling, shared by the interior coupling matrices
+    and the well-face operators so the formulas cannot drift apart. ``rr`` broadcasts as ``(n_r, 1)``.
+
+    Returns
+    -------
+    v_r, v_th, speed, d_rr, d_rt, d_tt : ndarray
+        Components on the product grid, each shape ``(n_r, n_theta)`` (``v_th`` is ``(1, n_theta)``).
+    """
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+    v_r = a0 / rr + v_d * cos_t[None, :]
+    v_th = -v_d * sin_t[None, :]  # theta-only (r-independent); broadcasts against the (n_r, .) factors
+    speed = np.sqrt(v_r**2 + v_th**2)
+    speed = np.where(speed == 0.0, 1.0, speed)  # a0=v_d=0 never reached here (alpha_L>0 guard upstream)
+    d_rr = alpha_l * v_r**2 / speed + d_m
+    d_rt = alpha_l * v_r * v_th / speed
+    d_tt = alpha_l * v_th**2 / speed + d_m
+    return v_r, v_th, speed, d_rr, d_rt, d_tt
+
+
 def block_coupling_matrices(
     r: npt.NDArray[np.floating],
     *,
@@ -96,7 +136,6 @@ def block_coupling_matrices(
     v_d: float,
     d_m: float,
     n_modes: int,
-    n_theta: int | None = None,
 ) -> tuple[npt.NDArray[np.complexfloating], npt.NDArray[np.complexfloating], npt.NDArray[np.complexfloating]]:
     r"""Coefficient matrices ``A(r), B(r), S0(r)`` of the coupled-mode block ODE.
 
@@ -119,12 +158,6 @@ def block_coupling_matrices(
         Molecular diffusivity (m^2/day).
     n_modes : int
         Azimuthal truncation ``M`` (keeps modes ``-M .. M``).
-    n_theta : int, optional
-        Azimuthal FFT grid size. The needed Fourier coefficients ``|k| <= 2 n_modes`` of the tensor
-        components decay like ``eps^|k|`` and a coefficient ``k`` aliases the ``k +- n_theta`` harmonic
-        (``~ eps^(n_theta - 2 n_modes)``); the default ``8 n_modes + 48`` keeps that alias below ~1e-12
-        across the slow-drift envelope (``eps <= 0.6`` at the grid edge), where ``8 n_modes + 8`` would
-        leave a ~1e-2 alias at the envelope's strong end.
 
     Returns
     -------
@@ -132,19 +165,10 @@ def block_coupling_matrices(
         The coefficient matrices at each radius.
     """
     r = np.atleast_1d(np.asarray(r, dtype=float))
-    nth = n_theta if n_theta is not None else 8 * n_modes + 48
-    theta = np.arange(nth) * (2.0 * np.pi / nth)
-    cos_t, sin_t = np.cos(theta), np.sin(theta)
-
+    theta = _theta_grid(n_modes)
+    nth = theta.size
     rr = r[:, None]  # (n_r, 1) broadcast against theta
-    v_r = a0 / rr + v_d * cos_t[None, :]  # (n_r, nth)
-    v_th = -v_d * sin_t[None, :]  # theta-only (r-independent); broadcasts against the (n_r, .) factors
-    speed = np.sqrt(v_r**2 + v_th**2)
-    speed = np.where(speed == 0.0, 1.0, speed)  # a0=v_d=0 never reached here (alpha_L>0 guard upstream)
-
-    d_rr = alpha_l * v_r**2 / speed + d_m
-    d_rt = alpha_l * v_r * v_th / speed
-    d_tt = alpha_l * v_th**2 / speed + d_m
+    v_r, v_th, speed, d_rr, d_rt, d_tt = _tensor_components(rr, theta, alpha_l=alpha_l, a0=a0, v_d=v_d, d_m=d_m)
 
     # analytic radial derivatives (v_th is r-independent; d_r v_r = -a0/r^2)
     dv_r = -a0 / rr**2
@@ -183,25 +207,23 @@ def _face_matrices(
 
     These carry the exact ``theta``-modulated well-face physics: the drift adds ``v_d cos(theta)`` to the
     face velocity and an ``O(eps_w)`` cross-dispersion ``D_rtheta``, which couple neighbouring modes in
-    the face boundary conditions (Robin flux inlet / Danckwerts) and in the injected-flux source. The
-    block-diagonal (scalar) face treatment drops these couplings; that drop biases the extraction readout
-    by ~``eps^2/2`` of the drift loss (measured against the corrected FV oracle and the exact streamtube
-    decomposition), so the face conditions are built exactly here.
+    the face boundary conditions (Robin flux inlet / Danckwerts) and in the injected-flux source. Though
+    individually ``O(eps_w)``, these couplings enter the drift recovery loss at ``O(eps^2)`` -- the order
+    of the loss itself -- so the face conditions are built exactly.
 
     Returns
     -------
     m_vr, m_drr, m_drt : ndarray of complex, each shape (2 n_modes + 1, 2 n_modes + 1)
         Azimuthal coupling matrices of the face velocity and dispersion-tensor components.
     """
-    nth = 8 * n_modes + 48
-    theta = np.arange(nth) * (2.0 * np.pi / nth)
-    v_r = a0_signed / r_w + v_d * np.cos(theta)
-    v_th = -v_d * np.sin(theta)
-    speed = np.sqrt(v_r**2 + v_th**2)
-    m_vr = _toeplitz_from_theta(v_r, n_modes)
-    m_drr = _toeplitz_from_theta(alpha_l * v_r**2 / speed + d_m, n_modes)
-    m_drt = _toeplitz_from_theta(alpha_l * v_r * v_th / speed, n_modes)
-    return m_vr, m_drr, m_drt
+    v_r, _, _, d_rr, d_rt, _ = _tensor_components(
+        np.array([[r_w]]), _theta_grid(n_modes), alpha_l=alpha_l, a0=a0_signed, v_d=v_d, d_m=d_m
+    )
+    return (
+        _toeplitz_from_theta(v_r, n_modes)[0],
+        _toeplitz_from_theta(d_rr, n_modes)[0],
+        _toeplitz_from_theta(d_rt, n_modes)[0],
+    )
 
 
 def field_grid(
@@ -364,7 +386,7 @@ def _block_solutions(
       face Toeplitz matrices (:func:`_face_matrices`): injection Robin
       ``L_+ = M[D_rr]^{-1}(M[v_r] - M[D_rt](i m)/r_w)``, extraction Danckwerts
       ``L_+ = -M[D_rr]^{-1} M[D_rt](i m)/r_w``. The ``O(eps_w)`` face couplings these carry look small
-      but bias the drift loss at ``O(eps^2)`` (~15-20% of the loss) if dropped. Gives ``L_+``.
+      but enter the drift loss at ``O(eps^2)``, the order of the loss itself. Gives ``L_+``.
 
     The recessive / regular fundamental solutions enter the interior resolvent only through
     **per-interval transitions** ``Psi_-(r_i, r_{i-1})`` (outward hops) and ``Psi_+(r_{i-1}, r_i)``
@@ -374,8 +396,8 @@ def _block_solutions(
     :func:`_resident_laplace`) stay bounded and well-conditioned at any Peclet, Laplace frequency, and
     azimuthal truncation. A single fundamental matrix pivoted at ``r_w`` -- even de-scaled by a scalar
     log-amplitude -- accumulates the full mode-split Sturm-Liouville exponent across the grid and
-    overflows / colinearizes (observed as singular resolvent blocks for phases with small ``A_0`` or
-    short durations), which is why the hops are the stored representation.
+    overflows / colinearizes for phases with small ``A_0`` or short durations, which is why the hops
+    are the stored representation.
 
     ``a0`` is the unsigned flow scale ``|A_0|``; the phase ``direction`` sets the operator orientation.
     Retardation enters as the explicit ``R`` in the ``R s`` term (the ODE keeps the physical ``A_0``/``D_m``).
@@ -437,9 +459,9 @@ def _block_solutions(
         dense_output=True,
         method="DOP853",
     )
-    # exact block well-face IC for the regular branch: the theta-modulated face velocity and the
-    # D_rtheta cross-dispersion couple the modes in the face condition (dropping them, the old scalar
-    # diagonal IC, biases the extraction readout by ~eps^2/2 of the drift loss):
+    # Exact block well-face IC for the regular branch: the theta-modulated face velocity and the
+    # D_rtheta cross-dispersion couple the modes in the face condition (a mode-decoupled face IC would
+    # mis-state the drift loss at O(eps^2), the order of the loss itself):
     #   injection (Robin flux inlet, homogeneous part):  M[v_r] c - M[D_rr] c' - M[D_rt] (i m / r_w) c = 0
     #   extraction (Danckwerts, zero dispersive flux):   M[D_rr] c' + M[D_rt] (i m / r_w) c = 0
     m_vr, m_drr, m_drt = _face_matrices(r_w, alpha_l=alpha_l, a0_signed=a0_signed, v_d=v_d, d_m=d_m, n_modes=n_modes)
@@ -607,9 +629,8 @@ def _readout_laplace(
 
         cout_hat = c_0(r_w) - (eps_w / 2) (c_{+1}(r_w) + c_{-1}(r_w)).
 
-    (The face flux weighting and the ``D_rtheta`` face coupling are ``O(eps_w)`` individually but bias the
-    drift loss at ``O(eps^2)`` -- ~15-20% of the loss -- when dropped; measured against the corrected FV
-    oracle and the exact streamtube decomposition.)
+    (The face flux weighting and the ``D_rtheta`` face coupling are ``O(eps_w)`` individually but enter
+    the drift loss at ``O(eps^2)``, the order of the loss itself; the engine-vs-FV loss tests pin them.)
 
     Returns
     -------
@@ -656,11 +677,11 @@ def _rest_drift_field(
     folded back across the face (``r' -> 2 r_w - r'``), the leading-order zero-dispersive-flux closure,
     which conserves the near-well mass (a zeroed disk would swallow ``O(sigma r_w / R_b^2)`` of the plume).
     The residual is the circle-vs-line curvature of the image and the neglected ``O(r_w^2/r^2)`` dipole
-    distortion of the drift around the cylinder -- at ``v_d = 0``, ``D_m > 0`` the kernel agrees with the
-    scalar engine's exact well-respecting Bessel rest kernel to ~4e-4 in ``cout`` for a stored plume (the
-    public API dispatches ``v_d = 0`` to the scalar path anyway). Source points outside the radial grid
-    carry no mass by the grid's containment guarantee (:func:`field_grid` provisions for the rest
-    displacement).
+    distortion of the drift around the cylinder -- at ``v_d = 0``, ``D_m > 0`` the kernel differs from
+    the scalar engine's exact well-respecting Bessel rest kernel only by this ``r_w``-scale closure
+    residual for a stored plume (the public API dispatches ``v_d = 0`` to the scalar path anyway).
+    Source points outside the radial grid carry no mass by the grid's containment guarantee
+    (:func:`field_grid` provisions for the rest displacement).
 
     An **honest truncation guard** protects the azimuthal representation: after reprojection, the energy
     in the harmonics just above the kept band (``M < |m| <= 2M``, available from the FFT grid) measures
@@ -686,8 +707,8 @@ def _rest_drift_field(
         return field  # v_d = 0 and D_m = 0: a rest phase is the identity
     n_quad, nm, k = field.shape
     modes = np.arange(-n_modes, n_modes + 1)
-    nth = 8 * n_modes + 48
-    theta = np.arange(nth) * (2.0 * np.pi / nth)
+    theta = _theta_grid(n_modes)
+    nth = theta.size
     x = r_nodes[:, None] * np.cos(theta)[None, :]  # (n_quad, nth)
     y = r_nodes[:, None] * np.sin(theta)[None, :]
     interp = BarycentricInterpolator(r_nodes, field.reshape(n_quad, nm * k))
@@ -698,7 +719,8 @@ def _rest_drift_field(
         thp = np.arctan2(yp, xp).ravel()
         # Source points inside the shut well are folded back across the face (radial Neumann image,
         # r' -> 2 r_w - r'): the leading-order zero-dispersive-flux closure at the well, which conserves
-        # the near-well mass that a zeroed disk would silently swallow.
+        # the near-well mass that a zeroed disk would silently swallow. Folded points land in
+        # [r_w, 2 r_w], always inside the grid (field_grid's margins are many multiples of r_w).
         rp = np.where(rp < r_w, 2.0 * r_w - rp, rp)
         inside = rp <= r_hi  # beyond the grid: no mass (containment guaranteed by field_grid)
         vals = np.zeros((rp.size, nm * k))
@@ -787,10 +809,10 @@ def block_cout_deviation(
     for constant ``cin`` over a phase at any flow profile (the resident profile then depends only on the
     total injected volume), leaving only the *variable cin AND variable flow* cin-placement error (bins at
     time corners rather than exact volume edges). Under drift no such exactness survives for any
-    within-phase flow variation: the mode coupling integrates ``eps(r(t))`` on the wall clock, so two flow
-    profiles with equal volume and duration end in different fields (an FV differencing of a constant-cin
-    ``+-60%`` flow ramp against constant flow shifts the drift recovery loss by ~12% of the loss). The
-    error grows with the within-phase variation; use finer phases if needed.
+    within-phase flow variation: the mode coupling integrates ``eps(r(t))`` on the wall clock, so two
+    flow profiles with equal volume and duration end in different fields while the mean-flow engine
+    returns identical results for both. The error grows with the within-phase variation; use finer
+    phases if needed.
 
     Parameters
     ----------
