@@ -559,10 +559,13 @@ def _readout_laplace(
     field by an ``O(eps_w · eps) = O(eps^2)`` term -- the same order as the drift loss itself. The ``m = 0``
     component of the *extraction interior-resolvent trace* used here is NOT that naive average: the
     convergent-flow Green's function carries the inflow weighting (the same duality by which the scalar
-    engine's resolvent readout returns the Kreft-Zuber flux concentration). It is validated against the 2-D
-    finite-volume oracle's own flux-weighted extracted concentration (the recovery loss matches to ~4e-4 in
-    the standard scenario, within the oracle's first-order floor; a plain-averaged FV readout disagrees by
-    the full ``O(eps^2)`` term). The residual at large ``eps_w`` is at the FV noise floor.
+    engine's resolvent readout returns the Kreft-Zuber flux concentration). KNOWN OPEN ISSUE: against the
+    cross-dispersion-sign-corrected FV oracle (and an exact along-streamline decomposition that agrees
+    with it), the engine under-predicts the drift recovery loss by ~15-20% of the loss, independent of the
+    mode truncation ``M`` -- an unresolved ``O(eps^2)`` term in the engine's budget, with this readout
+    duality and the block-diagonal recessive-IC / grid-cap policy as the candidates. (The previous ~4e-4
+    validation claim was an artifact of a sign error in the oracle's cross-dispersion term, which biased
+    the oracle's loss low by a compensating amount.)
 
     Returns
     -------
@@ -741,7 +744,7 @@ def block_cout_deviation(
     time corners rather than exact volume edges). Under drift no such exactness survives for any
     within-phase flow variation: the mode coupling integrates ``eps(r(t))`` on the wall clock, so two flow
     profiles with equal volume and duration end in different fields (an FV differencing of a constant-cin
-    ``+-60%`` flow ramp against constant flow shifts the drift recovery loss by ~14% of the loss). The
+    ``+-60%`` flow ramp against constant flow shifts the drift recovery loss by ~12% of the loss). The
     error grows with the within-phase variation; use finer phases if needed.
 
     Parameters

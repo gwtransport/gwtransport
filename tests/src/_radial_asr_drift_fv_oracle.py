@@ -254,12 +254,20 @@ def _cross_flux(
     dc_dth = 0.5 * (np.roll(conc, -1, axis=1) - np.roll(conc, 1, axis=1)) / dth  # centered, at cell centers
     tang_face = 0.5 * (dc_dth[:-1, :] + dc_dth[1:, :])  # average to radial face k
     fr = -drth_rf * nb * dth * tang_face  # area r dth, tangential grad (1/r) dC/dth -> r cancels
-    out[:-1, :] += fr
-    out[1:, :] -= fr
+    # fr is the OUTWARD (+r) cross flux at the face between cells k and k+1: cell k loses it, cell k+1
+    # gains it. (A sign inversion here previously made the oracle disperse along the y-MIRRORED velocity
+    # -- a different rank-1 tensor, since the mirrored problem is a distinct PDE with its own y-symmetric
+    # solution. The error vanishes at U = 0 and is O(eps^2)-small in the slow-drift envelope, but reaches
+    # several percent of the breakthrough at strong drift; caught by exact-advection particle tracking +
+    # an exact along-streamline decomposition, which the corrected oracle reproduces to its first-order
+    # floor.)
+    out[:-1, :] -= fr
+    out[1:, :] += fr
     dc_dr = np.zeros((n_r, n_theta))
     dc_dr[1:-1, :] = (conc[2:, :] - conc[:-2, :]) / (2 * dr)
     rad_face = 0.5 * (dc_dr + np.roll(dc_dr, 1, axis=1))  # average to theta face j
     fth = -drth_tf * nb * dr * rad_face
-    out -= fth
-    out += np.roll(fth, -1, axis=1)
+    # fth is the (+theta) cross flux at face j between cells j-1 and j: cell j-1 loses it, cell j gains.
+    out += fth
+    out -= np.roll(fth, -1, axis=1)
     return out
