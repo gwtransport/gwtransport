@@ -3,11 +3,12 @@
 Precision discipline mirrors the radial engine: U=0 reductions and exact symmetries are machine /
 de Hoog precision (~1e-8, the matrix-Riccati + de Hoog floor); finite-volume comparisons are
 first-order (``O(1/n_cells)``), so engine-vs-FV agreement is judged on the *drift recovery loss* (which
-cancels the common FV bias). NB with the oracle's cross-dispersion sign corrected, the block engine
-under-predicts the drift loss by ~15-20% of the loss (M-independent; an exact along-streamline
-decomposition cross-validated against the corrected oracle and exact-advection particle tracking sides
-with the oracle) -- a known open issue in the block engine's O(eps^2) budget; the FV tests assert the
-10% + 2e-3 envelope, which this satisfies at the tested eps.
+cancels the common FV bias) at the ~0.3-2% level. Two compensating defects were found and fixed
+together: the FV oracle applied the cross-dispersion divergence with inverted signs, and the block
+engine dropped the O(eps_w) well-face couplings (flux modulation, D_rtheta cross term, flux-weighted
+readout), which biased the loss low by ~15-20%. With both fixed, the block engine, the corrected
+oracle, and an exact along-streamline (streamtube) decomposition anchored by exact-advection particle
+tracking agree three ways.
 The rest-with-drift kernel has its own anchors: the t -> 0 identity, drift-reversal evenness through the
 rest, the v_d = 0 reduction to the scalar Bessel rest kernel (to the Neumann-image closure residual), an
 FV drift-loss cross-check of an inject-rest-extract cycle, and the honest spectral-tail guard.
@@ -414,11 +415,11 @@ def test_rest_dm_reduces_to_scalar_bessel():
 
 
 def test_rest_drift_loss_matches_fv_oracle():
-    """The rest-phase drift loss tracks the independent 2-D FV oracle: an inject-rest-extract cycle at
+    """The rest-phase drift loss matches the independent 2-D FV oracle: an inject-rest-extract cycle at
     eps=0.25 with a 4-day rest, judged on the drift recovery loss (RE(U~0) - RE(U)), which the rest phase
     roughly doubles relative to the no-rest schedule -- the seasonal-storage effect the kernel exists for.
-    With the corrected oracle the residual gap is ~13% of the loss (same open block-engine O(eps^2)
-    discrepancy as the no-rest FV test; the rest kernel itself is exact)."""
+    With the corrected oracle and the engine's exact face conditions the agreement is ~2% of the loss
+    (the residual is the Neumann-image closure of the free-space rest kernel plus the FV floor)."""
     n_inj, n_rest, n_ext = 6, 4, 10
     flow = np.concatenate([np.full(n_inj, _Q), np.zeros(n_rest), np.full(n_ext, -_Q)])
     dt = np.ones(len(flow))
@@ -466,7 +467,7 @@ def test_rest_drift_loss_matches_fv_oracle():
         return re[0.0] - re[u]
 
     fv = (fv_loss(220) * (1 / 140) - fv_loss(140) * (1 / 220)) / (1 / 140 - 1 / 220)  # Richardson
-    assert abs(block_loss - fv) < 0.1 * abs(fv) + 2e-3
+    assert abs(block_loss - fv) < 0.05 * abs(fv) + 1e-3
     assert block_loss > 0.0
 
 
@@ -825,13 +826,12 @@ def test_degenerate_schedules():
 
 # --- finite-volume oracle: the drift recovery loss --------------------------------------------------
 def test_drift_loss_matches_fv_oracle():
-    """The engine's drift-induced recovery loss tracks the independent 2-D FV oracle. The loss
+    """The engine's drift-induced recovery loss matches the independent 2-D FV oracle. The loss
     (RE(U=0) - RE(U)) cancels the FV's first-order bias, so this is a meaningful check that the engine is
     non-perturbative (a Taylor-in-eps engine would mis-scale the loss). With the oracle's cross-dispersion
-    sign corrected the residual gap is ~16% of the loss (engine low; M-independent) -- within this test's
-    envelope but a real, open O(eps^2) discrepancy in the block engine (the readout duality and the
-    recessive-IC / grid-cap policy are the candidates), pinned by an exact streamtube decomposition that
-    agrees with the corrected oracle to its Richardson floor."""
+    sign corrected and the engine's exact well-face conditions (flux-modulated Robin/Danckwerts with the
+    D_rtheta coupling, flux-weighted readout), the agreement is ~0.3% of the loss; the tolerance also
+    guards the face-BC physics (reverting to block-diagonal face conditions shifts the loss by ~18%)."""
     flow, dt, cin = _single_cycle(6, 10)
     ext = flow < 0
     r_b = np.sqrt(_R_W**2 + _Q * 6 / _C_GEO)
@@ -889,5 +889,5 @@ def test_drift_loss_matches_fv_oracle():
 
     # Richardson extrapolation of the first-order FV loss
     fv_loss = (fv_re(220) * (1 / 140) - fv_re(140) * (1 / 220)) / (1 / 140 - 1 / 220)
-    assert abs(block_loss - fv_loss) < 0.1 * abs(fv_loss) + 2e-3
+    assert abs(block_loss - fv_loss) < 0.05 * abs(fv_loss) + 1e-3
     assert block_loss > 0.0  # drift always reduces recovery

@@ -176,6 +176,34 @@ def block_coupling_matrices(
     return a_mat, b_mat, s0_mat
 
 
+def _face_matrices(
+    r_w: float, *, alpha_l: float, a0_signed: float, v_d: float, d_m: float, n_modes: int
+) -> tuple[npt.NDArray[np.complexfloating], npt.NDArray[np.complexfloating], npt.NDArray[np.complexfloating]]:
+    r"""Well-face Toeplitz matrices ``M[v_r]``, ``M[D_rr]``, ``M[D_rtheta]`` at ``r = r_w``.
+
+    These carry the exact ``theta``-modulated well-face physics: the drift adds ``v_d cos(theta)`` to the
+    face velocity and an ``O(eps_w)`` cross-dispersion ``D_rtheta``, which couple neighbouring modes in
+    the face boundary conditions (Robin flux inlet / Danckwerts) and in the injected-flux source. The
+    block-diagonal (scalar) face treatment drops these couplings; that drop biases the extraction readout
+    by ~``eps^2/2`` of the drift loss (measured against the corrected FV oracle and the exact streamtube
+    decomposition), so the face conditions are built exactly here.
+
+    Returns
+    -------
+    m_vr, m_drr, m_drt : ndarray of complex, each shape (2 n_modes + 1, 2 n_modes + 1)
+        Azimuthal coupling matrices of the face velocity and dispersion-tensor components.
+    """
+    nth = 8 * n_modes + 48
+    theta = np.arange(nth) * (2.0 * np.pi / nth)
+    v_r = a0_signed / r_w + v_d * np.cos(theta)
+    v_th = -v_d * np.sin(theta)
+    speed = np.sqrt(v_r**2 + v_th**2)
+    m_vr = _toeplitz_from_theta(v_r, n_modes)
+    m_drr = _toeplitz_from_theta(alpha_l * v_r**2 / speed + d_m, n_modes)
+    m_drt = _toeplitz_from_theta(alpha_l * v_r * v_th / speed, n_modes)
+    return m_vr, m_drr, m_drt
+
+
 def field_grid(
     flow: npt.NDArray[np.floating],
     dt_days: npt.NDArray[np.floating],
@@ -332,10 +360,11 @@ def _block_solutions(
     * **decaying** (recessive as ``r -> inf``): inward from ``r_far`` with a block-diagonal recessive IC
       (the scalar per-mode decaying log-derivative on every diagonal -- exact at ``v_d = 0`` and washed in
       by the inward attractor otherwise). Gives ``L_-`` at ``r_nodes`` and ``r_w``.
-    * **regular** (well boundary): outward from ``r_w`` with the block-diagonal well IC
-      (``L_+ = A_0/(alpha_L A_0 + D_m r_w) I`` injection Robin / ``0`` extraction Neumann; the exact
-      block flux operator has ``O(eps_w) = O(v_d r_w / A_0)`` off-diagonal coupling at the face, dropped
-      at the same order as the neglected well-face drift modulation of the injected flux). Gives ``L_+``.
+    * **regular** (well boundary): outward from ``r_w`` with the **exact block well IC** built from the
+      face Toeplitz matrices (:func:`_face_matrices`): injection Robin
+      ``L_+ = M[D_rr]^{-1}(M[v_r] - M[D_rt](i m)/r_w)``, extraction Danckwerts
+      ``L_+ = -M[D_rr]^{-1} M[D_rt](i m)/r_w``. The ``O(eps_w)`` face couplings these carry look small
+      but bias the drift loss at ``O(eps^2)`` (~15-20% of the loss) if dropped. Gives ``L_+``.
 
     The recessive / regular fundamental solutions enter the interior resolvent only through
     **per-interval transitions** ``Psi_-(r_i, r_{i-1})`` (outward hops) and ``Psi_+(r_{i-1}, r_i)``
@@ -408,8 +437,16 @@ def _block_solutions(
         dense_output=True,
         method="DOP853",
     )
-    lp_w = a0_signed / (alpha_l * abs(a0) + d_m * r_w) if sigma_a > 0 else 0.0
-    lp0 = (lp_w * eye[None] * np.ones((n_s, 1, 1))).astype(complex)
+    # exact block well-face IC for the regular branch: the theta-modulated face velocity and the
+    # D_rtheta cross-dispersion couple the modes in the face condition (dropping them, the old scalar
+    # diagonal IC, biases the extraction readout by ~eps^2/2 of the drift loss):
+    #   injection (Robin flux inlet, homogeneous part):  M[v_r] c - M[D_rr] c' - M[D_rt] (i m / r_w) c = 0
+    #   extraction (Danckwerts, zero dispersive flux):   M[D_rr] c' + M[D_rt] (i m / r_w) c = 0
+    m_vr, m_drr, m_drt = _face_matrices(r_w, alpha_l=alpha_l, a0_signed=a0_signed, v_d=v_d, d_m=d_m, n_modes=n_modes)
+    i_dm_face = 1j * np.arange(-n_modes, n_modes + 1)
+    cross = (m_drt * i_dm_face[None, :]) / r_w
+    lp_w = np.linalg.solve(m_drr, (m_vr - cross) if sigma_a > 0 else -cross)
+    lp0 = np.broadcast_to(lp_w, (n_s, nm, nm)).astype(complex)
     sol_p = solve_ivp(
         riccati_rhs,
         [r_w, r_max],
@@ -444,16 +481,24 @@ def _block_solutions(
 
 
 def _resident_laplace(
-    d: dict[str, npt.NDArray[np.complexfloating]], *, alpha_l: float, d_m: float, r_w: float, a0: float, n_modes: int
+    d: dict[str, npt.NDArray[np.complexfloating]],
+    *,
+    alpha_l: float,
+    d_m: float,
+    r_w: float,
+    a0: float,
+    v_d: float,
+    n_modes: int,
 ) -> npt.NDArray[np.complexfloating]:
-    r"""Laplace-domain resident mode-field per unit ``m = 0`` flux injection at the well.
+    r"""Laplace-domain resident mode-field per unit uniform-``cin`` flux injection at the well.
 
-    The injected water enters through the azimuthally symmetric (``m = 0``) Kreft-Zuber flux boundary;
-    the recessive (decaying) block solution carries it outward and drift couples it into the neighbouring
-    modes. With the block well-flux operator ``F_w = I - (alpha_L + D_m r_w/|A_0|) L_-(r_w)`` the resident
-    field is ``c(r_i) = Y_-(r_i) F_w^{-1} e_0`` (``e_0`` the unit ``m = 0`` source, ``Y_-`` normalized to
-    ``I`` at ``r_w``), evaluated by the stable outward hops ``c(r_i) = Psi_-(r_i, r_{i-1}) c(r_{i-1})``.
-    Reduces to the scalar FR resident transfer ``E / f_w`` at ``v_d = 0``.
+    The injected water enters through the exact Kreft-Zuber flux boundary
+    ``v_r c - D_rr d_r c - D_rt (1/r_w) d_th c = v_r cin``: the ``theta``-modulated face velocity gives
+    the injected flux an ``O(eps_w)`` ``m = +-1`` modulation and the ``D_rtheta`` cross term couples the
+    modes in the face operator, so with the recessive branch (``c' = L_-(r_w) c``) the face field is
+    ``c(r_w) = F_w^{-1} M[v_r] e_0`` with ``F_w = M[v_r] - M[D_rr] L_-(r_w) - M[D_rt] (i m)/r_w``, carried
+    outward by the stable hops ``c(r_i) = Psi_-(r_i, r_{i-1}) c(r_{i-1})``. Reduces to the scalar FR
+    resident transfer ``E / f_w`` at ``v_d = 0``.
 
     Returns
     -------
@@ -464,8 +509,10 @@ def _resident_laplace(
     n_s = d["Lm_w"].shape[0]
     e0 = np.zeros(nm, dtype=complex)
     e0[n_modes] = 1.0
-    fw = np.eye(nm)[None] - (alpha_l + d_m * r_w / abs(a0)) * d["Lm_w"]  # (n_s, nm, nm)
-    y = np.linalg.solve(fw, np.broadcast_to(e0, (n_s, nm))[..., None])  # (n_s, nm, 1)
+    m_vr, m_drr, m_drt = _face_matrices(r_w, alpha_l=alpha_l, a0_signed=abs(a0), v_d=v_d, d_m=d_m, n_modes=n_modes)
+    cross = (m_drt * (1j * np.arange(-n_modes, n_modes + 1))[None, :]) / r_w
+    fw = (m_vr - cross)[None] - m_drr[None] @ d["Lm_w"]  # (n_s, nm, nm)
+    y = np.linalg.solve(fw, np.broadcast_to(m_vr @ e0, (n_s, nm))[..., None])  # (n_s, nm, 1)
     tm = d["Tm"]
     c = np.empty((tm.shape[0], n_s, nm), dtype=complex)
     for i in range(tm.shape[0]):
@@ -545,39 +592,37 @@ def _readout_laplace(
     dr_weights: npt.NDArray[np.floating],
     retardation_factor: float,
     n_modes: int,
+    eps_w: float,
 ) -> npt.NDArray[np.complexfloating]:
-    r"""Laplace-domain ``m = 0`` well-face flux concentration from a resident ``field`` under extraction.
+    r"""Laplace-domain extracted flux concentration from a resident ``field`` under extraction.
 
-    The extracted Kreft-Zuber flux concentration under the Danckwerts (zero dispersive flux) well boundary
-    equals the resident concentration at the face, i.e. the extraction interior resolvent evaluated at
-    ``r_w``. Since ``r_w`` lies below every node, only the regular (suffix) branch contributes:
-    ``cout_hat(s) = [sum_j Y_+(r_w) Y_+(r_j)^{-1} H_j (R dr_j) field_j]_{m0}``, evaluated by running the
-    suffix recursion of :func:`_resolvent_field_laplace` one extra inward hop to ``r_w``.
+    Under the exact Danckwerts boundary (zero dispersive flux across the face, cross term included in the
+    regular-branch IC) the extracted flux concentration equals the resident concentration at the face
+    pointwise in ``theta``, i.e. the extraction interior resolvent evaluated at ``r_w``. Since ``r_w``
+    lies below every node, only the regular (suffix) branch contributes:
+    ``c(r_w) = sum_j Y_+(r_w) Y_+(r_j)^{-1} H_j (R dr_j) field_j``, evaluated by running the suffix
+    recursion of :func:`_resolvent_field_laplace` one extra inward hop to ``r_w``. The extracted mixture
+    is the **inflow-flux-weighted** azimuthal average -- ``|v_r(r_w, theta)| = (|A_0|/r_w)(1 - eps_w
+    cos(theta))`` with ``eps_w = v_d r_w / |A_0|`` -- applied explicitly on the face modes:
 
-    Note: the extracted concentration is the inflow-flux-weighted azimuthal average (``v_r(r_w, theta)``
-    carries an ``m = +-1`` modulation), which differs from a naive plain ``m = 0`` average of the resident
-    field by an ``O(eps_w · eps) = O(eps^2)`` term -- the same order as the drift loss itself. The ``m = 0``
-    component of the *extraction interior-resolvent trace* used here is NOT that naive average: the
-    convergent-flow Green's function carries the inflow weighting (the same duality by which the scalar
-    engine's resolvent readout returns the Kreft-Zuber flux concentration). KNOWN OPEN ISSUE: against the
-    cross-dispersion-sign-corrected FV oracle (and an exact along-streamline decomposition that agrees
-    with it), the engine under-predicts the drift recovery loss by ~15-20% of the loss, independent of the
-    mode truncation ``M`` -- an unresolved ``O(eps^2)`` term in the engine's budget, with this readout
-    duality and the block-diagonal recessive-IC / grid-cap policy as the candidates. (The previous ~4e-4
-    validation claim was an artifact of a sign error in the oracle's cross-dispersion term, which biased
-    the oracle's loss low by a compensating amount.)
+        cout_hat = c_0(r_w) - (eps_w / 2) (c_{+1}(r_w) + c_{-1}(r_w)).
+
+    (The face flux weighting and the ``D_rtheta`` face coupling are ``O(eps_w)`` individually but bias the
+    drift loss at ``O(eps^2)`` -- ~15-20% of the loss -- when dropped; measured against the corrected FV
+    oracle and the exact streamtube decomposition.)
 
     Returns
     -------
     ndarray
-        ``cout_hat(s)`` (the ``m = 0`` component), shape ``(n_s, k)`` for a ``(n_quad, nm, k)`` ``field``.
+        ``cout_hat(s)``, shape ``(n_s, k)`` for a ``(n_quad, nm, k)`` ``field``.
     """
     hs = _source_blocks(d, field, dr_weights, retardation_factor)  # (n_quad, n_s, nm, k)
     tp = d["Tp"]
     s_acc = np.zeros_like(hs[0])
     for i in range(hs.shape[0] - 1, 0, -1):
         s_acc = tp[i] @ (s_acc + hs[i])
-    return (tp[0] @ (s_acc + hs[0]))[:, n_modes, :]
+    face = tp[0] @ (s_acc + hs[0])  # (n_s, nm, k): the resident face modes
+    return face[:, n_modes, :] - 0.5 * eps_w * (face[:, n_modes + 1, :] + face[:, n_modes - 1, :])
 
 
 def _rest_drift_field(
@@ -891,6 +936,7 @@ def block_cout_deviation(
                         d_m=molecular_diffusivity,
                         r_w=r_w,
                         a0=a0,
+                        v_d=v_d,
                         n_modes=n_modes,
                     )
                     / s[:, None, None]
@@ -903,7 +949,14 @@ def block_cout_deviation(
 
             def f_hat_readout(s, a0=a0, field=field):
                 return (
-                    _readout_laplace(solutions(s, a0, "extraction"), field, dr_weights, retardation_factor, n_modes)
+                    _readout_laplace(
+                        solutions(s, a0, "extraction"),
+                        field,
+                        dr_weights,
+                        retardation_factor,
+                        n_modes,
+                        eps_w=v_d * r_w / a0,
+                    )
                     / s[:, None]
                 )
 
