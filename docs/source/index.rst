@@ -103,13 +103,14 @@ Installation
 Documentation Contents
 ----------------------
 
-For an in-depth discussion of the core modeling approach, see :doc:`user_guide/concepts`. To determine when ``gwtransport`` is appropriate for your application and understand the underlying assumptions, see :doc:`user_guide/assumptions`.
+To choose the right transport model for your setting, see :doc:`user_guide/modules`. For an in-depth discussion of the core modeling approach, see :doc:`user_guide/concepts`. To determine when ``gwtransport`` is appropriate for your application and understand the underlying assumptions, see :doc:`user_guide/assumptions`.
 
 .. toctree::
    :maxdepth: 2
    :caption: Guide
    :hidden:
 
+   user_guide/modules
    user_guide/concepts
    user_guide/assumptions
    user_guide/theory

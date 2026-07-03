@@ -1,9 +1,14 @@
 """
 Fast *approximate* 1D advection-dispersion transport (Kreft-Zuber flux concentration).
 
-This module computes the same physics as :mod:`gwtransport.diffusion_fast` -- the bin-averaged
-Kreft-Zuber (1978) flux concentration ``C_F`` on a bundle of 1D streamtubes -- but trades exactness
-for a single fast (~1.5 ms) native-grid evaluation that does not depend on the flow being constant.
+This module shares the conceptual model of :mod:`gwtransport.diffusion` and
+:mod:`gwtransport.diffusion_fast` -- advection with microdispersion (``alpha_L``) and molecular
+diffusion (``D_m``) along orthogonal (Cartesian) flow paths, one independent streamtube per aquifer
+pore volume, the spread across the pore volume distribution providing macrodispersion, and linear
+sorption via the retardation factor. It
+targets the bin-averaged Kreft-Zuber (1978) flux concentration ``C_F`` on the streamtube bundle, but
+trades exactness for a single fast (~1.5 ms) native-grid evaluation that does not depend on the flow
+being constant.
 It is **approximate**: where :mod:`gwtransport.diffusion_fast` reproduces the quadrature reference to
 machine precision, this module is accurate to ~3e-4 in the common regime and degrades in a
 documented corner (below). When you need machine precision, use :mod:`gwtransport.diffusion_fast`.
@@ -35,7 +40,7 @@ irregular-grid corner.
 Accuracy (vs :mod:`gwtransport.diffusion_fast`, flow-independent unless noted)
 ------------------------------------------------------------------------------
 
-- **~3e-4 whenever mechanical dispersion is present** (``alpha_L > 0`` -- the typical groundwater
+- **~3e-4 whenever microdispersion is present** (``alpha_L > 0`` -- the typical groundwater
   regime, Peclet number >> 1), constant *and* variable flow. Here molecular diffusion is
   sub-dominant, so approximating it barely matters.
 - In the **molecular-diffusion-dominated** corner (``alpha_L`` ~ 0): ~1e-4 for smooth inputs, but
@@ -460,7 +465,7 @@ def infiltration_to_extraction(
     spinup: str | None = "constant",
     saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
-    """Compute extracted concentration with advection and longitudinal dispersion (approximate).
+    """Compute extracted concentration with advection, microdispersion, and molecular diffusion (approximate).
 
     Fast *approximate* counterpart of :func:`gwtransport.diffusion_fast.infiltration_to_extraction`.
     The advection + macrodispersion + microdispersion (``alpha_L``) part is the exact skewed
@@ -490,7 +495,7 @@ def infiltration_to_extraction(
         Effective molecular diffusivity D_m [m²/day]: scalar or one value per pore volume.
         Must be non-negative.
     longitudinal_dispersivity : float or ndarray
-        Longitudinal dispersivity alpha_L [m]: scalar or one value per pore volume.
+        Longitudinal dispersivity alpha_L [m] (microdispersion): scalar or one value per pore volume.
         Must be non-negative.
     retardation_factor : float, optional
         Retardation factor (default 1.0). Values > 1.0 indicate slower transport.
@@ -622,7 +627,7 @@ def extraction_to_infiltration(
         Effective molecular diffusivity D_m [m²/day]: scalar or one value per pore volume.
         Must be non-negative.
     longitudinal_dispersivity : float or ndarray
-        Longitudinal dispersivity alpha_L [m]: scalar or one value per pore volume.
+        Longitudinal dispersivity alpha_L [m] (microdispersion): scalar or one value per pore volume.
         Must be non-negative.
     retardation_factor : float, optional
         Retardation factor (default 1.0).
@@ -762,7 +767,7 @@ def gamma_infiltration_to_extraction(
         Effective molecular diffusivity D_m [m²/day], applied to all streamtubes. Must be
         non-negative.
     longitudinal_dispersivity : float
-        Longitudinal dispersivity alpha_L [m], applied to all streamtubes. Must be non-negative.
+        Longitudinal dispersivity alpha_L [m] (microdispersion), applied to all streamtubes. Must be non-negative.
     retardation_factor : float, optional
         Retardation factor (default 1.0).
     flow_out : array-like or None, optional
@@ -855,7 +860,7 @@ def gamma_extraction_to_infiltration(
         Effective molecular diffusivity D_m [m²/day], applied to all streamtubes. Must be
         non-negative.
     longitudinal_dispersivity : float
-        Longitudinal dispersivity alpha_L [m], applied to all streamtubes. Must be non-negative.
+        Longitudinal dispersivity alpha_L [m] (microdispersion), applied to all streamtubes. Must be non-negative.
     retardation_factor : float, optional
         Retardation factor (default 1.0).
     regularization_strength : float, optional

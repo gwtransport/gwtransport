@@ -19,6 +19,8 @@ Calibration refers to the estimation of the aquifer pore volume distribution. On
 - **Enable early warning systems** as digital twins for drinking water protection
 - **Backwards model** to estimate infiltration concentrations from extracted concentrations
 
+Various conceptual models are available, depending on how the solute enters the aquifer and dominant transport mechanisms: [full overview](https://gwtransport.github.io/gwtransport/user_guide/modules.html).
+
 ## Two ways to obtain model parameters
 
 The aquifer pore volume distribution is constant over time and can be obtained using:
