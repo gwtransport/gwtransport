@@ -21,7 +21,6 @@ import pytest
 from _radial_asr_drift_fv_oracle import fv2d_cout_deviation  # ty: ignore[unresolved-import]  # tests/src on path
 from _radial_asr_drift_kernels_check import real_space_coupling, real_space_face  # ty: ignore[unresolved-import]
 
-import gwtransport._radial_asr_drift_kernels as drift_kernels
 from gwtransport._radial_asr_dehoog import dehoog_inverse
 from gwtransport._radial_asr_drift_kernels import _face_matrices, block_coupling_matrices, block_cout_deviation
 from gwtransport._radial_asr_reuse import cout_deviation
@@ -824,7 +823,7 @@ def test_solutions_cache_eviction_is_pure(monkeypatch):
         "tol": 1e-8,
     }
     base = block_cout_deviation(**kw)
-    monkeypatch.setattr(drift_kernels, "_SOLUTIONS_CACHE_MAX", 1)
+    monkeypatch.setattr("gwtransport._radial_asr_drift_kernels._SOLUTIONS_CACHE_MAX", 1)
     capped = block_cout_deviation(**kw)
     np.testing.assert_array_equal(base, capped)  # NaN injection bins compare equal under array_equal
 
