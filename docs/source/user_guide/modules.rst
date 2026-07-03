@@ -21,8 +21,8 @@ solute enters the aquifer.
 
 - **Water injected at a well**, then recovered (push-pull / ASR)
 
-  - :mod:`~gwtransport.radial_asr` --- radial advection with microdispersion and
-    molecular diffusion
+  - :mod:`~gwtransport.radial_asr` --- radial advection with microdispersion,
+    molecular diffusion, and optional steady regional background flow (drift)
 
 Shared building blocks: :mod:`~gwtransport.residence_time`,
 :mod:`~gwtransport.logremoval`, and :mod:`~gwtransport.gamma`.
@@ -170,11 +170,15 @@ Water is injected in an infinite aquifer at a single fully-penetrating well and
 later recovered at the same well under a signed flow schedule (push-pull / ASR).
 Transport is radial advection with microdispersion, molecular diffusion, and linear
 sorption; the spread of velocities across the well screen provides macrodispersion.
-Forward and backward modeling are supported.
+A steady uniform regional background flow (``regional_flux``) may be superimposed,
+making the stored water drift between injection and recovery; ``regional_flux = 0``
+(the default) is purely radial. Forward and backward modeling are supported.
 
 :Reactions: linear retardation (:ref:`concept-retardation-factor`).
 :Limitations: a single well (no two-point / doublet geometry); no non-linear
-   sorption.
+   sorption; regional drift is limited to the slow-drift envelope (the stored
+   plume must stay well inside the stagnation radius; the engine raises a
+   ``ValueError`` beyond it).
 :Examples: :doc:`/examples/13_Aquifer_Storage_Recovery`.
 
 
@@ -202,5 +206,6 @@ Scope and not-yet-available
 - No finite-radial bounded recharge: the bounded :mod:`~gwtransport.recharge` model
   uses a straight (1D) upstream boundary, not a circular capture-zone boundary.
 - Package-wide: streamlines are independent (no transverse mixing,
-  :ref:`assumption-no-transverse-mixing`); there is no multi-well or 2D/3D regional
+  :ref:`assumption-no-transverse-mixing`); apart from the steady uniform background
+  flow of :mod:`~gwtransport.radial_asr`, there is no multi-well or 2D/3D regional
   flow, and no kinetic or chained reactions.
