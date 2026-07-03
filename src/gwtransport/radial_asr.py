@@ -461,7 +461,8 @@ def infiltration_to_extraction(
         plume -- including its rest-phase drift displacement -- to stay well inside the stagnation radius
         ``r_s = |A_0| / |v_d|`` (a ``ValueError`` is raised otherwise). Rest phases (``flow == 0``) are
         propagated by the exact free-space drift kernel (translation ``v_d t / R`` plus anisotropic
-        Gaussian spread, with a Neumann-image closure at the shut well face).
+        Gaussian spread, with a Neumann-image closure at the shut well face). See
+        :ref:`concept-drift-envelope` for a worked multi-year feasibility table.
     n_modes : int, optional
         Azimuthal truncation ``M`` for the drift engine (keeps modes ``-M .. M``). Default ``None``
         auto-sizes ``M`` from the plume-front drift ratio ``eps = v_d R_b / A_0`` and the rest-phase
