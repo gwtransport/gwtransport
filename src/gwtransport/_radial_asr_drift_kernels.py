@@ -63,8 +63,9 @@ _PLUME_WIDTHS = 3.0
 _REST_HERMITE = 20
 _REST_TAIL_MAX = 1e-2
 # Per-call cap on cached per-phase kernel solutions (each entry is O(n_quad n_s (2M+1)^2) complex, ~70 MB
-# at the defaults; a periodic schedule needs one entry per pumping direction, so the cap only sheds
-# entries on long aperiodic schedules, where nothing recurs anyway).
+# at the defaults and ~6x that at the auto-sizing ceiling n_modes=8 -- up to ~2.4 GB at the cap; a periodic
+# schedule needs one entry per pumping direction, so the cap only sheds entries on long aperiodic
+# schedules, where nothing recurs anyway).
 _SOLUTIONS_CACHE_MAX = 8
 
 

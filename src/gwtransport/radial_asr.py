@@ -122,7 +122,7 @@ import pandas as pd
 
 from gwtransport import gamma
 from gwtransport._radial_asr_compose import single_cycle_echo_matrix
-from gwtransport._radial_asr_drift_kernels import block_cout_deviation
+from gwtransport._radial_asr_drift_kernels import _RS_FRAC, block_cout_deviation
 from gwtransport._radial_asr_reuse import cout_deviation
 from gwtransport._time import dt_to_days
 
@@ -336,7 +336,7 @@ def _auto_n_modes(
     nz = np.flatnonzero(flow != 0.0)
     interior = slice(nz[0], nz[-1] + 1)  # leading/trailing idle bins do not move the field
     delta = abs(v_d) * float(np.sum(dt_days[interior][flow[interior] == 0.0]))
-    eps = min(abs(v_d) * (r_b + delta) / abs(a0), 0.6)
+    eps = min(abs(v_d) * (r_b + delta) / abs(a0), _RS_FRAC)
     m_eps = int(np.ceil(np.log(5e-3) / np.log(eps))) if eps > 0.0 else 2
     width = np.sqrt(longitudinal_dispersivity * r_b + longitudinal_dispersivity**2)
     m_shift = int(np.ceil(delta / width)) + 2 if delta > 0.0 else 2

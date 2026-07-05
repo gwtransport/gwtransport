@@ -310,8 +310,10 @@ Reading the tables:
   the idle-season drift that accumulates. Schedules with shorter storage and idle periods stay inside
   the envelope at correspondingly higher drift rates.
 
-Computed with ``n_quad = 60``, ``n_terms = 24``, ``tol = 1e-8``, and automatic azimuthal truncation
-(``M = 2--8`` across the table). Absolute values carry ≲ 0.002 discretization at the longest records;
+Computed with ``n_quad = 60``, automatic azimuthal truncation (``M = 2--8`` across the table), and the
+engine-internal Laplace-inversion settings ``n_terms = 24``, ``tol = 1e-8`` (the public API fixes these
+at its defaults; spot checks through the public API reproduce the displayed values at the shown
+precision). Absolute values carry ≲ 0.002 discretization at the longest records;
 differences within a row are consistent to better than that. The zero-drift references use the drift
 engine at negligible ``regional_flux`` so that both columns share the same rest-phase kernel.
 

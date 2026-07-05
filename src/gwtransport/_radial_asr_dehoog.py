@@ -152,7 +152,9 @@ def dehoog_inverse(
     # rhombus rules slice the leading node axis and broadcast over the trailing batch). A batch entry whose
     # transform underflows toward zero at the high-frequency nodes (a heavily damped azimuthal mode at the
     # outer field nodes) yields degenerate quotients here; the resulting non-finite intermediates do not
-    # reach a meaningful (non-negligible) output, so the rhombus divisions are evaluated under errstate.
+    # reach a meaningful (non-negligible) output, so the rhombus divisions (and the final-convergent
+    # division below) are evaluated under errstate. The mask targets exactly these known-benign columns:
+    # a genuinely broken transform still surfaces as NaN in the output, just without a warning.
     d = np.empty((n_nodes, *batch), dtype=complex)
     d[0] = a[0]
     with np.errstate(divide="ignore", invalid="ignore"):

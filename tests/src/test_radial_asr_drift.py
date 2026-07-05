@@ -11,8 +11,10 @@ The rest-with-drift kernel has its own anchors: the t -> 0 identity, drift-rever
 rest, the v_d = 0 reduction to the scalar Bessel rest kernel (to the Neumann-image closure residual), an
 FV drift-loss cross-check of an inject-rest-extract cycle, and the honest spectral-tail guard.
 
-Memory note: the block solutions scale as ``n_quad * n_s * (2 n_modes + 1)^2``; these tests deliberately
-keep ``n_quad`` small and ``n_modes`` low so the suite stays light.
+Cost note: the block solutions scale as ``n_quad * n_s * (2 n_modes + 1)^2`` in memory, and the block
+Riccati integration cost grows steeply with ``n_modes`` at the production ODE tolerances. Each test keeps
+``n_quad``/``n_modes`` as small as its physics anchor allows, but the suite is compute-bound (~25 min on
+four workers) -- the price of exercising the full engine rather than mocks.
 """
 
 import numpy as np
@@ -584,6 +586,27 @@ def test_public_auto_n_modes_dispatch():
     )
 
 
+def test_public_drift_validation_errors():
+    """The drift validations reject a non-finite regional_flux and a non-positive n_modes before any
+    engine work starts."""
+    flow, _dt, cin = _single_cycle()
+    tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
+    kw = {
+        "cin": cin,
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "pore_heights": _B,
+        "porosity": _POROSITY,
+        "well_radius": _R_W,
+        "longitudinal_dispersivity": _ALPHA_L,
+    }
+    with pytest.raises(ValueError, match="regional_flux must be finite"):
+        infiltration_to_extraction(regional_flux=np.inf, **kw)
+    with pytest.raises(ValueError, match="n_modes must be >= 1"):
+        infiltration_to_extraction(regional_flux=0.05, n_modes=0, **kw)
+
+
 def test_public_drift_background_linearity():
     """Drift transport is linear in the deviation: cout(bg) == bg + cout_dev(bg=0) on extraction bins."""
     flow, _, cin = _single_cycle()
@@ -805,10 +828,10 @@ def test_batched_columns_match_vector_runs():
 def test_solutions_cache_eviction_is_pure(monkeypatch):
     """The per-phase solutions cache is a pure memo: capping it at one entry (forcing FIFO eviction and
     recomputation on every phase-signature revisit) leaves cout bit-identical to the default cap."""
-    flow = np.array([_Q] * 3 + [-_Q] * 3 + [_Q] * 3 + [-_Q] * 4)
+    flow = np.array([_Q] * 2 + [-_Q] * 2 + [_Q] * 2 + [-_Q] * 3)
     dt = np.ones(len(flow))
     cin = np.where(flow > 0, 1.0, 0.0)
-    r_b = np.sqrt(_R_W**2 + _Q * 3 / _C_GEO)
+    r_b = np.sqrt(_R_W**2 + _Q * 2 / _C_GEO)
     kw = {
         "cin_deviation": cin,
         "flow": flow,
