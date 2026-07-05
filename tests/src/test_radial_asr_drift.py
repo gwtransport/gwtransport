@@ -865,6 +865,12 @@ def test_dehoog_zero_and_mixed_batch_columns():
     np.testing.assert_allclose(out[:, 0], np.exp(-t), atol=1e-8)
     np.testing.assert_array_equal(out[:, 1], 0.0)
     np.testing.assert_allclose(out[:, 2], 1.0, atol=1e-8)
+    # The no-batch (1-D transform) case: zero_cols is then 0-d and indexes as a broadcast mask, so an
+    # identically-zero scalar transform parks and inverts to exact 0 with the input's shape preserved.
+    np.testing.assert_array_equal(dehoog_inverse(f_hat=np.zeros_like, t=t, n_terms=24, tol=1e-10), 0.0)
+    scalar_out = dehoog_inverse(f_hat=np.zeros_like, t=0.7, n_terms=24, tol=1e-10)
+    assert np.shape(scalar_out) == ()
+    np.testing.assert_array_equal(scalar_out, 0.0)
 
 
 def test_degenerate_schedules():
