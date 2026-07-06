@@ -33,6 +33,12 @@ Base URL: `https://gwtransport.github.io/gwtransport/`
 | `concept-nonlinear-sorption`       | Freundlich & Langmuir isotherms, front-tracking |
 | `concept-kinematic-wave`           | KW percolation through thick unsaturated zones  |
 
+### Module overview (`docs/source/user_guide/modules.rst`)
+
+| Label                    | Topic                                             |
+| ------------------------ | ------------------------------------------------- |
+| `concept-drift-envelope` | Regional-drift feasibility table for `radial_asr` |
+
 ### Assumptions (`docs/source/user_guide/assumptions.rst`)
 
 | Label                                 | Topic                           |
