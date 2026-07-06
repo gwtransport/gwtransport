@@ -55,6 +55,7 @@ convention = "numpy"
 "examples/**/*.ipynb" = [
     "INP001",  # __init__.py is not needed for the examples folder
     "T201",  # Allow for print statements
+    "S101",  # Self-verifying notebooks assert their acceptance criteria; a failed assert fails tests/examples
     "B018", # allow notebooks printing out variables in the mid cell with variable names only
     "PLR2004",
     "E402",

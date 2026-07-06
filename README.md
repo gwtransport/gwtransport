@@ -104,6 +104,7 @@ Examples:
 4. [Deposition analysis](https://gwtransport.github.io/gwtransport/examples/04_Deposition_Analysis_Bank_Filtration.html)
 5. [Bank filtration with TIMFlow: streamtubes to APVD](https://gwtransport.github.io/gwtransport/examples/08_bank_filtration_timflow.html)
 6. [Advection with non-linear sorption](https://gwtransport.github.io/gwtransport/examples/10_Advection_with_non_linear_sorption.html)
+7. [Confidence bands from parameter uncertainty](https://gwtransport.github.io/gwtransport/examples/14_Parameter_Uncertainty_Confidence_Bands.html)
 
 Full documentation: [gwtransport.github.io/gwtransport](https://gwtransport.github.io/gwtransport/)
 

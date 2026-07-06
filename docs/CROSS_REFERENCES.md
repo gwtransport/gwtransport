@@ -61,10 +61,11 @@ Base URL: `https://gwtransport.github.io/gwtransport/`
 
 ### Examples (`examples/`)
 
-| Path                                               | Topic                          |
-| -------------------------------------------------- | ------------------------------ |
-| `examples/01_Aquifer_Characterization_Temperature` | Temperature tracer calibration |
-| `examples/02_Residence_Time_Analysis`              | Residence time calculations    |
-| `examples/03_Pathogen_Removal_Bank_Filtration`     | Log removal efficiency         |
-| `examples/04_Deposition_Analysis_Bank_Filtration`  | Deposition analysis            |
-| `examples/10_Advection_with_non_linear_sorption`   | Freundlich sorption            |
+| Path                                                 | Topic                                         |
+| ---------------------------------------------------- | --------------------------------------------- |
+| `examples/01_Aquifer_Characterization_Temperature`   | Temperature tracer calibration                |
+| `examples/02_Residence_Time_Analysis`                | Residence time calculations                   |
+| `examples/03_Pathogen_Removal_Bank_Filtration`       | Log removal efficiency                        |
+| `examples/04_Deposition_Analysis_Bank_Filtration`    | Deposition analysis                           |
+| `examples/10_Advection_with_non_linear_sorption`     | Freundlich sorption                           |
+| `examples/14_Parameter_Uncertainty_Confidence_Bands` | Delta-method and Monte Carlo confidence bands |
