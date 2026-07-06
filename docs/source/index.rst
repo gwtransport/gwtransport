@@ -128,6 +128,7 @@ To choose the right transport model for your setting, see :doc:`user_guide/modul
    examples/11_Percolation_Unsaturated_Zone.nblink
    examples/12_Bank_Filtration_Rainwater_Fraction.nblink
    examples/13_Aquifer_Storage_Recovery.nblink
+   examples/14_Parameter_Uncertainty_Confidence_Bands.nblink
 
 .. toctree::
    :maxdepth: 2

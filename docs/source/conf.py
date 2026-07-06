@@ -207,6 +207,7 @@ jupyterlite_interactive_notebooks = [
     "10_Advection_with_non_linear_sorption",
     "11_Percolation_Unsaturated_Zone",
     "12_Bank_Filtration_Rainwater_Fraction",
+    "14_Parameter_Uncertainty_Confidence_Bands",
 ]
 
 # nbsphinx already renders every .ipynb page; keep it that way (do not let
