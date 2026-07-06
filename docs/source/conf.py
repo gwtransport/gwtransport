@@ -196,18 +196,15 @@ _jupyterlite_install = (
     "import numpy, scipy, pandas, matplotlib, mpmath  # noqa: F401\n"
 )
 
-# Example notebooks that run client-side. 01/02/03 use the inline KNMI soil-temperature data
-# embedded in gwtransport.examples, so they no longer need network access. Only 08 is excluded
-# (timflow -> numba, which has no WebAssembly build).
-jupyterlite_interactive_notebooks = [
-    "01_Aquifer_Characterization_Temperature",
-    "02_Residence_Time_Analysis",
-    "03_Pathogen_Removal_Bank_Filtration",
-    "04_Deposition_Analysis_Bank_Filtration",
-    "10_Advection_with_non_linear_sorption",
-    "11_Percolation_Unsaturated_Zone",
-    "12_Bank_Filtration_Rainwater_Fraction",
-]
+# Example notebooks that run client-side. Every notebook in ../examples is exposed as an
+# interactive (JupyterLite/Pyodide) copy and picked up automatically -- adding a new example
+# notebook requires no change here. Only the timflow notebook is excluded: it pulls in numba
+# (transitively via timflow), which has no WebAssembly build.
+_examples_dir = Path(__file__).parent.parent.parent / "examples"
+_jupyterlite_excluded_notebooks = {"08_bank_filtration_timflow"}
+jupyterlite_interactive_notebooks = sorted(
+    nb.stem for nb in _examples_dir.glob("*.ipynb") if nb.stem not in _jupyterlite_excluded_notebooks
+)
 
 # nbsphinx already renders every .ipynb page; keep it that way (do not let
 # jupyterlite-sphinx claim the .ipynb source suffix).

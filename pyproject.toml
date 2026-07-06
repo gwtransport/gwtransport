@@ -81,6 +81,10 @@ docs = [
   "jupyterlite-core>=0.6",
   "jupyterlite-pyodide-kernel>=0.6",
   "jupyterlite-sphinx>=0.22",
+  # conf.py imports nbformat directly (reads/writes the Pyodide notebook copies). It is
+  # otherwise present only transitively via nbsphinx; declare it so the direct import does
+  # not rest on a transitive dependency.
+  "nbformat>=5.0.2",
   "nbsphinx",
   "nbsphinx-link",
   "sphinx>=9.0,<10.0",
