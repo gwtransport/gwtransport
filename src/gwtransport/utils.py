@@ -28,25 +28,23 @@ Available functions:
   specified x-edges. Supports 1D or 2D edge arrays for batch processing. Handles NaN values
   and offers multiple extrapolation methods ('nan', 'outer', 'raise').
 
-- :func:`partial_isin` - Calculate fraction of each input bin overlapping with each output bin.
-  Returns dense matrix where element (i,j) represents overlap fraction. Uses vectorized
-  operations for efficiency.
-
 - :func:`time_bin_overlap` - Calculate fraction of time bins overlapping with specified time
   ranges. Similar to partial_isin but for time-based bin overlaps with list of (start, end)
   tuples.
 
 - :func:`simplify_bins` - Simplify a piecewise-constant time series by merging adjacent bins
   whose values are within a tolerance. Uses volume-weighted (flow x width) averaging when
-  flow is provided, otherwise width-weighted. Direction-independent via recursive splitting.
-
-- :func:`combine_bin_series` - Combine two binned series onto common set of unique edges. Maps
-  values from original bins to new combined structure with configurable extrapolation ('nearest'
-  or float value).
+  flow is provided, otherwise width-weighted. Direction-independent via largest-jump splitting.
 
 - :func:`compute_time_edges` - Compute DatetimeIndex of time bin edges from explicit edges,
   start times, or end times. Validates consistency with expected number of bins and handles
   uniform spacing extrapolation.
+
+The inverse solvers below are two intentionally coexisting families: a Tikhonov family (the dense
+:func:`solve_inverse_transport` and its banded equivalent :func:`solve_inverse_transport_banded`,
+both fed by :func:`compute_reverse_target` and built on :func:`solve_tikhonov`) for the
+overdetermined deconvolution in advection/diffusion, and a separate nullspace solver
+(:func:`solve_underdetermined_system`) for the underdetermined deposition inverse.
 
 - :func:`solve_tikhonov` - Solve linear system with Tikhonov regularization toward a target.
   Well-determined modes follow the data; poorly-determined modes are pulled toward the target.
@@ -593,123 +591,18 @@ def linear_average(
             bins_within_range = np.broadcast_to(bins_within_range, (n_series, bins_within_range.shape[1]))
         result[~bins_within_range] = np.nan
 
-        # With 2D y_data, propagate per-row NaNs from the y series itself: any output bin
-        # that touches an x_data segment with NaN y in this row must be NaN. Per-row NaN
-        # info is preserved in all_unique_y; mark bins whose [edge_left, edge_right]
-        # contains a NaN segment for this row.
-        if n_series_y > 1:
-            # For each unique-x segment, is it NaN in this row?
-            seg_nan = np.isnan(y_avg)  # shape (n_series_y, n_unique_x - 1)
-            # A bin spans segments [edge_indices[0, b], edge_indices[0, b+1])
-            # For each row, count NaN segments per bin via cumulative sums.
-            seg_nan_cum = np.concatenate([np.zeros((n_series_y, 1)), np.cumsum(seg_nan, axis=1)], axis=1)
-            nan_count_per_bin = seg_nan_cum[:, edge_indices[0, 1:]] - seg_nan_cum[:, edge_indices[0, :-1]]
-            row_has_nan_in_bin = nan_count_per_bin > 0
-            result[row_has_nan_in_bin] = np.nan
+    # With 2D y_data, propagate per-row NaNs from the y series itself: any output bin that
+    # touches an x_data segment with NaN y in this row must be NaN. This 2-D NaN contract is
+    # method-independent -- it also holds for 'outer'/'raise', which would otherwise return a
+    # silently wrong finite average (the NaN trapezoids were zeroed above). Per-row NaN info is
+    # preserved in y_avg; mark bins whose spanned segments contain a NaN segment for this row.
+    if n_series_y > 1:
+        seg_nan = np.isnan(y_avg)  # shape (n_series_y, n_unique_x - 1)
+        seg_nan_cum = np.concatenate([np.zeros((n_series_y, 1)), np.cumsum(seg_nan, axis=1)], axis=1)
+        nan_count_per_bin = seg_nan_cum[:, edge_indices[0, 1:]] - seg_nan_cum[:, edge_indices[0, :-1]]
+        result[nan_count_per_bin > 0] = np.nan
 
     return result
-
-
-def partial_isin(*, bin_edges_in: npt.ArrayLike, bin_edges_out: npt.ArrayLike) -> npt.NDArray[np.floating]:
-    """
-    Calculate the fraction of each input bin that overlaps with each output bin.
-
-    This function computes a matrix where element (i, j) represents the fraction
-    of input bin i that overlaps with output bin j. The computation uses
-    vectorized operations to avoid loops.
-
-    Parameters
-    ----------
-    bin_edges_in : array-like
-        1D array of input bin edges in ascending order. For n_in bins, there
-        should be n_in+1 edges.
-    bin_edges_out : array-like
-        1D array of output bin edges in ascending order. For n_out bins, there
-        should be n_out+1 edges.
-
-    Returns
-    -------
-    overlap_matrix : ndarray
-        Dense matrix of shape (n_in, n_out) where n_in is the number of input
-        bins and n_out is the number of output bins. Each element (i, j)
-        represents the fraction of input bin i that overlaps with output bin j.
-        Values range from 0 (no overlap) to 1 (complete overlap).
-
-    Raises
-    ------
-    ValueError
-        If ``bin_edges_in`` or ``bin_edges_out`` are not 1D arrays. If either edge
-        array has fewer than 2 elements. If ``bin_edges_in`` or ``bin_edges_out``
-        are not in ascending order.
-
-    Notes
-    -----
-    - Both input arrays must be sorted in ascending order
-    - The function leverages the sorted nature of both inputs for efficiency
-    - Uses vectorized operations to handle large bin arrays efficiently
-    - All overlaps sum to 1.0 for each input bin when output bins fully cover input range
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> from gwtransport.utils import partial_isin
-    >>> bin_edges_in = np.array([0, 10, 20, 30])
-    >>> bin_edges_out = np.array([5, 15, 25])
-    >>> partial_isin(
-    ...     bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out
-    ... )  # doctest: +NORMALIZE_WHITESPACE
-    array([[0.5, 0. ],
-           [0.5, 0.5],
-           [0. , 0.5]])
-    """
-    # Convert inputs to numpy arrays
-    bin_edges_in = np.asarray(bin_edges_in, dtype=float)
-    bin_edges_out = np.asarray(bin_edges_out, dtype=float)
-
-    # Validate inputs
-    if bin_edges_in.ndim != 1 or bin_edges_out.ndim != 1:
-        msg = "Both bin_edges_in and bin_edges_out must be 1D arrays"
-        raise ValueError(msg)
-    if len(bin_edges_in) < 2 or len(bin_edges_out) < 2:  # noqa: PLR2004
-        msg = "Both edge arrays must have at least 2 elements"
-        raise ValueError(msg)
-
-    # Edges must be non-decreasing (ignoring NaN). Zero-width input bins are
-    # allowed -- they arise e.g. from cumulative flow with zero-flow intervals --
-    # and produce zero overlap fractions (no water passed through).
-    diffs_in = np.diff(bin_edges_in)
-    valid_diffs_in = ~np.isnan(diffs_in)
-    if np.any(valid_diffs_in) and not np.all(diffs_in[valid_diffs_in] >= 0):
-        msg = "bin_edges_in must be non-decreasing"
-        raise ValueError(msg)
-
-    diffs_out = np.diff(bin_edges_out)
-    valid_diffs_out = ~np.isnan(diffs_out)
-    if np.any(valid_diffs_out) and not np.all(diffs_out[valid_diffs_out] >= 0):
-        msg = "bin_edges_out must be non-decreasing"
-        raise ValueError(msg)
-
-    # Build matrix using fully vectorized approach
-    # Create meshgrids for all possible input-output bin combinations
-    in_left = bin_edges_in[:-1, None]  # Shape: (n_bins_in, 1)
-    in_right = bin_edges_in[1:, None]  # Shape: (n_bins_in, 1)
-    in_width = diffs_in[:, None]  # Shape: (n_bins_in, 1); reuses the validated np.diff above
-
-    out_left = bin_edges_out[None, :-1]  # Shape: (1, n_bins_out)
-    out_right = bin_edges_out[None, 1:]  # Shape: (1, n_bins_out)
-
-    # Calculate overlaps for all combinations using broadcasting
-    overlap_left = np.maximum(in_left, out_left)  # Shape: (n_bins_in, n_bins_out)
-    overlap_right = np.minimum(in_right, out_right)  # Shape: (n_bins_in, n_bins_out)
-
-    # Calculate overlap widths (zero where no overlap)
-    overlap_widths = np.maximum(0, overlap_right - overlap_left)
-
-    # Zero-width input bins contribute no overlap (division-safe). NaN widths still
-    # propagate as NaN fractions (preserved for spin-up handling).
-    with np.errstate(divide="ignore", invalid="ignore"):
-        result = overlap_widths / in_width
-    return np.where(in_width == 0, 0.0, result)
 
 
 def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.NDArray[np.floating]:
@@ -776,6 +669,16 @@ def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.N
         msg = "bin_tedges must be non-empty"
         raise ValueError(msg)
 
+    # Normalize datetime-like inputs (datetime64 or object arrays of Timestamps/datetimes) to a
+    # common int64-nanosecond float scale so numeric, datetime64, and Timestamp inputs share one
+    # arithmetic path; ``np.maximum(0, Timedelta)`` on an object array would otherwise raise. Only
+    # differences enter the result, so the shared epoch origin cancels and the fractions are exact.
+    if not np.issubdtype(tedges.dtype, np.number):
+        tedges = pd.DatetimeIndex(tedges).asi8.astype(float)
+    if not np.issubdtype(bin_tedges_array.dtype, np.number):
+        flat = pd.DatetimeIndex(bin_tedges_array.ravel()).asi8.astype(float)
+        bin_tedges_array = flat.reshape(bin_tedges_array.shape)
+
     # Calculate overlaps for all combinations using broadcasting
     overlap_left = np.maximum(bin_tedges_array[:, [0]], tedges[None, :-1])
     overlap_right = np.minimum(bin_tedges_array[:, [1]], tedges[None, 1:])
@@ -802,9 +705,9 @@ def simplify_bins(
 ]:
     """Simplify a piecewise-constant time series by merging adjacent bins.
 
-    Recursively splits at the largest value jump until the peak-to-peak
-    range within every group does not exceed `tol`. The result is
-    independent of scan direction.
+    Splits at the largest value jump until the peak-to-peak range within
+    every group does not exceed `tol`. The result is independent of scan
+    direction.
 
     Parameters
     ----------
@@ -845,13 +748,23 @@ def simplify_bins(
     else:
         weights = widths
 
-    def _splits(lo: int, hi: int) -> list[int]:
+    # Iteratively split each segment at its largest value jump until every group's peak-to-peak
+    # range is within tol. An explicit LIFO stack replaces the natural recursion, which peels one
+    # element per level on smooth monotone data (argmax|diff| sits at a segment edge) and overflows
+    # the interpreter stack for a few thousand points. Every split index is interior to its
+    # (disjoint) segment, so sorting the collected splits reproduces the recursion's in-order
+    # output exactly -- the merged bins are identical.
+    splits: list[int] = []
+    stack: list[tuple[int, int]] = [(0, len(values))]
+    while stack:
+        lo, hi = stack.pop()
         if np.ptp(values[lo:hi]) <= tol:
-            return []
+            continue
         i = lo + int(np.argmax(np.abs(np.diff(values[lo:hi])))) + 1
-        return [*_splits(lo, i), i, *_splits(i, hi)]
-
-    s = np.array([0, *_splits(0, len(values))])
+        splits.append(i)
+        stack.extend(((lo, i), (i, hi)))
+    splits.sort()
+    s = np.array([0, *splits])
     idx = np.append(s, len(values))
     new_edges = edges[idx]
     new_widths = np.add.reduceat(widths, s)
@@ -869,96 +782,6 @@ def _generate_failed_coverage_badge() -> None:
 
     b = Badge(left_txt="coverage", right_txt="failed", color="red")
     b.write_to("coverage_failed.svg", use_shields=False)
-
-
-def combine_bin_series(
-    *,
-    a: npt.ArrayLike,
-    a_edges: npt.ArrayLike,
-    b: npt.ArrayLike,
-    b_edges: npt.ArrayLike,
-    extrapolation: str | float = 0.0,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]]:
-    """
-    Combine two binned series onto a common set of unique edges.
-
-    This function takes two binned series (a and b) with their respective bin edges
-    and creates new series (c and d) that are defined on a combined set of unique
-    edges from both input edge arrays.
-
-    Parameters
-    ----------
-    a : array-like
-        Values for the first binned series.
-    a_edges : array-like
-        Bin edges for the first series. Must have len(a) + 1 elements.
-    b : array-like
-        Values for the second binned series.
-    b_edges : array-like
-        Bin edges for the second series. Must have len(b) + 1 elements.
-    extrapolation : str or float, optional
-        Method for handling combined bins that fall outside the original series ranges.
-        - 'nearest': Use the nearest original bin value
-        - float value (e.g., np.nan, 0.0): Fill with the specified value (default: 0.0)
-
-    Returns
-    -------
-    c : ndarray
-        Values from series a mapped to the combined edge structure.
-    c_edges : ndarray
-        Combined unique edges from a_edges and b_edges.
-    d : ndarray
-        Values from series b mapped to the combined edge structure.
-    d_edges : ndarray
-        Combined unique edges from a_edges and b_edges (same as c_edges).
-
-    Raises
-    ------
-    ValueError
-        If ``a_edges`` does not have ``len(a) + 1`` elements, or if ``b_edges`` does not
-        have ``len(b) + 1`` elements.
-
-    Notes
-    -----
-    The combined edges are created by taking the union of all unique values
-    from both a_edges and b_edges, sorted in ascending order. The values
-    are then broadcasted/repeated for each combined bin that falls within
-    the original bin's range.
-    """
-    a = np.asarray(a, dtype=float)
-    a_edges = np.asarray(a_edges, dtype=float)
-    b = np.asarray(b, dtype=float)
-    b_edges = np.asarray(b_edges, dtype=float)
-
-    if len(a_edges) != len(a) + 1:
-        msg = "a_edges must have len(a) + 1 elements"
-        raise ValueError(msg)
-    if len(b_edges) != len(b) + 1:
-        msg = "b_edges must have len(b) + 1 elements"
-        raise ValueError(msg)
-
-    combined_edges = np.unique(np.concatenate([a_edges, b_edges]))
-    combined_bin_centers = (combined_edges[:-1] + combined_edges[1:]) / 2
-
-    def _map(values: npt.NDArray[np.floating], edges: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
-        # Map one series onto the combined bins, applying the chosen extrapolation.
-        assignment = np.clip(np.searchsorted(edges, combined_bin_centers, side="right") - 1, 0, len(values) - 1)
-        if extrapolation == "nearest":
-            return values[assignment]
-        out = np.zeros(len(combined_edges) - 1)
-        # A combined bin keeps the original value only when it lies fully inside that bin.
-        valid = (combined_edges[:-1] >= edges[assignment]) & (combined_edges[1:] <= edges[assignment + 1])
-        out[valid] = values[assignment[valid]]
-        out[~valid] = extrapolation
-        return out
-
-    c = _map(a, a_edges)
-    d = _map(b, b_edges)
-
-    c_edges = combined_edges
-    d_edges = combined_edges.copy()
-
-    return c, c_edges, d, d_edges
 
 
 def compute_time_edges(
@@ -1022,7 +845,7 @@ def compute_time_edges(
     """
     if tedges is not None:
         if number_of_bins != len(tedges) - 1:
-            msg = "tedges must have one more element than flow"
+            msg = "tedges must have one more element than number_of_bins"
             raise ValueError(msg)
         tedges = pd.DatetimeIndex(tedges)
         # Ensure nanosecond precision while preserving timezone
@@ -1032,7 +855,7 @@ def compute_time_edges(
         # Assume the index refers to the time at the start of the measurement interval
         tstart = pd.DatetimeIndex(tstart).as_unit("ns")
         if number_of_bins != len(tstart):
-            msg = "tstart must have the same number of elements as flow"
+            msg = "tstart must have the same number of elements as number_of_bins"
             raise ValueError(msg)
         if len(tstart) < 2:  # noqa: PLR2004
             msg = "tstart must have at least 2 elements to infer the bin width; pass tedges for a single bin"
@@ -1046,7 +869,7 @@ def compute_time_edges(
         # Assume the index refers to the time at the end of the measurement interval
         tend = pd.DatetimeIndex(tend).as_unit("ns")
         if number_of_bins != len(tend):
-            msg = "tend must have the same number of elements as flow"
+            msg = "tend must have the same number of elements as number_of_bins"
             raise ValueError(msg)
         if len(tend) < 2:  # noqa: PLR2004
             msg = "tend must have at least 2 elements to infer the bin width; pass tedges for a single bin"
@@ -1736,15 +1559,18 @@ def solve_inverse_transport_banded(
     weight matrix stored in banded layout: row ``k`` of the dense operator
     ``W`` is ``band_vals[k]`` placed at columns
     ``[col_start[k], col_start[k] + full_band)``. The Tikhonov normal
-    equations ``(WᵀW + λ D) x = Wᵀ observed + λ D x_target`` are assembled
-    **directly in banded form** -- ``WᵀW`` is symmetric with half-bandwidth
-    ``full_band - 1`` -- and Cholesky-factored with
-    :func:`scipy.linalg.cholesky_banded`. Forming ``WᵀW`` squares the condition
-    number, so the bare Cholesky solve loses accuracy in the under-determined
-    (spin-up nullspace) directions; **corrected semi-normal equations** restore
-    it by refining with the residual evaluated through ``W`` itself rather than
-    ``WᵀW`` (matching the dense least-squares solution to ~1e-10). Peak memory is
-    ``O(n_output * full_band)``, never the dense ``O(n_obs * n_output)``.
+    equations ``(WᵀW + λ D) x = Wᵀ observed + λ D x_target`` are stored **in
+    banded form** -- ``WᵀW`` is symmetric with half-bandwidth ``full_band - 1``
+    -- and Cholesky-factored with :func:`scipy.linalg.cholesky_banded`. The Gram
+    matrix ``WᵀW`` is built with a single dense BLAS matmul (``~24x`` a
+    per-diagonal scatter) before its sub-diagonals are read into the banded
+    layout. Forming ``WᵀW`` squares the condition number, so the bare Cholesky
+    solve loses accuracy in the under-determined (spin-up nullspace) directions;
+    **corrected semi-normal equations** restore it by refining with the residual
+    evaluated through ``W`` itself rather than ``WᵀW`` (matching the dense
+    least-squares solution to ~1e-10). The banded Cholesky factor, solve, and
+    refinement stay at ``O(n_output * full_band)``; only the one-shot Gram
+    assembly transiently materializes ``W`` and ``WᵀW`` densely.
 
     The regularization target ``x_target`` is the transpose-and-normalize of
     ``W`` applied to ``observed`` (the banded form of
@@ -1818,15 +1644,21 @@ def solve_inverse_transport_banded(
     with np.errstate(invalid="ignore", divide="ignore"):
         x_target = np.where(col_sum > _EPSILON_COEFF_SUM, wt_observed / col_sum, 0.0)
 
-    # Lower-banded WᵀW: band row d is the d-th sub-diagonal. A row's contribution to
-    # (i, j) with i = col_start + b1, j = col_start + b2 lands at offset d = b1 - b2 >= 0
-    # and column j. band_vals is zero outside each window, so off-window pairs add 0.
+    # Lower-banded WᵀW via a dense BLAS matmul. Materialize the forward operator W densely
+    # (row k is band_vals[k] at columns [col_start[k], col_start[k] + full_band)), form the
+    # symmetric Gram matrix WᵀW with a single optimized matmul, then read its lower sub-diagonals
+    # into the banded layout (band row d is the d-th sub-diagonal, WᵀW[j + d, j]). Each row's
+    # in-range band columns are distinct, so the scatter into W needs no accumulation. This is
+    # ~24x the per-diagonal np.add.at scatter; the matmul reorders the summation, so ab matches
+    # the scatter to ~1e-13 -- well inside the Tikhonov + refinement tolerance.
+    n_obs = band_vals.shape[0]
+    w_dense = np.zeros((n_obs, n_cin))
+    obs_idx = np.broadcast_to(np.arange(n_obs)[:, None], cols.shape)
+    w_dense[obs_idx[in_range], cols_clipped[in_range]] = band_vals[in_range]
+    gram = w_dense.T @ w_dense
     ab = np.zeros((full_band, n_cin))
     for d in range(full_band):
-        prod = band_vals[:, d:] * band_vals[:, : full_band - d]
-        c = cols_clipped[:, : full_band - d]
-        m = in_range[:, : full_band - d] & in_range[:, d:]
-        np.add.at(ab[d], c[m], prod[m])
+        ab[d, : n_cin - d] = np.diagonal(gram, offset=-d)
 
     lam = regularization_strength
     d_reg = lam * col_active

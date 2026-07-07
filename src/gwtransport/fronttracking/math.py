@@ -280,37 +280,21 @@ class FreundlichSorption(NonlinearSorption):
         -----
         - For n > 1: R decreases with increasing C (higher C travels faster)
         - For n < 1: R increases with increasing C (higher C travels slower)
-        - n<1 with c_min=0: R(0)=1 (no sorption at zero, physically correct).
+        - n<1 with c_min=0: R(0)=1 (no sorption at zero, physically correct)
+          because clamping to ``c_min=0`` leaves ``C^((1/n)-1) = 0^positive = 0``.
         - Otherwise: ``c`` is clamped to ``c_min`` before evaluation. This pairs with
           :meth:`total_concentration`, which also clamps to ``c_min``.
+
+        Clamping with ``np.maximum`` before the power keeps a single general path
+        for every ``(n, c_min)`` combination and avoids raising the base to a
+        fractional power on negative ``c``.
         """
         is_array = isinstance(c, np.ndarray)
-        c_arr = np.asarray(c)
-
-        if self.c_min == 0 and self.n < 1.0:
-            result = np.where(c_arr <= 0, 1.0, self._compute_retardation(c_arr))
-        else:
-            c_eff = np.maximum(c_arr, self.c_min)
-            result = self._compute_retardation(c_eff)
-
-        return result if is_array else float(result)
-
-    def _compute_retardation(self, c: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        """Compute retardation for positive concentrations.
-
-        Parameters
-        ----------
-        c : numpy.ndarray
-            Dissolved concentration [mass/volume]. Must be positive.
-
-        Returns
-        -------
-        numpy.ndarray
-            Retardation factor [-]. Always >= 1.0.
-        """
+        c_eff = np.maximum(np.asarray(c), self.c_min)
         exponent = (1.0 / self.n) - 1.0
         coefficient = (self.bulk_density * self.k_f) / (self.porosity * self.n)
-        return 1.0 + coefficient * (c**exponent)
+        result = 1.0 + coefficient * (c_eff**exponent)
+        return result if is_array else float(result)
 
     def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """
@@ -753,7 +737,7 @@ class BrooksCoreyConductivity(NonlinearSorption):
     .. math::
         K(\\theta) = K_s \\cdot \\Theta^a, \\qquad
         \\Theta = (\\theta - \\theta_r)/(\\theta_s - \\theta_r), \\qquad
-        a = 3 + 2/\\lambda \\;(\\text{Mualem})
+        a = 3 + 2/\\lambda \\;(\\text{Burdine})
 
     is recast in the framework's ``(C, C_T)`` variables by identifying
     ``C ≡ K`` (the flux variable) and ``C_T ≡ θ - θ_r`` (the conserved
@@ -773,9 +757,10 @@ class BrooksCoreyConductivity(NonlinearSorption):
         Saturated hydraulic conductivity [length/time]. Positive.
     brooks_corey_lambda : float
         Pore-size distribution index ``λ`` [-]. Positive. The exponent
-        ``a = 3 + 2/λ`` (Mualem variant; Burdine's ``a = 2 + 3/λ`` is not
-        implemented in v1, but a user wanting it can re-derive ``λ`` so the
-        Mualem ``a`` matches the desired Burdine exponent).
+        ``a = 3 + 2/λ`` is the Burdine pore-connectivity result. The Mualem
+        variant (``L = 0.5``) gives ``a = 2.5 + 2/λ`` and is not implemented;
+        a user wanting it can re-derive ``λ`` so the Burdine ``a`` matches the
+        desired Mualem exponent.
 
     See Also
     --------
@@ -819,7 +804,7 @@ class BrooksCoreyConductivity(NonlinearSorption):
     brooks_corey_lambda: float
     """Pore-size distribution index λ [-]."""
     a: float = field(init=False)
-    """Exponent ``a = 3 + 2/λ`` (Mualem); set in ``__post_init__``."""
+    """Exponent ``a = 3 + 2/λ`` (Burdine); set in ``__post_init__``."""
     delta_theta: float = field(init=False)
     """``θ_s − θ_r``; set in ``__post_init__``."""
 

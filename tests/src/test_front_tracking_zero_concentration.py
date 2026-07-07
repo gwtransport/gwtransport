@@ -28,7 +28,7 @@ class TestInletWaveCreationZeroConcentration:
         """Test C=0 → C=10 creates rarefaction for n>1 Freundlich with c_min>0."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
 
-        waves = create_inlet_waves_at_theta(c_prev=0.0, c_new=10.0, theta=5.0, sorption=sorption, v_inlet=0.0)
+        waves = create_inlet_waves_at_theta(c_prev=0.0, c_new=10.0, theta=5.0, sorption=sorption)
 
         # For n>1, velocity increases with concentration
         # So 10 > 0 means faster concentration catching slower, creating compression (shock)
@@ -43,7 +43,7 @@ class TestInletWaveCreationZeroConcentration:
         """Test C=0 → C=10 creates characteristic for n<1 Freundlich with c_min=0."""
         sorption = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
 
-        waves = create_inlet_waves_at_theta(c_prev=0.0, c_new=10.0, theta=5.0, sorption=sorption, v_inlet=0.0)
+        waves = create_inlet_waves_at_theta(c_prev=0.0, c_new=10.0, theta=5.0, sorption=sorption)
 
         # For n<1 with c_min=0, R(0)=1 is special case
         # Stepping from 0 to nonzero creates characteristic
@@ -55,7 +55,7 @@ class TestInletWaveCreationZeroConcentration:
         """Test C=0 → C=10 creates characteristic for constant retardation."""
         sorption = ConstantRetardation(retardation_factor=2.0)
 
-        waves = create_inlet_waves_at_theta(c_prev=0.0, c_new=10.0, theta=5.0, sorption=sorption, v_inlet=0.0)
+        waves = create_inlet_waves_at_theta(c_prev=0.0, c_new=10.0, theta=5.0, sorption=sorption)
 
         assert len(waves) == 1
         assert isinstance(waves[0], CharacteristicWave)
@@ -65,7 +65,7 @@ class TestInletWaveCreationZeroConcentration:
         """Test C=10 → C=0 creates rarefaction for n>1."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
 
-        waves = create_inlet_waves_at_theta(c_prev=10.0, c_new=0.0, theta=15.0, sorption=sorption, v_inlet=0.0)
+        waves = create_inlet_waves_at_theta(c_prev=10.0, c_new=0.0, theta=15.0, sorption=sorption)
 
         # For n>1, concentration decrease creates rarefaction (expansion)
         assert len(waves) == 1
@@ -78,7 +78,7 @@ class TestInletWaveCreationZeroConcentration:
         """Test C=2 → C=10 creates shock for n>1 (compression)."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-        waves = create_inlet_waves_at_theta(c_prev=2.0, c_new=10.0, theta=5.0, sorption=sorption, v_inlet=0.0)
+        waves = create_inlet_waves_at_theta(c_prev=2.0, c_new=10.0, theta=5.0, sorption=sorption)
 
         assert len(waves) == 1
         assert isinstance(waves[0], ShockWave)
@@ -90,7 +90,7 @@ class TestInletWaveCreationZeroConcentration:
         """Test C=10 → C=2 creates rarefaction for n>1 (expansion)."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-        waves = create_inlet_waves_at_theta(c_prev=10.0, c_new=2.0, theta=5.0, sorption=sorption, v_inlet=0.0)
+        waves = create_inlet_waves_at_theta(c_prev=10.0, c_new=2.0, theta=5.0, sorption=sorption)
 
         assert len(waves) == 1
         assert isinstance(waves[0], RarefactionWave)

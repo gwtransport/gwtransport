@@ -104,6 +104,26 @@ class TestFreundlichSorption:
         sorption_fav = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
         assert sorption_fav.retardation(0.0) > 1.0
 
+    def test_retardation_single_path_no_invalid_power_warning_on_negative_c(self):
+        """Non-positive ``c`` (n<1, c_min=0) clamps to zero -> R=1 with no fractional-power warning.
+
+        Regression for the collapse to a single ``np.maximum``-clamped path: the earlier
+        ``np.where`` special branch eagerly evaluated ``c**(1/n - 1)`` on the raw (negative)
+        array, raising ``(-c)`` to a fractional power and emitting a spurious
+        ``invalid value encountered in power`` RuntimeWarning before discarding the result.
+        Here ``1/n - 1 = 0.4285...`` is non-integer, so the raw-power path would warn.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=0.7, bulk_density=1500.0, porosity=0.3, c_min=0.0)
+        c = np.array([-5.0, -1e-9, 0.0, 2.0])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # any RuntimeWarning becomes a failure
+            r = sorption.retardation(c)
+        # All non-positive concentrations clamp to R = 1 exactly; the positive one matches the isotherm.
+        exponent = 1.0 / 0.7 - 1.0
+        coefficient = (1500.0 / 0.3) * 0.01 / 0.7
+        expected = np.array([1.0, 1.0, 1.0, 1.0 + coefficient * 2.0**exponent])
+        np.testing.assert_array_equal(r, expected)
+
     def test_retardation_positive_concentration_n_greater_1(self):
         """Test R(C) > 1 for C > 0 when n > 1."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
@@ -735,7 +755,7 @@ _STARINGREEKS_VG = [
 
 @pytest.mark.parametrize(("theta_r", "theta_s", "k_s", "lam"), _STARINGREEKS_BC)
 class TestBrooksCoreyConductivity:
-    """Brooks-Corey closed-form unsaturated-conductivity sorption (BC = Mualem variant)."""
+    """Brooks-Corey closed-form unsaturated-conductivity sorption (BC = Burdine variant, a = 3 + 2/λ)."""
 
     def test_constructor_derives_a_and_delta_theta(self, theta_r, theta_s, k_s, lam):
         """``a = 3 + 2/λ`` and ``Δθ = θ_s − θ_r`` set in ``__post_init__``."""

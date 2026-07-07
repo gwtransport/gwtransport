@@ -173,3 +173,69 @@ def test_vectorized_event_accumulation_matches_loop(seed, event_duration):
     )
 
     np.testing.assert_array_equal(actual_series.to_numpy(), expected)
+
+
+def test_deposition_seasonal_is_annual_for_nondaily_freq():
+    """The deposition seasonal must have a one-year period for any ``freq``, not one year of samples.
+
+    Isolates the seasonal component (base/noise/events zeroed) at weekly resolution and compares
+    against the closed form ``seasonal_amplitude * sin(2*pi*elapsed_days/365.25)``. Before the fix the
+    code used the sample index, so one year after the start the seasonal was ~0.78 instead of ~0.
+    """
+    date_start, date_end, freq = "2018-01-01", "2019-12-31", "W"
+    seasonal_amplitude = 1.0
+
+    series, _ = generate_example_deposition_timeseries(
+        date_start=date_start,
+        date_end=date_end,
+        freq=freq,
+        base=0.0,
+        seasonal_amplitude=seasonal_amplitude,
+        noise_scale=0.0,
+        event_dates=[],
+        ensure_non_negative=False,
+        rng=0,
+    )
+
+    dates = pd.date_range(date_start, date_end, freq=freq).tz_localize("UTC")
+    elapsed_days = (dates - dates[0]) / pd.Timedelta(days=1)
+    expected = seasonal_amplitude * np.sin(2 * np.pi * np.asarray(elapsed_days) / 365.25)
+
+    np.testing.assert_allclose(series.to_numpy(), expected)
+
+    # One year after the start the annual seasonal must return to ~0 (the sample-index bug gave ~0.78).
+    one_year = int(np.argmin(np.abs(np.asarray(elapsed_days) - 365.25)))
+    assert abs(series.to_numpy()[one_year]) < 0.03
+
+
+def test_flow_seasonal_varies_within_day_for_subdaily_freq():
+    """Sub-daily flow must resolve the seasonal within a calendar day, not stair-step per integer day.
+
+    With ``flow_noise=0`` and a short (spill-free) window the flow column equals the noiseless
+    seasonal floored at 5 m3/day. Before the fix the integer day count held the seasonal constant
+    across the four 6-hourly samples of each day; the closed form below distinguishes the two.
+    """
+    date_start, date_end, date_freq = "2020-01-01", "2020-01-05", "6h"
+    flow_mean, flow_amplitude = 100.0, 30.0
+
+    df, _ = generate_example_data(
+        date_start=date_start,
+        date_end=date_end,
+        date_freq=date_freq,
+        flow_mean=flow_mean,
+        flow_amplitude=flow_amplitude,
+        flow_noise=0.0,
+        measurement_noise=0.0,
+        rng=0,
+    )
+
+    dates = pd.date_range(date_start, date_end, freq=date_freq).tz_localize("UTC")
+    frac_days = (dates - dates[0]) / pd.Timedelta(days=1)
+    expected_flow = np.maximum(
+        flow_mean + flow_amplitude * np.sin(2 * np.pi * np.asarray(frac_days) / 365 + np.pi), 5.0
+    )
+
+    np.testing.assert_allclose(df["flow"].to_numpy(), expected_flow)
+
+    # The four 6-hourly samples of the first day must differ (the bug made them identical).
+    assert np.unique(df["flow"].to_numpy()[:4]).size == 4

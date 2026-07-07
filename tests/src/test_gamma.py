@@ -413,6 +413,21 @@ def test_bins_quantile_edges_too_few():
         gamma_bins(alpha=5.0, beta=2.0, quantile_edges=np.array([0.0, 1.0]))
 
 
+def test_bins_empty_quantile_edges_raises():
+    """Regression (G1): an empty quantile_edges must raise ValueError, not leak IndexError.
+
+    Before the fix the empty array passed the (vacuously true) strictly-increasing check
+    and then indexed ``quantile_edges[0]`` on a size-0 array, leaking an IndexError instead
+    of the documented ValueError family.
+    """
+    with pytest.raises(ValueError):
+        gamma_bins(alpha=2.0, beta=3.0, quantile_edges=np.array([]))
+
+    # A single edge cannot define even one bin either.
+    with pytest.raises(ValueError):
+        gamma_bins(alpha=2.0, beta=3.0, quantile_edges=np.array([0.0]))
+
+
 def test_bins_loc_zero_matches_legacy():
     """With loc=0, bins() reproduces the two-parameter result bit-for-bit."""
     r_default = gamma_bins(alpha=5.0, beta=2.0, n_bins=20)

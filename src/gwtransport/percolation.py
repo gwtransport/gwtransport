@@ -167,8 +167,9 @@ def root_zone_to_water_table_kinematic_wave(
     ------
     ValueError
         If inputs are inconsistent (wrong lengths, NaN, negative ``q_root_zone``
-        or ``k_scaling``, non-positive ``cumulative_pore_volumes_outlet`` or
-        ``k_s``), if neither or both sorption-parameter groups are supplied,
+        or ``k_scaling``, non-finite or non-positive
+        ``cumulative_pore_volumes_outlet`` or ``k_s``), if neither or both
+        sorption-parameter groups are supplied,
         if ``q_root_zone > f(t) * k_s`` at any bin (saturation/ponding limit),
         or if ``q_water_table_tedges`` does not equal ``tedges`` while
         ``k_scaling`` is provided.
@@ -318,14 +319,16 @@ def root_zone_to_water_table_kinematic_wave(
     if np.any(np.isnan(q_root_zone_arr)):
         msg = "q_root_zone must not contain NaN"
         raise ValueError(msg)
-    if cumulative_pore_volumes_outlet_arr.size == 0 or np.any(cumulative_pore_volumes_outlet_arr <= 0):
-        msg = "cumulative_pore_volumes_outlet must be non-empty with all entries positive"
+    if cumulative_pore_volumes_outlet_arr.size == 0 or not np.all(
+        np.isfinite(cumulative_pore_volumes_outlet_arr) & (cumulative_pore_volumes_outlet_arr > 0)
+    ):
+        msg = "cumulative_pore_volumes_outlet must be non-empty with all entries positive and finite"
         raise ValueError(msg)
     if not (0.0 <= theta_r < theta_s < 1.0):
         msg = f"theta_r, theta_s must satisfy 0 <= theta_r < theta_s < 1, got theta_r={theta_r}, theta_s={theta_s}"
         raise ValueError(msg)
-    if k_s <= 0:
-        msg = f"k_s must be positive, got {k_s}"
+    if not (np.isfinite(k_s) and k_s > 0):
+        msg = f"k_s must be positive and finite, got {k_s}"
         raise ValueError(msg)
     if (brooks_corey_lambda is None) == (van_genuchten_n is None):
         msg = "Exactly one of brooks_corey_lambda or van_genuchten_n must be provided"

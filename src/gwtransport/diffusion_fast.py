@@ -223,13 +223,20 @@ def _pv_band_values(
     r"""Bin-averaged ``C_F`` stripe for one streamtube on the shared band (values pass).
 
     ``C_F`` over a cout bin is ``(I(x_hi) - I(x_lo)) / dx`` with the closed-form antiderivative
-    ``I`` evaluated at both cout edges over the band cin edges. Because ``D_t = D_m*tau + alpha_L*xi``
+    ``I`` evaluated at the two cout edges bounding the bin. Because ``D_t = D_m*tau + alpha_L*xi``
     with ``tau = R*V/(L*Q)``, the antiderivative's slope ``dD_t/dx = R*D_m/v_fluid + alpha_L =
     D_s/v_s`` is exactly the Kreft-Zuber flux coefficient at the solute-front velocity
     ``v_s = Q*L/(R*V_pore)``, so the flux concentration emerges natively -- no correction term is
     added. The stripe is the band itself: each row spans cin edges
     ``col_start[k] .. col_start[k] + full_band`` (``full_band + 1`` edges), so the coefficient for
-    band offset ``b`` (cin bin ``col_start[k] + b``) is ``frac[b] - frac[b + 1]``. The
+    band offset ``b`` (cin bin ``col_start[k] + b``) is ``frac[b] - frac[b + 1]``.
+
+    ``I`` is evaluated once per cout EDGE, not once per (row, edge) pair: an interior edge bounds two
+    adjacent rows (it is a row's upper edge and the next row's lower edge), so the two evaluations of
+    ``I`` there are the identical function of the identical breakthrough coordinate. The build
+    therefore evaluates ``I`` on the ``n_cout_bins + 1`` cout edges over a single per-edge cin-edge
+    window (anchored so both adjacent rows can read it), then gathers each row's lower/upper edge
+    values from it -- roughly halving the ``erf`` work relative to evaluating both edges per row. The
     zero-dispersion limit is exact here too: ``D_t`` floors to ``_DT_FLOOR``, so ``C_F`` is a step
     smoothed by ~1e-15.
 
@@ -241,17 +248,33 @@ def _pv_band_values(
     """
     v_cin = cumulative_volume_at_cin
     n_cin_edges = v_cin.size
-    v_cout_lo, v_cout_hi = cumulative_volume_at_cout[:-1], cumulative_volume_at_cout[1:]
-    t_cout_lo, t_cout_hi = cout_tedges_days[:-1], cout_tedges_days[1:]
+    n_cout_bins = cumulative_volume_at_cout.size - 1
+    width = full_band + 1
 
-    # Bin-averaged C_F over the band: I evaluated at both cout edges on the full_band + 1 cin edges
-    # of each row's band. Edges are clipped to the real data edges, which the warm-start extension
-    # makes saturated, so out-of-range edges carry frac 0/1 and telescope away in the difference.
-    cols = col_start[:, None] + np.arange(full_band + 1)[None, :]
-    cc = np.clip(cols, 0, n_cin_edges - 1)
-    v_c, t_c = v_cin[cc], tedges_days[cc]
-    sw_lo = (v_cout_lo[:, None] - v_c - r_vpv) * length / r_vpv
-    sw_hi = (v_cout_hi[:, None] - v_c - r_vpv) * length / r_vpv
+    # Per-edge cin-edge window. Cout edge e bounds row e (as its lower edge, needing cin band anchor
+    # col_start[e]) and row e-1 (as its upper edge, needing col_start[e-1]); anchoring at the smaller
+    # of the two lets one evaluation serve both. col_start is non-decreasing here, but the min keeps
+    # both read offsets non-negative regardless. The sentinel (>= any column) drops the absent
+    # consumer at the two end edges. The window is widened past full_band + 1 only by the col_start
+    # jump between adjacent rows (typically 0-1), so it collapses to the row width when aligned.
+    big = n_cin_edges
+    estart = np.minimum(np.append(col_start, big), np.append(big, col_start))
+    lo_off = col_start - estart[:-1]
+    hi_off = col_start - estart[1:]
+    edge_width = width + int(max(lo_off.max(), hi_off.max()))
+    edge_cols = np.clip(estart[:, None] + np.arange(edge_width)[None, :], 0, n_cin_edges - 1)
+    v_c, t_c = v_cin[edge_cols], tedges_days[edge_cols]
+    sw_edge = (cumulative_volume_at_cout[:, None] - v_c - r_vpv) * length / r_vpv
+
+    # Gather each row's lower (cout edge k) and upper (cout edge k + 1) breakthrough coordinates from
+    # the per-edge stripe. Clipped cin edges fall in the warm-start-saturated tail, carrying frac 0/1
+    # that telescopes away in the coefficient difference.
+    rows = np.arange(n_cout_bins)[:, None]
+    band = np.arange(width)[None, :]
+    lo_idx = lo_off[:, None] + band
+    hi_idx = hi_off[:, None] + band
+    sw_lo = sw_edge[rows, lo_idx]
+    sw_hi = sw_edge[rows + 1, hi_idx]
 
     # No dispersion: C_R is the step H(x); its exact bin-average is the fraction of the cout bin with
     # x > 0, and at a zero-width (dv_cout = 0) cout bin it is the point value 0.5*(1 + sign(x_lo)).
@@ -264,18 +287,14 @@ def _pv_band_values(
         frac = np.where(dx > 0.0, frac, 0.5 + 0.5 * np.sign(sw_lo))
         return frac[:, :-1] - frac[:, 1:]
 
-    dt_lo = np.maximum(
-        molecular_diffusivity * np.maximum(t_cout_lo[:, None] - t_c, 0.0)
-        + longitudinal_dispersivity * np.maximum(sw_lo + length, 0.0),
+    dt_edge = np.maximum(
+        molecular_diffusivity * np.maximum(cout_tedges_days[:, None] - t_c, 0.0)
+        + longitudinal_dispersivity * np.maximum(sw_edge + length, 0.0),
         _DT_FLOOR,
     )
-    dt_hi = np.maximum(
-        molecular_diffusivity * np.maximum(t_cout_hi[:, None] - t_c, 0.0)
-        + longitudinal_dispersivity * np.maximum(sw_hi + length, 0.0),
-        _DT_FLOOR,
-    )
-    i_lo = _breakthrough_antideriv(sw_lo, dt_lo)
-    i_hi = _breakthrough_antideriv(sw_hi, dt_hi)
+    i_edge = _breakthrough_antideriv(sw_edge, dt_edge)
+    i_lo = i_edge[rows, lo_idx]
+    i_hi = i_edge[rows + 1, hi_idx]
     dx = sw_hi - sw_lo
     with np.errstate(divide="ignore", invalid="ignore"):
         frac = np.where(dx > 0.0, (i_hi - i_lo) / dx, 0.0)

@@ -87,7 +87,7 @@ def _wave_trajectory_in_t(
     t_arr = [state.t_at_theta(float(theta)) for theta in thetas[mask]]
     # Callers test truthiness of the returned lists (``if v_head:``), so keep
     # Python lists rather than arrays.
-    return t_arr, [float(v) for v in vs[mask]]
+    return t_arr, vs[mask].tolist()
 
 
 def plot_vt_diagram(
@@ -263,7 +263,7 @@ def plot_vt_diagram(
 
     # Plot wave interaction events as markers. Event records carry ``"theta"``;
     # translate to user-facing t for display via ``state.t_at_theta``.
-    if show_events and hasattr(state, "events") and state.events:
+    if show_events and state.events:
         for event in state.events:
             if "theta" in event and "location" in event:
                 t_event = state.t_at_theta(event["theta"])
@@ -411,6 +411,7 @@ def plot_breakthrough_curve(
             t_raref = np.linspace(t_seg_start, t_seg_end, n_rarefaction_points)
             theta_raref = state.theta_at_t_array(t_raref)
             c_raref = np.zeros_like(t_raref)
+            c_fallback = segment.get("c_start", raref.c_tail)
 
             # concentration_at_point is inherently scalar (returns None outside
             # the fan); only the t→θ map is vectorizable and is hoisted above.
@@ -419,7 +420,7 @@ def plot_breakthrough_curve(
                 if c_at_point is not None:
                     c_raref[j] = c_at_point
                 else:
-                    c_raref[j] = segment.get("c_start", raref.c_tail)
+                    c_raref[j] = c_fallback
 
             ax.plot(t_raref, c_raref, "b-", linewidth=2, label="Outlet concentration" if i == 0 else "")
 
@@ -720,7 +721,7 @@ def plot_front_tracking_summary(
     ----------
     structure : dict
         Structure returned from infiltration_to_extraction_nonlinear_sorption.
-        Must contain keys: 'tracker_state', 't_first_arrival'.
+        Must contain keys: 'tracker_state', 'theta_first_arrival'.
     tedges : pandas.DatetimeIndex
         Time bin edges for inlet concentration.
         Length = len(cin) + 1.
@@ -777,7 +778,7 @@ def plot_front_tracking_summary(
     tracker_state: FrontTrackerState = structure["tracker_state"]
 
     if t_max is None:
-        t_max = float((tedges.to_numpy()[-1] - tedges.to_numpy()[0]) / pd.Timedelta(days=1))
+        t_max = float((tedges[-1] - tedges[0]) / pd.Timedelta(days=1))
 
     # Top left: V-t diagram
     ax_vt = fig.add_subplot(gs[0, 0])
@@ -819,7 +820,9 @@ def plot_front_tracking_summary(
         )
 
     if show_bin_averaged:
-        t_edges_days = tedges_to_days(cout_tedges)
+        # Share the exact curve's origin (tracker_state.tedges[0]); referencing the output
+        # grid to its own first edge shifts the overlay by (cout_tedges[0] - tedges[0]) days.
+        t_edges_days = tedges_to_days(cout_tedges, ref=tracker_state.tedges[0])
         xstep_cout, ystep_cout = step_plot_coords(t_edges_days, cout)
         ax_outlet.plot(
             xstep_cout,
@@ -927,9 +930,9 @@ def plot_sorption_comparison(
     )
 
     if t_max_pulse is None:
-        t_max_pulse = (pulse_tedges.to_numpy()[-1] - pulse_tedges.to_numpy()[0]) / pd.Timedelta(days=1)
+        t_max_pulse = float((pulse_tedges[-1] - pulse_tedges[0]) / pd.Timedelta(days=1))
     if t_max_dip is None:
-        t_max_dip = (dip_tedges.to_numpy()[-1] - dip_tedges.to_numpy()[0]) / pd.Timedelta(days=1)
+        t_max_dip = float((dip_tedges[-1] - dip_tedges[0]) / pd.Timedelta(days=1))
 
     # === ROW 1: Pulse inlet ===
     t_days_pulse = tedges_to_days(pulse_tedges)

@@ -41,13 +41,17 @@ Accuracy (vs :mod:`gwtransport.diffusion_fast`, flow-independent unless noted)
 ------------------------------------------------------------------------------
 
 - **~3e-4 whenever microdispersion is present** (``alpha_L > 0`` -- the typical groundwater
-  regime, Peclet number >> 1), constant *and* variable flow. Here molecular diffusion is
-  sub-dominant, so approximating it barely matters.
+  regime, Peclet number >> 1), constant *and* variable flow, for realistic solute diffusivities
+  (``D_m`` ~ 1e-4) or ``R = 1``. Here molecular diffusion is sub-dominant, so approximating it
+  barely matters. This survives retardation for a typical APVD (measured <~1e-3 up to ``R = 3``).
 - In the **molecular-diffusion-dominated** corner (``alpha_L`` ~ 0): ~1e-4 for smooth inputs, but
   degrading to ~1e-2 for sharp inputs (and ~5e-2 for sharp inputs with a very wide / bimodal APVD or
   a large single pore volume), because the symmetric time-Gaussian cannot reproduce the skewed
-  molecular breakthrough. **Use** :mod:`gwtransport.diffusion_fast` **for exact results in this
-  regime.**
+  molecular breakthrough. **Retardation enlarges this corner:** the Gaussian's variance scales as
+  ``sigma_t^2 ~ D_m * R^3``, so ``R > 1`` reaches the ~1e-2 looseness at a smaller ``D_m`` -- a
+  sharp input at ``D_m = 0.01`` degrades from ~8e-4 at ``R = 1`` to ~1.7e-2 at ``R = 2`` and ~3.5e-2
+  at ``R = 3``. **Use** :mod:`gwtransport.diffusion_fast` **for exact results in this regime** --
+  in particular for heat transport (``R > 1`` with a large ``D_m``).
 
 The inverse (:func:`extraction_to_infiltration`) deconvolves the *same* approximate operator the
 forward applies. It assembles ``W = G . M`` directly in banded form (one ``Ibar`` gather plus a
@@ -202,8 +206,12 @@ def _eval_antideriv(
     g0 = grid[0]
     dstep = grid[1] - grid[0]
     f = (dv - g0) / dstep
-    i0 = np.clip(np.floor(f).astype(np.intp), 0, grid.size - 2)
-    out = ibar[i0] + (f - i0) * (ibar[i0 + 1] - ibar[i0])
+    # astype truncates toward zero; equals floor on f >= 0 (the only regime that survives the
+    # dv < g0 override below and the lower clip), so the floor call is redundant. Precompute the
+    # segment slopes once so the O(N*band) gather reads a single array instead of differencing two.
+    slopes = np.diff(ibar)
+    i0 = np.clip(f.astype(np.intp), 0, grid.size - 2)
+    out = ibar[i0] + (f - i0) * slopes[i0]
     out = np.where(dv < g0, 0.0, out)
     return np.where(dv > grid[-1], dv - mean_r_vpv, out)
 
@@ -471,8 +479,11 @@ def infiltration_to_extraction(
     The advection + macrodispersion + microdispersion (``alpha_L``) part is the exact skewed
     ``D_m=0`` Kreft-Zuber breakthrough applied on the native cumulative-volume grid; molecular
     diffusion (``D_m``) is a symmetric time-domain Gaussian. The result is flow-independent and
-    accurate to ~3e-4 whenever ``alpha_L > 0`` (the typical regime), degrading to ~1e-2 (sharp
-    inputs) in the molecular-diffusion-dominated corner (``alpha_L`` ~ 0). For machine precision, use
+    accurate to ~3e-4 whenever ``alpha_L > 0`` (the typical regime) for realistic solute ``D_m``
+    (~1e-4) or ``R = 1``. It loosens to ~1e-2 (sharp inputs) in the molecular-diffusion-dominated
+    corner (``alpha_L`` ~ 0), and retardation enlarges that corner because the Gaussian variance
+    grows as ``D_m * R^3`` (a sharp input at ``D_m = 0.01`` reaches ~1.7e-2 at ``R = 2`` and ~3.5e-2
+    at ``R = 3``). For machine precision -- or heat transport with ``R > 1`` and large ``D_m`` -- use
     :mod:`gwtransport.diffusion_fast`.
 
     Parameters
@@ -572,11 +583,21 @@ def infiltration_to_extraction(
     coeff, cin_bin, sigma_bins, valid = operator
 
     # Apply the advection+macro+micro band M to the (warm-start-extended) cin, then the molecular
-    # time-Gaussian G. The Gaussian runs before masking so it operates on NaN-free values.
+    # time-Gaussian G. Output bins with no through-flow carry a hard 0 in cout_micro; a plain
+    # Gaussian would smear those zeros into the valid neighbours. Convolve mask-aware instead --
+    # G(cout_micro*support)/G(support) -- so gap bins act as missing (not zero) data. This equals a
+    # plain G where support is all-True (constants stay constant, incl. exactly across a gap).
     cin_ext = np.concatenate([[cin[0]], cin, [cin[-1]]]) if extend else cin
     cout_micro = np.einsum("kb,kb->k", coeff, cin_ext[cin_bin])
-    cout = cout_micro if sigma_bins == 0.0 else gaussian_filter1d(cout_micro, sigma_bins, mode="nearest", truncate=6.0)
-    return np.where((coeff.sum(axis=1) >= _EPSILON_COEFF_SUM) & valid, cout, np.nan)
+    support = coeff.sum(axis=1) >= _EPSILON_COEFF_SUM
+    if sigma_bins == 0.0:
+        cout = cout_micro
+    else:
+        num = gaussian_filter1d(cout_micro * support, sigma_bins, mode="nearest", truncate=6.0)
+        den = gaussian_filter1d(support.astype(float), sigma_bins, mode="nearest", truncate=6.0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            cout = num / den  # den > 0 wherever support is True; 0/0 gap bins are masked out below
+    return np.where(support & valid, cout, np.nan)
 
 
 def extraction_to_infiltration(

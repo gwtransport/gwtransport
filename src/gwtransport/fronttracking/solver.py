@@ -20,6 +20,7 @@ All calculations are exact analytical with machine precision.
 
 import logging
 from dataclasses import dataclass
+from itertools import pairwise
 from operator import itemgetter
 
 import numpy as np
@@ -35,6 +36,7 @@ from gwtransport.fronttracking.events import (
     find_rarefaction_boundary_intersections,
     find_shock_characteristic_intersection,
     find_shock_shock_intersection,
+    is_outlet_crossing_pinned,
 )
 from gwtransport.fronttracking.handlers import (
     EPSILON_CONCENTRATION,
@@ -49,6 +51,10 @@ from gwtransport.fronttracking.handlers import (
 from gwtransport.fronttracking.math import (
     SorptionModel,
     compute_first_front_arrival_theta,
+)
+from gwtransport.fronttracking.output import (
+    FP_CANCELLATION_CLAMP,
+    compute_cumulative_outlet_mass,
 )
 from gwtransport.fronttracking.waves import (
     CharacteristicWave,
@@ -276,7 +282,6 @@ class FrontTracker:
                     c_new=c_new,
                     theta=float(theta_edges[i]),
                     sorption=self.state.sorption,
-                    v_inlet=0.0,
                 )
                 self.state.waves.extend(new_waves)
 
@@ -376,15 +381,18 @@ class FrontTracker:
         for wave in active_waves:
             if isinstance(wave, RarefactionWave):
                 theta_eval = max(theta_current, wave.theta_start)
-                for pos_fn, speed_fn in (
-                    (wave.head_position_at_theta, wave.head_speed),
-                    (wave.tail_position_at_theta, wave.tail_speed),
+                for c_boundary, pos_fn, speed_fn in (
+                    (wave.c_head, wave.head_position_at_theta, wave.head_speed),
+                    (wave.c_tail, wave.tail_position_at_theta, wave.tail_speed),
                 ):
                     v_pos = pos_fn(theta_eval)
                     if v_pos is None or v_pos >= v_outlet - outlet_tol:
                         continue
                     s = speed_fn()
-                    if s <= 0:
+                    # Skip a c_min-floored (pinned) boundary — R(c_min) inflated
+                    # for n>1, c→0: its crossing lands at a non-physical θ~1e8 and
+                    # only pollutes the event record.
+                    if s <= 0 or is_outlet_crossing_pinned(c_boundary, wave.sorption):
                         continue
                     theta_cross = theta_eval + (v_outlet - v_pos) / s
                     if theta_cross > theta_current:
@@ -590,3 +598,113 @@ class FrontTracker:
                     f"speed={wave.speed:.6g}"
                 )
                 raise RuntimeError(msg)
+
+
+def find_unresolved_interaction(state: FrontTrackerState) -> str | None:
+    """Locate an unresolved wave–wave interaction inside the transport domain.
+
+    The event-driven solver resolves shock↔shock, shock↔characteristic and
+    shock↔rarefaction collisions (the last into a :class:`DecayingShockWave`), but it
+    never collides anything *with* a decaying shock, nor composes two fans that come to
+    occupy the same region. Such an unresolved interaction leaves the non-interacting wave
+    objects overlapping, so the exact nonlinear multi-front field is not represented — the
+    public ``cout`` degrades to a spurious linear superposition of a nonlinear operator
+    (mass-fabricating once the reader clamps the resulting negative bins to zero). This
+    detects the first offending interaction so the public API can refuse the input rather
+    than return a wrong, non-conservative answer. Two complementary detectors run over the
+    input θ-window ``(0, theta_edges[-1]]``:
+
+    1. **Geometric fan overlap.** When two or more fan-bearing waves (rarefactions /
+       decaying shocks) cover a common point inside ``[0, v_outlet]``, their composite
+       field is wrong even when total mass happens to be conserved (a positive-but-wrong
+       ``cout`` with no negative bin — e.g. two decaying shocks with a zero fan tail, or a
+       later pulse's fan sweeping an earlier one). A symptom-only proxy cannot see this
+       class, so the geometric scan is a necessary complement.
+
+    2. **Conservation symptom.** The cumulative outlet mass ``m_out(θ) = m_in(θ) − m_dom(θ)``
+       must be non-decreasing in θ (mass exits the column, it never re-enters). A decrease
+       beyond the FP-cancellation band means the reader's domain-mass field transiently
+       over-counts stored mass — the fingerprint of a shock overtaking another shock /
+       rarefaction / decaying-shock fan. The two fans need NOT share an in-domain point
+       (they may only cross beyond ``v_outlet``), so the geometric scan misses this dominant
+       multi-pulse class; the monotonicity check catches it.
+
+    Parameters
+    ----------
+    state : FrontTrackerState
+        Completed simulation state (after :meth:`FrontTracker.run`).
+
+    Returns
+    -------
+    str or None
+        A short description (position/θ and mechanism) of the first offending interaction,
+        or ``None`` when the solution is a clean single-front / well-separated superposition
+        that the reader represents exactly.
+
+    Notes
+    -----
+    Both scans stay strictly inside the inlet θ-window, so the benign out-of-window
+    saturation clamp (a single-front run whose output bins extend past the last injected
+    mass) does not trip the symptom check. Well-separated pulses that clear a short column
+    before overtaking one another (their fans never share an in-domain point and their
+    cumulative outflow stays monotone) are correctly accepted.
+    """
+    waves = state.waves
+    v_outlet = state.v_outlet
+    theta_hi = float(state.theta_edges[-1])
+    v_tol = 1e-9 * max(v_outlet, 1.0)
+    thetas = np.linspace(theta_hi / 400.0, theta_hi, 400)
+
+    # (1) Geometric fan overlap.
+    def fan_covers(wave: Wave, v: float, theta: float) -> bool:
+        """Whether ``wave``'s self-similar fan geometrically spans ``v`` at ``theta``."""
+        if isinstance(wave, DecayingShockWave):
+            v_s = wave.position_at_theta(theta)
+            if v_s is None or v == wave.v_origin:
+                return False
+            return (wave.decay_side == "left" and v < v_s) or (wave.decay_side == "right" and v > v_s)
+        return isinstance(wave, RarefactionWave) and wave.contains_point(v, theta)
+
+    for theta in thetas:
+        fans = [w for w in waves if isinstance(w, (DecayingShockWave, RarefactionWave)) and w.was_active_at(theta)]
+        if len(fans) <= 1:  # a single fan (or none) cannot overlap another
+            continue
+        boundaries = {0.0, v_outlet}
+        for wave in waves:
+            if not wave.was_active_at(theta):
+                continue
+            if isinstance(wave, RarefactionWave):
+                candidates = (wave.head_position_at_theta(theta), wave.tail_position_at_theta(theta))
+            else:
+                candidates = (wave.position_at_theta(theta),)
+            boundaries.update(p for p in candidates if p is not None and 0.0 < p < v_outlet)
+        for v_lo, v_hi in pairwise(sorted(boundaries)):
+            if v_hi - v_lo < v_tol:
+                continue
+            v_mid = 0.5 * (v_lo + v_hi)
+            if len([w for w in fans if fan_covers(w, v_mid, theta)]) > 1:  # ≥ 2 fans share this point
+                return f"two fans overlap at V={v_mid:.4g} m³ (θ={theta:.4g} m³)"
+
+    # (2) Conservation symptom: cumulative outlet mass must be monotone non-decreasing.
+    # The band mirrors ``compute_bin_averaged_concentration_exact``'s FP-cancellation clamp
+    # (same constant, same ``max(scale, 1.0)`` floor) scaled to the total injected mass, so
+    # pre-breakthrough cancellation dust stays silent while a genuine over-count (orders of
+    # magnitude above the band) refuses the input.
+    grid = np.concatenate(([0.0], thetas))
+    m_out = np.array([
+        compute_cumulative_outlet_mass(
+            float(theta), v_outlet, waves, state.sorption, cin=state.cin, theta_edges=state.theta_edges
+        )
+        for theta in grid
+    ])
+    m_in_total = float(np.sum(state.cin * np.diff(state.theta_edges)))
+    band = FP_CANCELLATION_CLAMP * np.finfo(float).eps * max(m_in_total, 1.0)
+    steps = np.diff(m_out)
+    worst = int(np.argmin(steps))
+    if steps[worst] < -band:
+        return (
+            f"cumulative outlet mass drops by {-steps[worst]:.4g} near θ={grid[worst + 1]:.4g} m³ "
+            "(a shock overtakes another shock / rarefaction / decaying-shock fan; the reader "
+            "over-counts stored mass there)"
+        )
+    return None

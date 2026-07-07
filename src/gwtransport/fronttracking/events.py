@@ -23,6 +23,39 @@ from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWav
 
 # Numerical tolerance constants
 EPSILON_SPEED = 1e-15  # Tolerance for checking if two speeds are equal (machine precision)
+# A boundary state at/below the c_min retardation floor whose floored retardation
+# exceeds this value is "pinned": for the n>1 dry-soil singularity R(c_min) is
+# inflated to ~1e6, so the state advects orders of magnitude slower than any
+# physical wave and its outlet crossing lands at a non-physical θ (~1e8) that only
+# pollutes the diagnostic event record. n<1 clean water (R(c_min) ≈ 1, fast) stays
+# well below this threshold and is NOT pinned, so its outlet crossing is kept.
+OUTLET_PIN_RETARDATION = 1e4
+
+
+def is_outlet_crossing_pinned(concentration: float, sorption) -> bool:
+    """Whether a boundary state is pinned by the ``c_min`` retardation floor.
+
+    A crossing scheduled for such a state is a non-physical artifact (its speed is
+    a floor artifact, not physics); the caller drops it so it does not pollute the
+    solver's event record / ``theta_current``.
+
+    Parameters
+    ----------
+    concentration : float
+        Boundary-state concentration [mass/volume].
+    sorption : SorptionModel
+        Sorption model (supplies ``c_min`` and ``retardation``).
+
+    Returns
+    -------
+    bool
+        ``True`` only when ``concentration`` is at/below ``c_min`` AND the floored
+        retardation ``R(c_min)`` is inflated past :data:`OUTLET_PIN_RETARDATION`.
+    """
+    c_min = getattr(sorption, "c_min", 0.0)
+    if concentration > c_min:
+        return False
+    return float(sorption.retardation(c_min)) > OUTLET_PIN_RETARDATION
 
 
 class EventType(Enum):
@@ -288,7 +321,10 @@ def find_outlet_crossing(wave, v_outlet: float, theta_current: float) -> float |
 
         speed = characteristic_speed(wave.concentration, wave.sorption)
 
-        if speed <= 0:
+        # A c_min-floored (pinned) characteristic — R(c_min) inflated for n>1,
+        # c→0 — advects too slowly to cross at any physical θ; suppress the
+        # artifact crossing rather than scheduling it at θ~1e8.
+        if speed <= 0 or is_outlet_crossing_pinned(wave.concentration, wave.sorption):
             return None
 
         dtheta = (v_outlet - v_current) / speed

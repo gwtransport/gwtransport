@@ -60,6 +60,7 @@ from gwtransport._validation import (
     _validate_no_nan,
     _validate_non_negative_array,
     _validate_positive_scalar,
+    _validate_retardation_factor,
     _validate_tedges_parity,
 )
 
@@ -215,9 +216,7 @@ def recharge_to_extraction(
     _validate_no_nan(rech, name="recharge")
     _validate_non_negative_array(rech, name="recharge")
     _validate_positive_scalar(aquifer_pore_depth, name="aquifer_pore_depth")
-    if retardation_factor < 1.0:
-        msg = "retardation_factor must be >= 1.0"
-        raise ValueError(msg)
+    _validate_retardation_factor(retardation_factor)
 
     t = tedges_to_days(tedges)
     tq = tedges_to_days(cout_tedges, ref=tedges[0])
@@ -320,37 +319,37 @@ def _backward_entries(*, queries, t, dt, k, q, apv, v_start=0.0, edge_side="righ
     """
     n = len(dt)
     nq = len(queries)
-    m = np.clip(np.searchsorted(t, queries, side="left" if edge_side == "left" else "right") - 1, 0, n - 1)
+    m = np.clip(np.searchsorted(t, queries, side=edge_side) - 1, 0, n - 1)
     s_out = np.full(nq, np.nan)
     v0 = np.full(nq, np.nan)
     pos = np.full(nq, float(v_start))
     open_ = np.ones(nq, dtype=bool)
-    for i in range(n - 1, -1, -1):
-        sel = np.nonzero(open_ & (m >= i))[0]
-        if sel.size == 0:
-            continue
-        starts_here = m[sel] == i
-        seg = np.where(starts_here, queries[sel] - t[i], dt[i])
-        t_hi = np.where(starts_here, queries[sel], t[i + 1])
-        vi = pos[sel]
-        if k[i] > 0:
-            v_r = q[i] / k[i]
-            va = v_r + (vi - v_r) * np.exp(-k[i] * seg)
-            ent = va >= apv
-            with np.errstate(invalid="ignore", divide="ignore"):
+    with np.errstate(invalid="ignore", divide="ignore"):  # stagnant boundary (vi == v_r == apv)
+        for i in range(n - 1, -1, -1):
+            sel = np.nonzero(open_ & (m >= i))[0]
+            if sel.size == 0:
+                continue
+            starts_here = m[sel] == i
+            seg = np.where(starts_here, queries[sel] - t[i], dt[i])
+            t_hi = np.where(starts_here, queries[sel], t[i + 1])
+            vi = pos[sel]
+            if k[i] > 0:
+                v_r = q[i] / k[i]
+                va = v_r + (vi - v_r) * np.exp(-k[i] * seg)
+                ent = va >= apv
                 back = -np.log((apv - v_r) / (vi[ent] - v_r)) / k[i]
-            back = np.where(np.isfinite(back), back, 0.0)  # stagnant boundary (vi == v_r == apv)
-        else:
-            va = vi + q[i] * seg
-            # The q > 0 guard keeps a parcel parked exactly on the boundary
-            # through a fully stagnant bin (no flow, no recharge) walking into
-            # earlier bins: nothing moves and nothing is lost there.
-            ent = (va >= apv) & (q[i] > 0.0)
-            back = (apv - vi[ent]) / q[i] if q[i] > 0 else vi[ent][:0]
-        s_ent = np.clip(t_hi[ent] - back, t[i], t_hi[ent])
-        s_out[sel[ent]] = s_ent
-        open_[sel[ent]] = False
-        pos[sel[~ent]] = va[~ent]
+                back = np.where(np.isfinite(back), back, 0.0)
+            else:
+                va = vi + q[i] * seg
+                # The q > 0 guard keeps a parcel parked exactly on the boundary
+                # through a fully stagnant bin (no flow, no recharge) walking into
+                # earlier bins: nothing moves and nothing is lost there.
+                ent = (va >= apv) & (q[i] > 0.0)
+                back = (apv - vi[ent]) / q[i] if q[i] > 0 else vi[ent][:0]
+            s_ent = np.clip(t_hi[ent] - back, t[i], t_hi[ent])
+            s_out[sel[ent]] = s_ent
+            open_[sel[ent]] = False
+            pos[sel[~ent]] = va[~ent]
     v0[open_] = pos[open_]
     return s_out, v0
 
@@ -449,15 +448,25 @@ def _bounded_average(*, t, dt, u, k, q, cr, cb, apv, tq, covered):
     # Kernel mass: full-bin sum for j in [lo, m), then the current-bin and
     # entry-bin partial corrections (telescopes to vol when cr == cb == 1).
     lo = np.where(pre, 0, js)
-    lo_eff = np.maximum(lo, np.clip(np.searchsorted(u, u2t - _KERNEL_CUTOFF, side="right") - 1, 0, None))
+    # The per-bin weight magnitude scales with exp(u[col+1] - u1t) (u1t <= u2t is
+    # the piece's smallest clock value), so the cutoff must key to u1t: keying it
+    # to u2t drops still-significant bins when one input bin flushes >_KERNEL_CUTOFF
+    # pore volumes.
+    lo_eff = np.maximum(lo, np.clip(np.searchsorted(u, u1t - _KERNEL_CUTOFF, side="right") - 1, 0, None))
     w_max = int((m - lo_eff).max(initial=0))
     ker = np.zeros(len(mids))
     if w_max > 0:
         cols = lo_eff[:, None] + np.arange(w_max)[None, :]
         valid = cols < m[:, None]
         colsc = np.clip(cols, 0, n - 1)
-        w_lo = np.exp(u[colsc + 1] - u1t[:, None]) - np.exp(u[colsc] - u1t[:, None])
-        w_hi = np.exp(u[colsc + 1] - u2t[:, None]) - np.exp(u[colsc] - u2t[:, None])
+        # Each bin weight is an adjacent difference of exp values at its two u
+        # edges; consecutive bins share an edge, so evaluating exp once per edge
+        # over the extended [lo_eff, m] edge array halves the exp count.
+        edges = np.clip(lo_eff[:, None] + np.arange(w_max + 1)[None, :], 0, n)
+        e_lo = np.exp(u[edges] - u1t[:, None])
+        e_hi = np.exp(u[edges] - u2t[:, None])
+        w_lo = e_lo[:, 1:] - e_lo[:, :-1]
+        w_hi = e_hi[:, 1:] - e_hi[:, :-1]
         wgt = np.where(kpos[:, None], w_lo - w_hi, w_hi)
         ker = np.einsum("pw,pw->p", np.where(valid, wgt, 0.0), cr[colsc])
     mass = cr[m] * vol - cr[m] * piece_integral(u[m]) + ker * fac

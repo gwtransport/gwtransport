@@ -7,21 +7,22 @@ import numpy as np
 import pandas as pd
 import pytest
 import requests.exceptions
+from _oracles import partial_isin  # ty: ignore[unresolved-import]  # tests/src on path via conftest
 from scipy.linalg import null_space
 
 from gwtransport._time import dt_to_days, tedges_to_days
 from gwtransport.examples import generate_example_data, generate_example_deposition_timeseries
 from gwtransport.utils import (
     _make_strictly_monotone,
-    combine_bin_series,
     compute_reverse_target,
     compute_time_edges,
     cumulative_flow_volume,
     get_soil_temperature,
     linear_average,
     linear_interpolate,
-    partial_isin,
     simplify_bins,
+    solve_inverse_transport,
+    solve_inverse_transport_banded,
     solve_tikhonov,
     solve_underdetermined_system,
     step_plot_coords,
@@ -511,365 +512,6 @@ def test_invalid_inputs():
     bin_edges_out = np.array([25, 15, 5])  # Descending order
     with pytest.raises(ValueError, match="bin_edges_out must be non-decreasing"):
         partial_isin(bin_edges_in=bin_edges_in, bin_edges_out=bin_edges_out)
-
-
-def test_combine_bin_series_basic():
-    """Test basic functionality of combine_bin_series."""
-    # Simple case: non-overlapping bins
-    a = np.array([1.0, 2.0])
-    a_edges = np.array([0.0, 1.0, 2.0])
-    b = np.array([3.0, 4.0])
-    b_edges = np.array([1.0, 1.5, 2.0])
-
-    c, c_edges, d, d_edges = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
-
-    # Expected combined edges: [0, 1, 1.5, 2]
-    expected_edges = np.array([0.0, 1.0, 1.5, 2.0])
-    np.testing.assert_array_equal(c_edges, expected_edges)
-    np.testing.assert_array_equal(d_edges, expected_edges)
-
-    # Expected values for c: [1, 2, 2] (a[0] broadcasts to first bin, a[1] broadcasts to bins 2&3)
-    # Expected values for d: [0, 3, 4] (b[0] broadcasts to second bin, b[1] broadcasts to third bin)
-    expected_c = np.array([1.0, 2.0, 2.0])
-    expected_d = np.array([0.0, 3.0, 4.0])
-    np.testing.assert_array_equal(c, expected_c)
-    np.testing.assert_array_equal(d, expected_d)
-
-
-def test_combine_bin_series_identical_edges():
-    """Test combine_bin_series when both series have identical edges."""
-    a = np.array([1.0, 2.0, 3.0])
-    a_edges = np.array([0.0, 1.0, 2.0, 3.0])
-    b = np.array([4.0, 5.0, 6.0])
-    b_edges = np.array([0.0, 1.0, 2.0, 3.0])
-
-    c, c_edges, d, d_edges = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
-
-    # Edges should remain the same
-    expected_edges = np.array([0.0, 1.0, 2.0, 3.0])
-    np.testing.assert_array_equal(c_edges, expected_edges)
-    np.testing.assert_array_equal(d_edges, expected_edges)
-
-    # Values should be preserved
-    np.testing.assert_array_equal(c, a)
-    np.testing.assert_array_equal(d, b)
-
-
-def test_combine_bin_series_overlapping_bins():
-    """Test combine_bin_series with overlapping bin structures."""
-    a = np.array([10.0, 20.0])
-    a_edges = np.array([0.0, 5.0, 10.0])
-    b = np.array([30.0, 40.0])
-    b_edges = np.array([2.0, 7.0, 12.0])
-
-    c, c_edges, d, d_edges = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
-
-    # Expected combined edges: [0, 2, 5, 7, 10, 12]
-    expected_edges = np.array([0.0, 2.0, 5.0, 7.0, 10.0, 12.0])
-    np.testing.assert_array_equal(c_edges, expected_edges)
-    np.testing.assert_array_equal(d_edges, expected_edges)
-
-    # Test that the values are broadcasted/repeated correctly
-    # a[0]=10 covers [0,5]: broadcasts to bins [0,2] and [2,5]
-    # a[1]=20 covers [5,10]: broadcasts to bins [5,7] and [7,10]
-    # b[0]=30 covers [2,7]: broadcasts to bins [2,5] and [5,7]
-    # b[1]=40 covers [7,12]: broadcasts to bins [7,10] and [10,12]
-    expected_c = np.array([10.0, 10.0, 20.0, 20.0, 0.0])
-    expected_d = np.array([0.0, 30.0, 30.0, 40.0, 40.0])
-    np.testing.assert_array_equal(c, expected_c)
-    np.testing.assert_array_equal(d, expected_d)
-
-
-def test_combine_bin_series_single_bins():
-    """Test combine_bin_series with single bins."""
-    a = np.array([5.0])
-    a_edges = np.array([0.0, 2.0])
-    b = np.array([10.0])
-    b_edges = np.array([1.0, 3.0])
-
-    c, c_edges, d, d_edges = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
-
-    # Expected combined edges: [0, 1, 2, 3]
-    expected_edges = np.array([0.0, 1.0, 2.0, 3.0])
-    np.testing.assert_array_equal(c_edges, expected_edges)
-    np.testing.assert_array_equal(d_edges, expected_edges)
-
-    # a=5 covers [0,2]: broadcasts to [0,1] and [1,2]
-    # b=10 covers [1,3]: broadcasts to [1,2] and [2,3]
-    expected_c = np.array([5.0, 5.0, 0.0])
-    expected_d = np.array([0.0, 10.0, 10.0])
-    np.testing.assert_array_equal(c, expected_c)
-    np.testing.assert_array_equal(d, expected_d)
-
-
-def test_combine_bin_series_nested_bins():
-    """Test combine_bin_series where one series is nested within another."""
-    a = np.array([100.0])
-    a_edges = np.array([0.0, 10.0])
-    b = np.array([20.0, 30.0])
-    b_edges = np.array([2.0, 5.0, 8.0])
-
-    c, c_edges, d, d_edges = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
-
-    # Expected combined edges: [0, 2, 5, 8, 10]
-    expected_edges = np.array([0.0, 2.0, 5.0, 8.0, 10.0])
-    np.testing.assert_array_equal(c_edges, expected_edges)
-    np.testing.assert_array_equal(d_edges, expected_edges)
-
-    # a=100 covers [0,10]: broadcasts to all combined bins within its range
-    # b[0]=20 covers [2,5] and b[1]=30 covers [5,8]
-    expected_c = np.array([100.0, 100.0, 100.0, 100.0])
-    expected_d = np.array([0.0, 20.0, 30.0, 0.0])
-    np.testing.assert_array_equal(c, expected_c)
-    np.testing.assert_array_equal(d, expected_d)
-
-
-def test_combine_bin_series_non_overlapping():
-    """Test combine_bin_series with completely non-overlapping bins."""
-    a = np.array([1.0, 2.0])
-    a_edges = np.array([0.0, 1.0, 2.0])
-    b = np.array([3.0, 4.0])
-    b_edges = np.array([3.0, 4.0, 5.0])
-
-    c, c_edges, d, d_edges = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
-
-    # Expected combined edges: [0, 1, 2, 3, 4, 5]
-    expected_edges = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
-    np.testing.assert_array_equal(c_edges, expected_edges)
-    np.testing.assert_array_equal(d_edges, expected_edges)
-
-    # a maps to first two bins, b maps to last two bins
-    expected_c = np.array([1.0, 2.0, 0.0, 0.0, 0.0])
-    expected_d = np.array([0.0, 0.0, 0.0, 3.0, 4.0])
-    np.testing.assert_array_equal(c, expected_c)
-    np.testing.assert_array_equal(d, expected_d)
-
-
-def test_combine_bin_series_zero_values():
-    """Test combine_bin_series with zero values."""
-    a = np.array([0.0, 5.0])
-    a_edges = np.array([0.0, 1.0, 2.0])
-    b = np.array([3.0, 0.0])
-    b_edges = np.array([0.5, 1.5, 2.5])
-
-    c, c_edges, d, d_edges = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
-
-    # Expected combined edges: [0, 0.5, 1, 1.5, 2, 2.5]
-    expected_edges = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 2.5])
-    np.testing.assert_array_equal(c_edges, expected_edges)
-    np.testing.assert_array_equal(d_edges, expected_edges)
-
-    # Check that zero values are preserved and broadcasted correctly
-    expected_c = np.array([0.0, 0.0, 5.0, 5.0, 0.0])
-    expected_d = np.array([0.0, 3.0, 3.0, 0.0, 0.0])
-    np.testing.assert_array_equal(c, expected_c)
-    np.testing.assert_array_equal(d, expected_d)
-
-
-def test_combine_bin_series_floating_point():
-    """Test combine_bin_series with floating point precision."""
-    a = np.array([1.1, 2.2])
-    a_edges = np.array([0.1, 1.1, 2.1])
-    b = np.array([3.3, 4.4])
-    b_edges = np.array([0.6, 1.6, 2.6])
-
-    c, c_edges, d, d_edges = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
-
-    # Expected combined edges: [0.1, 0.6, 1.1, 1.6, 2.1, 2.6]
-    expected_edges = np.array([0.1, 0.6, 1.1, 1.6, 2.1, 2.6])
-    np.testing.assert_array_equal(c_edges, expected_edges)
-    np.testing.assert_array_equal(d_edges, expected_edges)
-
-    # Test with appropriate precision and broadcasting
-    expected_c = np.array([1.1, 1.1, 2.2, 2.2, 0.0])
-    expected_d = np.array([0.0, 3.3, 3.3, 4.4, 4.4])
-    np.testing.assert_array_equal(c, expected_c)
-    np.testing.assert_array_equal(d, expected_d)
-
-
-def test_combine_bin_series_input_validation():
-    """Test input validation for combine_bin_series."""
-    # Test mismatched array lengths
-    a = np.array([1.0, 2.0])
-    a_edges = np.array([0.0, 1.0])  # Should have 3 elements for 2 bins
-    b = np.array([3.0])
-    b_edges = np.array([1.0, 2.0])
-
-    with pytest.raises(ValueError, match="a_edges must have len\\(a\\) \\+ 1 elements"):
-        combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
-
-    # Test mismatched b array lengths
-    a = np.array([1.0])
-    a_edges = np.array([0.0, 1.0])
-    b = np.array([3.0, 4.0])
-    b_edges = np.array([1.0, 2.0])  # Should have 3 elements for 2 bins
-
-    with pytest.raises(ValueError, match="b_edges must have len\\(b\\) \\+ 1 elements"):
-        combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
-
-
-def test_combine_bin_series_list_inputs():
-    """Test combine_bin_series with list inputs."""
-    a = [1.0, 2.0]
-    a_edges = [0.0, 1.0, 2.0]
-    b = [3.0, 4.0]
-    b_edges = [1.5, 2.5, 3.5]
-
-    c, c_edges, d, d_edges = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
-
-    # Should work with list inputs and return numpy arrays
-    assert isinstance(c, np.ndarray)
-    assert isinstance(c_edges, np.ndarray)
-    assert isinstance(d, np.ndarray)
-    assert isinstance(d_edges, np.ndarray)
-
-    # Expected combined edges: [0, 1, 1.5, 2, 2.5, 3.5]
-    expected_edges = np.array([0.0, 1.0, 1.5, 2.0, 2.5, 3.5])
-    np.testing.assert_array_equal(c_edges, expected_edges)
-    np.testing.assert_array_equal(d_edges, expected_edges)
-
-
-def test_combine_bin_series_negative_values():
-    """Test combine_bin_series with negative values."""
-    a = np.array([-5.0, -2.0])
-    a_edges = np.array([-10.0, -3.0, 0.0])
-    b = np.array([1.0, 4.0])
-    b_edges = np.array([-1.0, 2.0, 5.0])
-
-    c, c_edges, d, d_edges = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
-
-    # Expected combined edges: [-10, -3, -1, 0, 2, 5]
-    expected_edges = np.array([-10.0, -3.0, -1.0, 0.0, 2.0, 5.0])
-    np.testing.assert_array_equal(c_edges, expected_edges)
-    np.testing.assert_array_equal(d_edges, expected_edges)
-
-    # Test correct mapping with negative values and broadcasting
-    expected_c = np.array([-5.0, -2.0, -2.0, 0.0, 0.0])
-    expected_d = np.array([0.0, 0.0, 1.0, 1.0, 4.0])
-    np.testing.assert_array_equal(c, expected_c)
-    np.testing.assert_array_equal(d, expected_d)
-
-
-def test_combine_bin_series_empty_arrays():
-    """Test combine_bin_series with minimal valid inputs."""
-    a = np.array([42.0])
-    a_edges = np.array([0.0, 1.0])
-    b = np.array([24.0])
-    b_edges = np.array([0.5, 1.5])
-
-    c, c_edges, d, d_edges = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
-
-    # Expected combined edges: [0, 0.5, 1, 1.5]
-    expected_edges = np.array([0.0, 0.5, 1.0, 1.5])
-    np.testing.assert_array_equal(c_edges, expected_edges)
-    np.testing.assert_array_equal(d_edges, expected_edges)
-
-    expected_c = np.array([42.0, 42.0, 0.0])
-    expected_d = np.array([0.0, 24.0, 24.0])
-    np.testing.assert_array_equal(c, expected_c)
-    np.testing.assert_array_equal(d, expected_d)
-
-
-def test_combine_bin_series_extrapolation_nearest():
-    """Test combine_bin_series with nearest extrapolation."""
-    a = np.array([1.0, 2.0])
-    a_edges = np.array([1.0, 2.0, 3.0])
-    b = np.array([10.0, 20.0])
-    b_edges = np.array([2.0, 3.0, 4.0])
-
-    c, c_edges, d, d_edges = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges, extrapolation="nearest")
-
-    # Expected combined edges: [1, 2, 3, 4]
-    expected_edges = np.array([1.0, 2.0, 3.0, 4.0])
-    np.testing.assert_array_equal(c_edges, expected_edges)
-    np.testing.assert_array_equal(d_edges, expected_edges)
-
-    # With nearest extrapolation:
-    # c extends to all bins using nearest values
-    # d extends to all bins using nearest values
-    expected_c = np.array([1.0, 2.0, 2.0])  # nearest for [3,4] is a[1]=2.0
-    expected_d = np.array([10.0, 10.0, 20.0])  # nearest for [1,2] is b[0]=10.0
-    np.testing.assert_array_equal(c, expected_c)
-    np.testing.assert_array_equal(d, expected_d)
-
-
-def test_combine_bin_series_extrapolation_nan():
-    """Test combine_bin_series with nan extrapolation."""
-    a = np.array([1.0, 2.0])
-    a_edges = np.array([1.0, 2.0, 3.0])
-    b = np.array([10.0, 20.0])
-    b_edges = np.array([2.0, 3.0, 4.0])
-
-    c, c_edges, d, d_edges = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges, extrapolation=np.nan)
-
-    # Expected combined edges: [1, 2, 3, 4]
-    expected_edges = np.array([1.0, 2.0, 3.0, 4.0])
-    np.testing.assert_array_equal(c_edges, expected_edges)
-    np.testing.assert_array_equal(d_edges, expected_edges)
-
-    # With nan extrapolation:
-    # Out-of-range bins get nan values
-    expected_c = np.array([1.0, 2.0, np.nan])  # [3,4] is out of range for a
-    expected_d = np.array([np.nan, 10.0, 20.0])  # [1,2] is out of range for b
-    np.testing.assert_array_equal(c, expected_c)
-    np.testing.assert_array_equal(d, expected_d)
-
-
-def test_combine_bin_series_extrapolation_custom_value():
-    """Test combine_bin_series with custom extrapolation value."""
-    a = np.array([1.0, 2.0])
-    a_edges = np.array([1.0, 2.0, 3.0])
-    b = np.array([10.0, 20.0])
-    b_edges = np.array([2.0, 3.0, 4.0])
-
-    c, c_edges, d, d_edges = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges, extrapolation=-999.0)
-
-    # Expected combined edges: [1, 2, 3, 4]
-    expected_edges = np.array([1.0, 2.0, 3.0, 4.0])
-    np.testing.assert_array_equal(c_edges, expected_edges)
-    np.testing.assert_array_equal(d_edges, expected_edges)
-
-    # With custom extrapolation value:
-    # Out-of-range bins get the custom value
-    expected_c = np.array([1.0, 2.0, -999.0])  # [3,4] is out of range for a
-    expected_d = np.array([-999.0, 10.0, 20.0])  # [1,2] is out of range for b
-    np.testing.assert_array_equal(c, expected_c)
-    np.testing.assert_array_equal(d, expected_d)
-
-
-def test_combine_bin_series_extrapolation_default_behavior():
-    """Test that default extrapolation preserves backwards compatibility."""
-    a = np.array([1.0, 2.0])
-    a_edges = np.array([1.0, 2.0, 3.0])
-    b = np.array([10.0, 20.0])
-    b_edges = np.array([2.0, 3.0, 4.0])
-
-    # Default behavior should be equivalent to extrapolation=0.0
-    c1, c_edges1, d1, d_edges1 = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges)
-    c2, c_edges2, d2, d_edges2 = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges, extrapolation=0.0)
-
-    np.testing.assert_array_equal(c1, c2)
-    np.testing.assert_array_equal(d1, d2)
-    np.testing.assert_array_equal(c_edges1, c_edges2)
-    np.testing.assert_array_equal(d_edges1, d_edges2)
-
-
-def test_combine_bin_series_extrapolation_no_out_of_range():
-    """Test extrapolation when there are no out-of-range bins."""
-    a = np.array([1.0, 2.0])
-    a_edges = np.array([0.0, 1.0, 2.0])
-    b = np.array([3.0, 4.0])
-    b_edges = np.array([0.0, 1.0, 2.0])
-
-    # When series have identical ranges, extrapolation method shouldn't matter
-    c1, _, d1, _ = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges, extrapolation="nearest")
-    c2, _, d2, _ = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges, extrapolation=np.nan)
-    c3, _, d3, _ = combine_bin_series(a=a, a_edges=a_edges, b=b, b_edges=b_edges, extrapolation=0.0)
-
-    np.testing.assert_array_equal(c1, c2)
-    np.testing.assert_array_equal(c1, c3)
-    np.testing.assert_array_equal(d1, d2)
-    np.testing.assert_array_equal(d1, d3)
 
 
 def test_get_soil_temperature_basic():
@@ -1592,7 +1234,7 @@ def test_compute_time_edges_explicit_tedges_roundtrip():
 def test_compute_time_edges_explicit_tedges_wrong_length():
     """tedges with the wrong length (not number_of_bins + 1) is rejected."""
     tedges = pd.DatetimeIndex(["2020-01-01", "2020-01-02", "2020-01-03"])
-    with pytest.raises(ValueError, match="tedges must have one more element than flow"):
+    with pytest.raises(ValueError, match="tedges must have one more element than number_of_bins"):
         compute_time_edges(tedges=tedges, tstart=None, tend=None, number_of_bins=5)
 
 
@@ -1607,7 +1249,7 @@ def test_compute_time_edges_tstart_extrapolates_final_edge():
 def test_compute_time_edges_tstart_wrong_length():
     """tstart length must equal number_of_bins."""
     tstart = pd.DatetimeIndex(["2020-01-01", "2020-01-02", "2020-01-03"])
-    with pytest.raises(ValueError, match="tstart must have the same number of elements as flow"):
+    with pytest.raises(ValueError, match="tstart must have the same number of elements as number_of_bins"):
         compute_time_edges(tedges=None, tstart=tstart, tend=None, number_of_bins=2)
 
 
@@ -1622,7 +1264,7 @@ def test_compute_time_edges_tend_extrapolates_initial_edge():
 def test_compute_time_edges_tend_wrong_length():
     """tend length must equal number_of_bins."""
     tend = pd.DatetimeIndex(["2020-01-02", "2020-01-03"])
-    with pytest.raises(ValueError, match="tend must have the same number of elements as flow"):
+    with pytest.raises(ValueError, match="tend must have the same number of elements as number_of_bins"):
         compute_time_edges(tedges=None, tstart=None, tend=tend, number_of_bins=3)
 
 
@@ -1846,3 +1488,209 @@ def test_simplify_bins_empty_with_flow_returns_empty_flow_array():
     assert new_flow is not None
     assert new_flow.dtype == np.float64
     assert len(new_flow) == 0
+
+
+# ---------------------------------------------------------------------------
+# U1: linear_average 2-D NaN contract is method-independent
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("method", ["outer", "raise", "nan"])
+def test_linear_average_2d_nan_propagates_for_all_methods(method):
+    """The documented 2-D per-row NaN contract must hold for every extrapolate_method.
+
+    Regression: the per-row NaN-propagation block was nested under the ``'nan'`` branch, so
+    ``'outer'``/``'raise'`` zeroed the NaN trapezoids and returned a silently wrong finite
+    average (1.0) for a row containing an interior NaN. A row whose bin touches a NaN segment
+    must be NaN regardless of the extrapolation method; a clean row is unaffected.
+    """
+    x_data = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    y_data = np.array([[2.0, 2.0, 2.0, 2.0, 2.0], [2.0, 2.0, np.nan, 2.0, 2.0]])
+    x_edges = np.array([0.0, 4.0])
+    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges, extrapolate_method=method)
+    np.testing.assert_array_equal(result[0], [2.0])  # clean row: unaffected
+    assert np.isnan(result[1, 0])  # NaN-touching row: NaN, not the buggy 1.0
+
+
+# ---------------------------------------------------------------------------
+# U2: time_bin_overlap accepts pandas Timestamp / datetime64 bin_tedges
+# ---------------------------------------------------------------------------
+
+
+def test_time_bin_overlap_timestamp_bin_tedges():
+    """Timestamp tedges and Timestamp (start, end) tuples must work like the numeric case.
+
+    Regression: object arrays of Timestamps drove ``np.maximum(0, Timedelta)`` and raised
+    ``TypeError``. Ten-day bins mirror the numeric ``test_time_bin_overlap_basic`` case, so the
+    expected fractions are identical.
+    """
+    tedges = pd.DatetimeIndex(["2020-01-01", "2020-01-11", "2020-01-21", "2020-01-31"])
+    bin_tedges = [
+        (pd.Timestamp("2020-01-06"), pd.Timestamp("2020-01-16")),
+        (pd.Timestamp("2020-01-26"), pd.Timestamp("2020-02-05")),
+    ]
+    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
+    np.testing.assert_allclose(result, [[0.5, 0.5, 0.0], [0.0, 0.0, 0.5]])
+
+
+def test_time_bin_overlap_timestamp_matches_datetime64_and_numeric():
+    """Timestamp, datetime64, and numeric inputs give bit-identical overlap fractions."""
+    numeric = time_bin_overlap(tedges=np.array([0, 10, 20, 30]), bin_tedges=[(5, 15), (25, 35)])
+    tedges_dt = pd.DatetimeIndex(["2020-01-01", "2020-01-11", "2020-01-21", "2020-01-31"])
+    bins_ts = [
+        (pd.Timestamp("2020-01-06"), pd.Timestamp("2020-01-16")),
+        (pd.Timestamp("2020-01-26"), pd.Timestamp("2020-02-05")),
+    ]
+    bins_dt64 = [(np.datetime64(a), np.datetime64(b)) for a, b in bins_ts]
+    np.testing.assert_array_equal(time_bin_overlap(tedges=tedges_dt, bin_tedges=bins_ts), numeric)
+    np.testing.assert_array_equal(time_bin_overlap(tedges=np.asarray(tedges_dt), bin_tedges=bins_dt64), numeric)
+
+
+# ---------------------------------------------------------------------------
+# U3: simplify_bins uses an iterative stack (no RecursionError) with identical splits
+# ---------------------------------------------------------------------------
+
+
+def _simplify_bins_recursive_reference(*, edges, values, flow=None, tol=0.0):
+    """Reference implementation using the original recursive _splits (pre-U3).
+
+    Reproduces the exact merged-bin outputs so the iterative-stack rewrite can be pinned
+    bit-for-bit on inputs shallow enough not to overflow the interpreter stack.
+    """
+    edges = np.asarray(edges) if not isinstance(edges, pd.DatetimeIndex) else edges
+    values = np.asarray(values, dtype=float)
+    widths = np.asarray(np.diff(edges), dtype=float)
+    weights = widths * np.asarray(flow, dtype=float) if flow is not None else widths
+
+    def _splits(lo, hi):
+        if np.ptp(values[lo:hi]) <= tol:
+            return []
+        i = lo + int(np.argmax(np.abs(np.diff(values[lo:hi])))) + 1
+        return [*_splits(lo, i), i, *_splits(i, hi)]
+
+    s = np.array([0, *_splits(0, len(values))])
+    idx = np.append(s, len(values))
+    new_edges = edges[idx]
+    new_widths = np.add.reduceat(widths, s)
+    weight_sums = np.add.reduceat(weights, s)
+    new_values = np.add.reduceat(weights * values, s) / weight_sums
+    new_flow = weight_sums / new_widths if flow is not None else None
+    return new_edges, new_values, new_flow
+
+
+def test_simplify_bins_no_recursion_error_on_smooth_monotone():
+    """A smooth monotone breakthrough (logistic, n=2500) must not overflow the stack.
+
+    Regression: the recursive splitter peeled one element per level on monotone data whose
+    largest |diff| sits at a segment edge, raising RecursionError. The iterative stack removes
+    the depth limit; the result is a valid, non-trivial simplification.
+    """
+    n = 2500
+    values = 1.0 / (1.0 + np.exp(-np.linspace(-6.0, 6.0, n)))
+    edges = np.arange(n + 1, dtype=float)
+    new_edges, new_values, _ = simplify_bins(edges=edges, values=values, tol=0.0)
+    # tol=0 merges only runs of identical values; the strictly increasing logistic has none,
+    # so no bins merge and the series is returned intact.
+    assert len(new_values) == n
+    np.testing.assert_array_equal(new_edges, edges)
+
+
+def test_simplify_bins_iterative_matches_recursive_reference():
+    """The iterative stack reproduces the recursive splitter's merged bins bit-for-bit.
+
+    Uses a non-monotone series with a non-trivial merge structure and volume weighting so the
+    split indices, merged values, and merged flow are all exercised on a case shallow enough
+    for the recursive reference to run.
+    """
+    edges = np.array([0.0, 1.0, 3.0, 6.0, 6.5, 8.0, 11.0, 12.0])
+    values = np.array([1.0, 1.0, 1.0, 5.0, 5.2, 2.0, 2.0])
+    flow = np.array([2.0, 4.0, 1.0, 3.0, 0.5, 2.5, 1.5])
+    for tol in (0.0, 0.5):
+        e_new, v_new, f_new = simplify_bins(edges=edges, values=values, flow=flow, tol=tol)
+        e_ref, v_ref, f_ref = _simplify_bins_recursive_reference(edges=edges, values=values, flow=flow, tol=tol)
+        np.testing.assert_array_equal(e_new, e_ref)
+        np.testing.assert_array_equal(v_new, v_ref)
+        np.testing.assert_array_equal(f_new, f_ref)
+
+
+# ---------------------------------------------------------------------------
+# U4: banded WᵀW assembly (dense BLAS build) equivalence
+# ---------------------------------------------------------------------------
+
+
+def test_solve_inverse_transport_banded_wtw_assembly_matches_add_at_reference():
+    """The dense-BLAS WᵀW build equals the per-diagonal np.add.at scatter (atol 1e-12).
+
+    Forming WᵀW with a matmul reorders the summation relative to np.add.at, so the two agree
+    to ~1e-13 rather than bit-for-bit; pin the equivalence at atol 1e-12.
+    """
+    rng = np.random.default_rng(0)
+    n_obs, full_band, n_output = 60, 9, 45
+    band_vals = rng.random((n_obs, full_band))
+    col_start = rng.integers(0, n_output - full_band, size=n_obs).astype(np.intp)
+    cols = col_start[:, None] + np.arange(full_band)[None, :]
+    in_range = cols < n_output
+    cols_clipped = np.clip(cols, 0, n_output - 1)
+
+    # Reference: original per-diagonal add.at assembly of the lower banded WᵀW.
+    ab_ref = np.zeros((full_band, n_output))
+    for d in range(full_band):
+        prod = band_vals[:, d:] * band_vals[:, : full_band - d]
+        c = cols_clipped[:, : full_band - d]
+        m = in_range[:, : full_band - d] & in_range[:, d:]
+        np.add.at(ab_ref[d], c[m], prod[m])
+
+    # New path: dense W build, one BLAS matmul, sub-diagonal extraction.
+    w_dense = np.zeros((n_obs, n_output))
+    obs_idx = np.broadcast_to(np.arange(n_obs)[:, None], cols.shape)
+    w_dense[obs_idx[in_range], cols_clipped[in_range]] = band_vals[in_range]
+    gram = w_dense.T @ w_dense
+    ab_new = np.zeros((full_band, n_output))
+    for d in range(full_band):
+        ab_new[d, : n_output - d] = np.diagonal(gram, offset=-d)
+
+    np.testing.assert_allclose(ab_new, ab_ref, atol=1e-12)
+
+
+def test_solve_inverse_transport_banded_matches_dense_solver():
+    """The banded solver reproduces the dense solve_inverse_transport on a random band.
+
+    End-to-end guard that the dense-BLAS assembly leaves the recovered signal unchanged: the
+    banded Cholesky + semi-normal refinement matches the dense least-squares solution to ~1e-10
+    on the shared active columns (and the NaN pattern is identical).
+    """
+    rng = np.random.default_rng(3)
+    n_obs, full_band, n_output = 80, 11, 60
+    band_vals = rng.random((n_obs, full_band))
+    band_vals /= band_vals.sum(axis=1, keepdims=True)  # precondition: valid rows sum to 1
+    col_start = rng.integers(0, n_output - full_band, size=n_obs).astype(np.intp)
+    observed = rng.random(n_obs)
+    lam = 1e-3
+
+    cols = col_start[:, None] + np.arange(full_band)[None, :]
+    in_range = cols < n_output
+    cols_clipped = np.clip(cols, 0, n_output - 1)
+    obs_idx = np.broadcast_to(np.arange(n_obs)[:, None], cols.shape)
+    w_dense = np.zeros((n_obs, n_output))
+    w_dense[obs_idx[in_range], cols_clipped[in_range]] = band_vals[in_range]
+
+    x_banded = solve_inverse_transport_banded(
+        band_vals=band_vals, col_start=col_start, observed=observed, n_output=n_output, regularization_strength=lam
+    )
+    x_dense = solve_inverse_transport(
+        w_forward=w_dense, observed=observed, n_output=n_output, regularization_strength=lam
+    )
+    np.testing.assert_array_equal(np.isnan(x_banded), np.isnan(x_dense))
+    active = ~np.isnan(x_banded)
+    np.testing.assert_allclose(x_banded[active], x_dense[active], atol=1e-9)
+
+
+def test_solve_inverse_transport_banded_rejects_nonpositive_lambda():
+    """λ <= 0 cannot make the banded Cholesky positive definite, so it is rejected."""
+    band_vals = np.ones((3, 2))
+    col_start = np.array([0, 1, 2], dtype=np.intp)
+    observed = np.ones(3)
+    with pytest.raises(ValueError, match="regularization_strength must be > 0"):
+        solve_inverse_transport_banded(
+            band_vals=band_vals, col_start=col_start, observed=observed, n_output=4, regularization_strength=0.0
+        )

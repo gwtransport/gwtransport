@@ -29,6 +29,7 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 
 import numpy as np
 import numpy.typing as npt
+from scipy.special import ive, kve
 
 from gwtransport._radial_asr_compose import _DEHOOG_TERMS, _SCALE_MARGIN, _fr_step_response
 from gwtransport._radial_asr_dehoog import dehoog_inverse
@@ -36,7 +37,6 @@ from gwtransport._radial_asr_kernels import (
     _integrate_logderiv,
     _resolvent_airy_pieces,
     assemble_airy_resolvent,
-    rest_resolvent,
 )
 
 _INJECTION = "injection"
@@ -132,7 +132,13 @@ def _airy_propagator_matrix(
     a0 = flow_scale / (2.0 * c_geo)
     gauge_sign = 1.0 if direction == _INJECTION else -1.0
     n = r_nodes.size
-    sl_weight = (2.0 * c_geo * r_nodes / alpha_l) * np.exp(-gauge_sign * r_nodes / alpha_l) * dr_weights
+    # Split the Sturm-Liouville source weight (2 c_geo r'/alpha_L) e^{-gauge_sign r'/alpha_L} dr' into its
+    # non-exponential prefactor and its LOG exponent: the exponent is folded into assemble_airy_resolvent
+    # so the divergent gauge cancels before np.exp (overflow-safe at any Peclet). Applying the exponential
+    # weight afterwards would overflow -- the injection assemble exponent and the extraction weight each blow
+    # up past r/alpha_L ~ 700 and meet as Inf * 0 = NaN.
+    sl_prefactor = (2.0 * c_geo * r_nodes / alpha_l) * dr_weights
+    sl_log = (-gauge_sign * r_nodes / alpha_l)[None, :]
     mu = c_geo * ((float(r_nodes.max()) + alpha_l) ** 2 + alpha_l**2 - r_w**2)
     scaling = _SCALE_MARGIN * max(mu, tau)
     below = r_nodes[None, :] < r_nodes[:, None]  # below[i, j] = r_j < r_i
@@ -148,8 +154,10 @@ def _airy_propagator_matrix(
             piece_a = {f: np.where(mask, grid_p[f], grid_p[f][:, i : i + 1]) for f in grid_p}
             piece_b = {f: np.where(mask, grid_p[f][:, i : i + 1], grid_p[f]) for f in grid_p}
             r_sum = (r_nodes[i] + r_nodes)[None, :]
-            ghat[:, i, :] = assemble_airy_resolvent(piece_a, piece_b, piece_w, r_sum, alpha_l, gauge_sign)
-        ghat *= sl_weight[None, None, :]  # apply the Sturm-Liouville source weight in place (stays complex)
+            ghat[:, i, :] = assemble_airy_resolvent(
+                piece_a, piece_b, piece_w, r_sum, alpha_l, gauge_sign, source_log_weight=sl_log
+            )
+        ghat *= sl_prefactor[None, None, :]  # non-exponential SL prefactor (the gauge is already folded in)
         return ghat
 
     return dehoog_inverse(f_hat=f_hat, t=tau, n_terms=n_terms, scaling=scaling, tol=tol)
@@ -236,22 +244,48 @@ def _rest_propagator_matrix(
     interior resolvent (:func:`gwtransport._radial_asr_kernels.rest_resolvent`) with the Sturm-Liouville rest
     measure ``w(r') dr' = (r'/D_m) dr'``, on the wall-clock clock. Retardation enters as ``d_m_eff = D_m/R``.
 
+    **Resolution limit.** Molecular diffusion over the rest spreads mass by the diffusion length
+    ``sqrt(D_m tau)``. Once that length drops below half the coarsest node gap the Gauss-Legendre grid can no
+    longer resolve the near-delta diffusive Green's function: the quadratured resolvent stops conserving mass
+    (``dv^T P`` amplifies above ``1`` -- a maximum-principle violation, ``cout > cin``). In that under-resolved
+    regime the physical propagator *is* the identity to grid accuracy (diffusion has not crossed a cell), so
+    the identity is returned -- mass-exact and equal to the ``D_m = 0`` echo, the correct small-``D_m`` limit.
+
     Returns
     -------
     ndarray
         Propagator matrix ``P``, shape ``(n_quad, n_quad)``.
     """
-    n = r_nodes.size
+    if np.sqrt(d_m_eff * tau) < 0.5 * float(np.diff(r_nodes).max()):
+        return np.eye(r_nodes.size)
     scaling = _SCALE_MARGIN * tau
     weight = (r_nodes / d_m_eff * dr_weights)[None, None, :]
+    # r_nodes ascend, so r_< = r_nodes[min(i, j)], r_> = r_nodes[max(i, j)]: the order-0 scaled Bessels are
+    # evaluated once on the grid per s-node and gathered by these index maps instead of O(n_quad) times.
+    idx = np.arange(r_nodes.size)
+    lt = np.minimum(idx[:, None], idx[None, :])
+    gt = np.maximum(idx[:, None], idx[None, :])
 
     def f_hat(s: npt.NDArray[np.complexfloating]) -> npt.NDArray[np.complexfloating]:
-        ghat = np.empty((s.size, n, n), dtype=complex)
-        for i in range(n):
-            ghat[:, i, :] = rest_resolvent(s=s, r=float(r_nodes[i]), r_prime=r_nodes, r_w=r_w, d_m=d_m_eff)
+        kappa = np.sqrt(np.asarray(s, dtype=complex).reshape(-1, 1) / d_m_eff)  # (n_s, 1), Re(kappa) > 0
+        zr = kappa * r_nodes[None, :]  # (n_s, n): kappa r' on the grid, Bessels evaluated once here
+        iv0, kv0 = ive(0, zr), kve(0, zr)
+        z_w = kappa * r_w
+        ratio_w = ive(1, z_w) / kve(1, z_w)  # (n_s, 1)
+        z_lt, z_gt = zr[:, lt], zr[:, gt]  # (n_s, n, n)
+        # Ghat = [I_0(z_<) + (I_1(z_w)/K_1(z_w)) K_0(z_<)] K_0(z_>) with scaled Bessels (see rest_resolvent):
+        # the scaling exponents difference to <= 0 so the growing I_0 never overflows at high kappa r.
+        ghat = iv0[:, lt] * kv0[:, gt] * np.exp(np.abs(z_lt.real) - z_gt)
+        outer = ratio_w[:, :, None] * kv0[:, lt]
+        outer *= kv0[:, gt]
+        outer *= np.exp((np.abs(z_w.real) + z_w)[:, :, None] - z_lt - z_gt)
+        ghat += outer
         ghat *= weight
         return ghat
 
+    # The de Hoog underflow guard zeros far-field cells whose transform decayed to the double-precision floor
+    # (physical ~0); a cell whose transform genuinely OVERFLOWED stays NaN so a real breakdown cannot read as
+    # a physical zero. No extra masking here (that would zero overflowed cells too, reversing that contract).
     return dehoog_inverse(f_hat=f_hat, t=tau, n_terms=n_terms, scaling=scaling, tol=tol)
 
 
@@ -331,8 +365,10 @@ def cout_deviation(
 
     Parameters
     ----------
-    cin_deviation : ndarray, shape (n,)
-        Injected concentration deviation per bin (used on injection bins, ``flow > 0``).
+    cin_deviation : ndarray, shape (n,) or (n, k)
+        Injected concentration deviation per bin (used on injection bins, ``flow > 0``). A trailing column
+        axis is transported through one engine pass (the per-phase matrices are cin-independent), used by
+        the reverse operator build to apply all unit-pulse columns at once.
     flow : ndarray, shape (n,)
         Signed flow per bin [m^3/day]: ``> 0`` injection, ``< 0`` extraction, ``0`` rest.
     dt_days : ndarray, shape (n,)
@@ -358,10 +394,12 @@ def cout_deviation(
 
     Returns
     -------
-    ndarray, shape (n,)
-        Extracted-flux deviation per bin; ``NaN`` on injection / rest bins.
+    ndarray, shape (n,) or (n, k)
+        Extracted-flux deviation per bin (matching ``cin_deviation``); ``NaN`` on injection / rest bins.
     """
     flow = np.asarray(flow, dtype=float)
+    cin_deviation = np.asarray(cin_deviation, dtype=float)
+    batch = cin_deviation.shape[1:]  # () for a single series, (k,) for a column batch (reverse operator build)
     flushed = np.abs(flow) * dt_days
     # D_m = 0 keeps the advective grid; D_m > 0 widens it to the molecular reach (the diffusive pumping and
     # rest kernels both spread beyond the advective front), matching gridfree_cout_deviation.
@@ -407,8 +445,8 @@ def cout_deviation(
             )
         return matrices[key] @ field
 
-    field = np.zeros(n_quad)
-    cout = np.full(len(flow), np.nan)
+    field = np.zeros((n_quad, *batch))
+    cout = np.full((len(flow), *batch), np.nan)
     for idx, (sign, sl) in enumerate(phases):
         phase_volume = float(flushed[sl].sum())
         if phase_volume == 0.0:  # rest: pure molecular diffusion on the wall-clock clock (D_m = 0 -> identity)

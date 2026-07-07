@@ -3,6 +3,7 @@ import warnings as warn_module
 import numpy as np
 import pandas as pd
 import pytest
+from _oracles import partial_isin  # ty: ignore[unresolved-import]  # tests/src on path via conftest
 from numpy.testing import assert_allclose
 from scipy.integrate import quad
 from scipy.special import erf, erfc
@@ -28,7 +29,7 @@ from gwtransport.diffusion_fast import (
     infiltration_to_extraction,
 )
 from gwtransport.gamma import mean_std_loc_to_alpha_beta
-from gwtransport.utils import cumulative_flow_volume, partial_isin
+from gwtransport.utils import cumulative_flow_volume
 
 # =============================================================================
 # Helper: create common test data for transport functions
@@ -2383,6 +2384,15 @@ def _good_diffusion_fast_inputs():
             lambda k: {**k, "molecular_diffusivity": -0.1},
             r"molecular_diffusivity must be non-negative",
         ),
+        # Non-finite molecular_diffusivity slips past the ``< 0`` comparison (shared validator).
+        (
+            lambda k: {**k, "molecular_diffusivity": np.inf},
+            r"molecular_diffusivity must be non-negative",
+        ),
+        (
+            lambda k: {**k, "molecular_diffusivity": np.nan},
+            r"molecular_diffusivity must be non-negative",
+        ),
         (
             lambda k: {**k, "longitudinal_dispersivity": -0.1},
             r"longitudinal_dispersivity must be non-negative",
@@ -2403,6 +2413,15 @@ def _good_diffusion_fast_inputs():
             lambda k: {**k, "aquifer_pore_volumes": np.array([0.0])},
             r"aquifer_pore_volumes must be positive",
         ),
+        # Non-finite aquifer_pore_volumes slips past the ``<= 0`` comparison (shared validator).
+        (
+            lambda k: {**k, "aquifer_pore_volumes": np.array([np.inf])},
+            r"aquifer_pore_volumes must be positive",
+        ),
+        (
+            lambda k: {**k, "aquifer_pore_volumes": np.array([np.nan])},
+            r"aquifer_pore_volumes must be positive",
+        ),
         (
             lambda k: {**k, "streamline_length": 0.0},
             r"streamline_length must be positive",
@@ -2421,6 +2440,11 @@ def _good_diffusion_fast_inputs():
         ),
         (
             lambda k: {**k, "retardation_factor": 0.5},
+            r"retardation_factor must be >= 1\.0",
+        ),
+        # NaN retardation slips past the ``< 1.0`` comparison (shared validator).
+        (
+            lambda k: {**k, "retardation_factor": np.nan},
             r"retardation_factor must be >= 1\.0",
         ),
     ],

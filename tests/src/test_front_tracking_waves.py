@@ -11,14 +11,40 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 
 import numpy as np
 import pytest
+from scipy.integrate import quad
+from scipy.optimize import brentq
 
 from gwtransport.fronttracking.math import (
     ConstantRetardation,
     FreundlichSorption,
     LangmuirSorption,
     VanGenuchtenMualemConductivity,
+    characteristic_speed,
 )
 from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWave, RarefactionWave, ShockWave
+
+
+def _invariant_theta_local_of_c(sorption, c_decay_initial, c_fixed, theta_local_collision, c_target):
+    """Independent reference for the numerical DSW decay invariant.
+
+    Integrates the decay-agnostic invariant
+    ``θ_local(c) = θ_local_coll · exp(∫_{c0}^{c} R'/[(1 − R·S)·R] dc)`` with the
+    symmetric secant speed ``S = (c − c_fixed)/(C_T(c) − C_T(c_fixed))`` via
+    adaptive ``scipy.integrate.quad`` — a method-independent check on the
+    module's composite-quadrature cache (which integrates the same integrand).
+    """
+    ct_fixed = float(sorption.total_concentration(c_fixed))
+
+    def integrand(c):
+        h = max(1e-9, 1e-7 * abs(c))
+        rp = (float(sorption.retardation(c + h)) - float(sorption.retardation(c - h))) / (2.0 * h)
+        r = float(sorption.retardation(c))
+        ct = float(sorption.total_concentration(c))
+        s = (c - c_fixed) / (ct - ct_fixed)
+        return rp / ((1.0 - r * s) * r)
+
+    val, _ = quad(integrand, c_decay_initial, c_target, limit=400)
+    return theta_local_collision * np.exp(val)
 
 
 class TestCharacteristicWave:
@@ -820,3 +846,167 @@ class TestSaturatedVanGenuchtenWaveSpeeds:
         )
         assert wave.head_speed() == np.inf
         assert np.isfinite(wave.tail_speed())
+
+
+def _fan_consistent_dsw(sorption, *, decay_side, c0, c_fixed, c_fan_tail, theta_origin, theta_local_collision):
+    """Build a fan-continuity-consistent DSW (``v_start = v_origin + θ_local/R(c0)``)."""
+    theta_start = theta_origin + theta_local_collision
+    v_origin = 0.0
+    v_start = v_origin + theta_local_collision / float(sorption.retardation(c0))
+    return DecayingShockWave(
+        theta_start=theta_start,
+        v_start=v_start,
+        c_decay_initial=c0,
+        c_fixed=c_fixed,
+        c_fan_tail=c_fan_tail,
+        decay_side=decay_side,
+        v_origin=v_origin,
+        theta_origin=theta_origin,
+        sorption=sorption,
+    )
+
+
+class TestDecayingShockWaveNumericalInversion:
+    """Fan-exhaustion and outlet-crossing on the numerical (non-closed-form) decay path.
+
+    These pin the orientation-agnostic inversion of the monotone
+    ``c_decay(θ_local)`` map and the outlet-crossing bracket seed. Each numerical
+    result is checked against an independent adaptive-``quad`` evaluation of the
+    same invariant integral.
+    """
+
+    def test_growing_decay_fan_exhaustion_finite(self):
+        """Growing decay (``c_decay_initial < c_fan_tail``) exhausts at a finite θ, not θ_start.
+
+        Favorable-Freundlich tail collision ([12,6,3,40]-class geometry): the
+        decaying side grows 3 → 6 and reaches ``c_fan_tail`` at a finite
+        ``θ_local`` given by the un-clamped invariant. The orientation-blind
+        early return previously reported immediate exhaustion at ``θ_start``.
+        """
+        sorption = FreundlichSorption(k_f=0.02, n=2.0, bulk_density=1500.0, porosity=0.3)
+        c0, c_fixed, c_fan_tail = 3.0, 40.0, 6.0
+        theta_origin, tlc = 400.0, 363.0
+        wave = _fan_consistent_dsw(
+            sorption,
+            decay_side="right",
+            c0=c0,
+            c_fixed=c_fixed,
+            c_fan_tail=c_fan_tail,
+            theta_origin=theta_origin,
+            theta_local_collision=tlc,
+        )
+        # Numerical path (Freundlich n=2 mirror c_decay_initial < c_fixed): no closed form.
+        assert np.isnan(wave.K)
+        assert wave.c_decay_initial < wave.c_fan_tail  # growing orientation
+
+        theta_ref = theta_origin + _invariant_theta_local_of_c(sorption, c0, c_fixed, tlc, c_fan_tail)
+        theta_exhaust = wave.theta_at_fan_exhaustion()
+        assert theta_exhaust is not None
+        assert theta_exhaust > wave.theta_start  # not the θ_start early return
+        np.testing.assert_allclose(theta_exhaust, theta_ref, rtol=1e-8)
+        # Physical meaning: c_decay has reached c_fan_tail at exhaustion.
+        c_at_exhaust = wave.c_decay_at_theta(theta_exhaust)
+        np.testing.assert_allclose(c_at_exhaust, c_fan_tail, rtol=1e-8)
+
+    def test_numerical_shrinking_fan_exhaustion_finite(self):
+        """Numerical shrinking decay (Langmuir c_fixed>0) exhausts at a finite θ, not None.
+
+        The clamped forward profile saturates AT ``c_fan_tail`` and never crosses
+        it, so the previous forward-map bracket reported no exhaustion; the
+        un-clamped invariant gives a finite θ.
+        """
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        c0, c_fixed, c_fan_tail = 10.0, 1.0, 4.0
+        theta_origin, tlc = 0.0, 500.0
+        wave = _fan_consistent_dsw(
+            sorption,
+            decay_side="left",
+            c0=c0,
+            c_fixed=c_fixed,
+            c_fan_tail=c_fan_tail,
+            theta_origin=theta_origin,
+            theta_local_collision=tlc,
+        )
+        assert np.isnan(wave.K)  # numerical path
+
+        theta_ref = theta_origin + _invariant_theta_local_of_c(sorption, c0, c_fixed, tlc, c_fan_tail)
+        theta_exhaust = wave.theta_at_fan_exhaustion()
+        assert theta_exhaust is not None
+        np.testing.assert_allclose(theta_exhaust, theta_ref, rtol=1e-8)
+        c_at_exhaust = wave.c_decay_at_theta(theta_exhaust)
+        np.testing.assert_allclose(c_at_exhaust, c_fan_tail, rtol=1e-8)
+
+    def test_numerical_outlet_crossing_roundtrip_sub_unit_theta_local(self):
+        """Outlet crossing recovers θ even when the crossing lies within θ_local < 1 of the apex.
+
+        Roundtrip ``position_at_theta → outlet_crossing_theta`` must be an
+        identity on the numerical path. The bracket seed was floored at the
+        dimensional constant 1.0 m³, so crossings closer than 1.0 to the apex
+        returned None.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=3.0, bulk_density=1500.0, porosity=0.3)
+        c0, c_fixed, c_fan_tail = 8.0, 2.0, 2.5
+        theta_origin, tlc = 0.0, 0.3  # tiny θ_local so crossings sit below 1.0 m³
+        wave = _fan_consistent_dsw(
+            sorption,
+            decay_side="left",
+            c0=c0,
+            c_fixed=c_fixed,
+            c_fan_tail=c_fan_tail,
+            theta_origin=theta_origin,
+            theta_local_collision=tlc,
+        )
+        assert np.isnan(wave.K)  # numerical path
+
+        for theta_local in (0.35, 0.6, 0.99):
+            theta = theta_origin + theta_local
+            v = wave.position_at_theta(theta)
+            assert v is not None
+            recovered = wave.outlet_crossing_theta(v_outlet=v)
+            assert recovered is not None
+            np.testing.assert_allclose(recovered, theta, rtol=1e-8)
+
+    def test_numerical_c_decay_matches_independent_quad(self):
+        """Cached numerical ``c_decay(θ_local)`` agrees with the direct invariant quad to 1e-9.
+
+        Anchors the per-wave cached decay profile (built by composite quadrature)
+        against an adaptive ``quad`` inversion of the same invariant.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=1.5, bulk_density=1500.0, porosity=0.3)
+        c0, c_fixed, c_fan_tail = 8.0, 1.0, 2.0
+        theta_origin, tlc = 0.0, 500.0
+        wave = _fan_consistent_dsw(
+            sorption,
+            decay_side="left",
+            c0=c0,
+            c_fixed=c_fixed,
+            c_fan_tail=c_fan_tail,
+            theta_origin=theta_origin,
+            theta_local_collision=tlc,
+        )
+
+        def c_direct(theta_local):
+            # Invert θ_local(c) = target via the independent quad reference.
+            def f(c):
+                return _invariant_theta_local_of_c(sorption, c0, c_fixed, tlc, c) - theta_local
+
+            return brentq(f, c_fan_tail + 1e-12, c0 - 1e-12, xtol=1e-15)
+
+        for theta_local in np.linspace(tlc * 1.01, tlc * 6.0, 25):
+            cached = wave.c_decay_at_theta(theta_origin + theta_local)  # theta_origin=0 -> θ = θ_local
+            np.testing.assert_allclose(cached, c_direct(theta_local), rtol=1e-9)
+
+
+class TestWaveSpeedCaching:
+    """Cached wave celerities (``__post_init__``) are bit-identical to direct evaluation."""
+
+    def test_characteristic_speed_cached_bit_identical(self):
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        wave = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption)
+        assert wave.speed() == characteristic_speed(5.0, sorption)
+
+    def test_rarefaction_head_tail_speed_cached_bit_identical(self):
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        wave = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption)
+        assert wave.head_speed() == characteristic_speed(10.0, sorption)
+        assert wave.tail_speed() == characteristic_speed(2.0, sorption)

@@ -1391,6 +1391,49 @@ class TestFlowWeightedDiffusion:
         ratios = mass_out_per_cin[10:42] / v_in_interior
         np.testing.assert_allclose(ratios, 1.0, atol=1e-10, rtol=0)
 
+    @pytest.mark.parametrize("seed", [3, 42])
+    @pytest.mark.parametrize("d_m", [1e-5, 0.01])
+    def test_column_mass_conservation_near_zero_dispersion(self, d_m, seed):
+        """Sharp-front regime: column mass conserved for near-zero dispersivity under variable flow.
+
+        Regression for the fixed-order Gauss-Legendre quadrature being unable to resolve the
+        breakthrough front when its width ``sqrt(4 * D_t)`` is far below the flow-bin volume
+        width (``alpha_L = 0``, tiny ``D_m``). The bin-averaged Kreft-Zuber flux concentration
+        must still make the flux-weighted column sum
+        ``sum_i W[i, j] * Q_out[i] * dt_out[i] == Q_in[j] * dt_in[j]`` hold. Pre-fix (fixed
+        16-point GL) the ratio drifts to ~1.13 at ``D_m = 1e-5``; the resolution-aware
+        composite quadrature restores it to 1 within 1e-9.
+        """
+        n = 90
+        tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+        cout_tedges = tedges
+
+        rng = np.random.default_rng(seed)
+        flow = rng.uniform(20.0, 200.0, n)
+        aquifer_pore_volumes = np.array([500.0])
+        streamline_length = np.array([100.0])
+
+        coeff, _ = _infiltration_to_extraction_coeff_matrix(
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            streamline_length=streamline_length,
+            molecular_diffusivity=np.array([d_m]),
+            longitudinal_dispersivity=np.array([0.0]),
+            retardation_factor=1.0,
+        )
+
+        # Interior cin bins 10..59 fully transit the 90-day cout window (RT = V/Q in
+        # [2.5, 25] days for Q in [20, 200]), so their flux-weighted column sums must
+        # equal the infiltrated volume.
+        dt = np.diff(tedges) / pd.Timedelta("1D")
+        v_out = flow * dt
+        v_in_interior = flow[10:60] * 1.0
+        mass_out_per_cin = (v_out[:, None] * coeff).sum(axis=0)
+        ratios = mass_out_per_cin[10:60] / v_in_interior
+        np.testing.assert_allclose(ratios, 1.0, atol=1e-9, rtol=0)
+
     @pytest.mark.parametrize("seed", [1, 3, 7, 42, 999])
     @pytest.mark.parametrize(
         ("d_m", "alpha_l"),
@@ -1982,6 +2025,50 @@ def _good_diffusion_inputs():
         "longitudinal_dispersivity": np.full(n_pv, 0.0),
         "retardation_factor": 1.0,
     }
+
+
+def _good_diffusion_public_kwargs():
+    """Minimal valid keyword arguments for the public forward diffusion entry point."""
+    n = 5
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    return {
+        "cin": np.ones(n),
+        "flow": np.full(n, 100.0),
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "aquifer_pore_volumes": np.array([500.0]),
+        "streamline_length": np.array([100.0]),
+        "molecular_diffusivity": 0.01,
+        "longitudinal_dispersivity": 0.5,
+        "retardation_factor": 1.0,
+    }
+
+
+@pytest.mark.parametrize("bad", [np.inf, np.nan])
+def test_diffusion_public_rejects_non_finite_aquifer_pore_volumes(bad):
+    """+inf/NaN pore volume slipped past the ``<= 0`` guard and produced all-NaN output; must raise."""
+    kwargs = _good_diffusion_public_kwargs()
+    kwargs["aquifer_pore_volumes"] = np.array([500.0, bad])
+    kwargs["streamline_length"] = np.array([100.0, 100.0])
+    with pytest.raises(ValueError, match="aquifer_pore_volumes must be positive"):
+        infiltration_to_extraction(**kwargs)
+
+
+@pytest.mark.parametrize("bad", [np.inf, np.nan])
+def test_diffusion_public_rejects_non_finite_molecular_diffusivity(bad):
+    """+inf/NaN molecular_diffusivity slipped past the ``< 0`` guard; must raise."""
+    kwargs = _good_diffusion_public_kwargs()
+    kwargs["molecular_diffusivity"] = bad
+    with pytest.raises(ValueError, match="molecular_diffusivity must be non-negative"):
+        infiltration_to_extraction(**kwargs)
+
+
+def test_diffusion_public_rejects_nan_retardation_factor():
+    """NaN retardation slipped past ``< 1.0`` and silently produced all-NaN output; must raise."""
+    kwargs = _good_diffusion_public_kwargs()
+    kwargs["retardation_factor"] = np.nan
+    with pytest.raises(ValueError, match=r"retardation_factor must be >= 1\.0"):
+        infiltration_to_extraction(**kwargs)
 
 
 def test_validate_diffusion_inputs_silent_on_good_input_forward():

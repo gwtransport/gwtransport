@@ -117,13 +117,38 @@ class TestDeHoog:
         np.testing.assert_allclose(batched, analytic, atol=1e-5)
 
     def test_nonpositive_t_returns_zero(self):
-        # de Hoog is defined only for t > 0; the t<=0 guard returns exactly 0 there (keeping the internal
-        # scaling finite) while still inverting the positive entries. Unreachable from the reuse engine
-        # (every phase has tau > 0), but the primitive must stay safe.
+        # de Hoog is defined only for t > 0; the final t>0 mask returns exactly 0 there (the big_t clamp keeps
+        # the internal scaling finite) while still inverting the positive entries -- one general path, no
+        # early return. Unreachable from the reuse engine (every phase has tau > 0), but the primitive must
+        # stay safe.
         t = np.array([-1.0, 0.0, 2.0])
         got = dehoog_inverse(f_hat=lambda s: 1.0 / (s + 1.0), t=t, n_terms=32, scaling=4.0)
         np.testing.assert_array_equal(got[:2], 0.0)
         np.testing.assert_allclose(got[2], np.exp(-2.0), atol=1e-5)
+
+    def test_underflow_columns_invert_to_zero_overflow_surfaces(self):
+        # RA2 (guard): a batch column whose transform decays to the double-precision underflow floor (exact
+        # or denormal zeros at the high-frequency nodes -- the far-field rest / Airy / Riccati propagator
+        # entries) drives the quotient-difference recurrence into 0/0 and x/0. Its physical inverse is ~0, so
+        # it must invert to exactly 0, NOT NaN -- a NaN there propagated through P @ field and silently
+        # collapsed the whole cout to background. A column whose transform OVERFLOWED (Inf/NaN already present)
+        # is a genuine breakdown and must still surface as NaN so a real failure cannot read as a physical
+        # zero. (Before the guard only *identically*-zero columns were parked; a partial-underflow column
+        # returned NaN.)
+        m = 24
+
+        def f_hat(s):
+            base = 1.0 / (s + 1.0)  # a well-resolved transform -> exp(-t)
+            underflow = base.copy()
+            underflow[3:] = 0.0  # decayed to the floor at the high-frequency nodes -> QD 0/0
+            overflow = base.copy()
+            overflow[5] = np.inf  # a genuinely broken (overflowed) transform
+            return np.stack([base, underflow, overflow], axis=1)
+
+        out = dehoog_inverse(f_hat=f_hat, t=np.array([1.0]), n_terms=m)
+        np.testing.assert_allclose(out[0, 0], np.exp(-1.0), atol=1e-6)  # normal column unaffected
+        assert out[0, 1] == 0.0  # underflowed column -> physical zero (was NaN before the guard)
+        assert not np.isfinite(out[0, 2])  # overflowed column -> NaN surfaces (never masked to 0)
 
 
 # --- Airy kernel + KB Sec. 6 moments ------------------------------------------------------------
@@ -366,6 +391,25 @@ class TestGammaWrapper:
         recovered = np.sum(cout[flow < 0] * (-flow[flow < 0]))
         np.testing.assert_allclose(recovered, np.sum(cin[flow > 0] * flow[flow > 0]), rtol=1e-2)
 
+    def test_velocity_cv_zero_is_homogeneous_screen(self):
+        # velocity_cv = 0 is a homogeneous screen -- a single streamtube at the mean velocity (pore height
+        # screen_height), matching the docstring. It must run (a degenerate std-0 gamma is not a valid
+        # distribution) and reproduce the plain engine at pore_heights = screen_height, bit-for-bit.
+        tedges, flow, geom = _scenario()
+        cin = np.where(flow > 0, 1.0, 0.0)
+        common = {
+            "flow": flow,
+            "tedges": tedges,
+            "cout_tedges": tedges,
+            "porosity": geom["porosity"],
+            "well_radius": geom["well_radius"],
+            "longitudinal_dispersivity": geom["longitudinal_dispersivity"],
+            "n_quad": 120,
+        }
+        gam = gamma_infiltration_to_extraction(cin=cin, screen_height=10.0, velocity_cv=0.0, n_bins=8, **common)
+        homogeneous = infiltration_to_extraction(cin=cin, pore_heights=10.0, **common)
+        np.testing.assert_array_equal(gam, homogeneous)
+
     @pytest.mark.slow
     def test_gamma_multi_cycle_round_trip(self):
         # Both gamma (screen-velocity ensemble) wrappers on a MULTI-CYCLE schedule, so they route through the
@@ -418,6 +462,17 @@ class TestValidation:
                 cout_tedges=tedges,
                 **{**geom, "longitudinal_dispersivity": 0.0},
             )
+
+    def test_reverse_nan_cout_on_extraction_raises(self):
+        # A single NaN measurement on an extraction bin would poison the whole least-squares reverse into
+        # an all-NaN cin; the inverse must raise (like the advection / diffusion inverses), not silently
+        # return NaN. Structural NaN on injection / rest bins (ignored by the inverse) stays allowed.
+        tedges, flow, geom = _scenario()
+        cin = np.where(flow > 0, 1.0, 0.0)
+        cout = infiltration_to_extraction(cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, n_quad=80)
+        cout[np.flatnonzero(flow < 0)[3]] = np.nan  # poison one extraction measurement
+        with pytest.raises(ValueError, match="cout contains NaN"):
+            extraction_to_infiltration(cout=cout, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, n_quad=80)
 
 
 class TestGeneralEngine:
@@ -480,6 +535,39 @@ class TestGeneralEngine:
         assert 0.9 < recovered <= 1.0 + 1e-3  # near-full recovery, up to the buffer + finite-volume floor
 
     @pytest.mark.slow
+    def test_high_peclet_multi_cycle_recovery_monotone(self):
+        # RA1: a large-plume multi-cycle push-pull whose grid reaches Peclet r_max/alpha_L > 700, where the
+        # reuse engine's Airy interior Green's function overflowed to Inf, the propagator went all-NaN, and the
+        # blanket nan_to_num silently mapped it to exactly 0 (recovery collapsed to 0). With the overflow-safe
+        # fold the recovery stays finite and PHYSICAL: sharpening the front (decreasing alpha_L) recovers a
+        # monotone-non-decreasing fraction of the injected mass -- the collapse produced a non-monotone drop to
+        # 0 at alpha_L = 0.22.
+        c_geo_heights = 30.0  # pore height; c_geo = pi * b * porosity
+        flow = np.array([5000.0] * 60 + [-10000.0] * 15 + [5000.0] * 30 + [-10000.0] * 30)
+        cin = np.array([100.0] * 60 + [0.0] * 15 + [50.0] * 30 + [0.0] * 30)
+        dt = np.ones(len(flow))
+        tedges = pd.date_range("2020-01-01", periods=len(flow) + 1, freq="D")
+        geom = {"pore_heights": c_geo_heights, "porosity": 0.3, "well_radius": 0.5}
+        injected = np.sum((cin * flow * dt)[flow > 0])
+        recovered = []
+        for alpha_l in (0.50, 0.30, 0.22, 0.18):
+            cout = infiltration_to_extraction(
+                cin=cin,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=tedges,
+                longitudinal_dispersivity=alpha_l,
+                **geom,
+                n_quad=120,
+            )
+            ext = flow < 0
+            assert not np.any(np.isnan(cout[ext]))  # the overflow no longer produces NaN -> silent-zero
+            recovered.append(np.sum((cout * (-flow) * dt)[ext]) / injected)
+        recovered = np.array(recovered)
+        assert np.all(recovered > 0.9)  # no collapse (baseline dropped to ~0 at alpha_L <= 0.22)
+        assert np.all(np.diff(recovered) > -1e-9)  # monotone non-decreasing as the front sharpens
+
+    @pytest.mark.slow
     def test_dm_positive_forward_conserves(self):
         # Single inject->extract cycle (no rest) with D_m>0 routes to the closed-form echo operator; this
         # checks that path conserves mass under molecular diffusion. The multi-cycle reuse-engine D_m>0 path
@@ -509,8 +597,9 @@ class TestGeneralEngine:
         # D_m>0 forward AND reverse through the reuse engine's Riccati branch on a multi-cycle schedule. The
         # public single-cycle D_m>0 path routes to the echo operator, so only a multi-cycle schedule drives
         # the Riccati propagator matrices (forward) and the dense-column ensemble reverse. @slow: the per-node
-        # Riccati ODE dominates and the reverse rebuilds it per injection column, so the schedule and n_quad
-        # are kept minimal (two single-injection cycles -> a 2-column dense reverse).
+        # Riccati ODE dominates; the reverse builds the propagator matrices once and applies them to the whole
+        # unit-pulse batch, so the schedule and n_quad are kept minimal (two single-injection cycles -> a
+        # 2-column dense reverse).
         flow = np.array([100.0] * 1 + [-100.0] * 2 + [100.0] * 1 + [-100.0] * 2)
         tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
         cin = np.where(flow > 0, 1.0, 0.0)

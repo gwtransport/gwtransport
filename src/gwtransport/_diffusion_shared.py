@@ -18,6 +18,12 @@ import pandas as pd
 from scipy.special import erf
 
 from gwtransport._time import dt_to_days
+from gwtransport._validation import (
+    _validate_no_nan,
+    _validate_non_negative_array,
+    _validate_positive_array,
+    _validate_retardation_factor,
+)
 from gwtransport.utils import solve_inverse_transport_banded
 
 # Minimum coefficient sum to consider an output bin valid.
@@ -173,10 +179,10 @@ def _validate_inputs(
     ------
     ValueError
         If array lengths are inconsistent, molecular_diffusivity or
-        longitudinal_dispersivity are negative, cin or cout or flow contain NaN values,
-        aquifer_pore_volumes contains non-positive values, streamline_length is
-        non-positive, or retardation_factor is below 1 (anti-retardation is not physical for
-        the supported sorption isotherms).
+        longitudinal_dispersivity are negative or non-finite, cin or cout or flow contain NaN
+        values, aquifer_pore_volumes contains non-positive or non-finite values,
+        streamline_length is non-positive or non-finite, or retardation_factor is NaN or below 1
+        (anti-retardation is not physical for the supported sorption isotherms).
     """
     if is_forward:
         if len(tedges) != len(cin_or_cout) + 1:
@@ -197,30 +203,17 @@ def _validate_inputs(
         if np.size(arr) not in {1, n_pore_volumes}:
             msg = f"{name} must be a scalar or have length len(aquifer_pore_volumes) = {n_pore_volumes}"
             raise ValueError(msg)
-    if np.any(np.asarray(molecular_diffusivity) < 0):
-        msg = "molecular_diffusivity must be non-negative"
-        raise ValueError(msg)
-    if np.any(np.asarray(longitudinal_dispersivity) < 0):
-        msg = "longitudinal_dispersivity must be non-negative"
-        raise ValueError(msg)
-    if np.any(np.isnan(cin_or_cout)):
-        msg = f"{'cin' if is_forward else 'cout'} contains NaN values, which are not allowed"
-        raise ValueError(msg)
-    if np.any(np.isnan(flow)):
-        msg = "flow contains NaN values, which are not allowed"
-        raise ValueError(msg)
-    if np.any(flow < 0):
-        msg = "flow must be non-negative (negative flow not supported)"
-        raise ValueError(msg)
-    if np.any(aquifer_pore_volumes <= 0):
-        msg = "aquifer_pore_volumes must be positive"
-        raise ValueError(msg)
-    if np.any(np.asarray(streamline_length) <= 0):
-        msg = "streamline_length must be positive"
-        raise ValueError(msg)
-    if retardation_factor < 1.0:
-        msg = "retardation_factor must be >= 1.0"
-        raise ValueError(msg)
+    # Delegate the finite+sign invariants to the shared _validation atoms so the NaN/+inf guards
+    # (which the bare ``< 0`` / ``<= 0`` / ``< 1.0`` comparisons here would let slip through) are
+    # enforced in exactly one place. Order and messages match the historical inline checks.
+    _validate_non_negative_array(molecular_diffusivity, name="molecular_diffusivity")
+    _validate_non_negative_array(longitudinal_dispersivity, name="longitudinal_dispersivity")
+    _validate_no_nan(cin_or_cout, name="cin" if is_forward else "cout")
+    _validate_no_nan(flow, name="flow")
+    _validate_non_negative_array(flow, name="flow", message="flow must be non-negative (negative flow not supported)")
+    _validate_positive_array(aquifer_pore_volumes, name="aquifer_pore_volumes")
+    _validate_positive_array(streamline_length, name="streamline_length")
+    _validate_retardation_factor(retardation_factor)
     if flow_out is None:
         # The output-grid extraction flow is only unambiguous when the cout grid matches
         # the flow grid; otherwise it must be supplied (it defines the cout-bin volumes and

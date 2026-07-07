@@ -46,6 +46,11 @@ EPSILON_VELOCITY = 1e-15  # Tolerance for checking if velocity is effectively ze
 EPSILON_TIME = 1e-15  # Tolerance for negligible time segments
 EPSILON_VOLUME = 1e-15  # Tolerance for negligible spatial-segment widths Δv [m³]
 EPSILON_POSITION = 1e-15  # Tolerance for shock-face proximity in position v [m³]
+# Multiplier on the eps·max(|m_in|,|m_dom|)/Δθ cancellation scale below which a conservation-form
+# residual is numerical zero. The m_dom fan-integral sum accumulates ~few·10² ULP over a
+# multi-pulse record (measured max ratio ~460); 65536 clears that with wide margin while staying
+# ~7 orders below any real breakthrough concentration (O(cin)).
+FP_CANCELLATION_CLAMP = 65536.0
 
 
 def concentration_at_point(
@@ -85,10 +90,10 @@ def concentration_at_point(
     point, returns 0.0 (initial condition).
     """
     # Multi-DSW dispatch: when several active DSW fans contain v, the newest
-    # (largest ``theta_start``) wins — same rule as ``compute_domain_mass`` at
-    # line ~1057. Iterating chronologically and short-circuiting picks the
-    # older DSW's fan value, which is wrong for overlap regions. The fan
-    # predicate mirrors the in-fan check used downstream.
+    # (largest ``theta_start``) wins — same rule as ``compute_domain_mass``.
+    # Iterating chronologically and short-circuiting picks the older DSW's fan
+    # value, which is wrong for overlap regions. The fan predicate mirrors the
+    # in-fan check used downstream.
     dsw_in_fan: list[DecayingShockWave] = []
     for wave in waves:
         if isinstance(wave, DecayingShockWave) and wave.was_active_at(theta):
@@ -812,9 +817,10 @@ def compute_bin_averaged_concentration_exact(
     compute_cumulative_outlet_mass : Cumulative outlet mass via conservation
     """
     theta_edges_out = np.asarray(theta_bin_edges, dtype=float)
+    dtheta_out = np.diff(theta_edges_out)
 
-    if np.any(np.diff(theta_edges_out) <= 0):
-        bad = int(np.argmin(np.diff(theta_edges_out)))
+    if np.any(dtheta_out <= 0):
+        bad = int(np.argmin(dtheta_out))
         msg = (
             f"Invalid θ-bin: theta_bin_edges[{bad}]={theta_edges_out[bad]} >= "
             f"theta_bin_edges[{bad + 1}]={theta_edges_out[bad + 1]}"
@@ -823,15 +829,20 @@ def compute_bin_averaged_concentration_exact(
 
     if cin is not None and theta_edges_inlet is not None:
         # Conservation form: c_avg = Δm_out/Δθ where m_out = m_in − m_dom.
-        # m_in is the piecewise-constant inlet integral up to each output edge —
-        # vectorized over all edges at once (one broadcast clip-and-sum rather
-        # than a per-edge ``compute_cumulative_inlet_mass`` call). m_dom is a
-        # per-θ spatial geometry query, so it stays a loop.
+        # m_in(θ) = ∫₀^θ cin dτ is the piecewise-LINEAR (in θ) integral of the piecewise-constant
+        # cin, so evaluate it at every output edge in O(N+M) from the inlet-bin cumulative sums
+        # plus the partial bin containing θ — instead of the dense N_out×M_in clip-and-matmul
+        # (≈245× slower, a 128 MB temporary at N=M=4000). Edges below te_in[0] contribute 0
+        # (nothing is injected before the record starts, even if it starts mid-window); edges at
+        # or past te_in[-1] saturate at the total. This mirrors ``compute_cumulative_inlet_mass``'s
+        # clip exactly. m_dom stays a per-θ spatial geometry loop.
         te_in = np.asarray(theta_edges_inlet, dtype=float)
         cin_arr = np.asarray(cin, dtype=float)
-        widths_full = np.diff(te_in)
-        widths = np.clip(theta_edges_out[:, None] - te_in[None, :-1], 0.0, widths_full[None, :])
-        m_in_at_edges = widths @ cin_arr
+        cum_in = np.concatenate([[0.0], np.cumsum(cin_arr * np.diff(te_in))])
+        idx = np.clip(np.searchsorted(te_in, theta_edges_out, side="right") - 1, 0, len(cin_arr) - 1)
+        m_in_at_edges = cum_in[idx] + cin_arr[idx] * (theta_edges_out - te_in[idx])
+        m_in_at_edges = np.where(theta_edges_out < te_in[0], 0.0, m_in_at_edges)
+        m_in_at_edges = np.where(theta_edges_out >= te_in[-1], cum_in[-1], m_in_at_edges)
         m_dom_at_edges = np.array([
             compute_domain_mass(theta=float(theta_e), v_outlet=v_outlet, waves=waves, sorption=sorption)
             for theta_e in theta_edges_out
@@ -839,32 +850,55 @@ def compute_bin_averaged_concentration_exact(
         # ``compute_cumulative_outlet_mass`` short-circuits to 0 for θ ≤ 0;
         # replicate that clamp so non-positive output edges contribute no mass.
         m_out_at_edges = np.where(theta_edges_out <= 0.0, 0.0, m_in_at_edges - m_dom_at_edges)
-        result = np.diff(m_out_at_edges) / np.diff(theta_edges_out)
-        # FP-noise clamp: m_in − m_dom subtracts nearly-equal large numbers,
-        # leaving ~1 ULP residuals on either sign. Clamp those to 0.
-        max_c = float(np.max(np.abs(result))) if result.size else 0.0
-        eps_clamp = 1e-12 * max(max_c, 1.0)
-        result = np.where(np.abs(result) < eps_clamp, 0.0, result)
-        # Large-negative diagnostic: residuals beyond the FP-noise band signal
-        # a real conservation-form violation, most commonly the post-inlet
-        # artifact — output edges exceed ``theta_edges_inlet[-1]``, m_in
-        # caps at the last injected mass while the simulator's wave list
-        # continues to evolve, producing FP-cancellation residuals from
-        # inconsistent θ ranges. Surface as a UserWarning; clamp to 0 to
-        # preserve the ``cout >= 0`` API contract.
-        if result.size:
-            min_val = float(np.min(result))
-            if min_val < -eps_clamp:
-                msg = (
-                    f"compute_bin_averaged_concentration_exact produced concentrations "
-                    f"as negative as {min_val:.3e} (clamp threshold -{eps_clamp:.3e}); "
-                    f"likely caused by output θ-bin edges exceeding "
-                    f"theta_edges_inlet[-1]={float(np.asarray(theta_edges_inlet)[-1]):.3f}, "
-                    "putting the inlet integral and the wave list on inconsistent θ ranges. "
-                    "Extend cin with trailing zeros to cover the output range, "
-                    "or restrict output bins to within the inlet window."
+        result = np.diff(m_out_at_edges) / dtheta_out
+        # FP-noise clamp scaled to the m_in − m_dom CANCELLATION magnitude: each cumulative-mass
+        # edge carries ~eps·max(|m_in|,|m_dom|) rounding (the m_dom fan-integral sum accumulates
+        # several hundred ULP over a multi-pulse record), amplified by 1/Δθ. The former
+        # 1e-12·max(cout) band keyed off the OUTPUT concentration, which collapses to ~0 before
+        # breakthrough — far too tight, so ~1e-11 cancellation dust tripped the diagnostic on
+        # fully in-range inputs. Residuals within this band are numerical zero: clamp and stay
+        # silent.
+        mass_scale = np.maximum(np.abs(m_in_at_edges), np.abs(m_dom_at_edges))
+        eps_band = (
+            FP_CANCELLATION_CLAMP
+            * np.finfo(float).eps
+            * np.maximum(np.maximum(mass_scale[:-1], mass_scale[1:]), 1.0)
+            / dtheta_out
+        )
+        result = np.where(np.abs(result) < eps_band, 0.0, result)
+        # A residual MORE negative than the FP band is a genuine conservation-form violation with two
+        # possible drivers, and BOTH can be present at once. Attribute per offending bin, not off the
+        # single last edge: a bin whose right edge passes ``theta_edges_inlet[-1]`` sees m_in saturate
+        # while the wave list keeps evolving (out-of-window); a fully in-window offending bin is a real
+        # wave-model over-count (e.g. overlapping non-interacting waves from an oscillating inlet, see
+        # ``compute_domain_mass`` Notes). Report every cause that actually produced a negative bin
+        # instead of the previously unconditional — and often factually false — "edges exceed range"
+        # message. Clamp to 0 to preserve the ``cout >= 0`` API contract either way.
+        neg_mask = result < -eps_band
+        if np.any(neg_mask):
+            worst = float(np.min(result))
+            te_in_last = float(te_in[-1])
+            out_of_window = neg_mask & (theta_edges_out[1:] > te_in_last)
+            causes = []
+            if np.any(out_of_window):
+                causes.append(
+                    f"output θ-bin edges exceeding theta_edges_inlet[-1]={te_in_last:.3f} (m_in "
+                    "saturates at the last injected mass while the wave list keeps evolving — extend "
+                    "cin with trailing zeros to cover the output range, or restrict output bins to the "
+                    "inlet window)"
                 )
-                warnings.warn(msg, UserWarning, stacklevel=2)
+            if np.any(neg_mask & ~out_of_window):
+                causes.append(
+                    "the domain-mass integral growing faster than the inlet-mass integral within the "
+                    "inlet window (an m_dom over-count — e.g. overlapping non-interacting waves from a "
+                    "continuous/oscillating inlet — or a wave-list / cin inconsistency)"
+                )
+            warnings.warn(
+                f"compute_bin_averaged_concentration_exact produced a concentration as negative as "
+                f"{worst:.3e}, beyond the FP-cancellation band; likely cause(s): {'; '.join(causes)}.",
+                UserWarning,
+                stacklevel=2,
+            )
         return np.maximum(result, 0.0)
 
     # Legacy outlet-segment integration (compatible with hand-constructed
@@ -1349,35 +1383,31 @@ def compute_cumulative_outlet_mass(
 
 
 def compute_total_outlet_mass(
-    v_outlet: float,
-    sorption: SorptionModel,
+    v_outlet: float,  # noqa: ARG001
+    sorption: SorptionModel,  # noqa: ARG001
     *,
     cin: npt.ArrayLike,
     theta_edges: npt.NDArray[np.floating],
 ) -> float:
-    """Asymptotic total outlet mass via the conservation-law identity.
+    """Total outlet mass over θ → ∞ (finite only for a returning-to-zero pulse).
 
-    Computed as ``m_in_total − m_dom_asymptotic`` where ``m_dom_asymptotic``
-    is the aquifer's steady-state domain mass: ``C_T(c_∞) · v_outlet``, with
-    ``c_∞ = cin[-1]`` (the final/sustained inlet boundary value). This is
-    the asymptotic limit of ``m_in(θ) − m_dom(θ)`` as θ → ∞:
+    The final inlet value ``c_∞ = cin[-1]`` is the sustained boundary state as θ → ∞:
 
-    - For ``c_∞ = 0`` (canonical c_R=0 pulse): m_dom_asymptotic = 0 and
-      ``m_out_total = m_in_total`` — every injected mass unit eventually exits.
-    - For ``c_∞ > 0`` (sustained ambient): m_dom_asymptotic = C_T(c_∞) · V_outlet
-      stays in the domain at steady state; the rest exits.
-
-    Sidesteps the multi-fan dispatch problem entirely — the integration is
-    purely closed-form arithmetic over (cin, theta_edges) plus one
-    ``sorption.total_concentration`` evaluation. The wave list is not
-    needed.
+    - For ``c_∞ = 0`` (canonical c_R=0 pulse): injection ceases, the domain empties, and
+      every injected mass unit eventually exits — ``m_out_total = m_in_total`` (the finite
+      record integral ``Σ cin·Δθ``). The wave list is not needed.
+    - For ``c_∞ > 0`` (sustained ambient): the inlet keeps injecting ``c_∞`` forever, so the
+      cumulative outlet mass grows without bound — return ``+inf``. The previous formula
+      ``m_in_total − C_T(c_∞)·v_outlet`` paired the FINITE record integral with the
+      infinite-time steady-state fill and went **negative** whenever
+      ``m_in_total < C_T(c_∞)·v_outlet``, which is not a physical outlet mass.
 
     Parameters
     ----------
     v_outlet : float
-        Outlet position [m³].
+        Outlet position [m³] (unused for ``c_∞ = 0``; the ``+inf`` branch does not need it).
     sorption : SorptionModel
-        Sorption model — used only for ``C_T(c_∞)``.
+        Sorption model (kept for API symmetry; no ``C_T`` evaluation is required).
     cin : array-like (kw-only)
         Inlet concentration per θ-bin [mass/volume].
     theta_edges : ndarray (kw-only)
@@ -1386,18 +1416,18 @@ def compute_total_outlet_mass(
     Returns
     -------
     float
-        Asymptotic outlet mass [mass]. Equals ``m_in_total`` for ``cin[-1]=0``.
+        ``m_in_total`` for ``cin[-1] = 0``; ``+inf`` for ``cin[-1] > 0``.
 
     See Also
     --------
-    compute_cumulative_outlet_mass : Cumulative outlet mass up to finite θ
+    compute_cumulative_outlet_mass : Cumulative outlet mass up to a finite θ (use this for
+        a sustained ``c_∞ > 0`` boundary, where the θ → ∞ total is unbounded).
     compute_domain_mass : Spatial integral of C_total in the aquifer
     """
     cin_arr = np.asarray(cin, dtype=float)
-    te = np.asarray(theta_edges, dtype=float)
-    m_in_total = float(np.sum(cin_arr * np.diff(te)))
     # An empty cin is a malformed (no-bin) input by the cin/theta_edges contract;
     # let cin_arr[-1] raise IndexError rather than masking it as c_inf=0.
-    c_inf = float(cin_arr[-1])
-    m_dom_asymptotic = float(sorption.total_concentration(c_inf)) * v_outlet
-    return m_in_total - m_dom_asymptotic
+    if float(cin_arr[-1]) > 0.0:
+        return float("inf")
+    te = np.asarray(theta_edges, dtype=float)
+    return float(np.sum(cin_arr * np.diff(te)))

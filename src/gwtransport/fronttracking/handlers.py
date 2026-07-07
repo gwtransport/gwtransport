@@ -296,6 +296,7 @@ def handle_shock_rarefaction_collision(
         theta_origin=raref.theta_start,
         sorption=sorption,
     )
+
     shock.deactivate(theta_event)
     raref.deactivate(theta_event)
     return [decaying]
@@ -374,11 +375,11 @@ def create_inlet_waves_at_theta(
     c_new: float,
     theta: float,
     sorption: SorptionModel,
-    v_inlet: float = 0.0,
 ) -> list:
     """Emit the wave produced by a step change in inlet concentration.
 
-    Wave type is determined by characteristic speed comparison in (V, θ):
+    All inlet waves originate at the inlet face ``V = 0``. Wave type is
+    determined by characteristic speed comparison in (V, θ):
 
     - ``s_new > s_prev``: compression → shock.
     - ``s_new < s_prev``: expansion → rarefaction.
@@ -400,7 +401,7 @@ def create_inlet_waves_at_theta(
         return [
             CharacteristicWave(
                 theta_start=theta,
-                v_start=v_inlet,
+                v_start=0.0,
                 concentration=c_new,
                 sorption=sorption,
             )
@@ -412,7 +413,7 @@ def create_inlet_waves_at_theta(
     if s_new > s_prev + 1e-15:
         shock = ShockWave(
             theta_start=theta,
-            v_start=v_inlet,
+            v_start=0.0,
             c_left=c_new,
             c_right=c_prev,
             sorption=sorption,
@@ -425,7 +426,7 @@ def create_inlet_waves_at_theta(
         return [
             RarefactionWave(
                 theta_start=theta,
-                v_start=v_inlet,
+                v_start=0.0,
                 c_head=c_prev,
                 c_tail=c_new,
                 sorption=sorption,
@@ -435,7 +436,7 @@ def create_inlet_waves_at_theta(
     return [
         CharacteristicWave(
             theta_start=theta,
-            v_start=v_inlet,
+            v_start=0.0,
             concentration=c_new,
             sorption=sorption,
         )

@@ -20,6 +20,7 @@ from gwtransport.fronttracking.output import (
     compute_cumulative_inlet_mass,
     compute_cumulative_outlet_mass,
     compute_domain_mass,
+    compute_total_outlet_mass,
     concentration_at_point,
     identify_outlet_segments,
     integrate_rarefaction_exact,
@@ -815,3 +816,182 @@ class TestDecayingShockWaveDomainMassConservation:
             compute_domain_mass(theta=float(t), v_outlet=v_outlet, waves=waves, sorption=sorption) for t in thetas
         ])
         np.testing.assert_allclose(m_dom, m_in, rtol=1e-12)
+
+
+def _godunov_fv_domain_mass(cin, theta_edges, v_outlet, sorption, theta_query, n_cells=1500):
+    """Independent upwind (Godunov) FV oracle for the n=2 Freundlich domain mass in [0, v_outlet].
+
+    Marches C_total in (V, θ) with an upwind flux, inverting the closed-form n=2 total→dissolved
+    map each step. Stores only the current column (never the space-time history), so it stays well
+    under memory limits. Returns (domain_mass, c_outlet) at ``theta_query``.
+    """
+    a = sorption.bulk_density * sorption.k_f / sorption.porosity  # C_total = c + a*sqrt(c) (n=2)
+
+    def c_from_ct(u):
+        # Invert C_total = c + a*sqrt(c): x = sqrt(c) solves x² + a·x − C_total = 0.
+        u = np.maximum(u, 0.0)
+        x = 0.5 * (-a + np.sqrt(a * a + 4.0 * u))
+        return x * x
+
+    te = np.asarray(theta_edges, dtype=float)
+    cin = np.asarray(cin, dtype=float)
+    dv = v_outlet * 1.25 / n_cells
+    dtheta = 0.4 * dv
+    out_idx = int(v_outlet / dv)
+    c = np.zeros(n_cells)
+    ct = sorption.total_concentration(c)
+    theta = 0.0
+    while theta < theta_query:
+        k = min(max(int(np.searchsorted(te, theta, side="right")) - 1, 0), len(cin) - 1)
+        c_in = cin[k] if theta < te[-1] else 0.0
+        c_left = np.empty(n_cells)
+        c_left[0] = c_in
+        c_left[1:] = c[:-1]
+        ct -= (dtheta / dv) * (c - c_left)
+        c = c_from_ct(ct)
+        theta += dtheta
+    return float(np.sum(ct[:out_idx]) * dv), float(c[out_idx])
+
+
+class TestSinglePulseDomainMass:
+    """``compute_domain_mass`` matches an independent Godunov FV oracle on a single pulse.
+
+    A single pulse produces exactly one fan-bearing wave, so the single-owner
+    ``compute_domain_mass`` reader is exact (up to Riemann discretisation) and equals the FV
+    resident mass. Multi-pulse / oscillating inputs form OVERLAPPING non-interacting fans that
+    the reader cannot compose exactly; that unresolved interaction is now refused at the public
+    boundary (:func:`gwtransport.advection.infiltration_to_extraction_nonlinear_sorption` raises
+    ``NotImplementedError`` via :func:`gwtransport.fronttracking.solver.find_unresolved_interaction`),
+    and its exact resolution is deferred to a solver-level follow-up — so the former multi-peak /
+    fan-truncation / oscillating conservation cases (which pinned a since-reverted output-side
+    mitigation) are covered by the raise, not by an internal-``compute_domain_mass`` assertion.
+    """
+
+    def test_fv_oracle_matches_single_pulse(self):
+        """The Godunov FV oracle agrees with ``compute_domain_mass`` on a single pulse (~0.5%)."""
+        cin = np.array([0.0, 10.0, 10.0, 0.0, 0.0, 0.0])
+        v_outlet = 40.0
+        sorption = FreundlichSorption(k_f=0.05, n=2.0, bulk_density=1600.0, porosity=0.35)
+        tedges = pd.date_range("2020-01-01", periods=len(cin) + 1, freq="D")
+        tr = FrontTracker(
+            cin=cin, flow=np.full(len(cin), 100.0), tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption
+        )
+        tr.run()
+        theta_q = 500.0  # before breakthrough: all injected mass resident
+        m_dom = compute_domain_mass(theta=theta_q, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
+        fv_dom, fv_cout = _godunov_fv_domain_mass(cin, tr.state.theta_edges, v_outlet, sorption, theta_q)
+        assert fv_cout < 1e-6  # single pulse has not broken through — resident mass only
+        assert abs(m_dom - fv_dom) < 0.01 * fv_dom
+
+
+class TestConservationFormClampScale:
+    """Regression: the FP-noise clamp/warning scales with the m_in−m_dom cancellation (review O2).
+
+    The old band ``1e-12·max(cout)`` keyed off the OUTPUT concentration, which collapses to ~0
+    before breakthrough — far too tight, so ~1e-11 cancellation dust on a fully in-range Freundlich
+    input tripped a UserWarning carrying a factually false "edges exceed inlet range" message.
+    """
+
+    def test_in_range_freundlich_multipeak_emits_no_warning(self, recwarn):
+        """The report's in-range multi-peak Freundlich case emits no UserWarning."""
+        cin = np.array([0.0, 10.0, 10.0, 0.0, 0.0, 0.0, 5.0, 5.0, 0.0])
+        v_outlet = 40.0
+        sorption = FreundlichSorption(k_f=0.05, n=2.0, bulk_density=1600.0, porosity=0.35)
+        tedges = pd.date_range("2020-01-01", periods=len(cin) + 1, freq="D")
+        tr = FrontTracker(
+            cin=cin, flow=np.full(len(cin), 100.0), tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption
+        )
+        tr.run()
+        theta_edges_out = np.linspace(1.0, 899.0, 80)  # every edge inside [0, 900]
+        compute_bin_averaged_concentration_exact(
+            theta_edges_out, v_outlet, tr.state.waves, sorption, cin=cin, theta_edges_inlet=tr.state.theta_edges
+        )
+        assert len(recwarn.list) == 0, "in-range conservation-form input must not warn"
+
+    def test_out_of_window_warning_names_the_true_cause(self):
+        """Output edges past the inlet window still warn, and the message says 'exceeding' the window.
+
+        A genuine out-of-window residual needs the wave list to keep growing m_dom while m_in
+        saturates — use a sustained boundary (single ShockWave, c_left=10) whose inlet record ends
+        before the output range.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=0.0, sorption=sorption, is_active=True)
+        waves = [shock]
+        v_outlet = 300.0
+        theta_cross = v_outlet / shock.speed
+        theta_edges_out = np.linspace(7.0, theta_cross * 2.0 + 7.0, 50)
+        theta_edges_inlet = np.array([0.0, theta_cross * 0.5])  # ends before the output range
+        cin = np.array([10.0])
+        with pytest.warns(UserWarning, match="exceeding theta_edges_inlet"):
+            compute_bin_averaged_concentration_exact(
+                theta_edges_out, v_outlet, waves, sorption, cin=cin, theta_edges_inlet=theta_edges_inlet
+            )
+
+
+class TestTotalOutletMassSemantics:
+    """``compute_total_outlet_mass`` honest c_∞ semantics (review O3).
+
+    Baseline paired the FINITE record integral ``m_in_total`` with the infinite-time steady-state
+    fill ``C_T(c_∞)·v_outlet``, returning a NEGATIVE total whenever ``m_in_total < C_T(c_∞)·v_outlet``
+    (demonstrated −3405.7). A pulse (``c_∞=0``) keeps ``m_in_total``; a sustained ``c_∞>0`` boundary
+    injects forever so the total outlet mass is unbounded → ``+inf``.
+    """
+
+    def test_pulse_returns_injected_mass(self):
+        """``cin[-1] == 0`` returns the finite injected mass ``Σ cin·Δθ``."""
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        cin = np.array([0.0, 4.0, 4.0, 0.0])
+        theta_edges = np.array([0.0, 100.0, 200.0, 300.0, 400.0])
+        m_out = compute_total_outlet_mass(v_outlet=500.0, sorption=sorption, cin=cin, theta_edges=theta_edges)
+        assert m_out == float(np.sum(cin * np.diff(theta_edges)))  # = 800.0, exact
+
+    def test_sustained_ambient_returns_inf_not_negative(self):
+        """``cin[-1] > 0`` with the −3405.7 layout returns +inf, never a negative mass."""
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        cin = np.array([0.0, 4.0, 4.0])  # c_∞ = 4 sustained
+        theta_edges = np.array([0.0, 100.0, 200.0, 300.0])
+        v_outlet = 5000.0  # large enough that C_T(c_∞)·v_outlet > m_in_total (baseline went negative)
+        m_in_total = float(np.sum(cin * np.diff(theta_edges)))
+        assert float(sorption.total_concentration(4.0)) * v_outlet > m_in_total  # the baseline-negative regime
+        m_out = compute_total_outlet_mass(v_outlet=v_outlet, sorption=sorption, cin=cin, theta_edges=theta_edges)
+        assert m_out == np.inf
+
+
+class TestConservationFormInletMassOutOfRange:
+    """Cumsum m_in at output edges == per-edge reference, incl. below/above the inlet window (O4).
+
+    The O(N+M) cumsum+searchsorted evaluation of the cumulative inlet integral must match the
+    per-edge ``compute_cumulative_inlet_mass`` reference to FP precision even when output edges fall
+    below ``theta_edges_inlet[0]`` (mass 0) or above ``theta_edges_inlet[-1]`` (saturated total).
+    """
+
+    def test_conservation_form_out_of_range_edges_match_reference(self):
+        """End-to-end conservation form with out-of-range edges equals the m_in−m_dom reference."""
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=0.0, sorption=sorption, is_active=True)
+        waves = [shock]
+        v_outlet = 300.0
+        # Inlet record starts mid-window (te_in[0] = 50) and ends at 350; output edges straddle both.
+        theta_edges_inlet = np.array([50.0, 150.0, 250.0, 350.0])
+        cin = np.array([10.0, 10.0, 10.0])
+        theta_edges_out = np.array([10.0, 40.0, 90.0, 200.0, 300.0, 380.0, 500.0])
+
+        c_avg = compute_bin_averaged_concentration_exact(
+            theta_edges_out, v_outlet, waves, sorption, cin=cin, theta_edges_inlet=theta_edges_inlet
+        )
+
+        # Independent reference: per-edge compute_cumulative_inlet_mass (the O(N·M) path the cumsum
+        # replaces), minus domain mass, clamped exactly as the conservation branch does.
+        m_in_ref = np.array([
+            compute_cumulative_inlet_mass(theta=float(e), cin=cin, theta_edges=theta_edges_inlet)
+            for e in theta_edges_out
+        ])
+        m_dom_ref = np.array([
+            compute_domain_mass(theta=float(e), v_outlet=v_outlet, waves=waves, sorption=sorption)
+            for e in theta_edges_out
+        ])
+        m_out_ref = np.where(theta_edges_out <= 0.0, 0.0, m_in_ref - m_dom_ref)
+        ref = np.maximum(np.diff(m_out_ref) / np.diff(theta_edges_out), 0.0)
+
+        np.testing.assert_allclose(c_avg, ref, rtol=1e-12, atol=1e-12)

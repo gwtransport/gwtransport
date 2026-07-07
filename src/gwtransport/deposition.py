@@ -59,11 +59,13 @@ from gwtransport._validation import (
     _validate_no_nan,
     _validate_non_negative_array,
     _validate_positive_scalar,
+    _validate_retardation_factor,
     _validate_tedges_parity,
 )
 from gwtransport.advection_utils import _densify_weights, _resolve_spinup_inputs
 from gwtransport.deposition_utils import _clipped_linear_integral
 from gwtransport.utils import (
+    _make_strictly_monotone,
     cumulative_flow_volume,
     linear_interpolate,
     solve_inverse_transport_banded,
@@ -79,6 +81,7 @@ def _validate_deposition_inputs(
     porosity: float,
     thickness: float,
     retardation_factor: float = 1.0,
+    spinup: str | float | None = "constant",
     cout_tedges: pd.DatetimeIndex | None = None,
     cout_values: np.ndarray | None = None,
     dep_values: np.ndarray | None = None,
@@ -108,7 +111,17 @@ def _validate_deposition_inputs(
     ValueError
         If any of the activated checks fails. The specific message names which
         invariant was violated (see body for the verbatim strings).
+    NotImplementedError
+        If ``spinup`` is a float. The fraction-threshold mode is not
+        implemented for deposition (matching the diffusion family); only
+        ``None`` and ``"constant"`` are supported.
     """
+    if isinstance(spinup, float):
+        msg = (
+            "deposition's spinup parameter only supports None or 'constant'; "
+            f"float thresholds are not yet implemented (got {spinup!r})"
+        )
+        raise NotImplementedError(msg)
     if dep_values is not None:
         _validate_tedges_parity(tedges, dep_values, tedges_name="tedges", values_name="dep")
     _validate_tedges_parity(tedges, flow_values, tedges_name="tedges", values_name="flow")
@@ -135,9 +148,7 @@ def _validate_deposition_inputs(
         name="aquifer_pore_volume",
         message=f"Aquifer pore volume must be positive, got {aquifer_pore_volume}",
     )
-    if retardation_factor < 1.0:
-        msg = "retardation_factor must be >= 1.0"
-        raise ValueError(msg)
+    _validate_retardation_factor(retardation_factor)
 
 
 def compute_deposition_weights(
@@ -168,7 +179,8 @@ def compute_deposition_weights(
     cumulative flow volume ``flow_cum``; the per-cell math reuses
     ``gwtransport.deposition_utils._clipped_linear_integral`` restricted to
     the band columns, so each row sums to
-    ``r_k = residence_time_k / (porosity * thickness)``. Reconstruct the dense
+    ``r_k = residence_time_k / (retardation_factor * porosity * thickness)``.
+    Reconstruct the dense
     ``(n_cout, n_cin)`` matrix with
     ``gwtransport.advection_utils._densify_weights`` when a dense operator
     is required (the nullspace inverse).
@@ -195,8 +207,8 @@ def compute_deposition_weights(
     band_vals : numpy.ndarray
         Banded weights of shape ``(n_cout, full_band)``. Slot ``band_vals[k, b]``
         is the weight on cin bin ``col_start[k] + b``. Row ``k`` sums to
-        ``r_k = residence_time_k / (porosity * thickness)``; invalid rows (NaN
-        residence time, zero-flow cout bins) are zero.
+        ``r_k = residence_time_k / (retardation_factor * porosity * thickness)``;
+        invalid rows (NaN residence time, zero-flow cout bins) are zero.
     col_start : numpy.ndarray of int
         First cin bin index of each cout row's band, shape ``(n_cout,)``.
     row_valid : numpy.ndarray of bool
@@ -262,7 +274,7 @@ def compute_deposition_weights(
     y_at_edge = flow_cum[band_edge_clipped]  # (n_cout, full_band + 1)
     y_top = y_at_edge - sv_top[:, None]
     y_bot = y_at_edge - sv_bot[:, None]
-    widths = dt[np.clip(col_start[:, None] + np.arange(full_band)[None, :], 0, n_cin - 1)]
+    widths = dt[np.clip(band_edge[:, :-1], 0, n_cin - 1)]
     # Zero the width of right-pad slots (band slot index >= width) so they add nothing.
     slot = np.arange(full_band)[None, :]
     widths = np.where(slot < width[:, None], widths, 0.0)
@@ -272,11 +284,14 @@ def compute_deposition_weights(
     # (porosity*thickness) converts that overlap to plan-area * time, the areal
     # footprint (and duration) over which the areal deposition flux is mixed down
     # through the aquifer thickness. The bin width is already folded into the
-    # integral, so do NOT multiply by widths again.
+    # integral, so do NOT multiply by widths again. The R-scaled window (r_apv)
+    # stretches this measure by R, but the steady-state areal mass balance
+    # Q*cout = dep*A_plan is R-independent (retardation delays breakthrough, it
+    # does not raise the outlet concentration), so divide out that same R here.
     top_integral = _clipped_linear_integral(y_top[:, :-1], y_top[:, 1:], widths, 0.0, r_apv)
     bottom_integral = _clipped_linear_integral(y_bot[:, :-1], y_bot[:, 1:], widths, 0.0, r_apv)
     contact_volume_time = np.maximum(top_integral - bottom_integral, 0.0)
-    numerator = contact_volume_time / (porosity * thickness)
+    numerator = contact_volume_time / (porosity * thickness * retardation_factor)
 
     band_vals = np.zeros((n_cout, full_band))
     # row_valid implies extracted_volume > 0, so the masked divide never sees a zero.
@@ -294,7 +309,7 @@ def deposition_to_extraction(
     porosity: float,
     thickness: float,
     retardation_factor: float = 1.0,
-    spinup: str | float | None = "constant",
+    spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """Compute concentrations from deposition rates (convolution).
 
@@ -317,20 +332,28 @@ def deposition_to_extraction(
         Aquifer thickness [m].
     retardation_factor : float, optional
         Compound retardation factor, by default 1.0.
-    spinup : {"constant"} | float in [0, 1] | None, optional
+    spinup : {"constant"} | None, optional
         Spin-up policy applied before computing deposition weights.
         Default ``"constant"`` shifts ``tedges[0]`` backward by
         ``retardation_factor * aquifer_pore_volume / flow[0]`` and treats
         ``dep`` and ``flow`` as constant at their first observed values
         over the prepended interval. ``None`` keeps the existing
         strict-validity behavior (NaN cout rows during spin-up). A float
-        value is accepted but silently ignored; behavior is identical to
-        ``None``.
+        raises ``NotImplementedError`` -- the fraction-threshold mode is
+        not implemented for deposition (matching the diffusion family).
 
     Returns
     -------
     numpy.ndarray
         Concentration changes [g/m³] with length len(cout_tedges) - 1.
+
+        Zero-extraction-flow cout bins (no water leaves the aquifer over the
+        bin) return ``0.0``, not NaN. This deliberately differs from advection,
+        which returns NaN for its undefined zero-flow output: the deposition
+        source term is defined even with no water (an areal flux still supplies
+        mass), and a bin that extracts zero volume carries zero mass, so ``0.0``
+        is the physically correct value rather than an undefined result. NaN is
+        reserved for spin-up bins whose residence time is not yet resolved.
 
     Raises
     ------
@@ -339,6 +362,9 @@ def deposition_to_extraction(
         arrays contain NaN values, or if physical parameters are out of
         valid range (porosity not in (0, 1), non-positive thickness or
         aquifer pore volume).
+    NotImplementedError
+        If ``spinup`` is a float (the fraction-threshold mode is not
+        implemented for deposition).
 
     See Also
     --------
@@ -385,6 +411,7 @@ def deposition_to_extraction(
         porosity=porosity,
         thickness=thickness,
         retardation_factor=retardation_factor,
+        spinup=spinup,
         dep_values=dep_values,
     )
 
@@ -430,7 +457,7 @@ def extraction_to_deposition(
     thickness: float,
     retardation_factor: float = 1.0,
     regularization_strength: float = 1e-10,
-    spinup: str | float | None = "constant",
+    spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """Compute deposition rates from concentration changes (deconvolution).
 
@@ -478,15 +505,16 @@ def extraction_to_deposition(
 
         Larger values trust the target more (smoother, more biased); smaller
         values trust the data more (noisier, less biased). Default is 1e-10.
-    spinup : {"constant"} | float in [0, 1] | None, optional
+    spinup : {"constant"} | None, optional
         Spin-up policy applied before building the forward weight matrix.
         Default ``"constant"`` shifts ``tedges[0]`` backward by
         ``retardation_factor * aquifer_pore_volume / flow[0]`` and treats
         flow as constant at its first value over the prepended interval;
         the recovered deposition vector is sliced back to the original
         ``tedges`` length so the public output shape is unchanged.
-        ``None`` keeps strict-validity behavior. A float value is accepted
-        but silently ignored; behavior is identical to ``None``.
+        ``None`` keeps strict-validity behavior. A float raises
+        ``NotImplementedError`` -- the fraction-threshold mode is not
+        implemented for deposition (matching the diffusion family).
 
     Returns
     -------
@@ -498,6 +526,9 @@ def extraction_to_deposition(
     ------
     ValueError
         If input dimensions are incompatible or if flow contains NaN values.
+    NotImplementedError
+        If ``spinup`` is a float (the fraction-threshold mode is not
+        implemented for deposition).
 
     See Also
     --------
@@ -520,7 +551,8 @@ def extraction_to_deposition(
     the cin bins inside its residence-time window -- and is built and solved in
     a compact banded layout (peak memory ``O(n_cin * band)``, never the dense
     ``O(n_cout * n_cin)``). Unlike advection (where rows sum to ~1), deposition
-    rows sum to ``r_i = residence_time_i / (porosity * thickness)``. Rows are
+    rows sum to ``r_i = residence_time_i / (retardation_factor * porosity *
+    thickness)``. Rows are
     rescaled by ``r_i`` before solving: for systems where ``cout`` lies in
     the column space of ``W`` this preserves the exact ``dep``, while for
     overdetermined systems with noise it is equivalent to weighted least
@@ -573,6 +605,7 @@ def extraction_to_deposition(
         porosity=porosity,
         thickness=thickness,
         retardation_factor=retardation_factor,
+        spinup=spinup,
         cout_tedges=cout_tedges,
         cout_values=cout_values,
     )
@@ -637,7 +670,7 @@ def extraction_to_deposition_full(
     nullspace_objective: str | Callable = "squared_differences",
     optimization_method: str = "BFGS",
     rcond: float | None = None,
-    spinup: str | float | None = "constant",
+    spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """Compute deposition rates from concentration changes using nullspace solver.
 
@@ -683,13 +716,14 @@ def extraction_to_deposition_full(
     rcond : float or None, optional
         Cutoff for small singular values in the least-squares step.
         Default is None (uses numpy default).
-    spinup : {"constant"} | float in [0, 1] | None, optional
+    spinup : {"constant"} | None, optional
         Spin-up policy applied before building the forward weight matrix.
         Default ``"constant"`` shifts ``tedges[0]`` backward by
         ``retardation_factor * aquifer_pore_volume / flow[0]``; the
         recovered deposition is sliced back to the original ``tedges``
-        length. ``None`` keeps strict-validity behavior. A float value is
-        accepted but silently ignored; behavior is identical to ``None``.
+        length. ``None`` keeps strict-validity behavior. A float raises
+        ``NotImplementedError`` -- the fraction-threshold mode is not
+        implemented for deposition (matching the diffusion family).
         See :func:`extraction_to_deposition` for full semantics.
 
     Returns
@@ -705,6 +739,9 @@ def extraction_to_deposition_full(
         does not have one more element than flow, if flow contains NaN
         values, or if physical parameters are out of valid range (porosity
         not in (0, 1), non-positive thickness or aquifer pore volume).
+    NotImplementedError
+        If ``spinup`` is a float (the fraction-threshold mode is not
+        implemented for deposition).
 
     See Also
     --------
@@ -728,6 +765,7 @@ def extraction_to_deposition_full(
         porosity=porosity,
         thickness=thickness,
         retardation_factor=retardation_factor,
+        spinup=spinup,
         cout_tedges=cout_tedges,
         cout_values=cout_values,
     )
@@ -773,7 +811,7 @@ def spinup_duration(
     flow: npt.ArrayLike,
     tedges: pd.DatetimeIndex,
     aquifer_pore_volume: float,
-    retardation_factor: float,
+    retardation_factor: float = 1.0,
 ) -> float:
     """
     Compute the spinup duration for deposition modeling.
@@ -794,8 +832,9 @@ def spinup_duration(
         Time edges for the flow data.
     aquifer_pore_volume : float
         Pore volume of the aquifer [m³].
-    retardation_factor : float
-        Retardation factor of the compound in the aquifer [dimensionless].
+    retardation_factor : float, optional
+        Retardation factor of the compound in the aquifer [dimensionless], by
+        default 1.0.
 
     Returns
     -------
@@ -845,5 +884,7 @@ def spinup_duration(
         raise ValueError(msg)
     # Plateaus in flow_cum from Q = 0 bins make V → t inversion multi-valued; bump duplicates
     # by the smallest representable amount so np.interp resolves consistently at plateau levels.
-    flow_cum = cumulative_flow_volume(flow_arr, dt_days, strictly_monotone=True)
+    # Reuse the raw cumsum (bit-identical to cumulative_flow_volume(..., strictly_monotone=True),
+    # which applies the same _make_strictly_monotone to the same array).
+    flow_cum = _make_strictly_monotone(flow_cum_raw)
     return float(linear_interpolate(x_ref=flow_cum, y_ref=tedges_days, x_query=target_cum))

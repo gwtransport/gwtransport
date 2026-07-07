@@ -307,6 +307,92 @@ def test_spinup_invalid_raises():
         gamma(flow=flow, tedges=tedges, cout_tedges=tedges, mean=300.0, std=80.0, spinup=-0.1)
 
 
+def _degenerate_covered_oracle(flow, tedges, b, mean_val, std_val, loc, r, direction):
+    """Independent covered-sub-mass oracle for a zero-throughflow (Q=0) output bin ``b``.
+
+    Over a zero-flow bin the cumulative volume ``v`` is fixed while output time advances, so the
+    bin-average residence time is the pointwise ``tau(v, V_p) = sign*(T(v + sign*r*V_p) - t_mid)``
+    (``T`` the volume->time map) averaged against the gamma density. Under a strict spin-up policy a
+    ``V_p`` whose parcel leaves the record (e2i: ``v - r V_p < 0``; i2e: ``v + r V_p > v_end``) is
+    excluded, so the mean is renormalized over the covered sub-range ``[support_lo, vp_hi]`` by
+    adaptive quadrature. Returns the covered-mass conditional mean and the covered mass fraction.
+    """
+    td = tedges_to_days(tedges)
+    flow_cum = cumulative_flow_volume(flow, np.diff(td), strictly_monotone=True)
+    v_end = flow_cum[-1]
+    alpha = (mean_val - loc) ** 2 / std_val**2
+    beta = std_val**2 / (mean_val - loc)
+    support_lo = loc + gamma_dist.ppf(1e-13, alpha, scale=beta)
+    support_hi = loc + gamma_dist.ppf(1 - 1e-13, alpha, scale=beta)
+    sign = -1.0 if direction == "extraction_to_infiltration" else 1.0
+    v = flow_cum[b]
+    t_mid = 0.5 * (td[b] + td[b + 1])
+    vp_hi = min((v if sign < 0 else v_end - v) / r, support_hi)
+
+    def pdf(vp):
+        return gamma_dist.pdf(vp - loc, alpha, scale=beta)
+
+    def tau_pdf(vp):
+        return sign * (np.interp(v + sign * r * vp, flow_cum, td) - t_mid) * pdf(vp)
+
+    pts = sorted({p for p in (sign * (flow_cum - v) / r) if support_lo < p < vp_hi})
+    num = quad(tau_pdf, support_lo, vp_hi, points=pts or None, limit=200)[0]
+    den = quad(pdf, support_lo, vp_hi, points=pts or None, limit=200)[0]
+    full_mass = gamma_dist.cdf(support_hi - loc, alpha, scale=beta) - gamma_dist.cdf(
+        support_lo - loc, alpha, scale=beta
+    )
+    return num / den, den / full_mass
+
+
+@pytest.mark.parametrize(
+    ("direction", "zero_bin"), [("extraction_to_infiltration", 2), ("infiltration_to_extraction", 9)]
+)
+def test_degenerate_bin_respects_spinup(direction, zero_bin):
+    """A zero-throughflow output bin must honour the spin-up policy (regression for M4).
+
+    The Q=0 degenerate branch previously clamped out-of-record look-back/forward parcels
+    (``np.interp``) and ignored ``spinup`` entirely, so ``None``/``0.0``/float all returned the
+    full-support *clamped* mean. The strict policies must instead renormalize over the covered
+    sub-mass (matching an independent quadrature oracle), and a float threshold must ``NaN`` an
+    under-covered bin. The default warm-start ``spinup='constant'`` is unchanged.
+    """
+    n = 12
+    flow = np.full(n, 100.0)
+    flow[zero_bin] = 0.0
+    tedges = pd.date_range("2023-01-01", periods=n + 1, freq="D")
+    mean_val, std_val, loc, r = 500.0, 150.0, 0.0, 1.0
+    kw = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "mean": mean_val,
+        "std": std_val,
+        "loc": loc,
+        "direction": direction,
+        "retardation_factor": r,
+    }
+    g_const = gamma(**kw, spinup="constant")
+    g_none = gamma(**kw, spinup=None)
+    g_zero = gamma(**kw, spinup=0.0)
+
+    oracle, cov_frac = _degenerate_covered_oracle(flow, tedges, zero_bin, mean_val, std_val, loc, r, direction)
+    # The chosen mean puts most of the APVD beyond the reachable look-back/forward volume: strong
+    # under-coverage, so the clamped (old, buggy) and covered-mass (correct) values differ materially.
+    assert cov_frac < 0.05
+    # Strict None renormalizes over the covered sub-mass -> matches the independent quad oracle.
+    np.testing.assert_allclose(g_none[zero_bin], oracle, rtol=1e-10, atol=0)
+    # ...and it is a genuine correction, distinct from the warm-started default.
+    assert not np.isclose(g_none[zero_bin], g_const[zero_bin], rtol=1e-6, atol=1e-6)
+    # spinup=0.0 is the exact None alias (bit-identical).
+    assert g_zero[zero_bin] == g_none[zero_bin]
+    # A float threshold above the covered fraction NaNs the under-covered bin...
+    assert np.isnan(gamma(**kw, spinup=0.6)[zero_bin])
+    # ...while a threshold below it still emits the covered-mass mean.
+    np.testing.assert_allclose(gamma(**kw, spinup=cov_frac / 2)[zero_bin], oracle, rtol=1e-10, atol=0)
+    # The default warm-start stays finite (never NaN) at the zero-flow bin.
+    assert np.isfinite(g_const[zero_bin])
+
+
 @pytest.mark.parametrize("direction", DIRECTIONS)
 def test_spinup_zero_vs_constant_differ_in_spinup_agree_deep(direction):
     """spinup=0.0 and spinup="constant" differ in early spin-up bins but agree in deep informed bins.
@@ -375,6 +461,53 @@ def test_float_spinup_threshold_gates_emission(direction):
     both = ~nan_low & ~nan_high
     assert both.any()
     np.testing.assert_allclose(low[both], high[both], atol=0, rtol=1e-12)
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_spinup_one_emits_every_fully_covered_bin(direction):
+    """spinup=1.0 must emit a finite value at EVERY fully-covered bin (regression for the exact gate).
+
+    The float-``spinup`` covered-fraction gate compared ``den >= threshold * reference`` exactly. For
+    a fully-covered bin the covered sub-mass ``den`` equals its reference only up to summation-
+    reassociation ulps, so the strictest threshold ``1.0`` -- newly reachable after widening the
+    contract to ``[0, 1]`` -- spuriously ``NaN``-ed a large fraction of fully-covered bins. A bin is
+    fully covered exactly where the strict ``spinup=None`` mean is finite and coincides with the
+    warm-started default (nothing is extrapolated there), so ``spinup=1.0`` must emit at all of them
+    and, since the gate only masks emission and never the value, must equal ``spinup=None`` bit-for-bit
+    there. A deep zero-throughflow (Q=0) bin places one of those fully-covered bins in the degenerate
+    branch, exercising the same exact gate on the pointwise path.
+    """
+    n = 90
+    flow = np.full(n, 100.0)
+    # A deep zero-throughflow bin: extraction looks back (deep = late, large cumulative volume);
+    # infiltration looks forward (deep = early). Either way the full gamma support is reachable, so
+    # the bin is fully covered and lands in the degenerate branch's covered-fraction gate.
+    zero_bin = n - 15 if direction == "extraction_to_infiltration" else 14
+    flow[zero_bin] = 0.0
+    tedges = pd.date_range("2023-01-01", periods=n + 1, freq="D")
+    kw = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "mean": 500.0,
+        "std": 150.0,
+        "loc": 0.0,
+        "direction": direction,
+        "retardation_factor": 1.0,
+    }
+    g_none = gamma(**kw, spinup=None)
+    g_const = gamma(**kw, spinup="constant")
+    g_one = gamma(**kw, spinup=1.0)
+
+    # Fully covered = strict None is finite and matches the warm-start (no extrapolation used there).
+    fully_covered = np.isfinite(g_none) & np.isclose(g_none, g_const, rtol=1e-9, atol=1e-9)
+    assert fully_covered.sum() > n // 2, "scenario must have many fully-covered bins"
+    assert fully_covered[zero_bin], "the deep zero-flow bin must be fully covered (degenerate-gate coverage)"
+
+    # No fully-covered bin may be spuriously NaN under the strictest threshold...
+    assert np.all(np.isfinite(g_one[fully_covered])), "spinup=1.0 spuriously NaN-ed a fully-covered bin"
+    # ...and where it emits, the gate only masks: the value is the strict covered-sub-mass mean exactly.
+    np.testing.assert_array_equal(g_one[fully_covered], g_none[fully_covered])
 
 
 @pytest.mark.parametrize("direction", DIRECTIONS)

@@ -1174,3 +1174,92 @@ class TestEndToEndConservation:
 
         total = m_out + m_dom_end
         np.testing.assert_allclose(total, mass_in, rtol=5e-3)
+
+
+class TestNoSpuriousOutletCrossings:
+    """Regression for c_min-floored spurious outlet crossings (review minor / H2).
+
+    A c≈0 rarefaction tail (or characteristic) has its speed floored by the ``c_min`` dry-soil
+    retardation (``R(1e-12)≈2.5e6`` for n>1), which schedules a physically meaningless outlet
+    crossing at θ~1e8 that pollutes ``state.events`` and leaves ``theta_current`` at ~1e8.
+    """
+
+    @pytest.mark.parametrize(
+        ("cin", "v_outlet"),
+        [
+            ([0.0, 5.0, 10.0, 10.0, 5.0, 0.0], 400.0),
+            ([0.0, 10.0, 10.0, 0.0, 0.0, 0.0, 5.0, 5.0, 0.0], 40.0),
+        ],
+    )
+    def test_no_events_beyond_physical_horizon(self, cin, v_outlet):
+        cin = np.asarray(cin)
+        sorption = FreundlichSorption(k_f=0.001, n=2.0, bulk_density=1600.0, porosity=0.35)
+        n_bins = len(cin)
+        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="D")
+        flow = np.full(n_bins, 100.0)
+        tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
+        tr.run()
+        # The physical θ-range is bounded by the last inlet edge plus a modest transit; the
+        # pinned artifacts land ~1e5–1e6× beyond it. A 100× horizon cleanly separates them.
+        horizon = 100.0 * float(tr.state.theta_edges[-1])
+        event_thetas = [e["theta"] for e in tr.state.events]
+        assert max(event_thetas) < horizon, f"spurious event at θ={max(event_thetas):.3g} (horizon {horizon:.3g})"
+        assert tr.state.theta_current < horizon
+
+
+class TestMultiPeakSingleOwnerInvariant:
+    """Every point in [0, V_outlet] is claimed by at most one active fan region (review C3 / H3).
+
+    A later inlet shock injected inside an existing fan's span must not leave two active
+    waves claiming the same near-inlet interval. After the waves.py growing-decay fixes the
+    intruding shock is resolved into a single-owner ``DecayingShockWave`` via the
+    shock↔rarefaction collision, so this spatial invariant holds; this test guards against a
+    regression that reintroduces a double claim.
+
+    This invariant is necessary but NOT sufficient for correctness: it says nothing about the
+    outlet-mass over-count a right-decaying DSW causes after its shock face leaves the domain, nor
+    about later pulses whose fans DO come to overlap. Those genuinely-interacting multi-front inputs
+    are refused at the public boundary — :func:`gwtransport.advection.infiltration_to_extraction_nonlinear_sorption`
+    raises ``NotImplementedError`` via :func:`gwtransport.fronttracking.solver.find_unresolved_interaction`
+    (exercised by ``TestUnresolvedMultiFrontInteractionRaises`` in ``test_front_tracking_api``); exact
+    multi-front interaction is deferred to a solver-level follow-up. The two parameterisations here use
+    weak retardation (``k_f = 0.001``) so the fans stay single-owner and the run completes.
+    """
+
+    @pytest.mark.parametrize(
+        ("cin", "v_outlet"),
+        [
+            ([0.0, 10.0, 10.0, 0.0, 0.0, 0.0, 5.0, 5.0, 0.0], 40.0),
+            ([0.0, 10.0, 10.0, 0.0, 0.0, 0.0, 15.0, 15.0, 0.0], 40.0),
+        ],
+    )
+    def test_no_two_active_fans_claim_same_point(self, cin, v_outlet):
+        cin = np.asarray(cin)
+        sorption = FreundlichSorption(k_f=0.001, n=2.0, bulk_density=1600.0, porosity=0.35)
+        n_bins = len(cin)
+        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="D")
+        flow = np.full(n_bins, 100.0)
+        tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
+        tr.run()
+
+        def fan_owners(v, theta):
+            owners = []
+            for i, w in enumerate(tr.state.waves):
+                if not w.was_active_at(theta):
+                    continue
+                if isinstance(w, DecayingShockWave):
+                    v_s = w.position_at_theta(theta)
+                    if v_s is None:
+                        continue
+                    in_fan = (w.decay_side == "left" and v < v_s) or (w.decay_side == "right" and v > v_s)
+                    if in_fan and v != w.v_origin and w.concentration_at_point(v, theta) is not None:
+                        owners.append(i)
+                elif isinstance(w, RarefactionWave) and w.contains_point(v, theta):
+                    owners.append(i)
+            return owners
+
+        theta_hi = 1.6 * float(tr.state.theta_edges[-1])
+        for theta in np.linspace(1.0, theta_hi, 200):
+            for v in np.linspace(1e-3 * v_outlet, v_outlet * (1 - 1e-3), 150):
+                owners = fan_owners(float(v), float(theta))
+                assert len(owners) <= 1, f"waves {owners} both claim v={v:.3f} at θ={theta:.2f}"

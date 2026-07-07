@@ -186,16 +186,16 @@ def test_invalid_spinup_raises():
     flow, tedges = _constant_flow()
     with pytest.raises(ValueError, match="spinup"):
         mean(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=300.0, spinup="bad")
-    # The unified contract is {'constant'} | None | float in [0, 1): out-of-range floats raise.
+    # The unified contract is {'constant'} | None | float in [0, 1]: only floats outside [0, 1] raise.
     with pytest.raises(ValueError, match="spinup"):
-        mean(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=300.0, spinup=1.0)
+        mean(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=300.0, spinup=1.5)
     with pytest.raises(ValueError, match="spinup"):
         mean(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=300.0, spinup=-0.1)
 
 
-@pytest.mark.parametrize("spinup", ["constant", None, 0.0, 0.5])
+@pytest.mark.parametrize("spinup", ["constant", None, 0.0, 0.5, 1.0])
 def test_residence_time_accepts_unified_spinup_set(spinup):
-    """mean accepts each member of the shared {'constant', None, float in [0, 1)} set."""
+    """mean accepts each member of the shared {'constant', None, float in [0, 1]} set."""
     flow, tedges = _constant_flow(n=40, q=100.0)
     apv = np.array([200.0, 400.0, 600.0, 800.0])
     got = mean(flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=spinup)
@@ -229,6 +229,30 @@ def test_residence_time_float_threshold_gates_covered_fraction():
     assert nan_high.sum() > nan_zero.sum()  # and strictly NaNs more in the staggered spin-up
     both_finite = ~nan_zero & ~nan_high
     np.testing.assert_array_equal(got_zero[both_finite], got_two_thirds[both_finite])
+
+
+def test_spinup_one_is_strictest_gate():
+    """spinup=1.0 is accepted and requires full coverage (regression for the [0, 1) -> [0, 1] widening).
+
+    Previously ``spinup=1.0`` raised (the residence-time contract was ``[0, 1)`` while advection uses
+    ``[0, 1]``). It must now be the strictest threshold: a bin is emitted only where every streamtube
+    has broken through, and there the renormalized mean equals the warm-started default.
+    """
+    flow, tedges = _constant_flow(n=40, q=100.0)
+    apv = np.array([200.0, 1500.0, 2800.0])  # staggered break-through: an early partial-coverage region
+    common = {"flow": flow, "tedges": tedges, "cout_tedges": tedges, "aquifer_pore_volumes": apv}
+    got_one = mean(**common, spinup=1.0)  # must not raise
+    got_const = mean(**common, spinup="constant")
+    # 1.0 emits iff every streamtube is valid under the strict per-pore-volume map.
+    all_valid = np.isfinite(full(**common, spinup=None)).all(axis=0)
+    # a genuine partial-coverage case: some fully-covered bins, some not
+    assert all_valid.any()
+    assert not all_valid.all()
+    np.testing.assert_array_equal(np.isfinite(got_one), all_valid)
+    # Where emitted it is the full-coverage mean, bit-identical to the warm-started default there.
+    np.testing.assert_array_equal(got_one[all_valid], got_const[all_valid])
+    # gamma also accepts the widened endpoint without raising.
+    assert gamma(flow=flow, tedges=tedges, cout_tedges=tedges, mean=1500.0, std=400.0, spinup=1.0).shape == (40,)
 
 
 @pytest.mark.parametrize("direction", DIRECTIONS)

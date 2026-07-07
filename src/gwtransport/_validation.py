@@ -89,9 +89,11 @@ def _validate_non_negative_array(
     name: str,
     message: str | None = None,
 ) -> None:
-    """Validate that ``arr`` has no strictly negative elements.
+    """Validate that every element of ``arr`` is finite and non-negative (``>= 0``).
 
-    Zeros are allowed. The companion ``_validate_positive_array`` rejects zeros too.
+    Zeros are allowed. The companion ``_validate_positive_array`` rejects zeros too. NaN and
+    ``+inf`` are rejected: both pass every ``< 0`` comparison, so a bare inequality would let
+    them slip through and poison the downstream computation.
 
     Parameters
     ----------
@@ -105,9 +107,10 @@ def _validate_non_negative_array(
     Raises
     ------
     ValueError
-        If any element of ``arr`` is strictly negative.
+        If any element of ``arr`` is negative or non-finite (NaN or infinite).
     """
-    if np.any(np.asarray(arr) < 0):
+    a = np.asarray(arr, dtype=float)
+    if not np.all(np.isfinite(a) & (a >= 0.0)):
         msg = message if message is not None else f"{name} must be non-negative"
         raise ValueError(msg)
 
@@ -118,7 +121,10 @@ def _validate_positive_array(
     name: str,
     message: str | None = None,
 ) -> None:
-    """Validate that every element of ``arr`` is strictly positive (``> 0``).
+    """Validate that every element of ``arr`` is finite and strictly positive (``> 0``).
+
+    NaN and ``+inf`` are rejected: both pass every ``<= 0`` comparison, so a bare inequality
+    would let them slip through and poison the downstream computation.
 
     Parameters
     ----------
@@ -132,9 +138,10 @@ def _validate_positive_array(
     Raises
     ------
     ValueError
-        If any element of ``arr`` is ``<= 0``.
+        If any element of ``arr`` is ``<= 0`` or non-finite (NaN or infinite).
     """
-    if np.any(np.asarray(arr) <= 0):
+    a = np.asarray(arr, dtype=float)
+    if np.any(~np.isfinite(a)) or np.any(a <= 0.0):
         msg = message if message is not None else f"{name} must be positive"
         raise ValueError(msg)
 
@@ -145,7 +152,11 @@ def _validate_positive_scalar(
     name: str,
     message: str | None = None,
 ) -> None:
-    """Validate that ``value`` is strictly positive (``> 0``).
+    """Validate that ``value`` is finite and strictly positive (``> 0``).
+
+    NaN and ``+inf`` are rejected: both pass the bare ``<= 0`` comparison, so an unchecked
+    inequality would let them slip through and poison the downstream computation (e.g. a
+    ``+inf`` thickness silently zeroed the deposition output).
 
     Parameters
     ----------
@@ -159,10 +170,32 @@ def _validate_positive_scalar(
     Raises
     ------
     ValueError
-        If ``value <= 0``.
+        If ``value <= 0`` or is non-finite (NaN or infinite).
     """
-    if value <= 0:
+    if not np.isfinite(value) or value <= 0:
         msg = message if message is not None else f"{name} must be positive, got {value}"
+        raise ValueError(msg)
+
+
+def _validate_retardation_factor(value: float) -> None:
+    """Validate that the retardation factor is ``>= 1`` (anti-retardation is unphysical).
+
+    The check is written as ``not value >= 1.0`` rather than ``value < 1.0`` so that NaN is
+    rejected too: ``NaN >= 1.0`` is False, so the bare ``< 1.0`` form would let NaN pass and
+    silently propagate an all-NaN transport output.
+
+    Parameters
+    ----------
+    value : float
+        Retardation factor to check.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is NaN or ``value < 1.0``.
+    """
+    if not value >= 1.0:
+        msg = "retardation_factor must be >= 1.0"
         raise ValueError(msg)
 
 

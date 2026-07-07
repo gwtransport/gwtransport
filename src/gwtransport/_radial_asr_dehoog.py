@@ -133,31 +133,25 @@ def dehoog_inverse(
         raise ValueError(msg)
     batch = a.shape[1:]
     nb = len(batch)
-    if t_max <= 0.0:
-        # No positive evaluation times: the one-sided inverse is identically zero there.
-        out = np.zeros((n_t, *batch))
-        if scalar_input:
-            return out[0]
-        return out.reshape(t_arr.shape + batch)
     a = a.copy()
-    # Batch entries whose transform is identically zero (e.g. a decoupled azimuthal mode with no source)
-    # invert to zero; the quotient-difference recurrence would otherwise form 0/0 and poison them with NaN.
-    # Park such columns at a unit sentinel through the QD pass and overwrite their output with 0 below.
-    zero_cols = ~np.any(a != 0.0, axis=0)
-    if np.any(zero_cols):
-        a[:, zero_cols] = 1.0
+    # A column is *underflow-degenerate* when its transform stays FINITE but decays to the double-precision
+    # floor -- identically zero (a decoupled azimuthal mode with no source) or underflowing toward zero at
+    # the high-frequency nodes (a heavily damped far-field propagator entry: rest / Airy / Riccati). Both
+    # drive the quotient-difference recurrence into 0/0 or x/0 and poison the column with NaN, yet the
+    # physical inverse is ~0. Such columns are detected here (finite transform) and their non-finite output
+    # is zeroed below. A column whose transform OVERFLOWED (inf/nan already in ``a`` -- an ill-scaled kernel)
+    # is a genuine breakdown and is deliberately NOT masked: it must still surface as NaN so a real failure
+    # can never masquerade as a physical zero.
+    finite_transform = np.all(np.isfinite(a), axis=0)
     a[0] *= 0.5
 
     # Quotient-difference algorithm -> continued-fraction coefficients d[0 .. 2M] (per batch entry; the
-    # rhombus rules slice the leading node axis and broadcast over the trailing batch). A batch entry whose
-    # transform underflows toward zero at the high-frequency nodes (a heavily damped azimuthal mode at the
-    # outer field nodes) yields degenerate quotients here; the resulting non-finite intermediates do not
-    # reach a meaningful (non-negligible) output, so the rhombus divisions (and the final-convergent
-    # division below) are evaluated under errstate. The mask targets exactly these known-benign columns:
-    # a genuinely broken transform still surfaces as NaN in the output, just without a warning.
+    # rhombus rules slice the leading node axis and broadcast over the trailing batch). The degenerate
+    # columns above form 0/0 / x/0 here and in the continued fraction, so every division is evaluated under
+    # errstate; their non-finite output is masked to zero after the assembly.
     d = np.empty((n_nodes, *batch), dtype=complex)
     d[0] = a[0]
-    with np.errstate(divide="ignore", invalid="ignore"):
+    with np.errstate(all="ignore"):  # degenerate columns form 0/0, x/0 and over/underflow; masked below
         q = a[1:] / a[:-1]  # q_1^{(i)}, length 2M
         d[1] = -q[0]
         e = q[1:] - q[:-1]  # e_1^{(i)} = e_0^{(i+1)} + q_1^{(i+1)} - q_1^{(i)}, length 2M-1
@@ -177,22 +171,23 @@ def dehoog_inverse(
     z = np.exp(1j * np.pi * t_flat / big_t).reshape(time_shape)  # (n_t, 1..1)
     a_pp = np.zeros((n_t, *batch), dtype=complex)  # A_{-1}
     b_pp = np.ones((n_t, *batch), dtype=complex)  # B_{-1}
-    a_p = np.broadcast_to(d[0], (n_t, *batch)).astype(complex).copy()  # A_0
+    a_p = np.broadcast_to(d[0], (n_t, *batch))  # A_0 (read-only view; only ever read below, never mutated)
     b_p = np.ones((n_t, *batch), dtype=complex)  # B_0
-    for n in range(1, n_nodes - 1):
-        dz = d[n] * z  # d[n] (batch) broadcasts against z (time, 1..1) -> (n_t, *batch)
-        a_pp, a_p = a_p, a_p + dz * a_pp
-        b_pp, b_p = b_p, b_p + dz * b_pp
-    # a_p, b_p hold the (2M-1) convergent; a_pp, b_pp the (2M-2) convergent.
-    with np.errstate(divide="ignore", invalid="ignore"):
+    with np.errstate(all="ignore"):  # degenerate columns propagate Inf/NaN through the CF; masked below
+        for n in range(1, n_nodes - 1):
+            dz = d[n] * z  # d[n] (batch) broadcasts against z (time, 1..1) -> (n_t, *batch)
+            a_pp, a_p = a_p, a_p + dz * a_pp
+            b_pp, b_p = b_p, b_p + dz * b_pp
+        # a_p, b_p hold the (2M-1) convergent; a_pp, b_pp the (2M-2) convergent.
         rem = 0.5 * (1.0 + z * (d[n_nodes - 2] - d[n_nodes - 1]))
         rem = -rem * (1.0 - np.sqrt(1.0 + z * d[n_nodes - 1] / (rem * rem)))
         a_final = a_p + rem * a_pp
         b_final = b_p + rem * b_pp
         result = (np.exp(gamma * t_flat).reshape(time_shape) / big_t) * np.real(a_final / b_final)
     result = np.where(t_flat.reshape(time_shape) > 0.0, result, 0.0)
-    if np.any(zero_cols):
-        result[..., zero_cols] = 0.0  # identically-zero transforms invert to zero (parked above)
+    # Zero the underflow-degenerate columns (finite transform, non-finite QD output). Overflowed columns
+    # (non-finite transform) are left as NaN so a genuine breakdown surfaces rather than reads as zero.
+    result = np.where(~np.isfinite(result) & finite_transform, 0.0, result)
     if scalar_input:
         return result[0]
     return result.reshape(t_arr.shape + batch)
