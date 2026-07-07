@@ -7,9 +7,11 @@ All tests have correct physics expectations for Freundlich n>1.
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from gwtransport.advection import infiltration_to_extraction_nonlinear_sorption
 from gwtransport.fronttracking.math import FreundlichSorption
+from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import RarefactionWave, ShockWave
 from gwtransport.utils import compute_time_edges
 
@@ -132,31 +134,40 @@ class TestEntropyAndPhysics:
     """Test physical correctness."""
 
     def test_all_shocks_satisfy_entropy(self):
-        """All shocks must satisfy Lax entropy condition."""
+        """Every shock the solver builds satisfies the Lax entropy condition.
+
+        The multi-level input (0.1→10→5→15→8) makes a later, faster shock
+        overtake an earlier wave, so the public API refuses it (interim
+        wave-interaction guard). Entropy is a solver-level property of each
+        individual shock, so it is verified directly on the wave list that
+        ``FrontTracker`` builds.
+        """
         dates = pd.date_range(start="2020-01-01", periods=20, freq="D")
         tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-
-        # Multiple concentration changes
         cin = np.array([0.1] * 4 + [10.0] * 4 + [5.0] * 4 + [15.0] * 4 + [8.0] * 4)
         flow = np.full(len(dates), 100.0)
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-        cout_dates = pd.date_range(start=dates[0], periods=30, freq="D")
-        cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+        # Interim contract: the public API refuses this interacting multi-front input.
+        with pytest.raises(NotImplementedError):
+            infiltration_to_extraction_nonlinear_sorption(
+                cin=cin,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=tedges,
+                aquifer_pore_volumes=np.array([300.0]),
+                freundlich_k=0.01,
+                freundlich_n=2.0,
+                bulk_density=1500.0,
+                porosity=0.3,
+            )
 
-        _cout, structure = infiltration_to_extraction_nonlinear_sorption(
-            cin=cin,
-            flow=flow,
-            tedges=tedges,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volumes=np.array([300.0]),
-            freundlich_k=0.01,
-            freundlich_n=2.0,
-            bulk_density=1500.0,
-            porosity=0.3,
-        )
-
-        # All shocks must satisfy entropy
-        shocks = [w for w in structure[0]["waves"] if isinstance(w, ShockWave)]
+        # Solver invariant (still valid on the unresolved wave list): every shock
+        # the tracker builds individually satisfies the Lax entropy condition.
+        tracker = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=300.0, sorption=sorption)
+        tracker.run()
+        shocks = [w for w in tracker.state.waves if isinstance(w, ShockWave)]
+        assert shocks, "expected the multi-change input to create shocks"
         for shock in shocks:
             assert shock.satisfies_entropy(), "Shock violates entropy condition"
 
@@ -461,41 +472,39 @@ class TestComplexInteractions:
         assert 2.0 - 1e-9 <= np.max(valid_cout) <= 12.0, f"Peak should be in [2, 12], got {np.max(valid_cout)}"
 
     def test_rapid_sequential_changes_event_ordering(self):
-        """Rapid concentration changes: stress test for event queue and wave creation."""
+        """Rapid concentration changes: stress test for the event queue and wave creation.
+
+        The rapid sequence (0→10→5→15→2→8) interacts (faster later shocks
+        overtake earlier waves), so the public API refuses it (interim guard).
+        Wave creation and θ-ordering of events are solver invariants, verified
+        directly on the ``FrontTracker`` state.
+        """
         dates = pd.date_range(start="2020-01-01", periods=30, freq="D")
         tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
-
-        # Rapid sequential changes: 0→10→5→15→2→8
         cin = np.array([0.0] * 5 + [10.0] * 5 + [5.0] * 5 + [15.0] * 5 + [2.0] * 5 + [8.0] * 5)
         flow = np.full(len(dates), 100.0)
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-        cout_dates = pd.date_range(start=dates[0], periods=50, freq="D")
-        cout_tedges = compute_time_edges(tedges=None, tstart=None, tend=cout_dates, number_of_bins=len(cout_dates))
+        # Interim contract: the public API refuses this interacting multi-front input.
+        with pytest.raises(NotImplementedError):
+            infiltration_to_extraction_nonlinear_sorption(
+                cin=cin,
+                flow=flow,
+                tedges=tedges,
+                cout_tedges=tedges,
+                aquifer_pore_volumes=np.array([300.0]),
+                freundlich_k=0.01,
+                freundlich_n=2.0,
+                bulk_density=1500.0,
+                porosity=0.3,
+            )
 
-        cout, structure = infiltration_to_extraction_nonlinear_sorption(
-            cin=cin,
-            flow=flow,
-            tedges=tedges,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volumes=np.array([300.0]),
-            freundlich_k=0.01,
-            freundlich_n=2.0,  # n>1: n>1
-            bulk_density=1500.0,
-            porosity=0.3,
+        # Solver invariants: rapid changes create multiple waves and the event
+        # queue stays chronologically ordered in θ.
+        tracker = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=300.0, sorption=sorption)
+        tracker.run()
+        assert len(tracker.state.waves) >= 5, (
+            f"Should create multiple waves from rapid changes, got {len(tracker.state.waves)}"
         )
-
-        # Should create multiple waves
-        total_waves = structure[0]["n_shocks"] + structure[0]["n_rarefactions"] + structure[0]["n_characteristics"]
-        assert total_waves >= 5, f"Should create multiple waves from rapid changes, got {total_waves}"
-
-        # Events are ordered by θ (which is monotone in t for non-negative flow).
-        event_thetas = [event["theta"] for event in structure[0]["events"]]
+        event_thetas = [event["theta"] for event in tracker.state.events]
         assert event_thetas == sorted(event_thetas), "Events should be chronologically ordered in θ"
-
-        # Output should not have NaN values after first arrival (translate θ→t).
-        tracker_state = structure[0]["tracker_state"]
-        t_first = tracker_state.t_at_theta(structure[0]["theta_first_arrival"])
-        cout_tedges_days = ((cout_tedges - cout_tedges[0]) / pd.Timedelta(days=1)).values
-        mask_after_spinup = cout_tedges_days[:-1] >= t_first
-        cout_after_spinup = cout[mask_after_spinup]
-        assert not np.any(np.isnan(cout_after_spinup)), "Output should not have NaN after spin-up"

@@ -4,6 +4,7 @@ from fractions import Fraction
 import numpy as np
 import pandas as pd
 import pytest
+from _oracles import partial_isin  # ty: ignore[unresolved-import]  # tests/src on path via conftest
 
 from gwtransport import advection as adv_mod
 from gwtransport import advection_utils, gamma
@@ -31,7 +32,6 @@ from gwtransport.utils import (
     compute_time_edges,
     cumulative_flow_volume,
     linear_interpolate,
-    partial_isin,
     solve_inverse_transport,
     solve_inverse_transport_banded,
 )
@@ -3586,6 +3586,21 @@ def _good_advection_inputs():
     }
 
 
+def test_advection_public_rejects_nan_retardation_factor():
+    """NaN retardation slipped past ``< 1.0`` and silently produced all-NaN output; must raise."""
+    n = 5
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    with pytest.raises(ValueError, match=r"retardation_factor must be >= 1\.0"):
+        infiltration_to_extraction(
+            cin=np.ones(n),
+            flow=np.full(n, 100.0),
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([500.0]),
+            retardation_factor=np.nan,
+        )
+
+
 def test_validate_advection_inputs_silent_on_good_input_forward():
     """No exception when the forward (cin) inputs are valid."""
     kwargs = _good_advection_inputs()
@@ -4383,3 +4398,125 @@ def test_advection_empty_pore_volumes_all_nan():
         cout=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=empty
     )
     assert np.all(np.isnan(cin_rec))
+
+
+# =============================================================================
+# Regression: nonlinear-sorption output wrapper zero-flow / left-edge handling
+# (review item A1 / M3). Baseline (pre-fix) raised ValueError "Invalid θ-bin"
+# because a zero-flow input span collapses θ-edges and a cout edge left of the
+# flow record clamps to θ=0; both produce a zero-width θ sub-bin. The linear
+# sibling handles both gracefully, so it is the physics oracle here (front
+# tracking with ConstantRetardation == linear advection at the same R).
+# =============================================================================
+
+
+def test_nonlinear_sorption_interior_zero_flow_coarse_cout_matches_linear():
+    """A1(a): an interior zero-flow input bin must not crash the front-tracking
+    output wrapper. With a coarse (3-day) cout grid the zero-flow day is absorbed
+    into a bin with positive throughflow, so every output bin is finite and equals
+    the linear sibling to machine precision."""
+    n = 20
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cin = np.zeros(n)
+    cin[2:5] = 10.0
+    flow = np.full(n, 100.0)
+    flow[10] = 0.0  # single interior zero-flow bin (validator allows flow == 0)
+    cout_tedges = pd.date_range("2020-01-01", periods=7, freq="3D")  # fully inside the flow record
+    apv = np.array([300.0])
+
+    cout_nl, _ = infiltration_to_extraction_nonlinear_sorption(
+        cin=cin, flow=flow, tedges=tedges, cout_tedges=cout_tedges, aquifer_pore_volumes=apv, retardation_factor=2.0
+    )
+    cout_lin = infiltration_to_extraction(
+        cin=cin, flow=flow, tedges=tedges, cout_tedges=cout_tedges, aquifer_pore_volumes=apv, retardation_factor=2.0
+    )
+
+    np.testing.assert_array_equal(np.isnan(cout_nl), np.isnan(cout_lin))
+    assert not np.any(np.isnan(cout_nl))  # zero-flow day absorbed -> no undefined bin
+    np.testing.assert_allclose(cout_nl, cout_lin, atol=1e-13)
+
+
+def test_nonlinear_sorption_zero_throughflow_output_bin_is_nan():
+    """A1(a): when the cout grid isolates the zero-flow input bin (daily cout
+    aligned with the flow grid), that output bin has zero throughflow and an
+    undefined flow-weighted average. It must be returned as NaN -- exactly where
+    the linear sibling is NaN -- while every other bin matches to machine
+    precision."""
+    n = 20
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cin = np.zeros(n)
+    cin[2:5] = 10.0
+    flow = np.full(n, 100.0)
+    flow[10] = 0.0
+    apv = np.array([300.0])
+
+    cout_nl, _ = infiltration_to_extraction_nonlinear_sorption(
+        cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, retardation_factor=2.0
+    )
+    cout_lin = infiltration_to_extraction(
+        cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, retardation_factor=2.0
+    )
+
+    assert np.isnan(cout_nl[10])  # the isolated zero-throughflow output bin
+    np.testing.assert_array_equal(np.isnan(cout_nl), np.isnan(cout_lin))
+    finite = ~np.isnan(cout_lin)
+    np.testing.assert_allclose(cout_nl[finite], cout_lin[finite], atol=1e-13)
+
+
+def test_nonlinear_sorption_cout_before_record_returns_zero_left_bins():
+    """A1(b): a cout grid starting before tedges[0] must not crash. The left
+    underflow fixup extrapolates the θ map at flow[0] (mirroring the right-edge
+    rule), so pre-record output bins read θ <= 0 -> mass 0 -> exactly 0.0 (the
+    documented out-of-range contract), and the in-record window matches the linear
+    sibling to machine precision."""
+    n = 20
+    tedges = pd.date_range("2020-01-10", periods=n + 1, freq="D")
+    cin = np.zeros(n)
+    cin[2:5] = 10.0
+    flow = np.full(n, 100.0)
+    apv = np.array([300.0])
+    cout_tedges = pd.date_range("2020-01-07", periods=27, freq="D")  # starts 3 days before tedges[0]
+
+    cout_nl, _ = infiltration_to_extraction_nonlinear_sorption(
+        cin=cin, flow=flow, tedges=tedges, cout_tedges=cout_tedges, aquifer_pore_volumes=apv, retardation_factor=2.0
+    )
+    cout_lin = infiltration_to_extraction(
+        cin=cin, flow=flow, tedges=tedges, cout_tedges=cout_tedges, aquifer_pore_volumes=apv, retardation_factor=2.0
+    )
+
+    assert not np.any(np.isnan(cout_nl))  # positive flow throughout -> out-of-range reads as 0
+    # Bins wholly before the flow record (2020-01-07..10) are exactly 0.0.
+    np.testing.assert_array_equal(cout_nl[:3], np.zeros(3))
+    # Where the linear sibling is defined, the breakthrough pulse matches exactly.
+    finite = ~np.isnan(cout_lin)
+    np.testing.assert_allclose(cout_nl[finite], cout_lin[finite], atol=1e-13)
+
+
+def test_infiltration_to_extraction_negative_pore_volume_raises():
+    """A2: a negative aquifer pore volume back-projects a cout bin to future
+    infiltration (anti-causal). The linear forward path must reject it, matching
+    the nonlinear and diffusion paths, rather than returning a silent wrong value."""
+    n = 10
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    with pytest.raises(ValueError, match="aquifer_pore_volumes must be positive"):
+        infiltration_to_extraction(
+            cin=np.ones(n),
+            flow=np.full(n, 100.0),
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([-300.0]),
+        )
+
+
+def test_extraction_to_infiltration_negative_pore_volume_raises():
+    """A2: the reverse (deconvolution) path must reject a negative pore volume too."""
+    n = 10
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    with pytest.raises(ValueError, match="aquifer_pore_volumes must be positive"):
+        extraction_to_infiltration(
+            cout=np.ones(n),
+            flow=np.full(n, 100.0),
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([-300.0]),
+        )

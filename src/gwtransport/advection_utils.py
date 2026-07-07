@@ -244,12 +244,12 @@ def _resolve_spinup_mask(
     invalid_mask : numpy.ndarray of bool
         True for cout bins where the policy is not satisfied.
 
-    Raises
-    ------
-    ValueError
-        If ``spinup`` is not ``None`` or a float in ``[0, 1]``. The string
-        ``"constant"`` is resolved into a threshold by
-        :func:`_resolve_spinup_inputs` before reaching this function.
+    Notes
+    -----
+    ``spinup`` is assumed already validated: :func:`_resolve_spinup_inputs`
+    resolves the string ``"constant"`` and rejects out-of-range values before
+    this function is reached, so ``spinup`` is always ``None`` or a float in
+    ``[0, 1]`` here.
     """
     if n_pv == 0:
         # No streamtubes means no transport: every cout bin is invalid.
@@ -257,18 +257,18 @@ def _resolve_spinup_mask(
 
     if spinup is None:
         # Strict validity: every streamtube must have contributed, so
-        # contributing_bins == n_pv on valid rows and the shared divisor below
+        # contributing_bins == n_pv on valid rows and the divisor below
         # (contributing_bins) coincides with n_pv there.
         valid = (contributing_bins == n_pv) & ~zero_flow_cout
-    elif isinstance(spinup, (int, float)) and not isinstance(spinup, bool) and 0.0 <= spinup <= 1.0:
-        valid = (contributing_bins >= spinup * n_pv) & ~zero_flow_cout & (contributing_bins > 0)
     else:
-        msg = f"spinup must be None, 'constant', or float in [0, 1]; got {spinup!r}"
-        raise ValueError(msg)
+        # ``_resolve_spinup_inputs`` has already narrowed a non-None threshold to a
+        # float in [0, 1], so no further type/range check is reachable here.
+        valid = (contributing_bins >= spinup * n_pv) & ~zero_flow_cout & (contributing_bins > 0)
 
+    # Every valid row has contributing_bins > 0 (== n_pv > 0 for strict validity,
+    # > 0 for the float threshold), so the divisor is guaranteed positive.
     weights = np.zeros_like(band_vals)
-    safe_div = np.where(valid, contributing_bins, 1)
-    weights[valid, :] = band_vals[valid, :] / safe_div[valid, None]
+    weights[valid, :] = band_vals[valid, :] / contributing_bins[valid, None]
     return weights, col_start, ~valid
 
 

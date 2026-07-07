@@ -283,9 +283,7 @@ class TestInletWaveCreation:
         # For n>1: higher C → higher R → slower velocity
         # So C: 0→10 means slow→slower velocity, but initial C=0 has R=1 (fastest)
         # Actually C: 0→10 means fast→slow, which is expansion (rarefaction)
-        waves = create_inlet_waves_at_theta(
-            c_prev=0.0, c_new=10.0, theta=10.0, sorption=freundlich_sorption, v_inlet=0.0
-        )
+        waves = create_inlet_waves_at_theta(c_prev=0.0, c_new=10.0, theta=10.0, sorption=freundlich_sorption)
 
         # For n=2 (n>1), C: 0→10 is rarefaction
         assert len(waves) == 1
@@ -296,9 +294,7 @@ class TestInletWaveCreation:
         # vel(10) = 100/R(10), vel(2) = 100/R(2)
         # Since R(10) > R(2), vel(10) < vel(2)
         # vel_new > vel_prev → expansion → rarefaction
-        waves = create_inlet_waves_at_theta(
-            c_prev=10.0, c_new=2.0, theta=10.0, sorption=freundlich_sorption, v_inlet=0.0
-        )
+        waves = create_inlet_waves_at_theta(c_prev=10.0, c_new=2.0, theta=10.0, sorption=freundlich_sorption)
 
         # MUST create exactly one rarefaction
         assert len(waves) == 1, "Expected exactly one wave"
@@ -309,9 +305,7 @@ class TestInletWaveCreation:
         # For n>1: C: 2→10
         # vel(2) > vel(10) → new water is slower
         # vel_new < vel_prev → compression → shock
-        waves = create_inlet_waves_at_theta(
-            c_prev=2.0, c_new=10.0, theta=10.0, sorption=freundlich_sorption, v_inlet=0.0
-        )
+        waves = create_inlet_waves_at_theta(c_prev=2.0, c_new=10.0, theta=10.0, sorption=freundlich_sorption)
 
         # MUST create exactly one shock with proper entropy
         assert len(waves) == 1, "Expected exactly one wave"
@@ -320,9 +314,7 @@ class TestInletWaveCreation:
 
     def test_no_change_creates_nothing(self, freundlich_sorption):
         """Test that no concentration change creates no waves."""
-        waves = create_inlet_waves_at_theta(
-            c_prev=5.0, c_new=5.0, theta=10.0, sorption=freundlich_sorption, v_inlet=0.0
-        )
+        waves = create_inlet_waves_at_theta(c_prev=5.0, c_new=5.0, theta=10.0, sorption=freundlich_sorption)
 
         assert len(waves) == 0
 
@@ -330,9 +322,7 @@ class TestInletWaveCreation:
         """Test that created shocks satisfy entropy condition."""
         # Create a scenario that definitely produces a shock
         # For n>1: C: 2→10 means fast→slow, compression→shock
-        waves = create_inlet_waves_at_theta(
-            c_prev=2.0, c_new=10.0, theta=10.0, sorption=freundlich_sorption, v_inlet=0.0
-        )
+        waves = create_inlet_waves_at_theta(c_prev=2.0, c_new=10.0, theta=10.0, sorption=freundlich_sorption)
 
         # This MUST create shock (C: 2→10, fast→slow, compression)
         assert len(waves) == 1, "Expected exactly one wave"
@@ -343,9 +333,7 @@ class TestInletWaveCreation:
         """Test wave creation with constant retardation."""
         # With constant retardation, all concentrations have same velocity
         # So any change is a contact discontinuity (characteristic)
-        waves = create_inlet_waves_at_theta(
-            c_prev=5.0, c_new=10.0, theta=10.0, sorption=constant_retardation, v_inlet=0.0
-        )
+        waves = create_inlet_waves_at_theta(c_prev=5.0, c_new=10.0, theta=10.0, sorption=constant_retardation)
 
         # With constant R, all velocities are same, so contact discontinuity
         assert len(waves) == 1
@@ -353,9 +341,7 @@ class TestInletWaveCreation:
 
     def test_wave_properties_correct(self, freundlich_sorption):
         """Test that created waves have correct properties."""
-        waves = create_inlet_waves_at_theta(
-            c_prev=2.0, c_new=10.0, theta=15.0, sorption=freundlich_sorption, v_inlet=0.0
-        )
+        waves = create_inlet_waves_at_theta(c_prev=2.0, c_new=10.0, theta=15.0, sorption=freundlich_sorption)
 
         assert len(waves) == 1
         wave = waves[0]
@@ -987,7 +973,7 @@ class TestInletWavesNLT1Physics:
         When concentration steps from 0 to positive, we create a characteristic
         with the new concentration that propagates at v(C>0).
         """
-        waves = create_inlet_waves_at_theta(c_prev=0.0, c_new=5.0, theta=10.0, sorption=freundlich_n_lt_1, v_inlet=0.0)
+        waves = create_inlet_waves_at_theta(c_prev=0.0, c_new=5.0, theta=10.0, sorption=freundlich_n_lt_1)
 
         assert len(waves) == 1, "Expected one wave"
         assert isinstance(waves[0], CharacteristicWave), "Should create characteristic for C=0 to C>0 with n<1"
@@ -999,7 +985,7 @@ class TestInletWavesNLT1Physics:
         Physics: When clean water (C=0) enters behind contaminated water (C>0),
         we create a characteristic with C=0 that propagates at v(0) = flow/1.
         """
-        waves = create_inlet_waves_at_theta(c_prev=5.0, c_new=0.0, theta=10.0, sorption=freundlich_n_lt_1, v_inlet=0.0)
+        waves = create_inlet_waves_at_theta(c_prev=5.0, c_new=0.0, theta=10.0, sorption=freundlich_n_lt_1)
 
         assert len(waves) == 1, "Expected one wave"
         assert isinstance(waves[0], CharacteristicWave), "Should create characteristic for C>0 to C=0 with n<1"
@@ -1013,9 +999,7 @@ class TestInletWavesNLT1Physics:
         - C: 10→5 means slow→fast = compression = shock
         """
         # Step up: 5→10 (fast to slow for n<1) = expansion
-        waves_up = create_inlet_waves_at_theta(
-            c_prev=5.0, c_new=10.0, theta=10.0, sorption=freundlich_n_lt_1, v_inlet=0.0
-        )
+        waves_up = create_inlet_waves_at_theta(c_prev=5.0, c_new=10.0, theta=10.0, sorption=freundlich_n_lt_1)
 
         # Verify velocities
         vel_5 = characteristic_speed(5.0, freundlich_n_lt_1)
@@ -1028,9 +1012,7 @@ class TestInletWavesNLT1Physics:
             assert isinstance(waves_up[0], RarefactionWave), "Expected rarefaction for fast→slow step"
 
         # Step down: 10→5 (slow to fast for n<1) = compression
-        waves_down = create_inlet_waves_at_theta(
-            c_prev=10.0, c_new=5.0, theta=10.0, sorption=freundlich_n_lt_1, v_inlet=0.0
-        )
+        waves_down = create_inlet_waves_at_theta(c_prev=10.0, c_new=5.0, theta=10.0, sorption=freundlich_n_lt_1)
 
         # Step down should create shock (new water faster than old)
         if len(waves_down) == 1:
@@ -1298,7 +1280,6 @@ class TestInletWaveCreationEdgeCases:
             c_new=1.0,  # Low C - slow for n>1
             theta=10.0,
             sorption=freundlich_sorption,
-            v_inlet=0.0,
         )
 
         # This is an expansion (fast old water, slow new water) → rarefaction
@@ -1314,7 +1295,7 @@ class TestInletWaveCreationEdgeCases:
         # With constant retardation, all velocities are the same
         const_r = ConstantRetardation(retardation_factor=2.0)
 
-        waves = create_inlet_waves_at_theta(c_prev=5.0, c_new=10.0, theta=10.0, sorption=const_r, v_inlet=0.0)
+        waves = create_inlet_waves_at_theta(c_prev=5.0, c_new=10.0, theta=10.0, sorption=const_r)
 
         # With constant R, velocities are same → characteristic
         assert len(waves) == 1

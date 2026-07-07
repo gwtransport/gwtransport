@@ -15,12 +15,11 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
-import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 import numpy as np
-from scipy.integrate import IntegrationWarning, quad
+from scipy.interpolate import CubicSpline
 from scipy.optimize import brentq
 
 from gwtransport.fronttracking.math import (
@@ -39,6 +38,12 @@ DECAYING_SHOCK_U_FLOOR = 1e-300  # Lower bracket bound for brentq on Freundlich 
 DECAYING_SHOCK_BRENTQ_XTOL = (
     1e-14  # brentq absolute tolerance for monotone θ inversions (exhaustion, outlet, numerical)
 )
+# Cached numerical decay profile (see ``_build_decay_profile``): c-grid resolution, the
+# Gauss-Legendre panel order for the cumulative invariant integral, and the fraction of the
+# c-gap the grid stops short of a secant-speed pole (where ``θ_local → ∞``).
+DECAY_PROFILE_NODES = 6000
+DECAY_PROFILE_GAUSS_ORDER = 10
+DECAY_PROFILE_POLE_FLOOR = 1e-6
 
 
 @dataclass
@@ -197,10 +202,16 @@ class CharacteristicWave(Wave):
     """Constant concentration carried [mass/volume]."""
     sorption: SorptionModel
     """Sorption model determining the speed."""
+    _speed: float = field(init=False, repr=False, compare=False)
+    """Cached characteristic speed (immutable inputs; set in ``__post_init__``)."""
+
+    def __post_init__(self) -> None:
+        """Cache the (immutable) characteristic speed once."""
+        self._speed = characteristic_speed(self.concentration, self.sorption)
 
     def speed(self) -> float:
         """Characteristic speed dV/dθ = 1/R(C) (``+∞`` at a saturated state, R = 0)."""
-        return characteristic_speed(self.concentration, self.sorption)
+        return self._speed
 
     def position_at_theta(self, theta: float) -> float | None:
         """Position at cumulative flow θ.
@@ -386,26 +397,30 @@ class RarefactionWave(Wave):
     """Concentration at trailing edge (slower) [mass/volume]."""
     sorption: SorptionModel
     """Sorption model (must be concentration-dependent)."""
+    _head_speed: float = field(init=False, repr=False, compare=False)
+    """Cached head celerity (immutable inputs; set in ``__post_init__``)."""
+    _tail_speed: float = field(init=False, repr=False, compare=False)
+    """Cached tail celerity (immutable inputs; set in ``__post_init__``)."""
 
     def __post_init__(self):
-        """Verify this is a rarefaction (head faster than tail)."""
-        s_head = self.head_speed()
-        s_tail = self.tail_speed()
+        """Cache head/tail celerities and verify this is a rarefaction (head faster than tail)."""
+        self._head_speed = characteristic_speed(self.c_head, self.sorption)
+        self._tail_speed = characteristic_speed(self.c_tail, self.sorption)
 
-        if s_head <= s_tail:
+        if self._head_speed <= self._tail_speed:
             msg = (
-                f"Not a rarefaction: head_speed={s_head:.6g} <= tail_speed={s_tail:.6g}. "
+                f"Not a rarefaction: head_speed={self._head_speed:.6g} <= tail_speed={self._tail_speed:.6g}. "
                 f"This would be a compression (shock) instead."
             )
             raise ValueError(msg)
 
     def head_speed(self) -> float:
         """Speed of rarefaction head dV/dθ = 1/R(C_head) (``+∞`` at a saturated state, R = 0)."""
-        return characteristic_speed(self.c_head, self.sorption)
+        return self._head_speed
 
     def tail_speed(self) -> float:
         """Speed of rarefaction tail dV/dθ = 1/R(C_tail) (``+∞`` at a saturated state, R = 0)."""
-        return characteristic_speed(self.c_tail, self.sorption)
+        return self._tail_speed
 
     def head_position_at_theta(self, theta: float) -> float | None:
         """Position of rarefaction head at cumulative flow θ."""
@@ -515,8 +530,8 @@ class DecayingShockWave(Wave):
 
     **Dispatch.** ``_c_decay_at_theta_local`` is the single dispatch site
     (position, fan-exhaustion and outlet-crossing all route through it): a
-    closed form is used where one exists, otherwise the shared numerical solver
-    ``_c_decay_numerical``. No combination raises — any
+    closed form is used where one exists, otherwise the per-wave cached numerical
+    profile (:func:`_build_decay_profile`). No combination raises — any
     :class:`~gwtransport.fronttracking.math.NonlinearSorption` is valid. With
     ``θ_local := θ − theta_origin`` measured from the rarefaction apex,
     ``α := ρ_b · k_f / n_por`` for Freundlich, and ``u_d := c_decay^(1/n)``:
@@ -537,11 +552,12 @@ class DecayingShockWave(Wave):
       invariant ``θ_local ∝ R(c_decay)^{a/(a−1)}`` (``R·S = 1/a`` constant),
       so ``R(c_d) = R(c0)·(θ_local/θ_local_coll)^{(a−1)/a}``.
     - Every other ``(isotherm, c_fixed)`` combination (Freundlich ``c_fixed>0,
-      n≠2``, Langmuir/Brooks-Corey ``c_fixed>0``, any van Genuchten) —
-      numerical solver ``_c_decay_numerical``: the decay-agnostic invariant
-      ``θ_local(c_d) = θ_local_coll · exp(∫ R'/[(1 − R·S)·R] dc)`` with the
-      symmetric secant speed ``S = (c − c_fixed)/(C_T(c) − C_T(c_fixed))`` by
-      ``scipy.integrate.quad``, inverted for ``c_d(θ)`` via ``brentq``.
+      n≠2``, Langmuir/Brooks-Corey ``c_fixed>0``, any van Genuchten) — cached
+      numerical profile (:func:`_build_decay_profile`): the decay-agnostic
+      invariant ``θ_local(c_d) = θ_local_coll · exp(∫ R'/[(1 − R·S)·R] dc)`` with
+      the symmetric secant speed ``S = (c − c_fixed)/(C_T(c) − C_T(c_fixed))``,
+      built once by composite quadrature and inverted for ``c_d(θ)`` by monotone
+      spline interpolation.
 
     Every path shares the fan-continuity identity
     ``V_s = v_origin + θ_local / R(c_decay)``, which ``position_at_theta`` and
@@ -605,6 +621,16 @@ class DecayingShockWave(Wave):
     K: float = field(init=False)
     """Invariant constant set in ``__post_init__`` (closed-form Freundlich ``c_fixed=0``/``n≈2`` and Langmuir
     ``c_fixed=0`` cases; ``nan`` for every numerical case)."""
+    _freundlich_cf: bool = field(init=False, repr=False, compare=False)
+    """Cached Freundlich-closed-form predicate (immutable inputs; set in ``__post_init__``)."""
+    _langmuir_cf: bool = field(init=False, repr=False, compare=False)
+    """Cached Langmuir-closed-form predicate."""
+    _brooks_corey_cf: bool = field(init=False, repr=False, compare=False)
+    """Cached Brooks-Corey ``c_fixed=0`` closed-form predicate."""
+    _numerical: bool = field(init=False, repr=False, compare=False)
+    """Cached predicate: no closed form applies, so the decay routes to the cached numerical profile."""
+    _decay_profile_cache: tuple | None = field(default=None, init=False, repr=False, compare=False)
+    """Lazily-built monotone ``θ_local(c)`` map for the numerical decay path (see ``_decay_profile``)."""
 
     def __post_init__(self) -> None:
         """Validate inputs and compute the closed-form invariant K when applicable."""
@@ -634,47 +660,54 @@ class DecayingShockWave(Wave):
             msg = f"DecayingShockWave requires a NonlinearSorption, got {type(self.sorption).__name__}"
             raise TypeError(msg)
 
-        # Closed where an exact form exists, else the shared numerical solver.
-        # K is the closed-form invariant constant; it is set only for the
-        # closed-form cases (see ``_uses_freundlich_closed_form`` /
-        # ``_uses_langmuir_closed_form``) and left as NaN for every numerical
-        # case. The ``_c_decay_at_theta_local`` dispatch mirrors these.
-        self.K = float("nan")
+        # Classify the decay path once (immutable inputs). Closed forms exist for:
+        # Freundlich c_fixed=0 (general n) or the n≈2 quadratic when the decaying side
+        # starts above the fixed side (the +√ / (u_d−u_R)² branch was derived only for
+        # c_decay_initial > c_fixed — the mirror routes to the numerical profile);
+        # Langmuir c_fixed=0; Brooks-Corey c_fixed=0. Everything else is numerical.
         s = self.sorption
-        if isinstance(s, FreundlichSorption) and self._uses_freundlich_closed_form():
+        self._freundlich_cf = isinstance(s, FreundlichSorption) and (
+            self.c_fixed == 0.0 or bool(np.isclose(s.n, 2.0, rtol=1e-12) and self.c_decay_initial > self.c_fixed)
+        )
+        self._langmuir_cf = isinstance(s, LangmuirSorption) and self.c_fixed == 0.0
+        self._brooks_corey_cf = isinstance(s, BrooksCoreyConductivity) and self.c_fixed == 0.0
+        self._numerical = not (self._freundlich_cf or self._langmuir_cf or self._brooks_corey_cf)
+
+        # K is the closed-form invariant constant; set only for the Freundlich/Langmuir
+        # closed forms and left NaN for every numerical (and Brooks-Corey) case. The
+        # isinstance guards narrow ``s`` for the typed helpers (the cached predicate already
+        # implies the type; the ``np.isclose`` cost is not re-incurred).
+        self.K = float("nan")
+        if self._freundlich_cf and isinstance(s, FreundlichSorption):
             self.K = _compute_k_freundlich(
                 s,
                 self.theta_start - self.theta_origin,
                 self.c_decay_initial,
                 self.c_fixed,
             )
-        elif isinstance(s, LangmuirSorption) and self._uses_langmuir_closed_form():
+        elif self._langmuir_cf and isinstance(s, LangmuirSorption):
             self.K = _compute_k_langmuir(
                 s,
                 self.theta_start - self.theta_origin,
                 self.c_decay_initial,
             )
 
-    def _uses_freundlich_closed_form(self) -> bool:
-        """Whether the Freundlich closed form (constant ``K``) applies.
+    def _decay_profile(self) -> tuple:
+        """Lazily build & cache the monotone ``θ_local(c)`` map for the numerical decay path.
 
-        Closed form holds for ``c_fixed = 0`` (general ``n``), and for the
-        ``n ≈ 2`` quadratic ONLY when the decaying side starts above the fixed
-        side (``c_decay_initial > c_fixed``) — that is the orientation the
-        ``+√`` root branch and the ``(u_d − u_R)²`` invariant were derived for.
-        The ``c_decay_initial < c_fixed`` mirror (e.g. ``decay_side='right'``)
-        has no valid closed form and routes to ``_c_decay_numerical``.
+        Returns ``(c_of_i, i_max, c_limit_node)``: a ``CubicSpline`` mapping the
+        cumulative invariant ``I = ln(θ_local/θ_local_coll)`` to ``c_decay``, the
+        largest resolved ``I`` (endpoint of the reachable c-range), and the c at
+        that endpoint. Built once per wave (see :func:`_build_decay_profile`).
         """
-        s = self.sorption
-        if not isinstance(s, FreundlichSorption):
-            return False
-        if self.c_fixed == 0.0:
-            return True
-        return bool(np.isclose(s.n, 2.0, rtol=1e-12) and self.c_decay_initial > self.c_fixed)
-
-    def _uses_langmuir_closed_form(self) -> bool:
-        """Whether the Langmuir closed form (constant ``K``) applies (``c_fixed = 0``)."""
-        return isinstance(self.sorption, LangmuirSorption) and self.c_fixed == 0.0
+        if self._decay_profile_cache is None:
+            self._decay_profile_cache = _build_decay_profile(
+                self.sorption,
+                self.c_decay_initial,
+                self.c_fixed,
+                self.c_fan_tail,
+            )
+        return self._decay_profile_cache
 
     def c_decay_at_theta(self, theta: float) -> float | None:
         """Concentration on the decaying side at cumulative flow θ.
@@ -728,16 +761,23 @@ class DecayingShockWave(Wave):
 
         theta_local_collision = self.theta_start - self.theta_origin
 
+        if self._numerical:
+            # The numerical forward map saturates AT c_fan_tail (it never crosses it),
+            # so a forward-map bracket cannot see the crossing for either decay
+            # orientation. Evaluate θ_local(c_fan_tail) from the un-clamped invariant
+            # directly: the gate above guarantees c_fan_tail is the reachable limit, so
+            # it is exactly the cached profile's endpoint ``i_max``.
+            _c_of_i, i_max, _c_limit_node = self._decay_profile()
+            return self.theta_origin + theta_local_collision * float(np.exp(i_max))
+
+        # Closed forms cross c_fan_tail smoothly (always a shrinking decay); invert the
+        # monotone forward map by bracketing (orientation-agnostic — no early return).
         def f(theta_local: float) -> float:
             return self._c_decay_at_theta_local(theta_local) - self.c_fan_tail
 
-        # c_decay is monotone in θ_local; find where it crosses c_fan_tail.
-        f_lo = f(theta_local_collision)
-        if f_lo <= 0.0:
-            # Already at/below the tail at collision — exhausted immediately.
-            return self.theta_start
-        # Seed == theta_local_collision, so reuse f_lo to skip one quad/eval.
-        theta_local_exhaust = _invert_monotone_theta_local(f, theta_hi_seed=theta_local_collision, f_seed=f_lo)
+        theta_local_exhaust = _invert_monotone_theta_local(
+            f, theta_hi_seed=theta_local_collision, f_seed=f(theta_local_collision)
+        )
         if theta_local_exhaust is None:
             return None
         return self.theta_origin + theta_local_exhaust
@@ -746,28 +786,35 @@ class DecayingShockWave(Wave):
         """Decaying concentration as a function of ``θ_local`` (apex-relative).
 
         The SOLE isotherm dispatch site: closed where an exact form exists,
-        otherwise the shared numerical solver. The closed forms (Freundlich
-        ``c_fixed=0`` or ``n≈2``; Langmuir ``c_fixed=0``; Brooks-Corey
-        ``c_fixed=0``) are selected by ``isinstance``; every other
-        ``(isotherm, c_fixed)`` combination falls through to
-        ``_c_decay_numerical``. Takes ``θ_local`` directly and skips the
-        activity check. ``c_decay_at_theta``, ``position_at_theta``,
+        otherwise the cached numerical decay profile. The closed forms
+        (Freundlich ``c_fixed=0`` or ``n≈2``; Langmuir ``c_fixed=0``;
+        Brooks-Corey ``c_fixed=0``) are selected by the ``__post_init__``
+        predicates; every other ``(isotherm, c_fixed)`` combination falls through
+        to the per-wave cached invariant profile. Takes ``θ_local`` directly and
+        skips the activity check. ``c_decay_at_theta``, ``position_at_theta``,
         ``theta_at_fan_exhaustion`` and ``outlet_crossing_theta`` all route
         through here rather than repeating the dispatch.
         """
         theta_local_collision = self.theta_start - self.theta_origin
         s = self.sorption
-        if isinstance(s, FreundlichSorption) and self._uses_freundlich_closed_form():
+        if self._freundlich_cf and isinstance(s, FreundlichSorption):
             return _c_decay_freundlich(
                 s, self.K, self.c_decay_initial, self.c_fixed, theta_local_collision, theta_local
             )
-        if isinstance(s, LangmuirSorption) and self._uses_langmuir_closed_form():
+        if self._langmuir_cf and isinstance(s, LangmuirSorption):
             return _c_decay_langmuir(s, self.K, theta_local)
-        if isinstance(s, BrooksCoreyConductivity) and self.c_fixed == 0.0:
+        if self._brooks_corey_cf and isinstance(s, BrooksCoreyConductivity):
             return _c_decay_brooks_corey(s, self.c_decay_initial, theta_local_collision, theta_local)
-        return _c_decay_numerical(
-            s, self.c_decay_initial, self.c_fixed, self.c_fan_tail, theta_local_collision, theta_local
-        )
+
+        # Numerical path: invert the cached monotone θ_local(c) map. c_decay stays at
+        # c_decay_initial up to the collision and clamps at the reachable c-limit past it.
+        if theta_local <= theta_local_collision:
+            return self.c_decay_initial
+        c_of_i, i_max, c_limit_node = self._decay_profile()
+        i_target = np.log(theta_local / theta_local_collision)
+        if i_target >= i_max:
+            return float(c_limit_node)
+        return float(c_of_i(i_target))
 
     def outlet_crossing_theta(self, v_outlet: float) -> float | None:
         """Cumulative flow at which ``V_s = v_outlet``.
@@ -791,7 +838,7 @@ class DecayingShockWave(Wave):
         # via the fan-continuity identity V_s - v_origin = θ_local / R(c_decay)
         # combined with the invariant to eliminate u, then solve for θ.
         s = self.sorption
-        if isinstance(s, FreundlichSorption) and self._uses_freundlich_closed_form():
+        if self._freundlich_cf and isinstance(s, FreundlichSorption):
             return _outlet_crossing_freundlich(
                 s,
                 self.K,
@@ -800,7 +847,7 @@ class DecayingShockWave(Wave):
                 self.theta_origin,
                 v_outlet,
             )
-        if isinstance(s, LangmuirSorption) and self._uses_langmuir_closed_form():
+        if self._langmuir_cf and isinstance(s, LangmuirSorption):
             return _outlet_crossing_langmuir(
                 s,
                 self.K,
@@ -827,66 +874,13 @@ class DecayingShockWave(Wave):
             # Already at/past the outlet at collision; the linear-shock guards
             # in the solver handle the duplicate-crossing suppression.
             return self.theta_start
-        # Reuse f_lo only when the seed coincides with the collision (≥1.0);
-        # otherwise let the helper evaluate f at its own seed.
-        theta_hi_seed = max(theta_local_collision, 1.0)
-        seed_f = f_lo if theta_local_collision >= 1.0 else None
-        theta_local_cross = _invert_monotone_theta_local(f, theta_hi_seed=theta_hi_seed, f_seed=seed_f)
+        # Seed at the collision (f_lo < 0 established above) and let the helper grow the
+        # bracket upward — no dimensional floor, so crossings within θ_local < 1 of the
+        # apex are found (mirrors theta_at_fan_exhaustion's closed-form bracket).
+        theta_local_cross = _invert_monotone_theta_local(f, theta_hi_seed=theta_local_collision, f_seed=f_lo)
         if theta_local_cross is None:
             return None
         return self.theta_origin + theta_local_cross
-
-    def mass_after_outlet_arrival(self, v_outlet: float) -> float:
-        """Mass exiting at ``v_outlet`` from the wave's outlet arrival to ``θ=+∞``.
-
-        Semantics depend on ``decay_side``:
-
-        - ``'left'`` (favorable n>1, Langmuir): after ``V_s`` reaches
-          ``v_outlet``, ``v_outlet`` falls *inside* the fan; c at ``v_outlet``
-          follows the fan's self-similar profile and asymptotes to
-          ``c_fixed``. For ``c_fixed=0`` the +∞ integral converges.
-        - ``'right'`` (n<1 mirror): after ``V_s`` reaches ``v_outlet``,
-          ``v_outlet`` is *upstream* of the shock; c at ``v_outlet`` jumps to
-          ``c_fixed`` and stays there. For ``c_fixed=0`` the +∞ contribution
-          is zero.
-
-        Parameters
-        ----------
-        v_outlet : float
-            Outlet position [m³].
-
-        Returns
-        -------
-        float
-            Total mass exiting at v_outlet from theta_arrival to +∞.
-
-        Raises
-        ------
-        ValueError
-            If ``c_fixed > 0`` (mass integral diverges; use segment-based
-            mass functions over a finite upper bound instead).
-        """
-        if self.c_fixed > 0.0:
-            msg = (
-                f"mass_after_outlet_arrival requires c_fixed=0 for the +∞ integral to converge; "
-                f"got c_fixed={self.c_fixed}"
-            )
-            raise ValueError(msg)
-        if self.decay_side == "right":
-            return 0.0
-        theta_arrival = self.outlet_crossing_theta(v_outlet)
-        if theta_arrival is None:
-            return 0.0
-        from gwtransport.fronttracking.output import integrate_fan_exact  # noqa: PLC0415
-
-        return integrate_fan_exact(
-            theta_origin=self.theta_origin,
-            v_origin=self.v_origin,
-            v_outlet=v_outlet,
-            theta_start=theta_arrival,
-            theta_end=float("inf"),
-            sorption=self.sorption,
-        )
 
     def concentration_left(self) -> float:
         """Concentration on the left (upstream) side at θ=theta_start.
@@ -979,25 +973,24 @@ class DecayingShockWave(Wave):
 def _invert_monotone_theta_local(f, *, theta_hi_seed: float, f_seed: float | None = None) -> float | None:
     """Bracket-then-brentq a monotone ``f(θ_local)`` with a sign change above the seed.
 
-    Shared by ``theta_at_fan_exhaustion`` and ``_outlet_crossing_numerical``:
-    both invert a monotone function of ``θ_local`` whose sign at the collision
-    is already known to differ from its sign at large ``θ_local``. Geometrically
-    grows ``θ_hi`` (``×2``, ≤200 iters) from ``theta_hi_seed`` until ``f`` flips
-    sign, then inverts with ``brentq``. Returns ``None`` if no sign change is
-    bracketed within the iteration budget.
+    Shared by the closed-form branch of ``theta_at_fan_exhaustion`` and by
+    ``_outlet_crossing_numerical``: both invert a monotone function of
+    ``θ_local`` whose sign at the collision is already known to differ from its
+    sign at large ``θ_local``. Geometrically grows ``θ_hi`` (``×2``, ≤200 iters)
+    from ``theta_hi_seed`` until ``f`` flips sign, then inverts with ``brentq``.
+    Returns ``None`` if no sign change is bracketed within the iteration budget.
 
     Parameters
     ----------
     f : callable
         Monotone residual ``f(θ_local)``; ``f(theta_hi_seed)`` and the far-field
         value must straddle zero. Caller-specific early sentinels
-        (already-exhausted / already-past-outlet) are handled by the caller.
+        (already-past-outlet) are handled by the caller.
     theta_hi_seed : float
         ``θ_local`` lower bracket; the search grows ``θ_hi`` from here.
     f_seed : float, optional
-        Pre-evaluated ``f(theta_hi_seed)``; callers that already computed it
-        (the numerical path's ``f`` is a ``scipy.quad`` call) pass it to avoid a
-        redundant evaluation. ``None`` recomputes it here.
+        Pre-evaluated ``f(theta_hi_seed)``; callers that already computed it pass
+        it to avoid a redundant evaluation. ``None`` recomputes it here.
 
     Returns
     -------
@@ -1014,30 +1007,30 @@ def _invert_monotone_theta_local(f, *, theta_hi_seed: float, f_seed: float | Non
     return None
 
 
-def _c_decay_numerical(
+def _build_decay_profile(
     sorption: NonlinearSorption,
     c_decay_initial: float,
     c_fixed: float,
     c_fan_tail: float,
-    theta_local_collision: float,
-    theta_local: float,
-) -> float:
-    r"""Decaying-side concentration for collisions with no closed form.
+) -> tuple:
+    r"""Build the per-wave monotone ``θ_local(c)`` map for collisions with no closed form.
 
     Decay-agnostic: the fan-continuity + Rankine-Hugoniot relations do not
     depend on which side decays. The secant speed
     ``S(c) = (c − c_fixed)/(C_T(c) − C_T(c_fixed))`` is symmetric in
     ``(c_decay, c_fixed)``, so the same invariant
-    ``θ_local(c) = θ_local_coll · exp(∫_{c0}^{c} R'/[(1 − R·S)·R] dc)`` (with
-    ``R'`` by central finite difference and ``scipy.integrate.quad``) holds for
-    Freundlich ``c_fixed>0, n≠2``, Langmuir ``c_fixed>0``, Brooks-Corey
-    ``c_fixed>0`` and any van Genuchten case alike. The invariant is monotone
-    from ``c_decay_initial`` to the reachable boundary, so the root is unique;
-    we bracket strictly inside and invert via brentq. The reachable boundary is
-    the fan tail ``c_fan_tail`` UNLESS ``c_fixed`` lies strictly between
-    ``c_decay_initial`` and ``c_fan_tail`` — then the secant speed has a pole at
-    ``c_fixed`` (the shock asymptotes to the fixed state and cannot cross it),
-    so ``c_fixed`` is the limit.
+    ``θ_local(c) = θ_local_coll · exp(I(c))``, ``I(c) = ∫_{c0}^{c} R'/[(1 − R·S)·R] dc``
+    (``R'`` by central finite difference) holds for Freundlich ``c_fixed>0, n≠2``,
+    Langmuir ``c_fixed>0``, Brooks-Corey ``c_fixed>0`` and any van Genuchten case
+    alike. ``I(c)`` is built ONCE by a single vectorised composite Gauss-Legendre
+    cumulative quadrature over a c-grid from ``c_decay_initial`` to the reachable
+    limit, then inverted by monotone-spline interpolation — replacing the former
+    quad-inside-brentq-inside-brentq scalar solve (~1000× fewer integrand evals
+    across a record). The reachable limit is the fan tail ``c_fan_tail`` UNLESS
+    ``c_fixed`` lies strictly between ``c_decay_initial`` and ``c_fan_tail`` — then
+    the secant speed has a pole at ``c_fixed`` (``R·S → 1``, ``θ_local → ∞``): the
+    shock asymptotes to the fixed state, so the grid stops a hair short of it and
+    ``c_decay`` clamps there.
 
     Parameters
     ----------
@@ -1049,67 +1042,56 @@ def _c_decay_numerical(
         Non-decaying-side concentration [mass/volume].
     c_fan_tail : float
         Concentration at the fan's far boundary [mass/volume]; bounds the decay.
-    theta_local_collision : float
-        ``θ_local`` at the collision (``θ_start − theta_origin``) [m³].
-    theta_local : float
-        ``θ_local`` at which to evaluate the decaying concentration [m³].
 
     Returns
     -------
-    float
-        Decaying-side concentration ``c`` at ``theta_local``.
+    tuple
+        ``(c_of_i, i_max, c_limit_node)``: a ``CubicSpline`` mapping the cumulative
+        invariant ``I = ln(θ_local/θ_local_coll)`` to ``c_decay``, the endpoint
+        ``I`` of the reachable c-range, and the ``c`` at that endpoint. ``I`` is
+        collision-independent (``θ_local_coll`` enters only at query time).
     """
     ct_fixed = float(sorption.total_concentration(c_fixed))
 
-    def r_prime(c: float) -> float:
-        h = max(1e-9, 1e-7 * abs(c))
-        return (float(sorption.retardation(c + h)) - float(sorption.retardation(c - h))) / (2.0 * h)
+    def integrand(c):
+        c = np.asarray(c, dtype=float)
+        h = np.maximum(1e-9, 1e-7 * np.abs(c))
+        r_prime = (np.asarray(sorption.retardation(c + h)) - np.asarray(sorption.retardation(c - h))) / (2.0 * h)
+        r = np.asarray(sorption.retardation(c))
+        ct = np.asarray(sorption.total_concentration(c))
+        secant = (c - c_fixed) / (ct - ct_fixed)
+        return r_prime / ((1.0 - r * secant) * r)
 
-    def integrand(c_eval: float) -> float:
-        r = float(sorption.retardation(c_eval))
-        ct = float(sorption.total_concentration(c_eval))
-        s = (c_eval - c_fixed) / (ct - ct_fixed)
-        return r_prime(c_eval) / ((1.0 - r * s) * r)
+    pole = (c_decay_initial - c_fixed) * (c_fan_tail - c_fixed) < 0.0
+    c_limit = c_fixed if pole else c_fan_tail
 
-    def theta_local_of_c(c: float) -> float:
-        # The integrand can have an integrable endpoint singularity (where
-        # R·S → 1); adaptive quadrature may exhaust its subdivision budget
-        # there while still converging. Suppress that benign warning.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", IntegrationWarning)
-            val, _ = quad(integrand, c_decay_initial, c, limit=200)
-        return float(theta_local_collision * np.exp(val))
+    # c-grid from c0 to the reachable limit. Toward a pole (θ_local → ∞) the grid is
+    # geometric, stopping a fraction DECAY_PROFILE_POLE_FLOOR of the gap short; the
+    # non-pole grid reaches c_fan_tail exactly (so i_max is the exhaustion integral).
+    frac = np.linspace(0.0, 1.0, DECAY_PROFILE_NODES)
+    gap0 = abs(c_decay_initial - c_limit)
+    gaps = gap0 * DECAY_PROFILE_POLE_FLOOR**frac if pole else gap0 * (1.0 - frac)
+    c_nodes = c_limit + np.sign(c_decay_initial - c_limit) * gaps
 
-    if theta_local <= theta_local_collision:
-        return c_decay_initial
+    # Cumulative composite Gauss-Legendre integral of the invariant integrand.
+    x_gl, w_gl = np.polynomial.legendre.leggauss(DECAY_PROFILE_GAUSS_ORDER)
+    lo = c_nodes[:-1]
+    hi = c_nodes[1:]
+    mid = 0.5 * (lo + hi)
+    half = 0.5 * (hi - lo)
+    points = mid[:, None] + half[:, None] * x_gl[None, :]
+    panel = (integrand(points.ravel()).reshape(points.shape) * w_gl[None, :]).sum(axis=1) * half
+    i_nodes = np.concatenate([[0.0], np.cumsum(panel)])
 
-    # The decaying side relaxes from c_decay_initial toward the first boundary
-    # it reaches. If c_fixed lies strictly between c_decay_initial and
-    # c_fan_tail, the secant speed S has a pole at c_fixed (R·S → 1 there): the
-    # shock asymptotes to the fixed state and CANNOT cross it, so c_fixed — not
-    # the more distant c_fan_tail — is the reachable limit. Otherwise the fan's
-    # far boundary c_fan_tail bounds the decay.
-    c_limit = c_fan_tail
-    if (c_decay_initial - c_fixed) * (c_fan_tail - c_fixed) < 0.0:
-        c_limit = c_fixed
-    lo, hi = sorted((c_decay_initial, c_limit))
-    eps = (hi - lo) * 1e-9
-    # Bracket endpoints: the c_decay_initial side and the asymptotic-limit side,
-    # each held strictly off the boundary (the limit may carry a secant-speed
-    # pole).
-    c_start = c_decay_initial + (eps if c_limit > c_decay_initial else -eps)
-    c_bound = c_limit + (-eps if c_limit > c_decay_initial else eps)
-
-    def f(c: float) -> float:
-        return theta_local_of_c(c) - theta_local
-
-    # f is monotone: f(c_start) = θ_local_coll − θ_local < 0 and f → +∞ at the
-    # asymptotic limit. If even c_bound has not reached the requested θ_local
-    # (asymptote not yet numerically exceeded), the root is past machine
-    # resolution of the boundary — clamp to it rather than letting brentq fail.
-    if f(c_bound) <= 0.0:
-        return float(c_bound)
-    return float(brentq(f, min(c_start, c_bound), max(c_start, c_bound), xtol=DECAYING_SHOCK_BRENTQ_XTOL))
+    # Inverse-interpolation precondition: keep the strictly-increasing prefix (the
+    # near-pole tail can lose monotonicity as the singular integrand outruns the grid).
+    non_increasing = np.nonzero(np.diff(i_nodes) <= 0.0)[0]
+    if non_increasing.size:
+        cut = non_increasing[0] + 1
+        i_nodes = i_nodes[:cut]
+        c_nodes = c_nodes[:cut]
+    c_of_i = CubicSpline(i_nodes, c_nodes)
+    return c_of_i, float(i_nodes[-1]), float(c_nodes[-1])
 
 
 def _c_decay_brooks_corey(

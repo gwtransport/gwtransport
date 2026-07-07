@@ -23,6 +23,7 @@ from gwtransport.fronttracking.plot import (
     plot_wave_interactions,
 )
 from gwtransport.fronttracking.solver import FrontTracker
+from gwtransport.fronttracking.validation import verify_physics
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 
 plt.switch_backend("Agg")
@@ -168,6 +169,80 @@ def _structure_from_tracker(tracker):
         "waves": tracker.state.waves,
         "events": tracker.state.events,
     }
+
+
+class TestVerifyPhysicsSpinupMaskTimeOrigin:
+    """verify_physics check 5 must build its spin-up mask on the *shared* time origin.
+
+    The mask maps ``cout_tedges`` to θ via ``tracker_state.theta_at_t``, which expects
+    days measured from ``tracker_state.tedges[0]`` (the input origin). If the output grid
+    is offset from the input origin and the mask is built with each grid's own first edge
+    as reference, the after-spin-up window is shifted earlier and NaNs that fall after the
+    true first arrival are silently excluded.
+    """
+
+    def test_nan_after_spinup_detected_in_offset_output_window(self, freundlich_favorable):
+        # Small step so the mass-balance check integrates a single shock cheaply.
+        tedges = pd.date_range("2020-01-01", periods=9, freq="10D")
+        cin = np.array([0.0] + [10.0] * 7)
+        flow = np.full(8, 100.0)
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=50.0,
+            sorption=freundlich_favorable,
+        )
+        tracker.run(max_iterations=500)
+        state = tracker.state
+
+        theta_first = tracker.theta_first_arrival
+        t_first = state.t_at_theta(theta_first)
+        assert np.isfinite(t_first)
+
+        # Output grid entirely AFTER first arrival but OFFSET from the input origin.
+        offset_days = t_first + 20.0
+        cout_tedges = pd.date_range(state.tedges[0] + pd.Timedelta(days=offset_days), periods=4, freq="5D")
+        cout = np.full(len(cout_tedges) - 1, 10.0)
+        cout[0] = np.nan  # NaN in the first (genuinely after-spin-up) output bin.
+
+        structure = {
+            "waves": state.waves,
+            "theta_first_arrival": theta_first,
+            "events": state.events,
+            "tracker_state": state,
+        }
+        results = verify_physics(structure, cout, cout_tedges, cin, verbose=False)
+        check5 = next(c for c in results["checks"] if c["name"] == "No NaN after spin-up")
+        assert not check5["passed"], "NaN after spin-up in an offset output window must be detected"
+
+
+class TestSummaryOverlayTimeOrigin:
+    """The bin-averaged outlet overlay must share the exact curve's time origin (tedges[0])."""
+
+    def test_bin_averaged_overlay_starts_at_shared_origin(self, tracker_step):
+        state = tracker_step.state
+        structure = _structure_from_tracker(tracker_step)
+
+        # Output grid offset 100 days past the input origin.
+        offset_days = 100.0
+        cout_tedges = pd.date_range(state.tedges[0] + pd.Timedelta(days=offset_days), periods=6, freq="10D")
+        cout = np.full(len(cout_tedges) - 1, 5.0)
+
+        fig, axes = plot_front_tracking_summary(
+            structure,
+            state.tedges,
+            state.cin,
+            cout_tedges,
+            cout,
+            show_exact=False,
+        )
+        binned = [ln for ln in axes["outlet"].get_lines() if ln.get_label() == "Bin-averaged outlet"]
+        assert binned, "bin-averaged overlay line not found"
+        xmin = float(np.asarray(binned[0].get_xdata(), dtype=float).min())
+        # Left edge sits at the offset when measured from the shared origin, not at 0.
+        np.testing.assert_allclose(xmin, offset_days, atol=1e-9)
+        plt.close(fig)
 
 
 class TestPlotSummaryAndComparisonSmoke:

@@ -406,22 +406,18 @@ def test_mass_balance_freundlich_nhalf_mirror_pointwise_breakthrough(n):
         err_msg=f"n={n} pointwise breakthrough mismatch:\nθ={theta_samples}\nnum={c_numerical}\nana={c_analytical}",
     )
 
-    # Asymptotic total: m_out_total = m_in - C_T(c_∞) · V_outlet (c_∞=4 here).
-    # NOTE: compute_total_outlet_mass uses the asymptotic formula directly
-    # (no wave list), so this is a smoke test for the formula wiring — it
-    # catches sign flips or missing c_∞ retrieval but not wave-list bugs.
-    mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
+    # Sustained ambient boundary: c_∞ = cin[-1] = 4 > 0, so the inlet keeps
+    # injecting forever and the θ → ∞ total outlet mass is unbounded. The
+    # corrected compute_total_outlet_mass returns +inf here (review O3); the
+    # old finite form ``m_in − C_T(c_∞)·V_outlet`` mixed a finite record
+    # integral with an infinite-time steady-state fill and could go negative.
     mass_out = compute_total_outlet_mass(
         v_outlet=v_outlet,
         sorption=sorption,
         cin=cin,
         theta_edges=tr.state.theta_edges,
     )
-    c_inf = float(cin[-1])
-    expected_m_out = mass_in - float(sorption.total_concentration(c_inf)) * v_outlet
-    assert np.isclose(mass_out, expected_m_out, rtol=1e-12), (
-        f"n={n} mirror asymptotic: mass_out={mass_out:.4f}, expected={expected_m_out:.4f}"
-    )
+    assert mass_out == float("inf"), f"n={n} mirror: sustained c_∞>0 total outlet mass must be +inf, got {mass_out}"
 
 
 def test_mass_balance_freundlich_n2_multipulse():

@@ -210,8 +210,11 @@ def verify_physics(
     # Check 5: No NaN values after spin-up
     tracker_state = structure.get("tracker_state")
     if tracker_state is not None and np.isfinite(theta_first):
-        t_days = tedges_to_days(cout_tedges)[:-1]
-        theta_at_edge = np.asarray([tracker_state.theta_at_t(float(t)) for t in t_days])
+        # theta_at_t measures days from the input origin tracker_state.tedges[0]; the output
+        # grid must be referenced to that same origin (not its own first edge) or the mask
+        # shifts and NaNs after spin-up slip through.
+        t_days = tedges_to_days(cout_tedges, ref=tracker_state.tedges[0])[:-1]
+        theta_at_edge = tracker_state.theta_at_t_array(t_days)
         mask_after_spinup = theta_at_edge >= theta_first
     elif not np.isfinite(theta_first):
         # No spin-up bound — every output row counts as "after spin-up".
