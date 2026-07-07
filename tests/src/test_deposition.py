@@ -262,8 +262,16 @@ def test_forward_pins_extraction_to_infiltration_direction_genuinely_variable_fl
 
 
 def test_exact_analytical_retardation_factor():
-    """
-    Test exact analytical solution with different retardation factors.
+    """Test exact analytical solution with different retardation factors.
+
+    The steady-state extracted concentration is R-independent: the areal mass
+    balance ``Q * cout = dep * A_plan`` holds regardless of retardation
+    (retardation delays breakthrough but does not change the outlet
+    concentration once the deposition history is fully resolved). So the
+    expected value is the R-independent steady state
+    ``dep * V_pv / (porosity * thickness * Q)`` -- equivalently the water
+    (R=1) residence time ``rt[0] / retardation_factor`` times
+    ``dep / (porosity * thickness)``.
     """
     dates = pd.date_range("2020-01-01", "2020-01-12", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -305,7 +313,16 @@ def test_exact_analytical_retardation_factor():
             direction="extraction_to_infiltration",
         )
 
-        expected = (rt[0] * deposition_rate) / (params["porosity"] * params["thickness"])
+        # R-independent steady state: divide the R-scaled residence time rt[0]
+        # by R to recover the water residence time V_pv/Q, matching the
+        # closed-form dep * V_pv / (porosity * thickness * Q).
+        expected = (rt[0] / retardation_factor * deposition_rate) / (params["porosity"] * params["thickness"])
+        closed_form = (
+            deposition_rate
+            * base_params["aquifer_pore_volume"]
+            / (base_params["porosity"] * base_params["thickness"] * flow_rate)
+        )
+        np.testing.assert_allclose(expected, closed_form, rtol=1e-12, atol=0)
 
         valid_result = cout_result[~np.isnan(cout_result)]
         valid_expected = expected[: len(valid_result)]
@@ -319,6 +336,119 @@ def test_exact_analytical_retardation_factor():
             rtol=1e-12,
             atol=0,
             err_msg=f"R={retardation_factor}",
+        )
+
+
+def test_steady_state_cout_r_independent_mass_balance():
+    """Steady-state extracted concentration is R-independent (areal mass balance).
+
+    The steady-state areal mass balance ``Q * cout = dep * A_plan`` is
+    model-independent: retardation delays breakthrough but cannot change the
+    steady-state outlet concentration, because at steady state the mass entering
+    areally (``dep * A_plan``) must leave advectively (``Q * cout``) regardless
+    of how much solute is sorbed on the immobile matrix. Here
+    ``A_plan = aquifer_pore_volume / (porosity * thickness)``.
+
+    Pre-fix the forward operator divided the R-scaled contact measure only by
+    ``porosity * thickness`` (not additionally by ``R``), so ``cout`` scaled
+    exactly proportional to ``R`` (``mass_out / mass_in == R`` instead of 1).
+    This pins the corrected R-independent steady state and the exact
+    flow-weighted mass balance for R in {1, 1.5, 2, 3}.
+    """
+    n = 60
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow_rate = 100.0
+    flow = np.full(n, flow_rate)
+    deposition_rate = 50.0
+    dep = np.full(n, deposition_rate)
+    aquifer_pore_volume, porosity, thickness = 500.0, 0.25, 4.0
+    # cout bin well past the longest spin-up (R=3 -> RT = 15 days) and inside the record.
+    cout_tedges = tedges[40:42]
+
+    a_plan = aquifer_pore_volume / (porosity * thickness)
+    expected_cout = deposition_rate * a_plan / flow_rate  # R-independent steady-state outlet
+
+    cout_by_r = {}
+    for retardation_factor in (1.0, 1.5, 2.0, 3.0):
+        cout = deposition_to_extraction(
+            dep=dep,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volume=aquifer_pore_volume,
+            porosity=porosity,
+            thickness=thickness,
+            retardation_factor=retardation_factor,
+        )
+        valid = cout[~np.isnan(cout)]
+        assert len(valid) >= 1, f"need a valid steady-state bin for R={retardation_factor}"
+        cout_by_r[retardation_factor] = valid
+        # Flow-weighted areal mass balance: Q*cout == dep*A_plan (mass_out/mass_in == 1).
+        np.testing.assert_allclose(
+            flow_rate * valid,
+            deposition_rate * a_plan,
+            rtol=1e-12,
+            atol=0,
+            err_msg=f"mass balance violated for R={retardation_factor}",
+        )
+        np.testing.assert_allclose(valid, expected_cout, rtol=1e-12, atol=0, err_msg=f"R={retardation_factor}")
+
+    # Steady-state cout identical across all R.
+    reference = cout_by_r[1.0]
+    for retardation_factor, valid in cout_by_r.items():
+        np.testing.assert_allclose(valid, reference, rtol=1e-12, atol=0, err_msg=f"R={retardation_factor} vs R=1")
+
+
+def test_forward_reverse_exact_adjoints_at_retardation():
+    """Forward and reverse are exact adjoints at R>1 on a well-posed operator.
+
+    Completeness-critic flagged a "reverse inverts a different operator than the
+    forward at R>1" from a roundtrip that degraded at R=2 but not R=1. That is a
+    false positive: the failing configuration made ``RT/dt`` land on an integer
+    (a uniform moving average with exact transfer-function zeros -- the
+    rank-deficiency the module already documents), which strikes specific R
+    values (R=2 -> RT/dt=10 here) and not others (R=1.5, 2.5, 3 all recover
+    cleanly). With a genuinely well-posed operator (non-integer ``RT/dt`` at
+    every R, overdetermined half-day cout), the deposition roundtrip is
+    machine-exact at R>1 exactly as at R=1, confirming the two directions are
+    consistent adjoints. This guards adjoint consistency across R in a
+    well-posed configuration; the R-independent steady-state magnitude of the
+    DEP1 fix itself is guarded separately by the steady-state mass-balance test.
+    """
+    dates = pd.date_range("2020-01-01", "2020-02-01", freq="D")
+    n = len(dates)
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_dates = pd.date_range("2020-01-01", "2020-02-01", freq="12h")
+    cout_tedges = pd.date_range("2020-01-01", periods=len(cout_dates) + 1, freq="12h")
+
+    flow = np.full(n, 100.0)
+    t = np.arange(n, dtype=float)
+    original_deposition = 20.0 + 10.0 * np.sin(2 * np.pi * t / n)
+    # RT/dt = 3.3 * R -- non-integer at R in {1, 1.5, 2}, so no transfer-function zeros.
+    params = {"aquifer_pore_volume": 330.0, "porosity": 0.25, "thickness": 4.0}
+
+    for retardation_factor in (1.0, 1.5, 2.0):
+        concentration = deposition_to_extraction(
+            dep=original_deposition,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            retardation_factor=retardation_factor,
+            **params,
+        )
+        recovered = extraction_to_deposition(
+            cout=concentration,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            retardation_factor=retardation_factor,
+            regularization_strength=1e-13,
+            **params,
+        )
+        valid = ~np.isnan(recovered)
+        assert valid.sum() == n, f"expected full recovery coverage for R={retardation_factor}"
+        np.testing.assert_allclose(
+            recovered[valid], original_deposition[valid], rtol=0, atol=1e-6, err_msg=f"R={retardation_factor}"
         )
 
 
@@ -643,6 +773,39 @@ def test_input_validation_public_api_wires_validator():
             cout_tedges=tedges[:3],
             **params,
         )
+
+
+def _good_deposition_public_kwargs():
+    """Minimal valid keyword arguments for the public forward deposition entry point."""
+    n = 4
+    dates = pd.date_range("2020-01-01", periods=n, freq="D")
+    tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=n)
+    return {
+        "dep": np.ones(n),
+        "flow": np.full(n, 100.0),
+        "tedges": tedges,
+        "cout_tedges": tedges,
+        "aquifer_pore_volume": 200.0,
+        "porosity": 0.3,
+        "thickness": 5.0,
+        "retardation_factor": 1.0,
+    }
+
+
+def test_deposition_public_rejects_inf_thickness():
+    """thickness=+inf slipped past ``<= 0`` and silently returned all-zeros (the worst case); must raise."""
+    kwargs = _good_deposition_public_kwargs()
+    kwargs["thickness"] = np.inf
+    with pytest.raises(ValueError, match="Thickness must be positive"):
+        deposition_to_extraction(**kwargs)
+
+
+def test_deposition_public_rejects_nan_aquifer_pore_volume():
+    """NaN aquifer_pore_volume slipped past ``<= 0``; must raise."""
+    kwargs = _good_deposition_public_kwargs()
+    kwargs["aquifer_pore_volume"] = np.nan
+    with pytest.raises(ValueError, match="Aquifer pore volume must be positive"):
+        deposition_to_extraction(**kwargs)
 
 
 def test_rank_deficient_integer_rt_no_warning_regularized_solution():
@@ -1196,7 +1359,7 @@ def test_compute_deposition_weights_causality():
 
 
 def test_compute_deposition_weights_with_retardation():
-    """Row-sum scales with R: sum(W[i,:]) * porosity * thickness == RT_i at both R=1 and R=2.
+    """Row-sum invariant sum(W[i,:]) * R * porosity * thickness == RT_i at R=1 and R=2.
 
     Replaces the prior `not np.allclose(weights_r1, weights_r2)` diff-only
     assertion, which a wrong-but-different implementation would pass. The pore
@@ -1205,6 +1368,13 @@ def test_compute_deposition_weights_with_retardation():
     extraction_to_infiltration residence time is fully defined for every cout
     bin at both R; the row-sum invariant is then asserted on real (finite)
     values rather than vacuously on NaN.
+
+    Because the steady-state outlet concentration is R-independent (the areal
+    mass balance ``Q * cout = dep * A_plan`` does not depend on retardation),
+    each row sums to ``RT_i / (R * porosity * thickness)``, so the invariant
+    carries an explicit factor of R on the left. Multiplying the (R-scaled) RT_i
+    reference by ``1/R`` here catches a regression that drops the R division in
+    the weight numerator (which would make the row sum R times too large).
     """
     dates = pd.date_range(start="2020-01-01", periods=50, freq="D")
     tedges = pd.date_range(start="2020-01-01", periods=51, freq="D")
@@ -1237,10 +1407,12 @@ def test_compute_deposition_weights_with_retardation():
         rt_per_bin = rt[:-1]
         valid = np.isfinite(rt_per_bin) & ~np.isnan(weights).any(axis=1)
         assert valid.sum() >= 1, f"setup must produce at least one finite row for R={retardation_factor}"
-        # Row sum scales linearly with R through RT_i; under R=2 the sums are
-        # twice the R=1 sums, so this is not vacuously satisfiable.
+        # Row sum = RT_i / (R * porosity * thickness). Multiplying by
+        # R * porosity * thickness must recover the R-scaled RT_i, which is
+        # twice as large at R=2 as at R=1 -- not vacuously satisfiable, and
+        # sensitive to a dropped R division in the numerator.
         np.testing.assert_allclose(
-            weights[valid].sum(axis=1) * porosity * thickness,
+            weights[valid].sum(axis=1) * retardation_factor * porosity * thickness,
             rt_per_bin[valid],
             rtol=0,
             atol=1e-12,
@@ -1871,18 +2043,19 @@ def test_extraction_to_deposition_spinup_constant_recovers_full_window():
     ids=["constant_flow_R1", "variable_flow_R1", "constant_flow_R2"],
 )
 def test_mass_conservation_pulse_dep(flow_pattern, retardation_factor, pulse_start, pulse_end):
-    """Closed-window mass balance: Σ cout · Q · Δt = D · A_eff · pulse_width.
+    """Closed-window mass balance: Σ cout · Q · Δt = D · A_plan · pulse_width.
 
     Dep is a constant pulse over [pulse_start, pulse_end] (well past spin-up),
     zero elsewhere. The cout window matches the dep window and is long enough
-    that the entire response decays into machine-zero bins inside it. Mass
-    balance holds exactly when ``A_eff = R · V_pore / (n · b)``.
+    that the entire response decays into machine-zero bins inside it.
 
-    The 1/r_i^2-weighted-LS framing of row normalization (see Notes block in
-    ``extraction_to_deposition``) is a forward-pass model identity: any per-bin
-    contribution ``cout[i] = sum_j W[i,j] dep[j]`` summed against ``Q * dt``
-    recovers ``D * A_eff * pulse_width`` exactly. A 1.5x scaling bug in
-    ``compute_deposition_weights`` would fail this at the 50 percent relative level.
+    The injected areal mass is ``D · A_plan · pulse_width`` with plan area
+    ``A_plan = V_pore / (porosity · thickness)`` -- independent of retardation:
+    linear reversible sorption stores solute on the immobile matrix during
+    transit but every gram eventually elutes, so the closed-window extracted
+    mass equals the injected mass regardless of R. (A pre-fix bug scaled cout
+    -- and hence extracted mass -- by R; this pins the R-independent balance,
+    failing at the 50 percent relative level for R=2 on that bug.)
     """
     n = 80
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
@@ -1909,8 +2082,8 @@ def test_mass_conservation_pulse_dep(flow_pattern, retardation_factor, pulse_sta
     valid = ~np.isnan(cout)
     mass_extracted = np.sum(cout[valid] * flow[valid] * 1.0)  # Δt_cout = 1 day
 
-    a_eff = retardation_factor * params["aquifer_pore_volume"] / (params["porosity"] * params["thickness"])
-    mass_injected = deposition_rate * a_eff * (pulse_end - pulse_start)
+    a_plan = params["aquifer_pore_volume"] / (params["porosity"] * params["thickness"])
+    mass_injected = deposition_rate * a_plan * (pulse_end - pulse_start)
 
     np.testing.assert_allclose(mass_extracted, mass_injected, rtol=1e-10)
 
@@ -2038,6 +2211,47 @@ def test_spinup_duration_first_bin_zero_flow():
 
     duration = spinup_duration(flow=flow, tedges=tedges, aquifer_pore_volume=500.0, retardation_factor=1.0)
     np.testing.assert_allclose(duration, 8.0, rtol=0, atol=1e-12)
+
+
+def test_spinup_duration_default_retardation_factor():
+    """spinup_duration defaults retardation_factor to 1.0 (package standard).
+
+    Omitting ``retardation_factor`` must behave as R=1 (spin-up = V_pore / Q
+    under constant flow), matching every other public function's default and the
+    explicit R=1 call. Pins the DEP5 API default, previously a required argument.
+    """
+    n = 30
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+
+    duration = spinup_duration(flow=flow, tedges=tedges, aquifer_pore_volume=500.0)
+    np.testing.assert_allclose(duration, 5.0, rtol=0, atol=1e-12)
+
+    explicit = spinup_duration(flow=flow, tedges=tedges, aquifer_pore_volume=500.0, retardation_factor=1.0)
+    np.testing.assert_array_equal(duration, explicit)
+
+
+def test_spinup_float_raises_not_implemented():
+    """A float ``spinup`` raises NotImplementedError in every deposition entry point.
+
+    The fraction-threshold spin-up mode is not implemented for deposition
+    (matching the diffusion family). A float was previously accepted and
+    silently ignored (behaviour identical to ``None``); all three public entry
+    points now reject it explicitly via ``_validate_deposition_inputs``.
+    """
+    n = 6
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    params = {"aquifer_pore_volume": 200.0, "porosity": 0.3, "thickness": 5.0}
+
+    with pytest.raises(NotImplementedError, match="spinup"):
+        deposition_to_extraction(dep=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, spinup=0.5, **params)
+    with pytest.raises(NotImplementedError, match="spinup"):
+        extraction_to_deposition(cout=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, spinup=0.5, **params)
+    with pytest.raises(NotImplementedError, match="spinup"):
+        extraction_to_deposition_full(
+            cout=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, spinup=0.5, **params
+        )
 
 
 @pytest.mark.parametrize(
