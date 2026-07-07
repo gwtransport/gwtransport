@@ -307,6 +307,13 @@ def _propagate_rest(
     ndarray
         Propagated resident deviation at each node, shape ``(n_quad,)``.
     """
+    # Resolution limit (mirrors _radial_asr_reuse._rest_propagator_matrix): once the diffusion length
+    # sqrt(D_m tau) drops below half the coarsest node gap the grid cannot resolve the near-delta diffusive
+    # Green's function and the quadratured resolvent amplifies mass (dv^T P > 1). There the propagator is the
+    # identity to grid accuracy (diffusion has not crossed a cell), so the field passes through unchanged
+    # (mass-exact). Keeping this in sync with the reuse engine keeps the two agreeing at any n_quad.
+    if np.sqrt(d_m_eff * tau) < 0.5 * float(np.diff(r_nodes).max()):
+        return field.copy()
     weighted = field * (r_nodes / d_m_eff) * dr_weights
     if not np.any(weighted != 0.0):
         return np.zeros_like(field)

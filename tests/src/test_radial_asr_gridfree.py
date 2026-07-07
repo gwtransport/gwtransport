@@ -404,6 +404,27 @@ class TestGridfreeEngine:
         # the manual mean of the same production engine (cout_deviation) to machine precision.
         np.testing.assert_allclose(ens[ext], manual, rtol=1e-12)
 
+    @pytest.mark.parametrize("alpha_l", [8.0, 3.0])
+    def test_echo_v_window_conserves_mass_at_low_peclet(self, alpha_l):
+        # The resident-profile V' quadrature window must be Peclet-aware. At low Peclet (large alpha_L,
+        # r_front/alpha_L << 1) the profile spreads over many breakthrough widths; a flat 4 S_inj/R margin
+        # truncates that tail and loses mass. Isolate the window from any finite-extraction loss with ONE
+        # injection bin and ONE huge extraction bin (every parcel arrives, so G1(T_end; V') -> 1): then
+        # recovered = W[0, 0] * T_end = int f(V') dV' = S_inj/R exactly, and any deficit is pure window
+        # truncation. Before the Peclet-aware window this lost ~1.5e-2 at alpha_L = 8 / ~3e-4 at alpha_L = 3.
+        c_geo, r_w, s_inj, t_end = 25.0, 0.5, 5000.0, 5.0e7
+        w = single_cycle_echo_matrix(
+            inj_volume_edges=np.array([0.0, s_inj]),
+            ext_volume_edges=np.array([0.0, t_end]),
+            c_geo=c_geo,
+            r_w=r_w,
+            alpha_l=alpha_l,
+            inj_flow_scale=100.0,
+            ext_flow_scale=100.0,
+            n_quad=240,
+        )
+        np.testing.assert_allclose(w[0, 0] * t_end, s_inj, rtol=1e-4)
+
 
 @contextlib.contextmanager
 def _tight_dehoog():
@@ -483,8 +504,15 @@ class TestReuseEngine:
     @pytest.mark.parametrize("direction", ["injection", "extraction"])
     def test_airy_matrix_is_per_reversal_operator(self, direction):
         # THE correctness identity (D_m=0): each cached-matrix column equals the per-reversal _propagate of a
-        # unit source at that node -- the same single de Hoog inversion of the same Airy kernel. Bit-exact,
-        # Peclet-independent (the matrix IS the operator; end-to-end gaps are only the de Hoog nonlinearity).
+        # unit source at that node -- the same single de Hoog inversion of the same Airy kernel. The reuse
+        # matrix folds the Sturm-Liouville source weight e^{-gauge r'/alpha_L} into assemble_airy_resolvent's
+        # log-exponents (overflow-safe at any Peclet -- the divergent injection branch and the extraction
+        # weight would otherwise blow up past r/alpha_L ~ 700 and meet as Inf * 0 = NaN), while _propagate
+        # applies it as a separate post-multiply. The two therefore differ only by exp(a + b) vs exp(a) e^b
+        # reorder noise (~1e-14 in the transform, amplified by the de Hoog condition to ~1e-8 in the column) --
+        # the same benign effect the Riccati sibling below tolerates. Measured worst |Δcol| = 7e-8 across the
+        # three probed columns/directions, so atol=5e-7 keeps ~7× headroom over the real reorder noise while a
+        # sign / structural error is O(|col|) ~ 1e-2..1e-1, five orders of magnitude above the tolerance.
         flow, dt = np.array([100.0] * 4 + [-100.0] * 4), np.ones(8)
         r_nodes, _, dr = _field_grid(flow, dt, CG, 0.5, 0.5, 0.0, 60)
         tau, flow_scale = 400.0, 100.0  # flushed-volume tau = phase_volume
@@ -497,9 +525,35 @@ class TestReuseEngine:
             e = np.zeros(60)
             e[j] = 1.0
             col = _propagate(e, r_nodes, sl, direction, tau, r_w=0.5, alpha_l=0.5, flow_scale=flow_scale, c_geo=CG)
-            # Bit-identical: the matrix column and _propagate of a unit source feed the SAME Ghat*sl input
-            # (the one-hot contraction adds only zeros, exact in IEEE) through the SAME de Hoog code.
-            np.testing.assert_array_equal(pmat[:, j], col)
+            np.testing.assert_allclose(pmat[:, j], col, rtol=1e-6, atol=5e-7)
+
+    @pytest.mark.parametrize("direction", ["injection", "extraction"])
+    def test_airy_matrix_finite_at_high_peclet(self, direction):
+        # At Peclet r_max/alpha_L > ~700 the growing-Airy injection branch (assemble's e^{+g r_sum}) and the
+        # extraction Sturm-Liouville weight e^{+r'/alpha_L} each overflow double precision; only folding the
+        # weight into the assembly's log-exponents keeps their bounded product finite. Before the fold the
+        # propagator was all-NaN, which the ensemble's nan_to_num silently mapped to a physical zero (cout=0).
+        alpha_l, r_w, c_geo = 0.18, 0.5, np.pi * 30.0 * 0.3
+        flow = np.array([5000.0] * 60 + [-10000.0] * 15 + [5000.0] * 30 + [-10000.0] * 30)
+        dt = np.ones(len(flow))
+        r_nodes, _, dr = _field_grid(flow, dt, c_geo, r_w, alpha_l, 0.0, 120)
+        assert r_nodes.max() / alpha_l > 700.0  # the regime that overflowed before the fold
+        signed = flow[flow > 0] if direction == "injection" else -flow[flow < 0]
+        tau, flow_scale = float(np.sum(signed)), float(np.mean(signed))
+        pmat = _airy_propagator_matrix(
+            direction,
+            tau,
+            r_nodes,
+            dr,
+            r_w=r_w,
+            alpha_l=alpha_l,
+            c_geo=c_geo,
+            flow_scale=flow_scale,
+            n_terms=44,
+            tol=1e-9,
+        )
+        assert np.all(np.isfinite(pmat))
+        assert np.max(np.abs(pmat)) < 1.0  # the bounded physical field hand-off (|P| ~ O(1), not amplifying)
 
     @pytest.mark.slow
     @pytest.mark.parametrize(("direction", "r_fac"), [("injection", 1.0), ("extraction", 1.0), ("extraction", 2.0)])
@@ -745,6 +799,53 @@ class TestRestDiffusion:
             for r, rp in ((1.2, 4.0), (4.0, 1.2), (2.0, 30.0)):
                 got = rest_resolvent(s=np.array([s]), r=r, r_prime=rp, r_w=r_w, d_m=d_m)[0, 0]
                 assert abs(got - complex(ref(s, r, rp))) / abs(complex(ref(s, r, rp))) < 1e-12
+
+    def test_rest_resolvent_high_frequency_no_overflow(self):
+        # At a high Laplace frequency Re(kappa r_w) exceeds ~354, where splitting the outer term's bounded
+        # combined exponent into exp(|Re z_w| + z_w) * exp(-z_lt - z_gt) overflows the first factor to Inf and
+        # forms Inf * 0 = NaN, defeating the scaled Bessels. The single-combined-exponent form stays finite and
+        # matches mpmath (arbitrary precision, which represents the huge I_1). r ~ r_w keeps the true (tiny)
+        # value above the double-precision underflow floor so the match is a real relative comparison.
+        d_m, r_w = 0.5, 0.5
+
+        def ref(s, r, rp):
+            s = mp.mpc(s)
+            k = mp.sqrt(s / d_m)
+            rl, rg = (r, rp) if r <= rp else (rp, r)
+            u0 = mp.besselk(1, k * r_w) * mp.besseli(0, k * rl) + mp.besseli(1, k * r_w) * mp.besselk(0, k * rl)
+            return u0 * mp.besselk(0, k * rg) / mp.besselk(1, k * r_w)
+
+        s = 720.0**2 * d_m  # Re(kappa r_w) = 360 > 354 -> the split outer factor overflows to Inf
+        for r, rp in ((0.6, 0.6), (0.55, 0.7)):
+            got = rest_resolvent(s=np.array([s + 0j]), r=r, r_prime=rp, r_w=r_w, d_m=d_m)[0, 0]
+            expected = complex(ref(s, r, rp))
+            assert np.isfinite(got)
+            assert abs(got - expected) / abs(expected) < 1e-10
+
+    def test_rest_propagator_conserves_mass_across_regimes(self):
+        # RA2: the rest (Q=0) propagator must be finite AND must never AMPLIFY resident mass -- the diffusion
+        # invariant dv^T P <= dv per source column (amplification is a maximum-principle violation that drives
+        # cout above cin end-to-end). Two regimes are exercised on the same grid:
+        #   sub-grid (small D_m): the diffusion length sqrt(D_m tau) drops below the grid spacing, so the
+        #     Bessel resolvent's near-delta Green's function is unresolved. The quadratured matrix AMPLIFIED
+        #     mass here (dv^T P reached ~2.4x -> cout > cin, recovered mass > injected) and, before the de Hoog
+        #     underflow guard, its far-field cells were NaN and collapsed cout to background. The
+        #     resolution-limit guard returns the identity (diffusion has not crossed a cell), so mass is
+        #     EXACTLY conserved and the rest reduces to the D_m=0 echo (the correct small-D_m limit).
+        #   resolved (larger D_m): the de Hoog matrix is used; it conserves interior mass and only loses a
+        #     little to the far field at the outer boundary -- never amplifies.
+        r_w, alpha_l, c_geo = 0.5, 0.5, np.pi * 10.0 * 0.35
+        flow = np.array([5.0] * 40 + [0.0] + [-5.0] * 40)
+        dt = np.ones(len(flow))
+        for d_m, sub_grid in ((1e-3, True), (0.05, False)):
+            r_nodes, _, dr = _field_grid(flow, dt, c_geo, r_w, alpha_l, d_m, 120)
+            dv = 2.0 * c_geo * r_nodes * dr  # radial mass measure: mass = dv @ field
+            pmat = _rest_propagator_matrix(1.0, r_nodes, dr, r_w=r_w, d_m_eff=d_m, n_terms=44, tol=1e-9)
+            assert np.all(np.isfinite(pmat))
+            col_mass = dv @ pmat  # resident mass produced per unit source; must never exceed the source mass
+            assert np.max(col_mass / dv) <= 1.0 + 1e-6  # no amplification (pre-fix reached ~2.4x at small D_m)
+            if sub_grid:  # sub-grid rest is the identity to grid accuracy -> mass EXACTLY conserved
+                np.testing.assert_allclose(col_mass, dv, rtol=1e-12)
 
     @pytest.mark.slow
     def test_seasonal_rest_matches_fv_oracle(self):

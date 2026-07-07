@@ -125,6 +125,7 @@ from gwtransport._radial_asr_compose import single_cycle_echo_matrix
 from gwtransport._radial_asr_drift_kernels import _RS_FRAC, block_cout_deviation
 from gwtransport._radial_asr_reuse import cout_deviation
 from gwtransport._time import dt_to_days
+from gwtransport._validation import _validate_retardation_factor
 
 
 def _is_single_cycle(flow: npt.NDArray[np.floating]) -> bool:
@@ -196,9 +197,7 @@ def _validate(
     if molecular_diffusivity < 0.0:
         msg = "molecular_diffusivity must be non-negative"
         raise ValueError(msg)
-    if retardation_factor < 1.0:
-        msg = "retardation_factor must be >= 1.0"
-        raise ValueError(msg)
+    _validate_retardation_factor(retardation_factor)
     if weights is not None and len(weights) != len(pore_heights):
         msg = "weights must have the same length as pore_heights"
         raise ValueError(msg)
@@ -273,29 +272,36 @@ def _reuse_ensemble(
     """Weight-averaged multi-cycle extracted-flux deviation over the streamtubes.
 
     Runs the reused-propagator-matrix multi-cycle engine once per streamtube (geometry constant
-    ``c_geo = pi b n``) and averages by ``weights``. Used by the forward (with ``cin``) and the reverse
-    (with unit pulses).
+    ``c_geo = pi b n``) and averages by ``weights``. ``cin_deviation`` may be ``(n,)`` or ``(n, k)`` -- a
+    column batch is transported through one engine pass per streamtube (the per-phase propagator / source /
+    readout matrices are cin-independent, so they are built once and applied to every column). Used by the
+    forward (with ``cin``) and the reverse (with the unit-pulse column batch).
 
     Returns
     -------
-    ndarray, shape (n,)
-        Weight-averaged extracted-flux deviation on extraction bins, ``0`` elsewhere.
+    ndarray, shape (n,) or (n, k)
+        Weight-averaged extracted-flux deviation on extraction bins (matching ``cin_deviation``), ``0``
+        elsewhere.
     """
-    acc = np.zeros(len(flow))
+    # cout_deviation returns NaN on injection / rest bins by contract (structural, expected). Only the
+    # extraction bins are accumulated, so those structural NaNs are dropped without a blanket nan_to_num --
+    # a genuine NaN on an EXTRACTION bin (a real numerical failure) then propagates and surfaces instead of
+    # silently reading as a physical zero.
+    ext_mask = flow < 0.0
+    acc = np.zeros(np.shape(cin_deviation))
     for c_geo, w_i in zip(c_geos, weights, strict=True):
-        acc += w_i * np.nan_to_num(
-            cout_deviation(
-                cin_deviation=cin_deviation,
-                flow=flow,
-                dt_days=dt_days,
-                c_geo=c_geo,
-                r_w=well_radius,
-                alpha_l=longitudinal_dispersivity,
-                molecular_diffusivity=molecular_diffusivity,
-                retardation_factor=retardation_factor,
-                n_quad=n_quad,
-            )
+        dev = cout_deviation(
+            cin_deviation=cin_deviation,
+            flow=flow,
+            dt_days=dt_days,
+            c_geo=c_geo,
+            r_w=well_radius,
+            alpha_l=longitudinal_dispersivity,
+            molecular_diffusivity=molecular_diffusivity,
+            retardation_factor=retardation_factor,
+            n_quad=n_quad,
         )
+        acc[ext_mask] += w_i * dev[ext_mask]
     return acc / np.sum(weights)
 
 
@@ -590,6 +596,12 @@ def extraction_to_infiltration(
     -------
     ndarray, shape (n,)
         Recovered injected concentration; NaN on extraction / rest bins.
+
+    Raises
+    ------
+    ValueError
+        If ``cout`` contains NaN on any extraction bin (``flow < 0``), which would poison the
+        least-squares solve. Structural NaN on injection / rest bins is allowed.
     """
     cout = np.asarray(cout, dtype=float)
     flow = np.asarray(flow, dtype=float)
@@ -610,6 +622,12 @@ def extraction_to_infiltration(
         regional_flux=regional_flux,
         n_modes=n_modes,
     )
+    # A NaN measurement on an extraction bin (the only bins the inverse reads) would poison the whole
+    # least-squares solve into an all-NaN cin; raise instead, as the advection / diffusion inverses do.
+    # Structural NaN on injection / rest bins is allowed (those bins are ignored by the inverse).
+    if np.any(np.isnan(cout[flow < 0.0])):
+        msg = "cout contains NaN values on extraction bins, which are not allowed"
+        raise ValueError(msg)
     c_geos = np.pi * pore_heights * porosity
     # A rest phase with molecular diffusion routes to the reuse engine (see the forward function); regional
     # drift never uses the radial echo operator (it breaks the azimuthal symmetry the echo relies on).
@@ -629,15 +647,17 @@ def extraction_to_infiltration(
             n_quad=n_quad,
         )
     else:
-        # Build the dense forward operator W by unit-pulse columns; the reverse cannot reuse the cheap
-        # single-solve forward path. The block (drift) engine transports all pulse columns in ONE pass
-        # (the per-phase kernels are shared across columns); the scalar reuse engine solves per column.
+        # Build the dense forward operator W whose columns are the unit-injection-pulse responses; the reverse
+        # cannot reuse the cheap single-solve forward path. The per-phase propagator / source / readout matrices
+        # are cin-independent (flow + geometry only), so the whole unit-pulse batch is transported in ONE engine
+        # pass -- the matrices are built once and applied to every column. The block (drift) engine carries
+        # the regional drift; the scalar reuse engine the drift-free case.
         inj_mask, ext_mask = flow > 0.0, flow < 0.0
         inj_idx = np.flatnonzero(inj_mask)
         dt_days = dt_to_days(tedges)
+        pulses = np.zeros((len(flow), len(inj_idx)))
+        pulses[inj_idx, np.arange(len(inj_idx))] = 1.0
         if regional_flux != 0.0:
-            pulses = np.zeros((len(flow), len(inj_idx)))
-            pulses[inj_idx, np.arange(len(inj_idx))] = 1.0
             cols = _block_ensemble(
                 pulses,
                 flow=flow,
@@ -653,25 +673,20 @@ def extraction_to_infiltration(
                 weights=weights_arr,
                 n_quad=n_quad,
             )
-            w_ens = cols[ext_mask, :]
         else:
-            w_ens = np.zeros((int(np.sum(ext_mask)), len(inj_idx)))
-            for j, idx in enumerate(inj_idx):
-                pulse = np.zeros(len(flow))
-                pulse[idx] = 1.0
-                col = _reuse_ensemble(
-                    pulse,
-                    flow=flow,
-                    dt_days=dt_days,
-                    c_geos=c_geos,
-                    well_radius=well_radius,
-                    longitudinal_dispersivity=longitudinal_dispersivity,
-                    molecular_diffusivity=molecular_diffusivity,
-                    retardation_factor=retardation_factor,
-                    weights=weights_arr,
-                    n_quad=n_quad,
-                )
-                w_ens[:, j] = col[ext_mask]
+            cols = _reuse_ensemble(
+                pulses,
+                flow=flow,
+                dt_days=dt_days,
+                c_geos=c_geos,
+                well_radius=well_radius,
+                longitudinal_dispersivity=longitudinal_dispersivity,
+                molecular_diffusivity=molecular_diffusivity,
+                retardation_factor=retardation_factor,
+                weights=weights_arr,
+                n_quad=n_quad,
+            )
+        w_ens = cols[ext_mask, :]
     # Tikhonov least-squares min ||W x - (cout-bg)||^2 + lambda ||x||^2 via the stable augmented
     # system [W; sqrt(lambda) I] x = [cout-bg; 0]. The echo / reuse operator has column sums ~1
     # (mass conservation per injection bin) and overdetermined rows, so a direct Tikhonov fit is used.
@@ -820,13 +835,17 @@ def _velocity_gamma_streamtubes(
     Raises
     ------
     ValueError
-        If ``screen_height`` or ``velocity_cv`` is not positive.
+        If ``screen_height`` is not positive or ``velocity_cv`` is negative.
     """
     if screen_height <= 0.0:
         msg = "screen_height must be positive"
         raise ValueError(msg)
-    if velocity_cv <= 0.0:
-        msg = "velocity_cv must be positive (use a single homogeneous screen for no macrodispersion)"
+    if velocity_cv < 0.0:
+        msg = "velocity_cv must be non-negative"
         raise ValueError(msg)
+    if velocity_cv == 0.0:
+        # A degenerate gamma (std 0) is not a valid distribution; velocity_cv = 0 is the homogeneous
+        # screen -- a single streamtube at the mean velocity (pore height H), matching the doc.
+        return np.array([screen_height]), np.array([1.0])
     bins = gamma.bins(mean=1.0, std=velocity_cv, n_bins=n_bins)
     return screen_height / bins["expected_values"], bins["probability_mass"]

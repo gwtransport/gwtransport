@@ -155,13 +155,15 @@ def single_cycle_echo_matrix(
     t_edges = np.asarray(ext_volume_edges, dtype=float) - ext_volume_edges[0]  # 0 .. T_end
     dt = np.diff(t_edges)
 
-    # V' quadrature window: the resident profile f(V') = G1(S_inj; V') decays to ~0 once the FR front
-    # mean (R c_geo r'^2 ~ R V') exceeds the injected volume by several breakthrough widths; taking
-    # mu_FR(r_max) ~ 4 S_inj covers the support (integrand ~0 beyond -- verified by mass conservation
-    # int f dV' = S_inj to the de Hoog + quadrature floor).
-    r_max = np.sqrt((4.0 * s_inj / (retardation_factor * c_geo)) + r_w**2)
-    # D_m dispatch is inside transfer_function: the vectorized Airy branch for D_m = 0, the Riccati
-    # log-derivative branch for D_m > 0 (exact at any A_0/D_m, no precision cap).
+    # V' quadrature window: the resident profile f(V') = G1(S_inj; V') has its front at the retarded solute
+    # radius r_front (where the FR arrival mean equals S_inj) and a dispersive tail of breakthrough width
+    # ~sqrt(alpha_L r_front). A flat 4 S_inj/R margin is Peclet-blind and truncates that tail at low Peclet
+    # (r_front/alpha_L << 1), losing mass (int f dV' < S_inj/R). Mirror the reuse engine's 12-sigma advective
+    # reach plus a 6-sigma molecular reach over the cycle duration -- the same grid that conserves the mass
+    # to ~1e-5. D_m dispatch is inside transfer_function (Airy for D_m = 0, Riccati log-derivative for D_m > 0).
+    r_front = np.sqrt(r_w**2 + s_inj / (retardation_factor * c_geo))
+    total_time = s_inj / inj_flow_scale + t_edges[-1] / ext_flow_scale
+    r_max = r_front + 12.0 * np.sqrt(alpha_l * r_front + alpha_l**2) + 6.0 * np.sqrt(molecular_diffusivity * total_time)
     v_max = c_geo * (r_max**2 - r_w**2)
     nodes, weights = np.polynomial.legendre.leggauss(n_quad)
     v_nodes = 0.5 * v_max * (nodes + 1.0)

@@ -279,6 +279,7 @@ def assemble_airy_resolvent(
     r_sum: npt.NDArray[np.floating],
     alpha_l: float,
     gauge_sign: float,
+    source_log_weight: npt.NDArray[np.floating] | float = 0.0,
 ) -> npt.NDArray[np.complexfloating]:
     r"""Assemble ``Ghat(r, r'; s) = -(pref_a e^{ea} - pref_b e^{eb})`` from precomputed scaled-Airy pieces.
 
@@ -290,6 +291,16 @@ def assemble_airy_resolvent(
     of radii once and assemble every output node from prefix selection -- the ``O(n^2) -> O(n)``
     saving the field propagator relies on.
 
+    The gauge term ``g * r_sum = gauge_sign (r + r')/(2 alpha_L)`` grows with the radii, so for the
+    field propagator its ``e^{g r_sum}`` factor is divergent (``+r/alpha_L`` injection) or its Airy
+    counterpart is (``-r/alpha_L`` extraction); on its own it overflows/underflows double precision at
+    Peclet ``r/alpha_L`` beyond ~700. It is tamed by the caller's Sturm-Liouville source weight
+    ``e^{-gauge_sign r'/alpha_L}``, whose LOG (``source_log_weight = -gauge_sign r'/alpha_L``, per
+    source node) must therefore be folded into the exponents *before* ``np.exp`` so the divergent parts
+    cancel to ``gauge_sign (r - r')/(2 alpha_L)`` (bounded by ``r_max/(2 alpha_L)``, and dominated by the
+    Airy decay) -- rather than overflowing to ``Inf`` and then meeting the taming factor as ``Inf * 0``.
+    The default ``0.0`` reproduces the bare interior resolvent (no source weight).
+
     Parameters
     ----------
     piece_a, piece_b, piece_w : dict of ndarray
@@ -300,11 +311,16 @@ def assemble_airy_resolvent(
         Longitudinal dispersivity (m).
     gauge_sign : float
         ``+1`` divergent (injection, Robin well BC) / ``-1`` convergent (extraction, Neumann well BC).
+    source_log_weight : ndarray or float, optional
+        Log of the caller's Sturm-Liouville source weight per source node ``r'``
+        (``-gauge_sign r'/alpha_L``), broadcast over the source axis and folded into both exponents so
+        the divergent gauge cancels before ``np.exp``. Default ``0.0`` (bare resolvent, no weight).
 
     Returns
     -------
     ndarray of complex
-        ``Ghat(r, r'; s)``, same broadcast shape as the input pieces.
+        ``Ghat(r, r'; s)`` (times the source weight when ``source_log_weight`` is given), same broadcast
+        shape as the input pieces.
     """
     g = gauge_sign / (2.0 * alpha_l)
     if gauge_sign < 0:  # extraction: Danckwerts -> zero dispersive flux -> Neumann u_0'(r_w) = 0
@@ -316,8 +332,8 @@ def assemble_airy_resolvent(
     denom0 = piece_w["s_regp"] * piece_w["s_inf"] - piece_w["s_infp"] * piece_w["s_reg"]
     pref_a = bc_reg * piece_a["s_inf"] * piece_b["s_inf"] / (bc_inf * denom0)
     pref_b = piece_a["s_reg"] * piece_b["s_inf"] / denom0
-    exp_a = g * r_sum - (piece_a["xi"] + piece_b["xi"] - 2.0 * piece_w["xi"])
-    exp_b = g * r_sum + (piece_a["xiR"] - piece_w["xiR"]) - (piece_b["xi"] - piece_w["xi"])
+    exp_a = g * r_sum + source_log_weight - (piece_a["xi"] + piece_b["xi"] - 2.0 * piece_w["xi"])
+    exp_b = g * r_sum + source_log_weight + (piece_a["xiR"] - piece_w["xiR"]) - (piece_b["xi"] - piece_w["xi"])
     return -(pref_a * np.exp(exp_a) - pref_b * np.exp(exp_b))
 
 
@@ -373,13 +389,12 @@ def rest_resolvent(
     z_lt, z_gt, z_w = kappa * r_lt, kappa * r_gt, kappa * r_w
     # Ghat = [I_0(z_<) + (I_1(z_w)/K_1(z_w)) K_0(z_<)] K_0(z_>); split so the scaled-Bessel scaling
     # exponents (ive scales by e^{-|Re z|}, kve by e^{+z}) difference to bounded values -- no overflow.
+    # Both terms carry the scaling exponents in a SINGLE np.exp of the combined (bounded) sum: the outer
+    # term's ``|Re z_w| + z_w`` alone overflows at Re(z_w) > ~354, but ``|Re z_w| + z_w - z_lt - z_gt``
+    # <= 0 (since r_w <= r_< <= r_>) so exponentiating the sum is overflow-safe.
     term_inner = ive(0, z_lt) * kve(0, z_gt) * np.exp(np.abs(z_lt.real) - z_gt)
     term_outer = (
-        (ive(1, z_w) / kve(1, z_w))
-        * np.exp(np.abs(z_w.real) + z_w)
-        * kve(0, z_lt)
-        * kve(0, z_gt)
-        * np.exp(-z_lt - z_gt)
+        (ive(1, z_w) / kve(1, z_w)) * kve(0, z_lt) * kve(0, z_gt) * np.exp(np.abs(z_w.real) + z_w - z_lt - z_gt)
     )
     return term_inner + term_outer
 
