@@ -61,7 +61,7 @@ longest for the largest pore volumes of a distribution.
 What happens in that region is governed by a ``spinup`` policy, following the package convention
 (see :mod:`gwtransport.advection`); :func:`full`, :func:`mean` and
 :func:`gamma` all share the contract ``spinup={'constant'} | None | float in
-[0, 1)`` and the default is ``"constant"`` everywhere:
+[0, 1]`` and the default is ``"constant"`` everywhere:
 
 * ``"constant"`` (default) **warm-starts** by extrapolating the boundary flow (flow held constant
   at its first/last value), so no in-record output is ``NaN``.
@@ -94,6 +94,13 @@ from scipy.stats import gamma as gamma_dist
 from gwtransport._time import tedges_to_days
 from gwtransport.gamma import parse_parameters
 from gwtransport.utils import cumulative_flow_volume, linear_interpolate
+
+# Relative slack on the covered-fraction spin-up gate. The covered sub-mass ``den`` equals its
+# fully-covered reference only up to summation-reassociation ulps, so an exact ``den >= threshold *
+# reference`` comparison spuriously rejects fully-covered bins at the strictest threshold (1.0). The
+# slack is far above that float noise (band widths reach ~1e4 pieces, ~1e-12 relative) yet negligible
+# as a physical coverage tolerance.
+_SPINUP_GATE_RELTOL = 1e-9
 
 
 def _boundary_extrapolated_map(
@@ -133,19 +140,19 @@ def _resolve_spinup(spinup: str | float | None) -> tuple[bool, float]:
     """Normalize the residence-time ``spinup`` policy to ``(extrapolate, threshold)``.
 
     The three sibling residence-time functions share one spin-up contract,
-    ``{'constant'} | None | float in [0, 1)``, matching the package convention (see
+    ``{'constant'} | None | float in [0, 1]``, matching the package convention (see
     :mod:`gwtransport.advection`):
 
     * ``'constant'`` -> ``(True, 0.0)`` -- warm-start by extrapolating the boundary flow.
     * ``None`` -> ``(False, 0.0)`` -- strict map (no extrapolation); a collapsed mean is emitted
       wherever any covered sub-mass / valid streamtube remains.
-    * ``float`` in ``[0, 1)`` -> ``(False, float)`` -- strict map, with the covered-fraction
+    * ``float`` in ``[0, 1]`` -> ``(False, float)`` -- strict map, with the covered-fraction
       threshold gating a collapsed mean. ``0.0`` matches ``None``; larger values require a larger
-      covered fraction before a bin is emitted.
+      covered fraction before a bin is emitted, and ``1.0`` is strictest (full coverage required).
 
     Parameters
     ----------
-    spinup : {'constant'}, None, or float in [0, 1)
+    spinup : {'constant'}, None, or float in [0, 1]
         Public spin-up policy.
 
     Returns
@@ -159,15 +166,15 @@ def _resolve_spinup(spinup: str | float | None) -> tuple[bool, float]:
     Raises
     ------
     ValueError
-        If ``spinup`` is not ``'constant'``, ``None``, or a float in ``[0, 1)``.
+        If ``spinup`` is not ``'constant'``, ``None``, or a float in ``[0, 1]``.
     """
     if spinup == "constant":
         return True, 0.0
     if spinup is None:
         return False, 0.0
-    if isinstance(spinup, int | float) and not isinstance(spinup, bool) and 0.0 <= spinup < 1.0:
+    if isinstance(spinup, int | float) and not isinstance(spinup, bool) and 0.0 <= spinup <= 1.0:
         return False, float(spinup)
-    msg = "spinup should be 'constant', None, or a float in [0, 1)"
+    msg = "spinup should be 'constant', None, or a float in [0, 1]"
     raise ValueError(msg)
 
 
@@ -282,7 +289,7 @@ def full(
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless]. A value greater
         than 1.0 indicates the compound moves slower than water. Default is 1.0.
-    spinup : {'constant'}, None, or float in [0, 1), optional
+    spinup : {'constant'}, None, or float in [0, 1], optional
         How to treat the spin-up zone, where a pore volume's retarded look-back/forward parcel
         leaves the flow record. Matches the package convention (see :mod:`gwtransport.advection`).
 
@@ -290,7 +297,7 @@ def full(
           the record at the boundary flow rates (flow held constant at its first/last value), so
           the residence time stays finite. No left-edge (extraction) or right-edge (infiltration)
           spin-up ``NaN``.
-        * ``None`` or a ``float`` in ``[0, 1)``: strict -- a pore volume whose parcel leaves the
+        * ``None`` or a ``float`` in ``[0, 1]``: strict -- a pore volume whose parcel leaves the
           record at any point within an output bin is ``NaN`` for that bin (all-or-nothing per bin),
           with no extrapolation. This function returns the full per-pore-volume array, so there is no
           pore-volume axis to collapse; the ``float`` covered-fraction threshold therefore behaves
@@ -304,6 +311,8 @@ def full(
     numpy.ndarray
         Mean residence time [days], shape ``(n_pore_volumes, n_output_bins)``. The first
         dimension corresponds to the pore volumes and the second to the ``cout_tedges`` bins.
+        Negative or ``NaN`` ``flow`` makes the cumulative-volume map non-monotone or undefined; the
+        whole array is returned as ``NaN`` (the function refuses rather than raising).
 
     Raises
     ------
@@ -311,7 +320,7 @@ def full(
         If ``tedges`` does not have exactly one more element than ``flow``. If
         ``direction`` is not ``'extraction_to_infiltration'`` or
         ``'infiltration_to_extraction'``. If ``spinup`` is not ``'constant'``, ``None``, or a float
-        in ``[0, 1)``.
+        in ``[0, 1]``.
 
     See Also
     --------
@@ -416,21 +425,25 @@ def full(
     phi_base = _eval_phi(vol_out, phi_v, phi_t, phi_knot, phi_rate, strict_nan=strict)  # (n_out + 1,)
     phi_shift = _eval_phi(vol_out[None, :] + shift[:, None], phi_v, phi_t, phi_knot, phi_rate, strict_nan=strict)
 
-    # Zero-throughflow output bin (dvol -> 0): the volume is fixed while output time advances, so the
-    # flow-weighted average degenerates to the pointwise tau at the bin time midpoint, sign*(T(V_lo +
-    # shift) - t_mid). A direct ratio there would catastrophically cancel.
-    t_mid = 0.5 * (cout_tedges_days[:-1] + cout_tedges_days[1:])
-    nan_outside = np.nan if strict else None
     tol = 1e6 * np.spacing(float(np.max(np.abs(flow_cum)))) if flow_cum.size else 0.0
     with np.errstate(divide="ignore", invalid="ignore"):
         result = (
             sign * ((phi_shift[:, 1:] - phi_shift[:, :-1]) - (phi_base[1:] - phi_base[:-1])[None, :]) / dvol[None, :]
         )
-        t_lookback = linear_interpolate(
-            x_ref=phi_v, y_ref=phi_t, x_query=v_lo[None, :] + shift[:, None], left=nan_outside, right=nan_outside
-        )
-        point = sign * (t_lookback - t_mid[None, :])
-    result = np.where(dvol[None, :] > tol, result, point)
+    # Zero-throughflow output bin (dvol -> 0): the volume is fixed while output time advances, so the
+    # flow-weighted average degenerates to the pointwise tau at the bin time midpoint, sign*(T(V_lo +
+    # shift) - t_mid). A direct ratio there would catastrophically cancel. Only in-record zero-flow
+    # bins reach it, so skip the interp entirely when none are present.
+    degenerate = bins_within & (dvol <= tol)
+    if np.any(degenerate):
+        t_mid = 0.5 * (cout_tedges_days[:-1] + cout_tedges_days[1:])
+        nan_outside = np.nan if strict else None
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t_lookback = linear_interpolate(
+                x_ref=phi_v, y_ref=phi_t, x_query=v_lo[None, :] + shift[:, None], left=nan_outside, right=nan_outside
+            )
+            point = sign * (t_lookback - t_mid[None, :])
+        result = np.where(dvol[None, :] > tol, result, point)
     return np.where(bins_within[None, :], result, np.nan)
 
 
@@ -483,14 +496,15 @@ def mean(
         Default is 'extraction_to_infiltration'.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
-    spinup : {'constant'}, None, or float in [0, 1), optional
+    spinup : {'constant'}, None, or float in [0, 1], optional
         Spin-up policy, sharing the contract of :func:`gamma`. ``'constant'``
         (default) warm-starts by extrapolating the boundary flow so no in-record bin is ``NaN``;
         ``None`` leaves spin-up streamtubes ``NaN`` and the mean renormalizes over those that have
         broken through (emitted wherever at least one streamtube is valid). A ``float`` in
-        ``[0, 1)`` is the covered-fraction threshold: the renormalized mean is emitted only where
-        the fraction of valid streamtubes is at least ``spinup`` (``0.0`` matches ``None``; larger
-        values demand more streamtubes to have broken through). Use :func:`fraction_explained_mean` to
+        ``[0, 1]`` is the covered-fraction threshold: the renormalized mean is emitted only where
+        the fraction of valid streamtubes is at least ``spinup`` (``0.0`` matches ``None``; ``1.0``
+        demands every streamtube; larger values demand more streamtubes to have broken through). Use
+        :func:`fraction_explained_mean` to
         locate the spin-up region.
 
     Returns
@@ -499,7 +513,8 @@ def mean(
         Mean residence time [days], shape ``(n_output_bins,)``. Output bins with no valid
         streamtube (outside the flow record, or -- with ``spinup=None`` -- fully in the spin-up
         zone) are NaN; with a ``float`` ``spinup`` so are bins whose valid-streamtube fraction is
-        below the threshold.
+        below the threshold. Negative or ``NaN`` ``flow`` makes the cumulative-volume map non-monotone
+        or undefined; the whole series is returned as ``NaN`` (the function refuses rather than raising).
 
     See Also
     --------
@@ -621,17 +636,18 @@ def gamma(
         Default is 'extraction_to_infiltration'.
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer [dimensionless]. Default is 1.0.
-    spinup : {'constant'}, None, or float in [0, 1), optional
+    spinup : {'constant'}, None, or float in [0, 1], optional
         How to treat the spin-up zone, where part of the gamma APVD lacks flow history. Matches
         the package convention (see :mod:`gwtransport.advection`).
 
         * ``'constant'`` (default): warm-start -- extrapolate the cumulative-volume-to-time map past
           the record at the boundary flow rates (flow held constant at its first/last value) and
           integrate the full distribution, so no in-record bin is ``NaN``.
-        * ``None`` or a ``float`` in ``[0, 1)``: renormalize the mean over the covered sub-mass,
+        * ``None`` or a ``float`` in ``[0, 1]``: renormalize the mean over the covered sub-mass,
           emitting a bin only where the covered fraction of the distribution is at least the
           threshold. ``None`` and ``0.0`` both give the exact covered-sub-mass conditional mean
-          (emit whenever any sub-mass is covered); larger values demand a larger covered fraction.
+          (emit whenever any sub-mass is covered); larger values demand a larger covered fraction,
+          and ``1.0`` requires the full distribution to be covered.
 
         Output bins lying wholly outside ``tedges`` are ``NaN`` under either policy.
 
@@ -640,14 +656,15 @@ def gamma(
     numpy.ndarray
         APVD-mean residence time [days], shape ``(n_output_bins,)``. Output bins outside the flow
         record are NaN; with a ``float`` ``spinup`` so are bins whose covered fraction is below the
-        threshold.
+        threshold. Negative or ``NaN`` ``flow`` makes the cumulative-volume map non-monotone or
+        undefined; the whole series is returned as ``NaN`` (the function refuses rather than raising).
 
     Raises
     ------
     ValueError
         If ``tedges`` does not have exactly one more element than ``flow``. If ``direction``
         is not ``'extraction_to_infiltration'`` or ``'infiltration_to_extraction'``. If ``spinup``
-        is not ``'constant'``, ``None``, or a float in ``[0, 1)``. Gamma parameter validation is
+        is not ``'constant'``, ``None``, or a float in ``[0, 1]``. Gamma parameter validation is
         delegated to :func:`gwtransport.gamma.parse_parameters`.
 
     See Also
@@ -862,8 +879,10 @@ def gamma(
         covered = good & (den > 0)
         if spinup_threshold > 0.0:
             # float spinup: emit only where the covered fraction of the APVD reaches the threshold.
-            # den is the covered sub-mass; (v_hi - v_lo) * m0.sum is the fully-covered sub-mass.
-            covered &= den >= spinup_threshold * (v_hi - v_lo) * m0.sum(axis=1)
+            # den is the covered sub-mass; (v_hi - v_lo) * m0.sum is the fully-covered reference (equal
+            # up to reassociation ulps when fully covered). The relative slack keeps the strictest
+            # threshold (1.0) from rejecting fully-covered bins on that float noise.
+            covered &= den >= (spinup_threshold - _SPINUP_GATE_RELTOL) * (v_hi - v_lo) * m0.sum(axis=1)
         tile_result = np.full(nt, np.nan)
         tile_result[covered] = num[covered] / den[covered]
         result[t0:t1] = tile_result
@@ -880,11 +899,20 @@ def gamma(
         # Over a zero-flow bin the volume is fixed but output time advances, so tau ramps linearly with
         # output time; its bin-average is the value at the bin's time midpoint, not at T(v).
         t_v = (0.5 * (cout_tedges_days[:-1] + cout_tedges_days[1:]))[degenerate]
+        # Upper V_p integration bound, mirroring the main loop's spin-up handling. With
+        # spinup="constant" the extrapolated phi map warm-starts the full support; otherwise a V_p
+        # whose look-back/forward parcel leaves the record (e2i: v - r*V_p < 0, i2e: v + r*V_p >
+        # v_end) is in spin-up, so integrate only the covered sub-range [support_lo, vp_hi] and let the
+        # covered sub-mass renormalize the mean (den_pt below), keeping the parcel inside the raw phi map.
+        if extrapolate:
+            vp_hi = np.full(v.shape, support_hi)
+        else:
+            vp_hi = np.clip((v if sign < 0 else v_end - v) / r, support_lo, support_hi)
         # tau(v, V_p) = sign * (T(v + sign*r*V_p) - t_mid) is piecewise-linear in V_p with knots where
-        # v + sign*r*V_p crosses a phi_v edge; integrate it against the gamma density over the support.
-        bp = np.clip(sign * (phi_v[None, :] - v[:, None]) / r, support_lo, support_hi)
+        # v + sign*r*V_p crosses a phi_v edge; integrate it against the gamma density over the sub-range.
+        bp = np.clip(sign * (phi_v[None, :] - v[:, None]) / r, support_lo, vp_hi[:, None])
         bp.sort(axis=1)
-        edges_pt = np.concatenate([np.full((v.size, 1), support_lo), bp, np.full((v.size, 1), support_hi)], axis=1)
+        edges_pt = np.concatenate([np.full((v.size, 1), support_lo), bp, vp_hi[:, None]], axis=1)
         lo_pt, hi_pt = edges_pt[:, :-1], edges_pt[:, 1:]
         nodes_pt = np.stack([lo_pt, 0.5 * (lo_pt + hi_pt), hi_pt])  # (3, k, n_pieces)
         a_pt = v[None, :, None] + sign * r * nodes_pt
@@ -898,8 +926,18 @@ def gamma(
         m0_pt = np.diff(gamma_dist.cdf(cdf_pt, alpha, scale=beta), axis=1)
         m1_pt = alpha * beta * np.diff(gamma_dist.cdf(cdf_pt, alpha + 1, scale=beta), axis=1) + loc * m0_pt
         num_pt = (tau_mid * m0_pt + slope * (m1_pt - mid_pt * m0_pt)).sum(axis=1)
-        den_pt = m0_pt.sum(axis=1)
-        result[degenerate] = np.where(den_pt > 0, num_pt / den_pt, np.nan)
+        den_pt = m0_pt.sum(axis=1)  # covered sub-mass over [support_lo, vp_hi]
+        covered_pt = den_pt > 0
+        if spinup_threshold > 0.0:
+            # float spinup: emit only where the covered fraction reaches the threshold. den_pt is the
+            # covered sub-mass; the full-support mass is the fully-covered reference. The same relative
+            # slack as the main loop keeps threshold 1.0 robust to reassociation ulps in den_pt.
+            full_mass = gamma_dist.cdf(support_hi - loc, alpha, scale=beta) - gamma_dist.cdf(
+                support_lo - loc, alpha, scale=beta
+            )
+            covered_pt &= den_pt >= (spinup_threshold - _SPINUP_GATE_RELTOL) * full_mass
+        with np.errstate(divide="ignore", invalid="ignore"):
+            result[degenerate] = np.where(covered_pt, num_pt / den_pt, np.nan)
     return result
 
 
@@ -953,7 +991,9 @@ def fraction_explained_full(
     -------
     numpy.ndarray
         Advective coverage [dimensionless], shape ``(n_pore_volumes, n_output_bins)``, values in
-        ``[0, 1]``. Output bins lying wholly outside ``tedges`` are ``NaN``.
+        ``[0, 1]``. Output bins lying wholly outside ``tedges`` are ``NaN``. Negative or ``NaN``
+        ``flow`` makes the cumulative-volume map non-monotone or undefined; the whole array is
+        returned as ``NaN`` (the function refuses rather than raising).
 
     Raises
     ------
@@ -1055,7 +1095,9 @@ def fraction_explained_mean(
     -------
     numpy.ndarray
         Advective coverage [dimensionless], shape ``(n_output_bins,)``, values in ``[0, 1]``.
-        Output bins lying wholly outside ``tedges`` are ``NaN``.
+        Output bins lying wholly outside ``tedges`` are ``NaN``. Negative or ``NaN`` ``flow`` makes
+        the cumulative-volume map non-monotone or undefined; the whole series is returned as ``NaN``
+        (the function refuses rather than raising).
 
     See Also
     --------
@@ -1159,7 +1201,9 @@ def fraction_explained_gamma(
     -------
     numpy.ndarray
         Advective coverage [dimensionless], shape ``(n_output_bins,)``, values in ``[0, 1]``.
-        Output bins lying wholly outside ``tedges`` are ``NaN``.
+        Output bins lying wholly outside ``tedges`` are ``NaN``. Negative or ``NaN`` ``flow`` makes
+        the cumulative-volume map non-monotone or undefined; the whole series is returned as ``NaN``
+        (the function refuses rather than raising).
 
     Raises
     ------
