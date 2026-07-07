@@ -490,6 +490,36 @@ def test_zero_diffusion_matches_advection():
     assert _peak_rel(cout_ff, cout_adv) < 1e-12
 
 
+def test_forward_zero_flow_gap_no_smear_into_neighbours():
+    """A pump-off gap (zero through-flow) puts a hard 0 in cout_micro at the gap bins; the molecular
+    time-Gaussian must NOT smear those zeros into the valid neighbours. With a constant input the
+    mask-aware convolution G(cout_micro*m)/G(m) preserves the constant EXACTLY across the gap (every
+    valid bin == cin) while the gap-interior bins stay NaN. A plain gaussian_filter1d of the hard
+    zeros instead drops the immediate neighbours ~12% below the constant (baseline: 6.39 vs 7.3).
+    sigma_bins ~0.5 here, so the molecular Gaussian is genuinely active and the mask is load-bearing.
+    """
+    n = 120
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    flow[40:44] = 0.0  # 4-bin pump-off gap
+    kw = {
+        "cin": np.full(n, 7.3),
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges.copy(),
+        "aquifer_pore_volumes": gamma.bins(mean=500.0, std=200.0, n_bins=25)["expected_values"],
+        "streamline_length": 10.0,
+        "molecular_diffusivity": 0.1,
+        "longitudinal_dispersivity": 0.5,
+    }
+    cout_ff = infiltration_to_extraction(**kw)
+    cout_df = df_i2e(**kw)
+    assert np.array_equal(np.isnan(cout_ff), np.isnan(cout_df))  # gap-interior bins NaN in both
+    valid = ~np.isnan(cout_ff)
+    assert valid.sum() > 100
+    assert_allclose(cout_ff[valid], 7.3, atol=1e-12, rtol=0)  # constant preserved across the gap
+
+
 # =============================================================================
 # Mass conservation: tight at constant flow; characterised (NOT conserved) at variable flow.
 # =============================================================================
@@ -836,6 +866,31 @@ def test_reverse_zero_cout_gives_zero_cin():
         longitudinal_dispersivity=1.0,
     )
     assert_allclose(cin[~np.isnan(cin)], 0.0, atol=1e-12)
+
+
+def test_reverse_zero_flow_gap_preserves_constant():
+    """Reverse analogue of test_forward_zero_flow_gap_no_smear_into_neighbours: a constant extraction
+    with a pump-off gap must deconvolve to a constant infiltration on the valid bins, without the
+    gap's zero G@M rows corrupting the neighbours. The banded solver row-normalizes W (that IS the
+    mask-aware normalization for the reverse: it divides each row by G@(row masses), so the gap rows'
+    zero mass drops out), so constants are preserved to solver precision across the gap."""
+    n = 120
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    flow[40:44] = 0.0  # 4-bin pump-off gap
+    cin = extraction_to_infiltration(
+        cout=np.full(n, 7.3),
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges.copy(),
+        aquifer_pore_volumes=gamma.bins(mean=500.0, std=200.0, n_bins=25)["expected_values"],
+        streamline_length=10.0,
+        molecular_diffusivity=0.1,
+        longitudinal_dispersivity=0.5,
+    )
+    valid = ~np.isnan(cin)
+    assert valid.sum() > 100
+    assert_allclose(cin[valid], 7.3, atol=1e-9, rtol=0)  # measured ~3.5e-13 on the row-normalized W
 
 
 def test_reverse_forwards_retardation_and_flow_out():

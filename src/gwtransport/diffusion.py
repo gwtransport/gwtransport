@@ -28,7 +28,9 @@ When to choose this module vs :mod:`gwtransport.diffusion_fast`
 ---------------------------------------------------------------
 
 This is the reference implementation: it evaluates the bin-averaged Kreft-Zuber flux
-concentration by 16-point Gauss-Legendre quadrature (splitting at flow-bin boundaries).
+concentration by resolution-aware composite Gauss-Legendre quadrature (splitting at
+flow-bin boundaries, with extra front-centred panels wherever a sharp breakthrough front
+is otherwise under-resolved).
 Prefer it only when the output grid is coarser than the flow detail -- it integrates the
 full within-bin flow, which the closed-form :mod:`gwtransport.diffusion_fast` approximates as
 constant per output bin. Otherwise that module computes the same physics to machine
@@ -75,17 +77,23 @@ where:
   travelled [m]
 
 The K-Z flux-correction term is what makes the column-sum invariant
-``integral Q c_out dt = integral Q c_in dt`` hold to machine precision under
-arbitrary variable Q. Without it, the leading-order C_R loses O(1/Pe) per
-column under variable Q + pure D_m (issue #180).
+``integral Q c_out dt = integral Q c_in dt`` hold under arbitrary variable Q.
+Without it, the leading-order C_R loses O(1/Pe) per column under variable Q +
+pure D_m (issue #180).
 
-Implementation: the bin-averaged C_F is computed by 16-point Gauss-Legendre
-quadrature in volume space, split at flow-bin boundaries so each sub-interval
-sees a linear t(V) and a smooth integrand. The variance is evaluated at each
-quadrature node from the parcel's own tau and xi histories — never capped at
-the residence time. The K-Z identity requires Bear's formula to satisfy the
-variable-coefficient ADE exactly, which holds only when D_t is allowed to
-keep growing past breakthrough.
+Implementation: the bin-averaged C_F is computed by resolution-aware composite
+Gauss-Legendre quadrature in volume space, split at flow-bin boundaries so each
+sub-interval sees a linear t(V). Within a sub-interval the erf-like front has
+width ``sqrt(4*D_t)`` (in volume units); for near-zero dispersivity this can be
+orders of magnitude below the flow-bin width, so a single fixed-order rule
+cannot resolve it. Sub-intervals whose front is under-resolved are therefore
+tiled with front-centred panels (fine near the front, flat tails outside),
+which restores the column-mass invariant to ~1e-11 for every dispersion regime;
+smooth/already-resolved sub-intervals keep the plain single 16-point rule. The
+variance is evaluated at each quadrature node from the parcel's own tau and xi
+histories — never capped at the residence time. The K-Z identity requires
+Bear's formula to satisfy the variable-coefficient ADE exactly, which holds only
+when D_t is allowed to keep growing past breakthrough.
 
 Macrodispersion vs microdispersion
 ----------------------------------
@@ -131,6 +139,7 @@ from gwtransport._validation import (
     _validate_no_nan,
     _validate_non_negative_array,
     _validate_positive_array,
+    _validate_retardation_factor,
     _validate_scalar_or_matching_length,
     _validate_tedges_parity,
 )
@@ -142,6 +151,20 @@ EPSILON_COEFF_SUM = 1e-10
 
 # Gauss-Legendre quadrature nodes and weights for volume-space integration
 _GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(16)
+
+# Resolution-aware composite-quadrature template for the erf-like breakthrough front.
+# When the front width sqrt(4*D_t) (in volume units) is much smaller than a
+# (cell, flow-bin) sub-interval, plain 16-point GL cannot resolve it. Cells flagged
+# as under-resolved get panels placed at ``V_front + front_width * _FRONT_OFFSETS``
+# (clipped to the sub-interval); the two outer panels then cover the flat erf tails,
+# where 16-point GL is already exact. Panels near the front are ~1 front-width wide,
+# spanning +-6 front-widths (erf and the flux-correction Gaussian are flat to ~1e-16
+# beyond that). A cell is refined only when its front lies inside the sub-interval and
+# the sub-interval is wider than _REFINE_RATIO front-widths, so adaptivity triggers
+# only near sharp fronts (smooth regimes keep the plain single-panel cost and answer).
+_FRONT_REACH = 6.0
+_FRONT_OFFSETS = np.arange(-_FRONT_REACH, _FRONT_REACH + 0.5, 1.0)
+_REFINE_RATIO = 4.0
 
 
 def _cfrac_mean_volume(
@@ -196,12 +219,16 @@ def _cfrac_mean_volume(
     misses the dispersive boundary flux at the outlet and column-sum mass
     conservation fails by O(1/Pe) under variable Q.
 
-    Implementation: 16-point Gauss-Legendre quadrature in volume space, split
-    at flow-bin boundaries so that within each sub-interval :math:`t(V)` is
-    linear and the integrand is smooth. No "fully capped" branch: the moving-
-    frame variance keeps growing past breakthrough, and the K-Z identity
-    requires Bear's formula to satisfy the variable-coefficient ADE exactly
-    (which it does only without capping).
+    Implementation: resolution-aware composite Gauss-Legendre quadrature in
+    volume space, split at flow-bin boundaries so that within each sub-interval
+    :math:`t(V)` is linear. The erf-like front has width :math:`\sqrt{4 D_t}`
+    (in volume units); a sub-interval whose front is under-resolved by a single
+    16-point rule (front width far below the sub-interval width) is tiled with
+    front-centred panels (see ``_FRONT_OFFSETS``), while smooth/already-resolved
+    sub-intervals keep the plain single 16-point rule (bit-identical to it). No
+    "fully capped" branch: the moving-frame variance keeps growing past
+    breakthrough, and the K-Z identity requires Bear's formula to satisfy the
+    variable-coefficient ADE exactly (which it does only without capping).
 
     Parameters
     ----------
@@ -276,11 +303,14 @@ def _cfrac_mean_volume(
             0.0,
         )
 
-    # --- Gauss-Legendre quadrature over each cell, split by flow bins ---
+    # --- Resolution-aware composite Gauss-Legendre quadrature, split by flow bins ---
     # The integration window per (cell, flow-bin) is the intersection of
     # [V_lo, V_hi] (cell), [ve_lo, ve_hi] (flow bin), and [V_j, infty) (parcel
-    # entered). Within each sub-interval, t(V) is linear and the integrand is
-    # smooth, so 16-point GL gives machine precision.
+    # entered). Within each sub-interval, t(V) is linear. Where the sub-interval is
+    # much wider than the front width sqrt(4*D_t), the erf-like front is under-resolved
+    # by a single 16-point GL rule; such sub-intervals are tiled with front-centred
+    # panels (see _FRONT_OFFSETS). Smooth sub-intervals keep the single panel and are
+    # bit-identical to the plain 16-point rule.
     idx_i, idx_j = np.nonzero(is_valid)
     if len(idx_i) == 0:
         return frac
@@ -292,6 +322,9 @@ def _cfrac_mean_volume(
     total_dv = v_hi_cells - v_lo_cells
     valid_cells = total_dv > 0
 
+    # Post-injection lower bound is loop-invariant: max(V_lo, V_cin) (D2 hoist).
+    v_lo_or_cin = np.maximum(v_lo_cells, v_cin_cells)
+
     integral_cf = np.zeros(len(idx_i))
 
     vol_edges = cumulative_volume_at_cin_tedges
@@ -300,31 +333,64 @@ def _cfrac_mean_volume(
         if v_per_bin[k] <= 0.0:
             continue
         dl_over_v_k = dl_over_v_per_bin[k]
+        dt_sub_bin = tedges_days[k + 1] - tedges_days[k]
+        dv_sub_edge = ve_hi - ve_lo
 
         # Intersection of cell, flow-bin, and post-injection range
-        sub_lo = np.maximum(np.maximum(v_lo_cells, ve_lo), v_cin_cells)
+        sub_lo = np.maximum(v_lo_or_cin, ve_lo)
         sub_hi = np.minimum(v_hi_cells, ve_hi)
         overlap = (sub_hi > sub_lo) & valid_cells
         if not np.any(overlap):
             continue
 
-        dv_sub = sub_hi[overlap] - sub_lo[overlap]
-        v_mid_sub = (sub_hi[overlap] + sub_lo[overlap]) / 2.0
-        v_half_sub = dv_sub / 2.0
+        lo = sub_lo[overlap]
+        hi = sub_hi[overlap]
+        vcin = v_cin_cells[overlap]
+        tj = t_j_cells[overlap]
 
-        v_nodes = v_mid_sub[:, np.newaxis] + v_half_sub[:, np.newaxis] * _GL_NODES[np.newaxis, :]
+        # Front centre (x = 0 => xi = L => V = V_cin + r_vpv) and its width in volume.
+        # front_width = sqrt(4*D_t_front) * r_vpv / L, with D_t_front = D_m*tau_front +
+        # alpha_L*L (xi = L at the front). t(V) is linear within flow bin k.
+        v_front = vcin + r_vpv
+        t_front = tedges_days[k] + (v_front - ve_lo) * (dt_sub_bin / dv_sub_edge)
+        tau_front = np.maximum(t_front - tj, 0.0)
+        dt_front = molecular_diffusivity * tau_front + longitudinal_dispersivity * streamline_len
+        front_width = np.sqrt(4.0 * dt_front) * r_vpv / streamline_len
+
+        # Refine only where a sharp front region intersects this sub-interval and is
+        # under-resolved by a single 16-point rule; elsewhere the integrand is flat
+        # or already resolved, so one panel is exact. The front-region test (not just
+        # "centre in this bin") also catches a front whose tail spills across a
+        # flow-bin boundary. A spuriously large extrapolated front_width far from the
+        # front fails ``underresolved`` and so cannot trigger refinement.
+        front_hits = (v_front + _FRONT_REACH * front_width > lo) & (v_front - _FRONT_REACH * front_width < hi)
+        underresolved = (hi - lo) > _REFINE_RATIO * front_width
+        if np.any(front_hits & underresolved):
+            inner = np.clip(
+                v_front[:, np.newaxis] + front_width[:, np.newaxis] * _FRONT_OFFSETS[np.newaxis, :],
+                lo[:, np.newaxis],
+                hi[:, np.newaxis],
+            )
+            edges = np.concatenate([lo[:, np.newaxis], inner, hi[:, np.newaxis]], axis=1)
+        else:
+            edges = np.stack([lo, hi], axis=1)
+
+        p_lo = edges[:, :-1]
+        p_hi = edges[:, 1:]
+        p_mid = 0.5 * (p_lo + p_hi)
+        p_half = 0.5 * (p_hi - p_lo)
+
+        # GL nodes over every panel: shape (n_cell, n_panel, n_gl)
+        v_nodes = p_mid[:, :, np.newaxis] + p_half[:, :, np.newaxis] * _GL_NODES[np.newaxis, np.newaxis, :]
 
         # Geometry: x = xi - L = (V - V_j - r_vpv) * L / r_vpv (parcel position
         # relative to outlet); xi = parcel travel distance.
-        x_nodes = (v_nodes - v_cin_cells[overlap, np.newaxis] - r_vpv) * streamline_len / r_vpv
+        x_nodes = (v_nodes - vcin[:, np.newaxis, np.newaxis] - r_vpv) * streamline_len / r_vpv
         xi_nodes = x_nodes + streamline_len
 
-        # t(V) linear within flow bin k
-        dt_sub_bin = tedges_days[k + 1] - tedges_days[k]
-        dv_sub_edge = ve_hi - ve_lo
         t_nodes = tedges_days[k] + (v_nodes - ve_lo) * (dt_sub_bin / dv_sub_edge)
-        # tau >= 0 by construction (sub_lo >= v_cin_cells); clip for safety.
-        tau_nodes = np.maximum(t_nodes - t_j_cells[overlap, np.newaxis], 0.0)
+        # tau >= 0 by construction (lo >= v_cin); clip for safety.
+        tau_nodes = np.maximum(t_nodes - tj[:, np.newaxis, np.newaxis], 0.0)
 
         # Bear's variance accumulator (sigma^2/2) — NO capping at RT/L
         dt_nodes = molecular_diffusivity * tau_nodes + longitudinal_dispersivity * xi_nodes
@@ -344,7 +410,11 @@ def _cfrac_mean_volume(
             )
         cf_vals = cr_vals + dl_over_v_k * gauss_vals
 
-        integral_cf[overlap] += v_half_sub * (cf_vals @ _GL_WEIGHTS)
+        # Integrate: GL-weight over nodes, then sum panel contributions per cell.
+        # The weight contraction is done in 2D so a single-panel (non-refined)
+        # sub-interval is bit-identical to a plain 16-point rule.
+        cf_weighted = (cf_vals.reshape(-1, cf_vals.shape[-1]) @ _GL_WEIGHTS).reshape(cf_vals.shape[:-1])
+        integral_cf[overlap] += (p_half * cf_weighted).sum(axis=1)
 
     with np.errstate(divide="ignore", invalid="ignore"):
         frac_cells = np.where(valid_cells, integral_cf / total_dv, np.nan)
@@ -452,9 +522,7 @@ def _validate_diffusion_inputs(
     _validate_non_negative_array(flow, name="flow", message="flow must be non-negative (negative flow not supported)")
     _validate_positive_array(aquifer_pore_volumes, name="aquifer_pore_volumes")
     _validate_positive_array(streamline_length, name="streamline_length")
-    if retardation_factor < 1.0:
-        msg = "retardation_factor must be >= 1.0"
-        raise ValueError(msg)
+    _validate_retardation_factor(retardation_factor)
 
 
 def _prepare_diffusion_arrays(
@@ -763,11 +831,14 @@ def infiltration_to_extraction(
          from the outlet at each (cout-edge, cin-edge)
 
     2. For each cell, compute the bin-averaged Kreft-Zuber flux concentration
-       ``frac[i, j] = (1/dV_i) * integral C_F(L, V; t_j) dV`` by 16-point
-       Gauss-Legendre quadrature in volume space, split at flow-bin
-       boundaries so that ``t(V)`` is linear within each sub-interval. The
-       moving-frame variance ``D_t = D_m*tau + alpha_L*xi`` is evaluated at
-       each quadrature node (never capped at the residence time).
+       ``frac[i, j] = (1/dV_i) * integral C_F(L, V; t_j) dV`` by resolution-aware
+       composite Gauss-Legendre quadrature in volume space, split at flow-bin
+       boundaries so that ``t(V)`` is linear within each sub-interval. Where the
+       erf-like front (width ``sqrt(4*D_t)`` in volume units) is under-resolved by
+       a single 16-point rule -- as for near-zero dispersivity -- the sub-interval
+       is tiled with front-centred panels; smooth sub-intervals keep the single
+       rule. The moving-frame variance ``D_t = D_m*tau + alpha_L*xi`` is evaluated
+       at each quadrature node (never capped at the residence time).
 
     3. Coefficient for bin: ``coeff[i,j] = frac[i, j] - frac[i, j+1]``. This
        is the contribution of cin[j] to cout[i] in the W matrix.
