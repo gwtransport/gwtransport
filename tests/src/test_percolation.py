@@ -823,6 +823,28 @@ class TestValidatorBranches:
         with pytest.raises(ValueError, match=match):
             root_zone_to_water_table_kinematic_wave(**kwargs)
 
+    @pytest.mark.parametrize(
+        ("override", "match"),
+        [
+            # NaN / +inf must be rejected, not passed silently: a comparison-only guard
+            # (`arr <= 0` / `k_s <= 0`) evaluates False for both and yields all-NaN output.
+            ({"cumulative_pore_volumes_outlet": np.array([np.nan])}, r"non-empty with all entries positive"),
+            ({"cumulative_pore_volumes_outlet": np.array([np.inf])}, r"non-empty with all entries positive"),
+            ({"cumulative_pore_volumes_outlet": np.array([0.1, np.nan])}, r"non-empty with all entries positive"),
+            ({"k_s": np.nan}, r"k_s must be positive"),
+            ({"k_s": np.inf}, r"k_s must be positive"),
+        ],
+    )
+    def test_c7_nonfinite_cpv_and_ks_raise(self, override, match):
+        """C7: non-finite ``cumulative_pore_volumes_outlet`` / ``k_s`` raise instead of silent all-NaN.
+
+        NaN and +inf both slip past a bare ``<= 0`` comparison (each yields ``False``),
+        so the guard must additionally require finiteness. Regression for PERC-P1.
+        """
+        kwargs = {**self._valid_kwargs(), **override}
+        with pytest.raises(ValueError, match=match):
+            root_zone_to_water_table_kinematic_wave(**kwargs)
+
 
 # =============================================================================
 # Section D — vG characteristic-speed monotonicity (property test)
@@ -903,23 +925,25 @@ class TestMissingCoverage:
     def test_m2_dry_days_handled(self):
         """M2: dry intervals (q=0) interspersed with positive q → no NaN/inf, physical bounds hold.
 
-        Constructs a wet-then-dry-then-wet sequence on a short column so the
-        signal exits *inside* the inlet θ-window (PERC-M2 regime). Asserts the
-        physical bounds ``0 ≤ q_wt ≤ q_root.max()`` (a flux at the water table can
-        neither go negative nor exceed the largest root-zone leakage), not merely
-        the absence of NaN/inf. The clamp-to-zero ``UserWarning`` is exercised
-        separately by ``test_m2b_no_clamp_warning_inside_inlet_window``.
+        Constructs a wet-then-dry-then-wet sequence on a short column. The full-zero
+        dry gap is a *single-front* run (one wetting front, no unresolved wave
+        interaction); its breakthrough lands just past the inlet θ-window, so the
+        in-window conservation residual is pure pre-breakthrough FP-cancellation dust.
+        That dust now falls inside the ``compute_bin_averaged_concentration_exact``
+        FP-cancellation band and is clamped SILENTLY — the previous run emitted a
+        ``clamp threshold`` ``UserWarning`` only because the old band was keyed off the
+        (≈0, pre-breakthrough) output concentration and was orders of magnitude too
+        tight. Run under ``simplefilter("error")`` so any warning — a spurious clamp
+        diagnostic OR a false multi-front-interaction flag — fails the test, then assert
+        the physical envelope ``0 ≤ q_wt ≤ q_root.max()`` (a flux at the water table can
+        neither go negative nor exceed the largest root-zone leakage).
         """
         tedges = _make_tedges(60)
         q_root = np.full(60, 0.001)
         q_root[20:30] = 0.0  # dry period (full zero — the genuine dry-days case)
         v_out = np.array([O05["theta_s"] * 0.3])
-        # The full-zero dry gap pushes the drying tail past the inlet window,
-        # tripping the benign out-of-window clamp warning (the subject of M2b,
-        # which uses an in-window forcing). Match it explicitly via pytest.warns
-        # rather than blanket-silencing, so any unrelated new warning still
-        # surfaces as an error here.
-        with pytest.warns(UserWarning, match="clamp threshold"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # any UserWarning (clamp / interaction) becomes an exception
             q_wt, _ = root_zone_to_water_table_kinematic_wave(
                 q_root_zone=q_root,
                 tedges=tedges,

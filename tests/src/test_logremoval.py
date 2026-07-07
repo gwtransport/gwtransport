@@ -657,26 +657,26 @@ def test_gamma_find_flow_for_target_mean_loc_zero_matches_closed_form():
 
 
 def test_gamma_pdf_negative_loc_raises():
-    """gamma_pdf must reject negative rt_loc."""
-    with pytest.raises(ValueError, match="rt_loc must be non-negative"):
+    """gamma_pdf must reject negative rt_loc (via gamma.parse_parameters)."""
+    with pytest.raises(ValueError, match="loc must be non-negative"):
         gamma_pdf(r=np.array([1.0]), rt_alpha=3.0, rt_beta=10.0, rt_loc=-1.0, log10_decay_rate=0.2)
 
 
 def test_gamma_cdf_negative_loc_raises():
-    """gamma_cdf must reject negative rt_loc."""
-    with pytest.raises(ValueError, match="rt_loc must be non-negative"):
+    """gamma_cdf must reject negative rt_loc (via gamma.parse_parameters)."""
+    with pytest.raises(ValueError, match="loc must be non-negative"):
         gamma_cdf(r=np.array([1.0]), rt_alpha=3.0, rt_beta=10.0, rt_loc=-1.0, log10_decay_rate=0.2)
 
 
 def test_gamma_mean_negative_loc_raises():
-    """gamma_mean must reject negative rt_loc."""
-    with pytest.raises(ValueError, match="rt_loc must be non-negative"):
+    """gamma_mean must reject negative rt_loc (via gamma.parse_parameters)."""
+    with pytest.raises(ValueError, match="loc must be non-negative"):
         gamma_mean(rt_alpha=3.0, rt_beta=10.0, rt_loc=-1.0, log10_decay_rate=0.2)
 
 
 def test_gamma_find_flow_for_target_mean_negative_loc_raises():
-    """gamma_find_flow_for_target_mean must reject negative apv_loc."""
-    with pytest.raises(ValueError, match="apv_loc must be non-negative"):
+    """gamma_find_flow_for_target_mean must reject negative apv_loc (via gamma.parse_parameters)."""
+    with pytest.raises(ValueError, match="loc must be non-negative"):
         gamma_find_flow_for_target_mean(
             target_mean=1.0,
             apv_alpha=3.0,
@@ -737,6 +737,90 @@ def test_gamma_find_flow_for_target_mean_invalid_alpha_beta_raises(apv_alpha, ap
             apv_loc=5.0,
             log10_decay_rate=0.1,
         )
+
+
+# ---------------------------------------------------------------------------
+# L1: dual (mean, std, loc) / (alpha, beta, loc) parameterization for the four
+# gamma functions, routed through gamma.parse_parameters, and rejection of
+# physically invalid (e.g. negative alpha) parameters.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("rt_alpha", "rt_beta", "rt_loc", "log10_decay_rate"),
+    [
+        (4.0, 3.0, 0.0, 0.2),
+        (2.5, 10.0, 1.5, 0.05),
+        (7.0, 0.8, 5.0, 0.3),
+    ],
+)
+def test_gamma_functions_mean_std_matches_alpha_beta(rt_alpha, rt_beta, rt_loc, log10_decay_rate):
+    """(mean, std, loc) input reproduces the (alpha, beta, loc) result to machine precision.
+
+    Regression (L1): before the fix the gamma functions accepted only (alpha, beta, loc),
+    breaking the package-wide dual-parameterization convention; passing rt_mean/rt_std
+    raised a TypeError.
+    """
+    rt_mean = rt_alpha * rt_beta + rt_loc
+    rt_std = np.sqrt(rt_alpha) * rt_beta
+    r = np.array([0.1, 1.0, 2.5, 5.0])
+
+    pdf_ab = gamma_pdf(r=r, rt_alpha=rt_alpha, rt_beta=rt_beta, rt_loc=rt_loc, log10_decay_rate=log10_decay_rate)
+    pdf_ms = gamma_pdf(r=r, rt_mean=rt_mean, rt_std=rt_std, rt_loc=rt_loc, log10_decay_rate=log10_decay_rate)
+    assert_allclose(pdf_ms, pdf_ab, rtol=1e-14, atol=0.0)
+
+    cdf_ab = gamma_cdf(r=r, rt_alpha=rt_alpha, rt_beta=rt_beta, rt_loc=rt_loc, log10_decay_rate=log10_decay_rate)
+    cdf_ms = gamma_cdf(r=r, rt_mean=rt_mean, rt_std=rt_std, rt_loc=rt_loc, log10_decay_rate=log10_decay_rate)
+    assert_allclose(cdf_ms, cdf_ab, rtol=1e-14, atol=0.0)
+
+    mean_ab = gamma_mean(rt_alpha=rt_alpha, rt_beta=rt_beta, rt_loc=rt_loc, log10_decay_rate=log10_decay_rate)
+    mean_ms = gamma_mean(rt_mean=rt_mean, rt_std=rt_std, rt_loc=rt_loc, log10_decay_rate=log10_decay_rate)
+    assert_allclose(mean_ms, mean_ab, rtol=1e-14, atol=0.0)
+
+
+@pytest.mark.parametrize(
+    ("apv_alpha", "apv_beta", "apv_loc", "log10_decay_rate", "target_mean"),
+    [
+        (3.0, 100.0, 0.0, 0.2, 2.0),
+        (2.5, 250.0, 50.0, 0.1, 1.5),
+    ],
+)
+def test_gamma_find_flow_mean_std_matches_alpha_beta(apv_alpha, apv_beta, apv_loc, log10_decay_rate, target_mean):
+    """gamma_find_flow_for_target_mean accepts (mean, std, loc) equivalently to (alpha, beta, loc)."""
+    apv_mean = apv_alpha * apv_beta + apv_loc
+    apv_std = np.sqrt(apv_alpha) * apv_beta
+
+    flow_ab = gamma_find_flow_for_target_mean(
+        target_mean=target_mean,
+        apv_alpha=apv_alpha,
+        apv_beta=apv_beta,
+        apv_loc=apv_loc,
+        log10_decay_rate=log10_decay_rate,
+    )
+    flow_ms = gamma_find_flow_for_target_mean(
+        target_mean=target_mean,
+        apv_mean=apv_mean,
+        apv_std=apv_std,
+        apv_loc=apv_loc,
+        log10_decay_rate=log10_decay_rate,
+    )
+    assert_allclose(flow_ms, flow_ab, rtol=1e-14, atol=0.0)
+
+
+def test_gamma_functions_reject_negative_alpha():
+    """Regression (L1): negative rt_alpha/apv_alpha must raise, not return an invalid value.
+
+    Before the fix ``gamma_mean(rt_alpha=-2, ...)`` silently returned a physically
+    meaningless number because no positivity validation was performed.
+    """
+    with pytest.raises(ValueError, match="Alpha and beta must be positive"):
+        gamma_mean(rt_alpha=-2.0, rt_beta=3.0, log10_decay_rate=0.2)
+    with pytest.raises(ValueError, match="Alpha and beta must be positive"):
+        gamma_pdf(r=np.array([1.0]), rt_alpha=-2.0, rt_beta=3.0, log10_decay_rate=0.2)
+    with pytest.raises(ValueError, match="Alpha and beta must be positive"):
+        gamma_cdf(r=np.array([1.0]), rt_alpha=-2.0, rt_beta=3.0, log10_decay_rate=0.2)
+    with pytest.raises(ValueError, match="Alpha and beta must be positive"):
+        gamma_find_flow_for_target_mean(target_mean=1.0, apv_alpha=-2.0, apv_beta=3.0, log10_decay_rate=0.2)
 
 
 # ---------------------------------------------------------------------------

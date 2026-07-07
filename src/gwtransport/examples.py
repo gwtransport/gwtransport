@@ -189,7 +189,9 @@ def generate_example_data(
     rng = np.random.default_rng(rng)
 
     dates = pd.date_range(start=date_start, end=date_end, freq=date_freq).tz_localize("UTC")
-    days = (dates - dates[0]).days.values
+    # Fractional elapsed days so the seasonal sinusoid resolves sub-daily sampling (integer .days
+    # would stair-step, holding the seasonal constant within each calendar day).
+    days = ((dates - dates[0]) / pd.Timedelta(days=1)).to_numpy()
 
     # Generate flow data with seasonal pattern (higher in winter)
     seasonal_flow = flow_mean + flow_amplitude * np.sin(2 * np.pi * days / 365 + np.pi)
@@ -647,8 +649,10 @@ def generate_example_deposition_timeseries(
     n_dates = len(dates)
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=n_dates)
 
-    # Base deposition rate with seasonal and event patterns
-    seasonal_pattern = seasonal_amplitude * np.sin(2 * np.pi * np.arange(n_dates) / 365.25)
+    # Base deposition rate with seasonal and event patterns. Use elapsed days (not the sample
+    # index) so the period stays one year for any ``freq``, not one year of samples.
+    days = ((dates - dates[0]) / pd.Timedelta(days=1)).to_numpy()
+    seasonal_pattern = seasonal_amplitude * np.sin(2 * np.pi * days / 365.25)
     noise = noise_scale * rng.normal(0, 1, n_dates)
 
     # Default event dates if not provided

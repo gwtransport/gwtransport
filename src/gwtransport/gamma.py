@@ -264,8 +264,9 @@ def bins(
 
     If ``n_bins`` is provided, the gamma distribution is divided into ``n_bins``
     equal-mass bins. If ``quantile_edges`` is provided, the distribution is divided
-    into bins defined by those quantile edges. The quantile edges must lie in
-    ``[0, 1]`` with size ``n_bins + 1``; the first and last entries must be 0 and 1.
+    into bins defined by those quantile edges. The quantile edges must be a strictly
+    increasing 1-D array of at least 3 entries (>= 2 bins) in ``[0, 1]``, with the
+    first and last entries exactly 0 and 1; ``n_bins`` is then ignored.
 
     Parameters
     ----------
@@ -284,9 +285,9 @@ def bins(
     n_bins : int, optional
         Number of bins to divide the gamma distribution (must be >= 2). Default is 100.
     quantile_edges : array-like, optional
-        Quantile edges for binning. Must be a 1-D, strictly increasing array of size
-        ``n_bins + 1`` with all entries in ``[0, 1]``; the first and last entries must
-        be exactly 0 and 1, respectively. If provided, ``n_bins`` is ignored.
+        Quantile edges for binning. Must be a strictly increasing 1-D array of at least
+        3 entries (>= 2 bins), all in ``[0, 1]``, with the first and last entries exactly
+        0 and 1. If provided, ``n_bins`` is ignored.
 
     Returns
     -------
@@ -345,6 +346,9 @@ def bins(
         if quantile_edges.ndim != 1:
             msg = "quantile_edges must be a 1-D array."
             raise ValueError(msg)
+        if quantile_edges.size == 0:
+            msg = "quantile_edges must not be empty."
+            raise ValueError(msg)
         if not np.all(np.diff(quantile_edges) > 0):
             msg = "quantile_edges must be strictly increasing."
             raise ValueError(msg)
@@ -369,7 +373,7 @@ def bins(
     #     E[X * 1_{a<=X<b}] = alpha * beta * (F_{alpha+1}(b/beta) - F_{alpha+1}(a/beta))
     # where F_{alpha+1} is the CDF of Gamma(alpha+1, beta).
     cdf_alpha_plus_1 = gamma_dist.cdf(unshifted_edges, alpha + 1, scale=beta)
-    diff_alpha_plus_1 = cdf_alpha_plus_1[1:] - cdf_alpha_plus_1[:-1]
+    diff_alpha_plus_1 = np.diff(cdf_alpha_plus_1)
     expected_values = beta * alpha * diff_alpha_plus_1 / probability_mass + loc
 
     return {

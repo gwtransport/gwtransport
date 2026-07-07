@@ -235,6 +235,41 @@ class TestUnbounded:
             vol += np.sum(w)
         np.testing.assert_allclose(wide[0], mass / vol, atol=2e-8)
 
+    def test_large_single_bin_uspan_kernel_not_truncated(self):
+        """A single bin flushing >60 pore volumes must not drop earlier kernel bins.
+
+        depth=0.1, dt=1, R=1 make u increment by recharge/0.1 per bin. With
+        recharge=[0.5, 6.5, 0.5, 0.5] the second bin flushes u-span 65 (u goes
+        5 -> 70). Spin-up is constant at cin_recharge[0]=10, so C is exactly 10
+        at u=5 (the bin-0 exit). Over bin 1 (recharge concentration 2, a
+        65-pore-volume flush) the recharge-weighted (= u-averaged) exit
+        concentration is (2*65 + (10 - 2)*(1 - e^-65)) / 65 = 138/65 to within
+        e^-65. Keying the kernel-truncation cutoff to the bin's largest u (u2t)
+        instead of its smallest (u1t) drops the still-significant bin-0
+        contribution here, biasing the average to ~1.97 (regression RC1).
+        """
+        depth = 0.1
+        tedges = to_tedges(np.arange(5.0))
+        cin_recharge = np.array([10.0, 2.0, 3.0, 4.0])
+        recharge = np.array([0.5, 6.5, 0.5, 0.5])
+        cout = recharge_to_extraction(
+            cin_recharge=cin_recharge,
+            recharge=recharge,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_depth=depth,
+        )
+        np.testing.assert_allclose(cout[1], 138.0 / 65.0, atol=1e-9)
+
+        # Independent anchor: fine recharge-weighted quadrature of the pointwise
+        # oracle (full, untruncated kernel sum) over the same output bin.
+        n = len(recharge)
+        ts = np.linspace(1.0, 2.0, 20001)
+        mid = 0.5 * (ts[:-1] + ts[1:])
+        c_mid = pointwise_oracle(mid, tedges, np.zeros(n), recharge, cin_recharge, cin_recharge, depth, np.inf)
+        w = recharge[np.clip(np.searchsorted(np.arange(5.0), mid, side="right") - 1, 0, n - 1)] * np.diff(ts)
+        np.testing.assert_allclose(cout[1], np.sum(c_mid * w) / np.sum(w), atol=1e-9)
+
     def test_outside_record_nan(self):
         tedges = to_tedges(np.arange(6.0))
         cout = recharge_to_extraction(
@@ -702,6 +737,11 @@ class TestValidation:
     def test_scalar_ranges(self):
         bad = dict(self.ok)
         bad["aquifer_pore_depth"] = 0.0
+        with pytest.raises(ValueError, match="positive"):
+            recharge_to_extraction(**bad)
+        # NaN slipped past the ``<= 0`` guard and silently produced garbage; must raise.
+        bad = dict(self.ok)
+        bad["aquifer_pore_depth"] = np.nan
         with pytest.raises(ValueError, match="positive"):
             recharge_to_extraction(**bad)
         with pytest.raises(ValueError, match="retardation_factor"):

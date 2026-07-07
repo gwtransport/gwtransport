@@ -50,13 +50,18 @@ Gamma-distribution parameter notation
 Several functions are parameterized by a gamma distribution. The parameter prefix marks
 *which* physical quantity is gamma-distributed, because two distinct quantities appear here:
 
-- ``rt_alpha`` / ``rt_beta`` / ``rt_loc`` parameterize the gamma distribution of the
-  **residence time** (used by :func:`gamma_pdf`, :func:`gamma_cdf`, :func:`gamma_mean`).
-- ``apv_alpha`` / ``apv_beta`` / ``apv_loc`` parameterize the gamma distribution of the
-  **aquifer pore volume** (used by :func:`gamma_find_flow_for_target_mean`).
+- ``rt_alpha`` / ``rt_beta`` / ``rt_loc`` (or the equivalent ``rt_mean`` / ``rt_std`` /
+  ``rt_loc``) parameterize the gamma distribution of the **residence time** (used by
+  :func:`gamma_pdf`, :func:`gamma_cdf`, :func:`gamma_mean`).
+- ``apv_alpha`` / ``apv_beta`` / ``apv_loc`` (or the equivalent ``apv_mean`` / ``apv_std`` /
+  ``apv_loc``) parameterize the gamma distribution of the **aquifer pore volume** (used by
+  :func:`gamma_find_flow_for_target_mean`).
 
 These prefixes are intentional and load-bearing: residence time and pore volume are different
-quantities, so a bare ``alpha`` / ``beta`` / ``loc`` would be ambiguous in this module.
+quantities, so a bare ``alpha`` / ``beta`` / ``loc`` would be ambiguous in this module. Both the
+shape/scale and the mean/std pairs are validated through :func:`gwtransport.gamma.parse_parameters`,
+so invalid parameters (e.g. a negative shape) raise ``ValueError`` rather than silently returning
+an unphysical result.
 
 Available functions:
 
@@ -102,6 +107,8 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import numpy.typing as npt
 from scipy import optimize, stats
+
+from gwtransport.gamma import parse_parameters
 
 
 def residence_time_to_log_removal(
@@ -349,9 +356,11 @@ def parallel_mean(
 def gamma_pdf(
     *,
     r: npt.ArrayLike,
-    rt_alpha: float,
-    rt_beta: float,
+    rt_alpha: float | None = None,
+    rt_beta: float | None = None,
     rt_loc: float = 0.0,
+    rt_mean: float | None = None,
+    rt_std: float | None = None,
     log10_decay_rate: float,
 ) -> npt.NDArray[np.floating]:
     """
@@ -361,17 +370,27 @@ def gamma_pdf(
     the log removal ``R = mu * T`` follows a shifted gamma distribution with shape
     ``rt_alpha``, scale ``mu * rt_beta``, and location ``mu * rt_loc``.
 
+    The residence-time distribution is specified with either ``(rt_alpha, rt_beta)`` or
+    ``(rt_mean, rt_std)`` (optionally shifted by ``rt_loc``); both are routed through
+    :func:`gwtransport.gamma.parse_parameters`.
+
     Parameters
     ----------
     r : array-like
         Log removal values at which to compute the PDF.
-    rt_alpha : float
+    rt_alpha : float, optional
         Shape parameter of the gamma distribution for residence time. Must be positive.
-    rt_beta : float
+    rt_beta : float, optional
         Scale parameter of the gamma distribution for residence time (days). Must be positive.
     rt_loc : float, optional
         Location (minimum residence time, days) of the residence time distribution.
         Must be non-negative. Default is ``0.0``.
+    rt_mean : float, optional
+        Mean residence time (days). Alternative to ``rt_alpha``; supply with ``rt_std``.
+        Must be strictly greater than ``rt_loc``.
+    rt_std : float, optional
+        Standard deviation of the residence time (days). Alternative to ``rt_beta``;
+        supply with ``rt_mean``. Must be positive.
     log10_decay_rate : float
         Log10 decay rate mu (log10/day). Relates residence time to
         log removal via R = mu * T.
@@ -384,25 +403,27 @@ def gamma_pdf(
     Raises
     ------
     ValueError
-        If ``rt_loc`` is negative.
+        If parameter validation in :func:`gwtransport.gamma.parse_parameters` fails
+        (e.g. ``rt_loc`` negative, non-positive shape/scale, or neither/both
+        parameter pairs supplied).
 
     See Also
     --------
     gamma_cdf : Cumulative distribution function of log removal
     gamma_mean : Mean of the log removal distribution
     """
-    if rt_loc < 0:
-        msg = "rt_loc must be non-negative"
-        raise ValueError(msg)
+    rt_alpha, rt_beta, rt_loc = parse_parameters(mean=rt_mean, std=rt_std, loc=rt_loc, alpha=rt_alpha, beta=rt_beta)
     return stats.gamma.pdf(r, a=rt_alpha, loc=log10_decay_rate * rt_loc, scale=log10_decay_rate * rt_beta)
 
 
 def gamma_cdf(
     *,
     r: npt.ArrayLike,
-    rt_alpha: float,
-    rt_beta: float,
+    rt_alpha: float | None = None,
+    rt_beta: float | None = None,
     rt_loc: float = 0.0,
+    rt_mean: float | None = None,
+    rt_std: float | None = None,
     log10_decay_rate: float,
 ) -> npt.NDArray[np.floating]:
     """
@@ -413,17 +434,27 @@ def gamma_cdf(
     P(T0 <= (r - mu*rt_loc)/mu)`` which is the CDF of a shifted gamma distribution
     with location ``mu * rt_loc``.
 
+    The residence-time distribution is specified with either ``(rt_alpha, rt_beta)`` or
+    ``(rt_mean, rt_std)`` (optionally shifted by ``rt_loc``); both are routed through
+    :func:`gwtransport.gamma.parse_parameters`.
+
     Parameters
     ----------
     r : array-like
         Log removal values at which to compute the CDF.
-    rt_alpha : float
+    rt_alpha : float, optional
         Shape parameter of the gamma distribution for residence time. Must be positive.
-    rt_beta : float
+    rt_beta : float, optional
         Scale parameter of the gamma distribution for residence time (days). Must be positive.
     rt_loc : float, optional
         Location (minimum residence time, days) of the residence time distribution.
         Must be non-negative. Default is ``0.0``.
+    rt_mean : float, optional
+        Mean residence time (days). Alternative to ``rt_alpha``; supply with ``rt_std``.
+        Must be strictly greater than ``rt_loc``.
+    rt_std : float, optional
+        Standard deviation of the residence time (days). Alternative to ``rt_beta``;
+        supply with ``rt_mean``. Must be positive.
     log10_decay_rate : float
         Log10 decay rate mu (log10/day). Relates residence time to
         log removal via R = mu * T.
@@ -436,24 +467,26 @@ def gamma_cdf(
     Raises
     ------
     ValueError
-        If ``rt_loc`` is negative.
+        If parameter validation in :func:`gwtransport.gamma.parse_parameters` fails
+        (e.g. ``rt_loc`` negative, non-positive shape/scale, or neither/both
+        parameter pairs supplied).
 
     See Also
     --------
     gamma_pdf : Probability density function of log removal
     gamma_mean : Mean of the log removal distribution
     """
-    if rt_loc < 0:
-        msg = "rt_loc must be non-negative"
-        raise ValueError(msg)
+    rt_alpha, rt_beta, rt_loc = parse_parameters(mean=rt_mean, std=rt_std, loc=rt_loc, alpha=rt_alpha, beta=rt_beta)
     return stats.gamma.cdf(r, a=rt_alpha, loc=log10_decay_rate * rt_loc, scale=log10_decay_rate * rt_beta)
 
 
 def gamma_mean(
     *,
-    rt_alpha: float,
-    rt_beta: float,
+    rt_alpha: float | None = None,
+    rt_beta: float | None = None,
     rt_loc: float = 0.0,
+    rt_mean: float | None = None,
+    rt_std: float | None = None,
     log10_decay_rate: float,
 ) -> float:
     """
@@ -474,15 +507,25 @@ def gamma_mean(
     the arithmetic mean ``mu * (alpha * beta + rt_loc)`` because short residence
     time paths contribute disproportionately to the output concentration.
 
+    The residence-time distribution is specified with either ``(rt_alpha, rt_beta)`` or
+    ``(rt_mean, rt_std)`` (optionally shifted by ``rt_loc``); both are routed through
+    :func:`gwtransport.gamma.parse_parameters`.
+
     Parameters
     ----------
-    rt_alpha : float
+    rt_alpha : float, optional
         Shape parameter of the gamma distribution for residence time. Must be positive.
-    rt_beta : float
+    rt_beta : float, optional
         Scale parameter of the gamma distribution for residence time (days). Must be positive.
     rt_loc : float, optional
         Location (minimum residence time, days) of the residence time distribution.
         Must be non-negative. Default is ``0.0``.
+    rt_mean : float, optional
+        Mean residence time (days). Alternative to ``rt_alpha``; supply with ``rt_std``.
+        Must be strictly greater than ``rt_loc``.
+    rt_std : float, optional
+        Standard deviation of the residence time (days). Alternative to ``rt_beta``;
+        supply with ``rt_mean``. Must be positive.
     log10_decay_rate : float
         Log10 decay rate mu (log10/day).
 
@@ -494,7 +537,9 @@ def gamma_mean(
     Raises
     ------
     ValueError
-        If ``rt_loc`` is negative.
+        If parameter validation in :func:`gwtransport.gamma.parse_parameters` fails
+        (e.g. ``rt_loc`` negative, non-positive shape/scale, or neither/both
+        parameter pairs supplied).
 
     See Also
     --------
@@ -504,18 +549,18 @@ def gamma_mean(
     gamma_cdf : CDF of the log removal distribution
     :ref:`concept-pore-volume-distribution` : Why residence times are distributed
     """
-    if rt_loc < 0:
-        msg = "rt_loc must be non-negative"
-        raise ValueError(msg)
+    rt_alpha, rt_beta, rt_loc = parse_parameters(mean=rt_mean, std=rt_std, loc=rt_loc, alpha=rt_alpha, beta=rt_beta)
     return log10_decay_rate * rt_loc + rt_alpha * np.log1p(rt_beta * log10_decay_rate * np.log(10)) / np.log(10)
 
 
 def gamma_find_flow_for_target_mean(
     *,
     target_mean: float,
-    apv_alpha: float,
-    apv_beta: float,
+    apv_alpha: float | None = None,
+    apv_beta: float | None = None,
     apv_loc: float = 0.0,
+    apv_mean: float | None = None,
+    apv_std: float | None = None,
     log10_decay_rate: float,
 ) -> float:
     """
@@ -535,17 +580,27 @@ def gamma_find_flow_for_target_mean(
     For ``apv_loc > 0`` the equation is transcendental and solved numerically
     with :func:`scipy.optimize.brentq` by bracketing the root in ``1/Q``.
 
+    The pore-volume distribution is specified with either ``(apv_alpha, apv_beta)`` or
+    ``(apv_mean, apv_std)`` (optionally shifted by ``apv_loc``); both are routed through
+    :func:`gwtransport.gamma.parse_parameters`.
+
     Parameters
     ----------
     target_mean : float
         Target effective mean log removal value. Must be positive.
-    apv_alpha : float
+    apv_alpha : float, optional
         Shape parameter of the gamma distribution for aquifer pore volume. Must be positive.
-    apv_beta : float
+    apv_beta : float, optional
         Scale parameter of the gamma distribution for aquifer pore volume. Must be positive.
     apv_loc : float, optional
         Location (minimum aquifer pore volume) of the gamma distribution.
         Must be non-negative. Default is ``0.0``.
+    apv_mean : float, optional
+        Mean aquifer pore volume. Alternative to ``apv_alpha``; supply with ``apv_std``.
+        Must be strictly greater than ``apv_loc``.
+    apv_std : float, optional
+        Standard deviation of the aquifer pore volume. Alternative to ``apv_beta``;
+        supply with ``apv_mean``. Must be positive.
     log10_decay_rate : float
         Log10 decay rate mu (log10/day).
 
@@ -558,26 +613,20 @@ def gamma_find_flow_for_target_mean(
     Raises
     ------
     ValueError
-        If ``apv_loc`` is negative, if ``target_mean`` is not positive, if
-        ``log10_decay_rate`` is not positive (no decay can never produce a
-        positive target log removal), or if ``apv_alpha`` or ``apv_beta`` are
-        not positive.
+        If ``target_mean`` is not positive, if ``log10_decay_rate`` is not positive
+        (no decay can never produce a positive target log removal), or if parameter
+        validation in :func:`gwtransport.gamma.parse_parameters` fails (e.g. ``apv_loc``
+        negative, non-positive shape/scale, or neither/both parameter pairs supplied).
 
     See Also
     --------
     gamma_mean : Compute effective mean log removal for given parameters
     """
-    if apv_loc < 0:
-        msg = "apv_loc must be non-negative"
-        raise ValueError(msg)
+    apv_alpha, apv_beta, apv_loc = parse_parameters(
+        mean=apv_mean, std=apv_std, loc=apv_loc, alpha=apv_alpha, beta=apv_beta
+    )
     if target_mean <= 0:
         msg = "target_mean must be positive"
-        raise ValueError(msg)
-    if apv_alpha <= 0:
-        msg = "apv_alpha must be positive"
-        raise ValueError(msg)
-    if apv_beta <= 0:
-        msg = "apv_beta must be positive"
         raise ValueError(msg)
     if log10_decay_rate <= 0:
         # Without decay, the effective mean log removal is identically zero
