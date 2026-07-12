@@ -938,7 +938,13 @@ class TestExtractionToInfiltrationDiffusion:
         # Edge bins (where cout window doesn't cover the cin-to-cout transport lag)
         # have near-zero coefficient support, so the solver cannot recover them.
         well_supported = valid & (cin > 1.0)
-        np.testing.assert_allclose(cin[well_supported], 5.0, rtol=1e-10, atol=1e-10)
+        # The reverse is a Tikhonov-regularized least-squares solve (default
+        # regularization_strength = 1e-10), so the recovered constant carries an
+        # O(lambda * cond) bias -- observed ~6e-10 here, and BLAS/version dependent.
+        # Asserting to 1e-10 is below that regularization floor and flakes across
+        # numpy builds; 1e-6 still pins "constant in -> constant out" to six
+        # significant figures (a real operator bug would give O(1) deviations).
+        np.testing.assert_allclose(cin[well_supported], 5.0, rtol=1e-6, atol=1e-6)
         assert np.sum(well_supported) > 0.85 * np.sum(valid)
 
 
