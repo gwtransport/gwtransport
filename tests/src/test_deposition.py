@@ -2231,13 +2231,18 @@ def test_spinup_duration_default_retardation_factor():
     np.testing.assert_array_equal(duration, explicit)
 
 
-def test_spinup_float_raises_not_implemented():
-    """A float ``spinup`` raises NotImplementedError in every deposition entry point.
+@pytest.mark.parametrize("spinup", [0.5, 0, 1, 0.6, True, "warm"], ids=["float", "int0", "int1", "frac", "bool", "str"])
+def test_spinup_non_constant_raises_not_implemented(spinup):
+    """Any ``spinup`` other than ``None``/``"constant"`` raises NotImplementedError everywhere.
 
     The fraction-threshold spin-up mode is not implemented for deposition
-    (matching the diffusion family). A float was previously accepted and
-    silently ignored (behaviour identical to ``None``); all three public entry
-    points now reject it explicitly via ``_validate_deposition_inputs``.
+    (matching the diffusion family). A guard that only checked
+    ``isinstance(spinup, float)`` let an int threshold (``spinup=0`` or ``1``)
+    slip through and be silently ignored -- the threshold from
+    ``_resolve_spinup_inputs`` is discarded by the deposition callers, so the
+    request had no effect. The corrected guard accepts only ``None`` and
+    ``"constant"`` and rejects floats, ints, bools, and typo'd strings alike on
+    all three public entry points.
     """
     n = 6
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
@@ -2245,12 +2250,12 @@ def test_spinup_float_raises_not_implemented():
     params = {"aquifer_pore_volume": 200.0, "porosity": 0.3, "thickness": 5.0}
 
     with pytest.raises(NotImplementedError, match="spinup"):
-        deposition_to_extraction(dep=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, spinup=0.5, **params)
+        deposition_to_extraction(dep=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, spinup=spinup, **params)
     with pytest.raises(NotImplementedError, match="spinup"):
-        extraction_to_deposition(cout=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, spinup=0.5, **params)
+        extraction_to_deposition(cout=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, spinup=spinup, **params)
     with pytest.raises(NotImplementedError, match="spinup"):
         extraction_to_deposition_full(
-            cout=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, spinup=0.5, **params
+            cout=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, spinup=spinup, **params
         )
 
 

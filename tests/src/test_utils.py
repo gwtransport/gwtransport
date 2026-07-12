@@ -1541,7 +1541,7 @@ def test_time_bin_overlap_timestamp_matches_datetime64_and_numeric():
         (pd.Timestamp("2020-01-06"), pd.Timestamp("2020-01-16")),
         (pd.Timestamp("2020-01-26"), pd.Timestamp("2020-02-05")),
     ]
-    bins_dt64 = [(np.datetime64(a), np.datetime64(b)) for a, b in bins_ts]
+    bins_dt64 = [(a.to_datetime64(), b.to_datetime64()) for a, b in bins_ts]
     np.testing.assert_array_equal(time_bin_overlap(tedges=tedges_dt, bin_tedges=bins_ts), numeric)
     np.testing.assert_array_equal(time_bin_overlap(tedges=np.asarray(tedges_dt), bin_tedges=bins_dt64), numeric)
 

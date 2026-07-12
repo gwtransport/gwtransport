@@ -985,8 +985,18 @@ def compute_domain_mass(
         )
         mass >= 0.0
     """
-    # Partition spatial domain into segments at active wave positions.
+    # Single θ-pass over the waves. Every quantity below (active flag, wave
+    # position, fan head/tail) depends only on θ, not on the spatial segment, so
+    # evaluate each exactly once here and reuse it in the per-segment loop. Doing
+    # it per segment made ``compute_domain_mass`` re-solve ``position_at_theta``
+    # (a spline/root-find for numerical DecayingShockWaves) O(n_waves) times per
+    # segment — O(n_waves²) transcendental work where O(n_waves) suffices.
     wave_positions = []
+    # Precomputed fan geometry for the segment dispatch below, kept in wave
+    # iteration order so the newest-wins ``max(..., key=theta_start)`` tie-break
+    # resolves to the same wave as the per-segment rebuild did.
+    dsw_fans: list[tuple[DecayingShockWave, float]] = []  # (wave, v_s = position_at_theta)
+    raref_fans: list[tuple[RarefactionWave, float, float]] = []  # (wave, v_tail, v_head)
 
     for wave in waves:
         # Use was_active_at(theta) — not is_active — so historical wave geometries
@@ -1010,12 +1020,24 @@ def compute_domain_mass(
             if v_tail is not None and 0 <= v_tail <= v_outlet:
                 wave_positions.append(v_tail)
 
+            # contains_point() excludes theta == theta_start (strict) even though
+            # was_active_at includes it; mirror that guard so ownership is identical.
+            # v_head/v_tail are non-None here (the wave is active) and stored
+            # unclamped — contains_point compares against the raw fan edges.
+            if theta > wave.theta_start and v_head is not None and v_tail is not None:
+                raref_fans.append((wave, v_tail, v_head))
+
         elif isinstance(wave, DecayingShockWave):
             v_pos = wave.position_at_theta(theta)
             if v_pos is not None and 0 <= v_pos <= v_outlet:
                 wave_positions.append(v_pos)
             if 0 <= wave.v_origin <= v_outlet:
                 wave_positions.append(wave.v_origin)
+            # Store the shock position unclamped: the fan-membership test below
+            # compares an in-domain v_mid against v_s, which may lie outside
+            # [0, v_outlet] yet still bound the fan covering the domain.
+            if v_pos is not None:
+                dsw_fans.append((wave, v_pos))
 
     # Add domain boundaries
     wave_positions.extend([0.0, v_outlet])
@@ -1048,31 +1070,25 @@ def compute_domain_mass(
         raref_wave: RarefactionWave | None = None
         decaying_wave: DecayingShockWave | None = None
 
-        dsw_candidates: list[DecayingShockWave] = []
-        for wave in waves:
-            if not wave.was_active_at(theta):
-                continue
-            if isinstance(wave, DecayingShockWave):
-                v_s = wave.position_at_theta(theta)
-                if v_s is None:
-                    continue
-                # decay_side='left': fan is upstream of V_s (v < V_s);
-                # decay_side='right': fan is downstream of V_s (v > V_s).
-                in_fan = (wave.decay_side == "left" and v_mid < v_s) or (wave.decay_side == "right" and v_mid > v_s)
-                if in_fan and v_mid != wave.v_origin:
-                    dsw_candidates.append(wave)
-
+        # Dispatch against the precomputed fan geometry; no per-segment
+        # position_at_theta / was_active_at re-evaluation.
+        dsw_candidates = [
+            (wave, v_s)
+            for (wave, v_s) in dsw_fans
+            # decay_side='left': fan is upstream of V_s (v < V_s);
+            # decay_side='right': fan is downstream of V_s (v > V_s).
+            if ((wave.decay_side == "left" and v_mid < v_s) or (wave.decay_side == "right" and v_mid > v_s))
+            and v_mid != wave.v_origin
+        ]
         if dsw_candidates:
-            decaying_wave = max(dsw_candidates, key=lambda w: w.theta_start)
+            decaying_wave = max(dsw_candidates, key=lambda pair: pair[0].theta_start)[0]
 
         if decaying_wave is None:
             raref_candidates = [
-                wave
-                for wave in waves
-                if wave.was_active_at(theta) and isinstance(wave, RarefactionWave) and wave.contains_point(v_mid, theta)
+                (wave, v_tail, v_head) for (wave, v_tail, v_head) in raref_fans if v_tail <= v_mid <= v_head
             ]
             if raref_candidates:
-                raref_wave = max(raref_candidates, key=lambda w: w.theta_start)
+                raref_wave = max(raref_candidates, key=lambda pair: pair[0].theta_start)[0]
 
         if raref_wave is not None:
             mass_segment = _integrate_rarefaction_spatial_exact(raref_wave, v_start, v_end, theta, sorption)

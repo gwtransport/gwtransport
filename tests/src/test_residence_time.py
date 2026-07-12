@@ -3,6 +3,8 @@ import pandas as pd
 import pytest
 
 from gwtransport.residence_time import (
+    fraction_explained_full,
+    fraction_explained_gamma,
     fraction_explained_mean,
     full,
     gamma,
@@ -10,6 +12,29 @@ from gwtransport.residence_time import (
 )
 
 DIRECTIONS = ["extraction_to_infiltration", "infiltration_to_extraction"]
+
+# The six public residence-time functions, each wrapped so it can be called with a common
+# (flow, tedges, cout_tedges, direction) signature for the all-NaN refusal contract test.
+_APV = np.array([1000.0, 2500.0])
+_GAMMA_KW = {"mean": 2000.0, "std": 600.0}
+_RESIDENCE_FUNCS = {
+    "full": lambda flow, te, cte, d: full(
+        flow=flow, tedges=te, cout_tedges=cte, aquifer_pore_volumes=_APV, direction=d
+    ),
+    "mean": lambda flow, te, cte, d: mean(
+        flow=flow, tedges=te, cout_tedges=cte, aquifer_pore_volumes=_APV, direction=d
+    ),
+    "gamma": lambda flow, te, cte, d: gamma(flow=flow, tedges=te, cout_tedges=cte, direction=d, **_GAMMA_KW),
+    "fraction_explained_full": lambda flow, te, cte, d: fraction_explained_full(
+        flow=flow, tedges=te, cout_tedges=cte, aquifer_pore_volumes=_APV, direction=d
+    ),
+    "fraction_explained_mean": lambda flow, te, cte, d: fraction_explained_mean(
+        flow=flow, tedges=te, cout_tedges=cte, aquifer_pore_volumes=_APV, direction=d
+    ),
+    "fraction_explained_gamma": lambda flow, te, cte, d: fraction_explained_gamma(
+        flow=flow, tedges=te, cout_tedges=cte, direction=d, **_GAMMA_KW
+    ),
+}
 
 
 def _variable_flow(n=40, seed=1):
@@ -330,3 +355,34 @@ def test_gamma_zero_flow_output_bins_match_full_oracle():
         # Narrow gamma (std=0.1) ~ single pore volume at the mean, so it tracks the full oracle.
         valid = np.isfinite(got) & np.isfinite(ref)
         np.testing.assert_allclose(got[valid], ref[valid], atol=0.05)
+
+
+@pytest.mark.parametrize("func_name", list(_RESIDENCE_FUNCS))
+@pytest.mark.parametrize("direction", DIRECTIONS)
+@pytest.mark.parametrize("bad_kind", ["negative", "nan"])
+def test_negative_or_nan_flow_returns_all_nan(func_name, direction, bad_kind):
+    """Negative or NaN flow makes every public residence_time function refuse (all-NaN), not raise.
+
+    Regression test for the documented refusal convention (issue #301, PR #295): a negative or
+    NaN flow bin makes the cumulative-volume map V(t) non-monotone or undefined, so the whole
+    array/series is returned as NaN rather than raising or returning partial finite values. The
+    contract was documentation-only until now. Guarding all six public functions in both
+    directions keeps a future refactor from silently starting to return partial values or to
+    raise.
+    """
+    func = _RESIDENCE_FUNCS[func_name]
+    n = 30
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cout_tedges = tedges
+
+    # Sanity guard against a trivial pass: valid flow must yield at least one finite value, so the
+    # all-NaN result below is attributable to the bad flow rather than to a degenerate fixture.
+    valid_flow = np.full(n, 100.0)
+    valid_out = func(valid_flow, tedges, cout_tedges, direction)
+    assert np.isfinite(valid_out).any(), "fixture sanity: valid flow must produce some finite output"
+
+    bad_flow = np.full(n, 100.0)
+    bad_flow[10] = -50.0 if bad_kind == "negative" else np.nan
+
+    out = func(bad_flow, tedges, cout_tedges, direction)
+    assert np.isnan(out).all(), f"{func_name}/{direction}/{bad_kind}: expected all-NaN, got finite entries"

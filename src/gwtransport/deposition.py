@@ -81,7 +81,7 @@ def _validate_deposition_inputs(
     porosity: float,
     thickness: float,
     retardation_factor: float = 1.0,
-    spinup: str | float | None = "constant",
+    spinup: str | None = "constant",
     cout_tedges: pd.DatetimeIndex | None = None,
     cout_values: np.ndarray | None = None,
     dep_values: np.ndarray | None = None,
@@ -112,14 +112,19 @@ def _validate_deposition_inputs(
         If any of the activated checks fails. The specific message names which
         invariant was violated (see body for the verbatim strings).
     NotImplementedError
-        If ``spinup`` is a float. The fraction-threshold mode is not
-        implemented for deposition (matching the diffusion family); only
-        ``None`` and ``"constant"`` are supported.
+        If ``spinup`` is anything other than ``None`` or ``"constant"``. The
+        fraction-threshold mode is not implemented for deposition (matching the
+        diffusion family); floats, ints, and bools are all rejected.
     """
-    if isinstance(spinup, float):
+    if spinup is not None and spinup != "constant":
+        # Accept only None and "constant"; reject everything else (floats, ints,
+        # bools, typo'd strings). Checking isinstance(spinup, float) alone let an
+        # int threshold (e.g. spinup=0 or 1) slip through and be silently ignored
+        # -- the fraction-threshold value from _resolve_spinup_inputs is discarded
+        # by the deposition callers, so the request had no effect.
         msg = (
             "deposition's spinup parameter only supports None or 'constant'; "
-            f"float thresholds are not yet implemented (got {spinup!r})"
+            f"other values are not yet implemented (got {spinup!r})"
         )
         raise NotImplementedError(msg)
     if dep_values is not None:
@@ -363,8 +368,8 @@ def deposition_to_extraction(
         valid range (porosity not in (0, 1), non-positive thickness or
         aquifer pore volume).
     NotImplementedError
-        If ``spinup`` is a float (the fraction-threshold mode is not
-        implemented for deposition).
+        If ``spinup`` is anything other than ``None`` or ``"constant"`` (the
+        fraction-threshold mode is not implemented for deposition).
 
     See Also
     --------
@@ -527,8 +532,8 @@ def extraction_to_deposition(
     ValueError
         If input dimensions are incompatible or if flow contains NaN values.
     NotImplementedError
-        If ``spinup`` is a float (the fraction-threshold mode is not
-        implemented for deposition).
+        If ``spinup`` is anything other than ``None`` or ``"constant"`` (the
+        fraction-threshold mode is not implemented for deposition).
 
     See Also
     --------
@@ -740,8 +745,8 @@ def extraction_to_deposition_full(
         values, or if physical parameters are out of valid range (porosity
         not in (0, 1), non-positive thickness or aquifer pore volume).
     NotImplementedError
-        If ``spinup`` is a float (the fraction-threshold mode is not
-        implemented for deposition).
+        If ``spinup`` is anything other than ``None`` or ``"constant"`` (the
+        fraction-threshold mode is not implemented for deposition).
 
     See Also
     --------

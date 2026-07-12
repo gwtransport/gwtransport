@@ -803,7 +803,13 @@ def test_reverse_much_faster_than_diffusion_fast():
     product (no per-pore-volume closed-form loop) and banded-solves it, whereas diffusion_fast
     evaluates the exact breakthrough per streamtube. The speedup grows with the streamtube count
     (measured ~14x at gamma-25, ~47x at gamma-100, n=2920). Assert the relative speedup (robust to CI
-    load, since both scale together) plus a generous absolute ceiling (a quadratic-regression guard)."""
+    load, since both scale together) plus a generous absolute ceiling (a quadratic-regression guard).
+
+    The fast path here is only ~30 ms, so a single OS scheduling hiccup can inflate its measurement
+    several-fold; the min-of-N over N samples rejects those transients (a clean sample dominates the
+    min). N=7 and a 3x floor keep this reliably green on shared CI while still proving the fast
+    reverse is several-fold faster (the diffusion_fast own-band optimization, issue #299, sped up the
+    dense reference, so the constant-factor margin is measured conservatively)."""
     n = 1000
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     kw = {
@@ -820,13 +826,13 @@ def test_reverse_much_faster_than_diffusion_fast():
     extraction_to_infiltration(**kw)  # warm-up / import jit
     df_e2i(**kw)  # warm-up the dense reference too
 
-    def best_of(fn, repeats=3):
+    def best_of(fn, repeats=7):
         return min(_timed(fn) for _ in range(repeats))
 
     t_fast = best_of(lambda: extraction_to_infiltration(**kw))
     t_dense = best_of(lambda: df_e2i(**kw))
     assert t_fast < 2.0  # generous: measured ~30ms; guards a quadratic regression
-    assert t_dense > 5.0 * t_fast  # measured ~25x; min-of-3 timings are CI-load-robust
+    assert t_dense > 3.0 * t_fast  # nominal ~8-25x (grows with streamtube count); min-of-7 is CI-load-robust
 
 
 def test_reverse_constant_cout_gives_constant_cin():
