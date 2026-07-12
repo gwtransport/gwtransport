@@ -413,18 +413,27 @@ def _closed_form_coeff_matrix(
         )
         np.minimum(union_lo, lo, out=union_lo)
         np.maximum(union_hi, hi, out=union_hi)
-        geometry.append((r_vpv, length, d_m, alpha_l))
+        geometry.append((r_vpv, length, d_m, alpha_l, lo, hi))
 
     col_start = union_lo
     full_band = min(int(np.max(union_hi - union_lo)) + 1, n_cin_bins)
     band_vals = np.zeros((n_cout_bins, full_band))
 
-    # PASS 2 (values): each streamtube's C_F stripe is built on the shared band (col_start,
-    # full_band), so its coeff is already offset-aligned and accumulates directly into the buffer.
-    for r_vpv, length, d_m, alpha_l in geometry:
-        band_vals += _pv_band_values(
-            col_start=col_start,
-            full_band=full_band,
+    # PASS 2 (values): evaluate each streamtube's C_F stripe on its OWN band [lo, hi] -- typically
+    # much narrower than the shared union band when the APVD spread is wide -- then scatter it
+    # offset-shifted into the union buffer at per-row offset (lo - union_lo). The erf-heavy
+    # antiderivative in _pv_band_values then runs over own_band columns instead of full_band,
+    # removing the redundant erf evaluation across the union width beyond each streamtube's own
+    # front. This is bit-identical to a union-band build: the coefficient at (row, absolute cin bin)
+    # depends only on that cin bin's breakthrough coordinate, not on the band anchoring, and every
+    # union-band column outside [lo, hi] carries a saturated (exactly-0 at the default threshold)
+    # coefficient that contributes nothing to the sum.
+    row_idx = np.arange(n_cout_bins)[:, None]
+    for r_vpv, length, d_m, alpha_l, lo, hi in geometry:
+        own_band = min(int(np.max(hi - lo)) + 1, n_cin_bins)
+        stripe = _pv_band_values(
+            col_start=lo,
+            full_band=own_band,
             cumulative_volume_at_cout=cumulative_volume_at_cout,
             cumulative_volume_at_cin=cumulative_volume_at_cin,
             cout_tedges_days=cout_tedges_days,
@@ -434,6 +443,13 @@ def _closed_form_coeff_matrix(
             molecular_diffusivity=d_m,
             longitudinal_dispersivity=alpha_l,
         )
+        # Per-row column offset of the own band inside the union band (>= 0 since union_lo <= lo).
+        cols = (lo - union_lo)[:, None] + np.arange(own_band)[None, :]
+        # Own-band stripes may extend one column past the union width into the saturated tail
+        # (all-zero at the default threshold); drop those so the scatter stays in bounds.
+        in_band = cols < full_band
+        rows = np.broadcast_to(row_idx, cols.shape)
+        np.add.at(band_vals, (rows[in_band], cols[in_band]), stripe[in_band])
 
     band_vals /= len(aquifer_pore_volumes)
     return np.nan_to_num(band_vals, nan=0.0), col_start, valid_cout_bins

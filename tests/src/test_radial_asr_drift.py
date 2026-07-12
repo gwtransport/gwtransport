@@ -275,6 +275,31 @@ def test_retardation_rescale_in_drift():
     np.testing.assert_allclose(retarded[ext], plain[ext], atol=1e-6)
 
 
+def test_retardation_rescale_selects_same_n_modes():
+    """_auto_n_modes picks the same M for the (R, flow, v_d) run and its (1, flow/R, v_d/R) rescale.
+
+    Retardation is a degree-1 rescale of the operator ``(A_0, v_d, D_m, R) -> (A_0/R, v_d/R, D_m/R,
+    1)`` that leaves the physics -- and therefore the correct azimuthal truncation -- unchanged (see
+    :func:`test_retardation_rescale_in_drift`). Sizing the azimuthal radius ``R_b`` and the rest
+    displacement ``delta`` from the retarded solute front (the ``/R`` factors, #297) makes the auto
+    heuristic invariant, so a retardation-invariance check under drift no longer sees a spurious
+    truncation-level ``M`` mismatch. The scenario exercises both bounds: an interior rest phase
+    drives the ``m_shift`` (delta) term, and moderate drift drives the ``m_eps`` term.
+    """
+    n_inj, n_rest, n_ext = 6, 8, 10
+    flow = np.array([_Q] * n_inj + [0.0] * n_rest + [-_Q] * n_ext)
+    dt = np.ones(len(flow))
+    r_b = np.sqrt(_R_W**2 + _Q * n_inj / _C_GEO)
+    v_d = _eps_to_vd(0.35, r_b)
+    r = 2.5
+    m_retarded = _auto_n_modes(flow, dt, _C_GEO, _R_W, _ALPHA_L, v_d, r)
+    m_plain = _auto_n_modes(flow / r, dt, _C_GEO, _R_W, _ALPHA_L, v_d / r, 1.0)
+    assert m_retarded == m_plain
+    # The shared value must be a genuine interior choice, not both pinned to the same [2, 8] rail
+    # (which would pass even without the fix and prove nothing).
+    assert 2 < m_retarded < 8
+
+
 def test_coupling_matrices_match_real_space_generator():
     """The FFT-in-theta coupling matrices A, B, S0 equal an independent real-space mode generator.
 
@@ -550,15 +575,15 @@ def test_auto_n_modes_sizing():
     the engine's graceful all-NaN branch run instead of an opaque empty-reduction crash)."""
     flow, dt, _ = _single_cycle()
     r_b = np.sqrt(_R_W**2 + _Q * 6 / _C_GEO)
-    assert _auto_n_modes(flow, dt, _C_GEO, _R_W, _ALPHA_L, 0.3 * _A0 / r_b) == 5  # ceil(ln 5e-3 / ln 0.3)
-    assert _auto_n_modes(flow, dt, _C_GEO, _R_W, _ALPHA_L, 1e-9 * _A0 / r_b) == 2  # floor
+    assert _auto_n_modes(flow, dt, _C_GEO, _R_W, _ALPHA_L, 0.3 * _A0 / r_b, 1.0) == 5  # ceil(ln 5e-3 / ln 0.3)
+    assert _auto_n_modes(flow, dt, _C_GEO, _R_W, _ALPHA_L, 1e-9 * _A0 / r_b, 1.0) == 2  # floor
     v_d = _eps_to_vd(0.2, r_b)
     flow_rest = np.concatenate([flow[:6], np.zeros(30), flow[6:]])
-    m_rest = _auto_n_modes(flow_rest, np.ones(len(flow_rest)), _C_GEO, _R_W, _ALPHA_L, v_d)
-    assert m_rest > _auto_n_modes(flow, dt, _C_GEO, _R_W, _ALPHA_L, v_d)
+    m_rest = _auto_n_modes(flow_rest, np.ones(len(flow_rest)), _C_GEO, _R_W, _ALPHA_L, v_d, 1.0)
+    assert m_rest > _auto_n_modes(flow, dt, _C_GEO, _R_W, _ALPHA_L, v_d, 1.0)
     flow_long = np.concatenate([flow[:6], np.zeros(300), flow[6:]])
-    assert _auto_n_modes(flow_long, np.ones(len(flow_long)), _C_GEO, _R_W, _ALPHA_L, v_d) == 8  # cap
-    assert _auto_n_modes(np.zeros(5), np.ones(5), _C_GEO, _R_W, _ALPHA_L, v_d) == 2  # all-rest
+    assert _auto_n_modes(flow_long, np.ones(len(flow_long)), _C_GEO, _R_W, _ALPHA_L, v_d, 1.0) == 8  # cap
+    assert _auto_n_modes(np.zeros(5), np.ones(5), _C_GEO, _R_W, _ALPHA_L, v_d, 1.0) == 2  # all-rest
 
 
 def test_public_auto_n_modes_dispatch():
@@ -567,7 +592,7 @@ def test_public_auto_n_modes_dispatch():
     flow, dt, cin = _single_cycle()
     tedges = pd.date_range("2024-01-01", periods=len(flow) + 1, freq="D")
     u = 0.05
-    m = _auto_n_modes(flow, dt, _C_GEO, _R_W, _ALPHA_L, u / _POROSITY)
+    m = _auto_n_modes(flow, dt, _C_GEO, _R_W, _ALPHA_L, u / _POROSITY, 1.0)
     kw = {
         "cin": cin,
         "flow": flow,

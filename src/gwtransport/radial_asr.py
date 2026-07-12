@@ -312,20 +312,27 @@ def _auto_n_modes(
     well_radius: float,
     longitudinal_dispersivity: float,
     v_d: float,
+    retardation_factor: float,
 ) -> int:
     r"""Azimuthal truncation ``M`` sized from the drift ratio ``eps`` and the rest-phase displacement.
 
     The pumping-phase mode amplitudes decay geometrically, ``|c_m| ~ eps^|m|`` with
     ``eps = v_d R_b / A_0``, so keeping modes ``-M .. M`` truncates the azimuthal field at
     ``O(eps^{M+1})``; ``M`` is chosen so that tail is below ``~5e-3``. An interior rest phase
-    additionally translates the plume by ``delta = v_d t_rest`` (``R = 1``, conservative; idle bins
-    before the first or after the last pumping do not move the field), populating harmonics up
-    to ``~ delta / width`` (``width`` the radial breakthrough std) -- the second bound. The result is
-    clamped to ``[2, 8]`` (the slow-drift envelope -- beyond ``eps ~ 0.6`` the far-field escape this
-    engine does not model dominates anyway); the rest kernel's honest spectral-tail guard raises if a long
-    rest still outruns the clamp (pass ``n_modes`` explicitly then). ``A_0`` uses the **smallest** pumping
-    magnitude (the worst-case largest ``eps``, consistent with the stagnation-radius envelope guard),
-    ``R_b`` the peak net injected radius. This function is only reached for nonzero drift.
+    additionally translates the plume by ``delta = v_d t_rest / R`` (the free-space rest kernel's
+    own translation; idle bins before the first or after the last pumping do not move the field),
+    populating harmonics up to ``~ delta / width`` (``width`` the radial breakthrough std) -- the
+    second bound. The result is clamped to ``[2, 8]`` (the slow-drift envelope -- beyond
+    ``eps ~ 0.6`` the far-field escape this engine does not model dominates anyway); the rest
+    kernel's honest spectral-tail guard raises if a long rest still outruns the clamp (pass
+    ``n_modes`` explicitly then). ``A_0`` uses the **smallest** pumping magnitude (the worst-case
+    largest ``eps``, consistent with the stagnation-radius envelope guard), ``R_b`` the peak
+    **retarded** solute-front radius. Sizing ``R_b`` and ``delta`` from the retarded front (the
+    ``/R`` factors) makes the selected ``M`` invariant under the operator rescale
+    ``(A_0, v_d, D_m, R) -> (A_0/R, v_d/R, D_m/R, 1)`` -- the two equivalent runs pick the same
+    truncation instead of differing (see ``test_retardation_rescale_selects_same_n_modes``) -- and
+    is tighter (fewer wasted modes) than the water-front radius. This function is only reached for
+    nonzero drift.
 
     Returns
     -------
@@ -338,10 +345,14 @@ def _auto_n_modes(
     a0 = float(np.min(pumping)) / (2.0 * c_geo)
     net_volume = np.concatenate(([0.0], np.cumsum(flow * dt_days)))
     peak_volume = max(float(net_volume.max()), 0.0)
-    r_b = np.sqrt(well_radius**2 + peak_volume / c_geo)
+    # Retarded solute-front radius: the solute penetrates R times less area than the water front,
+    # r_b^2 - r_w^2 = peak_volume / (R c_geo). This is the radius at which the azimuthal plume
+    # structure actually sits, and it makes r_b invariant under the (flow, v_d, R) rescale.
+    r_b = np.sqrt(well_radius**2 + peak_volume / (retardation_factor * c_geo))
     nz = np.flatnonzero(flow != 0.0)
     interior = slice(nz[0], nz[-1] + 1)  # leading/trailing idle bins do not move the field
-    delta = abs(v_d) * float(np.sum(dt_days[interior][flow[interior] == 0.0]))
+    # Rest translation is v_d t / R (the free-space rest kernel's exact drift), not v_d t.
+    delta = abs(v_d) * float(np.sum(dt_days[interior][flow[interior] == 0.0])) / retardation_factor
     eps = min(abs(v_d) * (r_b + delta) / abs(a0), _RS_FRAC)
     m_eps = int(np.ceil(np.log(5e-3) / np.log(eps))) if eps > 0.0 else 2
     width = np.sqrt(longitudinal_dispersivity * r_b + longitudinal_dispersivity**2)
@@ -387,7 +398,7 @@ def _block_ensemble(
         m = (
             n_modes
             if n_modes is not None
-            else _auto_n_modes(flow, dt_days, c_geo, well_radius, longitudinal_dispersivity, v_d)
+            else _auto_n_modes(flow, dt_days, c_geo, well_radius, longitudinal_dispersivity, v_d, retardation_factor)
         )
         acc += w_i * np.nan_to_num(
             block_cout_deviation(
