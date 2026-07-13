@@ -402,8 +402,9 @@ def full(
     # Sign convention: sign = -1 for extraction_to_infiltration, +1 for infiltration_to_extraction;
     # the look-back/forward parcel sits at volume V + shift and tau(V) = sign * (T(V + shift) - T(V)) is
     # piecewise-linear in V (T is the volume -> time map). Its flow-weighted bin average is a closed-
-    # form difference of the antiderivative phi(x) = int_0^x T(w) dw, so no per-streamtube integration
-    # grid is built (memory/time O(n_pore_volumes * n_bins), not O(n_pore_volumes^2 * n_flow)).
+    # form difference of an antiderivative phi with phi' = T (any additive constant cancels in the
+    # difference below; over the extrapolated map T is the extended map), so no per-streamtube
+    # integration grid is built (memory/time O(n_pore_volumes * n_bins), not O(n_pore_volumes^2 * n_flow)).
     sign = -1.0 if direction == "extraction_to_infiltration" else 1.0
     shift = sign * retardation_factor * aquifer_pore_volumes  # (n_pv,)
 
@@ -569,10 +570,10 @@ def mean(
     n_streamtubes = rt.shape[0]
     valid_count = np.isfinite(rt).sum(axis=0)
     with np.errstate(invalid="ignore"):
-        mean = np.nansum(rt, axis=0) / valid_count
+        bin_mean = np.nansum(rt, axis=0) / valid_count
     if threshold > 0.0:
-        mean = np.where(valid_count >= threshold * n_streamtubes, mean, np.nan)
-    return mean
+        bin_mean = np.where(valid_count >= threshold * n_streamtubes, bin_mean, np.nan)
+    return bin_mean
 
 
 def gamma(
@@ -679,10 +680,17 @@ def gamma(
     Notes
     -----
     With the default ``spinup='constant'`` the spin-up is warm-started exactly as in
-    :func:`mean` (constant-boundary-flow extrapolation), so the two agree everywhere. With
+    :func:`mean` (constant-boundary-flow extrapolation) -- the same warm-start policy applies across
+    the whole distribution (``mean`` discretizes it, ``gamma`` integrates it in closed form). With
     ``spinup=0.0`` the spin-up is instead handled by exact covered-sub-mass renormalization: each
     output bin integrates over only the pore-volume sub-range with sufficient flow history. See the
     module docstring (``Spin-up period``) for the full rule.
+
+    The closed form uses regularized incomplete-gamma CDFs. For an extremely narrow APVD
+    (``alpha = (mean / std) ** 2`` above ~1e7, i.e. ``std / mean`` below ~3e-4) SciPy's incomplete
+    gamma loses precision in its far tail and the result degrades to ~1e-5 relative; such a
+    distribution is effectively a single pore volume, so :func:`mean` with one bin is the exact
+    alternative there.
 
     Examples
     --------
@@ -904,7 +912,11 @@ def gamma(
         # whose look-back/forward parcel leaves the record (e2i: v - r*V_p < 0, i2e: v + r*V_p >
         # v_end) is in spin-up, so integrate only the covered sub-range [support_lo, vp_hi] and let the
         # covered sub-mass renormalize the mean (den_pt below), keeping the parcel inside the raw phi map.
-        if extrapolate:
+        # Warm-start the full support only when the phi map was actually extended -- i.e. there is a
+        # positive boundary flow to extrapolate from (matching full's `strict`). With all-zero flow the
+        # map stays the raw record (see _phi_setup), so an out-of-record parcel is in spin-up (-> NaN);
+        # the raw `extrapolate` flag alone would instead clamp it to a finite pointwise value (RT-P2).
+        if extrapolate and bool(np.any(flow > 0.0)):
             vp_hi = np.full(v.shape, support_hi)
         else:
             vp_hi = np.clip((v if sign < 0 else v_end - v) / r, support_lo, support_hi)
@@ -925,7 +937,16 @@ def gamma(
         cdf_pt = edges_pt - loc
         m0_pt = np.diff(gamma_dist.cdf(cdf_pt, alpha, scale=beta), axis=1)
         m1_pt = alpha * beta * np.diff(gamma_dist.cdf(cdf_pt, alpha + 1, scale=beta), axis=1) + loc * m0_pt
-        num_pt = (tau_mid * m0_pt + slope * (m1_pt - mid_pt * m0_pt)).sum(axis=1)
+        # Clip the piece-centred first moment mu1 = int (V_p - mid) f to its exact geometric bound
+        # |mu1| <= half * m0, mirroring the main loop's mu1 clip above. On a piece whose V_p sweep
+        # crosses another zero-flow plateau, the raw (m1 - mid m0) subtracts large near-equal terms and
+        # catastrophically cancels; the large piecewise slope (~ r / ulp-bump) then amplifies the noise
+        # into a spurious residence-time contribution. Only mu1 is needed here: tau is piecewise-linear
+        # in V_p (no quadratic mu2 term).
+        b0_pt = np.maximum(m0_pt, 0.0)
+        half_pt = 0.5 * (hi_pt - lo_pt)
+        mu1_pt = np.clip(m1_pt - mid_pt * m0_pt, -half_pt * b0_pt, half_pt * b0_pt)
+        num_pt = (tau_mid * m0_pt + slope * mu1_pt).sum(axis=1)
         den_pt = m0_pt.sum(axis=1)  # covered sub-mass over [support_lo, vp_hi]
         covered_pt = den_pt > 0
         if spinup_threshold > 0.0:
