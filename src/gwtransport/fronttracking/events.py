@@ -19,7 +19,13 @@ from dataclasses import dataclass
 from enum import Enum
 
 from gwtransport.fronttracking.math import characteristic_position, characteristic_speed
-from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWave, RarefactionWave, ShockWave
+from gwtransport.fronttracking.waves import (
+    CharacteristicWave,
+    DecayingShockWave,
+    DoubleFanShockWave,
+    RarefactionWave,
+    ShockWave,
+)
 
 # Numerical tolerance constants
 EPSILON_SPEED = 1e-15  # Tolerance for checking if two speeds are equal (machine precision)
@@ -75,6 +81,11 @@ class EventType(Enum):
     """Rarefaction boundary intersects with another rarefaction boundary."""
     DSW_FAN_EXHAUSTED = "decaying_shock_fan_exhausted"
     """A decaying shock's fan is exhausted (c_decay reached c_fan_tail)."""
+    WAVE_MERGE = "wave_merge"
+    """Two faces overtake (universal merge): any interaction involving a decaying/doubly-fed
+    shock — fan-entry, doubly-fed formation, same-apex annihilation, and their compositions."""
+    DFSW_SIDE_EXHAUSTED = "double_fan_side_exhausted"
+    """A doubly-fed shock's fan side reaches its far bound (degrades to a decaying shock/shock)."""
     OUTLET_CROSSING = "outlet_crossing"
     """Wave crosses outlet boundary."""
 
@@ -106,6 +117,7 @@ class Event:
     waves_involved: list  # List[Wave] - can't type hint due to circular import
     location: float
     boundary_type: str | None = None
+    faces: tuple | None = None  # (Face, Face) for WAVE_MERGE; ('left'|'right',) side for DFSW_SIDE_EXHAUSTED
 
     def __repr__(self):  # noqa: D105
         return (
@@ -343,8 +355,8 @@ def find_outlet_crossing(wave, v_outlet: float, theta_current: float) -> float |
         dtheta = (v_outlet - v_current) / wave.speed
         return theta_eval + dtheta
 
-    if isinstance(wave, DecayingShockWave):
-        # Closed-form inverse V_s(theta) = v_outlet.
+    if isinstance(wave, (DecayingShockWave, DoubleFanShockWave)):
+        # Closed-form / cached-trajectory inverse V_s(theta) = v_outlet.
         theta_cross = wave.outlet_crossing_theta(v_outlet)
         if theta_cross is None:
             return None

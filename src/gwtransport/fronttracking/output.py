@@ -28,18 +28,26 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 
 import warnings
 from collections.abc import Sequence
+from itertools import pairwise
 from operator import itemgetter
 
 import numpy as np
 import numpy.typing as npt
 
 from gwtransport.fronttracking.events import find_outlet_crossing
+from gwtransport.fronttracking.interactions import Face, iter_faces
 from gwtransport.fronttracking.math import (
-    ConstantRetardation,
     NonlinearSorption,
     SorptionModel,
 )
-from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWave, RarefactionWave, ShockWave, Wave
+from gwtransport.fronttracking.waves import (
+    CharacteristicWave,
+    DecayingShockWave,
+    Feeder,
+    RarefactionWave,
+    ShockWave,
+    Wave,
+)
 
 # Numerical tolerance constants
 EPSILON_VELOCITY = 1e-15  # Tolerance for checking if velocity is effectively zero
@@ -51,6 +59,25 @@ EPSILON_POSITION = 1e-15  # Tolerance for shock-face proximity in position v [m�
 # multi-pulse record (measured max ratio ~460); 65536 clears that with wide margin while staying
 # ~7 orders below any real breakthrough concentration (O(cin)).
 FP_CANCELLATION_CLAMP = 65536.0
+
+
+def _reader_faces(waves: Sequence[Wave], theta: float) -> list[tuple[float, Face]]:
+    """``(position, face)`` for every active wave face at ``theta`` (reader sweep basis).
+
+    Fan boundary lines are included: they mark where a downstream-opening fan ends and its
+    plateau begins (a ``decay_side='right'`` decaying/doubly-fed shock has its fan on the
+    downstream side, so its head boundary must partition the domain — the feeder clamp alone
+    only reaches the apex-side plateau).
+    """
+    out: list[tuple[float, Face]] = []
+    for wave in waves:
+        if not wave.was_active_at(theta):
+            continue
+        for face in iter_faces(wave, theta, include_boundaries=True):
+            pos = face.position(theta)
+            if pos is not None:
+                out.append((pos, face))
+    return out
 
 
 def concentration_at_point(
@@ -84,148 +111,33 @@ def concentration_at_point(
 
     Notes
     -----
-    **Wave priority**: decaying shocks first (closed-form analytical), then
-    rarefaction fans (spatial extent), then most recently crossing shock or
-    rarefaction tail, then characteristics. If no active wave controls the
-    point, returns 0.0 (initial condition).
+    **Nearest-downstream-face sweep.** ``C(v, θ)`` is the *left* (upstream) state of the
+    nearest face strictly downstream of ``v`` among the waves active at ``θ``; if no face
+    is downstream, the *right* state of the outermost face; ``0`` in a virgin domain. A
+    face's feeder is a constant or a bounded self-similar fan (clamped to its extent, so the
+    plateau beyond a fan reads correctly). Because every face crossing fires a solver event,
+    the front list is interaction-consistent and each region has a single owner — no
+    ownership heuristic is needed. This is exact for a single front (one owner everywhere)
+    and for genuinely interacting multi-front inputs alike.
     """
-    # Multi-DSW dispatch: when several active DSW fans contain v, the newest
-    # (largest ``theta_start``) wins — same rule as ``compute_domain_mass``.
-    # Iterating chronologically and short-circuiting picks the older DSW's fan
-    # value, which is wrong for overlap regions. The fan predicate mirrors the
-    # in-fan check used downstream.
-    dsw_in_fan: list[DecayingShockWave] = []
-    for wave in waves:
-        if isinstance(wave, DecayingShockWave) and wave.was_active_at(theta):
-            v_s = wave.position_at_theta(theta)
-            if v_s is None:
-                continue
-            in_fan = (wave.decay_side == "left" and v < v_s) or (wave.decay_side == "right" and v > v_s)
-            if in_fan and v != wave.v_origin:
-                dsw_in_fan.append(wave)
-
-    if dsw_in_fan:
-        newest = max(dsw_in_fan, key=lambda w: w.theta_start)
-        c = newest.concentration_at_point(v, theta)
-        if c is not None:
-            return c
-
-    # Fallback: no DSW fan contains v — handle shock-face (v ≈ V_s) and
-    # fixed-side (v on the c_fixed side) cases. Chronological iteration is
-    # fine here because (a) shock-face is rare and unique by v ≈ V_s, and
-    # (b) all DSWs in a typical multi-pulse share the same c_fixed baseline.
-    for wave in waves:
-        if isinstance(wave, DecayingShockWave) and wave.was_active_at(theta):
-            c = wave.concentration_at_point(v, theta)
-            if c is not None:
-                return c
-
-    # Multi-rarefaction dispatch: same shape as DSWs. RarefactionWave returns
-    # None outside its fan, so collecting non-None candidates is equivalent to
-    # an in-fan check. Newest wins.
-    raref_candidates: list[tuple[float, RarefactionWave]] = []
-    for wave in waves:
-        if isinstance(wave, RarefactionWave) and wave.was_active_at(theta):
-            c = wave.concentration_at_point(v, theta)
-            if c is not None:
-                raref_candidates.append((c, wave))
-
-    if raref_candidates:
-        return max(raref_candidates, key=lambda cw: cw[1].theta_start)[0]
-
-    latest_wave_theta = -np.inf
-    latest_wave_c = None
-    # Stacked-shock geometry: for v right of multiple shocks, c at v is c_right
-    # of the shock CLOSEST to v from the left (largest V_shock with V_shock < v).
-    # ``theta_start`` would mis-rank stacked shocks (youngest = innermost ≠
-    # closest-to-v), so we track V_shock directly.
-    # Obstruction check: a shock's c_R applies at v only when no other active
-    # wave (rarefaction tail/head, DSW V_s, other shock) sits between V_shock
-    # and v. Otherwise c_R is the c in the immediate-right-of-shock zone, not
-    # at v.
-    rightmost_passed_v_shock = -np.inf
-    rightmost_passed_c_right: float | None = None
-
-    def _intervening_wave_between(v_a: float, v_b: float) -> bool:
-        """Return True if any other active wave has a boundary V in (v_a, v_b)."""
-        for other in waves:
-            if not other.was_active_at(theta):
-                continue
-            if isinstance(other, RarefactionWave):
-                v_t = other.tail_position_at_theta(theta)
-                v_h = other.head_position_at_theta(theta)
-                if v_t is not None and v_a < v_t < v_b:
-                    return True
-                if v_h is not None and v_a < v_h < v_b:
-                    return True
-            else:
-                v_o = other.position_at_theta(theta)
-                if v_o is not None and v_a < v_o < v_b:
-                    return True
-        return False
-
-    for wave in waves:
-        if isinstance(wave, ShockWave) and wave.was_active_at(theta):
-            v_shock = wave.position_at_theta(theta)
-            if v_shock is not None:
-                if abs(v - v_shock) < EPSILON_POSITION:
-                    return 0.5 * (wave.c_left + wave.c_right)
-
-                if abs(wave.speed) > EPSILON_VELOCITY:
-                    theta_cross = wave.theta_start + (v - wave.v_start) / wave.speed
-
-                    if theta_cross <= theta:
-                        if theta_cross > latest_wave_theta:
-                            latest_wave_theta = theta_cross
-                            latest_wave_c = wave.c_left
-                    elif v > v_shock > rightmost_passed_v_shock and not _intervening_wave_between(v_shock, v):
-                        rightmost_passed_v_shock = v_shock
-                        rightmost_passed_c_right = wave.c_right
-
-    for wave in waves:
-        if isinstance(wave, RarefactionWave) and wave.was_active_at(theta):
-            v_tail = wave.tail_position_at_theta(theta)
-            if v_tail is not None and v_tail > v + EPSILON_POSITION:
-                tail_speed = wave.tail_speed()
-                if tail_speed > EPSILON_VELOCITY:
-                    theta_pass = wave.theta_start + (v - wave.v_start) / tail_speed
-                    if theta_pass <= theta and theta_pass > latest_wave_theta:
-                        latest_wave_theta = theta_pass
-                        latest_wave_c = wave.c_tail
-
-    # Priority: latest_wave_c is set by the IF-shock branch (theta_cross <=
-    # theta -> c_L of closest-passing shock) or by the rarefaction-tail loop
-    # (rarefaction tail downstream of v passed v at theta_pass -> c_tail).
-    # rightmost_passed_c_right is set by the elif-shock branch (v > V_shock,
-    # shock upstream of v, c_R of closest-from-left shock). The two represent
-    # different geometric truths: latest_wave_c is "most recent event AT v",
-    # rightmost_passed_c_right is "c just past the upstream shock". When a
-    # rarefaction tail is downstream of the shock AND right of v, that
-    # rarefaction's c_tail wins (the tail's passage at v is more recent than
-    # the shock's contribution at v, geometrically). Prefer latest_wave_c.
-    if latest_wave_c is not None:
-        return latest_wave_c
-    if rightmost_passed_c_right is not None:
-        return rightmost_passed_c_right
-
-    latest_c = 0.0
-    latest_theta = -np.inf
-
-    for wave in waves:
-        if isinstance(wave, CharacteristicWave) and wave.was_active_at(theta):
-            v_char_at_theta = wave.position_at_theta(theta)
-
-            if v_char_at_theta is not None and v_char_at_theta >= v - EPSILON_POSITION:
-                speed = wave.speed()
-
-                if speed > EPSILON_VELOCITY:
-                    theta_pass = wave.theta_start + (v - wave.v_start) / speed
-
-                    if theta_pass <= theta and theta_pass > latest_theta:
-                        latest_theta = theta_pass
-                        latest_c = wave.concentration
-
-    return latest_c
+    faces = _reader_faces(waves, theta)
+    # Nearest face at or downstream of v (within FP): its left (upstream) feeder gives the
+    # state just behind it, which is the state at v. A face strictly upstream of v does not
+    # describe v. If nothing is at/downstream, the outermost face's right (downstream) feeder
+    # holds — the state ahead of every front.
+    downstream = [(p, f) for (p, f) in faces if p >= v - EPSILON_POSITION]
+    if downstream:
+        pos, face = min(downstream, key=itemgetter(0))
+        # Exactly on a shock/fan face: return the average of the two sides (the infinitesimally
+        # thin discontinuity convention). A contact (characteristic) carries its value on the
+        # upstream side, so it returns that (the behind value) at its own position.
+        if abs(pos - v) < EPSILON_POSITION and face.role != "contact":
+            return 0.5 * (face.left.value(v, theta) + face.right.value(v, theta))
+        return face.left.value(v, theta)
+    if faces:
+        _p, face = max(faces, key=itemgetter(0))
+        return face.right.value(v, theta)
+    return 0.0
 
 
 def compute_breakthrough_curve(
@@ -859,9 +771,12 @@ def compute_bin_averaged_concentration_exact(
         # fully in-range inputs. Residuals within this band are numerical zero: clamp and stay
         # silent.
         mass_scale = np.maximum(np.abs(m_in_at_edges), np.abs(m_dom_at_edges))
+        # Band = the larger of the FP-cancellation floor and a 1e-6 relative transient floor.
+        # The latter absorbs the benign ``c_min``-floor artifact at a fan-entry (a decaying
+        # side born at ``c ≈ 1e-12`` rather than exactly 0 perturbs the near-apex fan integral
+        # for one θ-sample); a genuine over-count is O(a pulse's mass), far above the band.
         eps_band = (
-            FP_CANCELLATION_CLAMP
-            * np.finfo(float).eps
+            max(FP_CANCELLATION_CLAMP * np.finfo(float).eps, 1e-6)
             * np.maximum(np.maximum(mass_scale[:-1], mass_scale[1:]), 1.0)
             / dtheta_out
         )
@@ -985,178 +900,64 @@ def compute_domain_mass(
         )
         mass >= 0.0
     """
-    # Single θ-pass over the waves. Every quantity below (active flag, wave
-    # position, fan head/tail) depends only on θ, not on the spatial segment, so
-    # evaluate each exactly once here and reuse it in the per-segment loop. Doing
-    # it per segment made ``compute_domain_mass`` re-solve ``position_at_theta``
-    # (a spline/root-find for numerical DecayingShockWaves) O(n_waves) times per
-    # segment — O(n_waves²) transcendental work where O(n_waves) suffices.
-    wave_positions = []
-    # Precomputed fan geometry for the segment dispatch below, kept in wave
-    # iteration order so the newest-wins ``max(..., key=theta_start)`` tie-break
-    # resolves to the same wave as the per-segment rebuild did.
-    dsw_fans: list[tuple[DecayingShockWave, float]] = []  # (wave, v_s = position_at_theta)
-    raref_fans: list[tuple[RarefactionWave, float, float]] = []  # (wave, v_tail, v_head)
+    # Partition [0, v_outlet] at the active faces; each segment has a single owner (the
+    # left feeder of its nearest downstream face). A constant owner integrates as
+    # C_total·Δv; a fan owner integrates in closed form via integrate_fan_spatial_exact,
+    # clamped at the fan's near-apex (larger-retardation) bound. Because the wave list is
+    # interaction-consistent (every face crossing fires a solver event), this single-owner
+    # sweep is exact for single-front and genuinely interacting multi-front layouts alike.
+    faces = _reader_faces(waves, theta)
+    boundaries = {0.0, v_outlet}
+    boundaries.update(p for (p, _f) in faces if 0.0 < p < v_outlet)
+    positions = sorted(boundaries)
 
-    for wave in waves:
-        # Use was_active_at(theta) — not is_active — so historical wave geometries
-        # contribute to retrospective m_dom queries. Without this, a wave deactivated
-        # by a later collision event is skipped here, which propagates as a "cin echo
-        # at the outlet" bug (m_out = m_in − 0 instead of m_in − m_dom_correct).
-        if not wave.was_active_at(theta):
-            continue
-
-        if isinstance(wave, (CharacteristicWave, ShockWave)):
-            v_pos = wave.position_at_theta(theta)
-            if v_pos is not None and 0 <= v_pos <= v_outlet:
-                wave_positions.append(v_pos)
-
-        elif isinstance(wave, RarefactionWave):
-            v_head = wave.head_position_at_theta(theta)
-            v_tail = wave.tail_position_at_theta(theta)
-
-            if v_head is not None and 0 <= v_head <= v_outlet:
-                wave_positions.append(v_head)
-            if v_tail is not None and 0 <= v_tail <= v_outlet:
-                wave_positions.append(v_tail)
-
-            # contains_point() excludes theta == theta_start (strict) even though
-            # was_active_at includes it; mirror that guard so ownership is identical.
-            # v_head/v_tail are non-None here (the wave is active) and stored
-            # unclamped — contains_point compares against the raw fan edges.
-            if theta > wave.theta_start and v_head is not None and v_tail is not None:
-                raref_fans.append((wave, v_tail, v_head))
-
-        elif isinstance(wave, DecayingShockWave):
-            v_pos = wave.position_at_theta(theta)
-            if v_pos is not None and 0 <= v_pos <= v_outlet:
-                wave_positions.append(v_pos)
-            if 0 <= wave.v_origin <= v_outlet:
-                wave_positions.append(wave.v_origin)
-            # Store the shock position unclamped: the fan-membership test below
-            # compares an in-domain v_mid against v_s, which may lie outside
-            # [0, v_outlet] yet still bound the fan covering the domain.
-            if v_pos is not None:
-                dsw_fans.append((wave, v_pos))
-
-    # Add domain boundaries
-    wave_positions.extend([0.0, v_outlet])
-
-    # Sort and remove duplicates; all entries are within [0, v_outlet] by
-    # construction (each append site is guarded by the bounds check).
-    wave_positions = sorted(set(wave_positions))
-
-    # Compute mass in each segment using refined integration
     total_mass = 0.0
-
-    for i in range(len(wave_positions) - 1):
-        v_start = wave_positions[i]
-        v_end = wave_positions[i + 1]
+    for v_start, v_end in pairwise(positions):
         dv = v_end - v_start
-
         if dv < EPSILON_VOLUME:
             continue
-
-        # Check whether the midpoint is inside any fan-bearing wave; the fan
-        # spatial integral is closed-form for both RarefactionWave and
-        # DecayingShockWave (the latter via the parameterised
-        # ``integrate_fan_spatial_exact``).
-        #
-        # Multi-fan dispatch: when multiple DSWs (or rarefactions) nominally
-        # contain v_mid, the newer one (later ``theta_start``) wins —
-        # geometrically equivalent to the exclusion rule
-        # ``v_mid ∈ [V_apex_W₂, V_s_W₁]`` for simulator-produced layouts.
         v_mid = 0.5 * (v_start + v_end)
-        raref_wave: RarefactionWave | None = None
-        decaying_wave: DecayingShockWave | None = None
+        feeder = _owner_feeder(faces, v_mid)
 
-        # Dispatch against the precomputed fan geometry; no per-segment
-        # position_at_theta / was_active_at re-evaluation.
-        dsw_candidates = [
-            (wave, v_s)
-            for (wave, v_s) in dsw_fans
-            # decay_side='left': fan is upstream of V_s (v < V_s);
-            # decay_side='right': fan is downstream of V_s (v > V_s).
-            if ((wave.decay_side == "left" and v_mid < v_s) or (wave.decay_side == "right" and v_mid > v_s))
-            and v_mid != wave.v_origin
-        ]
-        if dsw_candidates:
-            decaying_wave = max(dsw_candidates, key=lambda pair: pair[0].theta_start)[0]
-
-        if decaying_wave is None:
-            raref_candidates = [
-                (wave, v_tail, v_head) for (wave, v_tail, v_head) in raref_fans if v_tail <= v_mid <= v_head
-            ]
-            if raref_candidates:
-                raref_wave = max(raref_candidates, key=lambda pair: pair[0].theta_start)[0]
-
-        if raref_wave is not None:
-            mass_segment = _integrate_rarefaction_spatial_exact(raref_wave, v_start, v_end, theta, sorption)
-        elif decaying_wave is not None:
-            # The decaying fan is bounded at its apex by the parent's tail concentration
-            # ``c_fan_tail`` (the sustained-inlet plateau), NOT the downstream ``c_fixed``.
-            # ``integrate_fan_spatial_exact`` then clamps the abandoned region at ``c_fan_tail``;
-            # passing ``c_fixed`` would integrate the unbounded self-similar fan to the apex and
-            # over-count the tail, breaking domain-mass conservation once a DSW forms.
-            mass_segment = integrate_fan_spatial_exact(
-                decaying_wave.theta_origin,
-                decaying_wave.v_origin,
+        if feeder is None or feeder.is_const:
+            c = feeder.value(v_mid, theta) if feeder is not None else 0.0
+            total_mass += float(sorption.total_concentration(c)) * dv
+        else:
+            total_mass += integrate_fan_spatial_exact(
+                feeder.theta_apex,
+                feeder.v_apex,
                 v_start,
                 v_end,
                 theta,
                 sorption,
-                c_apex=decaying_wave.c_fan_tail,
+                c_apex=_near_apex_bound(feeder, sorption),
             )
-        else:
-            # Constant region: c at midpoint is exact for the segment.
-            c = concentration_at_point(v_mid, theta, waves, sorption)
-            c_total = sorption.total_concentration(c)
-            mass_segment = c_total * dv
-
-        total_mass += mass_segment
 
     return float(total_mass)
 
 
-def _integrate_rarefaction_spatial_exact(
-    raref: RarefactionWave,
-    v_start: float,
-    v_end: float,
-    theta: float,
-    sorption: SorptionModel,
-) -> float:
-    """Exact spatial integral of a rarefaction's total concentration at fixed θ.
+def _owner_feeder(faces: list[tuple[float, Face]], v: float) -> Feeder | None:
+    """Return the feeder controlling the state at ``v``: nearest-downstream face's left, else outermost right."""
+    downstream = [(p, f) for (p, f) in faces if p > v + EPSILON_POSITION]
+    if downstream:
+        _p, face = min(downstream, key=itemgetter(0))
+        return face.left
+    if faces:
+        _p, face = max(faces, key=itemgetter(0))
+        return face.right
+    return None
 
-    Thin wrapper over :func:`integrate_fan_spatial_exact` that pulls the fan
-    apex from ``raref.theta_start, raref.v_start``. For ``ConstantRetardation``
-    the rarefaction degenerates to a single c value (no fan), so we use the
-    wave's ``concentration_at_point`` directly.
 
-    Parameters
-    ----------
-    raref : RarefactionWave
-        Rarefaction wave.
-    v_start, v_end : float
-        Integration range [m³].
-    theta : float
-        Cumulative flow at which to evaluate [m³].
-    sorption : SorptionModel
-        Sorption model.
+def _near_apex_bound(feeder: Feeder, sorption: SorptionModel) -> float:
+    """Return the fan boundary concentration with the larger retardation (the near-apex / plateau side).
 
-    Returns
-    -------
-    float
-        Mass in the segment ``[v_start, v_end]``.
+    This is the ``c_apex`` clamp for ``integrate_fan_spatial_exact``: the value the fan holds
+    at (and beyond) its apex. Monotonicity-agnostic — the low-c bound for R-decreasing
+    isotherms, the high-c bound for the Freundlich ``n<1`` mirror where R increases with c.
     """
-    if isinstance(sorption, ConstantRetardation):
-        v_mid = 0.5 * (v_start + v_end)
-        c = raref.concentration_at_point(v_mid, theta) or 0.0
-        c_total = sorption.total_concentration(c)
-        return c_total * (v_end - v_start)
-
-    return integrate_fan_spatial_exact(
-        raref.theta_start, raref.v_start, v_start, v_end, theta, sorption, c_apex=raref.c_tail
-    )
+    r_a = float(sorption.retardation(feeder.c_a))
+    r_b = float(sorption.retardation(feeder.c_b))
+    return feeder.c_a if r_a >= r_b else feeder.c_b
 
 
 def integrate_fan_spatial_exact(

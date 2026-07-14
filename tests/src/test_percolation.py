@@ -599,7 +599,10 @@ class TestEndToEnd:
         ``κ → 0.5·κ`` mutation in the antiderivative ``g = C_T·u − κ·c`` shifts the
         fan term by ~4% and fails this bound.
         """
-        self._assert_domain_mass_straddling_rarefaction(O05, theta_probe=18.7, rtol=1e-6)
+        # The solver now resolves the wet-shock↔dry-rarefaction interaction at θ≈18.53
+        # (issue #294 global resolution), so the bare rarefaction straddles the outlet only
+        # in (18.0, 18.535); probe inside that window (was 18.7, now past the collision).
+        self._assert_domain_mass_straddling_rarefaction(O05, theta_probe=18.3, rtol=1e-6)
 
     def test_b5a_universal_ibp_integrator_active_in_rarefaction_vg(self):
         """B5a-aux (vG): the straddling-fan IBP-integrator check for van Genuchten.

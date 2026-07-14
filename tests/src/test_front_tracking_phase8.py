@@ -7,7 +7,6 @@ All tests have correct physics expectations for Freundlich n>1.
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from gwtransport.advection import infiltration_to_extraction_nonlinear_sorption
 from gwtransport.fronttracking.math import FreundlichSorption
@@ -137,10 +136,10 @@ class TestEntropyAndPhysics:
         """Every shock the solver builds satisfies the Lax entropy condition.
 
         The multi-level input (0.1→10→5→15→8) makes a later, faster shock
-        overtake an earlier wave, so the public API refuses it (interim
-        wave-interaction guard). Entropy is a solver-level property of each
-        individual shock, so it is verified directly on the wave list that
-        ``FrontTracker`` builds.
+        overtake an earlier wave. The solver (issue #294) now resolves this
+        interacting multi-front input instead of refusing it, so the public API
+        runs. Entropy is a solver-level property of each individual shock,
+        verified directly on the resolved wave list that ``FrontTracker`` builds.
         """
         dates = pd.date_range(start="2020-01-01", periods=20, freq="D")
         tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -148,22 +147,21 @@ class TestEntropyAndPhysics:
         flow = np.full(len(dates), 100.0)
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-        # Interim contract: the public API refuses this interacting multi-front input.
-        with pytest.raises(NotImplementedError):
-            infiltration_to_extraction_nonlinear_sorption(
-                cin=cin,
-                flow=flow,
-                tedges=tedges,
-                cout_tedges=tedges,
-                aquifer_pore_volumes=np.array([300.0]),
-                freundlich_k=0.01,
-                freundlich_n=2.0,
-                bulk_density=1500.0,
-                porosity=0.3,
-            )
+        # The interacting multi-front input now runs at the public boundary.
+        infiltration_to_extraction_nonlinear_sorption(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([300.0]),
+            freundlich_k=0.01,
+            freundlich_n=2.0,
+            bulk_density=1500.0,
+            porosity=0.3,
+        )
 
-        # Solver invariant (still valid on the unresolved wave list): every shock
-        # the tracker builds individually satisfies the Lax entropy condition.
+        # Solver invariant on the resolved wave list: every shock the tracker
+        # builds individually satisfies the Lax entropy condition.
         tracker = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=300.0, sorption=sorption)
         tracker.run()
         shocks = [w for w in tracker.state.waves if isinstance(w, ShockWave)]
@@ -475,9 +473,10 @@ class TestComplexInteractions:
         """Rapid concentration changes: stress test for the event queue and wave creation.
 
         The rapid sequence (0→10→5→15→2→8) interacts (faster later shocks
-        overtake earlier waves), so the public API refuses it (interim guard).
-        Wave creation and θ-ordering of events are solver invariants, verified
-        directly on the ``FrontTracker`` state.
+        overtake earlier waves). The solver (issue #294) now resolves this
+        interacting multi-front input instead of refusing it, so the public API
+        runs. Wave creation and θ-ordering of events are solver invariants,
+        verified directly on the ``FrontTracker`` state.
         """
         dates = pd.date_range(start="2020-01-01", periods=30, freq="D")
         tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
@@ -485,19 +484,18 @@ class TestComplexInteractions:
         flow = np.full(len(dates), 100.0)
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-        # Interim contract: the public API refuses this interacting multi-front input.
-        with pytest.raises(NotImplementedError):
-            infiltration_to_extraction_nonlinear_sorption(
-                cin=cin,
-                flow=flow,
-                tedges=tedges,
-                cout_tedges=tedges,
-                aquifer_pore_volumes=np.array([300.0]),
-                freundlich_k=0.01,
-                freundlich_n=2.0,
-                bulk_density=1500.0,
-                porosity=0.3,
-            )
+        # The interacting multi-front input now runs at the public boundary.
+        infiltration_to_extraction_nonlinear_sorption(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=np.array([300.0]),
+            freundlich_k=0.01,
+            freundlich_n=2.0,
+            bulk_density=1500.0,
+            porosity=0.3,
+        )
 
         # Solver invariants: rapid changes create multiple waves and the event
         # queue stays chronologically ordered in θ.

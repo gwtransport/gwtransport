@@ -11,7 +11,7 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 
 import numpy as np
 import pytest
-from scipy.integrate import quad
+from scipy.integrate import quad, solve_ivp
 from scipy.optimize import brentq
 
 from gwtransport.fronttracking.math import (
@@ -21,7 +21,14 @@ from gwtransport.fronttracking.math import (
     VanGenuchtenMualemConductivity,
     characteristic_speed,
 )
-from gwtransport.fronttracking.waves import CharacteristicWave, DecayingShockWave, RarefactionWave, ShockWave
+from gwtransport.fronttracking.waves import (
+    CharacteristicWave,
+    DecayingShockWave,
+    DoubleFanShockWave,
+    Feeder,
+    RarefactionWave,
+    ShockWave,
+)
 
 
 def _invariant_theta_local_of_c(sorption, c_decay_initial, c_fixed, theta_local_collision, c_target):
@@ -895,8 +902,9 @@ class TestDecayingShockWaveNumericalInversion:
             theta_origin=theta_origin,
             theta_local_collision=tlc,
         )
-        # Numerical path (Freundlich n=2 mirror c_decay_initial < c_fixed): no closed form.
-        assert np.isnan(wave.K)
+        # Freundlich n=2 growing mirror (c_decay_initial < c_fixed) now has a closed form
+        # (the (u_d−u_R)² invariant, −√ root); K is set, not NaN.
+        assert not np.isnan(wave.K)
         assert wave.c_decay_initial < wave.c_fan_tail  # growing orientation
 
         theta_ref = theta_origin + _invariant_theta_local_of_c(sorption, c0, c_fixed, tlc, c_fan_tail)
@@ -1010,3 +1018,58 @@ class TestWaveSpeedCaching:
         wave = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption)
         assert wave.head_speed() == characteristic_speed(10.0, sorption)
         assert wave.tail_speed() == characteristic_speed(2.0, sorption)
+
+
+class TestDoubleFanShockWave:
+    """A shock fed by a fan on both sides (issue #294): closed form (n=2 shared apex) + RK4 fallback."""
+
+    def _fan_value(self, sorption, v_o, th_o, c_lo, c_hi, v, th):
+        """Bounded self-similar fan value used to build an independent reference ODE."""
+        if th <= th_o or v <= v_o:
+            return c_lo
+        r = (th - th_o) / (v - v_o)
+        r_lo, r_hi = sorted((float(sorption.retardation(c_lo)), float(sorption.retardation(c_hi))))
+        if r <= r_lo:
+            return c_hi if sorption.retardation(c_hi) < sorption.retardation(c_lo) else c_lo
+        if r >= r_hi:
+            return c_lo if sorption.retardation(c_lo) > sorption.retardation(c_hi) else c_hi
+        return float(sorption.concentration_from_retardation(r))
+
+    def test_shared_apex_closed_form_matches_dop853(self):
+        """n=2 shared-apex path uses the first-integral quadratic; matches an independent DOP853."""
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        left = Feeder.fan(0.0, 800.0, 0.0, 5.0, sorption)  # shared apex position v_o = 0
+        right = Feeder.fan(0.0, 300.0, 0.0, 10.0, sorption)
+        w = DoubleFanShockWave(
+            theta_start=1163.15, v_start=29.8143, left_feeder=left, right_feeder=right, sorption=sorption
+        )
+        assert w._closed_form  # noqa: SLF001
+
+        def rhs(th, y):
+            c_l = self._fan_value(sorption, 0.0, 800.0, 0.0, 5.0, y[0], th)
+            c_r = self._fan_value(sorption, 0.0, 300.0, 0.0, 10.0, y[0], th)
+            return [float(sorption.shock_speed(c_l, c_r))]
+
+        sol = solve_ivp(rhs, (1163.15, 2500.0), [29.8143], method="DOP853", rtol=1e-12, atol=1e-13, dense_output=True)
+        for th in (1300.0, 1600.0, 2000.0, 2400.0):
+            np.testing.assert_allclose(w.position_at_theta(th), float(sol.sol(th)[0]), rtol=1e-8)
+
+    def test_rk4_fallback_distinct_apex_self_converges_and_matches_dop853(self):
+        """Distinct fan apex positions have no closed form → RK4 spline; verify convergence + DOP853."""
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        left = Feeder.fan(2.0, 800.0, 0.0, 5.0, sorption)  # distinct apex position v_o = 2 ≠ 0
+        right = Feeder.fan(0.0, 300.0, 0.0, 10.0, sorption)
+        w = DoubleFanShockWave(
+            theta_start=1163.15, v_start=29.8143, left_feeder=left, right_feeder=right, sorption=sorption
+        )
+        assert not w._closed_form  # noqa: SLF001  # distinct apex → numerical path
+
+        def rhs(th, y):
+            c_l = self._fan_value(sorption, 2.0, 800.0, 0.0, 5.0, y[0], th)
+            c_r = self._fan_value(sorption, 0.0, 300.0, 0.0, 10.0, y[0], th)
+            return [float(sorption.shock_speed(c_l, c_r))]
+
+        sol = solve_ivp(rhs, (1163.15, 2500.0), [29.8143], method="DOP853", rtol=1e-12, atol=1e-13, dense_output=True)
+        for th in (1300.0, 1600.0, 2000.0, 2400.0):
+            # The RK4+spline trajectory tracks the independent DOP853 integration to <1e-6 relative.
+            np.testing.assert_allclose(w.position_at_theta(th), float(sol.sol(th)[0]), rtol=1e-6)
