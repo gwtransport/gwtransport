@@ -907,3 +907,87 @@ def test_van_genuchten_validation_rejects_invalid(invalid_kwargs):
     """Coverage-only parametrised validation. Each invalid input raises ``ValueError``."""
     with pytest.raises(ValueError):
         VanGenuchtenMualemConductivity(**invalid_kwargs)
+
+
+class TestFluxCurvatureNoCompoundWaves:
+    """Every isotherm flux is single-curvature — none is non-convex — so compound
+    (shock+rarefaction) waves never occur.
+
+    The scalar law is ``∂_θ C_T(c) + ∂_V c = 0`` with conserved ``U = C_T(c)``, flux
+    ``f = c`` and celerity ``λ(U) = dc/dC_T = 1/R(c)``. Compound waves require the flux
+    curvature ``f'' = dλ/dU`` to CHANGE SIGN. Equivalently ``λ(U)`` must be non-monotone.
+    These tests assert ``λ`` is strictly monotone in ``U`` for every model (gradient-free:
+    monotonicity of the exact ``(U, λ)`` sequence, so no finite-difference noise), with the
+    sign fixed by the isotherm class (favorable ``R'<0`` ⇒ ``λ`` increasing; unfavorable
+    ``R'>0`` ⇒ decreasing; linear ⇒ constant). See
+    ``docs/theory/front_tracking_interactions.md`` §2.
+    """
+
+    @staticmethod
+    def _u_lambda(sorption, c_grid):
+        u = np.array([float(sorption.total_concentration(c)) for c in c_grid])
+        lam = np.array([float(characteristic_speed(c, sorption)) for c in c_grid])
+        order = np.argsort(u)
+        return u[order], lam[order]
+
+    def test_freundlich_n_gt_1_convex_favorable(self):
+        """Freundlich ``n>1``: ``λ`` strictly increasing in ``U`` (convex, higher C faster)."""
+        for n in (1.5, 2.0, 3.0):
+            s = FreundlichSorption(k_f=0.01, n=n, bulk_density=1500.0, porosity=0.3)
+            _, lam = self._u_lambda(s, np.linspace(0.05, 20.0, 400))
+            assert np.all(np.diff(lam) > 0.0), f"Freundlich n={n} not strictly convex"
+
+    def test_freundlich_n_lt_1_concave_unfavorable(self):
+        """Freundlich ``n<1``: ``λ`` strictly decreasing in ``U`` (concave, higher C slower)."""
+        for n in (0.3, 0.5, 0.7):
+            s = FreundlichSorption(k_f=0.05, n=n, bulk_density=1500.0, porosity=0.3)
+            _, lam = self._u_lambda(s, np.linspace(0.05, 20.0, 400))
+            assert np.all(np.diff(lam) < 0.0), f"Freundlich n={n} not strictly concave"
+
+    def test_langmuir_convex_favorable(self):
+        """Langmuir: ``λ`` strictly increasing in ``U`` (convex, favorable)."""
+        s = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        _, lam = self._u_lambda(s, np.linspace(0.01, 30.0, 400))
+        assert np.all(np.diff(lam) > 0.0)
+
+    def test_constant_retardation_linearly_degenerate(self):
+        """Constant retardation: ``λ`` is constant in ``U`` (linearly degenerate, contacts only)."""
+        s = ConstantRetardation(retardation_factor=2.5)
+        lam = np.array([characteristic_speed(c, s) for c in np.linspace(0.1, 20.0, 50)])
+        np.testing.assert_allclose(lam, lam[0], rtol=1e-14)
+
+    @pytest.mark.parametrize("lam_bc", [0.15, 0.25, 0.5, 1.0, 2.0])
+    def test_brooks_corey_convex(self, lam_bc):
+        """Brooks-Corey: ``λ`` strictly increasing in ``U`` (convex; ``f ∝ U^a``, ``a>3``)."""
+        s = BrooksCoreyConductivity(theta_r=0.045, theta_s=0.43, k_s=10.0, brooks_corey_lambda=lam_bc)
+        c = np.linspace(1e-3 * s.k_s, 0.95 * s.k_s, 400)
+        _, lam = self._u_lambda(s, c)
+        assert np.all(np.diff(lam) > 0.0)
+
+    @pytest.mark.parametrize(
+        "n_vg",
+        [1.09, 1.15, 1.31, 1.41, 1.56, 1.89, 2.28, 2.68],  # Carsel-Parrish clay -> sand
+    )
+    def test_van_genuchten_mualem_convex_no_compound_waves(self, n_vg):
+        """vG-Mualem: ``λ = 1/R`` strictly increasing in ``U = C_T`` ⇒ convex ⇒ no compound waves.
+
+        This is the direct no-compound-wave test for the parameter the plan flagged as a
+        (spurious) non-convexity risk. A prior finite-difference analysis reported clay
+        (``n_vG≈1.09``) as non-convex; that was float64 cancellation in
+        ``U = 1 − (1 − S_e^{1/m})^m`` near ``S_e → 0`` (the astronomically small dry tail,
+        where ``dK/dS_e`` underflows float64 to 0). Working in the ``c``-domain via the
+        public ``characteristic_speed``/``total_concentration`` maps to well-resolved
+        ``S_e`` and is cleanly monotone. The full-range convexity (including the dry tail)
+        is proved at 200-digit precision in ``docs/theory/front_tracking_interactions.md`` §2.
+        """
+        s = VanGenuchtenMualemConductivity(theta_r=0.06, theta_s=0.40, k_s=10.0, van_genuchten_n=n_vg)
+        # Probe the float64-RESOLVABLE part of the range. c in [0.01, 0.6*k_s] maps to the upper S_e
+        # band (e.g. S_e in [0.91, 1.0] for clay n_vG=1.09) — this is a genuine limitation, not a
+        # choice: below it dK/dS_e underflows/jitters in float64 (the same catastrophic cancellation
+        # that produced the spurious "non-convex" reading). A GLOBAL non-convex regression is caught
+        # here (confirmed by mutation via the coarser-m soils); a dry-tail-LOCALIZED one is below
+        # float64 resolution and is instead covered by the 200-digit proof in
+        # ``docs/theory/front_tracking_interactions.md`` §2. Working in the c-domain avoids the
+        # brentq-inversion edge at saturation.
+        _, lam = self._u_lambda(s, np.linspace(0.01, 0.6 * s.k_s, 400))
+        assert np.all(np.diff(lam) > 0.0), f"vG-Mualem n_vG={n_vg}: λ not strictly increasing in U"
