@@ -1505,7 +1505,12 @@ def solve_inverse_transport(
     solve_inverse_transport_banded : Memory-light banded equivalent.
     """
     row_sums = w_forward.sum(axis=1)
-    col_active: npt.NDArray[np.bool_] = w_forward.sum(axis=0) > 0
+    # Emit only columns carrying real weight. Aligning the gate with the regularization
+    # threshold (``_EPSILON_COEFF_SUM``, also used for the row-validity gate below and by the
+    # banded/fast siblings) NaNs the erfc-tail sliver columns (``col_sum`` in ``(0, _EPSILON]``)
+    # instead of emitting the collapsed-singular-value garbage (tiny or negative) lstsq returns
+    # there — those bins are uninformative, not resolvable (#307).
+    col_active: npt.NDArray[np.bool_] = w_forward.sum(axis=0) > _EPSILON_COEFF_SUM
 
     if not np.any(col_active):
         return np.full(n_output, np.nan)

@@ -26,6 +26,9 @@ from gwtransport.diffusion import (
 from gwtransport.diffusion import (
     gamma_infiltration_to_extraction as diffusion_gamma_i2e,
 )
+from gwtransport.diffusion_fast import (
+    extraction_to_infiltration as diffusion_fast_e2i,
+)
 from gwtransport.gamma import mean_std_loc_to_alpha_beta
 
 
@@ -893,6 +896,49 @@ class TestExtractionToInfiltrationDiffusion:
         # values cross zero — rtol is meaningless near-zero.
         valid = ~np.isnan(cin_advection) & ~np.isnan(cin_diffusion)
         np.testing.assert_allclose(cin_advection[valid], cin_diffusion[valid], atol=0.01)
+
+    def test_reverse_trailing_bins_nan_not_garbage(self):
+        """Regression for #307: the dense reverse must NaN trailing erfc-tail sliver bins.
+
+        With diffusion on, the forward kernel's erfc tails leave a few trailing input
+        columns carrying only sliver weight (``col_sum`` in ``(0, _EPSILON_COEFF_SUM]``).
+        The dense least-squares solve used to *emit* those columns -- tiny or negative
+        deconvolution garbage -- because its emission gate was ``col_sum > 0`` rather than
+        the regularization threshold ``col_sum > _EPSILON_COEFF_SUM``. The banded
+        ``diffusion_fast`` sibling correctly returns NaN there. This pins the dense path to
+        agree: every bin the banded reverse cannot resolve, the dense reverse must also
+        leave NaN, never finite garbage.
+        """
+        n = 100
+        tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+        flow = np.full(n, 100.0)
+        # Smooth logistic breakthrough so the reverse is well-posed in the interior.
+        cout = 5.0 / (1.0 + np.exp(-(np.arange(n) - 40) / 8.0))
+        kw = {
+            "flow": flow,
+            "tedges": tedges,
+            "cout_tedges": tedges,
+            "aquifer_pore_volumes": [2000.0],
+            "streamline_length": [50.0],
+            "molecular_diffusivity": 1e-2,  # diffusion on -> erfc tails -> sliver columns
+            "longitudinal_dispersivity": [0.5],
+            "spinup": None,
+        }
+        cin_dense = extraction_to_infiltration(cout=cout, **kw)
+        cin_banded = diffusion_fast_e2i(cout=cout, flow_out=flow, **kw)
+
+        banded_nan = np.isnan(cin_banded)
+        # Non-vacuous: this config genuinely produces trailing sliver bins the banded
+        # solve declines to resolve.
+        assert banded_nan[-3:].any(), "expected trailing NaN bins in this config"
+        # The #307 signature is tiny/negative garbage where the banded path NaNs. (A large
+        # O(1) dense value where banded NaNs would be a legitimate higher-fidelity
+        # band-membership difference, not this bug -- so scope the assertion to tiny/negative.)
+        garbage = banded_nan & np.isfinite(cin_dense) & ((np.abs(cin_dense) < 1e-6) | (cin_dense < 0))
+        assert not garbage.any(), (
+            f"dense reverse emitted tiny/negative garbage at bins {np.flatnonzero(garbage).tolist()} "
+            f"(values {cin_dense[garbage]}) where the banded reverse returns NaN"
+        )
 
     def test_output_bounded_by_input(self, simple_setup):
         """Test that output concentrations are bounded by input range."""
