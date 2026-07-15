@@ -153,11 +153,14 @@ everywhere. The **asymptotic** argument closes it rigorously: as `S_e → 0`,
 Consequences:
 
 - **No detect-and-reject scan is needed** (there is nothing non-convex to reject).
-- The `__post_init__` 2-point monotonicity guard (`math.py:970`, samples
-  `S_e ∈ {0.5, 0.99}`) is **vestigial**: the code's own double-precision `_dk_dse` is
-  monotone-increasing over brentq's actual search range `[_C_MIN, 1]` for every
-  Carsel–Parrish soil, so the guard never fires for valid parameters
-  (`scratchpad/repro_code_double_precision.py`).
+- The `__post_init__` 2-point monotonicity guard (samples `S_e ∈ {0.5, 0.99}`) was
+  **vestigial** and is removed: both sample points lie in the float64-well-resolved band
+  where `_dk_dse` is cleanly increasing, so `_dk_dse(0.5) < _dk_dse(0.99)` for every valid
+  Carsel–Parrish soil and the guard never fired. Its safety does **not** rest on `_dk_dse`
+  being monotone over the whole search range `[_C_MIN, 1]` — in fact `_dk_dse` is
+  double-precision _non_-monotone over a low-`S_e` sub-interval (the same catastrophic
+  cancellation), but that deep tail maps to `c < _C_MIN`, is unreachable by brentq, and is
+  therefore harmless.
 - The vG-M `R↔c` inversion degrades only at `c → K_s` (saturation, `S_e → 1`, `R → 0`, where
   `dK/dS_e → ∞` cannot be bracketed in `[_C_MIN, 1]`). This is an expected endpoint edge
   (the `MAX_FINITE_SPEED` / `R = 0` regime, `interactions.py:48`), not a mid-range defect;

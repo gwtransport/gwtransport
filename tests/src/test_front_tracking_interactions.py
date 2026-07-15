@@ -4,9 +4,10 @@ Companion to ``docs/theory/front_tracking_interactions.md``. The ``interactions`
 (the Feeder/Face universal-merge calculus) previously had no dedicated test — it was only
 exercised transitively through the public-API multi-front runs. This file adds:
 
-- the RAREF-RAREF non-interaction guard (same-family simple waves never collide),
-- a "no silent corruption" randomized property sweep (whenever the solver does not flag an
-  unresolved interaction, its output is conservation-consistent and matches the FV oracle),
+- the RAREF-RAREF non-interaction *outcome* (same-family simple waves coexist without merging),
+- a "no silent corruption" property check over a fixed set of favorable multi-front inputs
+  (whenever the solver does not flag an unresolved interaction, its output is
+  conservation-consistent and matches the FV oracle),
 - confirmation that the favorable (Freundlich ``n>1``) regime is fully resolved, and
 - an ``xfail`` pinning the discovered multi-front completeness gap in the unfavorable
   (``n<1``) regime (declined LOUDLY via the public-API ``RuntimeError``, never silently wrong).
@@ -23,7 +24,12 @@ import pytest
 from _fv_oracle import upwind_fv_outlet  # ty: ignore[unresolved-import]  # tests/src on path via conftest
 
 from gwtransport.advection import infiltration_to_extraction_nonlinear_sorption
-from gwtransport.fronttracking.math import FreundlichSorption
+from gwtransport.fronttracking.math import (
+    BrooksCoreyConductivity,
+    ConstantRetardation,
+    FreundlichSorption,
+    LangmuirSorption,
+)
 from gwtransport.fronttracking.output import compute_domain_mass, concentration_at_point
 from gwtransport.fronttracking.solver import FrontTracker, find_unresolved_interaction
 from gwtransport.fronttracking.waves import DecayingShockWave, DoubleFanShockWave, RarefactionWave, ShockWave
@@ -70,13 +76,35 @@ _FAVORABLE_CONFIGS = [
 ]
 
 
+def test_fv_oracle_matches_analytic_contact():
+    """Known-answer self-check for the FV oracle: a constant-retardation contact.
+
+    Validates ``_fv_oracle.upwind_fv_outlet`` itself — the reference every tracker-vs-oracle
+    cross-check in this file leans on. For ``ConstantRetardation(R)`` a single ``0→c0`` inlet is a
+    contact discontinuity: it breaks through at ``θ = R·V`` and the outlet plateaus at ``c0``.
+    Catches a silent oracle regression (CFL/step-count, the ``U→c`` inversion, the ``max(·, 0)``
+    clamp) that would otherwise degrade all FV cross-checks without any localized failure.
+    """
+    r, c0, v_out = 2.0, 3.0, 5.0
+    sorption = ConstantRetardation(retardation_factor=r)
+    theta_edges = np.linspace(0.0, 25.0, 6)  # θ_end = 25 > R·V = 10 so breakthrough is captured
+    th, co = upwind_fv_outlet(sorption, np.full(5, c0), theta_edges, v_out, n_cells=200, cfl=0.4)
+    half_rise = float(th[np.searchsorted(co, c0 / 2.0)])
+    # first-order front smearing sets the breakthrough resolution to ~ΔV/V = 1/n_cells
+    np.testing.assert_allclose(half_rise, r * v_out, rtol=0.02)
+    np.testing.assert_allclose(co[-1], c0, rtol=1e-9)  # plateau to the inlet value
+
+
 class TestRarefactionRarefactionNoInteraction:
     """Two same-family rarefactions never interact (scalar single-family law).
 
     A rear rarefaction's head and the front rarefaction's tail both carry the separating
     constant state ``c*`` and move at the same celerity ``λ(c*)``; the gap is rigidly
-    translated and never closes (Rhee-Aris-Amundson). The solver's ``RAREF_RAREF_COLLISION``
-    no-op (``solver.py:560``) is therefore correct — see theory doc §4.1.
+    translated and never closes (Rhee-Aris-Amundson). These tests verify that *outcome* —
+    same-family rarefactions coexist and never spawn a merge/shock successor between them —
+    not the solver's ``RAREF_RAREF_COLLISION`` handler itself, which for physical inputs is
+    never reached (no ``rarefaction_rarefaction`` event is ever emitted), consistent with its
+    documented no-op status (see theory doc §4.1).
     """
 
     def test_unfavorable_staircase_is_all_coexisting_rarefactions(self):
@@ -101,12 +129,14 @@ class TestRarefactionRarefactionNoInteraction:
         # the resolved n<1 outlet is cross-checked against the FV oracle on a short config in
         # ``test_short_unfavorable_staircase_matches_fv`` below.
 
+    @pytest.mark.slow  # a fine FV-oracle cross-check: ~1e5 first-order upwind steps (~40 s serial)
     def test_short_unfavorable_staircase_matches_fv(self):
         """A short n<1 increasing staircase's resolved outlet matches the independent FV oracle.
 
         The only numerical (not just structural) validation of a resolved unfavorable-flux (concave,
-        mirror-regime) outlet — everything else in this file is favorable Freundlich n>1. Kept cheap
-        with a short series and small V so the first-order FV march stays a few thousand steps.
+        mirror-regime) outlet — everything else in this file is favorable Freundlich n>1. Even with a
+        short series and small V, the first-order FV march is ~1e5 steps (the CFL step scales with
+        ``V/n_cells`` while ``θ_end`` is fixed by the flow), so this is a slow independent cross-check.
         """
         s = FreundlichSorption(k_f=0.05, n=0.5, bulk_density=1500.0, porosity=0.3)
         cin = np.array([0.0] + [2.0] * 2 + [5.0] * 2 + [8.0] * 2 + [11.0] * 10)
@@ -118,13 +148,20 @@ class TestRarefactionRarefactionNoInteraction:
     def test_favorable_stepdowns_two_rarefactions_do_not_merge(self):
         """Freundlich ``n>1`` step-downs make two same-family rarefactions that never merge.
 
-        A leading loading shock forms (0→c step-up) and may catch the first fan, but the two
-        rarefactions themselves never collide and the solver stays self-consistent.
+        The inlet ``0→5→3→1`` forms a leading loading shock (``0→5`` step-up) followed by two
+        step-down rarefactions (fan1 ``5→3``, fan2 ``3→1``). The leading shock catches and
+        absorbs fan1 (a shock↔rarefaction interaction, not a rarefaction↔rarefaction one), so
+        exactly one rarefaction (fan2) survives — the two fans never merge *with each other*.
+        The surviving-rarefaction count and the FV cross-check pin that structure.
         """
         s = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         cin = np.array([5.0] * 30 + [3.0] * 30 + [1.0] * 60)
         tr = _run(s, cin, 30.0)
         assert find_unresolved_interaction(tr.state) is None
+        active = [w for w in tr.state.waves if w.is_active]
+        # fan2 survives; fan1 is absorbed by the leading loading shock (never merged into fan2).
+        assert sum(isinstance(w, RarefactionWave) for w in active) == 1
+        assert not any(isinstance(w, DoubleFanShockWave) for w in active)
         assert _fv_discrepancy(tr, s, 30.0) < 0.02
 
 
@@ -164,6 +201,57 @@ class TestNoSilentCorruption:
         tr = _run(_FAVORABLE, np.array(pulse + [0.0] * 12, dtype=float), v_pv)
         assert find_unresolved_interaction(tr.state) is None
         assert _fv_discrepancy(tr, _FAVORABLE, v_pv, n_cells=120, stride=8) < 0.04
+
+    @pytest.mark.slow  # Langmuir multi-front resolution (~7 s) plus a ~5e3-step FV cross-check
+    def test_langmuir_resolved_run_conserves_and_matches_fv(self):
+        """Extend the "never silently wrong" net to a second isotherm (Langmuir).
+
+        The universal Feeder/Face merge calculus is claimed (theory doc §5) to resolve *every*
+        ``NonlinearSorption``, but every other resolved-run check here is Freundlich. A favorable
+        Langmuir two-pulse input is either fully resolved — mass-conserving and FV-consistent — or
+        declined loudly; this pins the resolved branch for Langmuir specifically.
+        """
+        s = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        v_pv = 8.0
+        tr = _run(s, np.array([0.0, 6, 6, 0, 3, 3, 0] + [0.0] * 12, dtype=float), v_pv)
+        assert find_unresolved_interaction(tr.state) is None
+        theta_hi = float(tr.state.theta_edges[-1])
+
+        cout = np.array([concentration_at_point(v_pv, t, tr.state.waves, s) for t in np.linspace(1.0, theta_hi, 30)])
+        assert np.all(cout >= -1e-9), f"negative cout {cout.min()}"
+
+        theta_q = 0.4 * theta_hi
+        m_dom = compute_domain_mass(theta_q, v_pv, tr.state.waves, s)
+        # Langmuir's steeper fan makes the trapezoid reference converge more slowly than Freundlich's
+        # (rel ~9e-5 at n_v=6000, shrinking toward m_dom as n_v grows), so this gate is reference-error
+        # limited — not a defanged solver gate. m_dom (integrate_fan_spatial_exact) is exact.
+        m_quad = _independent_domain_mass(tr, s, v_pv, theta_q, n_v=6000)
+        np.testing.assert_allclose(m_dom, m_quad, rtol=3e-4, atol=1e-9)
+        # First-order FV diffusion runs higher for Langmuir's steeper fan than for Freundlich n>1.
+        assert _fv_discrepancy(tr, s, v_pv, n_cells=200, stride=8) < 0.06
+
+    def test_brooks_corey_resolved_run_conserves_and_nonnegative(self):
+        """Extend the resolved-branch conservation net to a third isotherm (Brooks-Corey).
+
+        A favorable Brooks-Corey two-pulse input is fully resolved (``find_unresolved`` None) and its
+        stored mass from ``integrate_fan_spatial_exact`` matches an independent pointwise trapezoid,
+        exercising Brooks-Corey's fan quadrature / merge calculus (theory doc §5's "every
+        ``NonlinearSorption``"). The FV-independent cross-check for a nonlinear isotherm is carried by
+        the Langmuir test above; Brooks-Corey's FV march is ~1e5 steps, too slow to repeat here.
+        """
+        s = BrooksCoreyConductivity(theta_r=0.045, theta_s=0.43, k_s=10.0, brooks_corey_lambda=0.5)
+        v_pv = 8.0
+        tr = _run(s, np.array([0.0, 6, 6, 0, 3, 3, 0] + [0.0] * 12, dtype=float), v_pv)
+        assert find_unresolved_interaction(tr.state) is None
+        theta_hi = float(tr.state.theta_edges[-1])
+
+        cout = np.array([concentration_at_point(v_pv, t, tr.state.waves, s) for t in np.linspace(1.0, theta_hi, 30)])
+        assert np.all(cout >= -1e-9), f"negative cout {cout.min()}"
+
+        theta_q = 0.4 * theta_hi
+        m_dom = compute_domain_mass(theta_q, v_pv, tr.state.waves, s)
+        m_quad = _independent_domain_mass(tr, s, v_pv, theta_q, n_v=6000)
+        np.testing.assert_allclose(m_dom, m_quad, rtol=1e-4, atol=1e-9)
 
 
 class TestKnownMultiFrontGaps:

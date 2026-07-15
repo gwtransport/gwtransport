@@ -924,30 +924,30 @@ class TestFluxCurvatureNoCompoundWaves:
     """
 
     @staticmethod
-    def _u_lambda(sorption, c_grid):
+    def _lambda_ordered_by_u(sorption, c_grid):
+        """Return ``λ(c)`` reordered by increasing ``U = C_T(c)`` (single-curvature ⇔ ``λ`` monotone)."""
         u = np.array([float(sorption.total_concentration(c)) for c in c_grid])
         lam = np.array([float(characteristic_speed(c, sorption)) for c in c_grid])
-        order = np.argsort(u)
-        return u[order], lam[order]
+        return lam[np.argsort(u)]
 
     def test_freundlich_n_gt_1_convex_favorable(self):
         """Freundlich ``n>1``: ``λ`` strictly increasing in ``U`` (convex, higher C faster)."""
         for n in (1.5, 2.0, 3.0):
             s = FreundlichSorption(k_f=0.01, n=n, bulk_density=1500.0, porosity=0.3)
-            _, lam = self._u_lambda(s, np.linspace(0.05, 20.0, 400))
+            lam = self._lambda_ordered_by_u(s, np.linspace(0.05, 20.0, 400))
             assert np.all(np.diff(lam) > 0.0), f"Freundlich n={n} not strictly convex"
 
     def test_freundlich_n_lt_1_concave_unfavorable(self):
         """Freundlich ``n<1``: ``λ`` strictly decreasing in ``U`` (concave, higher C slower)."""
         for n in (0.3, 0.5, 0.7):
             s = FreundlichSorption(k_f=0.05, n=n, bulk_density=1500.0, porosity=0.3)
-            _, lam = self._u_lambda(s, np.linspace(0.05, 20.0, 400))
+            lam = self._lambda_ordered_by_u(s, np.linspace(0.05, 20.0, 400))
             assert np.all(np.diff(lam) < 0.0), f"Freundlich n={n} not strictly concave"
 
     def test_langmuir_convex_favorable(self):
         """Langmuir: ``λ`` strictly increasing in ``U`` (convex, favorable)."""
         s = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
-        _, lam = self._u_lambda(s, np.linspace(0.01, 30.0, 400))
+        lam = self._lambda_ordered_by_u(s, np.linspace(0.01, 30.0, 400))
         assert np.all(np.diff(lam) > 0.0)
 
     def test_constant_retardation_linearly_degenerate(self):
@@ -961,7 +961,7 @@ class TestFluxCurvatureNoCompoundWaves:
         """Brooks-Corey: ``λ`` strictly increasing in ``U`` (convex; ``f ∝ U^a``, ``a>3``)."""
         s = BrooksCoreyConductivity(theta_r=0.045, theta_s=0.43, k_s=10.0, brooks_corey_lambda=lam_bc)
         c = np.linspace(1e-3 * s.k_s, 0.95 * s.k_s, 400)
-        _, lam = self._u_lambda(s, c)
+        lam = self._lambda_ordered_by_u(s, c)
         assert np.all(np.diff(lam) > 0.0)
 
     @pytest.mark.parametrize(
@@ -989,5 +989,5 @@ class TestFluxCurvatureNoCompoundWaves:
         # float64 resolution and is instead covered by the 200-digit proof in
         # ``docs/theory/front_tracking_interactions.md`` §2. Working in the c-domain avoids the
         # brentq-inversion edge at saturation.
-        _, lam = self._u_lambda(s, np.linspace(0.01, 0.6 * s.k_s, 400))
+        lam = self._lambda_ordered_by_u(s, np.linspace(0.01, 0.6 * s.k_s, 400))
         assert np.all(np.diff(lam) > 0.0), f"vG-Mualem n_vG={n_vg}: λ not strictly increasing in U"
