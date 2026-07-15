@@ -17,6 +17,7 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from operator import itemgetter
 
 import numpy as np
 from scipy.interpolate import CubicSpline
@@ -44,6 +45,94 @@ DECAYING_SHOCK_BRENTQ_XTOL = (
 DECAY_PROFILE_NODES = 6000
 DECAY_PROFILE_GAUSS_ORDER = 10
 DECAY_PROFILE_POLE_FLOOR = 1e-6
+# DoubleFanShockWave numerical-trajectory RK4 substeps per unit of fan age (only used when
+# no closed form applies — distinct fan apex positions or a non-n=2 isotherm). The
+# self-similar fans vary on the scale of their age, so the step is age/this-many.
+DFSW_RK_SUBSTEPS = 512
+
+
+@dataclass(frozen=True)
+class Feeder:
+    """One side's boundary state feeding a front: a constant, or a bounded self-similar fan.
+
+    A ``const`` feeder ignores ``(v, θ)`` and returns its value everywhere. A ``fan``
+    feeder evaluates the self-similar retardation ``R = (θ − θ_apex)/(v − v_apex)`` and
+    inverts it to a concentration, clamped to the fan's physical extent ``[c_a, c_b]``.
+    The clamp is monotonicity-agnostic (it clamps in ``R``-space, so it is correct for
+    both R-decreasing isotherms — Freundlich ``n>1``, Langmuir, Brooks-Corey,
+    van Genuchten-Mualem — and the R-increasing Freundlich ``n<1`` mirror), and it is
+    exactly what makes a fan feeder read the plateau concentration beyond the fan's edge.
+
+    Feeders are the uniform currency of the interaction calculus: every wave exposes its
+    sides as feeders, event handlers form a successor from ``(rear.left, front.right)``,
+    and the reader evaluates the left feeder of the nearest downstream face.
+    """
+
+    c_a: float
+    """One physical boundary concentration of the fan (or the constant value)."""
+    c_b: float
+    """The other physical boundary concentration of the fan (unused for a constant)."""
+    is_const: bool
+    """Whether this is a constant state (``True``) or a self-similar fan (``False``)."""
+    v_apex: float = 0.0
+    """Fan apex position [m³] (ignored for a constant)."""
+    theta_apex: float = 0.0
+    """Fan apex cumulative flow [m³] (ignored for a constant)."""
+    sorption: SorptionModel | None = None
+    """Sorption model used to invert ``R`` (required for a fan; ``None`` for a constant)."""
+    far_boundary_free: bool = True
+    """Whether the fan's far edge is a free plateau boundary (a collision line) rather than
+    already terminated by another shock. Propagated through merges so a wave born onto a
+    fan whose far end another wave owns does not re-expose a phantom boundary line."""
+
+    @classmethod
+    def constant(cls, c: float) -> "Feeder":
+        """Return a constant-concentration feeder."""
+        return cls(c_a=c, c_b=c, is_const=True)
+
+    @classmethod
+    def fan(
+        cls,
+        v_apex: float,
+        theta_apex: float,
+        c_a: float,
+        c_b: float,
+        sorption: SorptionModel,
+        *,
+        far_boundary_free: bool = True,
+    ) -> "Feeder":
+        """Return a bounded self-similar fan feeder with apex ``(v_apex, theta_apex)`` spanning ``[c_a, c_b]``."""
+        return cls(
+            c_a=c_a,
+            c_b=c_b,
+            is_const=False,
+            v_apex=v_apex,
+            theta_apex=theta_apex,
+            sorption=sorption,
+            far_boundary_free=far_boundary_free,
+        )
+
+    def value(self, v: float, theta: float) -> float:
+        """Concentration this feeder supplies at ``(v, θ)`` (clamped to the fan extent)."""
+        if self.is_const:
+            return self.c_a
+        sorption = self.sorption
+        assert sorption is not None  # noqa: S101  # a fan feeder always carries its sorption model
+        r_a = float(sorption.retardation(self.c_a))
+        r_b = float(sorption.retardation(self.c_b))
+        # c at the smaller-R (faster, "head") and larger-R (slower, "tail"/apex) ends.
+        if r_a <= r_b:
+            r_lo, r_hi, c_at_lo, c_at_hi = r_a, r_b, self.c_a, self.c_b
+        else:
+            r_lo, r_hi, c_at_lo, c_at_hi = r_b, r_a, self.c_b, self.c_a
+        if theta <= self.theta_apex or v <= self.v_apex:
+            return c_at_hi  # at/behind the apex: the largest-R (tail) end
+        r = (theta - self.theta_apex) / (v - self.v_apex)
+        if r <= r_lo:
+            return c_at_lo
+        if r >= r_hi:
+            return c_at_hi
+        return float(sorption.concentration_from_retardation(r))
 
 
 @dataclass
@@ -199,9 +288,16 @@ class CharacteristicWave(Wave):
     """
 
     concentration: float
-    """Constant concentration carried [mass/volume]."""
+    """Constant concentration carried on the upstream (behind) side [mass/volume]."""
     sorption: SorptionModel
     """Sorption model determining the speed."""
+    c_ahead: float = field(default=0.0, kw_only=True)
+    """Concentration on the downstream (ahead) side — the state the contact advances into.
+
+    A contact separates the carried ``concentration`` (behind, upstream) from ``c_ahead``
+    (ahead, downstream, the pre-existing state). The solver sets it to the previous inlet
+    value; it defaults to ``0`` (the virgin initial condition) for a lone contact. The
+    reader sweep uses it as the contact's downstream feeder."""
     _speed: float = field(init=False, repr=False, compare=False)
     """Cached characteristic speed (immutable inputs; set in ``__post_init__``)."""
 
@@ -539,11 +635,11 @@ class DecayingShockWave(Wave):
     - Freundlich, ``c_fixed = 0`` (general ``n > 0``, ``n ≠ 1``) — closed form:
       invariant ``θ_local · u_d^n = K · (n · u_d^(n-1) + α)``,
       position ``V_s(θ) = v_origin + n · K / u_d(θ)``.
-    - Freundlich, ``c_fixed > 0``, ``n = 2`` and ``c_decay_initial > c_fixed``
-      — closed form: invariant ``(u_d - u_R)² · θ_local = K · (2 u_d + α)``
-      with ``u_R := c_fixed^(1/2)``,
-      position ``V_s(θ) = v_origin + 2 K · u_d(θ) / (u_d - u_R)²``.
-      (The ``c_decay_initial < c_fixed`` mirror falls through to numerical.)
+    - Freundlich, ``c_fixed > 0``, ``n = 2`` (either decay orientation) — closed form:
+      invariant ``(u_d - u_R)² · θ_local = K · (2 u_d + α)`` with ``u_R := c_fixed^(1/2)``,
+      position ``V_s(θ) = v_origin + 2 K · u_d(θ) / (u_d - u_R)²``. The root of the
+      quadratic in ``u_d`` is selected by the decay orientation (``u_d > u_R`` shrinking,
+      ``u_d < u_R`` growing); both are exact (verified to ~1e-14 vs a DOP853 integration).
     - Langmuir, ``c_fixed = 0`` — closed form:
       invariant ``θ_local · c_d² = K · ((K_L + c_d)² + a)`` with
       ``a := ρ_b · s_max · K_L / n_por``,
@@ -631,6 +727,13 @@ class DecayingShockWave(Wave):
     """Cached predicate: no closed form applies, so the decay routes to the cached numerical profile."""
     _decay_profile_cache: tuple | None = field(default=None, init=False, repr=False, compare=False)
     """Lazily-built monotone ``θ_local(c)`` map for the numerical decay path (see ``_decay_profile``)."""
+    fan_boundary_consumed: bool = field(default=False, kw_only=True)
+    """Whether the fan's far-boundary line is owned from birth (a fan-entry successor rides a
+    fan another wave already terminates downstream, so its boundary is never a free face)."""
+    theta_fan_boundary_consumed: float = field(default=float("inf"), kw_only=True)
+    """Cumulative flow at which a *free* boundary line was later consumed by a wave entering
+    the fan. Retrospective reader/event queries treat the boundary as free only for
+    ``θ < theta_fan_boundary_consumed`` (historical truth, mirroring ``was_active_at``)."""
 
     def __post_init__(self) -> None:
         """Validate inputs and compute the closed-form invariant K when applicable."""
@@ -661,13 +764,14 @@ class DecayingShockWave(Wave):
             raise TypeError(msg)
 
         # Classify the decay path once (immutable inputs). Closed forms exist for:
-        # Freundlich c_fixed=0 (general n) or the n≈2 quadratic when the decaying side
-        # starts above the fixed side (the +√ / (u_d−u_R)² branch was derived only for
-        # c_decay_initial > c_fixed — the mirror routes to the numerical profile);
+        # Freundlich c_fixed=0 (general n) or the n≈2 quadratic for either decay orientation
+        # (shrinking c_decay_initial > c_fixed picks the +√ root, growing c_decay_initial <
+        # c_fixed the −√ root; both invert the same (u_d−u_R)² invariant, verified exact to
+        # ~1e-14 vs a DOP853 integration of the fan-fed shock ODE);
         # Langmuir c_fixed=0; Brooks-Corey c_fixed=0. Everything else is numerical.
         s = self.sorption
         self._freundlich_cf = isinstance(s, FreundlichSorption) and (
-            self.c_fixed == 0.0 or bool(np.isclose(s.n, 2.0, rtol=1e-12) and self.c_decay_initial > self.c_fixed)
+            self.c_fixed == 0.0 or bool(np.isclose(s.n, 2.0, rtol=1e-12) and self.c_decay_initial != self.c_fixed)
         )
         self._langmuir_cf = isinstance(s, LangmuirSorption) and self.c_fixed == 0.0
         self._brooks_corey_cf = isinstance(s, BrooksCoreyConductivity) and self.c_fixed == 0.0
@@ -842,6 +946,7 @@ class DecayingShockWave(Wave):
             return _outlet_crossing_freundlich(
                 s,
                 self.K,
+                self.c_decay_initial,
                 self.c_fixed,
                 self.v_origin,
                 self.theta_origin,
@@ -968,6 +1073,260 @@ class DecayingShockWave(Wave):
         if c_fan < c_lo - EPSILON_POSITION or c_fan > c_hi + EPSILON_POSITION:
             return None
         return c_fan
+
+
+@dataclass
+class DoubleFanShockWave(Wave):
+    r"""Shock fed by a self-similar fan on BOTH sides (a doubly-fed front).
+
+    Formed when a fan boundary (rarefaction head/tail, or another fan-fed shock) catches a
+    :class:`DecayingShockWave` whose surviving side is itself a fan — the merged front then
+    has a fan feeder on each side. The shock trajectory solves
+
+    .. math::
+        \frac{dV}{d\theta} = S\bigl(c_L(V,\theta),\, c_R(V,\theta)\bigr), \qquad
+        R(c_i) = \frac{\theta - \theta_{{\rm apex},i}}{V - v_{{\rm apex},i}},
+
+    with ``S`` the Rankine-Hugoniot secant and each ``c_i`` the self-similar value of its fan.
+
+    **Closed form (Freundlich ``n = 2``, shared apex position ``v_L = v_R = v_o``).** With
+    ``u_i = \sqrt{c_i} = A V'/(2(\tau_i - V'))`` (``V' = V - v_o``, ``\tau_i = \theta -
+    \theta_{{\rm apex},i}``, ``A = \rho_b k_f/n_{por}``), the product ``K = u_L u_R`` is a
+    first integral of the ODE, and the trajectory is the physical root of
+
+    .. math::
+        (A^2 - 4K)\,V'^2 + 4K(\tau_L + \tau_R)\,V' - 4K\,\tau_L\,\tau_R = 0,
+        \qquad 0 < V' < \min(\tau_L, \tau_R).
+
+    Every fan born at the inlet shares ``v_o = 0``, so inlet-driven inputs use the closed
+    form. **General fallback** (distinct apex positions, or a non-``n=2`` isotherm): the ODE
+    is integrated once by fixed-step RK4 (``\Delta\theta = \text{fan age}/DFSW_RK_SUBSTEPS``,
+    speed-independent since the fans vary on the scale of their age) into a cached monotone
+    spline. Both paths answer position, side concentrations, side exhaustion and outlet
+    crossing uniformly.
+
+    See Also
+    --------
+    DecayingShockWave : One fan side; the doubly-fed front degrades to this on side exhaustion.
+    Feeder : The bounded-fan side descriptor this wave carries.
+    """
+
+    left_feeder: Feeder
+    """Left (upstream) side feeder — a fan."""
+    right_feeder: Feeder
+    """Right (downstream) side feeder — a fan."""
+    sorption: NonlinearSorption
+    """Sorption model (concentration-dependent)."""
+    left_boundary_consumed: bool = field(default=False, kw_only=True)
+    """Whether the left fan's far-boundary line is owned from birth (not a free collision face)."""
+    right_boundary_consumed: bool = field(default=False, kw_only=True)
+    """Whether the right fan's far-boundary line is owned from birth (not a free collision face)."""
+    theta_left_boundary_consumed: float = field(default=float("inf"), kw_only=True)
+    """Cumulative flow at which a free left boundary was later consumed (historical, see DSW)."""
+    theta_right_boundary_consumed: float = field(default=float("inf"), kw_only=True)
+    """Cumulative flow at which a free right boundary was later consumed (historical, see DSW)."""
+    _closed_form: bool = field(init=False, repr=False, compare=False)
+    """Whether the n=2 shared-apex closed form applies."""
+    _k: float = field(init=False, repr=False, compare=False)
+    """Closed-form first integral ``K = u_L·u_R`` (``nan`` for the numerical path)."""
+    _traj_cache: tuple | None = field(default=None, init=False, repr=False, compare=False)
+    """Lazily-built ``(theta_grid, CubicSpline)`` for the numerical trajectory."""
+
+    def __post_init__(self) -> None:
+        """Classify closed-form vs numerical and set the first integral ``K``."""
+        if self.left_feeder.is_const or self.right_feeder.is_const:
+            msg = "DoubleFanShockWave requires two fan feeders; use DecayingShockWave for a one-fan front"
+            raise ValueError(msg)
+        if self.theta_origin_left >= self.theta_start or self.theta_origin_right >= self.theta_start:
+            msg = "both fan apexes must precede the collision (theta_apex < theta_start)"
+            raise ValueError(msg)
+        s = self.sorption
+        shared_apex = abs(self.left_feeder.v_apex - self.right_feeder.v_apex) < EPSILON_POSITION
+        self._closed_form = isinstance(s, FreundlichSorption) and bool(np.isclose(s.n, 2.0, rtol=1e-12)) and shared_apex
+        self._k = float("nan")
+        if self._closed_form:
+            v_prime = self.v_start - self.left_feeder.v_apex
+            tau_l = self.theta_start - self.theta_origin_left
+            tau_r = self.theta_start - self.theta_origin_right
+            a = self._alpha()
+            u_l = a * v_prime / (2.0 * (tau_l - v_prime))
+            u_r = a * v_prime / (2.0 * (tau_r - v_prime))
+            self._k = u_l * u_r
+
+    @property
+    def theta_origin_left(self) -> float:
+        """Cumulative flow at the left fan's apex [m³]."""
+        return self.left_feeder.theta_apex
+
+    @property
+    def theta_origin_right(self) -> float:
+        """Cumulative flow at the right fan's apex [m³]."""
+        return self.right_feeder.theta_apex
+
+    def _alpha(self) -> float:
+        """Freundlich lumped coefficient ``A = ρ_b·k_f/n_por`` (closed-form path only)."""
+        s = self.sorption
+        assert isinstance(s, FreundlichSorption)  # noqa: S101
+        return s.bulk_density * s.k_f / s.porosity
+
+    def _v_closed(self, theta: float) -> float:
+        """Closed-form shock position at ``theta`` (n=2 shared apex)."""
+        v_o = self.left_feeder.v_apex
+        tau_l = theta - self.theta_origin_left
+        tau_r = theta - self.theta_origin_right
+        a2 = self._alpha() ** 2 - 4.0 * self._k
+        a1 = 4.0 * self._k * (tau_l + tau_r)
+        a0 = -4.0 * self._k * tau_l * tau_r
+        if abs(a2) < EPSILON_POSITION:
+            # A² = 4K: the quadratic degenerates to linear a1·V' + a0 = 0.
+            v_prime = -a0 / a1
+            return v_o + v_prime
+        disc = a1 * a1 - 4.0 * a2 * a0
+        sqrt_disc = np.sqrt(max(disc, 0.0))
+        upper = min(tau_l, tau_r)
+        for sign in (-1.0, 1.0):
+            v_prime = (-a1 + sign * sqrt_disc) / (2.0 * a2)
+            if 0.0 < v_prime < upper:
+                return v_o + v_prime
+        # Numerical fallback: pick the root closest to the valid open interval.
+        candidates = [(-a1 + sign * sqrt_disc) / (2.0 * a2) for sign in (-1.0, 1.0)]
+        v_prime = min(candidates, key=lambda x: abs(x - 0.5 * upper))
+        return v_o + float(np.clip(v_prime, 0.0, upper))
+
+    def _rhs(self, v: float, theta: float) -> float:
+        """Shock-speed ODE right side ``S(c_L, c_R)`` at ``(v, θ)`` (numerical path)."""
+        c_l = self.left_feeder.value(v, theta)
+        c_r = self.right_feeder.value(v, theta)
+        return float(self.sorption.shock_speed(c_l, c_r))
+
+    def _ensure_numerical(self, theta: float) -> tuple:
+        """Build/extend the cached RK4 trajectory spline out to at least ``theta``."""
+        age0 = max(min(self.theta_start - self.theta_origin_left, self.theta_start - self.theta_origin_right), 1.0)
+        step0 = age0 / DFSW_RK_SUBSTEPS
+        if self._traj_cache is None:
+            thetas = [self.theta_start]
+            vs = [self.v_start]
+        else:
+            thetas, vs, _ = self._traj_cache
+            thetas = list(thetas)
+            vs = list(vs)
+        # March past ``theta`` and always keep at least two nodes so CubicSpline is well-posed
+        # (a query at ``theta_start`` alone would otherwise leave a single node).
+        target = max(theta, self.theta_start + step0)
+        while thetas[-1] < target:
+            t0 = thetas[-1]
+            v0 = vs[-1]
+            age = min(t0 - self.theta_origin_left, t0 - self.theta_origin_right, age0 + (t0 - self.theta_start))
+            h = max(age, age0) / DFSW_RK_SUBSTEPS
+            k1 = self._rhs(v0, t0)
+            k2 = self._rhs(v0 + 0.5 * h * k1, t0 + 0.5 * h)
+            k3 = self._rhs(v0 + 0.5 * h * k2, t0 + 0.5 * h)
+            k4 = self._rhs(v0 + h * k3, t0 + h)
+            vs.append(v0 + (h / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4))
+            thetas.append(t0 + h)
+        theta_arr = np.asarray(thetas)
+        v_arr = np.asarray(vs)
+        spline = CubicSpline(theta_arr, v_arr)
+        self._traj_cache = (theta_arr, v_arr, spline)
+        return self._traj_cache
+
+    def _v_at(self, theta: float) -> float:
+        """Shock position at ``theta`` (closed form or cached numerical spline)."""
+        if self._closed_form:
+            return self._v_closed(theta)
+        _theta_arr, _v_arr, spline = self._ensure_numerical(theta)
+        return float(spline(theta))
+
+    def position_at_theta(self, theta: float) -> float | None:
+        """Shock position ``V_s(θ)``; ``None`` for ``θ < theta_start`` or when inactive."""
+        if not self.was_active_at(theta):
+            return None
+        return self._v_at(theta)
+
+    def side_values(self, theta: float) -> tuple[float, float]:
+        """``(c_L, c_R)`` on the two sides of the shock face at ``theta``."""
+        v = self._v_at(theta)
+        return self.left_feeder.value(v, theta), self.right_feeder.value(v, theta)
+
+    def concentration_left(self) -> float:
+        """Left-side concentration at the collision moment."""
+        return self.left_feeder.value(self.v_start, self.theta_start)
+
+    def concentration_right(self) -> float:
+        """Right-side concentration at the collision moment."""
+        return self.right_feeder.value(self.v_start, self.theta_start)
+
+    def _bracket_and_solve(self, residual, *, r0: float) -> float | None:
+        """Find the first θ > theta_start where a monotone ``residual(θ)`` crosses zero.
+
+        ``r0 = residual(theta_start)`` is known to be nonzero; grow the upper bracket
+        geometrically until the sign flips, then ``brentq``. Returns ``None`` if the
+        residual never changes sign (the trajectory asymptotes short of the target).
+        """
+        seed = max(self.theta_start - min(self.theta_origin_left, self.theta_origin_right), 1.0)
+        hi = self.theta_start + seed
+        for _ in range(200):
+            if residual(hi) * r0 < 0.0:
+                return float(brentq(residual, self.theta_start, hi, xtol=DECAYING_SHOCK_BRENTQ_XTOL))
+            hi = self.theta_start + 2.0 * (hi - self.theta_start)
+        return None
+
+    def outlet_crossing_theta(self, v_outlet: float) -> float | None:
+        """Cumulative flow at which ``V_s = v_outlet`` (monotone, inverted by brentq)."""
+        if v_outlet <= self.v_start:
+            return None
+        return self._bracket_and_solve(lambda theta: self._v_at(theta) - v_outlet, r0=self.v_start - v_outlet)
+
+    def theta_at_side_exhaustion(self) -> tuple[float, str] | None:
+        """Earliest ``(θ, side)`` at which a side's fan value reaches its far bound.
+
+        A side exhausts when its concentration reaches the fan edge it is moving toward; the
+        solver then degrades the doubly-fed front to a :class:`DecayingShockWave` (or a plain
+        :class:`ShockWave` if both exhaust). Returns ``None`` when neither side exhausts in
+        finite θ (the shock asymptotes to the interior state).
+        """
+        candidates: list[tuple[float, str]] = []
+        for side, feeder in (("left", self.left_feeder), ("right", self.right_feeder)):
+            c_now = feeder.value(self.v_start, self.theta_start)
+            # The value moves monotonically toward one fan edge; target that edge.
+            target = feeder.c_a if abs(feeder.c_a - c_now) > abs(feeder.c_b - c_now) else feeder.c_b
+            r0 = c_now - target
+            if abs(r0) < EPSILON_POSITION:
+                continue
+            root = self._bracket_and_solve(
+                lambda theta, feeder=feeder, target=target: feeder.value(self._v_at(theta), theta) - target,
+                r0=r0,
+            )
+            if root is not None:
+                candidates.append((root, side))
+        if not candidates:
+            return None
+        return min(candidates, key=itemgetter(0))
+
+    def concentration_at_point(self, v: float, theta: float) -> float | None:
+        """Concentration at ``(v, θ)`` if controlled by this doubly-fed shock.
+
+        Left of the shock face the left fan controls; right of it the right fan; at the face
+        the average. Outside both fans' physical extents returns ``None`` (another wave owns
+        the point).
+        """
+        if not self.was_active_at(theta):
+            return None
+        v_s = self._v_at(theta)
+        tol = 1e-15 * max(abs(v_s), 1.0)
+        if abs(v - v_s) < tol:
+            c_l, c_r = self.side_values(theta)
+            return 0.5 * (c_l + c_r)
+        feeder = self.left_feeder if v < v_s else self.right_feeder
+        # Only claim the point if it lies within the fan's live self-similar range.
+        if theta <= feeder.theta_apex or v <= feeder.v_apex:
+            return None
+        r = (theta - feeder.theta_apex) / (v - feeder.v_apex)
+        r_a = float(self.sorption.retardation(feeder.c_a))
+        r_b = float(self.sorption.retardation(feeder.c_b))
+        if r < min(r_a, r_b) - EPSILON_POSITION or r > max(r_a, r_b) + EPSILON_POSITION:
+            return None
+        return feeder.value(v, theta)
 
 
 def _invert_monotone_theta_local(f, *, theta_hi_seed: float, f_seed: float | None = None) -> float | None:
@@ -1212,7 +1571,10 @@ def _c_decay_freundlich(
     ``u = (K + sqrt(K^2 + K·θ_local·α)) / θ_local``. For general n with
     c_fixed=0 (transcendental): brentq on the monotone bracket
     ``(tiny, c_decay_initial^(1/n)]``. For n=2 c_fixed>0 (quadratic in u with u_r):
-    closed form with positive sign chosen to give u > u_r as θ_local → ∞.
+    closed form; the root is selected by the decay orientation — the ``+√`` root
+    (``u > u_r``) for a shrinking decay (``c_decay_initial > c_fixed``), the ``−√``
+    root (``u < u_r``) for a growing decay (``c_decay_initial < c_fixed``). Both
+    approach ``u_r`` as ``θ_local → ∞``; the initial side of ``u_r`` fixes the branch.
 
     Returns
     -------
@@ -1230,10 +1592,15 @@ def _c_decay_freundlich(
         u_root = _invert_freundlich_cr_zero(k_invariant, c_decay_initial, n, alpha, theta_local_collision, theta_local)
         return float(u_root**n)
 
-    # n=2, c_fixed > 0
+    # n=2, c_fixed > 0. Growing decay (c_decay_initial < c_fixed) starts below u_r and
+    # takes the −√ root; shrinking decay starts above u_r and takes the +√ root.
     u_r = c_fixed**0.5
     disc = k_invariant * (theta_local * (2.0 * u_r + alpha) + k_invariant)
-    u = (u_r * theta_local + k_invariant + np.sqrt(disc)) / theta_local
+    sqrt_disc = np.sqrt(disc)
+    if c_decay_initial < c_fixed:
+        u = (u_r * theta_local + k_invariant - sqrt_disc) / theta_local
+    else:
+        u = (u_r * theta_local + k_invariant + sqrt_disc) / theta_local
     return float(u * u)
 
 
@@ -1286,6 +1653,7 @@ def _c_decay_langmuir(sorption: LangmuirSorption, k_invariant: float, theta_loca
 def _outlet_crossing_freundlich(
     sorption: FreundlichSorption,
     k_invariant: float,
+    c_decay_initial: float,
     c_fixed: float,
     v_origin: float,
     theta_origin: float,
@@ -1310,17 +1678,22 @@ def _outlet_crossing_freundlich(
         return float(theta_origin + theta_local)
 
     # n=2, c_fixed > 0: V_s - v_origin = 2·K·u / (u - u_r)^2 ⇒ quadratic in u.
-    # The plus-sqrt root always satisfies u > u_r for K, alpha, delta_v > 0:
-    # the quadratic's roots multiply to u_r² and sum to 2u_r + 2K/delta_v > 2u_r,
-    # so exactly one root exceeds u_r and it is the plus-sqrt branch. The
-    # minus-sqrt root is the unphysical companion.
+    # The two roots multiply to u_r² and sum to 2u_r + 2K/delta_v > 2u_r, so exactly one
+    # exceeds u_r (the +√ root, shrinking decay) and one lies below (the −√ root, growing
+    # decay). Select by the decay orientation to match _c_decay_freundlich's branch.
     u_r = c_fixed**0.5
     b_coef = -(2.0 * delta_v * u_r + 2.0 * k_invariant)
     c_coef = delta_v * u_r * u_r
     disc = b_coef * b_coef - 4.0 * delta_v * c_coef
     if disc < 0:
         return None
-    u_target = (-b_coef + np.sqrt(disc)) / (2.0 * delta_v)
+    sqrt_disc = np.sqrt(disc)
+    if c_decay_initial < c_fixed:
+        u_target = (-b_coef - sqrt_disc) / (2.0 * delta_v)
+    else:
+        u_target = (-b_coef + sqrt_disc) / (2.0 * delta_v)
+    if u_target <= 0.0:
+        return None
     theta_local = k_invariant * (2.0 * u_target + alpha) / (u_target - u_r) ** 2
     return float(theta_origin + theta_local)
 

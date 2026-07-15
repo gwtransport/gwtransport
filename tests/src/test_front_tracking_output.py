@@ -123,45 +123,47 @@ class TestConcentrationAtPoint:
         c = concentration_at_point(v=100.0, theta=500.0, waves=waves, sorption=sorption)
         assert c == 0.0
 
-    def test_dispatch_prefers_decaying_shock_over_rarefaction(self):
-        """DecayingShockWave must win over a co-active RarefactionWave at the same point.
+    def test_decaying_shock_fan_owns_interior_point(self):
+        """The reader attributes a DecayingShockWave's self-similar fan value inside its fan.
 
-        Phase 2 step 4 puts DecayingShockWave first in the wave-priority loop
-        in ``concentration_at_point``. End-to-end simulations rarely surface
-        this dispatch order because the parent rarefaction is deactivated
-        post-collision; this test keeps both active to exercise the priority
-        directly.
+        A single Freundlich ``n=2`` pulse ``[0, 10, 10, 0]`` forms a DecayingShockWave once
+        the trailing rarefaction catches the leading shock: the parent rarefaction is
+        deactivated and the DSW fan (apex at ``(v_origin, θ_origin)``) becomes the sole owner
+        of the region between its tail boundary and its curved shock face. The old dispatch-
+        priority test kept a rarefaction and a decaying shock co-active over the same region;
+        under the nearest-downstream-face sweep reader that geometry is single-owner-ambiguous
+        (both fans share the origin apex and range) and is not how the solver produces states.
+        This uses an interaction-consistent solver-built state instead: at a point strictly
+        inside the DSW fan the reader must return the self-similar fan concentration, which
+        discriminates against both the ``c_fixed`` plateau ahead of the shock and the shock's
+        two-sided average.
         """
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        raref = RarefactionWave(theta_start=0.0, v_start=0.0, c_head=8.0, c_tail=1e-12, sorption=sorption)
-        v_start_dsw = raref.head_position_at_theta(10.0)
-        assert v_start_dsw is not None
-        decaying = DecayingShockWave(
-            theta_start=10.0,
-            v_start=v_start_dsw,
-            c_decay_initial=raref.c_head,
-            c_fixed=0.0,
-            c_fan_tail=raref.c_tail,
-            decay_side="left",
-            v_origin=0.0,
-            theta_origin=0.0,
-            sorption=sorption,
-        )
+        n = 40
+        cin = np.array([0.0, 10.0, 10.0, 0.0] + [0.0] * (n - 4))
+        flow = np.full(n, 100.0)
+        tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+        tracker = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=300.0, sorption=sorption)
+        tracker.run()
 
-        theta_q = 20.0
-        v_q = decaying.position_at_theta(theta_q)
-        assert v_q is not None
+        decaying = next(w for w in tracker.state.waves if isinstance(w, DecayingShockWave))
+        assert decaying.is_active, "the trailing rarefaction should have formed an active decaying shock"
 
-        c_decay_at_q = decaying.c_decay_at_theta(theta_q)
-        assert c_decay_at_q is not None
-        c_dsw_expected = 0.5 * (c_decay_at_q + decaying.c_fixed)
+        # A point strictly inside the fan: upstream of the curved shock face, downstream of the
+        # tail boundary (which sits at the apex for c_fan_tail = 0).
+        theta_q = 1000.0
+        v_shock = decaying.position_at_theta(theta_q)
+        assert v_shock is not None
+        v_q = 0.5 * v_shock
 
-        # Both orderings must return the DSW value (priority is by type,
-        # not list position).
-        c1 = concentration_at_point(v=v_q, theta=theta_q, waves=[raref, decaying], sorption=sorption)
-        c2 = concentration_at_point(v=v_q, theta=theta_q, waves=[decaying, raref], sorption=sorption)
-        assert np.isclose(c1, c_dsw_expected, rtol=1e-12)
-        assert np.isclose(c2, c_dsw_expected, rtol=1e-12)
+        # Expected self-similar fan value: R = (θ − θ_apex)/(v − v_apex), inverted to concentration.
+        r_fan = (theta_q - decaying.theta_origin) / (v_q - decaying.v_origin)
+        c_fan_expected = float(sorption.concentration_from_retardation(r_fan))
+
+        c = concentration_at_point(v=v_q, theta=theta_q, waves=tracker.state.waves, sorption=sorption)
+        assert np.isclose(c, c_fan_expected, rtol=1e-12)
+        # Discriminate: the reader attributes the fan, not the plateau ahead of the shock.
+        assert not np.isclose(c, decaying.c_fixed, atol=1e-6)
 
 
 class TestComputeBreakthroughCurve:

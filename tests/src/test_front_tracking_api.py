@@ -8,8 +8,13 @@ import pytest
 
 from gwtransport.advection import infiltration_to_extraction_nonlinear_sorption
 from gwtransport.fronttracking.math import FreundlichSorption, LangmuirSorption, compute_first_front_arrival_theta
-from gwtransport.fronttracking.solver import FrontTracker, find_unresolved_interaction
-from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
+from gwtransport.fronttracking.output import (
+    compute_breakthrough_curve,
+    compute_cumulative_inlet_mass,
+    compute_domain_mass,
+)
+from gwtransport.fronttracking.solver import FrontTracker, FrontTrackerState, find_unresolved_interaction
+from gwtransport.fronttracking.waves import CharacteristicWave, DoubleFanShockWave, RarefactionWave, ShockWave
 from gwtransport.utils import compute_time_edges
 
 
@@ -639,37 +644,45 @@ class TestFrontTrackingAPI:
             )
 
 
-class TestMultiPeakInteractionRefused:
-    """End-to-end: a multi-peak cin whose fans overlap is refused, not silently mis-answered.
+class TestMultiPeakInteractionResolved:
+    """End-to-end: a multi-peak cin whose fans overlap now runs — interactions are resolved.
 
-    A later pulse's front sweeps into the first pulse's decaying-shock fan — an unresolved wave
-    interaction the front tracker does not compose. The single-owner reader then either drops the
-    earlier pulse's near-inlet mass (leaking a spurious inlet→outlet echo in the conservation-form
-    ``cout``) or over-counts it; neither is the true field. Rather than return that mass-losing
-    output, the public API refuses the input with ``NotImplementedError`` (an output-side mitigation
-    was tried and reverted because it fixed neither the physics nor a percolation regression). Exact
-    multi-front interaction is deferred to a solver-level follow-up.
+    A later pulse's front sweeps into the first pulse's decaying-shock fan. The solver
+    (issue #294) resolves such multi-front wave interactions instead of refusing the input;
+    the single-owner reader reads an interaction-consistent front list. This case pins the
+    conservation invariant on the resolved state: with a strongly retarded front (R≈37–52) and
+    a short 9-day window, no front reaches the outlet, so every unit of injected mass is still
+    stored in the domain — a C3-class conservation regression at a second parameter set.
     """
 
-    def test_multipeak_raises_not_implemented(self):
-        """Overlapping-fan multi-peak input raises ``NotImplementedError`` at the public boundary."""
+    def test_multipeak_pre_arrival_conserves_mass(self):
+        """Pre-arrival: domain mass equals cumulative inlet mass to machine precision."""
         cin = np.array([0.0, 10.0, 10.0, 0.0, 0.0, 0.0, 5.0, 5.0, 0.0])
         flow = np.full(len(cin), 100.0)
         tedges = pd.date_range("2020-01-01", periods=len(cin) + 1, freq="D")
-        cout_tedges = pd.date_range("2020-01-01", periods=len(cin) + 1, freq="D")
+        aquifer_pore_volume = 40.0
+        sorption = FreundlichSorption(k_f=0.05, n=2.0, bulk_density=1600.0, porosity=0.35)
 
-        with pytest.raises(NotImplementedError, match="interacting fronts"):
-            infiltration_to_extraction_nonlinear_sorption(
-                cin=cin,
-                flow=flow,
-                tedges=tedges,
-                cout_tedges=cout_tedges,
-                aquifer_pore_volumes=np.array([40.0]),
-                freundlich_k=0.05,
-                freundlich_n=2.0,
-                bulk_density=1600.0,
-                porosity=0.35,
-            )
+        tracker = FrontTracker(
+            cin=cin,
+            flow=flow,
+            tedges=tedges,
+            aquifer_pore_volume=aquifer_pore_volume,
+            sorption=sorption,
+        )
+        tracker.run()
+
+        theta_edges = tracker.state.theta_edges
+        theta_end = float(theta_edges[-1])
+        m_dom = compute_domain_mass(
+            theta=theta_end, v_outlet=aquifer_pore_volume, waves=tracker.state.waves, sorption=sorption
+        )
+        m_in = compute_cumulative_inlet_mass(theta_end, cin, theta_edges)
+
+        # Nothing broke through in-window, so all injected mass is still in the domain.
+        # rtol 1e-5 absorbs the benign c_min-floor transient (~5e-7); the pre-fix C3 bug dropped a
+        # full pulse (1000 of 3000), far above this — so the pin still catches that regression.
+        np.testing.assert_allclose(m_dom, m_in, rtol=1e-5)
 
 
 def _fv_outlet_cout_freundlich_n2(cin, flow, v_pv, k_f, bulk_density, porosity, *, n_cells=2500, cfl=0.4):
@@ -745,18 +758,16 @@ def _fv_outlet_cout_freundlich_n2(cin, flow, v_pv, k_f, bulk_density, porosity, 
 
 
 class TestUnresolvedMultiFrontInteractionRaises:
-    """The public API refuses inputs whose fronts interact unresolved, and runs non-interacting ones.
+    """The public API resolves interacting multi-front inputs and matches an independent FV oracle.
 
-    The front tracker resolves shock↔shock / shock↔rarefaction collisions (the latter into a
-    ``DecayingShockWave``) but never composes a later front overtaking an existing decaying-shock fan
-    (nor two fans overlapping). Such an unresolved interaction makes the public ``cout`` a linear
-    superposition of a nonlinear operator — mass-losing and silently wrong — so
-    :func:`~gwtransport.advection.infiltration_to_extraction_nonlinear_sorption` raises
-    ``NotImplementedError`` (via
-    :func:`gwtransport.fronttracking.solver.find_unresolved_interaction`) rather than returning it.
-    A single front, or well-separated pulses that break through before overtaking one another, run
-    and match an independent Godunov FV oracle. Acceptance params: Freundlich ``n=2``, ``k_f=0.01``,
-    ``ρ_b=1500``, ``φ=0.3``, ``flow=100``.
+    The solver now composes every wave interaction (shock↔shock, fan-entry, doubly-fed formation,
+    same-apex annihilation, and their compositions), so
+    :func:`~gwtransport.advection.infiltration_to_extraction_nonlinear_sorption` returns the exact
+    entropy solution rather than refusing the input (issue #294). Every case below — the multi-peak,
+    plateau, nonzero-dip and the three oscillating two-pulse signals that a prior guard refused —
+    runs and matches the independent Godunov FV oracle to well within 1% cumulative outlet mass and
+    a few times the single-front FV floor per bin. Acceptance params: Freundlich ``n=2``,
+    ``k_f=0.01``, ``ρ_b=1500``, ``φ=0.3``, ``flow=100``.
     """
 
     K_F, N, RHO_B, POR, FLOW = 0.01, 2.0, 1500.0, 0.3, 100.0
@@ -785,28 +796,33 @@ class TestUnresolvedMultiFrontInteractionRaises:
             ([0, 5, 10, 10, 5, 0], 40.0, 74),  # plateau: internal c=10 shock catches the 0→5 shock before outlet
             ([0, 10, 10, 2, 2, 2, 5, 5, 0], 40.0, 111),  # nonzero-dip: a fan overtakes an earlier decaying fan
             # Conservation-symptom class (pulse-2 shock overtakes pulse-1's decaying-shock fan; the
-            # two fans only cross BEYOND v_outlet, so the geometric scan cannot see it — the
-            # cumulative-outlet-mass monotonicity check refuses the fabricated mass instead). These
-            # are the seasonal/oscillating two-pulse signals a prior guard silently mis-answered.
+            # two fans only cross BEYOND v_outlet). These are the seasonal/oscillating two-pulse
+            # signals a prior guard silently mis-answered — now resolved exactly.
             ([0, 10, 10, 0, 10, 10, 0], 40.0, 53),  # 2-pulse equal
             ([0, 5, 5, 0, 10, 10, 0], 40.0, 53),  # 2-pulse rising
             ([0, 10, 10, 0, 5, 5, 0], 40.0, 53),  # 2-pulse falling
         ],
     )
-    def test_interacting_multifront_raises(self, pulse, v_pv, n_trail):
-        """An in-domain unresolved wave interaction raises ``NotImplementedError``."""
-        with pytest.raises(NotImplementedError, match="interacting fronts"):
-            self._run(pulse, v_pv, n_trail=n_trail)
+    def test_interacting_multifront_matches_fv(self, pulse, v_pv, n_trail):
+        """An in-domain multi-front interaction runs and matches the FV oracle (mass + per-bin)."""
+        cout, _ = self._run(pulse, v_pv, n_trail=n_trail)
+        cin = np.array(list(pulse) + [0.0] * n_trail, dtype=float)
+        cout_fv = _fv_outlet_cout_freundlich_n2(cin, self.FLOW, v_pv, self.K_F, self.RHO_B, self.POR)
+        m_pub = float(np.nansum(cout))
+        m_fv = float(np.nansum(cout_fv))
+        assert abs(m_pub - m_fv) < 0.01 * m_fv, f"{pulse}: outlet mass {m_pub:.3f} vs FV {m_fv:.3f}"
+        # Per-bin gate at 3× the single-front FV floor (~0.046) — the broken linear-superposition
+        # output failed this at 14×–48×, so it discriminates a wrong interaction resolution.
+        max_bin = float(np.nanmax(np.abs(cout - cout_fv)))
+        assert max_bin < 0.14, f"{pulse}: max per-bin |Δ| = {max_bin:.4f} exceeds gate"
 
-    def test_conservation_symptom_flags_fans_crossing_beyond_outlet(self):
-        """The two-pulse refusal is driven by the mass-monotonicity net, not the geometric scan.
+    def test_conservation_symptom_detector_returns_none_when_resolved(self):
+        """The mass-monotonicity tripwire returns None on a resolved two-pulse state (no over-count).
 
         For ``cin=[0,10,10,0,10,10,0]`` at ``V=40`` pulse-2's shock overtakes pulse-1's
-        decaying-shock fan, but the two fans only cross at ``V≈97 ≫ v_outlet``: no in-domain point
-        is ever covered by two fans, so the geometric fan-overlap scan returns clean. Cumulative
-        outlet mass nonetheless drops (the reader over-counts stored mass), which the monotonicity
-        detector reports. This pins that the added net — not the pre-existing geometric scan — is
-        what catches this dominant multi-pulse class.
+        decaying-shock fan (the two fans cross beyond ``v_outlet``). Before the solver-level fix
+        this over-counted stored mass and the detector flagged it; now the interaction is resolved,
+        cumulative outlet mass is monotone, and :func:`find_unresolved_interaction` returns ``None``.
         """
         cin = np.array([0, 10, 10, 0, 10, 10, 0] + [0.0] * 53, dtype=float)
         nb = len(cin)
@@ -816,9 +832,7 @@ class TestUnresolvedMultiFrontInteractionRaises:
             cin=cin, flow=np.full(nb, self.FLOW), tedges=tedges, aquifer_pore_volume=40.0, sorption=sorption
         )
         tracker.run()
-        reason = find_unresolved_interaction(tracker.state)
-        assert reason is not None, "interacting two-pulse input was not flagged"
-        assert "cumulative outlet mass" in reason, f"expected mass-monotonicity attribution, got: {reason}"
+        assert find_unresolved_interaction(tracker.state) is None
 
     def test_plateau_below_interaction_volume_runs_and_matches_fv(self):
         """The SAME plateau input at a shorter column (V=30) exits before interacting — runs, matches FV.
@@ -861,3 +875,188 @@ class TestUnresolvedMultiFrontInteractionRaises:
         m_pub = float(np.nansum(cout))
         m_fv = float(np.nansum(cout_fv))
         assert abs(m_pub - m_fv) < 0.01 * m_fv, f"staircase V{v_pv} outlet mass {m_pub:.3f} vs FV {m_fv:.3f}"
+
+
+class TestMultiFrontExactAnchors:
+    """Machine-precision regression anchors for the resolved multi-front solution (issue #294).
+
+    Coordinates derive from the Freundlich ``n=2`` closed forms (``A = ρ_b·k_f/φ = 50``,
+    ``C_T = c + A√c``, ``R = 1 + A/(2√c)``). They pin the exact geometry the reviewers verified,
+    independently of the FV oracle: the review-C3 domain-mass evidence, the review-C2 plateau hole,
+    and the doubly-fed front's exact outlet crossing.
+    """
+
+    K_F, N, RHO_B, POR, FLOW = 0.01, 2.0, 1500.0, 0.3, 100.0
+
+    def _tracker(self, pulse, v_pv, n_trail):
+        cin = np.array(list(pulse) + [0.0] * n_trail, dtype=float)
+        nb = len(cin)
+        tedges = pd.date_range("2020-01-01", periods=nb + 1, freq="D")
+        sorption = FreundlichSorption(k_f=self.K_F, n=self.N, bulk_density=self.RHO_B, porosity=self.POR)
+        tr = FrontTracker(
+            cin=cin, flow=np.full(nb, self.FLOW), tedges=tedges, aquifer_pore_volume=v_pv, sorption=sorption
+        )
+        tr.run()
+        return tr
+
+    def test_multipeak_domain_mass_holds_both_pulses_before_arrival(self):
+        """Review C3: at θ=810 (< first arrival 840) all injected mass is still stored in-domain.
+
+        The pre-fix bug dropped the second pulse's 1000 units from ``compute_domain_mass`` (2000 vs
+        3000), emitting a spurious inlet→outlet echo. Here both pulses are in-domain and exact.
+        """
+        tr = self._tracker([0, 10, 10, 0, 0, 0, 5, 5, 0], 40.0, 111)
+        m_dom = compute_domain_mass(810.0, 40.0, tr.state.waves, tr.state.sorption)
+        # rtol 1e-5 absorbs the benign c_min-floor transient (~1.4e-3 on 3000); the pre-fix bug
+        # was off by 1000 (a full pulse), so this cleanly catches the C3 regression.
+        np.testing.assert_allclose(m_dom, 3000.0, rtol=1e-5)
+
+    def test_multipeak_dsw_formation_and_first_arrival_exact(self):
+        """DSW forms at θ=500+8√10 (V=8√10); first breakthrough is θ=840 exactly."""
+        tr = self._tracker([0, 10, 10, 0, 0, 0, 5, 5, 0], 40.0, 111)
+        dsw_events = [e for e in tr.state.events if e["type"] == "shock_rarefaction_collision"]
+        assert dsw_events, "expected the Rh1×S0 decaying-shock formation"
+        np.testing.assert_allclose(dsw_events[0]["theta"], 500.0 + 8.0 * np.sqrt(10.0), rtol=1e-9)
+        np.testing.assert_allclose(dsw_events[0]["location"], 8.0 * np.sqrt(10.0), rtol=1e-9)
+        outlet = [e["theta"] for e in tr.state.events if e["type"] == "outlet_crossing"]
+        np.testing.assert_allclose(min(outlet), 840.0, rtol=1e-9)
+
+    def test_multipeak_doubly_fed_front_crosses_outlet_at_1340(self):
+        """The doubly-fed front reaches V=40 at θ=1340 exactly with face values (4, 1)."""
+        tr = self._tracker([0, 10, 10, 0, 0, 0, 5, 5, 0], 40.0, 111)
+        dfsw = [w for w in tr.state.waves if isinstance(w, DoubleFanShockWave)]
+        assert dfsw, "expected a doubly-fed shock in the multi-peak solution"
+        theta_cross = dfsw[0].outlet_crossing_theta(40.0)
+        # rtol 1e-3: the fan-entry DSW feeding this front is born at c_decay_initial = c_min
+        # (~1e-12) not exactly 0, shifting the idealized θ=1340 / faces (4, 1) by ~5e-4.
+        np.testing.assert_allclose(theta_cross, 1340.0, rtol=1e-3)
+        c_l, c_r = dfsw[0].side_values(theta_cross)
+        np.testing.assert_allclose([c_l, c_r], [4.0, 1.0], rtol=1e-3)
+
+    def test_plateau_breakthrough_has_no_zero_hole(self):
+        """Review C2: the V=40 plateau breakthrough reads ≈5 in the plateau window, not a c=0 hole.
+
+        The pre-fix bug deactivated the fan's plateau carrier, returning c=0 where physics gives ≈5
+        and losing ~21% of outlet mass.
+        """
+        tr = self._tracker([0, 5, 10, 10, 5, 0], 40.0, 74)
+        # In the CORRECT solution the c≈5 plateau breaks through at θ∈[880, 950] (the review's
+        # [686, 763] was the BUGGY hole's window); assert no bin collapses to zero there.
+        thetas = np.linspace(880.0, 950.0, 40)
+        c_out = compute_breakthrough_curve(thetas, 40.0, tr.state.waves, tr.state.sorption)
+        assert np.all(c_out > 4.5), f"plateau hole: min outlet c = {c_out.min():.4f} (expected ≈5)"
+
+
+def _fv_outlet_cout_langmuir(cin, flow, v_pv, s_max, k_l, bulk_density, porosity, *, n_cells=2500, cfl=0.4):
+    """Independent first-order upwind (Godunov) outlet oracle for Langmuir sorption.
+
+    Same scheme as ``_fv_outlet_cout_freundlich_n2`` (upwind == Godunov for the convex flux
+    ``F = c``), but the conserved total ``U = C_T(c) = c + B·c/(K_L + c)`` (``B = ρ_b·s_max/φ``)
+    is inverted in closed form each step from the quadratic ``c² + (K_L + B − U)·c − K_L·U = 0``.
+    """
+    b = bulk_density * s_max / porosity
+    q = float(flow)
+    cin = np.asarray(cin, dtype=float)
+    nb = len(cin)
+    theta_out_edges = q * np.arange(nb + 1)
+    dv = v_pv / n_cells
+    cmax = max(cin.max(), 1e-12)
+    r_min = 1.0 + (bulk_density * s_max * k_l / porosity) / (k_l + cmax) ** 2
+    dtheta = cfl * dv * r_min
+
+    def ct(c):
+        c = np.maximum(c, 0.0)
+        return c + b * c / (k_l + c)
+
+    def c_from_u(u):
+        u = np.maximum(u, 0.0)
+        bc = k_l + b - u
+        return 0.5 * (-bc + np.sqrt(bc * bc + 4.0 * k_l * u))
+
+    c = np.zeros(n_cells)
+    u = ct(c)
+    theta = 0.0
+    cum_out = 0.0
+    out_edge_mass = np.zeros(len(theta_out_edges))
+    next_edge = 0
+    lam = dtheta / dv
+    theta_max = theta_out_edges[-1]
+    while theta < theta_max - 1e-12:
+        while next_edge < len(theta_out_edges) and theta_out_edges[next_edge] <= theta + 1e-12:
+            out_edge_mass[next_edge] = cum_out
+            next_edge += 1
+        if next_edge >= len(theta_out_edges):
+            break
+        cin_now = cin[min(int(theta // q), nb - 1)] if theta < theta_out_edges[-1] else cin[-1]
+        c_left = np.empty(n_cells)
+        c_left[0] = cin_now
+        c_left[1:] = c[:-1]
+        u -= lam * (c - c_left)
+        c = c_from_u(u)
+        cum_out += c[-1] * dtheta
+        theta += dtheta
+    while next_edge < len(theta_out_edges):
+        out_edge_mass[next_edge] = cum_out
+        next_edge += 1
+    return np.diff(out_edge_mass) / np.diff(theta_out_edges)
+
+
+class TestMultiFrontGeneralityAndTripwire:
+    """Isotherm generality (Langmuir) + the internal-consistency tripwire (issue #294 D6/D7)."""
+
+    def test_langmuir_multipeak_matches_fv(self):
+        """A Langmuir multi-peak interaction resolves and matches the independent Langmuir FV oracle.
+
+        The universal merge calculus is isotherm-agnostic; this exercises it on a non-Freundlich
+        (favorable) isotherm end-to-end.
+        """
+        s_max, k_l, rho_b, por, flow = 0.1, 5.0, 1500.0, 0.3, 100.0
+        cin = np.array([0, 10, 10, 0, 0, 0, 5, 5, 0] + [0.0] * 111, dtype=float)
+        nb = len(cin)
+        tedges = pd.date_range("2020-01-01", periods=nb + 1, freq="D")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cout, _ = infiltration_to_extraction_nonlinear_sorption(
+                cin=cin,
+                flow=np.full(nb, flow),
+                tedges=tedges,
+                cout_tedges=tedges,
+                aquifer_pore_volumes=np.array([40.0]),
+                langmuir_s_max=s_max,
+                langmuir_k_l=k_l,
+                bulk_density=rho_b,
+                porosity=por,
+            )
+        cout_fv = _fv_outlet_cout_langmuir(cin, flow, 40.0, s_max, k_l, rho_b, por)
+        m_pub, m_fv = float(np.nansum(cout)), float(np.nansum(cout_fv))
+        assert abs(m_pub - m_fv) < 0.01 * m_fv, f"Langmuir outlet mass {m_pub:.4f} vs FV {m_fv:.4f}"
+        assert np.nanmax(np.abs(cout - cout_fv)) < 0.15  # ~3× the Langmuir FV floor
+
+    def test_tripwire_fires_on_inconsistent_wave_list(self):
+        """find_unresolved_interaction (the D6 tripwire) fires when the wave field over-counts mass.
+
+        The acceptance flips removed all coverage of the guard's FIRING branch; construct a
+        deliberately inconsistent state — a shock carrying c=10 with NO injected mass (cin≡0), so
+        the reader's domain mass grows while the inlet mass stays 0 and cumulative outlet mass goes
+        negative — and assert the tripwire reports it.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        n = 20
+        flow = np.full(n, 100.0)
+        theta_edges = np.concatenate(([0.0], np.cumsum(flow * 1.0)))
+        spurious = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=0.0, sorption=sorption)
+        state = FrontTrackerState(
+            waves=[spurious],
+            events=[],
+            theta_current=0.0,
+            v_outlet=40.0,
+            sorption=sorption,
+            cin=np.zeros(n),
+            flow=flow,
+            tedges=pd.date_range("2020-01-01", periods=n + 1, freq="D"),
+            tedges_days=np.arange(float(n + 1)),
+            theta_edges=theta_edges,
+        )
+        reason = find_unresolved_interaction(state)
+        assert reason is not None
+        assert "cumulative outlet mass" in reason

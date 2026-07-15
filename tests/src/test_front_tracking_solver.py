@@ -1208,22 +1208,16 @@ class TestNoSpuriousOutletCrossings:
 
 
 class TestMultiPeakSingleOwnerInvariant:
-    """Every point in [0, V_outlet] is claimed by at most one active fan region (review C3 / H3).
+    """The sweep reader is self-consistent on a resolved multi-peak state (issue #294, review C3).
 
-    A later inlet shock injected inside an existing fan's span must not leave two active
-    waves claiming the same near-inlet interval. After the waves.py growing-decay fixes the
-    intruding shock is resolved into a single-owner ``DecayingShockWave`` via the
-    shock↔rarefaction collision, so this spatial invariant holds; this test guards against a
-    regression that reintroduces a double claim.
-
-    This invariant is necessary but NOT sufficient for correctness: it says nothing about the
-    outlet-mass over-count a right-decaying DSW causes after its shock face leaves the domain, nor
-    about later pulses whose fans DO come to overlap. Those genuinely-interacting multi-front inputs
-    are refused at the public boundary — :func:`gwtransport.advection.infiltration_to_extraction_nonlinear_sorption`
-    raises ``NotImplementedError`` via :func:`gwtransport.fronttracking.solver.find_unresolved_interaction`
-    (exercised by ``TestUnresolvedMultiFrontInteractionRaises`` in ``test_front_tracking_api``); exact
-    multi-front interaction is deferred to a solver-level follow-up. The two parameterisations here use
-    weak retardation (``k_f = 0.001``) so the fans stay single-owner and the run completes.
+    The solver now resolves the multi-front interaction (a later pulse's shock enters an earlier
+    pulse's fan), so overlapping fans are shared consistently and the reader assigns each point a
+    single owner (the nearest-downstream face's left feeder). This test pins that single-owner
+    property FV-independently: the spatial domain-mass integral :func:`compute_domain_mass` must
+    equal a fine-grid quadrature of ``C_total(concentration_at_point(v, θ))`` over ``[0, v_outlet]``.
+    A double-claim / dropped-owner regression (the C3 over-count) would break this equality even
+    when total mass happens to balance. The two parameterisations exercise multi-peak signals whose
+    fronts interact in-domain.
     """
 
     @pytest.mark.parametrize(
@@ -1233,7 +1227,7 @@ class TestMultiPeakSingleOwnerInvariant:
             ([0.0, 10.0, 10.0, 0.0, 0.0, 0.0, 15.0, 15.0, 0.0], 40.0),
         ],
     )
-    def test_no_two_active_fans_claim_same_point(self, cin, v_outlet):
+    def test_domain_mass_matches_pointwise_quadrature(self, cin, v_outlet):
         cin = np.asarray(cin)
         sorption = FreundlichSorption(k_f=0.001, n=2.0, bulk_density=1600.0, porosity=0.35)
         n_bins = len(cin)
@@ -1242,24 +1236,14 @@ class TestMultiPeakSingleOwnerInvariant:
         tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
         tr.run()
 
-        def fan_owners(v, theta):
-            owners = []
-            for i, w in enumerate(tr.state.waves):
-                if not w.was_active_at(theta):
-                    continue
-                if isinstance(w, DecayingShockWave):
-                    v_s = w.position_at_theta(theta)
-                    if v_s is None:
-                        continue
-                    in_fan = (w.decay_side == "left" and v < v_s) or (w.decay_side == "right" and v > v_s)
-                    if in_fan and v != w.v_origin and w.concentration_at_point(v, theta) is not None:
-                        owners.append(i)
-                elif isinstance(w, RarefactionWave) and w.contains_point(v, theta):
-                    owners.append(i)
-            return owners
-
+        v_grid = np.linspace(0.0, v_outlet, 4001)
         theta_hi = 1.6 * float(tr.state.theta_edges[-1])
-        for theta in np.linspace(1.0, theta_hi, 200):
-            for v in np.linspace(1e-3 * v_outlet, v_outlet * (1 - 1e-3), 150):
-                owners = fan_owners(float(v), float(theta))
-                assert len(owners) <= 1, f"waves {owners} both claim v={v:.3f} at θ={theta:.2f}"
+        for theta in np.linspace(theta_hi / 20.0, theta_hi, 20):
+            m_dom = compute_domain_mass(float(theta), v_outlet, tr.state.waves, sorption)
+            c_pts = np.array([concentration_at_point(float(v), float(theta), tr.state.waves, sorption) for v in v_grid])
+            ct_pts = np.array([sorption.total_concentration(float(c)) for c in c_pts])
+            m_quad = float(np.trapezoid(ct_pts, v_grid))
+            # rtol 2e-3 for the trapezoid truncation across the sharp shock/fan faces; a
+            # double-claim over-count would shift m_dom by O(a fan's mass), far above this.
+            scale = max(m_dom, m_quad, 1.0)
+            assert abs(m_dom - m_quad) < 2e-3 * scale, f"θ={theta:.1f}: m_dom={m_dom:.4f} vs quad={m_quad:.4f}"

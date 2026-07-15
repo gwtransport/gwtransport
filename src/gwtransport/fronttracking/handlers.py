@@ -404,6 +404,7 @@ def create_inlet_waves_at_theta(
                 v_start=0.0,
                 concentration=c_new,
                 sorption=sorption,
+                c_ahead=c_prev,
             )
         ]
 
@@ -439,5 +440,6 @@ def create_inlet_waves_at_theta(
             v_start=0.0,
             concentration=c_new,
             sorption=sorption,
+            c_ahead=c_prev,
         )
     ]

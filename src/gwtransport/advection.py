@@ -1081,6 +1081,31 @@ def _validate_front_tracking_inputs(
     return cin, flow, tedges, cout_tedges, aquifer_pore_volumes, sorption, cout_tedges_days
 
 
+def _theta_at_last_output_edge(
+    cout_tedges_days: npt.NDArray[np.floating],
+    flow_tedges_days: npt.NDArray[np.floating],
+    flow: npt.NDArray[np.floating],
+) -> float:
+    """Cumulative flow θ at the last requested output edge (the interaction-resolution horizon).
+
+    Piecewise-linear ``t → θ`` map (identical to ``FrontTrackerState.theta_at_t``),
+    extrapolating the final-bin flow when the output window extends past the flow record.
+
+    Returns
+    -------
+    float
+        Cumulative flow θ [m³] at ``cout_tedges_days[-1]``.
+    """
+    theta_edges = np.concatenate(([0.0], np.cumsum(flow * np.diff(flow_tedges_days))))
+    t = float(cout_tedges_days[-1])
+    if t <= flow_tedges_days[0]:
+        return float(theta_edges[0])
+    if t >= flow_tedges_days[-1]:
+        return float(theta_edges[-1] + (t - flow_tedges_days[-1]) * float(flow[-1]))
+    i = int(np.searchsorted(flow_tedges_days, t, side="right")) - 1
+    return float(theta_edges[i] + (t - flow_tedges_days[i]) * float(flow[i]))
+
+
 def _flow_weighted_front_tracking_output(
     cout_tedges_days: npt.NDArray[np.floating],
     flow_tedges_days: npt.NDArray[np.floating],
@@ -1290,6 +1315,13 @@ def infiltration_to_extraction_nonlinear_sorption(
         - 'tracker_state': FrontTrackerState - Complete simulation state
         - 'aquifer_pore_volume': float - Pore volume for this simulation
 
+    Raises
+    ------
+    RuntimeError
+        If the front-tracking solver leaves an unresolved wave interaction (the domain-mass
+        field over-counts stored mass). This is an internal-consistency tripwire, not an
+        input limitation — every wave interaction is now composed; a firing indicates a bug.
+
     See Also
     --------
     infiltration_to_extraction : Convolution-based approach for linear retardation
@@ -1350,6 +1382,11 @@ def infiltration_to_extraction_nonlinear_sorption(
     cout_sum = np.zeros(len(cout_tedges) - 1)
     structures = []
 
+    # Resolve wave interactions out to the last requested output edge (extrapolating the
+    # final-bin flow if the output window extends past the flow record), so beyond-outlet
+    # merges that still feed an in-window outlet query are composed.
+    theta_horizon = _theta_at_last_output_edge(cout_tedges_days, flow_tedges_days, flow)
+
     for aquifer_pore_volume in aquifer_pore_volumes:
         tracker = FrontTracker(
             cin=cin,
@@ -1357,28 +1394,25 @@ def infiltration_to_extraction_nonlinear_sorption(
             tedges=tedges,
             aquifer_pore_volume=aquifer_pore_volume,
             sorption=sorption,
+            theta_horizon=theta_horizon,
         )
 
         tracker.run(max_iterations=max_iterations)
 
-        # The front tracker resolves shock↔shock / shock↔rarefaction collisions but not a
-        # later front overtaking an existing decaying-shock fan (or two fans composing). Such
-        # an unresolved interaction makes the public cout a spurious linear superposition of a
-        # nonlinear operator — non-conservative and silently wrong — so refuse it. The detector
-        # combines a geometric fan-overlap scan with a cumulative-outlet-mass monotonicity check
-        # (the latter catches the multi-pulse shock-overtakes-fan class whose fans never share an
-        # in-domain point); see find_unresolved_interaction.
+        # The solver now resolves every wave interaction (shock↔shock, fan-entry, doubly-fed
+        # formation, same-apex annihilation and their compositions), so the wave list is
+        # interaction-consistent and the single-owner reader is exact. This detector is now a
+        # tripwire: a firing means the solver left an unresolved interaction (an internal bug),
+        # not an unsupported input — fail loud rather than return a silently wrong cout.
         interaction = find_unresolved_interaction(tracker.state)
         if interaction is not None:
             msg = (
-                "infiltration_to_extraction_nonlinear_sorption: input produces interacting fronts "
-                f"(a shock overtakes another shock / rarefaction / decaying-shock fan within the "
-                f"transport domain: {interaction}); exact multi-front interaction is not yet "
-                "implemented. Use non-interacting inputs — a single front, or well-separated pulses "
-                "whose fronts break through before they overtake one another — or track "
-                "https://github.com/gwtransport/gwtransport/issues/294 for exact multi-front interaction support."
+                "infiltration_to_extraction_nonlinear_sorption: the front-tracking solver left an "
+                f"unresolved wave interaction ({interaction}). This is an internal inconsistency; "
+                "please report it with the cin/flow/pore-volume inputs at "
+                "https://github.com/gwtransport/gwtransport/issues."
             )
-            raise NotImplementedError(msg)
+            raise RuntimeError(msg)
 
         cout_sum += _flow_weighted_front_tracking_output(
             cout_tedges_days=cout_tedges_days,
