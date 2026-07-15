@@ -909,10 +909,12 @@ class VanGenuchtenMualemConductivity(NonlinearSorption):
     objective in ``concentration_from_retardation(R)``. The formula is
     inlined at both call sites, not exposed as a separate method.
 
-    The class checks monotonicity of ``dK_M/dS_e`` at a single pair of
-    sample points in ``__post_init__`` (cheap directional check). Truly
-    pathological parameter combinations that yield a non-monotone curve
-    surface as a ``brentq`` ValueError at the first inversion call.
+    ``dK_M/dS_e`` is strictly increasing for every ``n_vG > 1`` and
+    ``L ≥ 0`` (the conductivity flux is convex, ``d²K/dS_e² > 0``; proved at
+    200-digit precision in ``docs/theory/front_tracking_interactions.md`` §2),
+    so the brentq inversions are always well-posed — no monotonicity guard is
+    needed. A convex flux also means the transport admits only shocks and
+    rarefactions, never compound waves.
 
     Examples
     --------
@@ -941,14 +943,18 @@ class VanGenuchtenMualemConductivity(NonlinearSorption):
     """``θ_s − θ_r``; set in ``__post_init__``."""
 
     def __post_init__(self) -> None:
-        """Validate parameters and run a single-sample monotonicity check.
+        """Validate parameters and derive ``m``, ``delta_theta``.
+
+        No convexity/monotonicity guard is needed: ``dK_M/dS_e`` is strictly
+        increasing (the flux ``K(S_e)`` is convex, ``d²K/dS_e² > 0``) for every
+        ``n_vG > 1`` and ``L ≥ 0`` — proved at 200-digit precision in
+        ``docs/theory/front_tracking_interactions.md`` §2 — so the brentq
+        inversions are always well-posed.
 
         Raises
         ------
         ValueError
-            If parameters are outside their valid range, or if the cheap
-            monotonicity sample at ``S_e = 0.5`` vs ``0.99`` indicates
-            ``dK_M/dS_e`` is non-monotone (pathological).
+            If any parameter is outside its valid range.
         """
         if not 0.0 <= self.theta_r < self.theta_s:
             msg = f"theta_r must satisfy 0 <= theta_r < theta_s, got theta_r={self.theta_r}, theta_s={self.theta_s}"
@@ -967,17 +973,6 @@ class VanGenuchtenMualemConductivity(NonlinearSorption):
             raise ValueError(msg)
         self.m = 1.0 - 1.0 / self.van_genuchten_n
         self.delta_theta = self.theta_s - self.theta_r
-        # Cheap monotonicity sanity check on dK_M/dS_e.
-        s_low, s_high = 0.5, 0.99
-        if self._dk_dse(s_low) >= self._dk_dse(s_high):
-            msg = (
-                f"Non-monotone dK_M/dS_e detected at the sanity-check samples for "
-                f"van_genuchten_n={self.van_genuchten_n}, mualem_l={self.mualem_l}: "
-                f"dK_M/dS_e({s_low})={self._dk_dse(s_low):.6g} should be < "
-                f"dK_M/dS_e({s_high})={self._dk_dse(s_high):.6g}. "
-                f"Brentq inversions in this class assume monotone-increasing dK_M/dS_e."
-            )
-            raise ValueError(msg)
 
     def _k_se(self, s: float) -> float:
         """``K_M(S_e)`` evaluated at a scalar ``S_e``. Returns 0 at ``S_e = 0``."""
