@@ -1052,7 +1052,9 @@ class TestDoubleFanShockWave:
 
         sol = solve_ivp(rhs, (1163.15, 2500.0), [29.8143], method="DOP853", rtol=1e-12, atol=1e-13, dense_output=True)
         for th in (1300.0, 1600.0, 2000.0, 2400.0):
-            np.testing.assert_allclose(w.position_at_theta(th), float(sol.sol(th)[0]), rtol=1e-8)
+            pos = w.position_at_theta(th)
+            assert pos is not None  # defined at every θ in the wave's active window
+            np.testing.assert_allclose(pos, float(sol.sol(th)[0]), rtol=1e-8)
 
     def test_rk4_fallback_distinct_apex_self_converges_and_matches_dop853(self):
         """Distinct fan apex positions have no closed form → RK4 spline; verify convergence + DOP853."""
@@ -1072,4 +1074,6 @@ class TestDoubleFanShockWave:
         sol = solve_ivp(rhs, (1163.15, 2500.0), [29.8143], method="DOP853", rtol=1e-12, atol=1e-13, dense_output=True)
         for th in (1300.0, 1600.0, 2000.0, 2400.0):
             # The RK4+spline trajectory tracks the independent DOP853 integration to <1e-6 relative.
-            np.testing.assert_allclose(w.position_at_theta(th), float(sol.sol(th)[0]), rtol=1e-6)
+            pos = w.position_at_theta(th)
+            assert pos is not None  # defined at every θ in the wave's active window
+            np.testing.assert_allclose(pos, float(sol.sol(th)[0]), rtol=1e-6)
