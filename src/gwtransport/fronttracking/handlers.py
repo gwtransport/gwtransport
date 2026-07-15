@@ -16,7 +16,6 @@ creating new child waves.
 """
 
 from gwtransport.fronttracking.math import (
-    FreundlichSorption,
     NonlinearSorption,
     SorptionModel,
     characteristic_speed,
@@ -391,22 +390,6 @@ def create_inlet_waves_at_theta(
     """
     if abs(c_new - c_prev) < EPSILON_CONCENTRATION:
         return []
-
-    c_min = getattr(sorption, "c_min", 0.0)
-    is_n_lt_1 = isinstance(sorption, FreundlichSorption) and sorption.n < 1.0
-
-    # n<1, c_prev=0 or c_new=0: emit a single CharacteristicWave; clean water
-    # has a well-defined speed since R(0)=1.
-    if (c_prev <= c_min or c_new <= c_min) and is_n_lt_1 and c_min == 0:
-        return [
-            CharacteristicWave(
-                theta_start=theta,
-                v_start=0.0,
-                concentration=c_new,
-                sorption=sorption,
-                c_ahead=c_prev,
-            )
-        ]
 
     s_prev = characteristic_speed(c_prev, sorption)
     s_new = characteristic_speed(c_new, sorption)

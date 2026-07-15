@@ -8,6 +8,7 @@ and proper wave state transitions.
 """
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from gwtransport.fronttracking.handlers import (
@@ -24,6 +25,8 @@ from gwtransport.fronttracking.math import (
     FreundlichSorption,
     characteristic_speed,
 )
+from gwtransport.fronttracking.output import concentration_at_point
+from gwtransport.fronttracking.solver import FrontTracker, find_unresolved_interaction
 from gwtransport.fronttracking.waves import (
     CharacteristicWave,
     DecayingShockWave,
@@ -951,14 +954,15 @@ class TestShockRarefactionHeadCollisionPhysics:
 class TestInletWavesNLT1Physics:
     """Physics tests for inlet wave creation with n<1 Freundlich sorption.
 
-    For n<1 (unfavorable sorption):
-    - Lower C = faster velocity
-    - C=0 with c_min=0 has R(0)=1 (fastest possible)
-    - Step from C=0 to C>0: fast→slow = expansion = rarefaction? No, creates characteristic
-    - Step from C>0 to C=0: slow→fast = compression? No, creates characteristic
+    For n<1 (unfavorable sorption) lower C is faster, so C=0 (with c_min=0, where R(0)=1)
+    is the fastest state. Inlet steps to/from clean water follow the same velocity-comparison
+    logic as any other step — there is no special case:
+    - Step from C=0 to C>0 (fast behind, slow ahead): expansion → rarefaction.
+    - Step from C>0 to C=0 (fast clean water behind, slow contaminated ahead): compression → shock.
 
-    The special handling for n<1 with c_min=0 creates characteristics instead
-    of shocks/rarefactions because the C=0 state is physically meaningful.
+    Regression for #312: a former ``c_min == 0`` special branch in ``create_inlet_waves_at_theta``
+    emitted a single ``CharacteristicWave`` here, fabricating cout (the outlet collapsed to 0).
+    The general path is entropy-correct for every ``(n, c_min)`` including 0.
     """
 
     @pytest.fixture
@@ -966,30 +970,56 @@ class TestInletWavesNLT1Physics:
         """Freundlich sorption with n<1 and c_min=0."""
         return FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
 
-    def test_physics_step_from_zero_creates_characteristic(self, freundlich_n_lt_1):
-        """Test: Step from C=0 to C>0 creates characteristic for n<1.
+    def test_physics_step_from_zero_creates_rarefaction(self, freundlich_n_lt_1):
+        """Step from C=0 to C>0 is a rarefaction for n<1 (fast clean water behind slow).
 
-        Physics: For n<1 with c_min=0, C=0 represents clean water with R(0)=1.
-        When concentration steps from 0 to positive, we create a characteristic
-        with the new concentration that propagates at v(C>0).
+        Regression for #312: this formerly returned a single ``CharacteristicWave``; the general
+        path correctly spreads it into a rarefaction connecting the fast head (c=0) to the slow
+        tail (c=5).
         """
         waves = create_inlet_waves_at_theta(c_prev=0.0, c_new=5.0, theta=10.0, sorption=freundlich_n_lt_1)
 
         assert len(waves) == 1, "Expected one wave"
-        assert isinstance(waves[0], CharacteristicWave), "Should create characteristic for C=0 to C>0 with n<1"
-        assert waves[0].concentration == 5.0, "Characteristic should carry new concentration"
+        assert isinstance(waves[0], RarefactionWave), "0→C>0 for n<1 is a rarefaction, not a characteristic"
+        assert waves[0].c_head == 0.0
+        assert waves[0].c_tail == 5.0
 
-    def test_physics_step_to_zero_creates_characteristic(self, freundlich_n_lt_1):
-        """Test: Step from C>0 to C=0 creates characteristic for n<1.
+    def test_physics_step_to_zero_creates_shock(self, freundlich_n_lt_1):
+        """Step from C>0 to C=0 is a Rankine-Hugoniot shock for n<1 (fast clean water compresses).
 
-        Physics: When clean water (C=0) enters behind contaminated water (C>0),
-        we create a characteristic with C=0 that propagates at v(0) = flow/1.
+        Regression for #312: this formerly returned a single ``CharacteristicWave``; the general
+        path correctly forms an entropy-satisfying shock from the slow contaminated water (c=5,
+        ahead) to the fast clean water (c=0, behind).
         """
         waves = create_inlet_waves_at_theta(c_prev=5.0, c_new=0.0, theta=10.0, sorption=freundlich_n_lt_1)
 
         assert len(waves) == 1, "Expected one wave"
-        assert isinstance(waves[0], CharacteristicWave), "Should create characteristic for C>0 to C=0 with n<1"
-        assert waves[0].concentration == 0.0, "Characteristic should carry zero concentration"
+        assert isinstance(waves[0], ShockWave), "C>0→0 for n<1 is a shock, not a characteristic"
+        assert waves[0].satisfies_entropy()
+
+    def test_c_min_zero_matches_general_path_end_to_end(self, freundlich_n_lt_1):
+        """#312 mass/causality guard: with ``c_min=0`` the outlet cout must match the ``c_min=1e-12``
+        general path (the physics is continuous in ``c_min``).
+
+        The former special branch broke this by the full cin scale — the ``c_min=0`` outlet
+        collapsed to 0 where the general path gives a real rarefaction breakthrough. Compared
+        bin-by-bin at the outlet; the two are now bit-identical.
+        """
+        del freundlich_n_lt_1  # this test builds its own sorptions to vary c_min
+        cin = np.array([0.0] + [10.0] * 30)
+        nb = len(cin)
+        tedges = pd.date_range("2020-01-01", periods=nb + 1, freq="D")
+        flow = np.full(nb, 100.0)
+
+        def outlet(c_min):
+            s = FreundlichSorption(k_f=0.05, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=c_min)
+            tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=8.0, sorption=s)
+            tr.run()
+            assert find_unresolved_interaction(tr.state) is None
+            theta = np.linspace(1.0, float(tr.state.theta_edges[-1]), 40)
+            return np.array([concentration_at_point(8.0, t, tr.state.waves, s) for t in theta])
+
+        np.testing.assert_allclose(outlet(0.0), outlet(1e-12), atol=1e-9)
 
     def test_physics_step_between_nonzero_creates_appropriate_wave(self, freundlich_n_lt_1):
         """Test: Step between nonzero concentrations follows velocity logic.
