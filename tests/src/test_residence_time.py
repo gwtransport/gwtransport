@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from gwtransport.gamma import bins as gamma_bins
 from gwtransport.residence_time import (
     fraction_explained_full,
     fraction_explained_gamma,
@@ -355,6 +356,87 @@ def test_gamma_zero_flow_output_bins_match_full_oracle():
         # Narrow gamma (std=0.1) ~ single pore volume at the mean, so it tracks the full oracle.
         valid = np.isfinite(got) & np.isfinite(ref)
         np.testing.assert_allclose(got[valid], ref[valid], atol=0.05)
+
+
+def test_gamma_zero_flow_multi_shutdown_wide_apvd_matches_discretized_mean():
+    """RT-P1 (issue #308): gamma()'s zero-throughflow branch must clip the piece-centred first moment.
+
+    The existing single-gap / narrow-gamma / atol=0.05 regression above cannot catch this: the missing
+    clip is a no-op unless a zero-flow plateau's V_p-image lands near the gamma density peak (needs a
+    *wide* APVD) and the cancellation compounds across *several separated* shutdowns. Without the clip
+    the degenerate branch used the centred first moment ``m1 - mid*m0`` raw; on a piece whose V_p sweep
+    crosses another shutdown's near-vertical flow_cum plateau, the ~r/ulp-bump slope amplifies the
+    ~mid*eps cancellation noise into a spurious ~1e-3 residence-time contribution.
+
+    Oracle: ``mean`` over a fine equal-probability discretization of the *same* gamma (an independent
+    code path). Its discretization floor is ~1.7e-5 here (measured on the non-zero-flow bins, which use
+    the already-correct main loop); the pre-fix defect is ~9e-4, so rtol=1e-4 catches it with a 9x
+    margin while clearing the oracle floor with a 6x margin. Baseline-verified: fails at ~9e-4 without
+    the clip.
+    """
+    n = 120
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    shutdowns = [15, 40, 70, 100]  # >= 2 *separated* zero-flow bins (not one contiguous gap)
+    flow[shutdowns] = 0.0
+    mean_v, std_v, loc_v = 700.0, 400.0, 0.0  # wide APVD: std comparable to mean
+    ref_bins = gamma_bins(mean=mean_v, std=std_v, loc=loc_v, n_bins=4000)
+    for direction in DIRECTIONS:
+        got = gamma(
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            mean=mean_v,
+            std=std_v,
+            loc=loc_v,
+            direction=direction,
+            spinup="constant",
+        )
+        ref = mean(
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=ref_bins["expected_values"],
+            direction=direction,
+            spinup="constant",
+        )
+        valid = np.isfinite(got) & np.isfinite(ref)
+        # Fixture sanity: the shutdown bins must be among the emitted (finite) bins, else the test is vacuous.
+        assert valid[shutdowns].all(), f"{direction}: shutdown bins are not finite; fixture no longer exercises RT-P1"
+        np.testing.assert_allclose(got[valid], ref[valid], rtol=1e-4, atol=0.0)
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_gamma_all_zero_flow_is_all_nan(direction):
+    """RT-P2 (issue #313): gamma(spinup='constant') with all-zero flow must be all-NaN, like full/mean.
+
+    With no positive boundary flow the cumulative-volume->time map cannot be extrapolated, so every
+    look-back leaves the record and is in spin-up. ``full`` returns NaN; before the fix ``gamma``'s
+    degenerate branch keyed its warm-start on the raw ``extrapolate`` flag and clamped the out-of-record
+    parcel to a finite pointwise value (``+-t_mid``, e.g. [0.5, 1.5, 2.5, ...]) instead. Baseline-verified.
+    """
+    n = 10
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.zeros(n)
+    got = gamma(
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        mean=300.0,
+        std=50.0,
+        direction=direction,
+        spinup="constant",
+    )
+    ref = full(
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=np.array([300.0]),
+        direction=direction,
+        spinup="constant",
+    )[0]
+    assert np.all(np.isnan(ref)), "oracle sanity: full() must be all-NaN for all-zero flow"
+    assert np.all(np.isnan(got)), f"{direction}: all-zero-flow gamma() must be all-NaN, got {got}"
 
 
 @pytest.mark.parametrize("func_name", list(_RESIDENCE_FUNCS))
