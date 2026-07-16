@@ -991,3 +991,96 @@ class TestFluxCurvatureNoCompoundWaves:
         # brentq-inversion edge at saturation.
         lam = self._lambda_ordered_by_u(s, np.linspace(0.01, 0.6 * s.k_s, 400))
         assert np.all(np.diff(lam) > 0.0), f"vG-Mualem n_vG={n_vg}: λ not strictly increasing in U"
+
+
+_SCALAR_PATH_SORPTIONS = {
+    "freundlich_n2": FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3),
+    "freundlich_n05": FreundlichSorption(k_f=0.02, n=0.6, bulk_density=1400.0, porosity=0.35),
+    "freundlich_n3": FreundlichSorption(k_f=0.005, n=3.0, bulk_density=1600.0, porosity=0.28),
+    "freundlich_n2_cmin0": FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=0.0),
+    "langmuir": LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3),
+    "brookscorey": BrooksCoreyConductivity(theta_r=0.01, theta_s=0.337, k_s=0.174, brooks_corey_lambda=0.25),
+}
+# Dense c/r grids plus the edges that select each branch: 0, sub-c_min, negative, the r<=1
+# / saturated corners, and (for freundlich_n2_cmin0) the c<=0 fall-through that must return inf.
+_SCALAR_PATH_C_GRID = np.concatenate([
+    np.linspace(1e-6, 30.0, 800),
+    np.logspace(-9.0, 1.4, 200),
+    np.array([0.0, -1.0, -1e-9, 1e-15, 1e-12, 1e-9]),
+])
+_SCALAR_PATH_R_GRID = np.concatenate([
+    np.linspace(1.0 + 1e-12, 60.0, 800),
+    1.0 + np.logspace(-9.0, 1.5, 200),
+    np.array([1.0, 0.9999, 0.5, 1.0000001, 1e6]),
+])
+
+
+class TestIsothermScalarFastPath:
+    """The pure-float scalar fast path is bit-identical to the array route it short-circuits.
+
+    ``retardation``/``total_concentration``/``concentration_from_retardation`` carry a
+    scalar branch (avoiding the numpy dispatch that dominated the front-tracking solver's
+    per-event cost). It MUST stay bit-for-bit equal to the value a scalar previously got by
+    routing through the array code — reproduced here as ``float(method(np.asarray(x)))``, the
+    0-d-array route the pre-optimisation scalar call took. (numpy's *1-D* ``x**2`` = ``x*x``
+    can differ from the scalar ``pow`` by 1 ULP, but that 0-d-vs-1-D quirk predates the fast
+    path and is not what the solver's scalar calls exercise — so we pin against the 0-d route.)
+    """
+
+    @pytest.mark.parametrize("name", list(_SCALAR_PATH_SORPTIONS))
+    @pytest.mark.parametrize("method", ["retardation", "total_concentration", "concentration_from_retardation"])
+    def test_scalar_matches_array_route_bit_for_bit(self, name, method):
+        sorption = _SCALAR_PATH_SORPTIONS[name]
+        grid = _SCALAR_PATH_R_GRID if method == "concentration_from_retardation" else _SCALAR_PATH_C_GRID
+        fn = getattr(sorption, method)
+        for x in grid:
+            xf = float(x)
+            scalar = float(fn(xf))
+            array_route = float(fn(np.asarray(xf)))  # 0-d array == the pre-fast-path scalar route
+            # Bit-for-bit, incl. inf==inf at the c_min=0 dry-soil corner (both raise divide-by-zero → inf).
+            assert scalar.hex() == array_route.hex(), (
+                f"{name}.{method}({xf!r}): scalar {scalar!r} != array-route {array_route!r}"
+            )
+
+    def test_values_pinned_to_hand_derived_literals(self):
+        """Absolute value pins, derived by hand from the constructor parameters.
+
+        The scalar-vs-array-route check above cannot see a mistyped ``__post_init__`` constant:
+        both branches read the SAME cached value, so a wrong one moves them together. The
+        round-trip tests (``R -> c -> R``) are likewise invariant to a coefficient error. These
+        literals are re-derived from the raw parameters, so they fail on a bad cache and also
+        anchor the array path (which the scalar path is pinned against).
+        """
+        # Freundlich k_f=0.01, n=2, rho_b=1500, n_por=0.3 -> coeff=(1500*0.01)/(0.3*2)=25, exp=1/2-1=-1/2
+        fr = _SCALAR_PATH_SORPTIONS["freundlich_n2"]
+        assert fr.retardation(5.0) == 12.180339887498949  # 1 + 25/sqrt(5)
+        assert fr.total_concentration(5.0) == 116.80339887498948  # 5 + (1500/0.3)*0.01*sqrt(5)
+        assert fr.concentration_from_retardation(3.0) == 156.25  # ((3-1)/25)**-2
+
+        # Langmuir s_max=0.1, K_L=5, rho_b=1500, n_por=0.3 -> A = 1500*0.1*5/0.3 = 2500
+        lg = _SCALAR_PATH_SORPTIONS["langmuir"]
+        assert lg.retardation(5.0) == 26.0  # 1 + 2500/(5+5)**2
+        assert lg.total_concentration(5.0) == 255.0  # 5 + (1500/0.3)*0.1*5/(5+5)
+        assert lg.concentration_from_retardation(5.0) == 20.0  # sqrt(2500/4) - 5
+
+        # Brooks-Corey theta_r=0.01, theta_s=0.337, K_s=0.174, lambda=0.25 -> a=3+2/0.25=11, dtheta=0.327
+        bc = _SCALAR_PATH_SORPTIONS["brookscorey"]
+        assert bc.retardation(0.05) == 0.5308240442093716  # (dtheta/(a*K_s))*(c/K_s)**(1/a-1)
+        assert bc.total_concentration(0.05) == 0.2919532243151544  # dtheta*(c/K_s)**(1/a)
+        assert bc.concentration_from_retardation(2.0) == 0.01162204771675795  # K_s*(R*a*K_s/dtheta)**(-a/(a-1))
+
+    def test_scalar_returns_python_float(self):
+        """Scalar inputs (incl. numpy scalars) return a builtin ``float``, matching the array-else branch."""
+        s = _SCALAR_PATH_SORPTIONS["langmuir"]
+        for x in (5.0, np.float64(5.0), 0, np.int64(3)):
+            assert type(s.retardation(x)) is float
+            assert type(s.total_concentration(x)) is float
+        assert type(s.concentration_from_retardation(2.0)) is float
+        assert type(s.concentration_from_retardation(np.float64(2.0))) is float
+
+    def test_freundlich_cmin0_dry_soil_returns_inf(self):
+        """The ``c_min=0`` + ``n>1`` + ``c<=0`` corner returns ``inf`` (not a ZeroDivisionError)."""
+        s = _SCALAR_PATH_SORPTIONS["freundlich_n2_cmin0"]
+        assert s.retardation(0.0) == float("inf")
+        assert s.retardation(-1.0) == float("inf")
+        assert characteristic_speed(0.0, s) == 0.0  # 1/inf

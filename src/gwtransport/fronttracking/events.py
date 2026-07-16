@@ -126,102 +126,78 @@ class Event:
         )
 
 
+def _line_intersection(
+    theta_start_a: float,
+    v_start_a: float,
+    speed_a: float,
+    theta_start_b: float,
+    v_start_b: float,
+    speed_b: float,
+    theta_current: float,
+) -> tuple[float, float] | None:
+    """First future crossing of two straight (V, θ) fronts, or ``None``.
+
+    Every characteristic/shock/rarefaction-boundary travels at a flow-free constant
+    speed, so each is a line ``V = v_start + speed·(θ − θ_start)``. Both are evaluated
+    from the shared reference ``θ_both = max(θ_start_a, θ_start_b, θ_current)`` and the
+    crossing is returned only when strictly in the future (``dθ > 0``).
+
+    ``V_intersect`` is evaluated on line ``a``: the ``dθ`` is invariant under an a↔b swap
+    (exact IEEE negation of numerator and denominator) but ``V_intersect`` is not, so the
+    four public wrappers pass the same operand order their pre-refactor bodies used.
+    """
+    if abs(speed_a - speed_b) < EPSILON_SPEED:
+        return None
+    theta_both = max(theta_start_a, theta_start_b, theta_current)
+    v_a = v_start_a + speed_a * (theta_both - theta_start_a)
+    v_b = v_start_b + speed_b * (theta_both - theta_start_b)
+    dtheta = (v_b - v_a) / (speed_a - speed_b)
+    if dtheta <= 0:
+        return None
+    return (theta_both + dtheta, v_a + speed_a * dtheta)
+
+
 def find_characteristic_intersection(char1, char2, theta_current: float) -> tuple[float, float] | None:
     """Find exact analytical intersection of two characteristics in (V, θ).
 
     Returns (θ_intersect, V_intersect) if the intersection lies in the future
     (θ > θ_current) and both characteristics are active there; otherwise None.
     """
-    s1 = characteristic_speed(char1.concentration, char1.sorption)
-    s2 = characteristic_speed(char2.concentration, char2.sorption)
-
-    if abs(s1 - s2) < EPSILON_SPEED:
-        return None
-
-    theta_both_active = max(char1.theta_start, char2.theta_start, theta_current)
-
-    v1 = characteristic_position(
-        char1.concentration, char1.sorption, char1.theta_start, char1.v_start, theta_both_active
+    return _line_intersection(
+        char1.theta_start, char1.v_start, char1.speed(), char2.theta_start, char2.v_start, char2.speed(), theta_current
     )
-    v2 = characteristic_position(
-        char2.concentration, char2.sorption, char2.theta_start, char2.v_start, theta_both_active
-    )
-
-    if v1 is None or v2 is None:
-        return None
-
-    # v1 + s1*dθ = v2 + s2*dθ
-    dtheta = (v2 - v1) / (s1 - s2)
-
-    if dtheta <= 0:
-        return None
-
-    theta_intersect = theta_both_active + dtheta
-    v_intersect = v1 + s1 * dtheta
-
-    return (theta_intersect, v_intersect)
 
 
 def find_shock_shock_intersection(shock1, shock2, theta_current: float) -> tuple[float, float] | None:
     """Find exact analytical intersection of two shocks in (V, θ)."""
-    s1 = shock1.speed
-    s2 = shock2.speed
-
-    if abs(s1 - s2) < EPSILON_SPEED:
-        return None
-
-    theta_both_active = max(shock1.theta_start, shock2.theta_start, theta_current)
-
-    v1_ref = shock1.v_start + shock1.speed * (theta_both_active - shock1.theta_start)
-    v2_ref = shock2.v_start + shock2.speed * (theta_both_active - shock2.theta_start)
-
-    dtheta = (v2_ref - v1_ref) / (s1 - s2)
-
-    if dtheta <= 0:
-        return None
-
-    theta_intersect = theta_both_active + dtheta
-    v_intersect = v1_ref + s1 * dtheta
-
-    return (theta_intersect, v_intersect)
+    return _line_intersection(
+        shock1.theta_start,
+        shock1.v_start,
+        shock1.speed,
+        shock2.theta_start,
+        shock2.v_start,
+        shock2.speed,
+        theta_current,
+    )
 
 
 def find_shock_characteristic_intersection(shock, char, theta_current: float) -> tuple[float, float] | None:
     """Find exact analytical intersection of a shock and a characteristic in (V, θ)."""
-    s_shock = shock.speed
-    s_char = characteristic_speed(char.concentration, char.sorption)
-
-    if abs(s_shock - s_char) < EPSILON_SPEED:
-        return None
-
-    theta_both_active = max(shock.theta_start, char.theta_start, theta_current)
-
-    v_shock = shock.v_start + shock.speed * (theta_both_active - shock.theta_start)
-
-    v_char = characteristic_position(
-        char.concentration, char.sorption, char.theta_start, char.v_start, theta_both_active
+    return _line_intersection(
+        shock.theta_start, shock.v_start, shock.speed, char.theta_start, char.v_start, char.speed(), theta_current
     )
-
-    if v_char is None:
-        return None
-
-    dtheta = (v_char - v_shock) / (s_shock - s_char)
-
-    if dtheta <= 0:
-        return None
-
-    theta_intersect = theta_both_active + dtheta
-    v_intersect = v_shock + s_shock * dtheta
-
-    return (theta_intersect, v_intersect)
 
 
 def find_rarefaction_boundary_intersections(raref, other_wave, theta_current: float) -> list[tuple[float, float, str]]:
     """Intersections of a rarefaction's head/tail with another wave.
 
     Both rarefaction boundaries propagate at characteristic speeds (head at
-    ``1/R(c_head)``, tail at ``1/R(c_tail)``), so we synthesize temporary
-    ``CharacteristicWave`` instances and reuse the analytical helpers.
+    ``1/R(c_head)``, tail at ``1/R(c_tail)``), so each is a straight (V, θ) line
+    fed directly into :func:`_line_intersection` — no temporary ``CharacteristicWave``
+    objects. The operand order matches the per-branch order the closed-form helpers
+    used before the refactor (``a`` is the raref boundary vs a characteristic, but the
+    SHOCK vs a raref boundary, so ``V_intersect`` — the new wave's ``v_start`` — is
+    bit-identical).
 
     Returns
     -------
@@ -230,73 +206,52 @@ def find_rarefaction_boundary_intersections(raref, other_wave, theta_current: fl
         where boundary_type is ``'head'`` or ``'tail'``.
     """
     intersections = []
-
-    head_char = CharacteristicWave(
-        theta_start=raref.theta_start,
-        v_start=raref.v_start,
-        concentration=raref.c_head,
-        sorption=raref.sorption,
-        is_active=raref.is_active,
-    )
-
-    tail_char = CharacteristicWave(
-        theta_start=raref.theta_start,
-        v_start=raref.v_start,
-        concentration=raref.c_tail,
-        sorption=raref.sorption,
-        is_active=raref.is_active,
-    )
+    raref_boundaries = ((raref.head_speed(), "head"), (raref.tail_speed(), "tail"))
 
     if isinstance(other_wave, CharacteristicWave):
-        result = find_characteristic_intersection(head_char, other_wave, theta_current)
-        if result:
-            intersections.append((result[0], result[1], "head"))
-
-        result = find_characteristic_intersection(tail_char, other_wave, theta_current)
-        if result:
-            intersections.append((result[0], result[1], "tail"))
+        for s_raref, tag in raref_boundaries:
+            hit = _line_intersection(
+                raref.theta_start,
+                raref.v_start,
+                s_raref,
+                other_wave.theta_start,
+                other_wave.v_start,
+                other_wave.speed(),
+                theta_current,
+            )
+            if hit:
+                intersections.append((hit[0], hit[1], tag))
 
     elif isinstance(other_wave, ShockWave):
-        result = find_shock_characteristic_intersection(other_wave, head_char, theta_current)
-        if result:
-            intersections.append((result[0], result[1], "head"))
-
-        result = find_shock_characteristic_intersection(other_wave, tail_char, theta_current)
-        if result:
-            intersections.append((result[0], result[1], "tail"))
+        # a=SHOCK, b=raref boundary (matches find_shock_characteristic_intersection's order).
+        for s_raref, tag in raref_boundaries:
+            hit = _line_intersection(
+                other_wave.theta_start,
+                other_wave.v_start,
+                other_wave.speed,
+                raref.theta_start,
+                raref.v_start,
+                s_raref,
+                theta_current,
+            )
+            if hit:
+                intersections.append((hit[0], hit[1], tag))
 
     elif isinstance(other_wave, RarefactionWave):
-        other_head_char = CharacteristicWave(
-            theta_start=other_wave.theta_start,
-            v_start=other_wave.v_start,
-            concentration=other_wave.c_head,
-            sorption=other_wave.sorption,
-            is_active=other_wave.is_active,
-        )
-
-        other_tail_char = CharacteristicWave(
-            theta_start=other_wave.theta_start,
-            v_start=other_wave.v_start,
-            concentration=other_wave.c_tail,
-            sorption=other_wave.sorption,
-            is_active=other_wave.is_active,
-        )
-
-        result = find_characteristic_intersection(head_char, other_head_char, theta_current)
-        if result:
-            intersections.append((result[0], result[1], "head"))
-
-        result = find_characteristic_intersection(head_char, other_tail_char, theta_current)
-        if result:
-            intersections.append((result[0], result[1], "head"))
-
-        result = find_characteristic_intersection(tail_char, other_head_char, theta_current)
-        if result:
-            intersections.append((result[0], result[1], "tail"))
-
-        result = find_characteristic_intersection(tail_char, other_tail_char, theta_current)
-        if result:
-            intersections.append((result[0], result[1], "tail"))
+        other_boundaries = (other_wave.head_speed(), other_wave.tail_speed())
+        for s_raref, tag in raref_boundaries:
+            for s_other in other_boundaries:
+                hit = _line_intersection(
+                    raref.theta_start,
+                    raref.v_start,
+                    s_raref,
+                    other_wave.theta_start,
+                    other_wave.v_start,
+                    s_other,
+                    theta_current,
+                )
+                if hit:
+                    intersections.append((hit[0], hit[1], tag))
 
     return intersections
 

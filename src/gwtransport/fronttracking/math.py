@@ -19,6 +19,7 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
@@ -223,6 +224,14 @@ class FreundlichSorption(NonlinearSorption):
     """Porosity [-]."""
     c_min: float = 1e-12
     """Minimum concentration threshold to prevent infinite retardation."""
+    _ret_coefficient: float = field(init=False, repr=False, compare=False)
+    """Cached ``(rho_b*k_f)/(n_por*n)`` — shared by the scalar and array paths."""
+    _ret_exponent: float = field(init=False, repr=False, compare=False)
+    """Cached ``(1/n) - 1`` retardation exponent."""
+    _ct_coefficient: float = field(init=False, repr=False, compare=False)
+    """Cached ``(rho_b/n_por)*k_f`` sorbed-mass coefficient."""
+    _cfr_inv_exponent: float = field(init=False, repr=False, compare=False)
+    """Cached ``1/((1/n) - 1)`` inversion exponent for concentration_from_retardation."""
 
     def __post_init__(self):
         """Validate parameters after initialization.
@@ -252,6 +261,11 @@ class FreundlichSorption(NonlinearSorption):
         if self.c_min < 0:
             msg = f"c_min must be non-negative, got {self.c_min}"
             raise ValueError(msg)
+
+        self._ret_exponent = (1.0 / self.n) - 1.0
+        self._ret_coefficient = (self.bulk_density * self.k_f) / (self.porosity * self.n)
+        self._ct_coefficient = (self.bulk_density / self.porosity) * self.k_f
+        self._cfr_inv_exponent = 1.0 / self._ret_exponent
 
     def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """
@@ -288,13 +302,21 @@ class FreundlichSorption(NonlinearSorption):
         Clamping with ``np.maximum`` before the power keeps a single general path
         for every ``(n, c_min)`` combination and avoids raising the base to a
         fractional power on negative ``c``.
+
+        A pure-float fast path handles the (dominant) scalar case, bit-identical to
+        the array path; it falls through to the array expression only when the
+        clamped ``c`` is ``0`` (``c_min == 0`` and ``c <= 0``), where numpy's
+        ``0.0**exponent`` yields the documented ``inf`` (n>1) / ``0`` (n<1) that a
+        pure ``0.0**neg`` would instead raise on.
         """
-        is_array = isinstance(c, np.ndarray)
+        if not isinstance(c, np.ndarray):
+            cf = float(c)
+            c_eff = max(self.c_min, cf)
+            if c_eff > 0.0:
+                return 1.0 + self._ret_coefficient * (c_eff**self._ret_exponent)
         c_eff = np.maximum(np.asarray(c), self.c_min)
-        exponent = (1.0 / self.n) - 1.0
-        coefficient = (self.bulk_density * self.k_f) / (self.porosity * self.n)
-        result = 1.0 + coefficient * (c_eff**exponent)
-        return result if is_array else float(result)
+        result = 1.0 + self._ret_coefficient * (c_eff**self._ret_exponent)
+        return result if isinstance(c, np.ndarray) else float(result)
 
     def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """
@@ -330,11 +352,12 @@ class FreundlichSorption(NonlinearSorption):
         shock speeds when ``c_R = 0`` (e.g. the canonical 0->c->0 pulse).
         Negative ``c`` is clamped to ``0`` defensively.
         """
-        is_array = isinstance(c, np.ndarray)
+        if not isinstance(c, np.ndarray):
+            cf = float(c)
+            c_eff = max(0.0, cf)
+            return c_eff + self._ct_coefficient * (c_eff ** (1.0 / self.n))
         c_arr = np.maximum(np.asarray(c), 0.0)
-        sorbed = (self.bulk_density / self.porosity) * self.k_f * (c_arr ** (1.0 / self.n))
-        result = c_arr + sorbed
-        return result if is_array else float(result)
+        return c_arr + self._ct_coefficient * (c_arr ** (1.0 / self.n))
 
     def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """
@@ -374,23 +397,20 @@ class FreundlichSorption(NonlinearSorption):
         >>> bool(np.isclose(c, 5.0, rtol=1e-14))
         True
         """
-        is_array = isinstance(r, np.ndarray)
-        r_arr = np.asarray(r)
-
         # FreundlichSorption.__post_init__ rejects |n-1| < EPSILON_FREUNDLICH_N,
         # so the previous n≈1 guard here was unreachable.
-        exponent = (1.0 / self.n) - 1.0
-        coefficient = (self.bulk_density * self.k_f) / (self.porosity * self.n)
-        base = (r_arr - 1.0) / coefficient
-        inversion_exponent = 1.0 / exponent
+        if not isinstance(r, np.ndarray):
+            base = (float(r) - 1.0) / self._ret_coefficient
+            if base > 0.0:
+                return max(base**self._cfr_inv_exponent, self.c_min)
+            return self.c_min
 
+        base = (np.asarray(r) - 1.0) / self._ret_coefficient
         # Mask base to a safe placeholder before exponentiation; NumPy emits
         # RuntimeWarning otherwise for base <= 0 with a fractional exponent.
         safe_base = np.where(base > 0, base, 1.0)
-        c = safe_base**inversion_exponent
-        result = np.where(base > 0, np.maximum(c, self.c_min), self.c_min)
-
-        return result if is_array else float(result)
+        c = safe_base**self._cfr_inv_exponent
+        return np.where(base > 0, np.maximum(c, self.c_min), self.c_min)
 
     def fan_converges_at_infinity(self) -> bool:
         """Freundlich ``n > 1``: ``c → 0`` as ``R → ∞`` (converges). ``n < 1``: ``c → ∞`` (diverges)."""
@@ -625,6 +645,8 @@ class LangmuirSorption(NonlinearSorption):
 
         self.a_coeff: float = self.bulk_density * self.s_max * self.k_l / self.porosity
         """Lumped retardation constant rho_b * s_max * K_L / n_por."""
+        self._ct_coefficient: float = (self.bulk_density / self.porosity) * self.s_max
+        """Cached ``(rho_b/n_por)*s_max`` sorbed-mass coefficient (scalar + array paths)."""
 
     def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """
@@ -651,11 +673,12 @@ class LangmuirSorption(NonlinearSorption):
         - R decreases with increasing C (higher C travels faster)
         - R → 1 as C → ∞ (all sorption sites saturated)
         """
-        is_array = isinstance(c, np.ndarray)
-        c_arr = np.asarray(c)
-        c_eff = np.maximum(c_arr, 0.0)
-        result = 1.0 + self.a_coeff / (self.k_l + c_eff) ** 2
-        return result if is_array else float(result)
+        if not isinstance(c, np.ndarray):
+            cf = float(c)
+            c_eff = max(0.0, cf)
+            return 1.0 + self.a_coeff / (self.k_l + c_eff) ** 2
+        c_eff = np.maximum(np.asarray(c), 0.0)
+        return 1.0 + self.a_coeff / (self.k_l + c_eff) ** 2
 
     def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """
@@ -674,12 +697,13 @@ class LangmuirSorption(NonlinearSorption):
         c_total : float or numpy.ndarray
             Total concentration [mass/volume]. Always >= c.
         """
-        is_array = isinstance(c, np.ndarray)
+        if not isinstance(c, np.ndarray):
+            cf = float(c)
+            c_eff = max(0.0, cf)
+            return cf + self._ct_coefficient * c_eff / (self.k_l + c_eff)
         c_arr = np.asarray(c)
         c_eff = np.maximum(c_arr, 0.0)
-        sorbed = (self.bulk_density / self.porosity) * self.s_max * c_eff / (self.k_l + c_eff)
-        result = c_arr + sorbed
-        return result if is_array else float(result)
+        return c_arr + self._ct_coefficient * c_eff / (self.k_l + c_eff)
 
     def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """
@@ -713,17 +737,18 @@ class LangmuirSorption(NonlinearSorption):
         >>> bool(np.isclose(c, 5.0, rtol=1e-14))
         True
         """
-        is_array = isinstance(r, np.ndarray)
-        r_arr = np.asarray(r)
+        if not isinstance(r, np.ndarray):
+            r_minus_1 = float(r) - 1.0
+            if r_minus_1 > 0.0:
+                return max(math.sqrt(self.a_coeff / r_minus_1) - self.k_l, 0.0)
+            return 0.0
 
-        r_minus_1 = r_arr - 1.0
+        r_minus_1 = np.asarray(r) - 1.0
         # Mask r_minus_1 to a safe placeholder before division to avoid the
         # RuntimeWarning emitted by np.where's eager evaluation when r == 1.
         safe_r_minus_1 = np.where(r_minus_1 > 0, r_minus_1, 1.0)
         c = np.where(r_minus_1 > 0, np.sqrt(self.a_coeff / safe_r_minus_1) - self.k_l, 0.0)
-        result = np.maximum(c, 0.0)
-
-        return result if is_array else float(result)
+        return np.maximum(c, 0.0)
 
 
 @dataclass
@@ -807,6 +832,14 @@ class BrooksCoreyConductivity(NonlinearSorption):
     """Exponent ``a = 3 + 2/λ`` (Burdine); set in ``__post_init__``."""
     delta_theta: float = field(init=False)
     """``θ_s − θ_r``; set in ``__post_init__``."""
+    _inv_a: float = field(init=False, repr=False, compare=False)
+    """Cached ``1/a`` total-concentration exponent (scalar + array paths)."""
+    _ret_coefficient: float = field(init=False, repr=False, compare=False)
+    """Cached ``Δθ/(a·K_s)`` retardation coefficient."""
+    _ret_exponent: float = field(init=False, repr=False, compare=False)
+    """Cached ``1/a − 1`` retardation exponent."""
+    _cfr_exponent: float = field(init=False, repr=False, compare=False)
+    """Cached ``−a/(a−1)`` inversion exponent for concentration_from_retardation."""
 
     def __post_init__(self) -> None:
         """Validate parameters and derive ``a``, ``delta_theta``.
@@ -830,31 +863,40 @@ class BrooksCoreyConductivity(NonlinearSorption):
             raise ValueError(msg)
         self.a = 3.0 + 2.0 / self.brooks_corey_lambda
         self.delta_theta = self.theta_s - self.theta_r
+        self._inv_a = 1.0 / self.a
+        self._ret_coefficient = self.delta_theta / (self.a * self.k_s)
+        self._ret_exponent = 1.0 / self.a - 1.0
+        self._cfr_exponent = -self.a / (self.a - 1.0)
 
     def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """``C_T(C) = Δθ · (C/K_s)^(1/a)``. Returns 0 at C=0 (no clamp)."""
-        is_array = isinstance(c, np.ndarray)
+        if not isinstance(c, np.ndarray):
+            cf = float(c)
+            c_eff = max(0.0, cf)
+            return self.delta_theta * (c_eff / self.k_s) ** self._inv_a
         c_arr = np.maximum(np.asarray(c, dtype=float), 0.0)
-        result = self.delta_theta * (c_arr / self.k_s) ** (1.0 / self.a)
-        return result if is_array else float(result)
+        return self.delta_theta * (c_arr / self.k_s) ** self._inv_a
 
     def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """``R(C) = (Δθ / (a·K_s)) · (C/K_s)^(1/a − 1)``. Clamped at ``_C_MIN``."""
-        is_array = isinstance(c, np.ndarray)
+        if not isinstance(c, np.ndarray):
+            cf = float(c)
+            c_eff = max(_C_MIN, cf)
+            return self._ret_coefficient * (c_eff / self.k_s) ** self._ret_exponent
         c_eff = np.maximum(np.asarray(c, dtype=float), _C_MIN)
-        result = (self.delta_theta / (self.a * self.k_s)) * (c_eff / self.k_s) ** (1.0 / self.a - 1.0)
-        return result if is_array else float(result)
+        return self._ret_coefficient * (c_eff / self.k_s) ** self._ret_exponent
 
     def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
         """``C = K_s · (R · a · K_s / Δθ)^{−a/(a−1)}``. Result clamped at ``_C_MIN``."""
-        is_array = isinstance(r, np.ndarray)
-        r_arr = np.asarray(r, dtype=float)
-        base = r_arr * self.a * self.k_s / self.delta_theta
+        if not isinstance(r, np.ndarray):
+            base = float(r) * self.a * self.k_s / self.delta_theta
+            if base > 0.0:
+                return max(self.k_s * base**self._cfr_exponent, _C_MIN)
+            return _C_MIN
+        base = np.asarray(r, dtype=float) * self.a * self.k_s / self.delta_theta
         safe_base = np.where(base > 0, base, 1.0)
-        ratio = safe_base ** (-self.a / (self.a - 1.0))
-        c = self.k_s * ratio
-        result = np.where(base > 0, np.maximum(c, _C_MIN), _C_MIN)
-        return result if is_array else float(result)
+        ratio = safe_base**self._cfr_exponent
+        return np.where(base > 0, np.maximum(self.k_s * ratio, _C_MIN), _C_MIN)
 
 
 @dataclass
