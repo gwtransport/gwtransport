@@ -19,7 +19,12 @@ from gwtransport.fronttracking.events import (
     find_shock_characteristic_intersection,
     find_shock_shock_intersection,
 )
-from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption, characteristic_position
+from gwtransport.fronttracking.math import (
+    ConstantRetardation,
+    FreundlichSorption,
+    characteristic_position,
+    characteristic_speed,
+)
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 
 freundlich_sorptions = [
@@ -733,3 +738,176 @@ class TestMachinePrecision:
 
             assert np.isclose(v1, v2, rtol=1e-14, atol=1e-15)
             assert np.isclose(v1, v_int, rtol=1e-14, atol=1e-15)
+
+
+def _ref_char_char(c1, c2, tc) -> tuple[float, float] | None:
+    """Pre-refactor ``find_characteristic_intersection`` body (independent reference)."""
+    s1 = characteristic_speed(c1.concentration, c1.sorption)
+    s2 = characteristic_speed(c2.concentration, c2.sorption)
+    if abs(s1 - s2) < 1e-15:
+        return None
+    tb = max(c1.theta_start, c2.theta_start, tc)
+    v1 = characteristic_position(c1.concentration, c1.sorption, c1.theta_start, c1.v_start, tb)
+    v2 = characteristic_position(c2.concentration, c2.sorption, c2.theta_start, c2.v_start, tb)
+    if v1 is None or v2 is None:
+        return None
+    dt = (v2 - v1) / (s1 - s2)
+    return None if dt <= 0 else (float(tb + dt), float(v1 + s1 * dt))
+
+
+def _ref_shock_shock(a, b, tc) -> tuple[float, float] | None:
+    """Pre-refactor ``find_shock_shock_intersection`` body."""
+    if abs(a.speed - b.speed) < 1e-15:
+        return None
+    tb = max(a.theta_start, b.theta_start, tc)
+    v1 = a.v_start + a.speed * (tb - a.theta_start)
+    v2 = b.v_start + b.speed * (tb - b.theta_start)
+    dt = (v2 - v1) / (a.speed - b.speed)
+    return None if dt <= 0 else (float(tb + dt), float(v1 + a.speed * dt))
+
+
+def _ref_shock_char(sh, ch, tc) -> tuple[float, float] | None:
+    """Pre-refactor ``find_shock_characteristic_intersection`` body (a=shock)."""
+    sc = characteristic_speed(ch.concentration, ch.sorption)
+    if abs(sh.speed - sc) < 1e-15:
+        return None
+    tb = max(sh.theta_start, ch.theta_start, tc)
+    vs = sh.v_start + sh.speed * (tb - sh.theta_start)
+    vc = characteristic_position(ch.concentration, ch.sorption, ch.theta_start, ch.v_start, tb)
+    if vc is None:
+        return None
+    dt = (vc - vs) / (sh.speed - sc)
+    return None if dt <= 0 else (float(tb + dt), float(vs + sh.speed * dt))
+
+
+def _ref_raref_bounds(raref, other, tc) -> list[tuple[float, float, str]]:
+    """Pre-refactor ``find_rarefaction_boundary_intersections`` body (temp CharacteristicWaves)."""
+    out: list[tuple[float, float, str]] = []
+    head = CharacteristicWave(
+        theta_start=raref.theta_start, v_start=raref.v_start, concentration=raref.c_head, sorption=raref.sorption
+    )
+    tail = CharacteristicWave(
+        theta_start=raref.theta_start, v_start=raref.v_start, concentration=raref.c_tail, sorption=raref.sorption
+    )
+    if isinstance(other, CharacteristicWave):
+        for bc, tag in ((head, "head"), (tail, "tail")):
+            r = _ref_char_char(bc, other, tc)
+            if r:
+                out.append((r[0], r[1], tag))
+    elif isinstance(other, ShockWave):
+        for bc, tag in ((head, "head"), (tail, "tail")):
+            r = _ref_shock_char(other, bc, tc)
+            if r:
+                out.append((r[0], r[1], tag))
+    elif isinstance(other, RarefactionWave):
+        o_head = CharacteristicWave(
+            theta_start=other.theta_start, v_start=other.v_start, concentration=other.c_head, sorption=other.sorption
+        )
+        o_tail = CharacteristicWave(
+            theta_start=other.theta_start, v_start=other.v_start, concentration=other.c_tail, sorption=other.sorption
+        )
+        for bc, tag in ((head, "head"), (tail, "tail")):
+            for ob in (o_head, o_tail):
+                r = _ref_char_char(bc, ob, tc)
+                if r:
+                    out.append((r[0], r[1], tag))
+    return out
+
+
+class TestLineIntersectionKernelEquivalence:
+    """The ``_line_intersection`` refactor is bit-identical to the pre-refactor helper bodies.
+
+    Each closed-form intersection helper now delegates to one shared kernel using the waves'
+    CACHED speeds. The refactor is only equivalence-preserving if the per-branch operand order
+    is exact: ``dθ`` is invariant under an a↔b swap but ``V_intersect`` (the successor wave's
+    ``v_start``) is NOT — the raref-vs-shock branch in particular must keep ``a = shock``. This
+    checks BOTH returned components bit-for-bit against an independent transcription of the
+    original bodies over a randomised battery of all four pair kinds and both isotherm regimes.
+    """
+
+    @staticmethod
+    def _both_bit_equal(got, want):
+        if (got is None) != (want is None):
+            return False
+        if got is None:
+            return True
+        return got[0].hex() == want[0].hex() and got[1].hex() == want[1].hex()
+
+    def _make_raref(self, rng, sorption):
+        for _ in range(20):
+            a, b = float(rng.uniform(0.5, 20.0)), float(rng.uniform(0.5, 20.0))
+            for c_head, c_tail in ((max(a, b), min(a, b)), (min(a, b), max(a, b))):
+                try:
+                    return RarefactionWave(
+                        theta_start=float(rng.uniform(0, 50)),
+                        v_start=float(rng.uniform(0, 50)),
+                        c_head=c_head,
+                        c_tail=c_tail,
+                        sorption=sorption,
+                    )
+                except ValueError:
+                    continue
+        return None
+
+    def test_parallel_speeds_return_none_in_kernel_and_reference(self):
+        """The kernel's ``|s_a - s_b| < EPSILON_SPEED`` early-return agrees with the reference.
+
+        Randomised concentrations never collide exactly, so the degenerate branch needs an
+        explicit equal-speed configuration to be exercised inside the equivalence battery.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        c1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=7.0, sorption=sorption)
+        c2 = CharacteristicWave(theta_start=3.0, v_start=11.0, concentration=7.0, sorption=sorption)
+        assert find_characteristic_intersection(c1, c2, 0.0) is None
+        assert _ref_char_char(c1, c2, 0.0) is None
+
+        s1 = ShockWave(theta_start=0.0, v_start=0.0, c_left=8.0, c_right=2.0, sorption=sorption)
+        s2 = ShockWave(theta_start=1.0, v_start=9.0, c_left=8.0, c_right=2.0, sorption=sorption)
+        assert find_shock_shock_intersection(s1, s2, 0.0) is None
+        assert _ref_shock_shock(s1, s2, 0.0) is None
+
+    @pytest.mark.parametrize("n", [2.0, 0.6])
+    def test_all_four_helpers_bit_identical_to_reference(self, n):
+        rng = np.random.default_rng(20260715)
+        sorption = FreundlichSorption(k_f=0.01, n=n, bulk_density=1500.0, porosity=0.3)
+
+        def mk_char():
+            return CharacteristicWave(
+                theta_start=float(rng.uniform(0, 50)),
+                v_start=float(rng.uniform(0, 50)),
+                concentration=float(rng.uniform(0.5, 20.0)),
+                sorption=sorption,
+            )
+
+        def mk_shock():
+            return ShockWave(
+                theta_start=float(rng.uniform(0, 50)),
+                v_start=float(rng.uniform(0, 50)),
+                c_left=float(rng.uniform(0.5, 20.0)),
+                c_right=float(rng.uniform(0.5, 20.0)),
+                sorption=sorption,
+            )
+
+        for _ in range(3000):
+            tc = float(rng.uniform(0, 50))
+            c1, c2 = mk_char(), mk_char()
+            assert self._both_bit_equal(find_characteristic_intersection(c1, c2, tc), _ref_char_char(c1, c2, tc))
+            s1, s2 = mk_shock(), mk_shock()
+            assert self._both_bit_equal(find_shock_shock_intersection(s1, s2, tc), _ref_shock_shock(s1, s2, tc))
+            sh, ch = mk_shock(), mk_char()
+            assert self._both_bit_equal(find_shock_characteristic_intersection(sh, ch, tc), _ref_shock_char(sh, ch, tc))
+            raref = self._make_raref(rng, sorption)
+            if raref is None:
+                continue
+            for other in (mk_char(), mk_shock(), self._make_raref(rng, sorption)):
+                if other is None:
+                    continue
+                got = find_rarefaction_boundary_intersections(raref, other, tc)
+                want = _ref_raref_bounds(raref, other, tc)
+                assert len(got) == len(want)
+                for g, w in zip(got, want, strict=True):
+                    # float() is identity here; it narrows the float-annotated element off the
+                    # int|float numeric-tower union so .hex() resolves.
+                    assert float(g[0]).hex() == float(w[0]).hex()  # θ bit-for-bit
+                    assert float(g[1]).hex() == float(w[1]).hex()  # V bit-for-bit
+                    assert g[2] == w[2]  # boundary tag
