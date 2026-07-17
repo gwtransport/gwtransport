@@ -7,6 +7,7 @@ This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
 
+import math
 import warnings
 
 import numpy as np
@@ -1016,20 +1017,30 @@ _SCALAR_PATH_R_GRID = np.concatenate([
 
 
 class TestIsothermScalarFastPath:
-    """The pure-float scalar fast path is bit-identical to the array route it short-circuits.
+    """The pure-float scalar fast path agrees with the array route it short-circuits to ≤2 ULP.
 
     ``retardation``/``total_concentration``/``concentration_from_retardation`` carry a
     scalar branch (avoiding the numpy dispatch that dominated the front-tracking solver's
-    per-event cost). It MUST stay bit-for-bit equal to the value a scalar previously got by
-    routing through the array code — reproduced here as ``float(method(np.asarray(x)))``, the
-    0-d-array route the pre-optimisation scalar call took. (numpy's *1-D* ``x**2`` = ``x*x``
-    can differ from the scalar ``pow`` by 1 ULP, but that 0-d-vs-1-D quirk predates the fast
-    path and is not what the solver's scalar calls exercise — so we pin against the 0-d route.)
+    per-event cost). It must reproduce the value a scalar previously got by routing through
+    the array code — reproduced here as ``float(method(np.asarray(x)))``, the 0-d-array
+    route the pre-optimisation scalar call took. The two routes are the same formula through
+    different faithfully-rounded ``**`` implementations (Python-float libm vs numpy's ufunc
+    loop), which agree bit-for-bit on some platform/wheel combinations but not others
+    (observed: linux cp312 wheels vs glibc pow in ``concentration_from_retardation`` — 1 ULP
+    for Freundlich's bare ``base**exp``, 2 ULP for Brooks-Corey where the divergence passes
+    through one more rounded multiply ``k_s * base**exp``; numpy's *1-D* ``x**2`` = ``x*x``
+    has the same character). The 2-ULP cap is the verified worst case for every method: a
+    ±1-ULP perturbation at the ``**`` propagated through each method's real downstream ops
+    never exceeds 2 ULP — one rounded multiply/divide can add a ULP, while the trailing
+    ``1.0 + …``/``c + …`` adds a same-or-larger-magnitude term and does not amplify.
+    Anything beyond is a real divergence: a wrong formula or cached constant moves the
+    result by hundreds of ULPs and is separately pinned by
+    ``test_values_pinned_to_hand_derived_literals``.
     """
 
     @pytest.mark.parametrize("name", list(_SCALAR_PATH_SORPTIONS))
     @pytest.mark.parametrize("method", ["retardation", "total_concentration", "concentration_from_retardation"])
-    def test_scalar_matches_array_route_bit_for_bit(self, name, method):
+    def test_scalar_matches_array_route_within_2_ulp(self, name, method):
         sorption = _SCALAR_PATH_SORPTIONS[name]
         grid = _SCALAR_PATH_R_GRID if method == "concentration_from_retardation" else _SCALAR_PATH_C_GRID
         fn = getattr(sorption, method)
@@ -1037,10 +1048,15 @@ class TestIsothermScalarFastPath:
             xf = float(x)
             scalar = float(fn(xf))
             array_route = float(fn(np.asarray(xf)))  # 0-d array == the pre-fast-path scalar route
-            # Bit-for-bit, incl. inf==inf at the c_min=0 dry-soil corner (both raise divide-by-zero → inf).
-            assert scalar.hex() == array_route.hex(), (
-                f"{name}.{method}({xf!r}): scalar {scalar!r} != array-route {array_route!r}"
-            )
+            # Equality covers inf==inf at the c_min=0 dry-soil corner (both raise divide-by-zero → inf);
+            # finite values may differ by ≤2 ULP (libm-vs-ufunc ``**`` divergence plus one rounded
+            # multiply, see class docstring). The finiteness guard keeps an inf-vs-finite divergence
+            # from slipping through as inf <= inf.
+            assert scalar == array_route or (
+                math.isfinite(scalar)
+                and math.isfinite(array_route)
+                and abs(scalar - array_route) <= 2.0 * math.ulp(max(abs(scalar), abs(array_route)))
+            ), f"{name}.{method}({xf!r}): scalar {scalar.hex()} vs array-route {array_route.hex()} differ by >2 ULP"
 
     def test_values_pinned_to_hand_derived_literals(self):
         """Absolute value pins, derived by hand from the constructor parameters.
