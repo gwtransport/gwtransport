@@ -1575,9 +1575,9 @@ def solve_inverse_transport_banded(
     evaluated through ``W`` itself rather than ``WᵀW`` (matching the dense
     least-squares solution to ~1e-7 at the default regularization, degrading to
     ~1e-6 only at very small regularization with an ill-conditioned Gram). The
-    banded Cholesky factor, solve, and
-    refinement stay at ``O(n_output * full_band)``; only the one-shot Gram
-    assembly transiently materializes ``W`` and ``WᵀW`` densely.
+    banded Cholesky factor, solve, and refinement stay at
+    ``O(n_output * full_band)``; only the one-shot Gram assembly transiently
+    materializes ``W`` and ``WᵀW`` densely.
 
     The regularization target ``x_target`` is the transpose-and-normalize of
     ``W`` applied to ``observed`` (the banded form of

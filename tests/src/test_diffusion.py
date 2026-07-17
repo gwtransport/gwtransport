@@ -984,13 +984,12 @@ class TestExtractionToInfiltrationDiffusion:
         # Edge bins (where cout window doesn't cover the cin-to-cout transport lag)
         # have near-zero coefficient support, so the solver cannot recover them.
         # The reverse is a Tikhonov-regularized least-squares solve (default
-        # regularization_strength = 1e-10). The regularization bias (~5e-10,
-        # BLAS/version dependent) is confined to the boundary layer at each end
-        # of the recoverable range, where coefficient support is thin; the
-        # strictly-interior bins recover the constant to ~1e-11. Check the full
-        # well-supported range to six figures and the interior (3-bin margin at
-        # each end) to machine precision; a genuine reverse-solve error would be
-        # O(1), far above either.
+        # regularization_strength = 1e-10) whose regularization target equals the
+        # true constant here, so the error is conditioning-amplified roundoff
+        # (grows as regularization_strength shrinks; BLAS/version dependent):
+        # ~5e-10 in the thin-support boundary layer at each end of the recoverable
+        # range, ~1e-12 in the strictly-interior bins. A genuine reverse-solve
+        # error would be O(1), far above either tolerance below.
         well_supported = valid & (cin > 1.0)
         np.testing.assert_allclose(cin[well_supported], 5.0, rtol=1e-6, atol=1e-6)
         interior = np.flatnonzero(well_supported)[3:-3]
