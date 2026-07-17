@@ -983,14 +983,18 @@ class TestExtractionToInfiltrationDiffusion:
         # With constant input, output should also be constant for well-supported bins.
         # Edge bins (where cout window doesn't cover the cin-to-cout transport lag)
         # have near-zero coefficient support, so the solver cannot recover them.
-        well_supported = valid & (cin > 1.0)
         # The reverse is a Tikhonov-regularized least-squares solve (default
-        # regularization_strength = 1e-10), so the recovered constant carries an
-        # O(lambda * cond) bias -- observed ~6e-10 here, and BLAS/version dependent.
-        # Asserting to 1e-10 is below that regularization floor and flakes across
-        # numpy builds; 1e-6 still pins "constant in -> constant out" to six
-        # significant figures (a real operator bug would give O(1) deviations).
+        # regularization_strength = 1e-10) whose regularization target equals the
+        # true constant here, so the error is conditioning-amplified roundoff
+        # (grows as regularization_strength shrinks; BLAS/version dependent):
+        # ~5e-10 in the thin-support boundary layer at each end of the recoverable
+        # range, ~1e-12 in the strictly-interior bins. A genuine reverse-solve
+        # error would be O(1), far above either tolerance below.
+        well_supported = valid & (cin > 1.0)
         np.testing.assert_allclose(cin[well_supported], 5.0, rtol=1e-6, atol=1e-6)
+        interior = np.flatnonzero(well_supported)[3:-3]
+        assert interior.size > 20, "expected many strictly-interior well-supported bins"
+        np.testing.assert_allclose(cin[interior], 5.0, rtol=1e-10, atol=1e-10)
         assert np.sum(well_supported) > 0.85 * np.sum(valid)
 
 

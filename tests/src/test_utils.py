@@ -1656,8 +1656,8 @@ def test_solve_inverse_transport_banded_matches_dense_solver():
     """The banded solver reproduces the dense solve_inverse_transport on a random band.
 
     End-to-end guard that the dense-BLAS assembly leaves the recovered signal unchanged: the
-    banded Cholesky + semi-normal refinement matches the dense least-squares solution to ~1e-10
-    on the shared active columns (and the NaN pattern is identical).
+    banded Cholesky + semi-normal refinement matches the dense least-squares solution to within
+    the asserted atol=1e-9 on the shared active columns (and the NaN pattern is identical).
     """
     rng = np.random.default_rng(3)
     n_obs, full_band, n_output = 80, 11, 60
