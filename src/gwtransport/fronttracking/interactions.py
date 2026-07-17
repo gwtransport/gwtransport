@@ -242,8 +242,17 @@ def find_face_crossing(
     marched with a per-pair speed bound ``Λ = speed_bound_a + speed_bound_b`` so a step
     ``Δθ = max(|g|/Λ, floor)`` cannot straddle a sign change unseen; each step also brackets
     the gap's interior minimum to catch a grazing double-crossing.
+
+    The loose near-coincidence admission at birth is enabled only for cross-wave pairs (exact
+    coincidence is always reported). Same-wave exhaustion pairs — a wave's shock face against
+    its own fan boundary line — suppress it: a front born a small distance from its own
+    boundary line may be legitimately diverging, and the loose admission would fire a spurious
+    immediate exhaustion.
     """
     wave_a, wave_b = face_a.wave, face_b.wave
+    # Loose born-coincidence admission is a cross-wave notion (a newborn wave touching a
+    # different neighbour it must immediately merge with); a wave's own two faces suppress it.
+    allow_born_coincident = wave_a is not wave_b
     theta_start = max(theta_current, wave_a.theta_start, wave_b.theta_start)
     if theta_start >= theta_horizon:
         return None
@@ -272,7 +281,7 @@ def find_face_crossing(
     pa0 = face_a.position(theta_start)
     born_now = abs(wave_a.theta_start - theta_start) <= floor or abs(wave_b.theta_start - theta_start) <= floor
     coincidence_tol = 1e-3 * max(abs(pa0) if pa0 is not None else 0.0, 1.0)
-    if abs(g_prev) < EPSILON_POSITION or (born_now and abs(g_prev) < coincidence_tol):
+    if abs(g_prev) < EPSILON_POSITION or (allow_born_coincident and born_now and abs(g_prev) < coincidence_tol):
         return (theta, pa0) if pa0 is not None else None
 
     while theta < theta_horizon:

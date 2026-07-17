@@ -50,7 +50,6 @@ from gwtransport.fronttracking.handlers import (
 from gwtransport.fronttracking.interactions import (
     find_face_crossing,
     iter_faces,
-    make_wave_from_feeders,
     resolve_merge,
 )
 from gwtransport.fronttracking.math import (
@@ -65,16 +64,12 @@ from gwtransport.fronttracking.waves import (
     CharacteristicWave,
     DecayingShockWave,
     DoubleFanShockWave,
-    Feeder,
     RarefactionWave,
     ShockWave,
     Wave,
 )
 
 logger = logging.getLogger(__name__)
-
-# Concentration tolerance for matching a doubly-fed side value to a fan edge at exhaustion.
-_SIDE_EXHAUSTION_C_TOL = 1e-9
 
 
 @dataclass
@@ -397,10 +392,24 @@ class FrontTracker:
             theta_horizon = self.state.theta_horizon
             for i, fa in enumerate(all_faces):
                 for fb in all_faces[i + 1 :]:
-                    if fa.wave is fb.wave:
-                        continue
                     if not (isinstance(fa.wave, special_types) or isinstance(fb.wave, special_types)):
                         continue
+                    same_wave = fa.wave is fb.wave
+                    if same_wave and not (
+                        isinstance(fa.wave, DoubleFanShockWave) and {fa.role, fb.role} == {"shock", "boundary"}
+                    ):
+                        # Same-wave crossings other than a doubly-fed shock meeting its own fan
+                        # boundary line never occur (a DSW's fan exhaustion has its own exact
+                        # detector; two boundary lines of one wave diverge).
+                        continue
+                    # A doubly-fed shock crossing its OWN fan boundary line is that side's
+                    # exhaustion: the fan between them is spent, and the universal merge
+                    # (const far-bound feeder | surviving fan feeder) degrades the wave to a
+                    # DecayingShockWave while retiring the boundary — uniformly with every
+                    # other face merge. Entropy (λ(c_L) ≥ σ ≥ λ(c_R)) makes these crossings
+                    # the only finite-θ side endings: the left fan's slow (upstream-far) char
+                    # can only catch the shock from behind, the shock can only catch the
+                    # right fan's downstream-far char — exactly the two exposed lines.
                     crossing = find_face_crossing(fa, fb, theta_current, theta_horizon)
                     if crossing is None:
                         continue
@@ -420,21 +429,6 @@ class FrontTracker:
                         continue
                     candidates.append((theta, counter, EventType.WAVE_MERGE, [fa.wave, fb.wave], v, None, (fa, fb)))
                     counter += 1
-
-        # Doubly-fed side exhaustion: a DFSW fan side reaching its far bound degrades the wave.
-        for wave in active_waves:
-            if isinstance(wave, DoubleFanShockWave):
-                exhaust = wave.theta_at_side_exhaustion()
-                if exhaust is None:
-                    continue
-                theta_ex, side = exhaust
-                if theta_ex <= theta_current + collision_tol or theta_ex > self.state.theta_horizon:
-                    continue
-                v_ex = wave.position_at_theta(theta_ex)
-                if v_ex is None or v_ex < -collision_tol:
-                    continue
-                candidates.append((theta_ex, counter, EventType.DFSW_SIDE_EXHAUSTED, [wave], v_ex, None, (side,)))
-                counter += 1
 
         # Fan-exhaustion: a DecayingShockWave is valid only while c_decay stays
         # above c_fan_tail. When c_decay reaches c_fan_tail the fan is spent and
@@ -567,12 +561,6 @@ class FrontTracker:
             face_a, face_b = event.faces
             new_waves = resolve_merge(face_a, face_b, event.theta, event.location, self.state.sorption)
 
-        elif event.event_type == EventType.DFSW_SIDE_EXHAUSTED:
-            assert event.faces is not None  # noqa: S101  # DFSW_SIDE_EXHAUSTED carries the ('left'|'right',) side
-            new_waves = self._handle_dfsw_side_exhaustion(
-                event.waves_involved[0], event.faces[0], event.theta, event.location
-            )
-
         elif event.event_type == EventType.DSW_FAN_EXHAUSTED:
             new_waves = self._handle_fan_exhaustion(event.waves_involved[0], event.theta, event.location)
 
@@ -626,30 +614,6 @@ class FrontTracker:
         if not shock.satisfies_entropy():
             return []
         return [shock]
-
-    def _handle_dfsw_side_exhaustion(
-        self, dfsw: DoubleFanShockWave, side: str, theta_event: float, v_event: float
-    ) -> list[Wave]:
-        """Degrade a doubly-fed shock whose ``side`` fan reached its far bound.
-
-        The exhausted side becomes a constant at that far bound, so the front continues as a
-        one-fan :class:`DecayingShockWave` (or a plain :class:`ShockWave` if the surviving
-        side is also at a constant). The successor is built from the same left/right feeder
-        pair with the exhausted side frozen to its far concentration.
-        """
-        left = dfsw.left_feeder
-        right = dfsw.right_feeder
-        if side == "left":
-            c_far = left.c_a if abs(left.c_a - left.value(v_event, theta_event)) < _SIDE_EXHAUSTION_C_TOL else left.c_b
-            left = Feeder.constant(c_far)
-        else:
-            c_far = (
-                right.c_a if abs(right.c_a - right.value(v_event, theta_event)) < _SIDE_EXHAUSTION_C_TOL else right.c_b
-            )
-            right = Feeder.constant(c_far)
-        dfsw.deactivate(theta_event)
-        successor = make_wave_from_feeders(left, right, v_event, theta_event, self.state.sorption)
-        return [successor] if successor is not None else []
 
     def run(self, max_iterations: int = 10000, *, verbose: bool = False):
         """Process events in θ-order until the queue is empty or ``max_iterations`` is reached."""

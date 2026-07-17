@@ -17,7 +17,6 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from operator import itemgetter
 
 import numpy as np
 from scipy.interpolate import CubicSpline
@@ -1102,8 +1101,8 @@ class DoubleFanShockWave(Wave):
     form. **General fallback** (distinct apex positions, or a non-``n=2`` isotherm): the ODE
     is integrated once by fixed-step RK4 (``\Delta\theta = \text{fan age}/DFSW_RK_SUBSTEPS``,
     speed-independent since the fans vary on the scale of their age) into a cached monotone
-    spline. Both paths answer position, side concentrations, side exhaustion and outlet
-    crossing uniformly.
+    spline. Both paths answer position, side concentrations and outlet crossing uniformly
+    (side exhaustion is detected externally, as the shock face crossing its own fan boundary).
 
     See Also
     --------
@@ -1276,32 +1275,6 @@ class DoubleFanShockWave(Wave):
         if v_outlet <= self.v_start:
             return None
         return self._bracket_and_solve(lambda theta: self._v_at(theta) - v_outlet, r0=self.v_start - v_outlet)
-
-    def theta_at_side_exhaustion(self) -> tuple[float, str] | None:
-        """Earliest ``(θ, side)`` at which a side's fan value reaches its far bound.
-
-        A side exhausts when its concentration reaches the fan edge it is moving toward; the
-        solver then degrades the doubly-fed front to a :class:`DecayingShockWave` (or a plain
-        :class:`ShockWave` if both exhaust). Returns ``None`` when neither side exhausts in
-        finite θ (the shock asymptotes to the interior state).
-        """
-        candidates: list[tuple[float, str]] = []
-        for side, feeder in (("left", self.left_feeder), ("right", self.right_feeder)):
-            c_now = feeder.value(self.v_start, self.theta_start)
-            # The value moves monotonically toward one fan edge; target that edge.
-            target = feeder.c_a if abs(feeder.c_a - c_now) > abs(feeder.c_b - c_now) else feeder.c_b
-            r0 = c_now - target
-            if abs(r0) < EPSILON_POSITION:
-                continue
-            root = self._bracket_and_solve(
-                lambda theta, feeder=feeder, target=target: feeder.value(self._v_at(theta), theta) - target,
-                r0=r0,
-            )
-            if root is not None:
-                candidates.append((root, side))
-        if not candidates:
-            return None
-        return min(candidates, key=itemgetter(0))
 
     def concentration_at_point(self, v: float, theta: float) -> float | None:
         """Concentration at ``(v, θ)`` if controlled by this doubly-fed shock.

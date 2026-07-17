@@ -199,23 +199,22 @@ merge — but these are compositions of the same three primitives, not new ones.
 Wave objects (`waves.py`) and events (`events.py`, `EventType` at `:67`) are
 _representations_ of the primitives above:
 
-| code object / event     | file:line                             | primitive realized                                          | reachable?                                |
-| ----------------------- | ------------------------------------- | ----------------------------------------------------------- | ----------------------------------------- |
-| `CharacteristicWave`    | `waves.py:256`                        | contact / constant-state characteristic                     | yes (smooth regions)                      |
-| `ShockWave`             | `waves.py:342`                        | shock                                                       | yes                                       |
-| `RarefactionWave`       | `waves.py:440`                        | rarefaction fan                                             | yes                                       |
-| `DecayingShockWave`     | `waves.py:604`                        | shock adjacent to **one** fan                               | yes (shock↔fan)                           |
-| `DoubleFanShockWave`    | `waves.py:1079`                       | shock adjacent to **two** fans                              | yes (doubly-fed formation)                |
-| `CHAR_CHAR_COLLISION`   | handler `handlers.py:32`              | two contacts compress → shock (genesis)                     | yes                                       |
-| `SHOCK_SHOCK_COLLISION` | `handlers.py:95`                      | shock↔shock merge                                           | yes                                       |
-| `SHOCK_CHAR_COLLISION`  | `handlers.py:152`                     | contact into shock (may emit a fan)                         | yes                                       |
-| `RAREF_CHAR_COLLISION`  | `handlers.py:305`                     | contact absorbed at a fan boundary                          | yes                                       |
-| `SHOCK_RAREF_COLLISION` | `handlers.py:223`                     | shock→fan (tail) and fan→shock (head) → `DecayingShockWave` | yes                                       |
-| `WAVE_MERGE`            | `interactions.py:394` `resolve_merge` | universal merge (any DSW/DFSW face pair)                    | yes (transitively, multi-front)           |
-| `DSW_FAN_EXHAUSTED`     | `solver.py:594`                       | degradation: `DecayingShockWave` → plain `ShockWave`        | yes                                       |
-| `RAREF_RAREF_COLLISION` | **no-op** `solver.py:560`             | (impossible interaction)                                    | detected, correctly not resolved — see §4 |
-| `DFSW_SIDE_EXHAUSTED`   | `solver.py:630`                       | degradation: `DoubleFanShockWave` → DSW/ShockWave           | **reachability under audit (§4)**         |
-| `OUTLET_CROSSING`       | `handlers.py:354`                     | boundary bookkeeping                                        | yes                                       |
+| code object / event     | file:line                             | primitive realized                                                                           | reachable?                                |
+| ----------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `CharacteristicWave`    | `waves.py:256`                        | contact / constant-state characteristic                                                      | yes (smooth regions)                      |
+| `ShockWave`             | `waves.py:342`                        | shock                                                                                        | yes                                       |
+| `RarefactionWave`       | `waves.py:440`                        | rarefaction fan                                                                              | yes                                       |
+| `DecayingShockWave`     | `waves.py:604`                        | shock adjacent to **one** fan                                                                | yes (shock↔fan)                           |
+| `DoubleFanShockWave`    | `waves.py:1079`                       | shock adjacent to **two** fans                                                               | yes (doubly-fed formation)                |
+| `CHAR_CHAR_COLLISION`   | handler `handlers.py:32`              | two contacts compress → shock (genesis)                                                      | yes                                       |
+| `SHOCK_SHOCK_COLLISION` | `handlers.py:95`                      | shock↔shock merge                                                                            | yes                                       |
+| `SHOCK_CHAR_COLLISION`  | `handlers.py:152`                     | contact into shock (may emit a fan)                                                          | yes                                       |
+| `RAREF_CHAR_COLLISION`  | `handlers.py:305`                     | contact absorbed at a fan boundary                                                           | yes                                       |
+| `SHOCK_RAREF_COLLISION` | `handlers.py:223`                     | shock→fan (tail) and fan→shock (head) → `DecayingShockWave`                                  | yes                                       |
+| `WAVE_MERGE`            | `interactions.py:394` `resolve_merge` | universal merge (any DSW/DFSW face pair, incl. a DFSW's own boundary line — side exhaustion) | yes (transitively, multi-front)           |
+| `DSW_FAN_EXHAUSTED`     | `solver.py:594`                       | degradation: `DecayingShockWave` → plain `ShockWave`                                         | yes                                       |
+| `RAREF_RAREF_COLLISION` | **no-op** `solver.py:560`             | (impossible interaction)                                                                     | detected, correctly not resolved — see §4 |
+| `OUTLET_CROSSING`       | `handlers.py:354`                     | boundary bookkeeping                                                                         | yes                                       |
 
 The universal merge calculus (`interactions.py`): every wave exposes **faces** (`Face`,
 `:53`) separating a left/right **`Feeder`** (a constant state or a bounded self-similar fan,
@@ -252,35 +251,49 @@ forms. The solver's shock/rarefaction repertoire is complete.
 _Action:_ no compound-wave handling and no "detect-and-reject non-convex flux" scan are
 required. Document convexity; treat the vestigial vG-M 2-point guard per §2.2.
 
-### 4.3 Under audit (require constructed inputs or impossibility proofs)
+### 4.3 Doubly-fed side exhaustion — RESOLVED through the universal merge (issue #317)
 
-- **`DFSW_SIDE_EXHAUSTED`** (`solver.py:630`, `theta_at_side_exhaustion` `waves.py:1280`):
-  no test drives a doubly-fed shock whose fan side reaches its far bound within the horizon.
-  When both fan tails sit at the `R→∞` singular state (`c→0`, favorable), the shock reaches
-  the edge only as `θ→∞` (asymptotic — hence `None` observed). Determine whether a
-  **nonzero-background** multi-pulse (fan tail `c > 0`) produces finite-θ side exhaustion. If
-  yes → tested interaction; if provably asymptotic-only → delete the handler + non-existence
-  test.
+A `DoubleFanShockWave` side ends in finite θ **exactly** when the shock face crosses one of
+its own fan boundary lines. Lax entropy (`λ(c_L) ≥ σ ≥ λ(c_R)`) admits only two such
+crossings: the left fan's slow upstream-far characteristic catching the shock from behind
+(the `n<1` mirror, where the fan's far ray outruns the shock), or the shock catching the
+right fan's fast downstream-far characteristic. Both are the **same primitive** as every
+other face merge — a boundary line overtaking (or being overtaken by) a shock face — so they
+are resolved by the one universal `WAVE_MERGE` path: the merge builds the degraded successor
+from `(const far-bound feeder | surviving fan feeder)` and retires the exhausted boundary
+line. The face-pair loop admits the crossing of a DFSW's shock face with its **own** boundary
+line (`solver.py`); the loose born-coincident admission is disabled for same-wave pairs so a
+front born a small distance from its own boundary and diverging from it is not spuriously
+retired (exact coincidence still fires).
+
+This replaces the earlier dedicated `DFSW_SIDE_EXHAUSTED` detector
+(`theta_at_side_exhaustion` and its handler), which was **incomplete**: it targeted the fan
+edge _farther_ from the current side value (wrong whenever the wave is born mid-fan) and its
+residual was flattened to exactly zero by the feeder's fan-extent clamp, so the bracket never
+fired. That left the exhausted fan's boundary line exposed _beyond_ the shock — a ghost face
+the sweep reader misattributed, breaking outlet-mass monotonicity: the loud decline below.
+Geometry-, not regime-dependent (favorable Langmuir hits the same missed crossing).
+
 - **DFSW × DFSW** and **characteristic × fan** (via `WAVE_MERGE`): structurally reachable
-  (the face-pair loop admits them, `solver.py:394`) but untested. Construct a producing
+  (the face-pair loop admits them) but not separately pinned. Construct a producing
   input or prove impossibility.
 
-These are resolved in the companion audit steps (branch work), not in this reference.
+### 4.4 Former multi-front gap — unfavorable (`n<1`) and some Langmuir (issue #317, RESOLVED)
 
-### 4.4 Known multi-front gap — unfavorable (`n<1`) and some Langmuir (issue #317)
+The audit found the multi-front solver **declined** (left an unresolved interaction → the
+public API raised `RuntimeError`, never a silently-wrong `cout`) for some multi-pulse inputs:
 
-The randomized property sweep (§4.5) found that the multi-front solver **declines** (leaves
-an unresolved interaction → the public API raises `RuntimeError`, never a silently-wrong
-`cout`) for some multi-pulse inputs it does not yet resolve:
-
-- **Freundlich `n<1`** (concave / mirror geometry): a simple two-pulse input suffices —
+- **Freundlich `n<1`** (concave / mirror geometry): a simple two-pulse input sufficed —
   minimal reproducer `cin=[0,8,8,8,0,0,2,2,0]`, `V=10.6`.
 - **Langmuir**: some specific multi-pulse configs.
 - **Freundlich `n>1`** (favorable): robustly supported (0 declines over broad sweeps).
 
-Hypothesis: the Feeder/Face merge calculus was validated on the favorable (`n>1`) geometry;
-the `n<1` mirror (step-ups are rarefactions, step-downs are shocks) mishandles the shock↔fan
-merge. Pinned by `TestKnownMultiFrontGaps` (`xfail(strict=True)`); tracked in **issue #317**.
+Root cause: the missed doubly-fed side exhaustion of §4.3, not a mishandled shock↔fan merge —
+the merge calculus and every DSW/DFSW trajectory are correct in the `n<1` mirror (verified to
+`<1e-6` relative against independent DOP853 integration). Resolved by routing side exhaustion
+through the universal merge (§4.3). Pinned by `TestSideExhaustion`: the `n<1` reproducer with
+the exhaustion at the closed-form `θ=778.75`, `V=5/28` plus an FV-oracle cross-check, the
+public-API end-to-end resolution, and the two formerly-declining favorable Langmuir configs.
 
 ---
 
