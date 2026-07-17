@@ -1,9 +1,10 @@
 [build-system]
-requires = ["hatchling >= 1.26"]
+requires = ["hatchling >= 1.26", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "gwtransport"
+dynamic = ["version"]
 description = "Timeseries analysis for groundwater transport of solutes and heat"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -47,7 +48,6 @@ dependencies = [
   "requests>=2.19.0",
   "scipy>=1.13.0",
 ]
-version = "0.36.0"
 [project.optional-dependencies]
 test = [
   "nbconvert>=7.1.0",
@@ -98,6 +98,21 @@ docs = [
 Homepage = "https://github.com/gwtransport/gwtransport"
 Documentation = "https://gwtransport.github.io/gwtransport/"
 Sponsor = "https://www.savethechildren.net/what-we-do/emergencies/war-gaza-escalations-west-bank"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+# TestPyPI/PyPI reject local version identifiers (+gsha), and release.yml uploads
+# untagged builds to TestPyPI; without this every such upload would error instead
+# of versioning as 0.36.1.devN.
+local_scheme = "no-local-version"
+
+[tool.uv]
+# Overriding cache-keys replaces uv's default (pyproject.toml only), so list it
+# explicitly. The git key makes uv re-derive the hatch-vcs version when the commit
+# or tags change; otherwise editable installs keep serving a stale cached version.
+cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
 
 [tool.hatch.envs.hatch-static-analysis]
 config-path = "ruff.toml"

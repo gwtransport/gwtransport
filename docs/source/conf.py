@@ -1,5 +1,6 @@
 """Configuration file for the Sphinx documentation builder."""  # noqa: INP001
 
+import importlib.metadata
 import json
 import sys
 import tomllib
@@ -37,7 +38,9 @@ project_info = pyproject_data["project"]
 project = project_info["name"]
 copyright = f"{date.today().year}, Bas des Tombe"  # noqa: A001, DTZ011
 author = ", ".join([author["name"] for author in project_info["authors"]])
-release = project_info["version"]
+# The version is dynamic (hatch-vcs derives it from git tags), so it no longer
+# appears in the [project] table; read it from the installed distribution instead.
+release = importlib.metadata.version("gwtransport")
 
 # -- General configuration ---------------------------------------------------
 extensions = [
