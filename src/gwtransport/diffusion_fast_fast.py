@@ -10,57 +10,61 @@ targets the bin-averaged Kreft-Zuber (1978) flux concentration ``C_F`` on the st
 trades exactness for a single fast (~1.5 ms) native-grid evaluation that does not depend on the flow
 being constant.
 It is **approximate**: where :mod:`gwtransport.diffusion_fast` reproduces the quadrature reference to
-machine precision, this module is accurate to ~3e-4 in the common regime and degrades in a
-documented corner (below). When you need machine precision, use :mod:`gwtransport.diffusion_fast`.
+machine precision, this module is exact only up to a small interpolation floor at constant flow (see
+Accuracy below) and degrades under variable flow. When you need machine precision, use
+:mod:`gwtransport.diffusion_fast`.
 
-How it works -- an operator split in two coordinates
-----------------------------------------------------
+How it works -- one skewed breakthrough on the native volume grid
+-----------------------------------------------------------------
 
 The moving-frame dispersion product ``D_t = D_m*tau + alpha_L*xi`` mixes a *time* term (molecular
-diffusion ``D_m*tau``) and a *volume* term (microdispersion ``alpha_L*xi``). The two are split into
-the coordinate each is stationary in, so the dominant part is built once and is flow-independent:
-
-1. **Advection + macrodispersion + microdispersion** are the *exact* skewed ``D_m=0`` Kreft-Zuber
-   breakthrough, applied banded on the **native cumulative-volume grid**. The whole aquifer pore
-   volume distribution (APVD) is pre-summed into a single 1D antiderivative ``Ibar(dV)`` -- exact
-   for any APVD shape -- finely sampled once and read back by interpolation. This part is
-   volume-stationary, hence **flow-independent** (constant and strongly variable flow alike).
-2. **Molecular diffusion** is a symmetric **time-domain Gaussian** applied to the outlet signal
-   (variance ``2*D_m*tau_bt*(R*Vbar/L)^2/Q^2``). This is the only modelling approximation: the true
-   Kreft-Zuber molecular breakthrough is skewed, and at realistic (sub-bin) spreading the Gaussian
-   is nearly a no-op, so the molecular term is dropped rather than skewed.
+diffusion ``D_m*tau``) and a *volume* term (microdispersion ``alpha_L*xi``). Under constant flow the
+two coincide: elapsed time and breakthrough coordinate are locked, ``tau = r_vpv*xi/(L*Q)``
+(``r_vpv = R*V_pore``), so ``D_m*tau = (D_m*r_vpv/(L*Q))*xi`` -- the same ``xi``-proportional form as
+``alpha_L*xi``. Molecular diffusion is therefore an **effective dispersivity**
+``alpha_eff = alpha_L + D_m*r_vpv/(L*q_mean)`` per streamtube (``q_mean`` the record-mean flow), and
+the whole method is a single skewed ``D_t = alpha_eff*xi`` Kreft-Zuber breakthrough applied banded on
+the **native cumulative-volume grid**: the whole aquifer pore volume distribution (APVD) is pre-summed
+into one 1D antiderivative ``Ibar(dV)`` -- exact for any APVD shape -- finely sampled once and read
+back by interpolation.
 
 ``tedges`` need **not** be regularly spaced and ``cout_tedges`` need not equal ``tedges`` (supply
-``flow_out`` when they differ): step 1 runs on the native cumulative-volume grid for any spacing.
-Only the molecular Gaussian assumes a roughly regular grid -- it convolves in bin-index space using
-the mean bin width -- so a strongly irregular grid adds a small extra error to the (usually
-sub-dominant) molecular term; use :mod:`gwtransport.diffusion_fast` for the molecular-dominated +
-irregular-grid corner.
+``flow_out`` when they differ): the build runs on the native cumulative-volume grid for any spacing.
+The **only** approximations are the ``Ibar`` interpolation (~1e-4, below) and -- under *variable* flow
+-- freezing ``q_mean`` at the record mean: the ``tau = r_vpv*xi/(L*Q)`` map holds exactly only at
+constant flow, so the microdispersion part stays exact but the molecular part picks up a commutator
+residual.
 
-Accuracy (vs :mod:`gwtransport.diffusion_fast`, flow-independent unless noted)
-------------------------------------------------------------------------------
+Accuracy (vs :mod:`gwtransport.diffusion_fast`)
+-----------------------------------------------
 
-- **~3e-4 whenever microdispersion is present** (``alpha_L > 0`` -- the typical groundwater
-  regime, Peclet number >> 1), constant *and* variable flow, for realistic solute diffusivities
-  (``D_m`` ~ 1e-4) or ``R = 1``. Here molecular diffusion is sub-dominant, so approximating it
-  barely matters. This survives retardation for a typical APVD (measured <~1e-3 up to ``R = 3``).
-- In the **molecular-diffusion-dominated** corner (``alpha_L`` ~ 0): ~1e-4 for smooth inputs, but
-  degrading to ~1e-2 for sharp inputs (and ~5e-2 for sharp inputs with a very wide / bimodal APVD or
-  a large single pore volume), because the symmetric time-Gaussian cannot reproduce the skewed
-  molecular breakthrough. **Retardation enlarges this corner:** the Gaussian's variance scales as
-  ``sigma_t^2 ~ D_m * R^3``, so ``R > 1`` reaches the ~1e-2 looseness at a smaller ``D_m`` -- a
-  sharp input at ``D_m = 0.01`` degrades from ~8e-4 at ``R = 1`` to ~1.7e-2 at ``R = 2`` and ~3.5e-2
-  at ``R = 3``. **Use** :mod:`gwtransport.diffusion_fast` **for exact results in this regime** --
-  in particular for heat transport (``R > 1`` with a large ``D_m``).
+- **Constant flow:** exact to the ``Ibar`` interpolation floor -- ~1e-6 for smooth inputs, degrading
+  to ~1e-4 for sharp inputs at ``alpha_L = 0`` (the kink limit; ~1e-3 for a single large pore volume).
+  This holds across ``D_m`` and ``R`` at realistic Peclet numbers ``Pe = L/alpha_eff >> 1``,
+  **including heat transport** (``R > 1``, large ``D_m``): the effective-dispersivity fold reproduces
+  the skewed molecular breakthrough exactly, not merely its second moment. Only in the extreme
+  low-Peclet corner (``alpha_eff`` approaching ``L`` -- a short streamline with very strong molecular
+  diffusion, ``Pe <~ 2``) does the fold's wide dispersive band exceed the fine-grid sample cap
+  (``_MAX_KERNEL_SAMPLES``), coarsening the breakthrough shape; use :mod:`gwtransport.diffusion_fast`
+  there.
+- **Variable flow:** the microdispersion part stays exact; the molecular part carries the frozen-
+  ``q_mean`` commutator residual. It is small when molecular diffusion is sub-dominant -- the typical
+  ``alpha_L > 0`` regime, <~1e-3 for realistic solute ``D_m`` even through strong flow -- and grows in
+  the molecular-diffusion-dominated corner (``alpha_L`` ~ 0) with sharp inputs under strongly variable
+  or seasonal flow, reaching the multi-percent range where no fast approximation is reliable.
+  **Use** :mod:`gwtransport.diffusion_fast` **there** (in particular for heat transport under strongly
+  variable flow).
 
-The inverse (:func:`extraction_to_infiltration`) deconvolves the *same* approximate operator the
-forward applies. It assembles ``W = G . M`` directly in banded form (one ``Ibar`` gather plus a
-sparse ``G . M`` product -- no per-pore-volume closed-form loop, no dense ``(n_cout, n_cin)`` matrix)
-and solves it with banded Tikhonov regularisation (banded Cholesky, ``O(n * band**2)``), so it is
-much faster than :mod:`gwtransport.diffusion_fast`'s reverse, especially for many streamtubes.
-Inverting exactly the forward operator makes a round trip self-consistent: it recovers the input up
-to the deconvolution conditioning, with the only error being the forward operator's approximation of
-:mod:`gwtransport.diffusion_fast` (use that module when the approximation is unacceptable).
+The inverse (:func:`extraction_to_infiltration`) deconvolves the *same* approximate operator ``W`` the
+forward applies. It assembles ``W`` directly in banded form (one ``Ibar`` gather -- no per-pore-volume
+closed-form loop, no dense ``(n_cout, n_cin)`` matrix) and solves it with banded Tikhonov
+regularisation (banded Cholesky, ``O(n * band**2)``), so it is much faster than
+:mod:`gwtransport.diffusion_fast`'s reverse, especially for many streamtubes. Inverting exactly the
+forward operator makes a round trip self-consistent (recovering the input up to the deconvolution
+conditioning). On *real* extraction data the reverse is only as accurate as the forward: at constant
+flow it reproduces :mod:`gwtransport.diffusion_fast`'s reverse to ~1e-6, while in the
+molecular-dominated corner under strongly variable flow the deconvolution amplifies the forward's
+commutator residual -- use :mod:`gwtransport.diffusion_fast` there.
 
 Available functions:
 
@@ -82,7 +86,6 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from scipy.ndimage import gaussian_filter1d
 from scipy.sparse import coo_array
 
 from gwtransport import gamma
@@ -102,14 +105,18 @@ from gwtransport.residence_time import fraction_explained_full
 from gwtransport.utils import cumulative_flow_volume
 
 # Samples per native bin used to discretise the 1D breakthrough antiderivative ``Ibar``. Higher =
-# more accurate ``Ibar`` interpolation (advection+micro error ~ O(1/_KERNEL_FINE^2)) at the cost of
-# a larger one-time precompute; 16 gives ~1e-4 in the advection+micro part, which is below the
-# molecular-Gaussian floor, so it is not exposed as a user knob.
+# more accurate ``Ibar`` interpolation (breakthrough error ~ O(1/_KERNEL_FINE^2), or O(1/_KERNEL_FINE)
+# at the alpha_eff=0 kink) at the cost of a larger one-time precompute; 16 gives ~1e-4 -- the
+# constant-flow accuracy floor of the method -- so it is not exposed as a user knob.
 _KERNEL_FINE = 16
 
 # Upper bound on the number of fine ``Ibar`` samples. Caps the one-time precompute when the
-# breakthrough band spans far more than the record (e.g. tiny flow -> enormous front offset); the
-# affected output bins are masked by residence time anyway, so coarsening the band there is benign.
+# breakthrough band is very wide -- either tiny flow (enormous front offset; those bins are masked by
+# residence time anyway, so coarsening is benign) or the extreme low-Peclet corner where molecular
+# diffusion folds into a large ``alpha_eff`` (a valid, unmasked band). In the latter the cap coarsens
+# ``dv_fine`` below one sample per output bin and the breakthrough shape loses accuracy -- use
+# :mod:`gwtransport.diffusion_fast` for a short streamline with very strong molecular diffusion
+# (Pe = L/alpha_eff <~ 2). No realistic groundwater/heat regime reaches that corner.
 _MAX_KERNEL_SAMPLES = 20000
 
 
@@ -117,34 +124,43 @@ def _summed_antideriv(
     *,
     aquifer_pore_volumes: npt.NDArray[np.floating],
     streamline_length: npt.NDArray[np.floating],
+    molecular_diffusivity: npt.NDArray[np.floating],
     longitudinal_dispersivity: npt.NDArray[np.floating],
     retardation_factor: float,
+    q_mean: float,
     mean_bin_volume: float,
     saturation_threshold: float,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating], float, float, float]:
     r"""Precompute the APVD-summed breakthrough antiderivative ``Ibar(dV)`` on a fine 1D grid.
 
-    For one streamtube the bin-averaged ``D_m=0`` flux fraction over a cout bin equals the second
-    difference of the antiderivative ``I(x)`` (:func:`gwtransport._diffusion_shared._breakthrough_antideriv`)
-    of the resident concentration in the breakthrough coordinate ``x = (dV - r_vpv)*L/r_vpv``
+    For one streamtube the bin-averaged flux fraction over a cout bin equals the second difference of
+    the antiderivative ``I(x)`` (:func:`gwtransport._diffusion_shared._breakthrough_antideriv`) of the
+    resident concentration in the breakthrough coordinate ``x = (dV - r_vpv)*L/r_vpv``
     (``r_vpv = R*V_pore``). The antiderivative *with respect to cumulative volume* ``dV`` is
     ``(r_vpv/L)*I(x(dV))``; averaging it over the APVD gives a single 1D function
 
     .. math::
 
         \bar I(\Delta V) = \operatorname{mean}_{pv}\Bigl[\tfrac{r_{vpv}}{L}\,
-        I\bigl((\Delta V - r_{vpv})L/r_{vpv}\bigr)\Bigr],\quad D_t = \alpha_L\,\xi,
+        I\bigl((\Delta V - r_{vpv})L/r_{vpv}\bigr)\Bigr],\quad D_t = \alpha_{eff}\,\xi,
 
     whose edge-differences reproduce the per-streamtube-averaged ``C_F`` **exactly** for any APVD
     (the ``r_vpv/L`` Jacobian and the cout-bin volume normalisation cancel the per-streamtube ``dx``).
     Only the interpolation of ``Ibar`` is approximate.
 
+    Molecular diffusion is folded into ``D_t`` as an **effective dispersivity**. The moving-frame
+    variance is ``D_t = D_m*tau + alpha_L*xi``; under constant flow ``tau = r_vpv*xi/(L*Q)``, so
+    ``D_m*tau = (D_m*r_vpv/(L*Q))*xi`` -- the same ``xi``-proportional form as ``alpha_L*xi``. Hence
+    ``D_t = alpha_eff*xi`` with ``alpha_eff = alpha_L + D_m*r_vpv/(L*q_mean)`` per streamtube, which
+    reproduces the skewed Kreft-Zuber molecular breakthrough exactly at constant flow (``q_mean`` is
+    the record-mean flow; freezing it is the only approximation, and only under variable flow).
+
     The grid is **uniform** over the breakthrough band ``[off_lo, off_hi]`` (front ``r_vpv`` plus the
-    conservative ``alpha_L`` dispersion smear, unioned over streamtubes) plus a margin, sampled at
+    conservative ``alpha_eff`` dispersion smear, unioned over streamtubes) plus a margin, sampled at
     ``mean_bin_volume / _KERNEL_FINE`` (uniformity lets :func:`_eval_antideriv` interpolate by
-    fractional indexing instead of a per-point search). For ``alpha_L > 0`` ``Ibar`` is smooth and
-    the interpolation error is ``O(1/_KERNEL_FINE^2)``; at ``alpha_L = 0`` it has a kink at each
-    ``r_vpv`` and the error is ``O(1/_KERNEL_FINE)`` (sub-1e-3, well below the molecular floor).
+    fractional indexing instead of a per-point search). For ``alpha_eff > 0`` ``Ibar`` is smooth and
+    the interpolation error is ``O(1/_KERNEL_FINE^2)``; only at ``alpha_L = 0`` *and* ``D_m = 0`` does
+    it have a kink at each ``r_vpv`` (error ``O(1/_KERNEL_FINE)``, sub-1e-3).
 
     Returns
     -------
@@ -160,14 +176,16 @@ def _summed_antideriv(
     r_vpv = retardation_factor * aquifer_pore_volumes
     mean_r_vpv = float(r_vpv.mean())
     u = saturation_threshold
-    # D_m=0 dispersion half-widths in the breakthrough coordinate x (front D_t = alpha_L*L): the
-    # pre side shrinks (|x| = U*2*sqrt(alpha_L*L)); the post side grows with slope alpha_L, giving
-    # the quadratic root x = 2U^2*alpha_L + 2U*sqrt(U^2*alpha_L^2 + alpha_L*L). Mapped to volume
+    # Molecular diffusion as an effective dispersivity (see docstring): D_t = alpha_eff*xi. q_mean > 0
+    # is guaranteed -- _build_forward_operator returns early when total_volume <= 0, and
+    # tedges_days[-1] - tedges_days[0] > 0 for any valid strictly-increasing tedges.
+    alpha_eff = longitudinal_dispersivity + molecular_diffusivity * r_vpv / (streamline_length * q_mean)
+    # Dispersion half-widths in the breakthrough coordinate x (front D_t = alpha_eff*L): the pre side
+    # shrinks (|x| = U*2*sqrt(alpha_eff*L)); the post side grows with slope alpha_eff, giving the
+    # quadratic root x = 2U^2*alpha_eff + 2U*sqrt(U^2*alpha_eff^2 + alpha_eff*L). Mapped to volume
     # offsets via r_vpv/L and unioned over streamtubes (conservative, never under-covers the band).
-    pre_x = u * 2.0 * np.sqrt(longitudinal_dispersivity * streamline_length)
-    post_x = 2.0 * u * u * longitudinal_dispersivity + 2.0 * u * np.sqrt(
-        u * u * longitudinal_dispersivity**2 + longitudinal_dispersivity * streamline_length
-    )
+    pre_x = u * 2.0 * np.sqrt(alpha_eff * streamline_length)
+    post_x = 2.0 * u * u * alpha_eff + 2.0 * u * np.sqrt(u * u * alpha_eff**2 + alpha_eff * streamline_length)
     off_lo = float(np.min(r_vpv - (r_vpv / streamline_length) * pre_x))
     off_hi = float(np.max(r_vpv + (r_vpv / streamline_length) * post_x))
 
@@ -179,7 +197,7 @@ def _summed_antideriv(
     grid = np.arange(off_lo - margin, off_hi + margin + dv_fine, dv_fine)
 
     x = (grid[None, :] - r_vpv[:, None]) * streamline_length[:, None] / r_vpv[:, None]
-    dt_var = np.maximum(longitudinal_dispersivity[:, None] * np.maximum(x + streamline_length[:, None], 0.0), _DT_FLOOR)
+    dt_var = np.maximum(alpha_eff[:, None] * np.maximum(x + streamline_length[:, None], 0.0), _DT_FLOOR)
     antideriv = _breakthrough_antideriv(x, dt_var)
     ibar = ((r_vpv[:, None] / streamline_length[:, None]) * antideriv).mean(axis=0)
     return grid, ibar, mean_r_vpv, off_lo, off_hi
@@ -216,7 +234,7 @@ def _eval_antideriv(
     return np.where(dv > grid[-1], dv - mean_r_vpv, out)
 
 
-def _advection_micro_band(
+def _breakthrough_band(
     *,
     cumulative_volume_at_cin: npt.NDArray[np.floating],
     cumulative_volume_at_cout: npt.NDArray[np.floating],
@@ -227,7 +245,7 @@ def _advection_micro_band(
     off_hi: float,
     extend: bool,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp]]:
-    """Banded ``D_m=0`` advection+macro+micro coefficients on the native cumulative-volume grid.
+    """Banded breakthrough coefficients (advection + macro + micro + molecular) on the volume grid.
 
     For each cout bin, gathers the band of cin edges whose breakthrough offset falls in
     ``[off_lo, off_hi]`` (a conservative fixed window from ``searchsorted``, mirroring
@@ -296,23 +314,21 @@ def _build_forward_operator(
     retardation_factor: float,
     extend: bool,
     saturation_threshold: float,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp], float, npt.NDArray[np.bool_]] | None:
-    r"""Build the cin-independent pieces of the approximate banded forward operator ``W = G . M``.
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp], npt.NDArray[np.bool_]] | None:
+    r"""Build the cin-independent pieces of the approximate banded forward operator ``W``.
 
-    Both directions share this build: the advection+macro+micro band ``M`` (``coeff`` / ``cin_bin``,
-    :func:`_advection_micro_band`), the molecular time-Gaussian width ``sigma_bins`` (the operator
-    ``G``), and the residence-time ``valid`` mask. Because the band depends only on the volume grid
-    (not on ``cin`` / ``cout``), forward transport and reverse deconvolution operate on exactly the
-    same operator.
+    Both directions share this build: the banded breakthrough operator ``W`` (``coeff`` / ``cin_bin``,
+    :func:`_breakthrough_band` -- advection + macro + micro + molecular, with molecular diffusion
+    folded in as an effective dispersivity) and the residence-time ``valid`` mask. Because the band
+    depends only on the volume grid (not on ``cin`` / ``cout``), forward transport and reverse
+    deconvolution operate on exactly the same operator.
 
     Returns
     -------
     coeff : ndarray, shape (n_cout, band)
-        Banded ``M`` coefficients.
+        Banded ``W`` coefficients.
     cin_bin : ndarray of int, shape (n_cout, band)
         Column indices of ``coeff`` on the warm-start-extended cin axis.
-    sigma_bins : float
-        Molecular Gaussian width in output-bin units (0 -> ``G`` is the identity).
     valid : ndarray of bool, shape (n_cout,)
         Output bins with residence time finite at both edges (complete breakthrough).
 
@@ -334,17 +350,19 @@ def _build_forward_operator(
         cumulative_volume_at_cin=cumulative_volume_at_cin,
     )
 
-    n_cout = len(cout_tedges) - 1
     mean_bin_volume = total_volume / len(flow)
+    q_mean = total_volume / float(tedges_days[-1] - tedges_days[0])
     grid, ibar, mean_r_vpv, off_lo, off_hi = _summed_antideriv(
         aquifer_pore_volumes=aquifer_pore_volumes,
         streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
         longitudinal_dispersivity=longitudinal_dispersivity,
         retardation_factor=retardation_factor,
+        q_mean=q_mean,
         mean_bin_volume=mean_bin_volume,
         saturation_threshold=saturation_threshold,
     )
-    coeff, cin_bin = _advection_micro_band(
+    coeff, cin_bin = _breakthrough_band(
         cumulative_volume_at_cin=cumulative_volume_at_cin,
         cumulative_volume_at_cout=cumulative_volume_at_cout,
         grid=grid,
@@ -354,23 +372,6 @@ def _build_forward_operator(
         off_hi=off_hi,
         extend=extend,
     )
-
-    # Molecular diffusion: a single mean-streamtube time-domain Gaussian on the outlet signal.
-    # sigma_t^2 = 2*D_m*tau_bt*(r_vpv/L)^2/Q^2, with tau_bt = R*mean(V_pore)/Q the mean breakthrough
-    # time and Q = total_volume/total_time the flow-weighted mean throughflow. sigma_t (days) is
-    # converted with the OUTPUT-grid mean bin width (not the flow grid -- they differ for a coarse
-    # cout grid); a smear wider than the record cannot be resolved. Cap sigma_bins so the forward's
-    # truncation radius int(6*sigma_bins + 0.5) cannot exceed n_cout - 1 -- this matches the explicit
-    # min(..., n_cout - 1) clip the reverse applies in _banded_forward_matrix, so forward and reverse
-    # always use the identical molecular kernel (the cap is unreachable for realistic D_m).
-    total_days = float(tedges_days[-1] - tedges_days[0])
-    q_mean = total_volume / total_days
-    tau_bt = retardation_factor * float(aquifer_pore_volumes.mean()) / q_mean
-    sigma_t2 = (
-        2.0 * float(molecular_diffusivity.mean()) * tau_bt * (mean_r_vpv / float(streamline_length.mean())) ** 2
-    ) / q_mean**2
-    mean_cout_dt = (cout_tedges_days[-1] - cout_tedges_days[0]) / n_cout
-    sigma_bins = min(float(np.sqrt(sigma_t2)) / mean_cout_dt, (n_cout - 1) / 6.0)
 
     # Mask bins beyond the data range (and, without warm-start, incompletely-broken-through spin-up
     # bins). residence_time uses the extended grid when warm-starting so spin-up bins stay valid.
@@ -395,7 +396,7 @@ def _build_forward_operator(
         >= 1.0,
         axis=0,
     )
-    return coeff, cin_bin, sigma_bins, valid
+    return coeff, cin_bin, valid
 
 
 def _banded_forward_matrix(
@@ -404,17 +405,14 @@ def _banded_forward_matrix(
     cin_bin: npt.NDArray[np.intp],
     extend: bool,
     n_cin: int,
-    sigma_bins: float,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp]]:
-    """Assemble ``W = G . M`` as a per-row contiguous band for ``_solve_reverse_banded``.
+    """Assemble the banded forward operator ``W`` as a per-row contiguous band for ``_solve_reverse_banded``.
 
-    ``M`` (advection + macro + microdispersion) is scattered from the native band onto the real cin
-    axis, folding the warm-start virtual columns into the boundary bins
-    (``clip(cin_bin - int(extend), 0, n_cin - 1)``, so ``M @ cin`` equals the forward's
-    ``coeff @ cin_ext`` exactly). ``G`` is the molecular time-Gaussian along the output-bin axis (the
-    same ``mode="nearest"`` kernel the forward applies with :func:`scipy.ndimage.gaussian_filter1d`).
-    The returned band carries the forward operator verbatim; ``_solve_reverse_banded`` masks the
-    spin-up rows/columns and normalizes, so a forward-then-inverse round trip is self-consistent.
+    The breakthrough coefficients are scattered from the native band onto the real cin axis, folding
+    the warm-start virtual columns into the boundary bins (``clip(cin_bin - int(extend), 0, n_cin - 1)``,
+    so ``W @ cin`` equals the forward's ``coeff @ cin_ext`` exactly). The returned band carries the
+    forward operator verbatim; ``_solve_reverse_banded`` masks the spin-up rows/columns and normalizes,
+    so a forward-then-inverse round trip is self-consistent.
 
     Returns
     -------
@@ -426,22 +424,11 @@ def _banded_forward_matrix(
     n_cout = coeff.shape[0]
     rows = np.broadcast_to(np.arange(n_cout)[:, None], coeff.shape)
     real_col = np.clip(cin_bin - int(extend), 0, n_cin - 1)
-    m_mat = coo_array((coeff.ravel(), (rows.ravel(), real_col.ravel())), shape=(n_cout, n_cin)).tocsr()
+    # COO -> CSR sums the warm-start virtual columns folded onto the boundary real columns.
+    w_mat = coo_array((coeff.ravel(), (rows.ravel(), real_col.ravel())), shape=(n_cout, n_cin)).tocsr()
 
-    lw = min(int(6.0 * sigma_bins + 0.5), n_cout - 1) if sigma_bins > 0.0 else 0
-    if lw > 0:
-        offsets = np.arange(-lw, lw + 1)
-        kernel = np.exp(-0.5 * (offsets / sigma_bins) ** 2)
-        kernel /= kernel.sum()
-        g_rows = np.repeat(np.arange(n_cout), offsets.size)
-        g_cols = np.clip(np.arange(n_cout)[:, None] + offsets[None, :], 0, n_cout - 1).ravel()
-        g_mat = coo_array((np.tile(kernel, n_cout), (g_rows, g_cols)), shape=(n_cout, n_cout)).tocsr()
-        w_mat = (g_mat @ m_mat).tocsr()
-    else:
-        w_mat = m_mat
-
-    # CSR -> contiguous per-row band. Each W row is the union of overlapping contiguous M bands, so
-    # it stays contiguous (a flow spike that briefly opens a gap only adds explicit interior zeros).
+    # CSR -> contiguous per-row band. Each row spans one contiguous cin band (the fold only saturates
+    # the ends onto the boundary columns), so the banded layout carries no spurious interior gaps.
     w_mat.sort_indices()
     indptr, indices, data = w_mat.indptr, w_mat.indices, w_mat.data
     row_counts = np.diff(indptr)
@@ -476,15 +463,18 @@ def infiltration_to_extraction(
     """Compute extracted concentration with advection, microdispersion, and molecular diffusion (approximate).
 
     Fast *approximate* counterpart of :func:`gwtransport.diffusion_fast.infiltration_to_extraction`.
-    The advection + macrodispersion + microdispersion (``alpha_L``) part is the exact skewed
-    ``D_m=0`` Kreft-Zuber breakthrough applied on the native cumulative-volume grid; molecular
-    diffusion (``D_m``) is a symmetric time-domain Gaussian. The result is flow-independent and
-    accurate to ~3e-4 whenever ``alpha_L > 0`` (the typical regime) for realistic solute ``D_m``
-    (~1e-4) or ``R = 1``. It loosens to ~1e-2 (sharp inputs) in the molecular-diffusion-dominated
-    corner (``alpha_L`` ~ 0), and retardation enlarges that corner because the Gaussian variance
-    grows as ``D_m * R^3`` (a sharp input at ``D_m = 0.01`` reaches ~1.7e-2 at ``R = 2`` and ~3.5e-2
-    at ``R = 3``). For machine precision -- or heat transport with ``R > 1`` and large ``D_m`` -- use
-    :mod:`gwtransport.diffusion_fast`.
+    Advection + macrodispersion + microdispersion (``alpha_L``) and molecular diffusion (``D_m``,
+    folded in as an effective dispersivity ``alpha_L + D_m*r_vpv/(L*q_mean)`` per streamtube) form a
+    single exact skewed Kreft-Zuber breakthrough on the native cumulative-volume grid. At **constant
+    flow** the result reproduces :func:`gwtransport.diffusion_fast.infiltration_to_extraction` to the
+    ``Ibar`` interpolation floor (~1e-6 smooth, ~1e-4 sharp) at realistic Peclet numbers
+    (``Pe = L/alpha_eff >> 1``), including heat (``R > 1``, large ``D_m``); only the extreme low-Peclet
+    corner (``Pe <~ 2``) loses breakthrough-shape accuracy to the fine-grid sample cap. Under
+    **variable flow** the molecular part carries a commutator residual
+    from the frozen ``q_mean``: small when molecular diffusion is sub-dominant (``alpha_L > 0``, <~1e-3
+    for realistic solute ``D_m``), growing to the multi-percent range for sharp inputs in the
+    molecular-diffusion-dominated corner (``alpha_L`` ~ 0) under strongly variable flow. For machine
+    precision -- or that corner -- use :mod:`gwtransport.diffusion_fast`.
 
     Parameters
     ----------
@@ -580,23 +570,14 @@ def infiltration_to_extraction(
     if operator is None:
         # No through-flow: nothing breaks through (matches diffusion_fast's all-NaN result).
         return np.full(n_cout, np.nan)
-    coeff, cin_bin, sigma_bins, valid = operator
+    coeff, cin_bin, valid = operator
 
-    # Apply the advection+macro+micro band M to the (warm-start-extended) cin, then the molecular
-    # time-Gaussian G. Output bins with no through-flow carry a hard 0 in cout_micro; a plain
-    # Gaussian would smear those zeros into the valid neighbours. Convolve mask-aware instead --
-    # G(cout_micro*support)/G(support) -- so gap bins act as missing (not zero) data. This equals a
-    # plain G where support is all-True (constants stay constant, incl. exactly across a gap).
+    # Apply the banded breakthrough operator to the (warm-start-extended) cin. Output bins with no
+    # through-flow carry coeff.sum() ~= 0, so the support mask NaNs them out; the band adds zero volume
+    # across a zero-flow gap, so a constant cin stays constant across it (no smear to leak).
     cin_ext = np.concatenate([[cin[0]], cin, [cin[-1]]]) if extend else cin
-    cout_micro = np.einsum("kb,kb->k", coeff, cin_ext[cin_bin])
+    cout = np.einsum("kb,kb->k", coeff, cin_ext[cin_bin])
     support = coeff.sum(axis=1) >= _EPSILON_COEFF_SUM
-    if sigma_bins == 0.0:
-        cout = cout_micro
-    else:
-        num = gaussian_filter1d(cout_micro * support, sigma_bins, mode="nearest", truncate=6.0)
-        den = gaussian_filter1d(support.astype(float), sigma_bins, mode="nearest", truncate=6.0)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            cout = num / den  # den > 0 wherever support is True; 0/0 gap bins are masked out below
     return np.where(support & valid, cout, np.nan)
 
 
@@ -618,17 +599,20 @@ def extraction_to_infiltration(
 ) -> npt.NDArray[np.floating]:
     """Reconstruct infiltration concentration from extracted water (fast approximate deconvolution).
 
-    Inverts the **same** approximate operator the forward applies: it assembles ``W = G . M`` (the
-    advection+macro+micro band ``M`` times the molecular time-Gaussian ``G``) directly in banded form
-    and deconvolves it with banded Tikhonov regularization (``_solve_reverse_banded`` -- banded
-    Cholesky on the normal equations, ``O(n * band**2)``). It builds ``W`` from one ``Ibar`` gather
-    plus a sparse ``G . M`` product -- no per-pore-volume closed-form loop and no dense
-    ``(n_cout, n_cin)`` matrix -- so it is much faster than
+    Inverts the **same** approximate operator ``W`` the forward applies: it assembles the banded
+    breakthrough operator ``W`` (advection + macro + micro + molecular, molecular folded in as an
+    effective dispersivity) directly in banded form and deconvolves it with banded Tikhonov
+    regularization (``_solve_reverse_banded`` -- banded Cholesky on the normal equations,
+    ``O(n * band**2)``). It builds ``W`` from one ``Ibar`` gather -- no per-pore-volume closed-form
+    loop and no dense ``(n_cout, n_cin)`` matrix -- so it is much faster than
     :func:`gwtransport.diffusion_fast.extraction_to_infiltration` (which evaluates the exact
-    breakthrough per streamtube), especially for many streamtubes. Because the deconvolved operator
-    is exactly the forward operator, a forward-then-inverse round trip recovers ``cin`` up to the
-    deconvolution conditioning and regularization; the approximation lives entirely in the forward
-    operator vs :mod:`gwtransport.diffusion_fast`.
+    breakthrough per streamtube), especially for many streamtubes. Because the deconvolved operator is
+    exactly the forward operator, a forward-then-inverse round trip recovers ``cin`` up to the
+    deconvolution conditioning and regularization. On real extraction data the reverse is as accurate
+    as the forward: at constant flow it matches
+    :func:`gwtransport.diffusion_fast.extraction_to_infiltration` to ~1e-6, while the
+    molecular-diffusion-dominated corner under strongly variable flow amplifies the forward's
+    commutator residual (use :mod:`gwtransport.diffusion_fast` there).
 
     Parameters
     ----------
@@ -722,11 +706,9 @@ def extraction_to_infiltration(
     if operator is None:
         # No through-flow: nothing constrains the infiltration signal.
         return np.full(n_cin, np.nan)
-    coeff, cin_bin, sigma_bins, valid = operator
+    coeff, cin_bin, valid = operator
 
-    band_vals, col_start = _banded_forward_matrix(
-        coeff=coeff, cin_bin=cin_bin, extend=extend, n_cin=n_cin, sigma_bins=sigma_bins
-    )
+    band_vals, col_start = _banded_forward_matrix(coeff=coeff, cin_bin=cin_bin, extend=extend, n_cin=n_cin)
     return _solve_reverse_banded(
         band_vals=band_vals,
         col_start=col_start,

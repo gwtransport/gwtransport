@@ -1,15 +1,19 @@
 """Tests for gwtransport.diffusion_fast_fast.
 
-diffusion_fast_fast is a fast *approximate* forward transport: the advection + macrodispersion +
-microdispersion part is the exact D_m=0 Kreft-Zuber breakthrough on the native cumulative-volume
-grid, and molecular diffusion is a symmetric time-domain Gaussian (the documented limit). Its
-reference is gwtransport.diffusion_fast (machine-precision exact), which is itself anchored to the
-gwtransport.diffusion Gauss-Legendre quadrature.
+diffusion_fast_fast is a fast *approximate* forward transport: advection + macrodispersion +
+microdispersion AND molecular diffusion (folded in as an effective dispersivity
+alpha_eff = alpha_L + D_m*r_vpv/(L*q_mean) per streamtube) form a single skewed Kreft-Zuber
+breakthrough on the native cumulative-volume grid. Its reference is gwtransport.diffusion_fast
+(machine-precision exact), which is itself anchored to the gwtransport.diffusion Gauss-Legendre
+quadrature. At constant flow the method reproduces diffusion_fast to the Ibar-interpolation floor
+(~1e-4) for every regime including heat; under variable flow the molecular part carries a
+frozen-q_mean commutator residual (small when molecular diffusion is sub-dominant).
 
 Tolerances here are deliberately approximate and pinned per regime to the measured worst case
 (comments record the measurement) -- never blanket-loose. The reverse path deconvolves the SAME
-approximate operator the forward applies (banded W = G . M solved with banded Tikhonov), so a round
-trip is self-consistent: machine-precision at constant flow R=1 and conditioning-limited otherwise.
+approximate operator the forward applies (the banded breakthrough operator W solved with banded
+Tikhonov), so a round trip is self-consistent: machine-precision at constant flow R=1 and
+conditioning-limited otherwise.
 """
 
 import time
@@ -192,8 +196,10 @@ def test_step1_kernel_fineness_convergence(monkeypatch):
 @pytest.mark.parametrize("flow_kind", ["const", "cv01", "cv03", "cv06"])
 @pytest.mark.parametrize("inp", ["pulse", "smooth"])
 def test_full_typical_alpha_present_flow_independent(inp, flow_kind):
-    """With mechanical dispersion present (alpha_L>0, the typical regime) the method is ~3e-4 and
-    flow-independent: CV 0.6 is no worse than constant flow."""
+    """With mechanical dispersion present (alpha_L>0, the typical regime) the method stays within the
+    ~1e-3 bound for constant AND strongly variable flow: the advection+micro part is exact and
+    volume-stationary, and the sub-dominant molecular commutator residual stays small under flow
+    variation."""
     n = 200
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     flow = {
@@ -221,45 +227,57 @@ def test_full_typical_alpha_present_flow_independent(inp, flow_kind):
 
 
 def test_flow_independence_with_microdispersion():
-    """With alpha_L>0 the error is genuinely flow-INDEPENDENT (the advection+micro part is
-    volume-stationary): the strongly-variable-flow error must stay within a small factor of the
-    constant-flow error, not just below the absolute bound. A flow-dependent regression would
-    degrade with CV while still passing the per-regime bound."""
+    """The advection+micro part (D_m=0) is volume-stationary, so its error vs diffusion_fast stays at
+    the Ibar-interpolation floor under strongly variable flow -- NOT a ratio test: with the
+    effective-dispersivity fold the constant-flow error is near-zero (the operator is exact there),
+    so err_cv06/err_const blows up while both stay tiny; the meaningful guard is an ABSOLUTE bound.
+    With realistic sub-dominant molecular diffusion (D_m>0) the molecular part carries a small
+    flow-DEPENDENT commutator residual (that is the honest behaviour, not a regression) -- bounded,
+    and strictly larger than the D_m=0 part."""
     n = 200
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
-    apv = _apv(25)
-    cin = _smooth(n)
     common = {
-        "cin": cin,
+        "cin": _smooth(n),
         "tedges": tedges,
         "cout_tedges": tedges.copy(),
-        "aquifer_pore_volumes": apv,
+        "aquifer_pore_volumes": _apv(25),
         "streamline_length": SL,
-        "molecular_diffusivity": 0.05,
         "longitudinal_dispersivity": 1.0,
         "retardation_factor": 2.0,
     }
 
-    def err(flow):
-        return _peak_rel(infiltration_to_extraction(flow=flow, **common), df_i2e(flow=flow, **common))
+    def worst_cv06(d_m):
+        return max(
+            _peak_rel(
+                infiltration_to_extraction(flow=_variable_flow(n, 0.6, seed=s), molecular_diffusivity=d_m, **common),
+                df_i2e(flow=_variable_flow(n, 0.6, seed=s), molecular_diffusivity=d_m, **common),
+            )
+            for s in range(8)
+        )
 
-    err_const = err(np.full(n, 100.0))
-    err_cv06 = err(_variable_flow(n, 0.6, seed=5))
-    assert err_cv06 < 3.0 * max(err_const, 1e-6)  # measured ratio ~1.6
+    err_micro = worst_cv06(0.0)  # pure advection+micro, volume-stationary
+    err_molecular = worst_cv06(0.05)  # + sub-dominant molecular commutator
+    assert err_micro < 1e-4  # measured worst-of-8-seeds ~3.9e-5 (Ibar interpolation floor)
+    assert err_molecular < 5e-4  # measured worst-of-8-seeds ~1.3e-4 (the flow-dependent commutator)
+    assert err_molecular > err_micro  # the molecular term is what carries the flow dependence
 
 
-@pytest.mark.parametrize(
-    ("d_m", "alpha_l", "inp", "bound", "note"),
-    [
-        (0.0, 2.0, "pulse", 2e-4, "micro-dominant pulse, measured 8e-5"),
-        (0.3, 0.0, "smooth", 5e-4, "molecular-dominant smooth, measured 9e-5"),
-        (0.3, 0.0, "pulse", 6e-3, "molecular-dominant sharp D_m=0.3, measured 4e-3"),
-        (1.0, 0.0, "pulse", 1.5e-2, "molecular-dominant sharp D_m=1.0, measured 1e-2"),
-    ],
-)
-def test_full_regime_bounds(d_m, alpha_l, inp, bound, note):
-    """Per-regime accuracy bounds pinned to the measured worst case (see `note`). Sharp inputs are
-    crossed only with the micro-dominant / molecular-dominant buckets that own the loose bounds."""
+@pytest.mark.parametrize("retardation", [1.0, 2.0, 3.0])
+@pytest.mark.parametrize("d_m", [0.01, 0.5, 1.0])
+@pytest.mark.parametrize("alpha_l", [0.0, 1.0])
+@pytest.mark.parametrize("inp", ["pulse", "smooth"])
+def test_constant_flow_exact_all_regimes(inp, alpha_l, d_m, retardation):
+    """At CONSTANT flow the effective-dispersivity fold reproduces diffusion_fast to the
+    Ibar-interpolation floor across every realistic regime (Peclet Pe = L/alpha_eff >> 1) -- including
+    heat (R>1, large D_m) and the molecular-dominant sharp corner. (The extreme low-Peclet corner
+    Pe <~ 2, where the fine-grid sample cap coarsens the wide band, is out of scope -- see the module
+    docstring.) This is the headline property: molecular diffusion D_m*tau maps
+    exactly to an added dispersivity D_m*r_vpv/(L*Q) at constant flow, so the SKEWED molecular
+    breakthrough is reproduced, not merely its second moment. The large-D_m buckets (0.5, 1.0) are the
+    load-bearing guard: the old global time-domain Gaussian leaves up to ~3.6e-2 here (caught in the
+    high-R / sharp-pulse buckets), and dropping or mis-scaling the molecular term blows up further.
+    Replaces the old per-regime bound sweep (its buckets are subsumed; D_m=0 flow-independence is
+    covered by test_step1_advection_micro_parity)."""
     n = 200
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     cin = _pulse(n) if inp == "pulse" else _smooth(n)
@@ -272,12 +290,17 @@ def test_full_regime_bounds(d_m, alpha_l, inp, bound, note):
         "streamline_length": SL,
         "molecular_diffusivity": d_m,
         "longitudinal_dispersivity": alpha_l,
+        "retardation_factor": retardation,
     }
-    assert _peak_rel(infiltration_to_extraction(**kw), df_i2e(**kw)) < bound, note
+    cout_ff = infiltration_to_extraction(**kw)
+    cout_df = df_i2e(**kw)
+    assert np.array_equal(np.isnan(cout_ff), np.isnan(cout_df))
+    assert _peak_rel(cout_ff, cout_df) < 5e-4  # measured worst ~1.7e-4 (alpha_L=0 sharp kink, Ibar floor)
 
 
 def test_full_bimodal_apvd():
-    """A bimodal APVD (no gamma assumption): tight when alpha_L>0, loose only molecular-dominant sharp."""
+    """A bimodal APVD (no gamma assumption) at constant flow: tight everywhere with the eff-disp fold,
+    including the molecular-dominant sharp corner that the old symmetric time-Gaussian left at ~5e-2."""
     n = 200
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     bimodal = np.array([300.0, 320.0, 340.0, 900.0, 920.0, 940.0])
@@ -292,14 +315,17 @@ def test_full_bimodal_apvd():
     ff = infiltration_to_extraction(cin=_smooth(n), molecular_diffusivity=0.1, longitudinal_dispersivity=1.0, **base)
     df = df_i2e(cin=_smooth(n), molecular_diffusivity=0.1, longitudinal_dispersivity=1.0, **base)
     assert _peak_rel(ff, df) < 5e-4
-    # molecular-dominant sharp -> the wide-APVD corner, measured ~4.9e-2
+    # molecular-dominant sharp -> exact at constant flow (skew captured), measured ~1.4e-4
     ffp = infiltration_to_extraction(cin=_pulse(n), molecular_diffusivity=0.3, longitudinal_dispersivity=0.0, **base)
     dfp = df_i2e(cin=_pulse(n), molecular_diffusivity=0.3, longitudinal_dispersivity=0.0, **base)
-    assert _peak_rel(ffp, dfp) < 6e-2
+    assert _peak_rel(ffp, dfp) < 1e-3
 
 
 def test_full_per_pore_volume_arrays_mixed_diffusivity_retardation():
-    """Per-streamtube L / D_m / alpha_L arrays with D_m mixed zero/non-zero and R != 1."""
+    """Per-streamtube L / D_m / alpha_L arrays with D_m mixed zero/non-zero and R != 1. Tight bound is
+    load-bearing: the effective dispersivity D_m*r_vpv/(L*q_mean) is PER STREAMTUBE, so a regression
+    that used the bundle-mean r_vpv (mean_r_vpv) instead of the per-tube r_vpv errs ~1.5e-5 -- caught
+    by the 5e-6 bound but not by a loose one."""
     n = 200
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     kw = {
@@ -316,34 +342,175 @@ def test_full_per_pore_volume_arrays_mixed_diffusivity_retardation():
     cout_ff = infiltration_to_extraction(**kw)
     cout_df = df_i2e(**kw)
     assert np.array_equal(np.isnan(cout_ff), np.isnan(cout_df))
-    assert _peak_rel(cout_ff, cout_df) < 5e-4  # measured ~7.7e-5
+    assert _peak_rel(cout_ff, cout_df) < 5e-6  # measured ~1.8e-6; per-tube skew fold (mean_r_vpv mutant ~1.5e-5)
 
 
-@pytest.mark.parametrize("retardation", [1.0, 2.5])
+@pytest.mark.parametrize("retardation", [1.0, 3.0])
 def test_molecular_term_is_load_bearing(retardation):
-    """Pin the molecular-dominant floor AND prove the time-Gaussian is doing real work: at a large
-    pore volume (sigma_bins ~ 2.4) the molecular smear must bring the result far closer to
-    diffusion_fast than the smear-free (advection-only) approximation would -- a sigma regression
-    (e.g. sigma collapsing to 0, or a wrong R / mean_r_vpv dependence in sigma_t^2) would blow the
-    error up to ~0.9 and trip the floor. Parametrized over R to guard the R term in sigma_t^2."""
+    """Prove the molecular effective-dispersivity term is doing real work AND that its retardation
+    dependence is correct. At a large pore volume with strong D_m the molecular breakthrough is a big
+    part of the signal: including it (the eff-disp fold) matches diffusion_fast to the Ibar floor,
+    while dropping it (D_m=0) errs ~0.8. V_pore is held fixed and R varied, so r_vpv = R*V_pore -- and
+    hence alpha_eff = alpha_L + D_m*r_vpv/(L*q_mean) -- genuinely changes with R (unlike a fixed-r_vpv
+    setup, where the R parametrization would run identical math); a wrong R / r_vpv dependence in the
+    fold breaks the match."""
     n = 200
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     base = {
         "flow": np.full(n, 100.0),
         "tedges": tedges,
         "cout_tedges": tedges.copy(),
-        "aquifer_pore_volumes": np.array([4000.0 / retardation]),  # keep r_vpv ~ 4000 across R
+        "aquifer_pore_volumes": np.array([2000.0]),  # fixed V_pore -> r_vpv = R*2000 varies with R
         "streamline_length": SL,
         "longitudinal_dispersivity": 0.0,
         "retardation_factor": retardation,
     }
     ref = df_i2e(cin=_pulse(n), molecular_diffusivity=0.3, **base)
-    with_smear = infiltration_to_extraction(cin=_pulse(n), molecular_diffusivity=0.3, **base)
-    no_smear = infiltration_to_extraction(cin=_pulse(n), molecular_diffusivity=0.0, **base)
-    err_with = _peak_rel(with_smear, ref)
-    err_without = _peak_rel(no_smear, ref)
-    assert err_with < 6e-2  # measured floor ~3-5e-2
-    assert err_with < err_without / 3.0  # measured >20x improvement; guards sigma regressions
+    with_molecular = infiltration_to_extraction(cin=_pulse(n), molecular_diffusivity=0.3, **base)
+    without_molecular = infiltration_to_extraction(cin=_pulse(n), molecular_diffusivity=0.0, **base)
+    err_with = _peak_rel(with_molecular, ref)
+    err_without = _peak_rel(without_molecular, ref)
+    assert err_with < 1e-3  # measured ~1.6e-5 (R=3) .. 7.4e-5 (R=1) -- the Ibar floor
+    assert err_with < err_without / 3.0  # molecular term is load-bearing (drop it -> err ~0.8)
+
+
+@pytest.mark.parametrize(
+    ("n", "pv", "retardation", "d_m", "length", "start", "k_tail", "bound"),
+    [
+        (150, 6000.0, 2.0, 0.05, 80.0, 40, 10, 1e-4),  # config A: front lands at the record end
+        (400, 10000.0, 3.0, 0.01, 100.0, 100, 20, 1e-5),  # config B: molecular tail into the last ~20 bins
+    ],
+)
+def test_record_end_molecular_tail_matches_df(n, pv, retardation, d_m, length, start, k_tail, bound):
+    """DFF-F1 regression. A molecular early-arrival tail that lands at/beyond the last output edge is
+    built directly from in-record cin by the volume-domain fold (the old time-domain Gaussian could
+    only redistribute in-record mass, so it lost this tail entirely -- peak-rel 1.0 at the record end).
+    Assert VALUE parity on the raw trailing slice (NOT via _peak_rel, which skips the last 8 bins --
+    exactly the tail), plus NaN-pattern parity (the tail bins are valid in both, just wrong-valued in
+    the old code, so the NaN check alone would not have caught this)."""
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cin = np.zeros(n)
+    cin[start : start + 4] = 1.0
+    kw = {
+        "cin": cin,
+        "flow": np.full(n, 100.0),
+        "tedges": tedges,
+        "cout_tedges": tedges.copy(),
+        "aquifer_pore_volumes": np.array([pv]),
+        "streamline_length": length,
+        "molecular_diffusivity": d_m,
+        "longitudinal_dispersivity": 0.0,
+        "retardation_factor": retardation,
+    }
+    cout_ff = infiltration_to_extraction(**kw)
+    cout_df = df_i2e(**kw)
+    assert np.array_equal(np.isnan(cout_ff), np.isnan(cout_df))
+    peak = np.nanmax(np.abs(cout_df[~np.isnan(cout_df)]))
+    tail_err = np.nanmax(np.abs(cout_ff[-k_tail:] - cout_df[-k_tail:])) / peak
+    assert tail_err < bound  # old time-Gaussian lost the tail (1.0); measured A 1.1e-5 / B 1.9e-6
+
+
+def test_subbin_molecular_no_aliasing():
+    """DFF-F2 regression. The old time-domain Gaussian was the integer-SAMPLED kernel; for sub-bin
+    molecular width it aliased badly on an edge-aligned sharp feature (peak-rel 0.327) and on a
+    discrete-APVD comb (0.249). The volume-domain fold has no bin-index kernel at all, so both collapse
+    to the Ibar floor."""
+    # edge-aligned 1-bin pulse, single tube, sub-bin molecular width
+    n = 150
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cin = np.zeros(n)
+    cin[40] = 1.0
+    single = {
+        "cin": cin,
+        "flow": np.full(n, 100.0),
+        "tedges": tedges,
+        "cout_tedges": tedges.copy(),
+        "aquifer_pore_volumes": np.array([4000.0]),
+        "streamline_length": SL,
+        "molecular_diffusivity": 0.01,
+        "longitudinal_dispersivity": 0.0,
+    }
+    assert _peak_rel(infiltration_to_extraction(**single), df_i2e(**single)) < 5e-3  # old 0.327; measured ~6.8e-4
+    # discrete-APVD comb: many streamtubes each smearing sub-bin
+    n = 320
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    cin = np.zeros(n)
+    cin[40] = 1.0
+    comb = {
+        "cin": cin,
+        "flow": np.full(n, 100.0),
+        "tedges": tedges,
+        "cout_tedges": tedges.copy(),
+        "aquifer_pore_volumes": gamma.bins(mean=4000.0, std=1000.0, n_bins=25)["expected_values"],
+        "streamline_length": SL,
+        "molecular_diffusivity": 0.005,
+        "longitudinal_dispersivity": 0.0,
+    }
+    assert _peak_rel(infiltration_to_extraction(**comb), df_i2e(**comb)) < 5e-3  # old comb 0.249; measured ~1.2e-3
+
+
+def test_variable_flow_molecular_commutator_bounded():
+    """DFF-F3 regression. Under variable flow the molecular width is local, but the fold freezes q_mean
+    -> a commutator residual. The old global time-Gaussian obeyed err ~ |sigma_loc/sigma_bar - 1| and
+    reached ~0.9 here; the volume-domain fold carries the dominant 1/Q(t*) factor per streamtube and
+    stays bounded. The sinusoidal flow period is pinned to the breakthrough time tau_bt = r_vpv/q_mean
+    (resonance is the worst case). A seasonal (annual) period would push the residual higher -- the
+    documented 'use diffusion_fast' corner -- so this bound must NOT be read as a universal
+    variable-flow guarantee; it guards against a regression back to the global-sigma behaviour."""
+    n = 480
+    t = np.arange(n)
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    pv, retardation, length = 6000.0, 2.0, 100.0
+    # q_mean = mean(flow) = 100 (the sinusoid averages to 0); tau_bt = R*pv/q_mean = 120 -> pin period.
+    period = retardation * pv / 100.0
+    flow = 100.0 * (1.0 + 0.5 * np.sin(2.0 * np.pi * t / period))
+    cin = np.zeros(n)
+    cin[90:94] = 1.0  # arrival in a rising-flow phase (worst placement)
+    kw = {
+        "cin": cin,
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": tedges.copy(),
+        "aquifer_pore_volumes": np.array([pv]),
+        "streamline_length": length,
+        "molecular_diffusivity": 0.05,
+        "longitudinal_dispersivity": 0.0,
+        "retardation_factor": retardation,
+    }
+    assert _peak_rel(infiltration_to_extraction(**kw), df_i2e(**kw)) < 0.08  # old global-sigma ~0.9; measured ~2.4e-2
+
+
+def test_variable_flow_bundle_molecular_commutator_bounded():
+    """Companion to test_variable_flow_molecular_commutator_bounded (single tube) and
+    test_full_typical_alpha_present_flow_independent (molecular sub-dominant): a gamma BUNDLE under
+    variable flow with molecular diffusion a non-trivial fraction of the dispersion. The effective
+    dispersivity D_m*r_vpv/(L*q_mean) is per streamtube, so this guards that the frozen-q_mean
+    commutator stays bounded across the bundle -- a regression that froze q_mean at a bundle-wrong
+    value, or used mean_r_vpv under variable flow, is invisible to the single-tube F3 test and to the
+    sub-dominant alpha_L=1 typical test."""
+    n = 240
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    common = {
+        "tedges": tedges,
+        "cout_tedges": tedges.copy(),
+        "aquifer_pore_volumes": _apv(25),
+        "streamline_length": SL,
+        "molecular_diffusivity": 0.1,
+        "longitudinal_dispersivity": 0.2,
+        "retardation_factor": 2.0,
+    }
+    worst = 0.0
+    for cin in (_pulse(n), _smooth(n)):
+        for seed in range(6):
+            flow = _variable_flow(n, 0.4, seed)
+            worst = max(
+                worst,
+                _peak_rel(
+                    infiltration_to_extraction(cin=cin, flow=flow, **common),
+                    df_i2e(cin=cin, flow=flow, **common),
+                ),
+            )
+    assert worst < 3e-3  # measured worst-of-6-seeds x {pulse,smooth} ~7.0e-4 (per-tube commutator, bundle)
 
 
 # =============================================================================
@@ -396,13 +563,12 @@ def test_coarse_cout_grid_with_flow_out():
     assert _peak_rel(cout_ff, cout_df) < 1e-3  # measured ~5e-6
 
 
-def test_coarse_cout_grid_molecular_smear_uses_output_bin_width():
-    """The molecular sigma must be converted with the OUTPUT-grid bin width, not the flow-grid width.
-    Here sigma_bins ~0.1 on the cout grid (a sub-bin smear), so this test does NOT isolate a
-    load-bearing smear magnitude -- it isolates the 4x WIDTH error: using the wrong (flow-grid) width
-    inflates the kernel 4x, and with the sharp input that over-smear blows the error up to tens of
-    percent, whereas the correct output-grid width matches diffusion_fast to ~1e-4. alpha_L>0 keeps
-    step 1 exact so this isolates the smear width alone."""
+def test_coarse_cout_grid_strong_molecular():
+    """Strong molecular diffusion (D_m=0.5) on a COARSE cout grid + flow_out (the anchored-cumsum Vc
+    branch). The molecular term is now folded into the volume-domain Ibar (widening alpha_eff and the
+    band), so it is independent of the output bin width -- unlike the old time-domain Gaussian, whose
+    width had to be converted with the cout-grid spacing. This exercises the wide-band eff-disp fold
+    through the coarse-cout Vc path; it matches diffusion_fast to the Ibar floor at constant flow."""
     n = 360
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     flow = np.full(n, 100.0)
@@ -413,13 +579,13 @@ def test_coarse_cout_grid_molecular_smear_uses_output_bin_width():
         "flow": flow,
         "tedges": tedges,
         "cout_tedges": cout_tedges,
-        "aquifer_pore_volumes": np.array([1000.0]),  # sigma_bins ~0.1 on the cout grid
+        "aquifer_pore_volumes": np.array([1000.0]),
         "streamline_length": SL,
         "molecular_diffusivity": 0.5,
         "longitudinal_dispersivity": 1.0,
         "flow_out": flow_out,
     }
-    assert _peak_rel(infiltration_to_extraction(**kw), df_i2e(**kw)) < 1e-3  # measured ~1.4e-4
+    assert _peak_rel(infiltration_to_extraction(**kw), df_i2e(**kw)) < 1e-5  # measured ~8.9e-7
 
 
 # =============================================================================
@@ -491,13 +657,11 @@ def test_zero_diffusion_matches_advection():
 
 
 def test_forward_zero_flow_gap_no_smear_into_neighbours():
-    """A pump-off gap (zero through-flow) puts a hard 0 in cout_micro at the gap bins; the molecular
-    time-Gaussian must NOT smear those zeros into the valid neighbours. With a constant input the
-    mask-aware convolution G(cout_micro*m)/G(m) preserves the constant EXACTLY across the gap (every
-    valid bin == cin) while the gap-interior bins stay NaN. A plain gaussian_filter1d of the hard
-    zeros instead drops the immediate neighbours ~12% below the constant (baseline: 6.39 vs 7.3).
-    sigma_bins ~0.5 here, so the molecular Gaussian is genuinely active and the mask is load-bearing.
-    """
+    """A pump-off gap (zero through-flow) must not corrupt the valid neighbours. Because molecular
+    diffusion lives in the volume-domain band (a zero-flow gap adds zero cumulative volume, so its
+    coefficients are zero), there is no time-domain smear that could leak the gap's missing data into
+    the neighbours: a constant input is preserved EXACTLY across the gap (every valid bin == cin) while
+    the gap-interior bins stay NaN, matching diffusion_fast's NaN pattern."""
     n = 120
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     flow = np.full(n, 100.0)
@@ -526,9 +690,9 @@ def test_forward_zero_flow_gap_no_smear_into_neighbours():
 
 
 def test_column_mass_exact_at_constant_flow():
-    """At constant flow the time-Gaussian conserves volumetric column mass exactly (time integral =
-    volume integral), so the probe-built operator's volume-weighted column sums equal the infiltrated
-    volume per cin bin to machine precision -- a genuine conservation check (holds for D_m>0)."""
+    """At constant flow the breakthrough operator conserves volumetric column mass exactly, so the
+    probe-built operator's volume-weighted column sums equal the infiltrated volume per cin bin to
+    machine precision -- a genuine conservation check (holds for D_m>0)."""
     n = 200
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     flow = np.full(n, 100.0)
@@ -554,9 +718,8 @@ def test_column_mass_exact_at_constant_flow():
 def test_column_mass_conserved_at_variable_flow_matches_diffusion_fast():
     """Under variable flow, on fully-broken-through interior bins the approximate operator conserves
     volumetric column mass just as the exact diffusion_fast does -- the method does not introduce
-    extra mass error. (The molecular smear is mass-neutral at the sub-bin sigma of realistic D_m;
-    the smear itself is guarded by test_molecular_term_is_load_bearing.) Probe-built W, so
-    non-tautological."""
+    extra mass error. (The molecular effective-dispersivity term is mass-conserving in the volume
+    domain; it is guarded by test_molecular_term_is_load_bearing.) Probe-built W, so non-tautological."""
     n = 60
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     flow = _variable_flow(n, 0.5, seed=5)
@@ -718,11 +881,11 @@ def test_reverse_round_trip_recovers_signal(cv, retardation, n_seeds, bound, not
 
 
 def test_reverse_molecular_dominant_round_trip():
-    """Exercise the reverse molecular Gaussian G at a NON-trivial width. The round-trip tests above
-    all sit at sub-bin sigma where G is effectively the identity, so they cannot see a corrupted G.
-    Here a large pore volume + strong D_m gives sigma_bins ~ 1.1 (a real smear), and a sharp input
-    makes the smear load-bearing: a self-consistent round trip still recovers cin to ~1e-5, whereas
-    dropping or corrupting G in the reverse blows the interior error past 1e-3."""
+    """Exercise the reverse at a WIDE molecular band. A large pore volume + strong D_m makes the
+    effective-dispersivity molecular smear a big part of the operator, and a sharp input makes it
+    load-bearing. The reverse deconvolves exactly the operator the forward built, so the round trip is
+    self-consistent to ~1e-5 -- a structural check that the wide molecular band is assembled and solved
+    consistently in the reverse (molecular correctness itself is owned by the forward tests)."""
     n = 300
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     cin = np.sin(np.linspace(0.0, 16.0 * np.pi, n)) + 5.0  # sharp -> the smear matters
@@ -730,7 +893,7 @@ def test_reverse_molecular_dominant_round_trip():
         "flow": np.full(n, 100.0),
         "tedges": tedges,
         "cout_tedges": tedges.copy(),
-        "aquifer_pore_volumes": np.array([2000.0]),  # large PV -> sigma_bins ~ 1.1
+        "aquifer_pore_volumes": np.array([2000.0]),  # large PV -> wide molecular band
         "streamline_length": SL,
         "molecular_diffusivity": 0.5,
         "longitudinal_dispersivity": 1.0,
@@ -738,7 +901,32 @@ def test_reverse_molecular_dominant_round_trip():
     cout = infiltration_to_extraction(cin=cin, **common)
     cout_clean = np.where(np.isnan(cout), np.nanmean(cout), cout)
     cin_rec = extraction_to_infiltration(cout=cout_clean, **common)
-    assert _peak_rel(cin_rec, cin, skip=60) < 1e-3  # measured ~1.6e-5; drop-G mutant ~2.9e-3
+    assert _peak_rel(cin_rec, cin, skip=60) < 1e-3  # measured ~1.2e-6 (self-consistent at the wide band)
+
+
+def test_reverse_on_true_operator_data_matches_df_reverse():
+    """DFF-F4 regression. On cout generated by the TRUE operator (diffusion_fast), the reverse is only
+    as accurate as the forward. With the effective-dispersivity fold the forward is near-exact at
+    constant flow, so the fast reverse REPRODUCES diffusion_fast's own reverse -- there is no forward
+    mismatch for the deconvolution to amplify. (The old symmetric-Gaussian forward mismatch made the
+    fast reverse diverge from df's reverse by ~2e-2 on the same data.)"""
+    n = 300
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    common = {
+        "flow": np.full(n, 100.0),
+        "tedges": tedges,
+        "cout_tedges": tedges.copy(),
+        "aquifer_pore_volumes": np.array([6000.0]),
+        "streamline_length": SL,
+        "molecular_diffusivity": 0.05,
+        "longitudinal_dispersivity": 0.0,  # molecular-only -> the forward mismatch the reverse would amplify
+        "retardation_factor": 2.0,
+    }
+    cout_true = df_i2e(cin=_smooth(n), **common)
+    cout_clean = np.where(np.isnan(cout_true), np.nanmean(cout_true), cout_true)
+    fff_rev = extraction_to_infiltration(cout=cout_clean, **common)
+    df_rev = df_e2i(cout=cout_clean, **common)
+    assert _peak_rel(fff_rev, df_rev, skip=20) < 1e-5  # old code diverges from df-reverse by ~2.4; measured ~2.4e-6
 
 
 def test_forward_and_reverse_warning_clean():
@@ -767,11 +955,11 @@ def test_forward_and_reverse_warning_clean():
 
 
 def test_reverse_banded_matches_dense_solve_of_same_operator():
-    """Structural correctness: the banded assembly (W = G . M) + banded Tikhonov solve must match a
-    DENSE solve of the SAME approximate operator. The dense operator is reconstructed from public
-    forward probes (independent of the reverse internals) and solved with the dense Tikhonov path;
-    agreement to ~1e-10 proves the banded G@M assembly and banded solver are equivalent to the dense
-    reference -- the check a self-consistent round trip cannot give."""
+    """Structural correctness: the banded assembly of the breakthrough operator W + banded Tikhonov
+    solve must match a DENSE solve of the SAME approximate operator. The dense operator is
+    reconstructed from public forward probes (independent of the reverse internals) and solved with the
+    dense Tikhonov path; agreement to ~1e-10 proves the banded assembly and banded solver are
+    equivalent to the dense reference -- the check a self-consistent round trip cannot give."""
     n = 120
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     common = {
@@ -799,8 +987,8 @@ def test_reverse_banded_matches_dense_solve_of_same_operator():
 
 
 def test_reverse_much_faster_than_diffusion_fast():
-    """The point of the fast reverse: it assembles W = G . M with one Ibar gather + a sparse G@M
-    product (no per-pore-volume closed-form loop) and banded-solves it, whereas diffusion_fast
+    """The point of the fast reverse: it assembles the banded breakthrough operator W with one Ibar
+    gather (no per-pore-volume closed-form loop) and banded-solves it, whereas diffusion_fast
     evaluates the exact breakthrough per streamtube. The speedup grows with the streamtube count
     (measured ~14x at gamma-25, ~47x at gamma-100, n=2920). Assert the relative speedup (robust to CI
     load, since both scale together) plus a generous absolute ceiling (a quadratic-regression guard).
@@ -877,9 +1065,9 @@ def test_reverse_zero_cout_gives_zero_cin():
 def test_reverse_zero_flow_gap_preserves_constant():
     """Reverse analogue of test_forward_zero_flow_gap_no_smear_into_neighbours: a constant extraction
     with a pump-off gap must deconvolve to a constant infiltration on the valid bins, without the
-    gap's zero G@M rows corrupting the neighbours. The banded solver row-normalizes W (that IS the
-    mask-aware normalization for the reverse: it divides each row by G@(row masses), so the gap rows'
-    zero mass drops out), so constants are preserved to solver precision across the gap."""
+    gap's zero-mass rows corrupting the neighbours. The banded solver row-normalizes W (dividing each
+    row by its band mass, so the gap rows' zero mass drops out), so constants are preserved to solver
+    precision across the gap."""
     n = 120
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     flow = np.full(n, 100.0)
