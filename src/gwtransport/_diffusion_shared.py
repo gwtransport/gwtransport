@@ -247,7 +247,7 @@ def _solve_reverse_banded(
 
     Shared by :func:`gwtransport.diffusion_fast.extraction_to_infiltration` (which feeds the exact
     closed-form banded operator) and :func:`gwtransport.diffusion_fast_fast.extraction_to_infiltration`
-    (which feeds the approximate banded ``G . M`` operator). The steps are:
+    (which feeds the approximate banded breakthrough operator). The steps are:
 
     1. Zero invalid rows (incomplete breakthrough) and normalize the remaining rows to sum to 1 --
        the banded solver's ``W x ~= observed`` precondition.
@@ -264,7 +264,7 @@ def _solve_reverse_banded(
     ----------
     band_vals : ndarray, shape (n_cout_bins, full_band)
         Banded forward weights -- from :func:`gwtransport.diffusion_fast._closed_form_coeff_matrix`
-        (exact) or :func:`gwtransport.diffusion_fast_fast._banded_forward_matrix` (approximate ``G . M``).
+        (exact) or :func:`gwtransport.diffusion_fast_fast._banded_forward_matrix` (approximate breakthrough).
     col_start : ndarray of int, shape (n_cout_bins,)
         First cin-bin column of each cout row's band.
     valid_cout_bins : ndarray of bool, shape (n_cout_bins,)

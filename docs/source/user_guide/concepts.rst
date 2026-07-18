@@ -179,7 +179,7 @@ In pore volume units, :math:`\sigma_{V,disp}` is flow-independent, while :math:`
 
 - **Gamma-parameterized APVD**: Use :mod:`gwtransport.diffusion_fast` (standard approach).
 - **Discrete streamline volumes**: Use :mod:`gwtransport.diffusion_fast` or :mod:`gwtransport.diffusion`.
-- **Fast approximate forward (any flow)**: Use :mod:`gwtransport.diffusion_fast_fast` when a small error (~3e-4 with microdispersion present) is acceptable in exchange for speed.
+- **Fast approximate forward (any flow)**: Use :mod:`gwtransport.diffusion_fast_fast` when a small error is acceptable in exchange for speed. It is exact (to the interpolation floor) at constant flow for every regime; under variable flow it stays ~1e-3 or better whenever microdispersion is present (:math:`\alpha_L > 0`).
 
 .. _concept-variance-components:
 
