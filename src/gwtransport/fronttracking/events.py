@@ -83,9 +83,8 @@ class EventType(Enum):
     """A decaying shock's fan is exhausted (c_decay reached c_fan_tail)."""
     WAVE_MERGE = "wave_merge"
     """Two faces overtake (universal merge): any interaction involving a decaying/doubly-fed
-    shock — fan-entry, doubly-fed formation, same-apex annihilation, and their compositions."""
-    DFSW_SIDE_EXHAUSTED = "double_fan_side_exhausted"
-    """A doubly-fed shock's fan side reaches its far bound (degrades to a decaying shock/shock)."""
+    shock — fan-entry, doubly-fed formation, same-apex annihilation, side exhaustion (a
+    doubly-fed shock crossing its own fan boundary line), and their compositions."""
     OUTLET_CROSSING = "outlet_crossing"
     """Wave crosses outlet boundary."""
 
@@ -117,7 +116,7 @@ class Event:
     waves_involved: list  # List[Wave] - can't type hint due to circular import
     location: float
     boundary_type: str | None = None
-    faces: tuple | None = None  # (Face, Face) for WAVE_MERGE; ('left'|'right',) side for DFSW_SIDE_EXHAUSTED
+    faces: tuple | None = None  # (Face, Face) for WAVE_MERGE
 
     def __repr__(self):  # noqa: D105
         return (

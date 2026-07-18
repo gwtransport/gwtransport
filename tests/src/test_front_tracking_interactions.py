@@ -113,8 +113,8 @@ class TestRarefactionRarefactionNoInteraction:
         For the unfavorable (concave) flux, step-*ups* spread into rarefactions and there is no
         leading loading shock, so a strictly increasing inlet produces N same-family
         rarefactions that must all remain active with no collision and no merge successor. (This
-        is a pure-rarefaction layout with no multi-front interaction, so it is unaffected by the
-        ``n<1`` interaction gap in :class:`TestKnownMultiFrontGaps`.)
+        is a pure-rarefaction layout with no multi-front interaction, distinct from the resolved
+        ``n<1`` shock↔fan side exhaustion in :class:`TestSideExhaustion`.)
         """
         s = FreundlichSorption(k_f=0.05, n=0.5, bulk_density=1500.0, porosity=0.3)
         cin = np.array([0.0] + [2.0] * 8 + [5.0] * 8 + [8.0] * 8 + [11.0] * 40)
@@ -170,9 +170,10 @@ class TestNoSilentCorruption:
 
     Whenever ``find_unresolved_interaction`` returns ``None`` (the solver claims a complete
     resolution), the outlet ``cout`` must be conservation-consistent, match the independent FV
-    oracle, and be non-negative. Inputs the solver cannot resolve are declined LOUDLY (the
-    public API raises ``RuntimeError``); those are covered by :class:`TestKnownMultiFrontGaps`,
-    not silently mis-computed here. Theory doc §4.5.
+    oracle, and be non-negative. Any input the solver still cannot resolve is declined LOUDLY
+    (the public API raises ``RuntimeError``) rather than silently mis-computed here; the
+    formerly-declining ``n<1``/Langmuir side-exhaustion inputs are now resolved and covered by
+    :class:`TestSideExhaustion`. Theory doc §4.
     """
 
     @pytest.mark.parametrize(("pulse", "v_pv"), _FAVORABLE_CONFIGS, ids=[f"V{c[1]:g}" for c in _FAVORABLE_CONFIGS])
@@ -254,53 +255,147 @@ class TestNoSilentCorruption:
         np.testing.assert_allclose(m_dom, m_quad, rtol=1e-4, atol=1e-9)
 
 
-class TestKnownMultiFrontGaps:
-    """Documented completeness gaps in the #294/#316 multi-front solver.
+class TestSideExhaustion:
+    """Regression guards for the resolved #317 multi-front gap: doubly-fed side exhaustion.
 
-    The universal merge calculus was validated on the favorable (Freundlich ``n>1``) geometry;
-    the unfavorable (``n<1``, concave-flux) mirror — where step-ups are rarefactions and
-    step-downs are shocks — leaves some two-pulse shock↔fan interactions unresolved. The public
-    API surfaces this LOUDLY (``find_unresolved_interaction`` fires → ``RuntimeError``), so no
-    silently-wrong ``cout`` is ever returned. These tests assert the DESIRED behaviour (a
-    complete resolution) and are ``xfail(strict=True)``: a solver fix flips them to XPASS,
-    which fails the suite and flags that they should be un-xfailed. See
+    A :class:`DoubleFanShockWave` side ends in finite θ exactly when its shock face crosses
+    one of its own fan boundary lines — the left fan's slow upstream characteristic catching
+    the shock from behind (the ``n<1`` mirror, where fan characteristics outrun the shock),
+    or the shock catching the right fan's downstream characteristic. Lax entropy
+    (``λ(c_L) ≥ σ ≥ λ(c_R)``) forbids any other finite-θ side ending. The solver resolves
+    these same-wave face crossings through the universal ``WAVE_MERGE`` machinery: the merge
+    of the boundary line with the shock face builds the degraded successor
+    (``const far-bound | surviving fan``) and retires the boundary.
+
+    Before the fix, a special-case detector missed these crossings (it targeted the fan edge
+    farther from the current side value — wrong whenever the wave is born mid-fan — and the
+    feeder clamp flattened its residual to exactly zero, defeating the bracket), so the
+    exhausted fan's boundary line stayed exposed BEYOND the shock: a ghost face the reader
+    sweep used to misattribute the region between shock and line, breaking outlet-mass
+    monotonicity — the loud decline of issue #317 (Freundlich ``n<1`` two-pulse and several
+    favorable Langmuir multi-pulse inputs). See
     ``docs/theory/front_tracking_interactions.md`` §4.3.
     """
 
-    @pytest.mark.slow  # the declined run churns to the loop guard (~15 s) before giving up
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,  # pin the ASSERTION failing, not e.g. a decline->crash regression
-        reason="#316 multi-front solver leaves an unresolved interaction for unfavorable "
-        "Freundlich n<1 two-pulse inputs (mirror-regime shock<->fan merge). Tracked in #317.",
-    )
+    @pytest.mark.slow  # a fine FV-oracle cross-check over θ_end=2900 (~6 s)
     def test_freundlich_nlt1_two_pulse_resolves(self):
+        """The #317 minimal reproducer resolves, with the exhaustion pinned to its closed form.
+
+        For Freundlich exponent 2 (``n=0.5``) the doubly-fed secant collapses to the harmonic
+        mean of the two shared-apex fan rays, ``σ = 2V/((θ−θ_L)+(θ−θ_R))``, which integrates
+        to the linear-fractional trajectory ``V = (θ − (θ_L+θ_R)/2)/2401`` through the birth
+        point ``(725.15625, 5/32)`` (``θ_L=600``, ``θ_R=100``; ``2401 = 375.15625/(5/32)``).
+        Crossing the left fan's ``c=2`` characteristic ``V = (θ−600)/1001`` (``R(2)=1001``)
+        gives the side exhaustion at exactly ``θ = 778.75``, ``V = 5/28``. The solver's
+        RK4-spline trajectory plus the face-march/brentq reproduce the anchor to a relative
+        error of ~1e-9 (θ) and ~4e-9 (V) — both deterministic; the asserted rtols sit ~10-20×
+        above those floors.
+        """
         s = FreundlichSorption(k_f=0.05, n=0.5, bulk_density=1500.0, porosity=0.3)
         cin = np.array([0.0, 8.0, 8.0, 8.0, 0.0, 0.0, 2.0, 2.0, 0.0] + [0.0] * 20)
         tr = _run(s, cin, 10.6)
         assert find_unresolved_interaction(tr.state) is None
 
-    @pytest.mark.slow  # the declined run churns to the loop guard (~15 s) before giving up
-    def test_public_api_declines_n_lt_1_loudly(self):
-        """The gap surfaces as a public-API ``RuntimeError`` — never a silently-wrong cout.
+        # The side-exhaustion event: a same-wave merge (the DFSW's own boundary line × shock).
+        self_merges = [
+            ev
+            for ev in tr.state.events
+            if ev["type"] == "wave_merge" and ev["waves_before"][0] is ev["waves_before"][1]
+        ]
+        assert len(self_merges) == 1
+        ev = self_merges[0]
+        np.testing.assert_allclose(ev["theta"], 778.75, rtol=1e-8)
+        np.testing.assert_allclose(ev["location"], 5.0 / 28.0, rtol=1e-7)
+        (successor,) = ev["waves_after"]
+        assert isinstance(successor, DecayingShockWave)
+        assert successor.c_fixed == 2.0  # the exhausted left side froze at the fan's far bound
+        assert successor.decay_side == "right"
+        dfsw = ev["waves_before"][0]
+        assert not dfsw.is_active
+        np.testing.assert_allclose(dfsw.theta_deactivation, ev["theta"], rtol=0, atol=0)
+        np.testing.assert_allclose(dfsw.theta_left_boundary_consumed, ev["theta"], rtol=0, atol=0)
 
-        Guards ``advection.infiltration_to_extraction_nonlinear_sorption``'s ``find_unresolved_interaction``
-        raise-wiring end-to-end (the increment's central "never silently wrong" contract), which the
-        internal-only checks above do not exercise. When #317 is fixed this must stop raising — update
-        it to assert a valid cout then.
+        # Independent numerical gate: the resolved outlet matches the first-order FV oracle
+        # (0.05 = the oracle's own smearing floor at n_cells=160, cf. the staircase test above).
+        assert _fv_discrepancy(tr, s, 10.6, n_cells=160, stride=8) < 0.05
+
+    def test_public_api_resolves_n_lt_1(self):
+        """The public API returns a physical ``cout`` for the former #317 decline input.
+
+        Guards ``advection.infiltration_to_extraction_nonlinear_sorption`` end-to-end on the
+        input that used to raise ``RuntimeError`` (the loud decline): the returned bin averages
+        must be finite, non-negative, and the implied stored mass must be correct.
+
+        The stored-mass check must NOT be the closed-system balance ``m_out + m_dom == m_in``:
+        the public ``cout`` is *defined* per bin as ``Δ(m_in − m_dom)/Δθ`` (see
+        ``compute_bin_averaged_concentration_exact``), so that balance collapses to
+        ``m_in == m_in`` and passes even with a badly wrong ``compute_domain_mass`` (a uniform
+        50% ``m_dom`` error still balances to the FP floor — mutation-confirmed). Instead validate
+        ``compute_domain_mass`` against a genuinely *independent* reference — a fine trapezoid of
+        ``C_T(c(v, θ_end))`` sampled over ``[0, V]`` (a different integration than the analytic
+        fan IBP), which then pins ``m_out = m_in − m_dom``. (The resolved outlet field itself is
+        FV-oracle-gated in ``test_freundlich_nlt1_two_pulse_resolves``.)
         """
         cin = np.array([0.0, 8.0, 8.0, 8.0, 0.0, 0.0, 2.0, 2.0, 0.0] + [0.0] * 20)
         nb = len(cin)
         tedges = pd.date_range("2020-01-01", periods=nb + 1, freq="D")
-        with pytest.raises(RuntimeError, match="unresolved"):
-            infiltration_to_extraction_nonlinear_sorption(
-                cin=cin,
-                flow=np.full(nb, 100.0),
-                tedges=tedges,
-                cout_tedges=tedges,
-                aquifer_pore_volumes=[10.6],
-                freundlich_k=0.05,
-                freundlich_n=0.5,
-                bulk_density=1500.0,
-                porosity=0.3,
-            )
+        cout, structures = infiltration_to_extraction_nonlinear_sorption(
+            cin=cin,
+            flow=np.full(nb, 100.0),
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=[10.6],
+            freundlich_k=0.05,
+            freundlich_n=0.5,
+            bulk_density=1500.0,
+            porosity=0.3,
+        )
+        cout = np.asarray(cout, dtype=float).ravel()
+        # Out-of-window bins are returned as 0.0; genuinely zero-throughflow bins as NaN.
+        # This all-positive-flow run has neither, so every bin is finite and non-negative.
+        assert np.all(np.isfinite(cout))
+        assert np.all(cout >= -1e-9)
+        state, s = structures[0]["tracker_state"], structures[0]["sorption"]
+        theta_end = float(state.theta_edges[-1])
+        m_in = float(np.sum(cin * 100.0))
+        m_out = float(np.sum(cout * 100.0))
+        assert m_out > 0.0
+        # Independent stored-mass reference: trapezoid of C_T over [0, V] (samples the field via
+        # concentration_at_point, then integrates numerically) vs the analytic fan integral in
+        # compute_domain_mass. The two integrations agree and CONVERGE (rel 3.4e-4 → 7.3e-5 → 1.9e-5
+        # at n_v 4e3 → 2e4 → 1e5), so compute_domain_mass is the trapezoid's limit; rtol 1e-3 sits
+        # ~3× above the n_v=4000 discretization floor, yet is ~400× tighter than the ~40% gap a
+        # uniform compute_domain_mass error opens — so this is NOT the m_in−m_dom tautology
+        # (mutation-confirmed). This pins the public cout, since cout ≡ (m_in − m_dom)/Δθ.
+        m_domain = compute_domain_mass(theta_end, 10.6, state.waves, s)
+        v = np.linspace(0.0, 10.6, 4000)
+        c_field = np.array([concentration_at_point(vi, theta_end, state.waves, s) for vi in v])
+        m_domain_indep = float(np.trapezoid(np.asarray(s.total_concentration(c_field), dtype=float), v))
+        np.testing.assert_allclose(m_domain, m_domain_indep, rtol=1e-3)
+        np.testing.assert_allclose(m_out, m_in - m_domain, rtol=1e-9)
+
+    @pytest.mark.parametrize(
+        ("cin", "v_pv"),
+        [
+            # Both former decline configs (found by a seeded random sweep on the unfixed
+            # solver; each declined loudly there). The first exercises the born-mid-fan
+            # geometry (the wrong-target defect); the second is the clamp-flatline-only
+            # fingerprint (its detector targeted the correct edge and still never fired).
+            ([0.0, 9, 9, 0, 0, 2.6, 2.6, 0, 8.8, 0, 0, 8.3], 8.8),
+            ([0.0, 3.3, 0.5, 0.5, 8.3, 6.1, 6.1, 5, 5, 0.3, 0.3], 11.6),
+        ],
+        ids=["multi-pulse", "staircase"],
+    )
+    def test_langmuir_multipulse_resolves(self, cin, v_pv):
+        """Favorable Langmuir multi-pulse inputs that formerly declined now resolve.
+
+        Side exhaustion is geometry-dependent, not regime-dependent: these favorable-regime
+        configs hit the same missed self-crossing. Each run must resolve completely and must
+        actually exercise the same-wave merge path (at least one such event fires).
+        """
+        s = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        tr = _run(s, np.array(cin + [0.0] * 15, dtype=float), v_pv)
+        assert find_unresolved_interaction(tr.state) is None
+        assert any(
+            ev["type"] == "wave_merge" and ev["waves_before"][0] is ev["waves_before"][1] for ev in tr.state.events
+        )
