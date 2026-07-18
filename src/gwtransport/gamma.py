@@ -55,6 +55,13 @@ import numpy as np
 import numpy.typing as npt
 from scipy.stats import gamma as gamma_dist
 
+# Numerical-envelope guard thresholds for bins() (issue #331). Below _MIN_QUANTILE_GAP the
+# conditional-mean CDF difference cancels catastrophically; when alpha*eps exceeds
+# _HUGE_ALPHA_GAP_FRACTION of the smallest quantile gap, alpha + 1 == alpha to machine precision
+# and the per-bin expected values degrade to noise.
+_MIN_QUANTILE_GAP = 1e-8
+_HUGE_ALPHA_GAP_FRACTION = 0.01
+
 
 def parse_parameters(
     *,
@@ -101,7 +108,8 @@ def parse_parameters(
     ValueError
         If neither ``(mean, std)`` nor ``(alpha, beta)`` is provided, if both pairs
         are provided, if only one of a pair is provided, if ``alpha`` or ``beta`` are
-        not positive, if ``loc`` is negative, or if ``mean <= loc``.
+        not positive, if ``loc`` is negative, if the resolved ``alpha``, ``beta``, or
+        ``loc`` is not finite, or if ``mean <= loc``.
     """
     if loc < 0:
         msg = "loc must be non-negative"
@@ -126,6 +134,12 @@ def parse_parameters(
         alpha, beta = mean_std_loc_to_alpha_beta(mean=mean, std=std, loc=loc)
     elif alpha <= 0 or beta <= 0:
         msg = "Alpha and beta must be positive"
+        raise ValueError(msg)
+
+    # A non-finite alpha/beta/loc slips past the comparisons above (``nan <= 0`` and ``nan < 0`` are
+    # both False), producing an all-NaN distribution instead of a clear error. Reject it loudly.
+    if not (np.isfinite(alpha) and np.isfinite(beta) and np.isfinite(loc)):
+        msg = "alpha, beta, and loc must be finite."
         raise ValueError(msg)
 
     return alpha, beta, loc
@@ -307,7 +321,12 @@ def bins(
     ValueError
         If ``n_bins`` is not greater than 1, if ``quantile_edges`` is not a strictly
         increasing 1-D array in ``[0, 1]`` with endpoints exactly 0 and 1, or if
-        parameter validation in :func:`parse_parameters` fails.
+        parameter validation in :func:`parse_parameters` fails. Also raised for
+        numerically-degenerate requests that would otherwise return silently-wrong
+        structure: a smallest quantile-edge gap below ``1e-8`` (catastrophic
+        cancellation of the conditional-mean CDF difference), an ``alpha`` so large that
+        ``alpha + 1 == alpha`` in float64 relative to that gap (the distribution is
+        numerically a point mass), or a bin whose expected value underflows to ``loc``.
 
     See Also
     --------
@@ -317,6 +336,12 @@ def bins(
     :ref:`concept-gamma-loc` : Shifted gamma with minimum pore volume.
     :ref:`concept-dispersion-scales` : What ``std`` represents (macrodispersion vs total spreading).
     :ref:`assumption-gamma-distribution` : When gamma distribution is adequate.
+
+    Notes
+    -----
+    For a very large ``alpha`` (``>= ~1e6``) combined with custom ``quantile_edges`` deep
+    in the left tail, ``scipy``'s ``ppf`` loses relative accuracy; prefer equal-mass bins
+    or a coarser grid in that regime.
 
     Examples
     --------
@@ -363,6 +388,28 @@ def bins(
         msg = "Number of bins must be greater than 1"
         raise ValueError(msg)
 
+    # Guard the two numerical cliffs of the closed-form conditional mean below. A quantile gap
+    # narrower than ~1e-8 makes the CDF difference cancel catastrophically (expected values leave
+    # their own bins); an alpha so large that alpha*eps exceeds ~1% of that gap makes alpha+1 == alpha
+    # to machine precision, so the conditional means degrade to noise. Both are only reachable with
+    # extreme custom quantile_edges or a near-degenerate (delta-like) distribution.
+    min_quantile_gap = float(np.min(np.diff(quantile_edges)))
+    if min_quantile_gap < _MIN_QUANTILE_GAP:
+        msg = (
+            f"The smallest quantile-edge gap ({min_quantile_gap:.3g}) is below {_MIN_QUANTILE_GAP:g}; the "
+            "conditional-mean CDF difference cancels catastrophically and expected values may fall "
+            "outside their own bins. Use wider quantile bins."
+        )
+        raise ValueError(msg)
+    if alpha * np.finfo(float).eps > _HUGE_ALPHA_GAP_FRACTION * min_quantile_gap:
+        msg = (
+            f"alpha ({alpha:.3g}) is too large for float64 bin resolution: alpha*eps exceeds 1% of "
+            f"the smallest quantile gap ({min_quantile_gap:.3g}), so alpha+1 == alpha to machine "
+            "precision and the per-bin expected values are numerical noise. The distribution is "
+            "effectively a point mass at alpha*beta + loc; use a larger std/(mean-loc) or fewer bins."
+        )
+        raise ValueError(msg)
+
     # Unshifted bin edges for the standard Gamma(alpha, beta) distribution, then shift
     unshifted_edges = gamma_dist.ppf(quantile_edges, alpha, scale=beta)
     bin_edges = unshifted_edges + loc
@@ -374,7 +421,23 @@ def bins(
     # where F_{alpha+1} is the CDF of Gamma(alpha+1, beta).
     cdf_alpha_plus_1 = gamma_dist.cdf(unshifted_edges, alpha + 1, scale=beta)
     diff_alpha_plus_1 = np.diff(cdf_alpha_plus_1)
-    expected_values = beta * alpha * diff_alpha_plus_1 / probability_mass + loc
+
+    # Pre-shift conditional mean of the excess over loc. Every positive-mass bin of a Gamma(alpha, beta)
+    # has a strictly positive conditional mean, so this must be > 0; a value <= 0 signals an underflow /
+    # cancellation of the CDF difference (very small alpha or extremely fine bins) that would emit a
+    # numerically-zero or negative pore volume. Test this pre-shift quantity rather than the shifted
+    # expected value: for loc > 0 a benign ``loc + tiny_positive_excess == loc`` rounding would otherwise
+    # be misread as underflow and reject correct, usable output for shifted heterogeneous APVDs.
+    cond_mean_excess = beta * alpha * diff_alpha_plus_1 / probability_mass
+    if np.any(cond_mean_excess <= 0.0):
+        msg = (
+            "A bin's conditional expected value underflowed to loc (its excess conditional mean over loc "
+            "is not strictly positive). This happens for very small alpha or extremely fine bins where "
+            "the CDF difference underflows. Use fewer bins or a larger alpha."
+        )
+        raise ValueError(msg)
+
+    expected_values = cond_mean_excess + loc
 
     return {
         "lower_bound": bin_edges[:-1],
