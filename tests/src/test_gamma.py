@@ -646,3 +646,114 @@ def test_bins_expected_values_against_scipy_quadrature():
 # The former test_bins_alpha_less_than_one_large_nbins (alpha=0.5, beta=10.0, n_bins=100)
 # is now covered, at tighter tolerance and with the first-moment check, by the
 # (0.5, 10.0, 100) case in test_bins_extreme_regimes_finite_and_conservative.
+
+
+# =============================================================================
+# Numerical-envelope guards for bins() / parse_parameters (issue #331).
+#
+# Each degenerate input below previously returned silently-wrong structure -- expected
+# values outside their own bins, E == loc, or an all-NaN distribution -- with no error.
+# The guards now raise a clear ValueError. Every "must raise" test fails on the pre-guard
+# baseline (no exception was raised there), which is what makes it a regression test.
+# =============================================================================
+
+
+def test_parse_parameters_rejects_nonfinite():
+    """Non-finite alpha/beta/loc must raise, not slip through to an all-NaN distribution (GAM-F4).
+
+    ``nan <= 0`` and ``nan < 0`` are both False, so a non-finite value passes the positivity checks.
+    """
+    with pytest.raises(ValueError, match="must be finite"):
+        parse_parameters(alpha=np.nan, beta=2.0)
+    with pytest.raises(ValueError, match="must be finite"):
+        parse_parameters(alpha=2.0, beta=np.inf)
+    with pytest.raises(ValueError, match="must be finite"):
+        parse_parameters(alpha=2.0, beta=3.0, loc=np.nan)
+
+
+def test_bins_rejects_nonfinite_parameters():
+    """bins() surfaces the non-finite-parameter guard instead of returning an all-NaN dict (GAM-F4)."""
+    with pytest.raises(ValueError, match="must be finite"):
+        gamma_bins(alpha=np.nan, beta=2.0, n_bins=5)
+
+
+def test_bins_rejects_huge_alpha():
+    """alpha beyond float64 bin resolution (alpha + 1 == alpha) must raise (GAM-F1).
+
+    Reached through the documented (mean, std) parameterization: std/(mean - loc) = 1e-8 gives
+    alpha = 1e16 >= 2**53. On the baseline this returned noisy, non-monotone expected values with
+    8 of 10 lying outside their own bins, and nothing was raised.
+    """
+    with pytest.raises(ValueError, match="too large for float64 bin resolution"):
+        gamma_bins(mean=1.0, std=1e-8, n_bins=10)
+
+
+def test_bins_rejects_tiny_quantile_gap():
+    """A quantile gap below 1e-8 makes the conditional-mean CDF difference cancel catastrophically,
+    placing an expected value outside its own (infinitesimal) bin; it must raise (GAM-F2)."""
+    q0 = 0.5
+    edges = np.array([0.0, q0, np.nextafter(q0, 1.0), 1.0])
+    with pytest.raises(ValueError, match="quantile-edge gap"):
+        gamma_bins(alpha=10.0, beta=1.0, loc=5.0, quantile_edges=edges)
+
+
+def test_bins_rejects_expected_value_underflow():
+    """A very small alpha underflows the leftmost equal-mass bin's expected value to loc (a
+    numerically-zero pore volume); it must raise rather than propagate a bad value downstream (ADV-F2)."""
+    with pytest.raises(ValueError, match="underflowed to loc"):
+        gamma_bins(alpha=5e-3, beta=100.0, n_bins=100)
+
+
+def test_bins_guards_leave_realistic_configs_untouched():
+    """The #331 guards must not reject any realistic APVD: default and shifted configs, a fine
+    250-bin grid, and custom quantile edges all still succeed with strictly in-bin expected values."""
+    for kwargs in (
+        {"mean": 30000.0, "std": 8100.0, "n_bins": 10},
+        {"mean": 30000.0, "std": 8100.0, "loc": 5000.0, "n_bins": 250},
+        {"alpha": 13.7, "beta": 2000.0, "n_bins": 20},
+        {"mean": 30000.0, "std": 8100.0, "quantile_edges": np.array([0.0, 0.25, 0.5, 0.75, 1.0])},
+    ):
+        result = gamma_bins(**kwargs)
+        assert result["probability_mass"].sum() == 1.0
+        assert np.all(result["expected_values"] >= result["lower_bound"])
+        assert np.all(result["expected_values"] <= result["upper_bound"])
+
+
+def test_bins_accepts_shifted_heterogeneous_apvd():
+    """The underflow guard must test the pre-shift excess conditional mean, not the shifted expected
+    value. For a shifted, highly-heterogeneous APVD (loc > 0, small alpha) the excess conditional mean
+    is tiny but strictly positive; the shifted ``loc + tiny_excess`` can round to exactly ``loc`` in
+    float64 without any underflow, and that correctly-rounded, usable output must NOT be rejected.
+    Both parameterizations reach the same distribution and both must be accepted."""
+    for kwargs in (
+        {"alpha": 0.15, "beta": 100.0, "loc": 5000.0, "n_bins": 100},
+        {"mean": 6000.0, "std": 4472.0, "loc": 5000.0, "n_bins": 100},
+    ):
+        result = gamma_bins(**kwargs)
+        # Expected values are at least loc (the excess is non-negative) and inside their own bins,
+        # and the flow-weighted mean recovers the distribution mean.
+        assert np.all(result["expected_values"] >= result["lower_bound"])
+        assert np.all(result["expected_values"] <= result["upper_bound"])
+        assert np.all(result["expected_values"] >= 5000.0)
+
+
+def test_bins_rejects_expected_value_underflow_shifted():
+    """loc > 0: a genuine underflow (excess conditional mean == 0) must still raise. This pins that the
+    guard compares the excess against 0, not the shifted value against a hardcoded 0 -- a ``<= 0.0``
+    regression would silently pass at loc=0 but return E == loc bins here (the dominant shifted case)."""
+    with pytest.raises(ValueError, match="underflowed to loc"):
+        gamma_bins(alpha=5e-3, beta=100.0, n_bins=100, loc=5.0)
+
+
+def test_bins_rejects_huge_alpha_direct_alpha():
+    """The huge-alpha guard fires regardless of parameterization (direct alpha=, not only mean/std)."""
+    with pytest.raises(ValueError, match="too large for float64 bin resolution"):
+        gamma_bins(alpha=1e16, beta=1.0, n_bins=10)
+
+
+def test_parse_parameters_rejects_nonfinite_from_mean_std():
+    """A non-finite mean/std (e.g. an upstream division by zero) is rejected after conversion, so the
+    finite guard sits downstream of the (mean, std) -> (alpha, beta) converter, not only on the direct
+    alpha/beta arm."""
+    with pytest.raises(ValueError, match="must be finite"):
+        parse_parameters(mean=np.inf, std=1.0)
