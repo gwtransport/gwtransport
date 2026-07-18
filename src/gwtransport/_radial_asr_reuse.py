@@ -107,7 +107,6 @@ def _airy_propagator_matrix(
     r_w: float,
     alpha_l: float,
     c_geo: float,
-    flow_scale: float,
     n_terms: int,
     tol: float,
 ) -> npt.NDArray[np.floating]:
@@ -120,16 +119,17 @@ def _airy_propagator_matrix(
     and every output row is assembled by prefix selection (``O(n_quad)`` Airy evaluations).
 
     The Sturm-Liouville source weight is ``w(r') = (2 c_geo r'/alpha_L) e^{-gauge_sign r'/alpha_L} dr'``
-    (``gauge_sign = +1`` injection / ``-1`` extraction); the flushed-volume clock is set by ``s =
-    flow_scale * p`` with ``a0 = flow_scale/(2 c_geo)`` so ``beta = 2 c_geo p/alpha_L`` is flow-magnitude
-    independent (the autonomy of the S-clock).
+    (``gauge_sign = +1`` injection / ``-1`` extraction); the ``D_m = 0`` Airy kernel depends on the Laplace
+    node only through ``beta = 2 c_geo p/alpha_L`` (the autonomy of the flushed-volume S-clock), so it is
+    evaluated directly in that flow-free canonical form (``s = 2 c_geo p``, ``a0 = 1``) -- no ``flow_scale``
+    round-trip, so ``P`` is exactly independent of the phase flow magnitude.
 
     Returns
     -------
     ndarray
         Propagator matrix ``P``, shape ``(n_quad, n_quad)``.
     """
-    a0 = flow_scale / (2.0 * c_geo)
+    a0 = 1.0
     gauge_sign = 1.0 if direction == _INJECTION else -1.0
     n = r_nodes.size
     # Split the Sturm-Liouville source weight (2 c_geo r'/alpha_L) e^{-gauge_sign r'/alpha_L} dr' into its
@@ -144,7 +144,7 @@ def _airy_propagator_matrix(
     below = r_nodes[None, :] < r_nodes[:, None]  # below[i, j] = r_j < r_i
 
     def f_hat(p: npt.NDArray[np.complexfloating]) -> npt.NDArray[np.complexfloating]:
-        s = (flow_scale * p).reshape(-1, 1)
+        s = (2.0 * c_geo * p).reshape(-1, 1)  # canonical flow-free S-clock: beta = 2 c_geo p / alpha_L
         grid_p = _resolvent_airy_pieces(s, r_nodes.reshape(1, -1), alpha_l, a0, gauge_sign)
         piece_w = _resolvent_airy_pieces(s, np.array([[r_w]]), alpha_l, a0, gauge_sign)
         ghat = np.empty((p.size, n, n), dtype=complex)
@@ -412,7 +412,7 @@ def cout_deviation(
     def propagate(field, direction, flow_scale, phase_volume, phase_time):
         if molecular_diffusivity == 0.0:  # Airy: flushed-volume clock, retardation rescales the clock
             tau = phase_volume / retardation_factor
-            key = ("airy", direction, round(tau, 9), round(flow_scale, 9))
+            key = ("airy", direction, round(tau, 9))  # matrix is flow-magnitude independent (S-clock autonomy)
             if key not in matrices:
                 matrices[key] = _airy_propagator_matrix(
                     direction,
@@ -422,7 +422,6 @@ def cout_deviation(
                     r_w=r_w,
                     alpha_l=alpha_l,
                     c_geo=c_geo,
-                    flow_scale=flow_scale,
                     n_terms=n_terms,
                     tol=tol,
                 )
@@ -465,8 +464,8 @@ def cout_deviation(
                     )
                 field = matrices[key] @ field
             continue
-        flow_scale = float(np.mean(np.abs(flow[sl])))
         phase_time = float(np.sum(dt_days[sl]))
+        flow_scale = phase_volume / phase_time  # dt-weighted mean |Q|: flow_scale * phase_time = flushed volume
         edges = np.concatenate(([0.0], np.cumsum(flushed[sl])))
         readout = {
             "c_geo": c_geo,

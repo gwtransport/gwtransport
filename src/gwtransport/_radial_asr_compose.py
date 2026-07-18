@@ -58,11 +58,12 @@ def _fr_step_response(
 ) -> npt.NDArray[np.floating]:
     r"""Flux-resident step response ``G1(S; V') = L^{-1}[ghat_FR(p; V')/p](S)`` at one ``V'``.
 
-    The flushed-volume Laplace variable ``p`` enters the transfer function as ``s = flow_scale * p``
-    with ``A_0 = flow_scale / (2 c_geo)``. For ``D_m = 0`` the flow magnitude cancels (``ghat``
-    depends only on ``beta = 2 c_geo p / alpha_L``), so the response is the flow-independent S-clock
-    kernel -- exact for arbitrary within-phase variable flow. For ``D_m > 0`` the kernel depends on
-    ``A_0`` separately, so ``flow_scale`` must be the (constant) phase flow magnitude.
+    For ``D_m = 0`` the flushed-volume Airy kernel depends on the Laplace variable ``p`` only through
+    ``beta = 2 c_geo R p / alpha_L``, so it is evaluated directly in the flow-free canonical form
+    (``s = 2 c_geo p``, ``A_0 = 1``) -- exact for arbitrary within-phase variable flow and bit-independent of
+    ``flow_scale``. For ``D_m > 0`` the kernel depends on ``A_0 = flow_scale / (2 c_geo)`` separately, so the
+    Laplace variable enters as ``s = flow_scale * p`` and ``flow_scale`` must be the (constant) phase flow
+    magnitude.
 
     The de Hoog half-period is anchored to the FR arrival-volume mean at ``V'``
     (``mu = R c_geo[(r'+alpha_L)^2 + alpha_L^2 - r_w^2]``, KB Sec. 7 -- the breakthrough front),
@@ -76,15 +77,21 @@ def _fr_step_response(
     """
     r_p = np.sqrt(r_w**2 + v_prime / c_geo)
     mu = retardation_factor * c_geo * ((r_p + alpha_l) ** 2 + alpha_l**2 - r_w**2)
+    # D_m = 0: the Airy S-clock kernel depends on p only through beta = 2 c_geo R p / alpha_L, so evaluate it
+    # in the flow-free canonical form (a0 = 1, s = 2 c_geo p) -- routing flow_scale through s and a0 would
+    # round-trip it and leave ~1-ulp bit-noise the de Hoog QD stage amplifies. D_m > 0: the kernel depends on
+    # A_0 = flow_scale/(2 c_geo) separately, so use the (constant) phase flow magnitude.
+    s_mult = 2.0 * c_geo if molecular_diffusivity == 0.0 else flow_scale
+    a0 = s_mult / (2.0 * c_geo)  # 1.0 exactly for D_m = 0 (flow-free), flow_scale/(2 c_geo) for D_m > 0
 
     def f_hat(p: npt.NDArray[np.complexfloating]) -> npt.NDArray[np.complexfloating]:
         return (
             transfer_function(
-                s=flow_scale * p,
+                s=s_mult * p,
                 r=r_p,
                 r_w=r_w,
                 alpha_l=alpha_l,
-                a0=flow_scale / (2.0 * c_geo),
+                a0=a0,
                 d_m=molecular_diffusivity,
                 retardation_factor=retardation_factor,
                 inject="flux",
@@ -118,8 +125,8 @@ def single_cycle_echo_matrix(
     r"""Echo weight matrix ``W`` (``cout' = W @ cin'``) for one inject-then-extract cycle, one disk.
 
     The injection builds the resident profile with the FR kernel at the injection flow magnitude and
-    the extraction reads it out at the extraction flow magnitude. For ``D_m = 0`` the flow magnitudes
-    cancel (the S-clock kernel is flow-independent), so arbitrary within-phase variable flow is exact;
+    the extraction reads it out at the extraction flow magnitude. For ``D_m = 0`` the flow magnitudes are
+    not used (the S-clock kernel is evaluated flow-free), so arbitrary within-phase variable flow is exact;
     for ``D_m > 0`` the flow scales must be the (constant) per-phase magnitudes.
 
     Parameters
@@ -137,7 +144,8 @@ def single_cycle_echo_matrix(
         Longitudinal dispersivity (m).
     inj_flow_scale, ext_flow_scale : float
         Flow magnitudes ``|Q|`` (m^3/day) of the injection and extraction phases (only relevant when
-        ``molecular_diffusivity > 0``; ignored to within rounding for ``D_m = 0``).
+        ``molecular_diffusivity > 0``; ignored exactly for ``D_m = 0``, where the S-clock kernel is
+        evaluated flow-free).
     retardation_factor : float, optional
         Linear retardation ``R >= 1``. Default 1.
     molecular_diffusivity : float, optional

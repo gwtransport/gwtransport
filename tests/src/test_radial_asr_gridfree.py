@@ -515,16 +515,16 @@ class TestReuseEngine:
         # sign / structural error is O(|col|) ~ 1e-2..1e-1, five orders of magnitude above the tolerance.
         flow, dt = np.array([100.0] * 4 + [-100.0] * 4), np.ones(8)
         r_nodes, _, dr = _field_grid(flow, dt, CG, 0.5, 0.5, 0.0, 60)
-        tau, flow_scale = 400.0, 100.0  # flushed-volume tau = phase_volume
+        tau = 400.0  # flushed-volume tau = phase_volume (the D_m=0 Airy kernel is flow-magnitude free)
         gauge = -1.0 if direction == "injection" else 1.0
         sl = (2.0 * CG * r_nodes / 0.5) * np.exp(gauge * r_nodes / 0.5) * dr
         pmat = _airy_propagator_matrix(
-            direction, tau, r_nodes, dr, r_w=0.5, alpha_l=0.5, c_geo=CG, flow_scale=flow_scale, n_terms=44, tol=1e-9
+            direction, tau, r_nodes, dr, r_w=0.5, alpha_l=0.5, c_geo=CG, n_terms=44, tol=1e-9
         )
         for j in (5, 30, 55):
             e = np.zeros(60)
             e[j] = 1.0
-            col = _propagate(e, r_nodes, sl, direction, tau, r_w=0.5, alpha_l=0.5, flow_scale=flow_scale, c_geo=CG)
+            col = _propagate(e, r_nodes, sl, direction, tau, r_w=0.5, alpha_l=0.5, c_geo=CG)
             np.testing.assert_allclose(pmat[:, j], col, rtol=1e-6, atol=5e-7)
 
     @pytest.mark.parametrize("direction", ["injection", "extraction"])
@@ -539,7 +539,7 @@ class TestReuseEngine:
         r_nodes, _, dr = _field_grid(flow, dt, c_geo, r_w, alpha_l, 0.0, 120)
         assert r_nodes.max() / alpha_l > 700.0  # the regime that overflowed before the fold
         signed = flow[flow > 0] if direction == "injection" else -flow[flow < 0]
-        tau, flow_scale = float(np.sum(signed)), float(np.mean(signed))
+        tau = float(np.sum(signed))  # flushed-volume tau = phase_volume
         pmat = _airy_propagator_matrix(
             direction,
             tau,
@@ -548,7 +548,6 @@ class TestReuseEngine:
             r_w=r_w,
             alpha_l=alpha_l,
             c_geo=c_geo,
-            flow_scale=flow_scale,
             n_terms=44,
             tol=1e-9,
         )
@@ -863,3 +862,179 @@ class TestRestDiffusion:
             cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.05, n_cells=600, n_sub=8, **GEOM
         )
         assert np.max(np.abs(gf[ext] - fv[ext])) < 3e-2  # FV first-order floor (the gridfree side is exact)
+
+
+def _tedges_from_dt(dt):
+    """DatetimeIndex bin edges (n+1) whose day-widths equal ``dt`` -- for the public ``radial_asr`` API."""
+    return pd.Timestamp("2020-01-01") + pd.to_timedelta(np.concatenate(([0.0], np.cumsum(dt))), unit="D")
+
+
+def _assemble(segments):
+    """Concatenate a list of ``(flow, dt, cin)`` phase segments into flat ``(flow, dt, cin)`` arrays."""
+    return tuple(np.concatenate(col) for col in zip(*segments, strict=True))
+
+
+def _i2e(segments, n_quad):
+    """Run the public ``infiltration_to_extraction`` on assembled phase segments (fixed ASR geometry)."""
+    flow, dt, cin = _assemble(segments)
+    tedges = _tedges_from_dt(dt)
+    return infiltration_to_extraction(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        pore_heights=10.0,
+        porosity=0.3,
+        well_radius=0.5,
+        longitudinal_dispersivity=0.5,
+        molecular_diffusivity=0.05,
+        n_quad=n_quad,
+    )
+
+
+def _rebinning_schedules(direction):
+    r"""Two binnings (A, B) of one physical Q(t): a tracer push, then a clean probe phase binned coarsely
+    (A: 2 bins where ``|Q|`` and ``dt`` covary, so ``mean(|Q|) != phase_volume/phase_time``) vs. finely
+    (B: the identical physical flow in uniform 1-day bins), then a final extraction read on 6 shared bins.
+
+    The probe (``injection`` or ``extraction``) is an intermediate phase, so its across-reversal propagator
+    hand-off carries the ``flow_scale`` defect. Returns ``(segments_A, segments_B)``; the last 6 bins are the
+    identical extraction readout in both.
+    """
+    read = [(np.full(6, -100.0), np.full(6, 2.0), np.zeros(6))]  # final extraction: read cout on 6 shared bins
+    if direction == "injection":
+        pre = [
+            (np.full(4, 100.0), np.ones(4), np.ones(4)),  # tracer push (cin deviation = 1)
+            (np.full(2, -100.0), np.ones(2), np.zeros(2)),  # partial extract -> a resident plume remains
+        ]
+        # probe: clean injection of 380 m^3 over 20 d. mean|Q| = 100 (A) / 19 (B); phase_volume/time = 19 both.
+        probe_a = [(np.array([190.0, 10.0]), np.array([1.0, 19.0]), np.zeros(2))]
+        probe_b = [(np.concatenate([[190.0], np.full(19, 10.0)]), np.ones(20), np.zeros(20))]
+        return pre + probe_a + read, pre + probe_b + read
+    # extraction probe: tracer push, then a clean extraction binned two ways (its residual is propagated
+    # inward by the convergent hand-off), then a clean injection separates it from the readout extraction.
+    pre = [(np.full(6, 100.0), np.ones(6), np.ones(6))]  # tracer push (cin deviation = 1)
+    # probe: clean extraction of 500 m^3 over 4 d. mean|Q| = 100 (A) / 125 (B); phase_volume/time = 125 both.
+    probe_a = [(np.array([-150.0, -50.0]), np.array([3.0, 1.0]), np.zeros(2))]
+    probe_b = [(np.array([-150.0, -150.0, -150.0, -50.0]), np.ones(4), np.zeros(4))]
+    mid = [(np.full(2, 100.0), np.ones(2), np.zeros(2))]  # clean injection separates the two extraction phases
+    return pre + probe_a + mid + read, pre + probe_b + mid + read
+
+
+class TestRebinningInvariance:
+    r"""Issue #333: two valid binnings of the *same physical* Q(t) must give identical ``cout``.
+
+    The per-phase advective clock must advance the plume by the flushed volume ``sum|Q| dt`` (the
+    dt-weighted mean ``flow_scale = phase_volume/phase_time``), not by the unweighted ``mean(|Q|) * sum(dt)``.
+    Any phase where ``|Q|`` and ``dt`` covary makes the two differ, so the two binnings expose the bug
+    (issue #333 confirmed baselines: ~0.95 rel for ``D_m > 0``, ~7e-5 for ``D_m = 0``; the per-test baselines
+    below vary with the schedule). Every uniform-bin schedule -- i.e. every other radial test -- is a
+    bit-exact no-op for the fix, which is why it went uncaught. All comparisons are on physically identical
+    extraction bins.
+    """
+
+    @pytest.mark.parametrize("direction", ["injection", "extraction"])
+    def test_rebinning_invariance_dm0(self, direction):
+        # D_m = 0 (Airy S-clock, vectorized -> fast). After the fix flow_scale is binning-invariant AND the
+        # kernel is evaluated flow-free, so the two binnings share bit-identical grids/matrices: A == B to the
+        # last bit (measured 0.0). Baseline round-trips a different flow_scale per binning (RAR-F2), leaving
+        # de-Hoog-amplified bit-noise ~2.6e-8 on this schedule.
+        seg_a, seg_b = _rebinning_schedules(direction)
+        fa, da, ca = _assemble(seg_a)
+        fb, db, cb = _assemble(seg_b)
+        cout_a = cout_deviation(cin_deviation=ca, flow=fa, dt_days=da, molecular_diffusivity=0.0, n_quad=64, **GEOM)
+        cout_b = cout_deviation(cin_deviation=cb, flow=fb, dt_days=db, molecular_diffusivity=0.0, n_quad=64, **GEOM)
+        # atol near machine precision: integer volumes give bit-identical tau/flow_scale, so A and B build the
+        # identical matrices; the ~2.6e-8 baseline fails this by ~5 orders.
+        np.testing.assert_allclose(cout_a[-6:], cout_b[-6:], rtol=0, atol=1e-13)
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize(
+        ("direction", "r_fac"),
+        [("injection", 1.0), ("extraction", 1.0), ("injection", 2.0)],  # both hand-off directions + retardation
+    )
+    def test_rebinning_invariance_dm_positive(self, direction, r_fac):
+        # D_m > 0 (Riccati wall-clock) -- THE major regression (RAR-F1). Baseline mis-advects the probe phase
+        # by mean(|Q|)*sum(dt) instead of the flushed volume: ~0.95 rel between the two binnings. After the fix
+        # flow_scale = phase_volume/phase_time is binning-invariant, so both build the identical cached Riccati
+        # propagator and A == B bit-for-bit (measured 0.0). R>1 exercises the a0_eff = flow_scale/(2c_geo)/R
+        # coupling; the extraction probe exercises the convergent (Danckwerts) hand-off.
+        seg_a, seg_b = _rebinning_schedules(direction)
+        kw = {"molecular_diffusivity": 0.05, "retardation_factor": r_fac, "n_quad": 40, **GEOM}
+        fa, da, ca = _assemble(seg_a)
+        fb, db, cb = _assemble(seg_b)
+        cout_a = cout_deviation(cin_deviation=ca, flow=fa, dt_days=da, **kw)
+        cout_b = cout_deviation(cin_deviation=cb, flow=fb, dt_days=db, **kw)
+        np.testing.assert_allclose(cout_a[-6:], cout_b[-6:], rtol=0, atol=1e-13)
+
+    def test_dm0_flow_magnitude_invariance(self):
+        # RAR-F2 in isolation: for D_m = 0 the S-clock kernel is flow-magnitude free, so scaling all |Q| by a
+        # constant (with inverse-scaled dt -> fixed volume schedule) must leave cout unchanged, and with a
+        # different flow magnitude on each run this is independent of the RAR-F1 (dt-weighting) fix. Multi-cycle
+        # so the across-reversal Airy propagator hand-off (which carries the round-trip noise) is invoked -- a
+        # single inject/extract cycle never propagates. The scale factor is NON-power-of-two on purpose: a power
+        # of two makes the baseline round-trip cancel exactly (s=c*s, a0=c*a0 -> beta=s/a0 bit-identical),
+        # hiding the bug. Baseline: ~1e-8 de-Hoog-amplified flow_scale bit-noise; post-fix the kernel is
+        # evaluated flow-free so only ~1e-14 volume-ulp noise remains.
+        flow = np.array([100.0] * 4 + [-100.0] * 2 + [50.0] * 4 + [-100.0] * 6)  # 3 reversals -> propagator used
+        dt = np.ones(len(flow))
+        cin = np.where(flow > 0, 1.0, 0.0)  # tracer on injections
+        c = 1.7  # NON-power-of-two
+        ext = flow < 0
+        cout1 = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.0, n_quad=80, **GEOM)
+        cout2 = cout_deviation(
+            cin_deviation=cin, flow=flow * c, dt_days=dt / c, molecular_diffusivity=0.0, n_quad=80, **GEOM
+        )
+        np.testing.assert_allclose(cout1[ext], cout2[ext], rtol=0, atol=1e-11)
+
+    @pytest.mark.slow
+    def test_dm_engine_reduces_to_airy_limit(self):
+        # Physical-correctness ANCHOR that pins the flow_scale VALUE (not just self-consistency, which the
+        # rebinning tests already give): as D_m -> 0 the wall-clock Riccati engine must reduce to the
+        # volume-exact D_m=0 Airy engine on the non-uniform schedule. This holds ONLY if the Riccati clock
+        # advects exactly the flushed volume, i.e. flow_scale = phase_volume/phase_time. Baseline (mean|Q|)
+        # mis-advects -> ~0.97 gap; any wrong-but-binning-invariant scale (e.g. max|Q|, = 190 in both binnings)
+        # would also fail here while passing the A==B tests. Post-fix the gap is the first-order D_m truncation
+        # (~2e-3 at D_m=1e-3).
+        flow, dt, cin = _assemble(_rebinning_schedules("injection")[0])
+        ext = flow < 0
+        ref = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.0, n_quad=48, **GEOM)
+        approx = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=1e-3, n_quad=48, **GEOM)
+        scale = np.max(np.abs(ref[ext]))
+        assert np.max(np.abs(approx[ext] - ref[ext])) / scale < 8e-3  # first-order D_m limit; baseline ~0.97
+
+    @pytest.mark.slow
+    def test_nonuniform_dm_matches_fv_oracle(self):
+        # Independent cross-check: the fixed non-uniform D_m>0 engine matches the finite-volume oracle, which
+        # shares NO kernel code with the engine and is itself rebinning-invariant. This is the definitive guard
+        # against "engine and gridfree oracle silently agree on the wrong value" (both were fixed together).
+        # The floor is the constant-|Q| per-phase kernel approximation (~7%, ratio-independent) + slow-FV
+        # first-order convergence -- NOT "a few %". Baseline engine-vs-FV = 0.87 (sides with the wrong value);
+        # post-fix ~0.08.
+        flow, dt, cin = _assemble(_rebinning_schedules("injection")[0])
+        ext = flow < 0
+        eng = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.05, n_quad=64, **GEOM)
+        fv = fv_cout_deviation(
+            cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.05, n_cells=600, n_sub=8, **GEOM
+        )
+        scale = np.max(np.abs(fv[ext]))
+        assert np.max(np.abs(eng[ext] - fv[ext])) / scale < 0.15  # constant-|Q| kernel (~7%) + slow-FV floor
+
+    @pytest.mark.slow
+    def test_echo_operator_rebinning_invariance(self):
+        # The single-cycle D_m>0 public path uses the echo operator (radial_asr._echo_operator), whose
+        # inj/ext_flow_scale are the milder RAR-F1 site (volume corners exact, only the kernel A_0 shape is
+        # off). Non-uniform vs uniform injection of the same tracer -> identical cout after the fix (baseline
+        # ~2.6%). Exercises the public infiltration_to_extraction dispatch + tedges->dt conversion.
+        inj_a = (np.array([190.0, 10.0]), np.array([1.0, 19.0]), np.array([1.0, 1.0]))
+        inj_b = (np.concatenate([[190.0], np.full(19, 10.0)]), np.ones(20), np.ones(20))
+        ext = (np.full(6, -100.0), np.full(6, 2.0), np.zeros(6))
+        np.testing.assert_allclose(_i2e([inj_a, ext], 48)[-6:], _i2e([inj_b, ext], 48)[-6:], rtol=0, atol=1e-13)
+
+    @pytest.mark.slow
+    def test_public_multicycle_rebinning(self):
+        # The multi-cycle public path (infiltration_to_extraction -> _reuse_ensemble -> cout_deviation, plus
+        # the tedges->dt conversion and streamtube averaging) is rebinning-invariant. Complements the direct
+        # cout_deviation tests, which bypass the public wrapper. Baseline ~0.95; post-fix bit-identical.
+        seg_a, seg_b = _rebinning_schedules("injection")
+        np.testing.assert_allclose(_i2e(seg_a, 40)[-6:], _i2e(seg_b, 40)[-6:], rtol=0, atol=1e-13)

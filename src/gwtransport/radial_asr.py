@@ -237,8 +237,10 @@ def _echo_operator(
     dt = dt_to_days(tedges)
     inj_vol = np.concatenate(([0.0], np.cumsum((flow * dt)[inj_mask])))  # 0 .. S_inj
     ext_vol = np.concatenate(([0.0], np.cumsum((-flow * dt)[ext_mask])))  # 0 .. T_end
-    inj_flow_scale = float(np.mean(flow[inj_mask])) if np.any(inj_mask) else 1.0
-    ext_flow_scale = float(np.mean(-flow[ext_mask])) if np.any(ext_mask) else 1.0
+    # dt-weighted mean |Q| per direction (total flushed volume / total pumping time): flow_scale * time =
+    # flushed volume, so the D_m>0 constant-|Q| kernel conserves volume and cout is rebinning-invariant.
+    inj_flow_scale = float(inj_vol[-1] / np.sum(dt[inj_mask])) if np.any(inj_mask) else 1.0
+    ext_flow_scale = float(ext_vol[-1] / np.sum(dt[ext_mask])) if np.any(ext_mask) else 1.0
     w_ens = np.zeros((int(np.sum(ext_mask)), int(np.sum(inj_mask))))
     for c_geo, w_i in zip(c_geos, weights, strict=True):
         w_ens += w_i * single_cycle_echo_matrix(
@@ -462,7 +464,10 @@ def infiltration_to_extraction(
     molecular_diffusivity : float, optional
         Molecular diffusivity ``D_m`` [m^2/day]. Default 0. ``D_m = 0`` uses the vectorized Airy branch;
         ``D_m > 0`` uses the log-derivative Riccati kernel -- exact to the de Hoog floor at any ``A_0/D_m``
-        with no precision cap, reducing continuously to the Airy branch as ``D_m -> 0``.
+        with no precision cap, reducing continuously to the Airy branch as ``D_m -> 0``. For ``D_m > 0`` each
+        one-signed pumping phase is advanced at its (constant) dt-weighted mean flow magnitude, so
+        within-phase variable flow is a constant-|Q| approximation whose error grows with the within-phase
+        flow variation; it is exact for constant-|Q| phases, and (at any flow schedule) for ``D_m = 0``.
     retardation_factor : float, optional
         Linear retardation ``R >= 1``. Default 1.
     weights : array-like, optional

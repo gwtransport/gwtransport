@@ -157,7 +157,6 @@ def _propagate(
     *,
     r_w: float,
     alpha_l: float,
-    flow_scale: float,
     c_geo: float,
 ) -> npt.NDArray[np.floating]:
     """Propagate a resident field by flushed-volume ``tau`` with the Airy interior Green's function.
@@ -165,9 +164,10 @@ def _propagate(
     ``f_resid(r_i) = L^{-1}_p[ sum_k Ghat(r_i, r_k; p) field_k src_measure_k ](tau)`` -- one de Hoog
     inversion per output node, with the source superposition folded into the transform (it is linear
     and commutes with the inversion). ``src_measure_k = w(r_k) dr_weights_k`` carries the
-    Sturm-Liouville weight; ``flow_scale`` cancels for ``D_m = 0`` (the autonomous S/T-clock). The
-    scaled Airy on the grid is evaluated ONCE per de Hoog node set (cached and reused across output
-    nodes), and each output node is assembled by prefix selection at ``r_i`` -- ``O(n_quad)`` Airy
+    Sturm-Liouville weight; the ``D_m = 0`` Airy kernel depends on the Laplace node only through
+    ``beta = 2 c_geo p/alpha_L`` (the autonomous S-clock), so it is evaluated flow-free (``s = 2 c_geo p``,
+    ``a0 = 1``). The scaled Airy on the grid is evaluated ONCE per de Hoog node set (cached and reused across
+    output nodes), and each output node is assembled by prefix selection at ``r_i`` -- ``O(n_quad)`` Airy
     evaluations rather than ``O(n_quad^2)``.
 
     Returns
@@ -175,7 +175,7 @@ def _propagate(
     ndarray
         Propagated resident deviation at each node, shape ``(n_quad,)``.
     """
-    a0 = flow_scale / (2.0 * c_geo)
+    a0 = 1.0
     gauge_sign = 1.0 if direction == "injection" else -1.0
     weighted = field * src_measure
     if not np.any(weighted != 0.0):
@@ -186,7 +186,7 @@ def _propagate(
     cache: dict[bytes, tuple] = {}
 
     def pieces(p: npt.NDArray[np.complexfloating]) -> tuple:
-        s = (flow_scale * p).reshape(-1, 1)
+        s = (2.0 * c_geo * p).reshape(-1, 1)  # canonical flow-free S-clock: beta = 2 c_geo p / alpha_L
         return (
             _resolvent_airy_pieces(s, r_grid, alpha_l, a0, gauge_sign),
             _resolvent_airy_pieces(s, np.array([[r_w]]), alpha_l, a0, gauge_sign),
@@ -399,7 +399,6 @@ def gridfree_cout_deviation(
                 phase_volume / retardation_factor,
                 r_w=r_w,
                 alpha_l=alpha_l,
-                flow_scale=flow_scale,
                 c_geo=c_geo,
             )
         return _propagate_diffusive(  # D_m > 0: wall-clock time, retardation rescales A_0, D_m
@@ -433,8 +432,8 @@ def gridfree_cout_deviation(
                     d_m_eff=molecular_diffusivity / retardation_factor,
                 )
             continue
-        flow_scale = float(np.mean(np.abs(flow[sl])))
         phase_time = float(np.sum(dt_days[sl]))
+        flow_scale = phase_volume / phase_time  # dt-weighted mean |Q|: flow_scale * phase_time = flushed volume
         edges = np.concatenate(([0.0], np.cumsum(phase_flushed)))
         if sign > 0:  # injection: propagate the buffer, then add the new injected resident profile
             field = propagate(field, "injection", flow_scale, phase_volume, phase_time)
