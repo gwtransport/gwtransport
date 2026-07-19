@@ -118,6 +118,7 @@ def _pv_band_geometry(
     min_cin_flow: float,
     saturation_threshold: float,
     n_cin_bins: int,
+    stagnant_time_at_cout: npt.NDArray[np.floating],
 ) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
     r"""Per-cout-row band bounds (lo, hi) in cin-bin columns for one streamtube (geometry only).
 
@@ -136,6 +137,12 @@ def _pv_band_geometry(
     genuine, non-negligible coefficient remains at column 0 (the warm-start tail of a wide bin with
     large ``tau`` -> large ``D_t``). Each row therefore additionally tests ``|x0| < U*2*sqrt(D_t0)``
     at edge 0 and, when non-saturated, drops its band lower bound to 0 so that tail is kept.
+
+    ``stagnant_time_at_cout`` is the interior zero-flow (stagnation) time accumulated before each
+    cout bin's upper edge [days]. During a pumped-off gap the moving-frame variance keeps growing
+    (``D_m * tau``) at frozen cumulative volume, so post-side columns before the gap carry a ``D_t``
+    larger than the front intercept plus the flowing slope bound; the gap-accumulated product
+    ``D_m * stagnant_time`` is added to the post-side intercept so those columns stay in the band.
 
     Returns
     -------
@@ -175,7 +182,10 @@ def _pv_band_geometry(
         molecular_diffusivity * np.maximum(t_cout_lo - tedges_days[np.minimum(center_post, n_cin_edges - 1)], 0.0)
         + disp
     )
-    a_post = np.maximum(a_post, a_pre)
+    # Interior stagnation: tau across a zero-flow gap grows without volume, so the flowing slope
+    # bound below misses D_m * (gap time) at post-side columns before the gap; add it to the
+    # intercept (conservative: all interior stagnant time before the row's upper edge).
+    a_post = np.maximum(a_post, a_pre) + molecular_diffusivity * stagnant_time_at_cout
     pre_x = 2.0 * u * np.sqrt(a_pre)
     if min_cin_flow > 0.0:
         b_max = longitudinal_dispersivity + molecular_diffusivity * r_vpv / (length * min_cin_flow)
@@ -296,8 +306,49 @@ def _pv_band_values(
     i_lo = i_edge[rows, lo_idx]
     i_hi = i_edge[rows + 1, hi_idx]
     dx = sw_hi - sw_lo
+    delta = i_hi - i_lo
+
+    # Stagnation (zero-flow gap) correction. The endpoint difference above integrates the exact
+    # 1-form dI = C_R dx + (dI/dD_t) dD_t along the bin; on flowing stretches dD_t/dx = D_s/v_s
+    # makes dI = C_F dx, but across a zero-flow gap x is frozen while tau (hence D_t) keeps
+    # growing, so a cout bin straddling a gap picks up a vertical int (dI/dD_t) dD_t that carries
+    # no extracted volume and does not belong in the flux-weighted bin average. Subtract, per
+    # (cout bin, zero-flow cin bin) overlap clipped to the bin's time span, the antiderivative
+    # jump at the gap's frozen breakthrough coordinate. Consecutive zero-flow bins telescope to
+    # the full gap jump; zero-length overlaps (grid-aligned cout edges) are skipped, keeping the
+    # aligned path bit-identical.
+    if molecular_diffusivity > 0.0:
+        gap_bins = np.nonzero((np.diff(v_cin) <= 0.0) & (np.diff(tedges_days) > 0.0))[0]
+        if gap_bins.size:
+            t_gap_lo, t_gap_hi = tedges_days[gap_bins], tedges_days[gap_bins + 1]
+            k_first = np.maximum(np.searchsorted(cout_tedges_days, t_gap_lo, side="right") - 1, 0)
+            k_last = np.minimum(np.searchsorted(cout_tedges_days, t_gap_hi, side="left") - 1, n_cout_bins - 1)
+            counts = np.maximum(k_last - k_first + 1, 0)
+            k_pair = np.repeat(k_first, counts) + (
+                np.arange(counts.sum()) - np.repeat(np.cumsum(counts) - counts, counts)
+            )
+            g_pair = np.repeat(np.arange(gap_bins.size), counts)
+            t_lo_pair = np.maximum(cout_tedges_days[k_pair], t_gap_lo[g_pair])
+            t_hi_pair = np.minimum(cout_tedges_days[k_pair + 1], t_gap_hi[g_pair])
+            keep = t_hi_pair > t_lo_pair
+            if np.any(keep):
+                k_pair, g_pair = k_pair[keep], g_pair[keep]
+                t_lo_pair, t_hi_pair = t_lo_pair[keep], t_hi_pair[keep]
+                cols = np.clip(col_start[k_pair][:, None] + band, 0, n_cin_edges - 1)
+                x_gap = (v_cin[gap_bins[g_pair], None] - v_cin[cols] - r_vpv) * length / r_vpv
+                disp_term = longitudinal_dispersivity * np.maximum(x_gap + length, 0.0)
+                t_c = tedges_days[cols]
+                dt_gap_lo = np.maximum(
+                    molecular_diffusivity * np.maximum(t_lo_pair[:, None] - t_c, 0.0) + disp_term, _DT_FLOOR
+                )
+                dt_gap_hi = np.maximum(
+                    molecular_diffusivity * np.maximum(t_hi_pair[:, None] - t_c, 0.0) + disp_term, _DT_FLOOR
+                )
+                jump = _breakthrough_antideriv(x_gap, dt_gap_hi) - _breakthrough_antideriv(x_gap, dt_gap_lo)
+                np.add.at(delta, k_pair, -jump)
+
     with np.errstate(divide="ignore", invalid="ignore"):
-        frac = np.where(dx > 0.0, (i_hi - i_lo) / dx, 0.0)
+        frac = np.where(dx > 0.0, delta / dx, 0.0)
 
     return frac[:, :-1] - frac[:, 1:]
 
@@ -388,6 +439,17 @@ def _closed_form_coeff_matrix(
     n_cout_bins = len(cout_tedges) - 1
     n_cin_bins = len(flow)
 
+    # Interior stagnation (zero-flow gap) time accumulated before each cout bin's upper edge, for
+    # the post-side band intercept (see _pv_band_geometry). The data-start plateau (including the
+    # 100-year warm-start pad when flow[0] == 0) is excluded: its columns share the data-start
+    # cumulative volume, so the per-row x0 tail check already covers them without forcing a
+    # record-wide band.
+    dv_bins = np.diff(cumulative_volume_at_cin)
+    stagnant_dt = np.where(dv_bins > 0.0, 0.0, np.diff(tedges_days))
+    stagnant_dt[: int(np.argmax(dv_bins > 0.0))] = 0.0
+    stagnant_cum = np.concatenate(([0.0], np.cumsum(stagnant_dt)))
+    stagnant_time_at_cout = np.interp(cout_tedges_days[1:], tedges_days, stagnant_cum)
+
     # PASS 1 (geometry): per-streamtube band bounds (lo, hi) in cin-bin columns; accumulate the
     # per-row union over streamtubes. union_lo / union_hi are the min / max bounds per cout row.
     union_lo = np.full(n_cout_bins, n_cin_bins - 1, dtype=np.intp)
@@ -410,6 +472,7 @@ def _closed_form_coeff_matrix(
             min_cin_flow=min_cin_flow,
             saturation_threshold=saturation_threshold,
             n_cin_bins=n_cin_bins,
+            stagnant_time_at_cout=stagnant_time_at_cout,
         )
         np.minimum(union_lo, lo, out=union_lo)
         np.maximum(union_hi, hi, out=union_hi)
