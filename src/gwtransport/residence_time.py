@@ -766,8 +766,20 @@ def gamma(
     # pore volumes. band_width is the global maximum so every tile shares one column layout; a
     # spurious column clips to the support and merely splits a quadratic piece without changing
     # its integral, so the band is an exact superset.
-    a_min = v_lo_all - r * support_hi if sign < 0 else v_lo_all + r * support_lo
-    a_max = v_hi_all - r * support_lo if sign < 0 else v_hi_all + r * support_hi
+    #
+    # The support-shifted sweep alone leaves a gap: for sign > 0 the low edge v_lo + r*support_lo
+    # sits above the bin's own v_lo, and for sign < 0 the high edge v_hi - r*support_lo sits below
+    # v_hi. In strict mode (spinup other than 'constant') the coverage clamp puts breakpoints on the
+    # flow edges inside the bin's own [v_lo, v_hi] window, so those must be columns too or a
+    # quadratic piece straddles a flow-edge kink and is mis-integrated. Widen the band to always
+    # cover [v_lo, v_hi]; the extra columns clip to the support and split without changing the
+    # integral where they are not needed.
+    a_min = (
+        np.minimum(v_lo_all - r * support_hi, v_lo_all) if sign < 0 else np.minimum(v_lo_all + r * support_lo, v_lo_all)
+    )
+    a_max = (
+        np.maximum(v_hi_all - r * support_lo, v_hi_all) if sign < 0 else np.maximum(v_hi_all + r * support_hi, v_hi_all)
+    )
     jlo_all = np.clip(np.searchsorted(flow_cum, a_min, "left") - 1, 0, n_edges - 1)
     jhi_all = np.clip(np.searchsorted(flow_cum, a_max, "right"), 0, n_edges - 1)
     band_width = int((jhi_all - jlo_all).max()) + 1

@@ -1,8 +1,11 @@
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import gamma as scipy_gamma_dist
 
+from gwtransport._time import tedges_to_days
 from gwtransport.gamma import bins as gamma_bins
+from gwtransport.gamma import mean_std_loc_to_alpha_beta
 from gwtransport.residence_time import (
     fraction_explained_full,
     fraction_explained_gamma,
@@ -404,6 +407,130 @@ def test_gamma_zero_flow_multi_shutdown_wide_apvd_matches_discretized_mean():
         # Fixture sanity: the shutdown bins must be among the emitted (finite) bins, else the test is vacuous.
         assert valid[shutdowns].all(), f"{direction}: shutdown bins are not finite; fixture no longer exercises RT-P1"
         np.testing.assert_allclose(got[valid], ref[valid], rtol=1e-4, atol=0.0)
+
+
+def _phi_antiderivative(flow_cum, tedges_days):
+    """Phi(v) = int_0^v T(w) dw for the piecewise-linear cumulative-volume -> time map T through the
+    knots (flow_cum, tedges_days). Vectorized callable, built only from the public inputs -- shares no
+    code with residence_time's phi machinery, so it is an independent reference."""
+    vk = np.asarray(flow_cum, float)
+    tk = np.asarray(tedges_days, float)
+    slope = np.diff(tk) / np.diff(vk)  # dT/dv on each segment
+    phi_knot = np.concatenate([[0.0], np.cumsum(0.5 * (tk[:-1] + tk[1:]) * np.diff(vk))])
+
+    def phi(x):
+        x = np.clip(np.asarray(x, float), vk[0], vk[-1])
+        k = np.clip(np.searchsorted(vk, x, "right") - 1, 0, len(vk) - 2)
+        dv = x - vk[k]
+        return phi_knot[k] + tk[k] * dv + 0.5 * slope[k] * dv**2
+
+    return phi
+
+
+def _gamma_partial_oracle(*, flow, tedges_days, cout_tedges_days, alpha, beta, loc, sign, r, n_v=60000):
+    """Partial-coverage-aware fine-pore-volume reference for residence_time.gamma() in strict mode.
+
+    Directly evaluates gamma()'s definition -- the flow-weighted, coverage-renormalized mean over the
+    bin's volume window and the shifted-gamma density of tau(v, V) = sign*(T(v + sign*r*V) - T(v)),
+    counting only covered (in-record) contributions -- via a fine summation over V using the Phi
+    antiderivative. It shares no code with gamma()'s band/piece integrator. Note ``mean()`` over a fine
+    discretization is NOT valid here: its per-streamtube all-or-nothing coverage differs from this
+    partial-coverage integral by O(1) on the near-end bins.
+    """
+    flow = np.asarray(flow, float)
+    tedges_days = np.asarray(tedges_days, float)
+    flow_cum = np.concatenate([[0.0], np.cumsum(flow * np.diff(tedges_days))])
+    v_end = flow_cum[-1]
+    phi = _phi_antiderivative(flow_cum, tedges_days)
+    tail = 1e-13
+    lo_v = loc + scipy_gamma_dist.ppf(tail, alpha, scale=beta)
+    hi_v = loc + scipy_gamma_dist.ppf(1 - tail, alpha, scale=beta)
+    v_grid = np.linspace(lo_v, hi_v, n_v)
+    weight = scipy_gamma_dist.pdf(v_grid - loc, alpha, scale=beta)
+    vol = np.interp(cout_tedges_days, tedges_days, flow_cum, left=np.nan, right=np.nan)
+    out = np.full(len(vol) - 1, np.nan)
+    for i in range(len(out)):
+        lo, hi = vol[i], vol[i + 1]
+        if not (np.isfinite(lo) and np.isfinite(hi) and hi > lo):
+            continue
+        if sign > 0:
+            v_stop = np.minimum(hi, v_end - r * v_grid)
+            length = np.maximum(v_stop - lo, 0.0)
+            num = (phi(v_stop + r * v_grid) - phi(v_stop)) - (phi(lo + r * v_grid) - phi(lo))
+        else:
+            v_start = np.maximum(lo, r * v_grid)
+            length = np.maximum(hi - v_start, 0.0)
+            num = (phi(hi) - phi(hi - r * v_grid)) - (phi(v_start) - phi(v_start - r * v_grid))
+        covered = length > 0
+        den = np.trapezoid(weight * np.where(covered, length, 0.0), v_grid)
+        out[i] = np.trapezoid(weight * np.where(covered, num, 0.0), v_grid) / den if den > 0 else np.nan
+    return out
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_gamma_strict_mode_coarse_cout_partial_bins_match_partial_oracle(direction):
+    """RT-F2 (issue #308): in strict mode (``spinup`` other than ``'constant'``) with a cout grid coarser
+    than the flow grid and a shifted APVD (``loc > 0``), the per-bin flow-edge band must cover each bin's
+    own ``[v_lo, v_hi]`` volume window. Otherwise a coverage-clamp breakpoint that sits on a flow edge
+    inside that window is dropped, a quadratic piece straddles the flow-edge kink, and the partially-
+    covered late output bins are mis-integrated -- baseline error is ~1e-3 on the near-end bins.
+
+    Oracle: the partial-coverage-aware fine-pore-volume reference above (independent of the band/piece
+    integrator). Its discretization floor here is ~3e-6, and the fixed code matches it to that floor; the
+    pre-fix defect reaches ~2e-3 on the near-end bins as a value-independent absolute error, so the
+    absolute-only assertion (``atol=5e-5, rtol=0``) clears the floor by ~14x while catching the defect on
+    two near-end bins by ~46x. Baseline-verified: fails without the band widen.
+    """
+    n = 140
+    tedges = pd.date_range("2023-01-01", periods=n + 1, freq="D")
+    flow = 100.0 * (1.0 + 0.6 * np.sin(np.arange(n) / 3.0))  # variable flow -> real flow-edge kinks
+    cout_tedges = tedges[::7]  # coarse output grid over the daily flow grid
+    mean_v, std_v, loc_v, r = 3000.0, 900.0, 600.0, 1.5
+    sign = -1.0 if direction == "extraction_to_infiltration" else 1.0
+    got = gamma(
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        mean=mean_v,
+        std=std_v,
+        loc=loc_v,
+        direction=direction,
+        retardation_factor=r,
+        spinup=0.0,
+    )
+    a, b = mean_std_loc_to_alpha_beta(mean=mean_v, std=std_v, loc=loc_v)
+    ref = _gamma_partial_oracle(
+        flow=flow,
+        tedges_days=tedges_to_days(tedges),
+        cout_tedges_days=tedges_to_days(cout_tedges, ref=tedges[0]),
+        alpha=a,
+        beta=b,
+        loc=loc_v,
+        sign=sign,
+        r=r,
+    )
+    valid = np.isfinite(got) & np.isfinite(ref)
+    # Fixture sanity: the RT-F2 defect lives on partially-covered bins, so the fixture must actually
+    # straddle the coverage boundary -- some output bin must keep the smallest supported streamtube in
+    # the record while the largest has already left it. Otherwise the test is vacuous.
+    support = gamma_bins(mean=mean_v, std=std_v, loc=loc_v, n_bins=200)["expected_values"]
+    per_tube = full(
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([support[0], support[-1]]),
+        direction=direction,
+        retardation_factor=r,
+        spinup=0.0,
+    )
+    partially_covered = np.isfinite(per_tube[0]) & ~np.isfinite(per_tube[1])
+    assert partially_covered.any(), (
+        f"{direction}: fixture no longer straddles the coverage boundary; RT-F2 not exercised"
+    )
+    assert valid.sum() >= 6, f"{direction}: too few finite bins"
+    # rtol=0: the integrator's error here is a value-independent absolute ~3e-6 (well below atol); an
+    # rtol term would inflate the tolerance on the larger-valued bins and mask real defects there.
+    np.testing.assert_allclose(got[valid], ref[valid], rtol=0.0, atol=5e-5)
 
 
 @pytest.mark.parametrize("direction", DIRECTIONS)
