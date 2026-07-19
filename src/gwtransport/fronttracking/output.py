@@ -273,7 +273,9 @@ def identify_outlet_segments(
             # whose c follows the self-similar profile and asymptotes to the
             # fan's tail concentration.
             theta_cross = wave.outlet_crossing_theta(v_outlet)
-            if theta_cross is None:
+            if theta_cross is None or theta_cross >= wave.theta_deactivation:
+                # The extrapolated crossing postdates the wave's death (a
+                # collision handed the front to a successor): spurious.
                 continue
             if theta_cross <= theta_start:
                 # Outlet already inside the fan at theta_start.
@@ -301,7 +303,7 @@ def identify_outlet_segments(
                 tail_speed = wave.tail_speed()
                 if tail_speed > EPSILON_VELOCITY:
                     theta_cross = wave.theta_start + (v_outlet - wave.v_start) / tail_speed
-                    if theta_start < theta_cross <= theta_end:
+                    if theta_start < theta_cross <= theta_end and theta_cross < wave.theta_deactivation:
                         outlet_events.append({
                             "theta": theta_cross,
                             "wave": wave,
@@ -310,11 +312,15 @@ def identify_outlet_segments(
                         })
                 continue
 
-            # Head crossing
+            # Head crossing. Crossings past the wave's death are extrapolation
+            # artifacts (the fan was handed to a successor, e.g. a
+            # DecayingShockWave, whose own crossing covers the outlet): clamp
+            # every crossing to ``theta_cross < theta_deactivation``, per
+            # ``was_active_at`` semantics.
             head_speed = wave.head_speed()
             if head_speed > EPSILON_VELOCITY and wave.v_start < v_outlet:
                 theta_cross = wave.theta_start + (v_outlet - wave.v_start) / head_speed
-                if theta_start <= theta_cross <= theta_end:
+                if theta_start <= theta_cross <= theta_end and theta_cross < wave.theta_deactivation:
                     outlet_events.append({
                         "theta": theta_cross,
                         "wave": wave,
@@ -326,7 +332,7 @@ def identify_outlet_segments(
             tail_speed = wave.tail_speed()
             if tail_speed > EPSILON_VELOCITY and wave.v_start < v_outlet:
                 theta_cross = wave.theta_start + (v_outlet - wave.v_start) / tail_speed
-                if theta_start <= theta_cross <= theta_end:
+                if theta_start <= theta_cross <= theta_end and theta_cross < wave.theta_deactivation:
                     outlet_events.append({
                         "theta": theta_cross,
                         "wave": wave,
@@ -570,7 +576,8 @@ def integrate_fan_exact(
     c_apex : float, optional
         Concentration on the constant side at the fan apex. For
         ``RarefactionWave`` this is ``raref.c_tail``; for
-        ``DecayingShockWave`` (decay_side='left') this is ``wave.c_fixed``.
+        ``DecayingShockWave`` (decay_side='left') this is ``wave.c_fan_tail``
+        (the plateau the outlet holds once the fan's far edge sweeps by).
         For ``c_apex > 0`` the fan formula extrapolates past the physical
         fan range; the integration is clamped at ``θ_tail`` (where
         ``c(θ_tail) = c_apex``) and the constant-c_apex region beyond
@@ -841,9 +848,14 @@ def compute_bin_averaged_concentration_exact(
                     c_mid = concentration_at_point(v_outlet, 0.5 * (seg_a + seg_b), waves, sorption)
                     total += c_mid * d
             elif seg["type"] == "decaying_fan":
+                # After the shock passes the outlet, the outlet sits inside the
+                # fan; once the fan's far edge (c = c_fan_tail) sweeps by, the
+                # concentration holds the c_fan_tail plateau (the reader's fan
+                # clamp) — NOT c_fixed, which is the state on the shock's other
+                # side and never reaches the outlet post-crossing.
                 w = seg["wave"]
                 total += integrate_fan_exact(
-                    w.theta_origin, w.v_origin, v_outlet, seg_a, seg_b, sorption, c_apex=w.c_fixed
+                    w.theta_origin, w.v_origin, v_outlet, seg_a, seg_b, sorption, c_apex=w.c_fan_tail
                 )
         c_avg[i] = total / dtheta_bin
     return c_avg

@@ -277,6 +277,140 @@ class TestIdentifyOutletSegments:
         # Should have 3 segments: [0, 1000] c=0, [1000, 1500] c=5, [1500, 2000] c=10.
         assert len(segments) == 3
 
+    def test_shock_deactivated_before_crossing_yields_no_segment(self):
+        """A shock deactivated mid-window never reaches the outlet -- no spurious crossing (issue #311).
+
+        The shock would cross v_outlet at θ_cross by straight-line extrapolation, but it was
+        deactivated (collision) at θ_deac < θ_cross, with θ_deac inside the query window so the
+        retrospective ``theta_deactivation <= theta_start`` filter does not remove it. The segment
+        list must not schedule the extrapolated crossing: the whole window stays at the downstream
+        state c=0, consistent with ``was_active_at`` and with ``concentration_at_point``. Today
+        this is guarded by ``find_outlet_crossing``'s ``is_active`` check; this test pins the
+        behavior so that guard cannot be removed without a ``theta_deactivation`` clamp.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=0.0, sorption=sorption, is_active=True)
+        v_outlet = 300.0
+        assert shock.speed is not None
+        theta_cross = v_outlet / shock.speed
+        shock.deactivate(0.5 * theta_cross)  # collision kills the wave halfway to the outlet
+        theta_end = 2.0 * theta_cross
+
+        segments = identify_outlet_segments(
+            theta_start=0.0, theta_end=theta_end, v_outlet=v_outlet, waves=[shock], sorption=sorption
+        )
+
+        # Independent check: the reader (which honors was_active_at) sees c=0 at the outlet
+        # for the entire window.
+        for theta_q in [0.25 * theta_cross, theta_cross, 1.5 * theta_cross]:
+            assert concentration_at_point(v_outlet, theta_q, [shock], sorption) == 0.0
+
+        assert all(seg["type"] == "constant" for seg in segments)
+        np.testing.assert_allclose([seg["concentration"] for seg in segments], 0.0)
+
+    def test_deactivated_rarefaction_does_not_mask_decaying_fan(self):
+        """A rarefaction consumed by a DSW must not schedule its extrapolated head crossing (issue #311).
+
+        Canonical Freundlich n=2 pulse: leading shock + trailing rarefaction merge into a
+        DecayingShockWave at θ≈525 (both parents deactivated). The dead rarefaction's head would
+        cross v_outlet=100 at θ≈1191 by extrapolation; scheduling it swallows the true structure:
+        constant c=0 until the DSW crossing at θ=3525, then the decaying fan. The reader
+        (``concentration_at_point``, post-#316 face sweep) is the independent oracle for the
+        pre-arrival plateau.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        n = 40
+        cin = np.array([0.0, 10.0, 10.0, 0.0] + [0.0] * (n - 4))
+        flow = np.full(n, 100.0)
+        tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+        tracker = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=100.0, sorption=sorption)
+        tracker.run()
+        state = tracker.state
+        waves = state.waves
+
+        raref = next(w for w in waves if isinstance(w, RarefactionWave))
+        dsw = next(w for w in waves if isinstance(w, DecayingShockWave))
+        assert not raref.is_active
+        theta_cross = dsw.outlet_crossing_theta(state.v_outlet)
+        assert theta_cross is not None
+        assert raref.theta_deactivation < theta_cross < state.theta_edges[-1]
+
+        segments = identify_outlet_segments(
+            theta_start=0.0,
+            theta_end=float(state.theta_edges[-1]),
+            v_outlet=state.v_outlet,
+            waves=waves,
+            sorption=sorption,
+        )
+
+        # No segment may come from the deactivated rarefaction.
+        assert not any(seg["type"] == "rarefaction" for seg in segments)
+        # The true structure: constant 0 up to the DSW crossing, then the decaying fan.
+        fan_segments = [seg for seg in segments if seg["type"] == "decaying_fan"]
+        assert len(fan_segments) == 1
+        np.testing.assert_allclose(fan_segments[0]["theta_start"], theta_cross, rtol=1e-12)
+        pre = [seg for seg in segments if seg["theta_end"] <= theta_cross + 1e-9]
+        assert pre, "expected a pre-arrival constant segment"
+        assert all(seg["type"] == "constant" for seg in pre)
+        np.testing.assert_allclose([seg["concentration"] for seg in pre], 0.0)
+
+
+class TestLegacyDecayingFanBinAverage:
+    """Legacy outlet-segment integration of a DSW fan clamps at c_fan_tail, not c_fixed (issue #311).
+
+    Hand-constructed Freundlich ``n=2``, ``c_fixed=0`` DecayingShockWave (closed-form trajectory,
+    same collision IC as the hand-derived wave test: apex at (V=0, θ=1000), K=1000/27) with a
+    nonzero fan-tail plateau ``c_fan_tail=0.5``. After the shock crosses the outlet the outlet
+    sits inside the fan; once the fan's far edge (c=c_fan_tail) passes, the concentration holds
+    the c_fan_tail plateau -- exactly what the post-#316 reader returns. The independent oracle is
+    the closed-form fan profile: with ``a = ρ_b·k_f/n_por = 50``, ``R(c) = 1 + (a/2)/√c``, the fan
+    at the outlet obeys ``R(c) = (θ-θ_origin)/Δv`` so ``c(θ) = (a/2)²/(r-1)²`` down to c_fan_tail,
+    and ``∫ c dθ = (a/2)²·Δv·[-(r-1)^{-1}]`` in closed form. ``c_apex=c_fixed=0`` instead
+    extrapolates the fan below the plateau and undercounts by ~10%.
+    """
+
+    def test_bin_average_matches_closed_form_plateau_oracle(self):
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        a_half = 0.5 * sorption.bulk_density * sorption.k_f / sorption.porosity  # 25.0
+        theta_origin, v_origin = 1000.0, 0.0
+        c_fan_tail = 0.5
+        wave = DecayingShockWave(
+            theta_start=1500.0,
+            v_start=1000.0 / 27.0,
+            c_decay_initial=4.0,
+            c_fixed=0.0,
+            c_fan_tail=c_fan_tail,
+            decay_side="left",
+            v_origin=v_origin,
+            theta_origin=theta_origin,
+            sorption=sorption,
+        )
+        v_outlet = 2000.0 / 27.0
+        delta_v = v_outlet - v_origin
+        theta_cross = wave.outlet_crossing_theta(v_outlet)
+        assert theta_cross is not None
+        np.testing.assert_allclose(theta_cross, 79000.0 / 27.0, rtol=1e-12)  # c_decay=1 at crossing
+
+        theta_a, theta_b = 2000.0, 4500.0
+        # Wave still valid at theta_b: c_decay(theta_b) > c_fan_tail.
+        c_decay_end = wave.c_decay_at_theta(theta_b)
+        assert c_decay_end is not None
+        assert c_decay_end > c_fan_tail
+
+        # Closed-form oracle. Fan: c(θ) = a_half²/(r-1)² with r = (θ-θ_origin)/Δv, valid until
+        # c = c_fan_tail at r_tail = 1 + a_half/√c_fan_tail; plateau c_fan_tail beyond.
+        r_cross = (theta_cross - theta_origin) / delta_v
+        r_tail = 1.0 + a_half / np.sqrt(c_fan_tail)
+        theta_tail = theta_origin + delta_v * r_tail
+        assert theta_cross < theta_tail < theta_b
+        fan_mass = a_half**2 * delta_v * (1.0 / (r_cross - 1.0) - 1.0 / (r_tail - 1.0))
+        plateau_mass = c_fan_tail * (theta_b - theta_tail)
+        # Pre-arrival: downstream of the shock the outlet sees c_fixed = 0.
+        expected_avg = (fan_mass + plateau_mass) / (theta_b - theta_a)
+
+        c_avg = compute_bin_averaged_concentration_exact(np.array([theta_a, theta_b]), v_outlet, [wave], sorption)
+        np.testing.assert_allclose(c_avg, [expected_avg], rtol=1e-12)
+
 
 class TestIntegrateRarefactionExact:
     """Test exact analytical integration of rarefaction (θ-based)."""

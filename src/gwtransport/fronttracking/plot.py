@@ -21,7 +21,11 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from gwtransport._time import tedges_to_days
-from gwtransport.fronttracking.output import compute_breakthrough_curve, identify_outlet_segments
+from gwtransport.fronttracking.output import (
+    compute_breakthrough_curve,
+    concentration_at_point,
+    identify_outlet_segments,
+)
 from gwtransport.fronttracking.solver import FrontTrackerState
 from gwtransport.fronttracking.waves import CharacteristicWave, RarefactionWave, ShockWave
 from gwtransport.utils import step_plot_coords
@@ -423,6 +427,17 @@ def plot_breakthrough_curve(
                     c_raref[j] = c_fallback
 
             ax.plot(t_raref, c_raref, "b-", linewidth=2, label="Outlet concentration" if i == 0 else "")
+        elif segment["type"] == "decaying_fan":
+            # DecayingShockWave fan at the outlet: self-similar decay toward the
+            # fan-tail plateau. The face-sweep reader handles both the fan
+            # interior and the c_fan_tail plateau beyond the fan's edge.
+            t_fan = np.linspace(t_seg_start, t_seg_end, n_rarefaction_points)
+            theta_fan = state.theta_at_t_array(t_fan)
+            c_fan = np.array([
+                concentration_at_point(state.v_outlet, float(theta_j), state.waves, state.sorption)
+                for theta_j in theta_fan
+            ])
+            ax.plot(t_fan, c_fan, "b-", linewidth=2, label="Outlet concentration" if i == 0 else "")
 
     if t_first_arrival is not None and np.isfinite(t_first_arrival):
         ax.axvline(
