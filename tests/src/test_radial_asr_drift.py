@@ -22,12 +22,19 @@ import pandas as pd
 import pytest
 from _radial_asr_drift_fv_oracle import fv2d_cout_deviation  # ty: ignore[unresolved-import]  # tests/src on path
 from _radial_asr_drift_kernels_check import real_space_coupling, real_space_face  # ty: ignore[unresolved-import]
+from scipy.special import airye
 
 from gwtransport._radial_asr_dehoog import dehoog_inverse
-from gwtransport._radial_asr_drift_kernels import _face_matrices, block_coupling_matrices, block_cout_deviation
+from gwtransport._radial_asr_drift_kernels import (
+    _block_solutions,
+    _face_matrices,
+    block_coupling_matrices,
+    block_cout_deviation,
+)
 from gwtransport._radial_asr_reuse import cout_deviation
 from gwtransport.radial_asr import (
     _auto_n_modes,
+    _block_ensemble,
     extraction_to_infiltration,
     gamma_extraction_to_infiltration,
     gamma_infiltration_to_extraction,
@@ -983,3 +990,108 @@ def test_drift_loss_matches_fv_oracle():
     fv_loss = (fv_re(220) * (1 / 140) - fv_re(140) * (1 / 220)) / (1 / 140 - 1 / 220)
     assert abs(block_loss - fv_loss) < 0.05 * abs(fv_loss) + 1e-3
     assert block_loss > 0.0  # drift always reduces recovery
+
+
+# --- issue #310 regressions -----------------------------------------------------------------------
+def test_extraction_bin_nan_surfaces_not_background(monkeypatch):
+    """A genuine breakdown NaN on an EXTRACTION bin must surface through the drift ensemble instead of
+    silently reading as the background. block_cout_deviation returns NaN on injection / rest bins by
+    contract (structural, dropped), but an extraction-bin NaN is the de Hoog inverter's deliberate
+    breakdown signal (an overflowed kernel column is NOT masked); a blanket nan_to_num would erase it
+    and the public API would report cout == background for a failed inversion (issue #310)."""
+    flow = np.array([_Q] * 3 + [-_Q] * 4)
+    n = len(flow)
+    ext = flow < 0
+    poisoned = 4  # an extraction bin
+
+    def fake_block(cin_deviation, **_kwargs):
+        out = np.full(np.shape(cin_deviation), np.nan)
+        out[ext] = 0.25
+        out[poisoned] = np.nan  # a genuine de Hoog breakdown on one extraction bin
+        return out
+
+    monkeypatch.setattr("gwtransport.radial_asr.block_cout_deviation", fake_block)
+    tedges = pd.date_range("2024-01-01", periods=n + 1, freq="D")
+    background = 7.0
+    cout = infiltration_to_extraction(
+        cin=np.where(flow > 0, 1.0 + background, background),
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        pore_heights=_B,
+        porosity=_POROSITY,
+        well_radius=_R_W,
+        longitudinal_dispersivity=_ALPHA_L,
+        regional_flux=0.05,
+        background=background,
+        n_modes=2,
+        n_quad=16,
+    )
+    healthy = ext & (np.arange(n) != poisoned)
+    np.testing.assert_allclose(cout[healthy], background + 0.25)
+    assert np.isnan(cout[poisoned])  # NOT background: the failure must not masquerade as physics
+    # the (n, k) column-batch path (reverse operator build) must propagate the NaN row too
+    dev = _block_ensemble(
+        np.zeros((n, 2)),
+        flow=flow,
+        dt_days=np.ones(n),
+        c_geos=np.array([_C_GEO]),
+        porosity=_POROSITY,
+        well_radius=_R_W,
+        longitudinal_dispersivity=_ALPHA_L,
+        molecular_diffusivity=0.0,
+        retardation_factor=1.0,
+        regional_flux=0.05,
+        n_modes=2,
+        weights=np.array([1.0]),
+        n_quad=16,
+    )
+    assert np.isnan(dev[poisoned]).all()
+    np.testing.assert_allclose(dev[healthy], 0.25)
+    np.testing.assert_array_equal(dev[~ext], 0.0)  # structural inj/rest NaNs are dropped, not propagated
+
+
+def test_nonuniform_dt_within_phase_is_volume_clocked():
+    """Constant cin at v_d = 0: the block engine must match the volume-exact scalar engine even when dt
+    varies within a pumping phase. The phase clock is the dt-weighted mean |Q| (flushed volume over the
+    phase duration, matching the scalar reuse engine's flow_scale = phase_volume / phase_time); the
+    unweighted bin mean would clock this phase at 200 instead of 150 m^3/day (issue #310)."""
+    flow = np.concatenate([[100.0, 300.0], np.full(8, -150.0)])
+    dt = np.concatenate([[1.5, 0.5], np.ones(8)])
+    cin = np.where(flow > 0, 1.0, 0.0)
+    ext = flow < 0
+    kw = {"dt_days": dt, "c_geo": _C_GEO, "r_w": _R_W, "alpha_l": _ALPHA_L, "n_quad": 80, "n_terms": 40, "tol": 1e-11}
+    scalar = cout_deviation(cin_deviation=cin, flow=flow, **kw)
+    block = block_cout_deviation(cin_deviation=cin, flow=flow, v_d=0.0, n_modes=2, **kw)
+    np.testing.assert_allclose(block[ext], scalar[ext], atol=1e-6)
+
+
+def test_dm0_extraction_recessive_ic_carries_direction_gauge():
+    """The D_m = 0 recessive-Airy IC must carry the phase-direction gauge. At v_d = 0, m = 0 the radial
+    ODE is exactly ``c'' - (sigma/alpha_L) c' - (R s / (alpha_L A0)) r c = 0`` (sigma = -1 for
+    extraction), whose decaying solution is ``c = exp(sigma r / (2 alpha_L)) Ai(zeta)``, so
+    ``L = sigma/(2 alpha_L) + beta^{1/3} Ai'/Ai``. Hardcoding the injection gauge (+1) hands the
+    extraction Riccati a non-solution; over a short (stagnation-clipped) grid the inward attractor
+    cannot wash the O(1/alpha_L) error out before r_w (issue #310)."""
+    alpha_l, a0, r_w, r_far = 0.5, 20.0, 0.5, 1.5
+    s = np.array([0.1 + 0.0j])
+    r_nodes = np.linspace(0.6, 1.4, 5)
+    sol = _block_solutions(
+        s,
+        r_nodes,
+        r_w,
+        alpha_l=alpha_l,
+        a0=a0,
+        v_d=0.0,
+        d_m=0.0,
+        retardation_factor=1.0,
+        n_modes=0,
+        direction="extraction",
+        r_far=r_far,
+    )
+    beta = float(s[0].real) / (alpha_l * a0)
+    b13 = beta ** (1.0 / 3.0)
+    zeta = b13 * r_w + beta ** (-2.0 / 3.0) / (4.0 * alpha_l**2)
+    aie, aipe, _, _ = airye(zeta)
+    l_exact = -1.0 / (2.0 * alpha_l) + b13 * (aipe / aie)
+    np.testing.assert_allclose(sol["Lm_w"][0, 0, 0], l_exact, rtol=1e-5)

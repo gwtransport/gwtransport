@@ -395,6 +395,11 @@ def _block_ensemble(
         elsewhere.
     """
     v_d = regional_flux / porosity
+    # block_cout_deviation returns NaN on injection / rest bins by contract (structural, expected). Only the
+    # extraction bins are accumulated, so those structural NaNs are dropped without a blanket nan_to_num --
+    # a genuine NaN on an EXTRACTION bin (a de Hoog breakdown) then propagates and surfaces instead of
+    # silently reading as the background (mirrors _reuse_ensemble).
+    ext_mask = flow < 0.0
     acc = np.zeros(np.shape(cin_deviation))
     for c_geo, w_i in zip(c_geos, weights, strict=True):
         m = (
@@ -402,21 +407,20 @@ def _block_ensemble(
             if n_modes is not None
             else _auto_n_modes(flow, dt_days, c_geo, well_radius, longitudinal_dispersivity, v_d, retardation_factor)
         )
-        acc += w_i * np.nan_to_num(
-            block_cout_deviation(
-                cin_deviation=cin_deviation,
-                flow=flow,
-                dt_days=dt_days,
-                c_geo=c_geo,
-                r_w=well_radius,
-                alpha_l=longitudinal_dispersivity,
-                v_d=v_d,
-                molecular_diffusivity=molecular_diffusivity,
-                retardation_factor=retardation_factor,
-                n_modes=m,
-                n_quad=n_quad,
-            )
+        dev = block_cout_deviation(
+            cin_deviation=cin_deviation,
+            flow=flow,
+            dt_days=dt_days,
+            c_geo=c_geo,
+            r_w=well_radius,
+            alpha_l=longitudinal_dispersivity,
+            v_d=v_d,
+            molecular_diffusivity=molecular_diffusivity,
+            retardation_factor=retardation_factor,
+            n_modes=m,
+            n_quad=n_quad,
         )
+        acc[ext_mask] += w_i * dev[ext_mask]
     return acc / np.sum(weights)
 
 
