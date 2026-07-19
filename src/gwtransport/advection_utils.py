@@ -18,9 +18,9 @@ from gwtransport.utils import cumulative_flow_volume
 
 # Target number of (streamtube x cout-bin) pairs per tile in the banded weight build. The
 # per-tile working set is O(_WEIGHT_BUILD_BLOCK x band), so peak memory is bounded
-# independent of record length; chosen to keep the build under ~30 MB while spanning most
+# independent of record length; chosen to keep the build under ~300 MB while spanning most
 # records in one or a few tiles. See _infiltration_to_extraction_weights.
-_WEIGHT_BUILD_BLOCK = 100_000
+_WEIGHT_BUILD_BLOCK = 1_000_000
 
 
 def _infiltration_to_extraction_weights(
