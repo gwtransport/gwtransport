@@ -1477,7 +1477,8 @@ def solve_inverse_transport(
         Forward coefficient matrix with shape ``(n_obs, n_output)``.
     observed : ndarray
         Observed values with shape ``(n_obs,)`` (e.g., extraction
-        concentrations).
+        concentrations). NaN entries mark measurement gaps; their rows are
+        excluded from the solve and the regularization target.
     n_output : int
         Length of the output vector (e.g., number of cin bins).
     regularization_strength : float
@@ -1529,13 +1530,19 @@ def solve_inverse_transport(
                 stacklevel=2,
             )
 
-    valid: npt.NDArray[np.bool_] = row_sums > _EPSILON_COEFF_SUM if valid_rows is None else valid_rows
+    # Gapped observations (sparse lab samples): NaN rows drop out of the data
+    # equations and the regularization target, matching deposition's masking.
+    nan_obs = np.isnan(observed)
+    valid: npt.NDArray[np.bool_] = (row_sums > _EPSILON_COEFF_SUM if valid_rows is None else valid_rows) & ~nan_obs
 
     rhs = np.where(valid, row_sums * observed, np.nan)
     w_solve = w_forward.copy()
     w_solve[~valid, :] = np.nan
 
-    x_target = compute_reverse_target(coeff_matrix=w_forward, rhs_vector=observed)
+    x_target = compute_reverse_target(
+        coeff_matrix=np.where(nan_obs[:, None], 0.0, w_forward),
+        rhs_vector=np.where(nan_obs, 0.0, observed),
+    )
 
     x_solved = solve_tikhonov(
         coefficient_matrix=w_solve,
@@ -1595,7 +1602,8 @@ def solve_inverse_transport_banded(
         First output-column index of each row's band, shape ``(n_obs,)``.
     observed : ndarray
         Observed values of shape ``(n_obs,)`` (e.g. extraction concentrations).
-        Must not contain NaN.
+        NaN entries mark measurement gaps; their rows are excluded from the
+        normal equations (band row and observed value zeroed).
     n_output : int
         Length of the output vector (number of cin bins).
     regularization_strength : float
@@ -1629,6 +1637,12 @@ def solve_inverse_transport_banded(
     # needs no row_sums scaling -- matching the dense solve_inverse_transport.
     band_vals = np.asarray(band_vals, dtype=float)
     observed = np.asarray(observed, dtype=float)
+    # Gapped observations (sparse lab samples): zero the band row so it drops out of
+    # the normal equations, and zero the observed value so 0 * NaN cannot poison
+    # Wᵀ·observed or the refinement residual.
+    nan_obs = np.isnan(observed)
+    band_vals = np.where(nan_obs[:, None], 0.0, band_vals)
+    observed = np.where(nan_obs, 0.0, observed)
     full_band = band_vals.shape[1]
     n_cin = n_output
     cols = col_start[:, None] + np.arange(full_band)[None, :]  # (n_obs, full_band) output-column index

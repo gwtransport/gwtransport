@@ -1328,3 +1328,38 @@ def test_negative_diffusivity_rejected():
             molecular_diffusivity=-1.0,
             longitudinal_dispersivity=1.0,
         )
+
+
+def test_extraction_to_infiltration_gapped_cout_masked():
+    """NaN gaps in cout are masked out of the banded inverse instead of raising (#321).
+
+    Sparse lab samples leave NaN cout bins; the reverse operator must exclude
+    those rows from the banded Tikhonov normal equations -- matching
+    :func:`gwtransport.deposition.extraction_to_deposition` -- rather than
+    reject the whole series. The reverse inverts the same approximate operator
+    the forward applies, so with cout at 12h resolution (via ``flow_out``) the
+    overdetermined surviving rows recover cin at the no-gap round-trip floor.
+    """
+    n_days = 120
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    cout_tedges = pd.date_range("2020-01-01", periods=2 * n_days + 1, freq="12h")
+    flow = np.full(n_days, 100.0)
+    cin_true = 5.0 + 3.0 * np.sin(2 * np.pi * np.arange(n_days) / 30.0)
+    kwargs = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([517.0]),
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.01,
+        "longitudinal_dispersivity": 0.1,
+        "flow_out": np.full(2 * n_days, 100.0),
+    }
+
+    cout = infiltration_to_extraction(cin=cin_true, **kwargs)
+    cout[[0, 90, 120, 121, 150, 239]] = np.nan  # boundary + scattered gaps
+
+    cin_rec = extraction_to_infiltration(cout=cout, **kwargs)
+
+    interior = slice(30, 95)
+    assert_allclose(cin_rec[interior], cin_true[interior], atol=1e-10)

@@ -121,8 +121,9 @@ def _validate_advection_inputs(
         _validate_no_nan(cin_values, name="cin")
     elif cout_values is not None and cout_tedges is not None:
         _validate_tedges_parity(tedges, flow, tedges_name="tedges", values_name="flow")
+        # NaN in cout marks measurement gaps (sparse lab samples); the banded
+        # inverse solver excludes those rows, matching deposition (#321).
         _validate_tedges_parity(cout_tedges, cout_values, tedges_name="cout_tedges", values_name="cout")
-        _validate_no_nan(cout_values, name="cout")
     else:
         msg = "must provide cin_values (forward) or both cout_values and cout_tedges (reverse)"
         raise ValueError(msg)
@@ -810,7 +811,7 @@ def extraction_to_infiltration(
     ------
     ValueError
         If tedges length doesn't match flow plus one, if cout_tedges length
-        doesn't match cout plus one, or if inputs contain NaN.
+        doesn't match cout plus one, or if flow contains NaN.
 
     See Also
     --------
@@ -823,10 +824,10 @@ def extraction_to_infiltration(
 
     Notes
     -----
-    NaN values in ``cout`` are rejected. The Tikhonov solver here does not
-    mask NaN rows, so any NaN in ``cout`` would poison the solution. This
-    differs from :func:`gwtransport.deposition.extraction_to_deposition`,
-    whose regularized solver excludes NaN ``cout`` rows by construction.
+    NaN values in ``cout`` mark measurement gaps (e.g. sparse lab samples).
+    Their rows are excluded from the banded Tikhonov solve, matching
+    :func:`gwtransport.deposition.extraction_to_deposition`; cin bins
+    constrained only by gapped ``cout`` bins are returned as NaN.
 
     Examples
     --------

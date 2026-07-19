@@ -179,7 +179,7 @@ def _validate_inputs(
     ------
     ValueError
         If array lengths are inconsistent, molecular_diffusivity or
-        longitudinal_dispersivity are negative or non-finite, cin or cout or flow contain NaN
+        longitudinal_dispersivity are negative or non-finite, cin (forward) or flow contain NaN
         values, aquifer_pore_volumes contains non-positive or non-finite values,
         streamline_length is non-positive or non-finite, or retardation_factor is NaN or below 1
         (anti-retardation is not physical for the supported sorption isotherms).
@@ -208,7 +208,10 @@ def _validate_inputs(
     # enforced in exactly one place. Order and messages match the historical inline checks.
     _validate_non_negative_array(molecular_diffusivity, name="molecular_diffusivity")
     _validate_non_negative_array(longitudinal_dispersivity, name="longitudinal_dispersivity")
-    _validate_no_nan(cin_or_cout, name="cin" if is_forward else "cout")
+    # Forward cin must be NaN-free; reverse cout may contain NaN (measurement
+    # gaps) -- the banded inverse solver excludes those rows, matching deposition (#321).
+    if is_forward:
+        _validate_no_nan(cin_or_cout, name="cin")
     _validate_no_nan(flow, name="flow")
     _validate_non_negative_array(flow, name="flow", message="flow must be non-negative (negative flow not supported)")
     _validate_positive_array(aquifer_pore_volumes, name="aquifer_pore_volumes")

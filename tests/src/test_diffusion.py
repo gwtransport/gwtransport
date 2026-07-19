@@ -2275,11 +2275,7 @@ def test_validate_diffusion_inputs_silent_on_good_input_reverse():
             },
             r"cout_tedges must have one more element than cout",
         ),
-        (
-            "reverse",
-            lambda k: {**k, "cout_values": np.array([1.0, np.nan, 1.0, 1.0, 1.0]), "cout_tedges": k["tedges"]},
-            r"cout contains NaN values, which are not allowed",
-        ),
+        # NaN cout no longer raises: gaps are masked out of the inverse solve (#321).
         # NEW: flow >= 0 in reverse (omission fix)
         (
             "reverse",
@@ -2395,3 +2391,35 @@ def test_coarse_cout_grid_conserves_pulse_mass(offset_days):
     cout_disp = infiltration_to_extraction(molecular_diffusivity=0.02, longitudinal_dispersivity=1.0, **kwargs)
     assert not np.any(np.isnan(cout_disp))
     np.testing.assert_allclose(np.sum(flow_rate * cout_disp * dt_days), mass_in, rtol=1e-10)
+def test_extraction_to_infiltration_gapped_cout_masked():
+    """NaN gaps in cout are masked out of the inverse solve instead of raising (#321).
+
+    Sparse lab samples leave NaN cout bins; the reverse operator must exclude
+    those rows from the Tikhonov solve (data equations AND regularization
+    target) -- matching :func:`gwtransport.deposition.extraction_to_deposition`
+    -- rather than reject the whole series. cout at 12h resolution vs daily cin
+    keeps the system overdetermined, so the surviving rows still pin every
+    interior cin bin and recovery stays at the no-gap round-trip floor.
+    """
+    n_days = 120
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    cout_tedges = pd.date_range("2020-01-01", periods=2 * n_days + 1, freq="12h")
+    flow = np.full(n_days, 100.0)
+    cin_true = 5.0 + 3.0 * np.sin(2 * np.pi * np.arange(n_days) / 30.0)
+    kwargs = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([517.0]),
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.01,
+        "longitudinal_dispersivity": 0.1,
+    }
+
+    cout = infiltration_to_extraction(cin=cin_true, **kwargs)
+    cout[[0, 90, 120, 121, 150, 239]] = np.nan  # boundary + scattered gaps
+
+    cin_rec = extraction_to_infiltration(cout=cout, **kwargs)
+
+    interior = slice(30, 95)
+    np.testing.assert_allclose(cin_rec[interior], cin_true[interior], atol=1e-10)
