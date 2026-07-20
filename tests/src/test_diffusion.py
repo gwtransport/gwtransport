@@ -2423,3 +2423,48 @@ def test_extraction_to_infiltration_gapped_cout_masked():
 
     interior = slice(30, 95)
     np.testing.assert_allclose(cin_rec[interior], cin_true[interior], atol=1e-10)
+
+
+def test_extraction_to_infiltration_wide_gap_never_fabricates():
+    """A gap wider than the dispersive arrival window must NaN the unconstrained cin bins (#321).
+
+    A cin bin whose entire breakthrough support falls inside the NaN-cout window has no surviving
+    data equation; the dense solver must mark its column inactive (computed from the NaN-masked
+    matrix) and return NaN. Gating the column activity on the unmasked matrix instead leaves such
+    bins "active" and lets lstsq fabricate min-norm values (zeros, or huge sliver-support garbage)
+    that read downstream as real concentrations. Contract: zero-support bins are NaN, never
+    fabricated; well-constrained bins recover at the round-trip floor. Bins with *partial* support
+    at the gap edges (a sliver of the dispersive tail survives) legitimately emit softened
+    regularized estimates -- they are bounded by the data's physical range, not exact.
+    """
+    n_days = 120
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    cout_tedges = pd.date_range("2020-01-01", periods=2 * n_days + 1, freq="12h")
+    flow = np.full(n_days, 100.0)
+    cin_true = 5.0 + 3.0 * np.sin(2 * np.pi * np.arange(n_days) / 30.0)
+    kwargs = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([517.0]),
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.01,
+        "longitudinal_dispersivity": 0.1,
+    }
+
+    cout = infiltration_to_extraction(cin=cin_true, **kwargs)
+    cout[100:160] = np.nan  # 30-day gap (12h bins): days 50-80, far wider than the ~5.2-day arrival
+
+    cin_rec = extraction_to_infiltration(cout=cout, **kwargs)
+
+    # Bins wholly inside the gap's shadow are unconstrained -> NaN (mask engaged, nothing fabricated).
+    assert np.isnan(cin_rec[50:70]).all(), "unconstrained cin bins inside the gap shadow must be NaN"
+    # Bins away from the gap remain pinned by surviving rows at the round-trip floor.
+    np.testing.assert_allclose(cin_rec[10:40], cin_true[10:40], atol=1e-8)
+    assert np.isfinite(cin_rec[10:40]).all()
+    # No finite bin anywhere is fabricated: every emitted value sits inside the data's physical
+    # range (cin_true spans [2, 8]; the baseline defect emitted 0.0 and ~3.6e6 here). Partially-
+    # supported gap-edge bins are allowed to be soft, but never non-physical.
+    finite = np.isfinite(cin_rec)
+    assert cin_rec[finite].min() >= cin_true.min() - 1.0
+    assert cin_rec[finite].max() <= cin_true.max() + 1.0
