@@ -1249,7 +1249,8 @@ def compute_first_front_arrival_theta(
     -------
     theta_first_arrival : float
         Cumulative-flow θ at which ``c_first`` is fully present at the outlet
-        [m³]. Returns ``np.inf`` only if ``cin`` is identically zero.
+        [m³]. Returns ``np.inf`` only if no water-carrying (positive θ-width)
+        bin has nonzero ``cin``.
 
     Examples
     --------
@@ -1262,7 +1263,9 @@ def compute_first_front_arrival_theta(
     >>> bool(np.isclose(theta_first, 100.0 + 500.0 * 2.0))  # θ_emit + V·R
     True
     """
-    nonzero_indices = np.where(cin > 0)[0]
+    # Zero-flow (pump-off) bins have zero θ-width and emit no wave (the solver
+    # skips them), so they cannot be the first arrival either.
+    nonzero_indices = np.where((cin > 0) & (np.diff(theta_edges) > 0))[0]
     if len(nonzero_indices) == 0:
         return float(np.inf)
 

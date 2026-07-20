@@ -289,6 +289,13 @@ class FrontTracker:
         theta_edges = self.state.theta_edges
 
         for i in range(len(self.state.cin)):
+            # A zero-flow (pump-off) bin carries no water: its θ-interval has zero
+            # width, so it is transport-invisible. Skipping it carries the inlet
+            # step through the gap (effective transition c_before_gap → c_after_gap)
+            # instead of emitting coincident spurious waves at the degenerate θ.
+            if theta_edges[i + 1] <= theta_edges[i]:
+                continue
+
             c_new = float(self.state.cin[i])
 
             if abs(c_new - c_prev) > EPSILON_CONCENTRATION:
