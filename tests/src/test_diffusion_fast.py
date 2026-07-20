@@ -3187,3 +3187,94 @@ def test_leading_zero_flow_inverse_finite_and_matches_dense_reverse():
     both = interior & np.isfinite(cin_rec) & np.isfinite(cin_ref)
     assert np.sum(both) > 50
     assert_allclose(cin_rec[both], cin_ref[both], atol=1e-6, rtol=0.0)
+
+
+# =============================================================================
+# Interior zero-flow gap: band coverage and stagnation-straddle aggregation (#306)
+# =============================================================================
+
+
+def test_interior_zero_flow_gap_band_covers_gap_accumulated_diffusion():
+    """Interior zero-flow gap: the default band (U=7) reproduces the wide band (U=25).
+
+    During a pumped-off (zero-flow) gap, molecular diffusion keeps growing the moving-frame
+    variance ``D_t = D_m*tau + alpha_L*xi`` (``tau`` grows, ``xi`` frozen), so post-restart
+    cout bins carry non-saturated coefficients at pre-gap cin columns whose ``D_t`` includes
+    the full stagnation time. A post-side band extent sized from the dispersion slope and the
+    front intercept alone truncates those columns (errors up to ~5e-4 here, ~4.9e-3 in wider
+    scans); the record is long enough that the warm-start data-start tail check is saturated
+    and cannot mask the truncation. At any ``U >= ~6`` the dropped coefficients are exactly
+    zero, so the U=7 and U=25 builds must agree to machine precision.
+    """
+    n = 1200
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    flow[1000:1100] = 0.0
+    # Misaligned cout grid: same daily spacing, offset 6 h, so bins straddle the gap edges.
+    cout_tedges = tedges[:-1] + pd.Timedelta(hours=6)
+    tedges_days = tedges_to_days(tedges)
+    cout_days = tedges_to_days(cout_tedges, ref=tedges[0])
+    cumvol = cumulative_flow_volume(flow, dt_to_days(tedges))
+    flow_out = np.diff(np.interp(cout_days, tedges_days, cumvol)) / np.diff(cout_days)
+    cin = np.random.default_rng(42).random(n)
+    kwargs = {
+        "cin": cin,
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([300.0]),
+        "streamline_length": 10.0,
+        "molecular_diffusivity": 0.1,
+        "longitudinal_dispersivity": 0.0,
+        "flow_out": flow_out,
+    }
+    cout_default = infiltration_to_extraction(**kwargs, saturation_threshold=7.0)
+    cout_wide = infiltration_to_extraction(**kwargs, saturation_threshold=25.0)
+    np.testing.assert_array_equal(np.isnan(cout_default), np.isnan(cout_wide))
+    valid = ~np.isnan(cout_default)
+    assert np.sum(valid) > 1000
+    assert_allclose(cout_default[valid], cout_wide[valid], atol=1e-13, rtol=0.0)
+
+
+@pytest.mark.parametrize(
+    ("d_m", "alpha_l", "pv"),
+    # (0.2, 0.1, 1500) is excluded: at that dispersion strength the 16-point quadrature reference
+    # itself carries a ~6e-12 resolution floor on this coarse grid even without a gap.
+    [(0.05, 0.1, 1000.0), (0.2, 0.0, 1500.0)],
+)
+def test_coarse_cout_straddling_flow_restart_matches_diffusion_quadrature(d_m, alpha_l, pv):
+    """Coarse cout bins straddling a zero-flow gap match the quadrature volume-weighted aggregate.
+
+    The banded ``C_F`` is a two-endpoint antiderivative difference ``(I(x_hi) - I(x_lo))/dx``,
+    exact whenever ``D_t`` follows the flow path (``dD_t/dx = D_s/v_s``). Across a stagnation
+    (zero-flow) interval, ``x`` is frozen while ``D_t`` keeps growing, so a coarse cout bin
+    straddling the gap must exclude the vertical ``int (dI/dD_t) dD_t`` jump -- no volume is
+    extracted during the gap, so it carries no weight in the flux-weighted bin average.
+    ``gwtransport.diffusion`` integrates in volume space and skips zero-``dV`` flow bins, so it
+    defines the aggregate exactly (a naive endpoint difference deviates by up to ~7e-3 here).
+    """
+    n = 60
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    flow[20:30] = 0.0
+    # Coarse 4-day cout bins; bin [day 28, day 32) straddles the flow restart at day 30.
+    cout_tedges = tedges[::4]
+    tedges_days = tedges_to_days(tedges)
+    cout_days = tedges_to_days(cout_tedges, ref=tedges[0])
+    cumvol = cumulative_flow_volume(flow, dt_to_days(tedges))
+    flow_out = np.diff(np.interp(cout_days, tedges_days, cumvol)) / np.diff(cout_days)
+    cin = np.random.default_rng(7).random(n)
+    kwargs = {
+        "cin": cin,
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([pv]),
+        "molecular_diffusivity": d_m,
+        "longitudinal_dispersivity": alpha_l,
+    }
+    cout_fast = infiltration_to_extraction(**kwargs, streamline_length=10.0, flow_out=flow_out)
+    cout_quad = diffusion_exact(**kwargs, streamline_length=np.array([10.0]))
+    both = np.isfinite(cout_fast) & np.isfinite(cout_quad)
+    assert np.sum(both) > 5
+    assert_allclose(cout_fast[both], cout_quad[both], atol=1e-12, rtol=0.0)
