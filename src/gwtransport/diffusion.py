@@ -660,15 +660,11 @@ def _infiltration_to_extraction_coeff_matrix(
     n_cin_bins = len(flow)
     accumulated_coeff = np.zeros((n_cout_bins, n_cin_bins))
 
-    # Determine when infiltration has occurred: cout_tedge must be >= tedge (infiltration time)
-    isactive = cout_tedges.to_numpy()[:, None] >= tedges.to_numpy()[None, :]
-
     # Loop over each pore volume
     for i_pv in range(len(aquifer_pore_volumes)):
         r_vpv = retardation_factor * aquifer_pore_volumes[i_pv]
 
         delta_volume = cumulative_volume_at_cout_tedges[:, None] - cumulative_volume_at_cin_tedges[None, :] - r_vpv
-        delta_volume[~isactive] = np.nan
 
         step_widths = delta_volume / r_vpv * streamline_length[i_pv]
 
@@ -683,12 +679,7 @@ def _infiltration_to_extraction_coeff_matrix(
             streamline_len=streamline_length[i_pv],
         )
 
-        frac_start = frac[:, :-1]
-        frac_end = frac[:, 1:]
-        frac_end_filled = np.where(np.isnan(frac_end) & ~np.isnan(frac_start), 0.0, frac_end)
-        coeff = frac_start - frac_end_filled
-
-        accumulated_coeff += coeff
+        accumulated_coeff += frac[:, :-1] - frac[:, 1:]
 
     coeff_matrix_filled = np.nan_to_num(accumulated_coeff / len(aquifer_pore_volumes), nan=0.0)
 
