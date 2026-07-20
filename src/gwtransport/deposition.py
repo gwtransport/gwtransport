@@ -339,13 +339,17 @@ def deposition_to_extraction(
         Compound retardation factor, by default 1.0.
     spinup : {"constant"} | None, optional
         Spin-up policy applied before computing deposition weights.
-        Default ``"constant"`` shifts ``tedges[0]`` backward by
-        ``retardation_factor * aquifer_pore_volume / flow[0]`` and treats
-        ``dep`` and ``flow`` as constant at their first observed values
-        over the prepended interval. ``None`` keeps the existing
-        strict-validity behavior (NaN cout rows during spin-up). A float
-        raises ``NotImplementedError`` -- the fraction-threshold mode is
-        not implemented for deposition (matching the diffusion family).
+        Default ``"constant"`` shifts ``tedges[0]`` backward by at least
+        ``retardation_factor * aquifer_pore_volume / flow[0]`` (rounded up to
+        whole bins, plus one extra bin) and treats ``dep`` and ``flow`` as
+        constant at their first observed values over the prepended interval.
+        When the warm-start is undefined -- ``flow[0] <= 0``, zero/NaN pore
+        volume, a non-positive first bin width, or a pad exceeding the memory
+        cap -- ``"constant"`` silently reverts to the strict-validity
+        behavior. ``None`` keeps the existing strict-validity behavior (NaN
+        cout rows during spin-up). A float raises ``NotImplementedError`` --
+        the fraction-threshold mode is not implemented for deposition
+        (matching the diffusion family).
 
     Returns
     -------
@@ -360,12 +364,18 @@ def deposition_to_extraction(
         is the physically correct value rather than an undefined result. NaN is
         reserved for spin-up bins whose residence time is not yet resolved.
 
+        Cout bins lying entirely outside the flow record (before ``tedges[0]``
+        or after ``tedges[-1]``) also return ``0.0``: their out-of-record edges
+        clamp to the record boundaries, so they extract zero volume and fall
+        under the same zero-mass convention.
+
     Raises
     ------
     ValueError
         If tedges does not have one more element than dep or flow, if input
-        arrays contain NaN values, or if physical parameters are out of
-        valid range (porosity not in (0, 1), non-positive thickness or
+        arrays contain NaN values, if ``flow`` contains negative values, if
+        ``retardation_factor`` is less than 1.0, or if physical parameters are
+        out of valid range (porosity not in (0, 1), non-positive thickness or
         aquifer pore volume).
     NotImplementedError
         If ``spinup`` is anything other than ``None`` or ``"constant"`` (the
@@ -512,14 +522,17 @@ def extraction_to_deposition(
         values trust the data more (noisier, less biased). Default is 1e-10.
     spinup : {"constant"} | None, optional
         Spin-up policy applied before building the forward weight matrix.
-        Default ``"constant"`` shifts ``tedges[0]`` backward by
-        ``retardation_factor * aquifer_pore_volume / flow[0]`` and treats
-        flow as constant at its first value over the prepended interval;
-        the recovered deposition vector is sliced back to the original
-        ``tedges`` length so the public output shape is unchanged.
-        ``None`` keeps strict-validity behavior. A float raises
-        ``NotImplementedError`` -- the fraction-threshold mode is not
-        implemented for deposition (matching the diffusion family).
+        Default ``"constant"`` shifts ``tedges[0]`` backward by at least
+        ``retardation_factor * aquifer_pore_volume / flow[0]`` (rounded up to
+        whole bins, plus one extra bin) and treats flow as constant at its
+        first value over the prepended interval; the recovered deposition
+        vector is sliced back to the original ``tedges`` length so the public
+        output shape is unchanged. When the warm-start is undefined
+        (``flow[0] <= 0``, zero/NaN pore volume, non-positive first bin width,
+        or a pad exceeding the memory cap), ``"constant"`` silently reverts to
+        strict-validity behavior. ``None`` keeps strict-validity behavior. A
+        float raises ``NotImplementedError`` -- the fraction-threshold mode is
+        not implemented for deposition (matching the diffusion family).
 
     Returns
     -------
@@ -530,7 +543,10 @@ def extraction_to_deposition(
     Raises
     ------
     ValueError
-        If input dimensions are incompatible or if flow contains NaN values.
+        If input dimensions are incompatible, if flow contains NaN or negative
+        values, if ``retardation_factor`` is less than 1.0, or if physical
+        parameters are out of valid range (porosity not in (0, 1),
+        non-positive thickness or aquifer pore volume).
     NotImplementedError
         If ``spinup`` is anything other than ``None`` or ``"constant"`` (the
         fraction-threshold mode is not implemented for deposition).
@@ -553,9 +569,11 @@ def extraction_to_deposition(
     The forward model is ``W @ dep = cout``, where the weight matrix ``W``
     encodes the physical relationship between deposition rates and
     concentrations. ``W`` is genuinely banded -- row ``i`` is nonzero only on
-    the cin bins inside its residence-time window -- and is built and solved in
-    a compact banded layout (peak memory ``O(n_cin * band)``, never the dense
-    ``O(n_cout * n_cin)``). Unlike advection (where rows sum to ~1), deposition
+    the cin bins inside its residence-time window -- and is *built* in a
+    compact banded layout (peak memory ``O(n_cin * band)``); the Tikhonov
+    *solve* (:func:`gwtransport.utils.solve_inverse_transport_banded`)
+    transiently materializes the dense matrix and its Gram product
+    (``O(n_cout * n_cin + n_cin**2)``). Unlike advection (where rows sum to ~1), deposition
     rows sum to ``r_i = residence_time_i / (retardation_factor * porosity *
     thickness)``. Rows are
     rescaled by ``r_i`` before solving: for systems where ``cout`` lies in
@@ -723,13 +741,15 @@ def extraction_to_deposition_full(
         Default is None (uses numpy default).
     spinup : {"constant"} | None, optional
         Spin-up policy applied before building the forward weight matrix.
-        Default ``"constant"`` shifts ``tedges[0]`` backward by
-        ``retardation_factor * aquifer_pore_volume / flow[0]``; the
-        recovered deposition is sliced back to the original ``tedges``
-        length. ``None`` keeps strict-validity behavior. A float raises
-        ``NotImplementedError`` -- the fraction-threshold mode is not
-        implemented for deposition (matching the diffusion family).
-        See :func:`extraction_to_deposition` for full semantics.
+        Default ``"constant"`` shifts ``tedges[0]`` backward by at least
+        ``retardation_factor * aquifer_pore_volume / flow[0]`` (rounded up to
+        whole bins, plus one extra bin), silently reverting to strict-validity
+        when the warm-start is undefined; the recovered deposition is sliced
+        back to the original ``tedges`` length. ``None`` keeps strict-validity
+        behavior. A float raises ``NotImplementedError`` -- the
+        fraction-threshold mode is not implemented for deposition (matching
+        the diffusion family). See :func:`extraction_to_deposition` for full
+        semantics.
 
     Returns
     -------
@@ -741,9 +761,10 @@ def extraction_to_deposition_full(
     ------
     ValueError
         If cout_tedges does not have one more element than cout, if tedges
-        does not have one more element than flow, if flow contains NaN
-        values, or if physical parameters are out of valid range (porosity
-        not in (0, 1), non-positive thickness or aquifer pore volume).
+        does not have one more element than flow, if flow contains NaN or
+        negative values, if ``retardation_factor`` is less than 1.0, or if
+        physical parameters are out of valid range (porosity not in (0, 1),
+        non-positive thickness or aquifer pore volume).
     NotImplementedError
         If ``spinup`` is anything other than ``None`` or ``"constant"`` (the
         fraction-threshold mode is not implemented for deposition).
@@ -860,11 +881,10 @@ def spinup_duration(
     """
     # Spin-up is the residence time of water *currently being extracted*: how
     # far back in history we must know deposition to fully characterise the
-    # extracted concentration. This uses the ``extraction_to_infiltration``
-    # direction. Under variable flow this differs from
-    # ``infiltration_to_extraction`` (which would describe how long ahead
-    # water infiltrated at the first time step will take to be extracted, a
-    # forward-in-time question that is not what spin-up means).
+    # extracted concentration. For this boundary quantity -- the extraction
+    # time of the water infiltrated exactly at tedges[0] -- the two transport
+    # directions coincide: the infiltration->extraction and extraction->
+    # infiltration maps are inverses, so both solve V(t*) = R * V_p below.
     #
     # The smallest extraction time t* at which the extracted water was
     # infiltrated exactly at tedges[0] satisfies

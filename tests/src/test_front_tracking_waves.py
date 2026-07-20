@@ -14,6 +14,7 @@ import pytest
 from scipy.integrate import quad, solve_ivp
 from scipy.optimize import brentq
 
+from gwtransport.fronttracking import waves as waves_mod
 from gwtransport.fronttracking.math import (
     ConstantRetardation,
     FreundlichSorption,
@@ -1077,3 +1078,46 @@ class TestDoubleFanShockWave:
             pos = w.position_at_theta(th)
             assert pos is not None  # defined at every θ in the wave's active window
             np.testing.assert_allclose(pos, float(sol.sol(th)[0]), rtol=1e-6)
+
+
+class TestFreundlichNearTwoRouting:
+    """Regression (issue #314, FTF-F3): n within 1e-8 of 2 must use the general-n inversion.
+
+    ``_c_decay_freundlich`` dispatches on ``np.isclose(n, 2.0, rtol=1e-12)``; the numpy
+    default ``atol=1e-8`` silently routed any ``n`` within 1e-8 of 2 to the n=2 closed
+    form. With ``atol=0.0`` only (essentially) exact n=2 takes the closed form.
+    """
+
+    C0 = 4.0
+    THETA_COLL = 100.0
+    THETA = 250.0
+
+    def _call(self, n):
+        sorption = FreundlichSorption(k_f=0.01, n=n, bulk_density=1500.0, porosity=0.3)
+        alpha = sorption.bulk_density * sorption.k_f / sorption.porosity
+        # Invariant K consistent with u(theta_coll) = c0**(1/n): closed form of
+        # u0*theta_c = K + sqrt(K**2 + theta_c*K*alpha) solved for K.
+        u0 = self.C0 ** (1.0 / n)
+        k_invariant = u0**2 * self.THETA_COLL / (2.0 * u0 + alpha)
+        return waves_mod._c_decay_freundlich(sorption, k_invariant, self.C0, 0.0, self.THETA_COLL, self.THETA)  # noqa: SLF001
+
+    def test_n_within_atol_of_two_routes_to_general_path(self, monkeypatch):
+        """n = 2 + 1e-10 must call the general-n brentq inversion, not the n=2 closed form."""
+        calls = []
+        general = waves_mod._invert_freundlich_cr_zero  # noqa: SLF001
+
+        def recording(*args, **kwargs):
+            calls.append(args)
+            return general(*args, **kwargs)
+
+        monkeypatch.setattr(waves_mod, "_invert_freundlich_cr_zero", recording)
+        self._call(2.0 + 1e-10)
+        assert len(calls) == 1  # baseline: 0 (silently misrouted to the n=2 closed form)
+
+        calls.clear()
+        self._call(2.0)  # exact n=2 keeps the closed form
+        assert len(calls) == 0
+
+    def test_general_path_is_continuous_at_two(self):
+        """The general-n inversion agrees with the n=2 closed form as n -> 2 (sanity)."""
+        np.testing.assert_allclose(self._call(2.0 + 1e-10), self._call(2.0), rtol=1e-8)

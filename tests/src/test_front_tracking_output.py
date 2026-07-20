@@ -942,10 +942,9 @@ class TestTotalOutletMassSemantics:
 
     def test_pulse_returns_injected_mass(self):
         """``cin[-1] == 0`` returns the finite injected mass ``Σ cin·Δθ``."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         cin = np.array([0.0, 4.0, 4.0, 0.0])
         theta_edges = np.array([0.0, 100.0, 200.0, 300.0, 400.0])
-        m_out = compute_total_outlet_mass(v_outlet=500.0, sorption=sorption, cin=cin, theta_edges=theta_edges)
+        m_out = compute_total_outlet_mass(cin=cin, theta_edges=theta_edges)
         assert m_out == float(np.sum(cin * np.diff(theta_edges)))  # = 800.0, exact
 
     def test_sustained_ambient_returns_inf_not_negative(self):
@@ -956,7 +955,7 @@ class TestTotalOutletMassSemantics:
         v_outlet = 5000.0  # large enough that C_T(c_∞)·v_outlet > m_in_total (baseline went negative)
         m_in_total = float(np.sum(cin * np.diff(theta_edges)))
         assert float(sorption.total_concentration(4.0)) * v_outlet > m_in_total  # the baseline-negative regime
-        m_out = compute_total_outlet_mass(v_outlet=v_outlet, sorption=sorption, cin=cin, theta_edges=theta_edges)
+        m_out = compute_total_outlet_mass(cin=cin, theta_edges=theta_edges)
         assert m_out == np.inf
 
 

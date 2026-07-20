@@ -19,8 +19,8 @@ antiderivative ``I(x) = 0.5*x + 0.5*[x*erf(x/s) + (s/sqrt(pi))*exp(-(x/s)^2)]``,
 ``s = 2*sqrt(D_t)``. Evaluating ``I`` once per cout edge with ``D_t`` carried *per edge*
 and differencing yields the flux concentration ``C_F`` directly -- not merely ``C_R`` --
 because ``dD_t/dx = D_m/v_s + alpha_L = D_s/v_s`` is exactly the Kreft-Zuber flux coefficient
-at the solute-front velocity ``v_s = Q*L/(R*V_pore)`` (using ``d(tau)/dx = 1/v_s`` with
-``tau = R*V/(L*Q)``). The dispersive boundary-flux correction therefore emerges from the
+at the solute-front velocity ``v_s = Q*L/(R*V_pore)`` (using ``d(tau)/dx = 1/v_s =
+R*V_pore/(L*Q)``). The dispersive boundary-flux correction therefore emerges from the
 ``D_t`` variation across the bin; no explicit correction term is added.
 
 The elapsed time ``tau`` and travel distance ``xi`` are read directly from the time and
@@ -124,7 +124,8 @@ def _pv_band_geometry(
     Locates the narrow cumulative-volume band where the breakthrough transitions between 0 and 1
     -- the only cin bins with a non-zero coefficient. Within a streamtube the moving-frame
     dispersion product is exactly linear in the breakthrough coordinate, ``D_t(x) = A + B*x``,
-    with slope ``B = dD_t/dx = R*D_m/v + alpha_L`` and intercept ``A`` the front value, so the
+    with slope ``B = dD_t/dx = R*D_m/v_fluid + alpha_L`` (``v_fluid = Q*L/V_pore``) and
+    intercept ``A`` the front value, so the
     saturation edge ``|x| = saturation_threshold * 2*sqrt(D_t(x))`` is the root of a quadratic --
     the band half-width is closed form, no iteration. The band is centred per cout bin on the
     front ``V_cin = V_cout - R*V_pore`` and mapped to cin-edge columns with ``searchsorted`` (so
@@ -224,7 +225,7 @@ def _pv_band_values(
 
     ``C_F`` over a cout bin is ``(I(x_hi) - I(x_lo)) / dx`` with the closed-form antiderivative
     ``I`` evaluated at the two cout edges bounding the bin. Because ``D_t = D_m*tau + alpha_L*xi``
-    with ``tau = R*V/(L*Q)``, the antiderivative's slope ``dD_t/dx = R*D_m/v_fluid + alpha_L =
+    with ``d(tau)/dx = 1/v_s = R*V_pore/(L*Q)``, the antiderivative's slope ``dD_t/dx = R*D_m/v_fluid + alpha_L =
     D_s/v_s`` is exactly the Kreft-Zuber flux coefficient at the solute-front velocity
     ``v_s = Q*L/(R*V_pore)``, so the flux concentration emerges natively -- no correction term is
     added. The stripe is the band itself: each row spans cin edges
@@ -492,7 +493,7 @@ def infiltration_to_extraction(
         Travel distance L [m]: a scalar (shared by all streamtubes) or an array with one
         value per aquifer pore volume. Must be positive.
     molecular_diffusivity : float or ndarray
-        Effective molecular diffusivity D_m [m²/day]: scalar or one value per pore volume.
+        Effective (retarded-frame) molecular diffusivity D_m [m²/day]: scalar or one value per pore volume.
         Must be non-negative.
     longitudinal_dispersivity : float or ndarray
         Longitudinal dispersivity alpha_L [m] (microdispersion): scalar or one value per pore volume.
@@ -620,7 +621,7 @@ def extraction_to_infiltration(
         Travel distance L [m]: a scalar (shared by all streamtubes) or an array with one
         value per aquifer pore volume. Must be positive.
     molecular_diffusivity : float or ndarray
-        Effective molecular diffusivity D_m [m²/day]: scalar or one value per pore volume.
+        Effective (retarded-frame) molecular diffusivity D_m [m²/day]: scalar or one value per pore volume.
         Must be non-negative.
     longitudinal_dispersivity : float or ndarray
         Longitudinal dispersivity alpha_L [m] (microdispersion): scalar or one value per pore volume.
@@ -748,7 +749,7 @@ def gamma_infiltration_to_extraction(
     streamline_length : float
         Travel distance L [m], applied to all gamma streamtubes. Must be positive.
     molecular_diffusivity : float
-        Effective molecular diffusivity D_m [m²/day], applied to all streamtubes. Must be
+        Effective (retarded-frame) molecular diffusivity D_m [m²/day], applied to all streamtubes. Must be
         non-negative.
     longitudinal_dispersivity : float
         Longitudinal dispersivity alpha_L [m] (microdispersion), applied to all streamtubes. Must be
@@ -841,7 +842,7 @@ def gamma_extraction_to_infiltration(
     streamline_length : float
         Travel distance L [m], applied to all gamma streamtubes. Must be positive.
     molecular_diffusivity : float
-        Effective molecular diffusivity D_m [m²/day], applied to all streamtubes. Must be
+        Effective (retarded-frame) molecular diffusivity D_m [m²/day], applied to all streamtubes. Must be
         non-negative.
     longitudinal_dispersivity : float
         Longitudinal dispersivity alpha_L [m] (microdispersion), applied to all streamtubes. Must be

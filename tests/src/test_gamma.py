@@ -260,11 +260,16 @@ def test_parse_parameters_partial_alpha_beta():
 
 
 def test_parse_parameters_partial_mean_std():
-    """Test parse_parameters raises error with partial mean/std."""
-    with pytest.raises(ValueError, match=r"Either \(alpha, beta\) or \(mean, std\) must be provided"):
+    """Partial mean/std raises the same symmetric pairing error as partial alpha/beta.
+
+    Regression (issue #314, GAM-P4): the baseline raised the generic
+    "Either (alpha, beta) or (mean, std) must be provided" for a partial mean/std pair,
+    asymmetric with the "alpha and beta must both be provided" pairing check.
+    """
+    with pytest.raises(ValueError, match="mean and std must both be provided"):
         parse_parameters(mean=10.0)
 
-    with pytest.raises(ValueError, match=r"Either \(alpha, beta\) or \(mean, std\) must be provided"):
+    with pytest.raises(ValueError, match="mean and std must both be provided"):
         parse_parameters(std=3.0)
 
 
@@ -372,12 +377,20 @@ def test_bins_both_n_bins_and_quantiles():
 
 
 def test_bins_n_bins_too_small():
-    """Test bins raises error with n_bins <= 1."""
+    """Test bins raises error with n_bins <= 1.
+
+    The negative case is a regression (issue #314, GAM-P3): the baseline reached
+    ``np.linspace(0, 1, n_bins + 1)`` first and surfaced numpy's opaque
+    "Number of samples ... must be non-negative" error instead of the clear guard.
+    """
     with pytest.raises(ValueError, match="Number of bins must be greater than 1"):
         gamma_bins(alpha=5.0, beta=2.0, n_bins=1)
 
     with pytest.raises(ValueError, match="Number of bins must be greater than 1"):
         gamma_bins(alpha=5.0, beta=2.0, n_bins=0)
+
+    with pytest.raises(ValueError, match="Number of bins must be greater than 1"):
+        gamma_bins(alpha=5.0, beta=2.0, n_bins=-2)
 
 
 def test_bins_quantile_edges_must_span_unit_interval():

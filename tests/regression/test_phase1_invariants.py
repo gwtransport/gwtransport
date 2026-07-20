@@ -412,8 +412,6 @@ def test_mass_balance_freundlich_nhalf_mirror_pointwise_breakthrough(n):
     # old finite form ``m_in − C_T(c_∞)·V_outlet`` mixed a finite record
     # integral with an infinite-time steady-state fill and could go negative.
     mass_out = compute_total_outlet_mass(
-        v_outlet=v_outlet,
-        sorption=sorption,
         cin=cin,
         theta_edges=tr.state.theta_edges,
     )
@@ -442,8 +440,6 @@ def test_mass_balance_freundlich_n2_multipulse():
 
     mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
     mass_out = compute_total_outlet_mass(
-        v_outlet=v_outlet,
-        sorption=sorption,
         cin=cin,
         theta_edges=tr.state.theta_edges,
     )
@@ -545,8 +541,6 @@ def test_freundlich_n_just_above_1_plateau_holds_inlet_c():
 
     mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
     mass_out = compute_total_outlet_mass(
-        v_outlet=v_outlet,
-        sorption=sorption,
         cin=cin,
         theta_edges=tr.state.theta_edges,
     )
