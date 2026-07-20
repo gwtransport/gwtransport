@@ -33,7 +33,10 @@ flow-bin boundaries, with extra front-centred panels wherever a sharp breakthrou
 is otherwise under-resolved).
 Prefer it only when the output grid is coarser than the flow detail -- it integrates the
 full within-bin flow, which the closed-form :mod:`gwtransport.diffusion_fast` approximates as
-constant per output bin. Otherwise that module computes the same physics to machine
+constant per output bin. Caveat (issue #305): on output grids so coarse that a cout bin is
+wider than a streamtube residence time, this module currently violates mass conservation
+(a breakthrough pulse can be silently deleted or amplified); validate column mass before
+trusting coarse-output results. Otherwise that module computes the same physics to machine
 precision for *every* parameter regime (including ``retardation_factor != 1`` with non-zero
 molecular diffusivity, whose flux correction it also evaluates in closed form) and is
 ~80-90x faster (no quadrature, no residence-time inversion). Both modules accept
@@ -1034,13 +1037,14 @@ def extraction_to_infiltration(
     -----
     The algorithm builds the forward coefficient matrix ``W_forward`` (same as
     used by :func:`infiltration_to_extraction`) and solves ``W_forward @ cin = cout``
-    using :func:`gwtransport.utils.solve_tikhonov`. This ensures mathematical
-    consistency between forward and inverse operations.
+    using :func:`gwtransport.utils.solve_inverse_transport`. This ensures
+    mathematical consistency between forward and inverse operations.
 
-    NaN values in ``cout`` are rejected. The Tikhonov solver here does not
-    mask NaN rows, so any NaN in ``cout`` would poison the solution. This
-    differs from :func:`gwtransport.deposition.extraction_to_deposition`,
-    whose regularized solver excludes NaN ``cout`` rows by construction.
+    NaN values in ``cout`` are rejected up front (ValueError): the dense
+    Tikhonov solve does not mask NaN rows, so a NaN measurement reaching it
+    would poison the whole solution. This differs from
+    :func:`gwtransport.deposition.extraction_to_deposition`, whose regularized
+    solver excludes NaN ``cout`` rows by construction.
 
     Examples
     --------
