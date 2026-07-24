@@ -2391,6 +2391,8 @@ def test_coarse_cout_grid_conserves_pulse_mass(offset_days):
     cout_disp = infiltration_to_extraction(molecular_diffusivity=0.02, longitudinal_dispersivity=1.0, **kwargs)
     assert not np.any(np.isnan(cout_disp))
     np.testing.assert_allclose(np.sum(flow_rate * cout_disp * dt_days), mass_in, rtol=1e-10)
+
+
 def test_extraction_to_infiltration_gapped_cout_masked():
     """NaN gaps in cout are masked out of the inverse solve instead of raising (#321).
 

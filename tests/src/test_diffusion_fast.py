@@ -3278,6 +3278,8 @@ def test_coarse_cout_straddling_flow_restart_matches_diffusion_quadrature(d_m, a
     both = np.isfinite(cout_fast) & np.isfinite(cout_quad)
     assert np.sum(both) > 5
     assert_allclose(cout_fast[both], cout_quad[both], atol=1e-12, rtol=0.0)
+
+
 def test_extraction_to_infiltration_gapped_cout_masked():
     """NaN gaps in cout are masked out of the banded inverse instead of raising (#321).
 
