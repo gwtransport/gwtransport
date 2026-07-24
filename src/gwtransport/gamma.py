@@ -123,6 +123,10 @@ def parse_parameters(
         msg = "Provide either (alpha, beta) or (mean, std), not both."
         raise ValueError(msg)
 
+    if (mean is None) != (std is None):
+        msg = "mean and std must both be provided or both be None."
+        raise ValueError(msg)
+
     # The ``or beta is None`` is redundant at runtime (the check above pairs them) but lets the
     # type checker narrow ``beta`` to a float on the fall-through return.
     if alpha is None or beta is None:
@@ -382,6 +386,11 @@ def bins(
             raise ValueError(msg)
         n_bins = len(quantile_edges) - 1
     else:
+        if n_bins <= 1:
+            # Validate before np.linspace: a negative n_bins would otherwise surface as
+            # numpy's opaque "Number of samples ... must be non-negative" error.
+            msg = "Number of bins must be greater than 1"
+            raise ValueError(msg)
         quantile_edges = np.linspace(0, 1, n_bins + 1)
 
     if n_bins <= 1:
@@ -417,8 +426,9 @@ def bins(
 
     # Conditional mean within each bin for the unshifted distribution, then shift by loc.
     # E[X | a <= X < b] for X ~ Gamma(alpha, beta) uses the identity
-    #     E[X * 1_{a<=X<b}] = alpha * beta * (F_{alpha+1}(b/beta) - F_{alpha+1}(a/beta))
-    # where F_{alpha+1} is the CDF of Gamma(alpha+1, beta).
+    #     E[X * 1_{a<=X<b}] = alpha * beta * (F_{alpha+1}(b) - F_{alpha+1}(a))
+    # where F_{alpha+1} is the CDF of Gamma(alpha+1, scale=beta) (equivalently the regularized
+    # lower incomplete gamma P(alpha+1, b/beta) - P(alpha+1, a/beta)).
     cdf_alpha_plus_1 = gamma_dist.cdf(unshifted_edges, alpha + 1, scale=beta)
     diff_alpha_plus_1 = np.diff(cdf_alpha_plus_1)
 

@@ -14,7 +14,11 @@ Functions
     compute_domain_mass(theta, v_outlet, waves, sorption)
     compute_cumulative_inlet_mass(theta, cin, theta_edges)
     compute_cumulative_outlet_mass(theta, v_outlet, waves, sorption, *, cin, theta_edges)
-    compute_total_outlet_mass(v_outlet, sorption, *, cin, theta_edges) -> float
+    compute_total_outlet_mass(*, cin, theta_edges) -> float
+    identify_outlet_segments(theta_start, theta_end, v_outlet, waves, ...)
+    integrate_rarefaction_exact(raref, v_outlet, theta_start, theta_end, sorption)
+    integrate_fan_exact(theta_origin, v_origin, v_outlet, theta_start, theta_end, sorption, c_apex=0.0)
+    integrate_fan_spatial_exact(theta_origin, v_origin, v_start, v_end, theta, sorption, c_apex=0.0)
 
 Outlet-mass functions use the PDE conservation identity
 ``m_out(θ) = m_in(θ) − m_dom(θ)`` (Bear & Cheng 2010, Ch. 3: mass
@@ -650,8 +654,7 @@ def _integrate_fan_exact_universal(
 
     # For a c_apex=0 fan the upper bound may be +∞. The integral converges only when
     # c → 0 as R → ∞ (so base·c → 0). Freundlich n<1 (c → ∞ as R → ∞) diverges — reject it
-    # explicitly. (DecayingShockWave.mass_after_outlet_arrival returns 0 for the n<1 mirror
-    # before reaching here, so this is a defensive guard for direct callers.)
+    # explicitly via the fan_converges_at_infinity guard.
     if theta_end_fan == float("inf") and not sorption.fan_converges_at_infinity():
         msg = "Fan integral diverges at θ=+∞ for this sorption (e.g. Freundlich n<1); pass a finite theta_end"
         raise ValueError(msg)
@@ -1200,8 +1203,6 @@ def compute_cumulative_outlet_mass(
 
 
 def compute_total_outlet_mass(
-    v_outlet: float,  # noqa: ARG001
-    sorption: SorptionModel,  # noqa: ARG001
     *,
     cin: npt.ArrayLike,
     theta_edges: npt.NDArray[np.floating],
@@ -1221,10 +1222,6 @@ def compute_total_outlet_mass(
 
     Parameters
     ----------
-    v_outlet : float
-        Outlet position [m³] (unused for ``c_∞ = 0``; the ``+inf`` branch does not need it).
-    sorption : SorptionModel
-        Sorption model (kept for API symmetry; no ``C_T`` evaluation is required).
     cin : array-like (kw-only)
         Inlet concentration per θ-bin [mass/volume].
     theta_edges : ndarray (kw-only)

@@ -377,11 +377,11 @@ def _build_forward_operator(
     # bins). residence_time uses the extended grid when warm-starting so spin-up bins stay valid.
     work_tedges = tedges
     if extend:
-        edge_values = tedges.to_numpy().copy()
-        delta = np.timedelta64(36500, "D")
-        edge_values[0] -= delta
-        edge_values[-1] += delta
-        work_tedges = pd.DatetimeIndex(edge_values)
+        # Timestamp arithmetic keeps the input timezone (tz-naive stays naive, tz-aware
+        # stays tz-aware); going through ``.to_numpy()`` would strip the tz. Mirrors
+        # diffusion_fast's extension.
+        pad = pd.Timedelta(days=36500)
+        work_tedges = (tedges[:1] - pad).append(tedges[1:-1]).append(tedges[-1:] + pad)
     # Output bin valid where every streamtube's advective look-back is in-record across the whole
     # bin (advective coverage == 1 for all pore volumes; NaN outside the record -> invalid).
     valid = np.all(

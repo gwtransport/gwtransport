@@ -147,7 +147,7 @@ from gwtransport.residence_time import fraction_explained_full
 from gwtransport.utils import cumulative_flow_volume, solve_inverse_transport
 
 # Numerical tolerance for coefficient sum to determine valid output bins
-EPSILON_COEFF_SUM = 1e-10
+_EPSILON_COEFF_SUM = 1e-10
 
 # Gauss-Legendre quadrature nodes and weights for volume-space integration
 _GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(16)
@@ -225,7 +225,9 @@ def _cfrac_mean_volume(
     (in volume units); a sub-interval whose front is under-resolved by a single
     16-point rule (front width far below the sub-interval width) is tiled with
     front-centred panels (see ``_FRONT_OFFSETS``), while smooth/already-resolved
-    sub-intervals keep the plain single 16-point rule (bit-identical to it). No
+    sub-intervals keep the plain single 16-point rule (bit-identical to it *per
+    sub-interval*; a cell split at flow-bin boundaries still integrates more
+    accurately than one un-split rule over the whole cell). No
     "fully capped" branch: the moving-frame variance keeps growing past
     breakthrough, and the K-Z identity requires Bear's formula to satisfy the
     variable-coefficient ADE exactly (which it does only without capping).
@@ -936,7 +938,7 @@ def infiltration_to_extraction(
     # Output bins are invalid where the coefficient sum is near zero (no cin has broken
     # through yet) or the bin extends beyond the input data range (valid_cout_bins).
     total_coeff = np.sum(coeff_matrix, axis=1)
-    no_valid_contribution = (total_coeff < EPSILON_COEFF_SUM) | ~valid_cout_bins
+    no_valid_contribution = (total_coeff < _EPSILON_COEFF_SUM) | ~valid_cout_bins
     cout[no_valid_contribution] = np.nan
 
     return cout
@@ -1034,8 +1036,9 @@ def extraction_to_infiltration(
     -----
     The algorithm builds the forward coefficient matrix ``W_forward`` (same as
     used by :func:`infiltration_to_extraction`) and solves ``W_forward @ cin = cout``
-    using :func:`gwtransport.utils.solve_tikhonov`. This ensures mathematical
-    consistency between forward and inverse operations.
+    using :func:`gwtransport.utils.solve_inverse_transport` (which builds the
+    reverse regularization target and then applies Tikhonov regularization).
+    This ensures mathematical consistency between forward and inverse operations.
 
     NaN values in ``cout`` are rejected. The Tikhonov solver here does not
     mask NaN rows, so any NaN in ``cout`` would poison the solution. This
