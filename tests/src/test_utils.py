@@ -1708,6 +1708,7 @@ def test_simplify_bins_all_zero_flow_group_falls_back_to_width_weights():
     new_edges, new_values, new_flow = simplify_bins(edges=edges, values=values, flow=flow)
     np.testing.assert_allclose(new_edges, [0.0, 2.0, 4.0])
     np.testing.assert_allclose(new_values, [2.0, 5.0])
+    assert new_flow is not None  # narrow the flow=None overload for the type checker
     np.testing.assert_allclose(new_flow, [0.0, 10.0])
 
 

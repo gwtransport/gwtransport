@@ -4627,6 +4627,8 @@ def test_fronttracking_domain_mass_interior_zero_flow_gap_matches_deleted_gap(so
             theta=theta, v_outlet=aquifer_pore_volume, waves=tracker_nogap.state.waves, sorption=sorption
         )
         np.testing.assert_allclose(mass_gap, mass_nogap, rtol=0.0, atol=1e-9)
+
+
 def test_infiltration_to_extraction_non_monotonic_tedges_raises():
     """#313 ADV-P2: the docstring promises a ValueError for non-monotonic time edges.
 
