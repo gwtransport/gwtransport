@@ -645,3 +645,21 @@ class TestGeneralEngine:
         )
         ext = flow < 0
         np.testing.assert_allclose(pub[ext], eng[ext], rtol=1e-12, atol=1e-12)
+
+
+def test_reverse_negative_regularization_strength_raises():
+    """#313 RAC-P5: a negative Tikhonov parameter flowed into np.sqrt -> NaN -> silent all-NaN cin.
+
+    Reject it up front instead.
+    """
+    tedges, flow, geom = _scenario()
+    with pytest.raises(ValueError, match="regularization_strength"):
+        extraction_to_infiltration(
+            cout=np.zeros(len(flow)),
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            **geom,
+            regularization_strength=-1.0,
+            n_quad=80,
+        )

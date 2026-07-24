@@ -1694,3 +1694,57 @@ def test_solve_inverse_transport_banded_rejects_nonpositive_lambda():
         solve_inverse_transport_banded(
             band_vals=band_vals, col_start=col_start, observed=observed, n_output=4, regularization_strength=0.0
         )
+
+
+def test_simplify_bins_all_zero_flow_group_falls_back_to_width_weights():
+    """#313 UTI-F2: a merged group whose bins all have zero flow has zero volume weight.
+
+    The volume-weighted average is then 0/0 -> NaN (with a RuntimeWarning) even though
+    the group's value is perfectly well defined; fall back to width weighting there.
+    """
+    edges = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    values = np.array([2.0, 2.0, 5.0, 5.0])
+    flow = np.array([0.0, 0.0, 10.0, 10.0])
+    new_edges, new_values, new_flow = simplify_bins(edges=edges, values=values, flow=flow)
+    np.testing.assert_allclose(new_edges, [0.0, 2.0, 4.0])
+    np.testing.assert_allclose(new_values, [2.0, 5.0])
+    assert new_flow is not None  # narrow the flow=None overload for the type checker
+    np.testing.assert_allclose(new_flow, [0.0, 10.0])
+
+
+def test_time_bin_overlap_nanosecond_precision_far_epoch():
+    """#313 UTI-F3: datetime edges must be differenced in int64 nanoseconds.
+
+    Converting asi8 to float64 BEFORE differencing rounds a year-2200 epoch value
+    (~7.3e18 ns, float64 ulp = 1024 ns) to the nearest 1024 ns, corrupting
+    sub-microsecond bins. Differences of int64 nanoseconds are exact.
+    """
+    base = pd.Timestamp("2200-01-01")
+    tedges = pd.DatetimeIndex([base + pd.Timedelta(n, "ns") for n in (0, 1000, 2000, 3000)])
+    bin_tedges = [(base + pd.Timedelta(500, "ns"), base + pd.Timedelta(1500, "ns"))]
+    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
+    np.testing.assert_allclose(result, [[0.5, 0.5, 0.0]], rtol=0, atol=0)
+
+
+def test_solve_tikhonov_resolution_dead_column_nan_target():
+    """#313 UTI-F4: a dead (all-zero) column whose x_target is NaN is unregularized.
+
+    Its gram row/column is then exactly zero and np.linalg.inv raised LinAlgError.
+    The pinned diagonal leaves every other resolution entry unchanged and reports
+    fraction_data = 1.0, the documented convention for non-regularized entries.
+    """
+    coeff = np.array([[1.0, 0.0], [2.0, 0.0]])
+    rhs = np.array([1.0, 2.0])
+    x_target = np.array([1.0, np.nan])
+    lam = 1e-10
+    x, fraction_data = solve_tikhonov(
+        coefficient_matrix=coeff,
+        rhs_vector=rhs,
+        x_target=x_target,
+        regularization_strength=lam,
+        return_resolution=True,
+    )
+    # lstsq returns the minimum-norm solution: dead column -> 0, live column exact.
+    np.testing.assert_allclose(x, [1.0, 0.0])
+    # Live column: R = 1 - lam / (||col||^2 + lam); dead unregularized column: 1.0 by convention.
+    np.testing.assert_allclose(fraction_data, [1.0 - lam / (5.0 + lam), 1.0], rtol=1e-12)

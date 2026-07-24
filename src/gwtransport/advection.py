@@ -126,6 +126,11 @@ def _validate_advection_inputs(
     else:
         msg = "must provide cin_values (forward) or both cout_values and cout_tedges (reverse)"
         raise ValueError(msg)
+    # The docstrings promise a ValueError for non-monotonic infiltration time edges, which would
+    # otherwise silently corrupt the cumulative-volume mapping.
+    if np.any(np.diff(tedges.asi8) <= 0):
+        msg = "tedges must be strictly increasing"
+        raise ValueError(msg)
     _validate_no_nan(flow, name="flow")
     _validate_non_negative_array(flow, name="flow", message="flow must be non-negative (negative flow not supported)")
     _validate_retardation_factor(retardation_factor)

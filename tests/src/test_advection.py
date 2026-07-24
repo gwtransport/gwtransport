@@ -4627,3 +4627,37 @@ def test_fronttracking_domain_mass_interior_zero_flow_gap_matches_deleted_gap(so
             theta=theta, v_outlet=aquifer_pore_volume, waves=tracker_nogap.state.waves, sorption=sorption
         )
         np.testing.assert_allclose(mass_gap, mass_nogap, rtol=0.0, atol=1e-9)
+
+
+def test_infiltration_to_extraction_non_monotonic_tedges_raises():
+    """#313 ADV-P2: the docstring promises a ValueError for non-monotonic time edges.
+
+    Without the check, non-monotonic tedges silently corrupt the cumulative-volume
+    mapping and produce wrong output.
+    """
+    n = 10
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D").to_numpy().copy()
+    tedges[3], tedges[4] = tedges[4], tedges[3]  # swap two interior edges
+    with pytest.raises(ValueError, match="strictly increasing"):
+        infiltration_to_extraction(
+            cin=np.ones(n),
+            flow=np.full(n, 100.0),
+            tedges=pd.DatetimeIndex(tedges),
+            cout_tedges=pd.date_range("2020-01-01", periods=n + 1, freq="D"),
+            aquifer_pore_volumes=np.array([300.0]),
+        )
+
+
+def test_extraction_to_infiltration_non_monotonic_tedges_raises():
+    """#313 ADV-P2: the reverse (deconvolution) path must reject non-monotonic tedges too."""
+    n = 10
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D").to_numpy().copy()
+    tedges[3], tedges[4] = tedges[4], tedges[3]
+    with pytest.raises(ValueError, match="strictly increasing"):
+        extraction_to_infiltration(
+            cout=np.ones(n),
+            flow=np.full(n, 100.0),
+            tedges=pd.DatetimeIndex(tedges),
+            cout_tedges=pd.date_range("2020-01-01", periods=n + 1, freq="D"),
+            aquifer_pore_volumes=np.array([300.0]),
+        )

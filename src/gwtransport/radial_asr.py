@@ -648,6 +648,11 @@ def extraction_to_infiltration(
     if np.any(np.isnan(cout[flow < 0.0])):
         msg = "cout contains NaN values on extraction bins, which are not allowed"
         raise ValueError(msg)
+    # A negative Tikhonov parameter would flow into np.sqrt below -> NaN augmented rows -> silent
+    # all-NaN cin (or an opaque lstsq convergence error); reject it up front.
+    if regularization_strength < 0.0:
+        msg = f"regularization_strength must be >= 0, got {regularization_strength}"
+        raise ValueError(msg)
     c_geos = np.pi * pore_heights * porosity
     # A rest phase with molecular diffusion routes to the reuse engine (see the forward function); regional
     # drift never uses the radial echo operator (it breaks the azimuthal symmetry the echo relies on).

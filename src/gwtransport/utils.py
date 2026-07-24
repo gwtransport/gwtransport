@@ -670,13 +670,15 @@ def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.N
         raise ValueError(msg)
 
     # Normalize datetime-like inputs (datetime64 or object arrays of Timestamps/datetimes) to a
-    # common int64-nanosecond float scale so numeric, datetime64, and Timestamp inputs share one
-    # arithmetic path; ``np.maximum(0, Timedelta)`` on an object array would otherwise raise. Only
-    # differences enter the result, so the shared epoch origin cancels and the fractions are exact.
+    # common int64-nanosecond scale so numeric, datetime64, and Timestamp inputs share one
+    # arithmetic path; ``np.maximum(0, Timedelta)`` on an object array would otherwise raise.
+    # Stay in int64 through the differencing below: a float64 epoch value rounds to its ulp
+    # (1024 ns by the 2200s), which would corrupt sub-microsecond bins. Only exact int64
+    # differences enter the final float division, so the shared epoch origin cancels.
     if not np.issubdtype(tedges.dtype, np.number):
-        tedges = pd.DatetimeIndex(tedges).asi8.astype(float)
+        tedges = pd.DatetimeIndex(tedges).asi8
     if not np.issubdtype(bin_tedges_array.dtype, np.number):
-        flat = pd.DatetimeIndex(bin_tedges_array.ravel()).asi8.astype(float)
+        flat = pd.DatetimeIndex(bin_tedges_array.ravel()).asi8
         bin_tedges_array = flat.reshape(bin_tedges_array.shape)
 
     # Calculate overlaps for all combinations using broadcasting
@@ -769,7 +771,12 @@ def simplify_bins(
     new_edges = edges[idx]
     new_widths = np.add.reduceat(widths, s)
     weight_sums = np.add.reduceat(weights, s)
-    new_values = np.add.reduceat(weights * values, s) / weight_sums
+    # A merged group of all-zero-flow bins has zero volume weight (0/0 -> NaN); its average is
+    # still well defined, so fall back to width weighting there.
+    zero_weight = weight_sums == 0.0
+    new_values = np.where(
+        zero_weight, np.add.reduceat(widths * values, s), np.add.reduceat(weights * values, s)
+    ) / np.where(zero_weight, new_widths, weight_sums)
     # When flow is given, weights == flow * widths, so weight_sums == reduceat(flow * widths, s) exactly.
     new_flow = weight_sums / new_widths if flow is not None else None
 
@@ -1441,6 +1448,12 @@ def solve_tikhonov(
         d_reg[target_indices] = 1.0
         gram = valid_matrix.T @ valid_matrix
         gram[np.arange(n_cin), np.arange(n_cin)] += regularization_strength * d_reg
+        # A dead (all-zero) column with a NaN target is unregularized: its gram row/column is
+        # exactly zero, which would make the inverse singular. Pin its diagonal to 1 -- the
+        # block-diagonal structure leaves every other entry of the inverse unchanged and yields
+        # fraction_data = 1.0, the documented convention for non-regularized entries.
+        dead = np.diag(gram) == 0.0
+        gram[dead, dead] = 1.0
         gram_inv_diag = np.diag(np.linalg.inv(gram))
         fraction_data = 1.0 - regularization_strength * gram_inv_diag * d_reg
         return x, fraction_data
