@@ -514,10 +514,10 @@ def _validate_diffusion_inputs(
     )
     _validate_non_negative_array(molecular_diffusivity, name="molecular_diffusivity")
     _validate_non_negative_array(longitudinal_dispersivity, name="longitudinal_dispersivity")
+    # Forward cin must be NaN-free; reverse cout may contain NaN (measurement
+    # gaps) -- the inverse solver excludes those rows, matching deposition (#321).
     if cin_values is not None:
         _validate_no_nan(cin_values, name="cin")
-    elif cout_values is not None:
-        _validate_no_nan(cout_values, name="cout")
     _validate_no_nan(flow, name="flow")
     _validate_non_negative_array(flow, name="flow", message="flow must be non-negative (negative flow not supported)")
     _validate_positive_array(aquifer_pore_volumes, name="aquifer_pore_volumes")
@@ -1037,10 +1037,10 @@ def extraction_to_infiltration(
     using :func:`gwtransport.utils.solve_tikhonov`. This ensures mathematical
     consistency between forward and inverse operations.
 
-    NaN values in ``cout`` are rejected. The Tikhonov solver here does not
-    mask NaN rows, so any NaN in ``cout`` would poison the solution. This
-    differs from :func:`gwtransport.deposition.extraction_to_deposition`,
-    whose regularized solver excludes NaN ``cout`` rows by construction.
+    NaN values in ``cout`` mark measurement gaps (e.g. sparse lab samples).
+    Their rows are excluded from the Tikhonov solve, matching
+    :func:`gwtransport.deposition.extraction_to_deposition`; cin bins
+    constrained only by gapped ``cout`` bins are returned as NaN.
 
     Examples
     --------
