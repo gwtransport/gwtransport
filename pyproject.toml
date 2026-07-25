@@ -64,6 +64,10 @@ test = [
   "numba>=0.63",
   "ty",
   "validate-pyproject[all,store]",
+  # schema-store 2026.7.20 ships a uv.json schema that crashes validate-pyproject 0.25's
+  # generated validator (UnboundLocalError: 'data_keys'), failing the lint job on every
+  # branch. Exclude the broken release; drop the exclusion once a fixed version is out.
+  "validate-pyproject-schema-store!=2026.7.20",
 ]
 docs = [
   # Do NOT add the "jupyter" metapackage (or "notebook"/"jupyterlab") here. The docs
