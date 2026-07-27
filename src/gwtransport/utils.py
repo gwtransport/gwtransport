@@ -1649,8 +1649,11 @@ def solve_inverse_transport_banded(
     # the normal equations, and zero the observed value so 0 * NaN cannot poison
     # Wᵀ·observed or the refinement residual.
     nan_obs = np.isnan(observed)
-    band_vals = np.where(nan_obs[:, None], 0.0, band_vals)
-    observed = np.where(nan_obs, 0.0, observed)
+    if nan_obs.any():
+        # band_vals is only read below, so the masked copy is needed only when gaps exist;
+        # the common NaN-free path keeps the caller's array without allocating.
+        band_vals = np.where(nan_obs[:, None], 0.0, band_vals)
+        observed = np.where(nan_obs, 0.0, observed)
     full_band = band_vals.shape[1]
     n_cin = n_output
     cols = col_start[:, None] + np.arange(full_band)[None, :]  # (n_obs, full_band) output-column index
