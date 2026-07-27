@@ -444,7 +444,7 @@ def _block_solutions(
         b13 = beta ** (1.0 / 3.0)
         zeta = b13 * r_far + beta ** (-2.0 / 3.0) / (4.0 * alpha_l * alpha_l)
         aie, aipe, _, _ = airye(zeta)
-        l0 = 1.0 / (2.0 * alpha_l) + b13 * (aipe / aie)
+        l0 = sigma_a / (2.0 * alpha_l) + b13 * (aipe / aie)
     else:
         astar = alpha_l * abs(a0) / d_m
         kappa = np.sqrt(retardation_factor * s / d_m)
@@ -803,10 +803,10 @@ def block_cout_deviation(
     floor *for constant-per-phase flow* (the public API dispatches ``v_d = 0`` to the scalar path for the
     bit-for-bit guarantee).
 
-    Within-phase variable flow is **approximate**: each phase is clocked in wall-clock time at its mean
-    magnitude ``a0 = mean(|flow[phase]|)`` (the drift breaks the flushed-volume-clock autonomy the scalar
-    ``D_m = 0`` path exploits for exact variable flow, and matches the scalar ``D_m > 0`` path's same mean-
-    flow approximation). It is exact for piecewise-constant flow. At ``v_d = 0`` it is additionally exact
+    Within-phase variable flow is **approximate**: each phase is clocked in wall-clock time at its
+    dt-weighted mean magnitude ``a0 = sum(|flow| dt) / sum(dt)`` -- the flushed volume over the phase
+    duration (the drift breaks the flushed-volume-clock autonomy the scalar ``D_m = 0`` path exploits
+    for exact variable flow, and matches the scalar ``D_m > 0`` path's same mean-flow approximation). It is exact for piecewise-constant flow. At ``v_d = 0`` it is additionally exact
     for constant ``cin`` over a phase at any flow profile (the resident profile then depends only on the
     total injected volume), leaving only the *variable cin AND variable flow* cin-placement error (bins at
     time corners rather than exact volume edges). Under drift no such exactness survives for any
@@ -873,12 +873,15 @@ def block_cout_deviation(
         return cout_empty[:, 0] if vector_input else cout_empty
     while phases[-1][0] == 0:  # trailing rest phases cannot affect any output; don't propagate or guard them
         phases.pop()
-    # Each pumping phase is clocked at its mean magnitude, so its A_0 = mean(|flow[phase]|)/(2 c_geo); the
+    # Each pumping phase is clocked at its dt-weighted mean magnitude (flushed volume / duration), so its
+    # A_0 = sum(|flow[phase]| dt)/sum(dt)/(2 c_geo); the
     # stagnation radius r_s = |A_0|/|v_d| is smallest for the weakest phase, so size the grid cap on that
     # (worst-case). Interior rest phases translate the plume by v_d t/R; the grid provisions for their
     # total shift. Leading rests act on an empty field and trailing rests are dropped above, so neither
     # counts -- idle padding must not inflate the envelope guard or dilute the radial resolution.
-    a0_min = min(float(np.mean(np.abs(flow[sl]))) for _, sl in pumping) / (2.0 * c_geo)
+    a0_min = min(float(np.sum(np.abs(flow[sl]) * dt_days[sl]) / np.sum(dt_days[sl])) for _, sl in pumping) / (
+        2.0 * c_geo
+    )
     nz = np.flatnonzero(flow != 0.0)
     interior = slice(nz[0], nz[-1] + 1)
     rest_time = float(np.sum(dt_days[interior][flow[interior] == 0.0]))
@@ -945,7 +948,7 @@ def block_cout_deviation(
                     n_modes=n_modes,
                 )
             continue
-        a0 = float(np.mean(np.abs(flow[sl]))) / (2.0 * c_geo)
+        a0 = float(np.sum(np.abs(flow[sl]) * dt_days[sl])) / (t_phase * 2.0 * c_geo)
         if sign > 0:  # injection: propagate the buffer, then add the freshly injected resident profile
             if np.any(field):
                 field = propagate(field, a0, _INJECTION, t_phase)

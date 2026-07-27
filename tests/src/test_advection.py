@@ -27,7 +27,9 @@ from gwtransport.advection_utils import (
 from gwtransport.advection_utils import (
     _resolve_spinup_mask as _banded_mask,
 )
-from gwtransport.fronttracking.math import ConstantRetardation
+from gwtransport.fronttracking.math import ConstantRetardation, FreundlichSorption, LangmuirSorption
+from gwtransport.fronttracking.output import compute_domain_mass
+from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.utils import (
     compute_time_edges,
     cumulative_flow_volume,
@@ -4520,3 +4522,108 @@ def test_extraction_to_infiltration_negative_pore_volume_raises():
             cout_tedges=tedges,
             aquifer_pore_volumes=np.array([-300.0]),
         )
+
+
+# Issue #309: an interior zero-flow (pump-off) bin must be transport-invisible.
+# Oracle: physically deleting the zero-flow bins from the record leaves the
+# θ-history (cumulative flow) of every water-carrying bin unchanged, and the
+# front-tracking transport depends on θ only — so cout of the water-carrying
+# bins must match the gap-free run bin-for-bin.
+_PUMP_OFF_SORPTION_KWARGS = [
+    pytest.param({"retardation_factor": 2.0}, id="constant-retardation"),
+    pytest.param(
+        {"freundlich_k": 0.01, "freundlich_n": 2.0, "bulk_density": 1500.0, "porosity": 0.3},
+        id="freundlich",
+    ),
+    pytest.param(
+        {"langmuir_s_max": 1.0, "langmuir_k_l": 1.0, "bulk_density": 1500.0, "porosity": 0.3},
+        id="langmuir",
+    ),
+]
+
+
+@pytest.mark.parametrize("c_gap", [5.0, 0.0], ids=["nonzero-gap-cin", "zero-gap-cin"])
+@pytest.mark.parametrize("sorption_kwargs", _PUMP_OFF_SORPTION_KWARGS)
+def test_nonlinear_sorption_interior_zero_flow_gap_matches_deleted_gap(sorption_kwargs, c_gap):
+    """Interior pump-off bins (flow=0) must not alter cout of the water-carrying bins."""
+    n = 40
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    gap = slice(20, 24)
+    flow[gap] = 0.0
+    cin = np.full(n, 8.0)
+    cin[gap] = c_gap
+    cin[24:] = 3.0
+
+    keep = np.ones(n, dtype=bool)
+    keep[gap] = False
+    tedges_nogap = pd.date_range("2020-01-01", periods=int(keep.sum()) + 1, freq="D")
+
+    cout_gap, _ = infiltration_to_extraction_nonlinear_sorption(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=tedges,
+        aquifer_pore_volumes=[200.0],
+        **sorption_kwargs,
+    )
+    cout_nogap, _ = infiltration_to_extraction_nonlinear_sorption(
+        cin=cin[keep],
+        flow=flow[keep],
+        tedges=tedges_nogap,
+        cout_tedges=tedges_nogap,
+        aquifer_pore_volumes=[200.0],
+        **sorption_kwargs,
+    )
+
+    # The kept bins of the gap run cover exactly the same θ-intervals as the
+    # gap-free run, so the flow-weighted bin averages must agree to roundoff.
+    np.testing.assert_allclose(cout_gap[keep], cout_nogap, rtol=0.0, atol=1e-12)
+
+
+@pytest.mark.parametrize("c_gap", [5.0, 0.0], ids=["nonzero-gap-cin", "zero-gap-cin"])
+@pytest.mark.parametrize(
+    "sorption",
+    [
+        pytest.param(ConstantRetardation(retardation_factor=2.0), id="constant-retardation"),
+        pytest.param(FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3), id="freundlich"),
+        pytest.param(LangmuirSorption(s_max=1.0, k_l=1.0, bulk_density=1500.0, porosity=0.3), id="langmuir"),
+    ],
+)
+def test_fronttracking_domain_mass_interior_zero_flow_gap_matches_deleted_gap(sorption, c_gap):
+    """Stored mass in the domain must be identical with and without the pump-off gap."""
+    n = 40
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
+    flow = np.full(n, 100.0)
+    gap = slice(20, 24)
+    flow[gap] = 0.0
+    cin = np.full(n, 8.0)
+    cin[gap] = c_gap
+    cin[24:] = 3.0
+
+    keep = np.ones(n, dtype=bool)
+    keep[gap] = False
+    tedges_nogap = pd.date_range("2020-01-01", periods=int(keep.sum()) + 1, freq="D")
+
+    aquifer_pore_volume = 200.0
+    tracker_gap = FrontTracker(
+        cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=aquifer_pore_volume, sorption=sorption
+    )
+    tracker_gap.run()
+    tracker_nogap = FrontTracker(
+        cin=cin[keep],
+        flow=flow[keep],
+        tedges=tedges_nogap,
+        aquifer_pore_volume=aquifer_pore_volume,
+        sorption=sorption,
+    )
+    tracker_nogap.run()
+
+    for theta in [500.0, 1500.0, 2100.0, 3000.0, 3600.0]:
+        mass_gap = compute_domain_mass(
+            theta=theta, v_outlet=aquifer_pore_volume, waves=tracker_gap.state.waves, sorption=sorption
+        )
+        mass_nogap = compute_domain_mass(
+            theta=theta, v_outlet=aquifer_pore_volume, waves=tracker_nogap.state.waves, sorption=sorption
+        )
+        np.testing.assert_allclose(mass_gap, mass_nogap, rtol=0.0, atol=1e-9)

@@ -6,6 +6,7 @@ import pytest
 from scipy import integrate, special
 
 from gwtransport import gamma as gamma_utils
+from gwtransport._time import tedges_to_days
 from gwtransport.advection import (
     extraction_to_infiltration as advection_e2i,
 )
@@ -2339,3 +2340,58 @@ def test_cout_tedges_unit_mismatch_matches_aligned():
 
     assert np.isfinite(mismatched).sum() == np.isfinite(aligned).sum() > 0
     np.testing.assert_array_equal(mismatched, aligned)
+
+
+@pytest.mark.parametrize("offset_days", range(10))
+def test_coarse_cout_grid_conserves_pulse_mass(offset_days):
+    """Coarse cout bins conserve pulse mass for every grid alignment.
+
+    Regression for the zero-residence edge mask in
+    ``_infiltration_to_extraction_coeff_matrix``: with cout bins (10 d) wider
+    than the residence time (RT = R * V_pore / Q = 5 d), the mask NaN-ed out
+    cells the causality-aware quadrature fills correctly, so depending on the
+    grid offset the pulse mass was silently deleted (ratio 0) or amplified
+    (ratio 5). The oracle is the exact column-sum invariant
+    ``integral Q c_out dt = integral Q c_in dt`` (Kreft & Zuber, 1978, Eq. 1),
+    checked against the input mass computed from first principles.
+    """
+    n_days = 60
+    flow_rate = 100.0
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    flow = np.full(n_days, flow_rate)
+    cin = np.zeros(n_days)
+    cin[20] = 1.0  # 1-day pulse => mass_in = Q * 1 * 1 day = 100
+    # 5 x 10-day bins, staying inside the 60-day flow record for every offset so the
+    # advection reference has no NaN bins; the breakthrough (days 25-26) is fully captured.
+    cout_tedges = pd.date_range(tedges[0] + pd.Timedelta(days=offset_days), periods=6, freq="10D")
+    kwargs = {
+        "cin": cin,
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([500.0]),  # RT = 5 days
+        "streamline_length": np.array([100.0]),
+        "retardation_factor": 1.0,
+    }
+
+    dt_days = np.diff(tedges_to_days(cout_tedges))
+    mass_in = flow_rate * cin.sum() * 1.0  # Q * c * dt
+
+    # Pure-advection limit: mass conservation and exact agreement with the advection module.
+    cout = infiltration_to_extraction(molecular_diffusivity=0.0, longitudinal_dispersivity=0.0, **kwargs)
+    assert not np.any(np.isnan(cout))
+    np.testing.assert_allclose(np.sum(flow_rate * cout * dt_days), mass_in, rtol=1e-12)
+    cout_adv = advection_i2e(
+        cin=cin,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=np.array([500.0]),
+        retardation_factor=1.0,
+    )
+    np.testing.assert_allclose(cout, cout_adv, rtol=1e-14, atol=1e-16)
+
+    # Dispersive regime: the Kreft-Zuber flux concentration keeps the invariant exact.
+    cout_disp = infiltration_to_extraction(molecular_diffusivity=0.02, longitudinal_dispersivity=1.0, **kwargs)
+    assert not np.any(np.isnan(cout_disp))
+    np.testing.assert_allclose(np.sum(flow_rate * cout_disp * dt_days), mass_in, rtol=1e-10)
