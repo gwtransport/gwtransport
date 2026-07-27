@@ -610,7 +610,7 @@ def extraction_to_infiltration(
     molecular_diffusivity, retardation_factor, weights, background, regional_flux, n_modes, n_quad
         As in :func:`infiltration_to_extraction`.
     regularization_strength : float, optional
-        Tikhonov parameter. Default ``1e-10``.
+        Tikhonov parameter, must be non-negative. Default ``1e-10``.
 
     Returns
     -------
@@ -622,6 +622,8 @@ def extraction_to_infiltration(
     ValueError
         If ``cout`` contains NaN on any extraction bin (``flow < 0``), which would poison the
         least-squares solve. Structural NaN on injection / rest bins is allowed.
+        If ``regularization_strength`` is negative: it would reach ``np.sqrt`` in the augmented
+        system and silently produce an all-NaN ``cin``.
     """
     cout = np.asarray(cout, dtype=float)
     flow = np.asarray(flow, dtype=float)
@@ -648,8 +650,6 @@ def extraction_to_infiltration(
     if np.any(np.isnan(cout[flow < 0.0])):
         msg = "cout contains NaN values on extraction bins, which are not allowed"
         raise ValueError(msg)
-    # A negative Tikhonov parameter would flow into np.sqrt below -> NaN augmented rows -> silent
-    # all-NaN cin (or an opaque lstsq convergence error); reject it up front.
     if regularization_strength < 0.0:
         msg = f"regularization_strength must be >= 0, got {regularization_strength}"
         raise ValueError(msg)

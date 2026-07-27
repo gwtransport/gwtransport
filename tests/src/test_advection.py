@@ -4630,11 +4630,7 @@ def test_fronttracking_domain_mass_interior_zero_flow_gap_matches_deleted_gap(so
 
 
 def test_infiltration_to_extraction_non_monotonic_tedges_raises():
-    """#313 ADV-P2: the docstring promises a ValueError for non-monotonic time edges.
-
-    Without the check, non-monotonic tedges silently corrupt the cumulative-volume
-    mapping and produce wrong output.
-    """
+    """Non-monotonic infiltration time edges raise ValueError instead of corrupting the volume mapping (#313)."""
     n = 10
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D").to_numpy().copy()
     tedges[3], tedges[4] = tedges[4], tedges[3]  # swap two interior edges
@@ -4649,7 +4645,7 @@ def test_infiltration_to_extraction_non_monotonic_tedges_raises():
 
 
 def test_extraction_to_infiltration_non_monotonic_tedges_raises():
-    """#313 ADV-P2: the reverse (deconvolution) path must reject non-monotonic tedges too."""
+    """The reverse (deconvolution) path also rejects non-monotonic tedges (#313)."""
     n = 10
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D").to_numpy().copy()
     tedges[3], tedges[4] = tedges[4], tedges[3]

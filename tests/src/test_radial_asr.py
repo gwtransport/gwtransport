@@ -648,10 +648,7 @@ class TestGeneralEngine:
 
 
 def test_reverse_negative_regularization_strength_raises():
-    """#313 RAC-P5: a negative Tikhonov parameter flowed into np.sqrt -> NaN -> silent all-NaN cin.
-
-    Reject it up front instead.
-    """
+    """Negative regularization_strength raises ValueError instead of a silent all-NaN cin (#313)."""
     tedges, flow, geom = _scenario()
     with pytest.raises(ValueError, match="regularization_strength"):
         extraction_to_infiltration(

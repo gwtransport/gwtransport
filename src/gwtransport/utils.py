@@ -641,6 +641,9 @@ def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.N
     - tedges must be sorted in ascending order
     - Uses vectorized operations to handle large arrays efficiently
     - Time ranges in bin_tedges can be in any order and can overlap
+    - Datetime inputs are differenced in exact int64 nanoseconds before the final
+      float division; a float64 epoch value rounds to its ulp (1024 ns by the
+      2200s), which would corrupt sub-microsecond bins
 
     Examples
     --------
@@ -672,9 +675,7 @@ def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.N
     # Normalize datetime-like inputs (datetime64 or object arrays of Timestamps/datetimes) to a
     # common int64-nanosecond scale so numeric, datetime64, and Timestamp inputs share one
     # arithmetic path; ``np.maximum(0, Timedelta)`` on an object array would otherwise raise.
-    # Stay in int64 through the differencing below: a float64 epoch value rounds to its ulp
-    # (1024 ns by the 2200s), which would corrupt sub-microsecond bins. Only exact int64
-    # differences enter the final float division, so the shared epoch origin cancels.
+    # Kept in int64 through the differencing for exactness (see Notes); the epoch origin cancels.
     if not np.issubdtype(tedges.dtype, np.number):
         tedges = pd.DatetimeIndex(tedges).asi8
     if not np.issubdtype(bin_tedges_array.dtype, np.number):
@@ -1390,7 +1391,10 @@ def solve_tikhonov(
         - ``fraction_data[j] ≈ 1``: element *j* is data-driven
         - ``fraction_data[j] ≈ 0``: element *j* is target-driven
         - Non-regularized entries (NaN in ``x_target``):
-          ``fraction_data[j] = 1.0``
+          ``fraction_data[j] = 1.0``. This includes dead (all-zero) columns
+          with a NaN target: their zero gram row/column would make the
+          resolution inverse singular, so their diagonal is pinned to 1,
+          which leaves every other entry of the inverse unchanged.
 
     Raises
     ------
@@ -1448,10 +1452,8 @@ def solve_tikhonov(
         d_reg[target_indices] = 1.0
         gram = valid_matrix.T @ valid_matrix
         gram[np.arange(n_cin), np.arange(n_cin)] += regularization_strength * d_reg
-        # A dead (all-zero) column with a NaN target is unregularized: its gram row/column is
-        # exactly zero, which would make the inverse singular. Pin its diagonal to 1 -- the
-        # block-diagonal structure leaves every other entry of the inverse unchanged and yields
-        # fraction_data = 1.0, the documented convention for non-regularized entries.
+        # Dead (all-zero, NaN-target) columns leave a zero gram row/column; pin the diagonal
+        # to 1 so the inverse stays nonsingular (see Returns).
         dead = np.diag(gram) == 0.0
         gram[dead, dead] = 1.0
         gram_inv_diag = np.diag(np.linalg.inv(gram))

@@ -33,10 +33,10 @@ flow-bin boundaries, with extra front-centred panels wherever a sharp breakthrou
 is otherwise under-resolved).
 Prefer it only when the output grid is coarser than the flow detail -- it integrates the
 full within-bin flow, which the closed-form :mod:`gwtransport.diffusion_fast` approximates as
-constant per output bin. Caveat (issue #305): on output grids so coarse that a cout bin is
-wider than a streamtube residence time, this module currently violates mass conservation
-(a breakthrough pulse can be silently deleted or amplified); validate column mass before
-trusting coarse-output results. Otherwise that module computes the same physics to machine
+constant per output bin. Caveat: on output grids so coarse that a cout bin is wider than a
+streamtube residence time, this module violates mass conservation -- a breakthrough pulse
+can be silently deleted or amplified (#305); validate column mass before trusting
+coarse-output results. Otherwise that module computes the same physics to machine
 precision for *every* parameter regime (including ``retardation_factor != 1`` with non-zero
 molecular diffusivity, whose flux correction it also evaluates in closed form) and is
 ~80-90x faster (no quadrature, no residence-time inversion). Both modules accept

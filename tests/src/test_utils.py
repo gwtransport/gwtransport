@@ -1697,11 +1697,7 @@ def test_solve_inverse_transport_banded_rejects_nonpositive_lambda():
 
 
 def test_simplify_bins_all_zero_flow_group_falls_back_to_width_weights():
-    """#313 UTI-F2: a merged group whose bins all have zero flow has zero volume weight.
-
-    The volume-weighted average is then 0/0 -> NaN (with a RuntimeWarning) even though
-    the group's value is perfectly well defined; fall back to width weighting there.
-    """
+    """A merged group whose bins all have zero flow gets a width-weighted average, not NaN (#313)."""
     edges = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
     values = np.array([2.0, 2.0, 5.0, 5.0])
     flow = np.array([0.0, 0.0, 10.0, 10.0])
@@ -1713,11 +1709,10 @@ def test_simplify_bins_all_zero_flow_group_falls_back_to_width_weights():
 
 
 def test_time_bin_overlap_nanosecond_precision_far_epoch():
-    """#313 UTI-F3: datetime edges must be differenced in int64 nanoseconds.
+    """Datetime edges are differenced in exact int64 nanoseconds (#313).
 
-    Converting asi8 to float64 BEFORE differencing rounds a year-2200 epoch value
-    (~7.3e18 ns, float64 ulp = 1024 ns) to the nearest 1024 ns, corrupting
-    sub-microsecond bins. Differences of int64 nanoseconds are exact.
+    Near year 2200 the float64 ulp of an epoch-nanosecond value is 1024 ns, so
+    sub-microsecond bins require integer differencing to overlap exactly.
     """
     base = pd.Timestamp("2200-01-01")
     tedges = pd.DatetimeIndex([base + pd.Timedelta(n, "ns") for n in (0, 1000, 2000, 3000)])
@@ -1727,11 +1722,10 @@ def test_time_bin_overlap_nanosecond_precision_far_epoch():
 
 
 def test_solve_tikhonov_resolution_dead_column_nan_target():
-    """#313 UTI-F4: a dead (all-zero) column whose x_target is NaN is unregularized.
+    """A dead (all-zero) column with NaN x_target reports fraction_data = 1.0 (#313).
 
-    Its gram row/column is then exactly zero and np.linalg.inv raised LinAlgError.
-    The pinned diagonal leaves every other resolution entry unchanged and reports
-    fraction_data = 1.0, the documented convention for non-regularized entries.
+    Its pinned gram diagonal keeps the resolution inverse nonsingular and leaves
+    the live entries unchanged.
     """
     coeff = np.array([[1.0, 0.0], [2.0, 0.0]])
     rhs = np.array([1.0, 2.0])
