@@ -1516,7 +1516,11 @@ def solve_inverse_transport(
     # never a fabricated lstsq min-norm value. With NaN-free observations this reduces bit-identically
     # to the unmasked sum.
     nan_obs = np.isnan(observed)
-    col_active: npt.NDArray[np.bool_] = np.where(nan_obs[:, None], 0.0, w_forward).sum(axis=0) > _EPSILON_COEFF_SUM
+    # One shared masked view of the forward matrix: with NaN-free observations it aliases
+    # ``w_forward`` (no copy, bit-identical to the unmasked path); with gaps it is materialized
+    # once and reused for both the column-activity gate and the regularization target below.
+    w_masked = np.where(nan_obs[:, None], 0.0, w_forward) if nan_obs.any() else w_forward
+    col_active: npt.NDArray[np.bool_] = w_masked.sum(axis=0) > _EPSILON_COEFF_SUM
 
     if not np.any(col_active):
         return np.full(n_output, np.nan)
@@ -1544,7 +1548,7 @@ def solve_inverse_transport(
     w_solve[~valid, :] = np.nan
 
     x_target = compute_reverse_target(
-        coeff_matrix=np.where(nan_obs[:, None], 0.0, w_forward),
+        coeff_matrix=w_masked,
         rhs_vector=np.where(nan_obs, 0.0, observed),
     )
 
