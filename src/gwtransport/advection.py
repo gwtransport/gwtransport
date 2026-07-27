@@ -1151,6 +1151,12 @@ def _flow_weighted_front_tracking_output(
     -------
     ndarray
         Flow-weighted bin-averaged concentrations. Length = len(cout_tedges_days) - 1.
+
+    Notes
+    -----
+    Zero-flow sub-bins are dropped from the averaging only; a cin step injected
+    during a zero-flow bin still enters the tracker as a wave at a degenerate θ
+    and can corrupt adjacent output bins (#309).
     """
     inner_flow_edges = flow_tedges_days[
         (flow_tedges_days > cout_tedges_days[0]) & (flow_tedges_days < cout_tedges_days[-1])
@@ -1171,10 +1177,8 @@ def _flow_weighted_front_tracking_output(
 
     # A zero-flow input span leaves θ stationary, so its sub-bins have zero width in
     # θ and zero q·dt weight. Drop them before the exact averaging (which rejects
-    # non-positive-width bins); they read back as 0 and carry no weight in THIS
-    # averaging. Note this only handles the readback: a cin step injected during a
-    # zero-flow bin still enters the tracker as a wave at a degenerate θ and can
-    # corrupt adjacent output bins (issue #309). Consecutive kept bins stay
+    # non-positive-width bins); they read back as 0 and carry no weight in this
+    # averaging (see Notes for the #309 caveat). Consecutive kept bins stay
     # contiguous because the dropped bins share their neighbours' θ value.
     theta_lo, theta_hi = fine_theta_edges[:-1], fine_theta_edges[1:]
     nondegenerate = theta_hi > theta_lo

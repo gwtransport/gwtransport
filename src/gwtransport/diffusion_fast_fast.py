@@ -378,8 +378,7 @@ def _build_forward_operator(
     work_tedges = tedges
     if extend:
         # Timestamp arithmetic keeps the input timezone (tz-naive stays naive, tz-aware
-        # stays tz-aware); going through ``.to_numpy()`` would strip the tz. Mirrors
-        # diffusion_fast's extension.
+        # stays tz-aware); going through ``.to_numpy()`` would strip the tz.
         pad = pd.Timedelta(days=36500)
         work_tedges = (tedges[:1] - pad).append(tedges[1:-1]).append(tedges[-1:] + pad)
     # Output bin valid where every streamtube's advective look-back is in-record across the whole

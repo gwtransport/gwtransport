@@ -1081,11 +1081,11 @@ class TestDoubleFanShockWave:
 
 
 class TestFreundlichNearTwoRouting:
-    """Regression (issue #314, FTF-F3): n within 1e-8 of 2 must use the general-n inversion.
+    """``_c_decay_freundlich`` routes only (essentially) exact n=2 to the closed form (#314).
 
-    ``_c_decay_freundlich`` dispatches on ``np.isclose(n, 2.0, rtol=1e-12)``; the numpy
-    default ``atol=1e-8`` silently routed any ``n`` within 1e-8 of 2 to the n=2 closed
-    form. With ``atol=0.0`` only (essentially) exact n=2 takes the closed form.
+    The dispatch uses ``np.isclose(n, 2.0, rtol=1e-12, atol=0.0)``: any other ``n``,
+    including values within numpy's default ``atol=1e-8`` of 2, must take the
+    general-n inversion.
     """
 
     C0 = 4.0
@@ -1112,7 +1112,7 @@ class TestFreundlichNearTwoRouting:
 
         monkeypatch.setattr(waves_mod, "_invert_freundlich_cr_zero", recording)
         self._call(2.0 + 1e-10)
-        assert len(calls) == 1  # baseline: 0 (silently misrouted to the n=2 closed form)
+        assert len(calls) == 1
 
         calls.clear()
         self._call(2.0)  # exact n=2 keeps the closed form
