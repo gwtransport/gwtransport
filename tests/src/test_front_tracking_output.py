@@ -278,15 +278,13 @@ class TestIdentifyOutletSegments:
         assert len(segments) == 3
 
     def test_shock_deactivated_before_crossing_yields_no_segment(self):
-        """A shock deactivated mid-window never reaches the outlet -- no spurious crossing (issue #311).
+        """A shock deactivated mid-window never reaches the outlet -- no spurious crossing (#311).
 
-        The shock would cross v_outlet at θ_cross by straight-line extrapolation, but it was
+        The shock's straight-line extrapolation crosses v_outlet at θ_cross, but the wave is
         deactivated (collision) at θ_deac < θ_cross, with θ_deac inside the query window so the
         retrospective ``theta_deactivation <= theta_start`` filter does not remove it. The segment
         list must not schedule the extrapolated crossing: the whole window stays at the downstream
-        state c=0, consistent with ``was_active_at`` and with ``concentration_at_point``. Today
-        this is guarded by ``find_outlet_crossing``'s ``is_active`` check; this test pins the
-        behavior so that guard cannot be removed without a ``theta_deactivation`` clamp.
+        state c=0, consistent with ``was_active_at`` and with ``concentration_at_point``.
         """
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=0.0, sorption=sorption, is_active=True)
@@ -309,14 +307,13 @@ class TestIdentifyOutletSegments:
         np.testing.assert_allclose([seg["concentration"] for seg in segments], 0.0)
 
     def test_deactivated_rarefaction_does_not_mask_decaying_fan(self):
-        """A rarefaction consumed by a DSW must not schedule its extrapolated head crossing (issue #311).
+        """A rarefaction consumed by a DSW must not schedule its extrapolated head crossing (#311).
 
         Canonical Freundlich n=2 pulse: leading shock + trailing rarefaction merge into a
-        DecayingShockWave at θ≈525 (both parents deactivated). The dead rarefaction's head would
-        cross v_outlet=100 at θ≈1191 by extrapolation; scheduling it swallows the true structure:
-        constant c=0 until the DSW crossing at θ=3525, then the decaying fan. The reader
-        (``concentration_at_point``, post-#316 face sweep) is the independent oracle for the
-        pre-arrival plateau.
+        DecayingShockWave at θ≈525 (both parents deactivated). The dead rarefaction's head
+        extrapolates to a crossing of v_outlet=100 at θ≈1191; the segment list must instead
+        show constant c=0 until the DSW crossing at θ=3525, then the decaying fan.
+        ``concentration_at_point`` is the independent oracle for the pre-arrival plateau.
         """
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         n = 40
@@ -356,17 +353,15 @@ class TestIdentifyOutletSegments:
 
 
 class TestLegacyDecayingFanBinAverage:
-    """Legacy outlet-segment integration of a DSW fan clamps at c_fan_tail, not c_fixed (issue #311).
+    """Legacy outlet-segment integration of a DSW fan clamps at c_fan_tail, not c_fixed (#311).
 
     Hand-constructed Freundlich ``n=2``, ``c_fixed=0`` DecayingShockWave (closed-form trajectory,
-    same collision IC as the hand-derived wave test: apex at (V=0, θ=1000), K=1000/27) with a
-    nonzero fan-tail plateau ``c_fan_tail=0.5``. After the shock crosses the outlet the outlet
-    sits inside the fan; once the fan's far edge (c=c_fan_tail) passes, the concentration holds
-    the c_fan_tail plateau -- exactly what the post-#316 reader returns. The independent oracle is
-    the closed-form fan profile: with ``a = ρ_b·k_f/n_por = 50``, ``R(c) = 1 + (a/2)/√c``, the fan
-    at the outlet obeys ``R(c) = (θ-θ_origin)/Δv`` so ``c(θ) = (a/2)²/(r-1)²`` down to c_fan_tail,
-    and ``∫ c dθ = (a/2)²·Δv·[-(r-1)^{-1}]`` in closed form. ``c_apex=c_fixed=0`` instead
-    extrapolates the fan below the plateau and undercounts by ~10%.
+    apex at (V=0, θ=1000), K=1000/27) with a nonzero fan-tail plateau ``c_fan_tail=0.5``. After
+    the shock crosses the outlet the outlet sits inside the fan; once the fan's far edge
+    (c=c_fan_tail) passes, the concentration holds the c_fan_tail plateau. The independent oracle
+    is the closed-form fan profile: with ``a = ρ_b·k_f/n_por = 50``, ``R(c) = 1 + (a/2)/√c``, the
+    fan at the outlet obeys ``R(c) = (θ-θ_origin)/Δv`` so ``c(θ) = (a/2)²/(r-1)²`` down to
+    c_fan_tail, and ``∫ c dθ = (a/2)²·Δv·[-(r-1)^{-1}]`` in closed form.
     """
 
     def test_bin_average_matches_closed_form_plateau_oracle(self):

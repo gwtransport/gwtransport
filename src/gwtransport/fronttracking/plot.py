@@ -428,9 +428,8 @@ def plot_breakthrough_curve(
 
             ax.plot(t_raref, c_raref, "b-", linewidth=2, label="Outlet concentration" if i == 0 else "")
         elif segment["type"] == "decaying_fan":
-            # DecayingShockWave fan at the outlet: self-similar decay toward the
-            # fan-tail plateau. The face-sweep reader handles both the fan
-            # interior and the c_fan_tail plateau beyond the fan's edge.
+            # DecayingShockWave fan at the outlet: sample the reader, which covers
+            # both the fan interior and the c_fan_tail plateau beyond its edge.
             t_fan = np.linspace(t_seg_start, t_seg_end, n_rarefaction_points)
             theta_fan = state.theta_at_t_array(t_fan)
             c_fan = np.array([

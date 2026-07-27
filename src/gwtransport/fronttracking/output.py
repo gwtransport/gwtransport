@@ -248,6 +248,11 @@ def identify_outlet_segments(
     4. Handling rarefaction and decaying-fan profiles with θ-varying concentration.
 
     The segments completely partition the interval [theta_start, theta_end].
+
+    Every crossing is clamped to ``theta_cross < theta_deactivation``
+    (matching ``was_active_at`` semantics): a crossing extrapolated past a
+    wave's deactivation is an artifact — after a collision the front belongs
+    to the successor wave, whose own crossing covers the outlet.
     """
     # Find all waves that cross outlet in this θ-range
     outlet_events: list[dict] = []
@@ -274,8 +279,7 @@ def identify_outlet_segments(
             # fan's tail concentration.
             theta_cross = wave.outlet_crossing_theta(v_outlet)
             if theta_cross is None or theta_cross >= wave.theta_deactivation:
-                # The extrapolated crossing postdates the wave's death (a
-                # collision handed the front to a successor): spurious.
+                # Crossings at or after deactivation are spurious extrapolations.
                 continue
             if theta_cross <= theta_start:
                 # Outlet already inside the fan at theta_start.
@@ -312,11 +316,7 @@ def identify_outlet_segments(
                         })
                 continue
 
-            # Head crossing. Crossings past the wave's death are extrapolation
-            # artifacts (the fan was handed to a successor, e.g. a
-            # DecayingShockWave, whose own crossing covers the outlet): clamp
-            # every crossing to ``theta_cross < theta_deactivation``, per
-            # ``was_active_at`` semantics.
+            # Head crossing
             head_speed = wave.head_speed()
             if head_speed > EPSILON_VELOCITY and wave.v_start < v_outlet:
                 theta_cross = wave.theta_start + (v_outlet - wave.v_start) / head_speed
@@ -848,11 +848,7 @@ def compute_bin_averaged_concentration_exact(
                     c_mid = concentration_at_point(v_outlet, 0.5 * (seg_a + seg_b), waves, sorption)
                     total += c_mid * d
             elif seg["type"] == "decaying_fan":
-                # After the shock passes the outlet, the outlet sits inside the
-                # fan; once the fan's far edge (c = c_fan_tail) sweeps by, the
-                # concentration holds the c_fan_tail plateau (the reader's fan
-                # clamp) — NOT c_fixed, which is the state on the shock's other
-                # side and never reaches the outlet post-crossing.
+                # Outlet is inside the fan; past the fan's far edge c holds the c_fan_tail plateau.
                 w = seg["wave"]
                 total += integrate_fan_exact(
                     w.theta_origin, w.v_origin, v_outlet, seg_a, seg_b, sorption, c_apex=w.c_fan_tail

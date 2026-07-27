@@ -128,14 +128,12 @@ class TestPlotBreakthroughCurveData:
         plt.close(fig)
 
     def test_plotted_breakthrough_renders_decaying_fan(self):
-        """The exact-segment plot renders a DecayingShockWave's fan at the outlet (issue #311).
+        """The exact-segment plot renders a DecayingShockWave's fan at the outlet (#311).
 
         Canonical Freundlich n=2 pulse whose DSW crosses v_outlet=100 at θ=3525 (t=35.25 d,
         constant flow 100 m³/d): after arrival the outlet concentration follows the DSW's
         self-similar fan profile. The rendered breakthrough lines must contain samples strictly
-        inside the fan interval whose y-values equal ``concentration_at_point`` (the post-#316
-        reader) at the same t. Before the fix the ``decaying_fan`` segment was silently skipped
-        (and a deactivated rarefaction's extrapolated crossing plotted its c_start=10 fallback).
+        inside the fan interval whose y-values equal ``concentration_at_point`` at the same t.
         """
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         n = 40
