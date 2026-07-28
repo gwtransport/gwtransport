@@ -3281,14 +3281,11 @@ def test_coarse_cout_straddling_flow_restart_matches_diffusion_quadrature(d_m, a
 
 
 def test_extraction_to_infiltration_gapped_cout_masked():
-    """NaN gaps in cout are masked out of the banded inverse instead of raising (#321).
+    """Gapped (NaN) cout: the banded reverse solve uses only the measured bins (#321).
 
-    Sparse lab samples leave NaN cout bins; the reverse operator must exclude
-    those rows from the banded Tikhonov normal equations -- matching
-    :func:`gwtransport.deposition.extraction_to_deposition` -- rather than
-    reject the whole series. cout at 12h resolution (via ``flow_out``) vs daily
-    cin keeps the system overdetermined, so the surviving rows still pin every
-    interior cin bin and recovery stays at the no-gap round-trip floor.
+    cout at 12h resolution (via ``flow_out``) vs daily cin keeps the system
+    overdetermined, so the surviving rows pin every interior cin bin at the
+    no-gap round-trip floor.
     """
     n_days = 120
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")

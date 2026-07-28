@@ -1331,14 +1331,11 @@ def test_negative_diffusivity_rejected():
 
 
 def test_extraction_to_infiltration_gapped_cout_masked():
-    """NaN gaps in cout are masked out of the banded inverse instead of raising (#321).
+    """Gapped (NaN) cout: the banded reverse solve uses only the measured bins (#321).
 
-    Sparse lab samples leave NaN cout bins; the reverse operator must exclude
-    those rows from the banded Tikhonov normal equations -- matching
-    :func:`gwtransport.deposition.extraction_to_deposition` -- rather than
-    reject the whole series. The reverse inverts the same approximate operator
-    the forward applies, so with cout at 12h resolution (via ``flow_out``) the
-    overdetermined surviving rows recover cin at the no-gap round-trip floor.
+    The reverse inverts the same approximate operator the forward applies, so
+    with cout at 12h resolution (via ``flow_out``) the overdetermined surviving
+    rows recover cin at the no-gap round-trip floor.
     """
     n_days = 120
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")

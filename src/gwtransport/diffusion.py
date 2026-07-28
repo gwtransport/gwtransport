@@ -514,8 +514,7 @@ def _validate_diffusion_inputs(
     )
     _validate_non_negative_array(molecular_diffusivity, name="molecular_diffusivity")
     _validate_non_negative_array(longitudinal_dispersivity, name="longitudinal_dispersivity")
-    # Forward cin must be NaN-free; reverse cout may contain NaN (measurement
-    # gaps) -- the inverse solver excludes those rows, matching deposition (#321).
+    # Reverse cout may contain NaN (measurement gaps); gapped rows are excluded from the solve.
     if cin_values is not None:
         _validate_no_nan(cin_values, name="cin")
     _validate_no_nan(flow, name="flow")

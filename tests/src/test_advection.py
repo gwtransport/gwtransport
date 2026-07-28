@@ -4622,17 +4622,12 @@ def test_fronttracking_domain_mass_interior_zero_flow_gap_matches_deleted_gap(so
 
 
 def test_extraction_to_infiltration_gapped_cout_masked():
-    """NaN gaps in cout are masked out of the inverse solve instead of raising (#321).
+    """Gapped (NaN) cout: the reverse solve uses only the measured bins (#321).
 
-    Sparse lab samples leave NaN cout bins; the reverse operator must exclude
-    those rows from the banded Tikhonov normal equations -- matching
-    :func:`gwtransport.deposition.extraction_to_deposition` -- rather than
-    reject the whole series. cout at 12h resolution vs daily cin keeps the
-    system overdetermined, so the surviving rows still pin every interior cin
-    bin and recovery stays at the no-gap round-trip floor. A 2.5-day contiguous
-    gap (5 cout bins) fully covers the arrival window of cin bins 55-56
-    (residence time 5.17 days), which therefore lose all data and must come
-    back NaN, not fabricated.
+    cout at 12h resolution vs daily cin keeps the system overdetermined, so the
+    surviving rows pin every interior cin bin at the no-gap round-trip floor. A
+    2.5-day contiguous gap fully covers the arrival window of cin bins 55-56
+    (residence time 5.17 days); with no data equations those bins are NaN.
     """
     n_days = 120
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")

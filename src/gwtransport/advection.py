@@ -121,8 +121,7 @@ def _validate_advection_inputs(
         _validate_no_nan(cin_values, name="cin")
     elif cout_values is not None and cout_tedges is not None:
         _validate_tedges_parity(tedges, flow, tedges_name="tedges", values_name="flow")
-        # NaN in cout marks measurement gaps (sparse lab samples); the banded
-        # inverse solver excludes those rows, matching deposition (#321).
+        # Reverse cout may contain NaN (measurement gaps); gapped rows are excluded from the solve.
         _validate_tedges_parity(cout_tedges, cout_values, tedges_name="cout_tedges", values_name="cout")
     else:
         msg = "must provide cin_values (forward) or both cout_values and cout_tedges (reverse)"

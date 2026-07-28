@@ -1506,20 +1506,12 @@ def solve_inverse_transport(
     solve_inverse_transport_banded : Memory-light banded equivalent.
     """
     row_sums = w_forward.sum(axis=1)
-    # Emit only columns carrying real weight in the rows that survive the gap mask. Aligning the
-    # gate with the regularization threshold (``_EPSILON_COEFF_SUM``, also used for the row-validity
-    # gate below and by the banded/fast siblings) NaNs the erfc-tail sliver columns (``col_sum`` in
-    # ``(0, _EPSILON]``) instead of emitting the collapsed-singular-value garbage (tiny or negative)
-    # lstsq returns there — those bins are uninformative, not resolvable (#307). Masking the NaN
-    # observation rows out of the column sums extends the same rule to gapped cout (#321): a column
-    # whose entire support falls inside a gap has no surviving data equation and must come back NaN,
-    # never a fabricated lstsq min-norm value. With NaN-free observations this reduces bit-identically
-    # to the unmasked sum.
     nan_obs = np.isnan(observed)
-    # One shared masked view of the forward matrix: with NaN-free observations it aliases
-    # ``w_forward`` (no copy, bit-identical to the unmasked path); with gaps it is materialized
-    # once and reused for both the column-activity gate and the regularization target below.
+    # Aliases w_forward when there are no gaps; otherwise one masked copy, shared with the
+    # regularization target below.
     w_masked = np.where(nan_obs[:, None], 0.0, w_forward) if nan_obs.any() else w_forward
+    # A column is active when its weight over the surviving rows exceeds the regularization
+    # epsilon; sliver-support and gap-only columns emit NaN instead of a min-norm value.
     col_active: npt.NDArray[np.bool_] = w_masked.sum(axis=0) > _EPSILON_COEFF_SUM
 
     if not np.any(col_active):
@@ -1539,8 +1531,7 @@ def solve_inverse_transport(
                 stacklevel=2,
             )
 
-    # Gapped observations (sparse lab samples): NaN rows drop out of the data
-    # equations and the regularization target, matching deposition's masking.
+    # Gapped rows drop out of the data equations and the regularization target.
     valid: npt.NDArray[np.bool_] = (row_sums > _EPSILON_COEFF_SUM if valid_rows is None else valid_rows) & ~nan_obs
 
     rhs = np.where(valid, row_sums * observed, np.nan)
@@ -1645,13 +1636,10 @@ def solve_inverse_transport_banded(
     # needs no row_sums scaling -- matching the dense solve_inverse_transport.
     band_vals = np.asarray(band_vals, dtype=float)
     observed = np.asarray(observed, dtype=float)
-    # Gapped observations (sparse lab samples): zero the band row so it drops out of
-    # the normal equations, and zero the observed value so 0 * NaN cannot poison
-    # Wᵀ·observed or the refinement residual.
+    # Zeroed gapped rows drop out of the normal equations, and a zeroed observed value keeps
+    # 0 * NaN out of Wᵀ·observed and the refinement residual.
     nan_obs = np.isnan(observed)
     if nan_obs.any():
-        # band_vals is only read below, so the masked copy is needed only when gaps exist;
-        # the common NaN-free path keeps the caller's array without allocating.
         band_vals = np.where(nan_obs[:, None], 0.0, band_vals)
         observed = np.where(nan_obs, 0.0, observed)
     full_band = band_vals.shape[1]

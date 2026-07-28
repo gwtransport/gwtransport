@@ -2394,14 +2394,11 @@ def test_coarse_cout_grid_conserves_pulse_mass(offset_days):
 
 
 def test_extraction_to_infiltration_gapped_cout_masked():
-    """NaN gaps in cout are masked out of the inverse solve instead of raising (#321).
+    """Gapped (NaN) cout: the dense reverse solve uses only the measured bins (#321).
 
-    Sparse lab samples leave NaN cout bins; the reverse operator must exclude
-    those rows from the Tikhonov solve (data equations AND regularization
-    target) -- matching :func:`gwtransport.deposition.extraction_to_deposition`
-    -- rather than reject the whole series. cout at 12h resolution vs daily cin
-    keeps the system overdetermined, so the surviving rows still pin every
-    interior cin bin and recovery stays at the no-gap round-trip floor.
+    Gapped rows drop out of both the data equations and the regularization
+    target. cout at 12h resolution vs daily cin keeps the system overdetermined,
+    so the surviving rows pin every interior cin bin at the no-gap round-trip floor.
     """
     n_days = 120
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
@@ -2428,16 +2425,13 @@ def test_extraction_to_infiltration_gapped_cout_masked():
 
 
 def test_extraction_to_infiltration_wide_gap_never_fabricates():
-    """A gap wider than the dispersive arrival window must NaN the unconstrained cin bins (#321).
+    """A gap wider than the dispersive arrival window yields NaN cin bins, never fabricated values (#321).
 
-    A cin bin whose entire breakthrough support falls inside the NaN-cout window has no surviving
-    data equation; the dense solver must mark its column inactive (computed from the NaN-masked
-    matrix) and return NaN. Gating the column activity on the unmasked matrix instead leaves such
-    bins "active" and lets lstsq fabricate min-norm values (zeros, or huge sliver-support garbage)
-    that read downstream as real concentrations. Contract: zero-support bins are NaN, never
-    fabricated; well-constrained bins recover at the round-trip floor. Bins with *partial* support
-    at the gap edges (a sliver of the dispersive tail survives) legitimately emit softened
-    regularized estimates -- they are bounded by the data's physical range, not exact.
+    A cin bin whose entire breakthrough support falls inside the NaN-cout window
+    has no surviving data equation: its column is inactive and the bin is NaN.
+    Well-constrained bins recover at the round-trip floor. Partially-supported
+    gap-edge bins (a sliver of the dispersive tail survives) emit softened
+    regularized estimates bounded by the data's physical range.
     """
     n_days = 120
     tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
@@ -2459,14 +2453,13 @@ def test_extraction_to_infiltration_wide_gap_never_fabricates():
 
     cin_rec = extraction_to_infiltration(cout=cout, **kwargs)
 
-    # Bins wholly inside the gap's shadow are unconstrained -> NaN (mask engaged, nothing fabricated).
+    # Bins wholly inside the gap's shadow have no data equations -> NaN.
     assert np.isnan(cin_rec[50:70]).all(), "unconstrained cin bins inside the gap shadow must be NaN"
     # Bins away from the gap remain pinned by surviving rows at the round-trip floor.
     np.testing.assert_allclose(cin_rec[10:40], cin_true[10:40], atol=1e-8)
     assert np.isfinite(cin_rec[10:40]).all()
-    # No finite bin anywhere is fabricated: every emitted value sits inside the data's physical
-    # range (cin_true spans [2, 8]; the baseline defect emitted 0.0 and ~3.6e6 here). Partially-
-    # supported gap-edge bins are allowed to be soft, but never non-physical.
+    # Every finite bin sits inside the data's physical range (cin_true spans [2, 8]);
+    # partially-supported gap-edge bins may be soft, never non-physical.
     finite = np.isfinite(cin_rec)
     assert cin_rec[finite].min() >= cin_true.min() - 1.0
     assert cin_rec[finite].max() <= cin_true.max() + 1.0

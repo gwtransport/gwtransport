@@ -208,8 +208,7 @@ def _validate_inputs(
     # enforced in exactly one place. Order and messages match the historical inline checks.
     _validate_non_negative_array(molecular_diffusivity, name="molecular_diffusivity")
     _validate_non_negative_array(longitudinal_dispersivity, name="longitudinal_dispersivity")
-    # Forward cin must be NaN-free; reverse cout may contain NaN (measurement
-    # gaps) -- the banded inverse solver excludes those rows, matching deposition (#321).
+    # Reverse cout may contain NaN (measurement gaps); gapped rows are excluded from the solve.
     if is_forward:
         _validate_no_nan(cin_or_cout, name="cin")
     _validate_no_nan(flow, name="flow")
