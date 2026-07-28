@@ -262,13 +262,12 @@ def identify_outlet_segments(
     active_rarefactions_at_start: list[RarefactionWave | DecayingShockWave] = []
 
     for wave in waves:
-        # Retrospective filter: ``identify_outlet_segments`` is called over
-        # arbitrary [theta_start, theta_end] windows (e.g., plotting after the
-        # simulation ends). ``is_active`` is the wave's *current* (end-of-sim)
-        # state and skips waves that legitimately crossed v_outlet during the
-        # window but were later deactivated by a collision. Skip only if the
-        # wave's lifetime ended before the window started.
-        if wave.theta_deactivation <= theta_start:
+        # Lifetime filter, matching ``Wave.was_active_at``: skip waves that were never
+        # activated (``is_active=False`` with no recorded deactivation) or whose lifetime
+        # ended before the window starts. ``is_active`` alone is the end-of-simulation
+        # state and would also skip waves deactivated after an in-window crossing.
+        never_active = not wave.is_active and wave.theta_deactivation == float("inf")
+        if never_active or wave.theta_deactivation <= theta_start:
             continue
 
         if isinstance(wave, DecayingShockWave):

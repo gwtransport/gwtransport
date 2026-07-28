@@ -351,6 +351,38 @@ class TestIdentifyOutletSegments:
         assert all(seg["type"] == "constant" for seg in pre)
         np.testing.assert_allclose([seg["concentration"] for seg in pre], 0.0)
 
+    def test_never_active_wave_contributes_no_segments(self):
+        """A never-active wave (``is_active=False``, no recorded deactivation) is invisible (#311).
+
+        ``Wave.was_active_at`` defines that state as never active at any theta;
+        the segment reader honors the same lifetime contract, so the output
+        equals the empty-wave-list background.
+        """
+        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        wave = DecayingShockWave(
+            theta_start=1500.0,
+            v_start=1000.0 / 27.0,
+            c_decay_initial=4.0,
+            c_fixed=0.0,
+            c_fan_tail=0.5,
+            decay_side="left",
+            v_origin=0.0,
+            theta_origin=1000.0,
+            sorption=sorption,
+            is_active=False,
+        )
+        v_outlet = 2000.0 / 27.0
+        theta_cross = wave.outlet_crossing_theta(v_outlet)
+        assert theta_cross is not None
+        assert not wave.was_active_at(theta_cross)
+        segments = identify_outlet_segments(
+            theta_start=2000.0, theta_end=4500.0, v_outlet=v_outlet, waves=[wave], sorption=sorption
+        )
+        background = identify_outlet_segments(
+            theta_start=2000.0, theta_end=4500.0, v_outlet=v_outlet, waves=[], sorption=sorption
+        )
+        assert segments == background
+
 
 class TestLegacyDecayingFanBinAverage:
     """Legacy outlet-segment integration of a DSW fan clamps at c_fan_tail, not c_fixed (#311).
