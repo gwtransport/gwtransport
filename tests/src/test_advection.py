@@ -4649,6 +4649,8 @@ def test_extraction_to_infiltration_non_monotonic_tedges_raises():
             cout_tedges=pd.date_range("2020-01-01", periods=n + 1, freq="D"),
             aquifer_pore_volumes=np.array([300.0]),
         )
+
+
 def test_extraction_to_infiltration_gapped_cout_masked():
     """Gapped (NaN) cout: the reverse solve uses only the measured bins (#321).
 
