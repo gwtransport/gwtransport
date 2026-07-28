@@ -7,36 +7,6 @@ sorption; there is no microdispersion or molecular diffusion, while the spread a
 pore volumes provides macrodispersion. Forward and backward modeling are supported. No assumption
 is made about whether the flow is radial or orthogonal.
 
-Available functions:
-
-- :func:`infiltration_to_extraction` - Arbitrary pore volume distribution, flow-weighted averaging.
-  Supports explicit distribution of aquifer pore volumes with flow-weighted averaging.
-  Flexible output time resolution via cout_tedges. Use case: Known pore volume distribution
-  from streamline analysis.
-
-- :func:`gamma_infiltration_to_extraction` - Gamma-distributed pore volumes, flow-weighted averaging.
-  Models aquifer heterogeneity with 2-parameter gamma distribution. Parameterizable via
-  (alpha, beta) or (mean, std). Discretizes gamma distribution into equal-probability bins.
-  Use case: Heterogeneous aquifer with calibrated gamma parameters.
-
-- :func:`extraction_to_infiltration` - Arbitrary pore volume distribution, deconvolution.
-  Inverts forward transport for arbitrary pore volume distributions. Symmetric inverse of
-  infiltration_to_extraction. Flow-weighted averaging in reverse direction. Use case:
-  Estimating infiltration history from extraction data.
-
-- :func:`gamma_extraction_to_infiltration` - Gamma-distributed pore volumes, deconvolution.
-  Inverts forward transport for gamma-distributed pore volumes. Symmetric inverse of
-  gamma_infiltration_to_extraction. Use case: Calibrating infiltration conditions from
-  extraction measurements.
-
-- :func:`infiltration_to_extraction_nonlinear_sorption` - Exact front tracking with nonlinear sorption.
-  Event-driven algorithm that solves 1D advective transport with Freundlich or Langmuir isotherm
-  using analytical integration of shock and rarefaction waves. Machine-precision physics (no
-  numerical dispersion). Returns bin-averaged concentrations together with the full piecewise
-  analytical structure (events, segments, wave list) for downstream analysis. Use case: Sharp
-  concentration fronts with exact mass balance required, across a distribution of aquifer
-  pore volumes (macrodispersion). Forward modeling only; nonlinear sorption has no inverse.
-
 Note on dispersion: The spreading from the pore volume distribution (APVD) represents
 macrodispersion—aquifer-scale velocity heterogeneity that depends on both aquifer
 properties and hydrological boundary conditions. To add microdispersion and molecular
@@ -64,6 +34,7 @@ from gwtransport._time import tedges_to_days
 from gwtransport._validation import (
     _validate_no_nan,
     _validate_non_negative_array,
+    _validate_positive_array,
     _validate_retardation_factor,
     _validate_tedges_parity,
 )
@@ -90,7 +61,7 @@ def _validate_advection_inputs(
     tedges: pd.DatetimeIndex,
     flow: np.ndarray,
     retardation_factor: float,
-    aquifer_pore_volumes: npt.ArrayLike | None = None,
+    aquifer_pore_volumes: npt.ArrayLike,
     cin_values: np.ndarray | None = None,
     cout_values: np.ndarray | None = None,
     cout_tedges: pd.DatetimeIndex | None = None,
@@ -104,11 +75,9 @@ def _validate_advection_inputs(
       flow; ``cout_tedges`` parities cout.
 
     All shared checks fire on both paths. ``flow >= 0`` is enforced in both
-    directions (the previous reverse prologue omitted this; see issue #187), and
-    ``aquifer_pore_volumes`` (when passed) must be finite and strictly positive --
-    a negative or zero volume would source a cout bin from future infiltration.
-    Every other error-message string is preserved verbatim from the prior
-    duplicated prologue so that ``match=`` regex tests do not break.
+    directions, and ``aquifer_pore_volumes`` must be non-empty, finite and
+    strictly positive -- a negative or zero volume would source a cout bin from
+    future infiltration, and an empty distribution carries no water at all.
 
     Raises
     ------
@@ -133,14 +102,13 @@ def _validate_advection_inputs(
     _validate_no_nan(flow, name="flow")
     _validate_non_negative_array(flow, name="flow", message="flow must be non-negative (negative flow not supported)")
     _validate_retardation_factor(retardation_factor)
-    if aquifer_pore_volumes is not None:
-        apv = np.asarray(aquifer_pore_volumes, dtype=float)
-        # A negative or zero pore volume back-projects a cout bin to *future*
-        # infiltration (anti-causal); a non-finite one poisons the whole solve.
-        # The nonlinear and diffusion paths already reject these.
-        if np.any(~np.isfinite(apv)) or np.any(apv <= 0.0):
-            msg = "aquifer_pore_volumes must be positive"
-            raise ValueError(msg)
+    apv = np.asarray(aquifer_pore_volumes, dtype=float)
+    if apv.size == 0:
+        msg = "aquifer_pore_volumes must not be empty"
+        raise ValueError(msg)
+    # A negative or zero pore volume back-projects a cout bin to *future*
+    # infiltration (anti-causal); a non-finite one poisons the whole solve.
+    _validate_positive_array(apv, name="aquifer_pore_volumes")
 
 
 def gamma_infiltration_to_extraction(
@@ -156,7 +124,7 @@ def gamma_infiltration_to_extraction(
     beta: float | None = None,
     n_bins: int = 100,
     retardation_factor: float = 1.0,
-    spinup: str | float | None = "constant",
+    spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the extracted water by shifting cin with its residence time.
@@ -203,7 +171,7 @@ def gamma_infiltration_to_extraction(
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
         Values > 1.0 indicate slower transport due to sorption/interaction.
-    spinup : {"constant"} | float in [0, 1] | None, optional
+    spinup : {"constant"} | None, optional
         Forwarded to :func:`infiltration_to_extraction`. Default
         ``"constant"`` warm-starts the system before ``tedges[0]``.
 
@@ -289,18 +257,6 @@ def gamma_infiltration_to_extraction(
     ...     std=20.0,
     ...     n_bins=5,
     ... )
-
-    With retardation factor:
-
-    >>> cout = gamma_infiltration_to_extraction(
-    ...     cin=cin,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     cout_tedges=cout_tedges,
-    ...     alpha=10.0,
-    ...     beta=10.0,
-    ...     retardation_factor=2.0,  # Doubles residence time
-    ... )
     """
     bins = gamma.bins(mean=mean, std=std, loc=loc, alpha=alpha, beta=beta, n_bins=n_bins)
     return infiltration_to_extraction(
@@ -328,7 +284,7 @@ def gamma_extraction_to_infiltration(
     n_bins: int = 100,
     retardation_factor: float = 1.0,
     regularization_strength: float = 1e-10,
-    spinup: str | float | None = "constant",
+    spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the infiltrating water from extracted water (deconvolution).
@@ -379,7 +335,7 @@ def gamma_extraction_to_infiltration(
     regularization_strength : float, optional
         Tikhonov regularization parameter λ. See
         :func:`extraction_to_infiltration` for details. Default is 1e-10.
-    spinup : {"constant"} | float in [0, 1] | None, optional
+    spinup : {"constant"} | None, optional
         Forwarded to :func:`extraction_to_infiltration`. Default
         ``"constant"`` warm-starts the system before ``tedges[0]``.
 
@@ -464,18 +420,6 @@ def gamma_extraction_to_infiltration(
     ...     std=20.0,
     ...     n_bins=5,
     ... )
-
-    With retardation factor:
-
-    >>> cin = gamma_extraction_to_infiltration(
-    ...     cout=cout,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     cout_tedges=cout_tedges,
-    ...     alpha=10.0,
-    ...     beta=10.0,
-    ...     retardation_factor=2.0,  # Doubles residence time
-    ... )
     """
     bins = gamma.bins(mean=mean, std=std, loc=loc, alpha=alpha, beta=beta, n_bins=n_bins)
     return extraction_to_infiltration(
@@ -498,7 +442,7 @@ def infiltration_to_extraction(
     cout_tedges: pd.DatetimeIndex,
     aquifer_pore_volumes: npt.ArrayLike,
     retardation_factor: float = 1.0,
-    spinup: str | float | None = "constant",
+    spinup: str | None = "constant",
 ) -> npt.NDArray[np.floating]:
     """
     Compute the concentration of the extracted water using flow-weighted advection.
@@ -540,7 +484,7 @@ def infiltration_to_extraction(
     retardation_factor : float, optional
         Retardation factor of the compound in the aquifer (default 1.0).
         Values > 1.0 indicate slower transport due to sorption/interaction.
-    spinup : {"constant"} | float in [0, 1] | None, optional
+    spinup : {"constant"} | None, optional
         How to treat cout bins where one or more streamtube source windows
         fall outside the cin time range. Default is ``"constant"``.
 
@@ -553,12 +497,6 @@ def infiltration_to_extraction(
         - ``None`` — strict mass-conservation: NaN whenever any streamtube
           has not fully broken through into the cin range, or extraction
           flow during the bin is zero. Bundle row sums to 1 across cin.
-        - float in [0, 1] — fraction threshold: emit cout when at least
-          ``spinup * n_pv`` streamtubes have contributed; the bundle is
-          then a count-mean over the contributing subset. *Warning:* this
-          conserves mass per row but NOT cin → cout mass; with a delta
-          cin pulse and ``spinup=0.0`` you reproduce the issue #161
-          over-attribution (Σ cout > Σ cin).
 
     Returns
     -------
@@ -570,8 +508,7 @@ def infiltration_to_extraction(
         past the end of the flow record (a cout edge beyond
         ``tedges[-1]``, whose back-projected source window leaves the cin
         range) and for zero-throughflow bins; ``spinup=None`` additionally
-        NaNs left-edge spin-up bins; a float threshold relaxes either case
-        in exchange for non-mass-conserving count-mean output.
+        NaNs left-edge spin-up bins.
 
     Raises
     ------
@@ -627,20 +564,6 @@ def infiltration_to_extraction(
     >>> cout.shape
     (11,)
 
-    Using array inputs instead of pandas Series:
-
-    >>> # Convert to arrays
-    >>> cin_values = cin.values
-    >>> flow_values = flow.values
-    >>>
-    >>> cout = infiltration_to_extraction(
-    ...     cin=cin_values,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volumes=aquifer_pore_volumes,
-    ... )
-
     With constant retardation factor (linear sorption):
 
     >>> cout = infiltration_to_extraction(
@@ -655,17 +578,6 @@ def infiltration_to_extraction(
     Note: For concentration-dependent retardation (nonlinear sorption),
     use `infiltration_to_extraction_nonlinear_sorption` instead, as this
     function only supports constant (float) retardation factors.
-
-    Using single pore volume:
-
-    >>> single_volume = np.array([100])  # Single 100 m³ pore volume
-    >>> cout = infiltration_to_extraction(
-    ...     cin=cin,
-    ...     flow=flow,
-    ...     tedges=tedges,
-    ...     cout_tedges=cout_tedges,
-    ...     aquifer_pore_volumes=single_volume,
-    ... )
     """
     tedges = pd.DatetimeIndex(tedges)
     cout_tedges = pd.DatetimeIndex(cout_tedges)
@@ -683,7 +595,7 @@ def infiltration_to_extraction(
         cin_values=cin,
     )
 
-    weight_tedges, weight_flow, weight_cin, threshold, _ = _resolve_spinup_inputs(
+    weight_tedges, weight_flow, weight_cin, _, _ = _resolve_spinup_inputs(
         spinup,
         tedges=tedges,
         flow=flow,
@@ -699,13 +611,11 @@ def infiltration_to_extraction(
         flow=weight_flow,
         retardation_factor=retardation_factor,
     )
-    weights, _, invalid_mask = _resolve_spinup_mask(
+    weights, invalid_mask = _resolve_spinup_mask(
         band_vals=band_vals,
-        col_start=col_start,
         contributing_bins=contributing_bins,
         zero_flow_cout=zero_flow_cout,
         n_pv=len(aquifer_pore_volumes),
-        spinup=threshold,
     )
 
     # Banded flow-weighted average: row k contributes cin over its narrow band only.
@@ -786,7 +696,7 @@ def extraction_to_infiltration(
         a factor of 2-10 for additional smoothing. For noiseless synthetic
         data (e.g., roundtrip tests), the default 1e-10 preserves machine
         precision.
-    spinup : {"constant"} | float in [0, 1] | None, optional
+    spinup : {"constant"} | None, optional
         Spin-up policy applied when building the forward weight matrix
         used to set up the inverse problem. Same semantics as in
         :func:`infiltration_to_extraction`; default ``"constant"`` shifts
@@ -919,7 +829,7 @@ def extraction_to_infiltration(
 
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes)
 
-    weight_tedges, weight_flow, _, threshold, n_pad = _resolve_spinup_inputs(
+    weight_tedges, weight_flow, _, _, n_pad = _resolve_spinup_inputs(
         spinup,
         tedges=tedges,
         flow=flow,
@@ -935,13 +845,11 @@ def extraction_to_infiltration(
         flow=weight_flow,
         retardation_factor=retardation_factor,
     )
-    band_vals, _, _ = _resolve_spinup_mask(
+    band_vals, _ = _resolve_spinup_mask(
         band_vals=band_vals,
-        col_start=col_start,
         contributing_bins=contributing_bins,
         zero_flow_cout=zero_flow_cout,
         n_pv=len(aquifer_pore_volumes),
-        spinup=threshold,
     )
 
     cin_padded = solve_inverse_transport_banded(
@@ -990,7 +898,7 @@ def _validate_front_tracking_inputs(
     ------
     ValueError
         If array lengths are inconsistent, values are non-physical (negative
-        concentrations, non-positive flows, NaN values, non-positive pore
+        concentrations, negative flows, NaN values, non-positive pore
         volumes), retardation_factor < 1, Freundlich or Langmuir parameters
         are missing or non-positive, freundlich_n equals 1, or physical
         parameters are invalid.
@@ -1001,24 +909,16 @@ def _validate_front_tracking_inputs(
     cout_tedges = pd.DatetimeIndex(cout_tedges)
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
 
-    if len(tedges) != len(cin) + 1:
-        msg = "tedges must have length len(cin) + 1"
+    _validate_tedges_parity(tedges, cin, tedges_name="tedges", values_name="cin")
+    _validate_tedges_parity(tedges, flow, tedges_name="tedges", values_name="flow")
+    _validate_no_nan(cin, name="cin")
+    _validate_no_nan(flow, name="flow")
+    _validate_non_negative_array(cin, name="cin")
+    _validate_non_negative_array(flow, name="flow", message="flow must be non-negative (negative flow not supported)")
+    if aquifer_pore_volumes.size == 0:
+        msg = "aquifer_pore_volumes must not be empty"
         raise ValueError(msg)
-    if len(flow) != len(cin):
-        msg = "flow must have same length as cin"
-        raise ValueError(msg)
-    if np.any(cin < 0):
-        msg = "cin must be non-negative"
-        raise ValueError(msg)
-    if np.any(np.isnan(cin)) or np.any(np.isnan(flow)):
-        msg = "cin and flow must not contain NaN"
-        raise ValueError(msg)
-    if np.any(flow < 0):
-        msg = "flow must be non-negative (negative flow not supported)"
-        raise ValueError(msg)
-    if np.any(aquifer_pore_volumes <= 0):
-        msg = "aquifer_pore_volumes must be positive"
-        raise ValueError(msg)
+    _validate_positive_array(aquifer_pore_volumes, name="aquifer_pore_volumes")
 
     # Convert cout_tedges to days (relative to tedges[0]) for output computation
     cout_tedges_days = tedges_to_days(cout_tedges, ref=tedges[0])
@@ -1085,31 +985,6 @@ def _validate_front_tracking_inputs(
     return cin, flow, tedges, cout_tedges, aquifer_pore_volumes, sorption, cout_tedges_days
 
 
-def _theta_at_last_output_edge(
-    cout_tedges_days: npt.NDArray[np.floating],
-    flow_tedges_days: npt.NDArray[np.floating],
-    flow: npt.NDArray[np.floating],
-) -> float:
-    """Cumulative flow θ at the last requested output edge (the interaction-resolution horizon).
-
-    Piecewise-linear ``t → θ`` map (identical to ``FrontTrackerState.theta_at_t``),
-    extrapolating the final-bin flow when the output window extends past the flow record.
-
-    Returns
-    -------
-    float
-        Cumulative flow θ [m³] at ``cout_tedges_days[-1]``.
-    """
-    theta_edges = np.concatenate(([0.0], np.cumsum(flow * np.diff(flow_tedges_days))))
-    t = float(cout_tedges_days[-1])
-    if t <= flow_tedges_days[0]:
-        return float(theta_edges[0])
-    if t >= flow_tedges_days[-1]:
-        return float(theta_edges[-1] + (t - flow_tedges_days[-1]) * float(flow[-1]))
-    i = int(np.searchsorted(flow_tedges_days, t, side="right")) - 1
-    return float(theta_edges[i] + (t - flow_tedges_days[i]) * float(flow[i]))
-
-
 def _flow_weighted_front_tracking_output(
     cout_tedges_days: npt.NDArray[np.floating],
     flow_tedges_days: npt.NDArray[np.floating],
@@ -1160,7 +1035,7 @@ def _flow_weighted_front_tracking_output(
     -----
     Zero-flow sub-bins are dropped from the averaging only; a cin step injected
     during a zero-flow bin still enters the tracker as a wave at a degenerate θ
-    and can corrupt adjacent output bins (#309).
+    and can corrupt adjacent output bins.
     """
     inner_flow_edges = flow_tedges_days[
         (flow_tedges_days > cout_tedges_days[0]) & (flow_tedges_days < cout_tedges_days[-1])
@@ -1182,7 +1057,7 @@ def _flow_weighted_front_tracking_output(
     # A zero-flow input span leaves θ stationary, so its sub-bins have zero width in
     # θ and zero q·dt weight. Drop them before the exact averaging (which rejects
     # non-positive-width bins); they read back as 0 and carry no weight in this
-    # averaging (see Notes for the #309 caveat). Consecutive kept bins stay
+    # averaging (see Notes for the degenerate-θ caveat). Consecutive kept bins stay
     # contiguous because the dropped bins share their neighbours' θ value.
     theta_lo, theta_hi = fine_theta_edges[:-1], fine_theta_edges[1:]
     nondegenerate = theta_hi > theta_lo
@@ -1330,7 +1205,7 @@ def infiltration_to_extraction_nonlinear_sorption(
     RuntimeError
         If the front-tracking solver leaves an unresolved wave interaction (the domain-mass
         field over-counts stored mass). This is an internal-consistency tripwire, not an
-        input limitation — every wave interaction is now composed; a firing indicates a bug.
+        input limitation: the solver composes every wave interaction, so a firing indicates a bug.
 
     See Also
     --------
@@ -1392,10 +1267,14 @@ def infiltration_to_extraction_nonlinear_sorption(
     cout_sum = np.zeros(len(cout_tedges) - 1)
     structures = []
 
-    # Resolve wave interactions out to the last requested output edge (extrapolating the
-    # final-bin flow if the output window extends past the flow record), so beyond-outlet
-    # merges that still feed an in-window outlet query are composed.
-    theta_horizon = _theta_at_last_output_edge(cout_tedges_days, flow_tedges_days, flow)
+    # Resolve wave interactions out to the last requested output edge, so beyond-outlet merges
+    # that still feed an in-window outlet query are composed. The horizon follows the same
+    # piecewise-linear t → θ map the tracker uses, clamped at the first flow edge and
+    # extrapolating the final-bin flow when the output window extends past the flow record.
+    theta_flow_edges = np.concatenate(([0.0], np.cumsum(flow * np.diff(flow_tedges_days))))
+    t_horizon = max(float(cout_tedges_days[-1]), float(flow_tedges_days[0]))
+    k = min(int(np.searchsorted(flow_tedges_days, t_horizon, side="right")) - 1, len(flow) - 1)
+    theta_horizon = float(theta_flow_edges[k] + (t_horizon - flow_tedges_days[k]) * flow[k])
 
     for aquifer_pore_volume in aquifer_pore_volumes:
         tracker = FrontTracker(
@@ -1409,9 +1288,9 @@ def infiltration_to_extraction_nonlinear_sorption(
 
         tracker.run(max_iterations=max_iterations)
 
-        # The solver now resolves every wave interaction (shock↔shock, fan-entry, doubly-fed
+        # The solver resolves every wave interaction (shock↔shock, fan-entry, doubly-fed
         # formation, same-apex annihilation and their compositions), so the wave list is
-        # interaction-consistent and the single-owner reader is exact. This detector is now a
+        # interaction-consistent and the single-owner reader is exact. This detector is a
         # tripwire: a firing means the solver left an unresolved interaction (an internal bug),
         # not an unsupported input — fail loud rather than return a silently wrong cout.
         interaction = find_unresolved_interaction(tracker.state)

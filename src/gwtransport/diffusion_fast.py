@@ -5,11 +5,9 @@ This module shares the conceptual model of :mod:`gwtransport.diffusion` -- advec
 microdispersion (``alpha_L``) and molecular diffusion (``D_m``) along orthogonal (Cartesian)
 flow paths, one independent streamtube per aquifer pore volume, with the spread across the
 pore volume distribution providing macrodispersion and linear sorption entering through the
-retardation factor. It computes the
-same physics as :mod:`gwtransport.diffusion` -- the Kreft-Zuber (1978) flux concentration
-``C_F`` at the outlet of the streamtube bundle -- but evaluates the bin-averaged breakthrough
-in closed form instead of by Gauss-Legendre quadrature: a faster but still exact
-implementation.
+retardation factor. It reports the same Kreft-Zuber (1978) flux concentration ``C_F`` at the
+outlet of the streamtube bundle, but evaluates the bin-averaged breakthrough in closed form
+instead of by Gauss-Legendre quadrature.
 
 For each streamtube (one aquifer pore volume) the resident concentration in moving-frame
 cumulative-volume (V) coordinates is the Gaussian CDF
@@ -25,12 +23,10 @@ R*V_pore/(L*Q)``). The dispersive boundary-flux correction therefore emerges fro
 
 The elapsed time ``tau`` and travel distance ``xi`` are read directly from the time and
 cumulative-volume edges (``tau_ij = t_cout_i - t_cin_j``, ``xi`` geometric), so no per-cell
-quadrature and no residence-time inversion is needed. The result reproduces
-:mod:`gwtransport.diffusion` to machine precision when the cout grid aligns with the flow
-grid (supply ``flow_out`` on the output grid). The coefficient matrix is built only on the
-breakthrough band -- the cumulative-volume band where the bin-averaged ``C_F`` is unsaturated,
-the only region with non-zero coefficients -- so the build cost scales with the band width
-(a few percent of the matrix at realistic dispersion) rather than with the full grid.
+quadrature and no residence-time inversion is needed. The coefficient matrix is built only on
+the breakthrough band -- the cumulative-volume band where the bin-averaged ``C_F`` is
+unsaturated, the only region with non-zero coefficients -- so the build cost scales with the
+band width (a few percent of the matrix at realistic dispersion) rather than with the full grid.
 
 Streamtube assumption (no cross-sectional area parameter)
 ---------------------------------------------------------
@@ -44,28 +40,15 @@ one value per pore volume, exactly as in :mod:`gwtransport.diffusion`.
 When to choose this module vs :mod:`gwtransport.diffusion`
 ----------------------------------------------------------
 
-Both modules implement the *same* physics (Bear resident concentration + Kreft-Zuber flux
-concentration on 1D streamtubes, with retardation and the moving-frame variance
-``D_t = D_m*tau + alpha_L*xi``), and both accept per-streamtube ``streamline_length`` /
-``molecular_diffusivity`` / ``longitudinal_dispersivity`` arrays. Whenever the cout grid is
-at or finer than the flow grid, this module reproduces :mod:`gwtransport.diffusion` to
-machine precision for *every* parameter regime -- including ``retardation_factor != 1`` with
-``molecular_diffusivity > 0``, where the antiderivative's slope ``dD_t/dx = D_s/v_s`` already
-carries the solute-front Kreft-Zuber flux coefficient natively -- while being ~80-90x faster
-even before banding (closed form, no Gauss-Legendre quadrature, no residence-time inversion),
-and the banded build computes only the non-zero breakthrough band -- faster still at the
-weak-to-moderate dispersion of realistic problems. So it is the right default. The only case that favours
-:mod:`gwtransport.diffusion` is a cout grid *coarser* than the flow detail: this module
+Whenever the cout grid is at or finer than the flow grid, this module reproduces
+:mod:`gwtransport.diffusion` to machine precision for *every* parameter regime -- including
+``retardation_factor != 1`` with ``molecular_diffusivity > 0``, where the antiderivative's slope
+``dD_t/dx = D_s/v_s`` already carries the solute-front Kreft-Zuber flux coefficient natively --
+while being ~80-90x faster even before banding. So it is the right default. The only case that
+favours :mod:`gwtransport.diffusion` is a cout grid *coarser* than the flow detail: this module
 treats ``flow_out`` as constant within each cout bin, whereas :mod:`gwtransport.diffusion`
 integrates the full ``tedges``-resolution flow within each cout bin -- a ~0.1%-of-peak
 difference for a rapidly-varying ``cin`` over wide cout bins under variable flow.
-
-Available functions:
-
-- :func:`infiltration_to_extraction` -- forward transport.
-- :func:`extraction_to_infiltration` -- inverse via Tikhonov regularization.
-- :func:`gamma_infiltration_to_extraction` -- gamma-distributed APVD (forward).
-- :func:`gamma_extraction_to_infiltration` -- same, inverse.
 
 References
 ----------
@@ -85,23 +68,23 @@ from gwtransport import gamma
 from gwtransport._diffusion_shared import (
     _DT_FLOOR,
     _EPSILON_COEFF_SUM,
+    _advective_valid_cout_bins,
     _breakthrough_antideriv,
-    _broadcast_to_pore_volumes,
+    _coerce_and_validate,
     _cout_cumulative_volume,
+    _extend_tedges,
     _extend_tedges_flag,
     _solve_reverse_banded,
-    _validate_inputs,
 )
 from gwtransport._time import dt_to_days, tedges_to_days
-from gwtransport.residence_time import fraction_explained_full
 from gwtransport.utils import cumulative_flow_volume
 
-# Default saturation threshold U for the banded build: a cout/cin pair is only evaluated
-# while the breakthrough |x|/(2*sqrt(D_t)) <= U; beyond it the bin-averaged C_F is saturated
-# to 0 or 1. At U >= ~6 the dense kernel itself already rounds the dropped tail to exactly 0
-# or 1 (the Gaussian term underflows below the ulp of x), so the banded matrix is bit-identical
-# to the dense one. Smaller U narrows the band -> faster, at the cost of dropping breakthrough
-# tails of order exp(-U^2).
+# Saturation threshold U of the banded build: a cout/cin pair is only evaluated while the
+# breakthrough |x|/(2*sqrt(D_t)) <= U; beyond it the bin-averaged C_F is saturated to 0 or 1.
+# At U >= ~6 the dense kernel itself rounds the dropped tail to exactly 0 or 1 (the Gaussian
+# term underflows below the ulp of x), so the banded matrix is bit-identical to the dense one.
+# A smaller U narrows the band -> faster, at the cost of dropping breakthrough tails of order
+# exp(-U^2); the builders take it as a parameter so that trade-off stays testable.
 _DEFAULT_SATURATION_THRESHOLD = 7.0
 
 
@@ -377,8 +360,7 @@ def _closed_form_coeff_matrix(
     operator ``W`` is ``band_vals[k]`` placed at columns ``[col_start[k], col_start[k] + full_band)``.
     The build runs in two passes over the pore-volume loop -- a cheap geometry pass that sizes the
     per-row band union, then a values pass that scatters each streamtube's ``C_F`` stripe into the
-    banded buffer. The result reproduces the slow module's ``C_F`` to machine precision when the
-    cout grid aligns with the flow grid. ``streamline_length``, ``molecular_diffusivity``, and
+    banded buffer. ``streamline_length``, ``molecular_diffusivity``, and
     ``longitudinal_dispersivity`` are per-pore-volume arrays (length ``len(aquifer_pore_volumes)``).
 
     Returns
@@ -390,14 +372,7 @@ def _closed_form_coeff_matrix(
     valid_cout_bins : ndarray of bool, shape (n_cout_bins,)
         Output bins with complete breakthrough information for every streamtube.
     """
-    work_tedges = tedges
-    if extend_tedges:
-        # Extend by 100 years on each side so a constant warm-start fills the spin-up region.
-        # Timestamp arithmetic keeps the input timezone (tz-naive stays naive, tz-aware UTC
-        # stays tz-aware); going through ``.to_numpy()`` would strip/mix the tz.
-        pad = pd.Timedelta(days=36500)
-        work_tedges = tedges[:1] - pad
-        work_tedges = work_tedges.append(tedges[1:-1]).append(tedges[-1:] + pad)
+    work_tedges = _extend_tedges(tedges) if extend_tedges else tedges
 
     tedges_days = tedges_to_days(work_tedges)
     cout_tedges_days = tedges_to_days(cout_tedges, ref=work_tedges[0])
@@ -416,19 +391,12 @@ def _closed_form_coeff_matrix(
         cumulative_volume_at_cin=cumulative_volume_at_cin,
     )
 
-    # Output bin valid where every streamtube's advective look-back is in-record across the whole
-    # bin (advective coverage == 1 for all pore volumes; NaN outside the record -> invalid).
-    valid_cout_bins = np.all(
-        fraction_explained_full(
-            flow=flow,
-            tedges=work_tedges,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-            retardation_factor=retardation_factor,
-            direction="extraction_to_infiltration",
-        )
-        >= 1.0,
-        axis=0,
+    valid_cout_bins = _advective_valid_cout_bins(
+        flow=flow,
+        tedges=work_tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=retardation_factor,
     )
 
     # Slowest cin-side flow rate, used to bound the broken-through band width (the slowest flow
@@ -532,7 +500,6 @@ def infiltration_to_extraction(
     retardation_factor: float = 1.0,
     flow_out: npt.ArrayLike | None = None,
     spinup: str | None = "constant",
-    saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Compute extracted concentration with advection, microdispersion, and molecular diffusion.
 
@@ -572,12 +539,6 @@ def infiltration_to_extraction(
     spinup : {"constant"} | None, optional
         ``"constant"`` (default) extends ``tedges`` by 100 years on each side so a constant
         warm-start fills the left-edge spin-up region; ``None`` leaves spin-up cout as NaN.
-    saturation_threshold : float, optional
-        Breakthrough-band cutoff ``U`` (default 7.0). The coefficient matrix is built only on the
-        cumulative-volume band where the breakthrough is unsaturated (``|x| < U * 2*sqrt(D_t)``),
-        which is the only region with non-zero coefficients. ``U`` around 7 (any value above ~6)
-        reproduces the full dense build to machine precision; a smaller value narrows the band --
-        faster -- at the cost of dropping breakthrough tails of order ``exp(-U**2)``.
 
     Returns
     -------
@@ -592,15 +553,7 @@ def infiltration_to_extraction(
     extraction_to_infiltration : Inverse operation.
     :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion.
     """
-    cout_tedges = pd.DatetimeIndex(cout_tedges)
-    tedges = pd.DatetimeIndex(tedges)
-    cin = np.asarray(cin, dtype=float)
-    flow = np.asarray(flow, dtype=float)
-    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
-    if flow_out is not None:
-        flow_out = np.asarray(flow_out, dtype=float)
-
-    _validate_inputs(
+    cin, transport = _coerce_and_validate(
         cin_or_cout=cin,
         flow=flow,
         tedges=tedges,
@@ -613,24 +566,10 @@ def infiltration_to_extraction(
         is_forward=True,
         flow_out=flow_out,
     )
-
-    n_pore_volumes = len(aquifer_pore_volumes)
-    streamline_length = _broadcast_to_pore_volumes(streamline_length, n_pore_volumes)
-    molecular_diffusivity = _broadcast_to_pore_volumes(molecular_diffusivity, n_pore_volumes)
-    longitudinal_dispersivity = _broadcast_to_pore_volumes(longitudinal_dispersivity, n_pore_volumes)
-
     band_vals, col_start, valid_cout_bins = _closed_form_coeff_matrix(
-        flow=flow,
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        flow_out=flow_out,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        streamline_length=streamline_length,
-        molecular_diffusivity=molecular_diffusivity,
-        longitudinal_dispersivity=longitudinal_dispersivity,
+        **transport,
         retardation_factor=retardation_factor,
         extend_tedges=_extend_tedges_flag(spinup),
-        saturation_threshold=saturation_threshold,
     )
 
     n_cin = len(cin)
@@ -659,7 +598,6 @@ def extraction_to_infiltration(
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
     spinup: str | None = "constant",
-    saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Reconstruct infiltration concentration from extracted water (deconvolution).
 
@@ -698,8 +636,6 @@ def extraction_to_infiltration(
         See :func:`infiltration_to_extraction`. Default None.
     spinup : {"constant"} | None, optional
         See :func:`infiltration_to_extraction`. Default ``"constant"``.
-    saturation_threshold : float, optional
-        See :func:`infiltration_to_extraction`. Default 7.0.
 
     Returns
     -------
@@ -713,15 +649,7 @@ def extraction_to_infiltration(
     gwtransport.diffusion.extraction_to_infiltration : Quadrature reference.
     :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion.
     """
-    tedges = pd.DatetimeIndex(tedges)
-    cout_tedges = pd.DatetimeIndex(cout_tedges)
-    cout = np.asarray(cout, dtype=float)
-    flow = np.asarray(flow, dtype=float)
-    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
-    if flow_out is not None:
-        flow_out = np.asarray(flow_out, dtype=float)
-
-    _validate_inputs(
+    cout, transport = _coerce_and_validate(
         cin_or_cout=cout,
         flow=flow,
         tedges=tedges,
@@ -734,27 +662,13 @@ def extraction_to_infiltration(
         is_forward=False,
         flow_out=flow_out,
     )
-
-    n_pore_volumes = len(aquifer_pore_volumes)
-    streamline_length = _broadcast_to_pore_volumes(streamline_length, n_pore_volumes)
-    molecular_diffusivity = _broadcast_to_pore_volumes(molecular_diffusivity, n_pore_volumes)
-    longitudinal_dispersivity = _broadcast_to_pore_volumes(longitudinal_dispersivity, n_pore_volumes)
-
-    n_cin = len(tedges) - 1
     band_vals, col_start, valid_cout_bins = _closed_form_coeff_matrix(
-        flow=flow,
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        flow_out=flow_out,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        streamline_length=streamline_length,
-        molecular_diffusivity=molecular_diffusivity,
-        longitudinal_dispersivity=longitudinal_dispersivity,
+        **transport,
         retardation_factor=retardation_factor,
         extend_tedges=_extend_tedges_flag(spinup),
-        saturation_threshold=saturation_threshold,
     )
 
+    n_cin = len(transport["flow"])
     return _solve_reverse_banded(
         band_vals=band_vals,
         col_start=col_start,
@@ -783,7 +697,6 @@ def gamma_infiltration_to_extraction(
     retardation_factor: float = 1.0,
     flow_out: npt.ArrayLike | None = None,
     spinup: str | None = "constant",
-    saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Compute extracted concentration for a gamma-distributed pore volume distribution.
 
@@ -824,8 +737,6 @@ def gamma_infiltration_to_extraction(
         :func:`infiltration_to_extraction`. Default None.
     spinup : {"constant"} | None, optional
         See :func:`infiltration_to_extraction`. Default ``"constant"``.
-    saturation_threshold : float, optional
-        See :func:`infiltration_to_extraction`. Default 7.0.
 
     Returns
     -------
@@ -853,7 +764,6 @@ def gamma_infiltration_to_extraction(
         retardation_factor=retardation_factor,
         flow_out=flow_out,
         spinup=spinup,
-        saturation_threshold=saturation_threshold,
     )
 
 
@@ -876,7 +786,6 @@ def gamma_extraction_to_infiltration(
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
     spinup: str | None = "constant",
-    saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Reconstruct infiltration concentration for a gamma-distributed pore volume distribution.
 
@@ -919,8 +828,6 @@ def gamma_extraction_to_infiltration(
         :func:`infiltration_to_extraction`. Default None.
     spinup : {"constant"} | None, optional
         See :func:`infiltration_to_extraction`. Default ``"constant"``.
-    saturation_threshold : float, optional
-        See :func:`infiltration_to_extraction`. Default 7.0.
 
     Returns
     -------
@@ -948,5 +855,4 @@ def gamma_extraction_to_infiltration(
         regularization_strength=regularization_strength,
         flow_out=flow_out,
         spinup=spinup,
-        saturation_threshold=saturation_threshold,
     )

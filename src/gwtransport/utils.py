@@ -3,76 +3,14 @@ General Utilities for 1D Groundwater Transport Modeling.
 
 This module provides general-purpose utility functions for time series manipulation,
 interpolation, numerical operations, and data processing used throughout the gwtransport
-package. Functions include linear interpolation/averaging, bin overlap calculations,
-underdetermined system solvers, and external data retrieval.
-
-Available functions:
-
-- :func:`step_plot_coords` - Compute step-plot coordinates from bin edges and
-  bin-averaged values. Returns paired x/y arrays for plotting piecewise-constant
-  functions with ``ax.plot(x, y)``.
-
-- ``_make_strictly_monotone`` (private) - Bump consecutive duplicates in a non-decreasing
-  array by ``k * ulp(max)`` so it becomes strictly monotone. Used before V → t inversions to
-  prevent ``np.interp`` from silently picking one limit at plateau levels.
-
-- :func:`cumulative_flow_volume` - Cumulative infiltrated/extracted volume from per-bin flow
-  rates and bin widths, prepended with a leading zero. Optionally bumped to strict
-  monotonicity for V → t inversions.
-
-- :func:`linear_interpolate` - Linear interpolation using numpy's optimized interp function.
-  Automatically handles unsorted data with configurable extrapolation (None for clamping,
-  float for constant values). Handles multi-dimensional query arrays.
-
-- :func:`linear_average` - Compute average values of piecewise linear time series between
-  specified x-edges. Supports 1D or 2D edge arrays for batch processing. Handles NaN values
-  and offers multiple extrapolation methods ('nan', 'outer', 'raise').
-
-- :func:`time_bin_overlap` - Calculate fraction of time bins overlapping with specified time
-  ranges. Similar to partial_isin but for time-based bin overlaps with list of (start, end)
-  tuples.
-
-- :func:`simplify_bins` - Simplify a piecewise-constant time series by merging adjacent bins
-  whose values are within a tolerance. Uses volume-weighted (flow x width) averaging when
-  flow is provided, otherwise width-weighted. Direction-independent via largest-jump splitting.
-
-- :func:`compute_time_edges` - Compute DatetimeIndex of time bin edges from explicit edges,
-  start times, or end times. Validates consistency with expected number of bins and handles
-  uniform spacing extrapolation.
+package. Functions include linear interpolation, cumulative flow volumes, time-edge
+construction, linear-system solvers, and external data retrieval.
 
 The inverse solvers below are two intentionally coexisting families: a Tikhonov family (the dense
 :func:`solve_inverse_transport` and its banded equivalent :func:`solve_inverse_transport_banded`,
 both fed by :func:`compute_reverse_target` and built on :func:`solve_tikhonov`) for the
 overdetermined deconvolution in advection/diffusion, and a separate nullspace solver
 (:func:`solve_underdetermined_system`) for the underdetermined deposition inverse.
-
-- :func:`solve_tikhonov` - Solve linear system with Tikhonov regularization toward a target.
-  Well-determined modes follow the data; poorly-determined modes are pulled toward the target.
-
-- :func:`compute_reverse_target` - Build the regularization target for the inverse problem by
-  transposing and row-normalizing the forward coefficient matrix. Consumed by
-  :func:`solve_tikhonov` and :func:`solve_inverse_transport`.
-
-- :func:`solve_inverse_transport` - Solve the inverse transport problem (deconvolution) via
-  Tikhonov regularization. Shared by advection, diffusion, and diffusion_fast
-  ``extraction_to_infiltration`` functions.
-
-- :func:`solve_inverse_transport_banded` - Memory-light banded equivalent of
-  :func:`solve_inverse_transport` for a forward operator stored in banded layout. Assembles the
-  Tikhonov normal equations directly in banded form and solves them via banded Cholesky.
-
-- :func:`solve_underdetermined_system` - Solve underdetermined linear system (Ax = b, m < n)
-  with nullspace regularization. Handles NaN values by row exclusion. Supports built-in
-  objectives ('squared_differences', 'summed_differences') or custom callable objectives.
-  Used by :mod:`gwtransport.deposition`.
-
-- :func:`get_soil_temperature` - Download soil temperature data from KNMI weather stations with
-  automatic caching. Supports stations 260 (De Bilt), 273 (Marknesse), 286 (Nieuw Beerta),
-  323 (Wilhelminadorp). Returns DataFrame with columns TB1-TB5, TNB1-TNB2, TXB1-TXB2 at various
-  depths. Daily cache prevents redundant downloads.
-
-- ``_generate_failed_coverage_badge`` (private) - Generate SVG badge indicating failed coverage
-  using genbadge library. Used in CI/CD workflows.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -81,7 +19,6 @@ See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/
 from __future__ import annotations
 
 import io
-import warnings
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -251,12 +188,10 @@ def linear_interpolate(
     """
     Linear interpolation using numpy's optimized interp function.
 
-    Automatically handles unsorted reference data by sorting it first.
-
     Parameters
     ----------
     x_ref : array-like
-        Reference x-values. If unsorted, will be automatically sorted.
+        Reference x-values, in ascending order.
     y_ref : array-like
         Reference y-values corresponding to x_ref.
     x_query : array-like
@@ -296,403 +231,8 @@ def linear_interpolate(
     ...     x_ref=x_ref, y_ref=y_ref, x_query=x_query, left=np.nan, right=np.nan
     ... )
     array([nan, 15., 25., 35., nan])
-
-    Handles unsorted reference data automatically:
-
-    >>> x_unsorted = np.array([3.0, 1.0, 4.0, 2.0])
-    >>> y_unsorted = np.array([30.0, 10.0, 40.0, 20.0])
-    >>> linear_interpolate(x_ref=x_unsorted, y_ref=y_unsorted, x_query=x_query)
-    array([10., 15., 25., 35., 40.])
     """
-    x_ref = np.asarray(x_ref)
-    y_ref = np.asarray(y_ref)
-    x_query = np.asarray(x_query)
-
-    sort_idx = np.argsort(x_ref)
-    x_ref_sorted = x_ref[sort_idx]
-    y_ref_sorted = y_ref[sort_idx]
-
-    return np.interp(x_query, x_ref_sorted, y_ref_sorted, left=left, right=right)
-
-
-def linear_average(
-    *,
-    x_data: npt.ArrayLike,
-    y_data: npt.ArrayLike,
-    x_edges: npt.ArrayLike,
-    extrapolate_method: str = "nan",
-) -> npt.NDArray[np.floating]:
-    """
-    Compute the average value of a piecewise linear time series between specified x-edges.
-
-    Parameters
-    ----------
-    x_data : array-like
-        x-coordinates of the time series data points, must be in ascending order.
-    y_data : array-like
-        y-coordinates of the time series data points. Can be 1D or 2D.
-
-        - If 1D: shape ``(n_data,)`` -- a single series.
-        - If 2D: shape ``(n_series_y, n_data)`` -- multiple series sharing the same
-          ``x_data``. The leading axis is averaged independently per row. Cannot be
-          combined with 2D ``x_edges`` (each row of ``x_edges`` and each row of
-          ``y_data`` would otherwise have to broadcast against each other, which is
-          not supported).
-    x_edges : array-like
-        x-coordinates of the integration edges.
-
-        - If 1D: shape ``(n_edges,)``, must be in ascending order.
-        - If 2D: shape ``(n_series_x, n_edges)``, each row must be in ascending order.
-    extrapolate_method : str, optional
-        Method for handling bin edges that fall outside ``x_data``. Default
-        is ``'nan'``.
-
-        - ``'outer'``: average over the **in-range** portion of each bin
-          (clip-then-average). The bin width used for normalisation is the
-          clipped width, not the original width. For example,
-          ``x_data = y_data = [1, 2, 3]`` and ``x_edges = [0, 5]`` returns
-          ``2.0`` (integral over ``[1, 3]`` divided by clipped width 2),
-          **not** ``2.2`` (which a constant-extension scheme would give).
-        - ``'nan'``: bins that extend outside ``x_data`` are returned as ``nan``.
-        - ``'raise'``: raise an error if any bin edge falls outside ``x_data``.
-
-    Returns
-    -------
-    ndarray
-        2D array of average values between consecutive pairs of x_edges.
-        Shape is ``(n_series, n_bins)`` where ``n_bins = n_edges - 1`` and
-        ``n_series = max(n_series_x, n_series_y)``. Both ``x_edges`` and ``y_data``
-        being 1D yields ``n_series = 1``.
-
-    Raises
-    ------
-    ValueError
-        If ``x_edges`` is not 1D or 2D. If ``y_data`` is not 1D or 2D. If both
-        ``x_edges`` and ``y_data`` are 2D. If ``x_data`` and ``y_data`` have
-        incompatible shapes or are empty. If ``x_edges`` has fewer than 2 values per
-        row. If ``x_data`` is not in ascending order. If ``x_edges`` rows are not in
-        ascending order. If ``extrapolate_method`` is ``'raise'`` and any edge falls
-        outside the data range.
-
-    Notes
-    -----
-    **NaN handling is asymmetric between 1D and 2D ``y_data``.**
-
-    - 1D ``y_data`` is treated as a single series; internal NaN gaps are
-      silently bridged by linear interpolation across the gap (via
-      ``np.interp`` with ``left=nan, right=nan``).
-    - 2D ``y_data`` is treated row-wise; any output bin whose
-      ``[edge_left, edge_right]`` touches a NaN segment **in that row** is
-      set to NaN, while other rows are unaffected.
-
-    Callers that need NaN-bridging behaviour across multiple series must
-    pre-fill (e.g., ``pd.DataFrame.interpolate``) before calling.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> from gwtransport.utils import linear_average
-    >>> x_data = [0, 1, 2, 3]
-    >>> y_data = [0, 1, 1, 0]
-    >>> x_edges = [0, 1.5, 3]
-    >>> linear_average(
-    ...     x_data=x_data, y_data=y_data, x_edges=x_edges
-    ... )  # doctest: +ELLIPSIS
-    array([[0.666..., 0.666...]])
-
-    >>> x_edges_2d = [[0, 1.5, 3], [0.5, 2, 3]]
-    >>> linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges_2d)
-    array([[0.66666667, 0.66666667],
-           [0.91666667, 0.5       ]])
-
-    Multiple y-series with shared x_data and x_edges:
-
-    >>> y_data_2d = [[0, 1, 1, 0], [0, 2, 2, 0]]
-    >>> linear_average(x_data=x_data, y_data=y_data_2d, x_edges=x_edges)
-    array([[0.66666667, 0.66666667],
-           [1.33333333, 1.33333333]])
-    """
-    # Convert inputs to numpy arrays
-    x_data = np.asarray(x_data, dtype=float)
-    y_data = np.asarray(y_data, dtype=float)
-    x_edges = np.asarray(x_edges, dtype=float)
-
-    # Ensure x_edges is always 2D
-    if x_edges.ndim == 1:
-        x_edges = x_edges[np.newaxis, :]
-    elif x_edges.ndim != 2:  # noqa: PLR2004
-        msg = "x_edges must be 1D or 2D array"
-        raise ValueError(msg)
-
-    # Ensure y_data is always 2D internally with shape (n_series_y, n_data)
-    if y_data.ndim == 1:
-        y_data = y_data[np.newaxis, :]
-    elif y_data.ndim != 2:  # noqa: PLR2004
-        msg = "y_data must be 1D or 2D array"
-        raise ValueError(msg)
-
-    # 2D y_data requires 1D x_edges (no per-row x_edges allowed). The combination would
-    # require an outer product over (n_series_x, n_series_y), which is intentionally
-    # not supported -- callers can loop or stack instead.
-    n_series_x = x_edges.shape[0]
-    n_series_y = y_data.shape[0]
-    if n_series_x > 1 and n_series_y > 1:
-        msg = "Cannot combine 2D x_edges with 2D y_data"
-        raise ValueError(msg)
-    n_series = max(n_series_x, n_series_y)
-
-    # Input validation
-    if y_data.shape[1] != x_data.shape[0] or x_data.shape[0] == 0:
-        msg = "x_data and y_data must have the same length and be non-empty"
-        raise ValueError(msg)
-    if x_edges.shape[1] < 2:  # noqa: PLR2004
-        msg = "x_edges must contain at least 2 values in each row"
-        raise ValueError(msg)
-    if not np.all(np.diff(x_data) >= 0):
-        msg = "x_data must be in ascending order"
-        raise ValueError(msg)
-    if not np.all(np.diff(x_edges, axis=1) >= 0):
-        msg = "x_edges must be in ascending order along each row"
-        raise ValueError(msg)
-
-    # Filter out NaN values. With 2D y_data, a column is dropped only when all rows
-    # have NaN there; per-row NaNs are handled via segment masking below so that one
-    # series' NaNs do not contaminate the others.
-    x_nan = np.isnan(x_data)
-    y_any_finite = np.any(~np.isnan(y_data), axis=0)
-    show = ~x_nan & y_any_finite
-    if show.sum() < 2:  # noqa: PLR2004
-        if show.sum() == 1 and extrapolate_method == "outer":
-            # For a single retained data point with outer extrapolation, use the
-            # row-wise value broadcast across all output bins.
-            constant_value = y_data[:, show][:, 0]  # shape (n_series_y,)
-            return np.broadcast_to(constant_value[:, None], (n_series, x_edges.shape[1] - 1)).astype(
-                np.float64, copy=True
-            )
-        return np.full(shape=(n_series, x_edges.shape[1] - 1), fill_value=np.nan)
-
-    x_data_clean = x_data[show]
-    y_data_clean = y_data[:, show]  # shape (n_series_y, n_clean)
-
-    # Handle extrapolation for all series at once (vectorized). The 'raise' and 'nan'
-    # branches never mutate edges_processed, so they alias x_edges directly; 'outer'
-    # produces a fresh clipped array.
-    if extrapolate_method == "outer":
-        edges_processed = np.clip(x_edges, x_data_clean[0], x_data_clean[-1])
-    elif extrapolate_method == "raise":
-        if np.any(x_edges < x_data_clean[0]) or np.any(x_edges > x_data_clean[-1]):
-            msg = "x_edges must be within the range of x_data"
-            raise ValueError(msg)
-        edges_processed = x_edges
-    else:  # nan method
-        edges_processed = x_edges
-
-    # Create a combined grid of all unique x points (data + all edges)
-    all_unique_x = np.unique(np.concatenate([x_data_clean, edges_processed.ravel()]))
-
-    # Interpolate y values at all unique x points once. For 2D y_data we vectorize
-    # the linear interpolation manually since np.interp does not accept 2D y.
-    if n_series_y == 1:
-        all_unique_y_result = np.interp(all_unique_x, x_data_clean, y_data_clean[0], left=np.nan, right=np.nan)
-        all_unique_y: npt.NDArray[np.floating] = np.asarray(all_unique_y_result, dtype=np.float64)[np.newaxis, :]
-    else:
-        # Locate each query x in x_data_clean. For x within the data range, idx is in
-        # [1, len(x_data_clean) - 1] so left_idx = idx - 1 is the bracketing left index.
-        idx = np.searchsorted(x_data_clean, all_unique_x).clip(1, len(x_data_clean) - 1)
-        left_idx = idx - 1
-        right_idx = idx
-        x_left = x_data_clean[left_idx]
-        x_right = x_data_clean[right_idx]
-        denom = x_right - x_left
-        # Detect query points coincident with an x_data point. Handling them via a
-        # direct lookup avoids the IEEE 754 trap where NaN * 0 = NaN, which would
-        # otherwise contaminate exact-endpoint queries adjacent to a NaN sample.
-        on_left_node = denom == 0  # only happens if x_left == x_right (duplicate)
-        weights = np.where(on_left_node, 0.0, (all_unique_x - x_left) / np.where(on_left_node, 1.0, denom))
-        all_unique_y = y_data_clean[:, left_idx] * (1.0 - weights) + y_data_clean[:, right_idx] * weights
-        # Override at exact x_data positions to avoid NaN * 0 contamination.
-        is_left_match = all_unique_x == x_left
-        is_right_match = all_unique_x == x_right
-        all_unique_y[:, is_left_match] = y_data_clean[:, left_idx[is_left_match]]
-        all_unique_y[:, is_right_match] = y_data_clean[:, right_idx[is_right_match]]
-        # Mark out-of-range query points as NaN (matches np.interp(left=nan, right=nan)).
-        out_of_range = (all_unique_x < x_data_clean[0]) | (all_unique_x > x_data_clean[-1])
-        all_unique_y[:, out_of_range] = np.nan
-
-    # Compute cumulative integrals once using trapezoidal rule.
-    # Segments outside the data range carry NaN (from the interp step with left/right=NaN);
-    # those NaNs will be masked out later via the bin-range check, so we suppress
-    # them here only to keep the cumulative sum finite for in-range bins.
-    dx = np.diff(all_unique_x)
-    y_avg = (all_unique_y[:, :-1] + all_unique_y[:, 1:]) / 2
-    segment_integrals = np.where(np.isnan(y_avg), 0.0, dx[np.newaxis, :] * y_avg)
-    # Cumulative integral with leading 0 along the x axis.
-    cumulative_integral = np.concatenate([np.zeros((y_avg.shape[0], 1)), np.cumsum(segment_integrals, axis=1)], axis=1)
-
-    # Vectorized computation for all series
-    # Find indices of all edges in the combined grid
-    edge_indices_result = np.searchsorted(all_unique_x, edges_processed)
-    # Ensure it's a 2D array for type checker
-    edge_indices: npt.NDArray[np.intp] = np.asarray(edge_indices_result, dtype=np.intp).reshape(edges_processed.shape)
-
-    # Compute integral between consecutive edges. Broadcast over n_series via the leading axis
-    # of cumulative_integral. edge_indices is (n_series_x, n_bins+1); cumulative_integral is
-    # (n_series_y, n_unique_x). We rely on n_series_x == 1 or n_series_y == 1 (enforced above).
-    integral_values = cumulative_integral[:, edge_indices[:, 1:]] - cumulative_integral[:, edge_indices[:, :-1]]
-    # integral_values has shape (n_series_y, n_series_x, n_bins). Squeeze the singleton.
-    integral_values_2d = integral_values[0] if n_series_y == 1 else integral_values[:, 0, :]
-
-    # Compute widths between consecutive edges for all series (vectorized)
-    edge_widths = np.diff(edges_processed, axis=1)  # shape (n_series_x, n_bins)
-    # Broadcast widths to match (n_series, n_bins)
-    edge_widths_b = np.broadcast_to(edge_widths, (n_series, edge_widths.shape[1])) if n_series_y > 1 else edge_widths
-
-    # Handle zero-width intervals (vectorized)
-    zero_width_mask = edge_widths_b == 0
-    result = np.zeros_like(edge_widths_b, dtype=np.float64)
-
-    # For non-zero width intervals, compute average = integral / width (vectorized)
-    non_zero_mask = ~zero_width_mask
-    result[non_zero_mask] = integral_values_2d[non_zero_mask] / edge_widths_b[non_zero_mask]
-
-    # For zero-width intervals, interpolate y-value directly (vectorized)
-    if np.any(zero_width_mask):
-        # Positions where zero width occurs; use the left edge's x position.
-        if n_series_y == 1:
-            zero_positions = edges_processed[:, :-1][zero_width_mask]  # 1D
-            result[zero_width_mask] = np.interp(zero_positions, x_data_clean, y_data_clean[0])
-        else:
-            # zero_width_mask has shape (n_series_y, n_bins); positions vary per row.
-            # edges_processed is (1, n_bins+1) here since n_series_x == 1.
-            edges_left = np.broadcast_to(edges_processed[:, :-1], (n_series, edge_widths.shape[1]))
-            zero_positions = edges_left[zero_width_mask]
-            # Interpolate per series using the same x_data_clean. Find bracketing indices
-            # for each zero-width position, then index into the appropriate y row.
-            # Get the row index for each zero-width entry.
-            row_idx_grid = np.broadcast_to(np.arange(n_series)[:, None], (n_series, edge_widths.shape[1]))
-            zero_rows = row_idx_grid[zero_width_mask]
-            idx_z = np.searchsorted(x_data_clean, zero_positions).clip(1, len(x_data_clean) - 1)
-            xl = x_data_clean[idx_z - 1]
-            xr = x_data_clean[idx_z]
-            denom_z = np.where(xr == xl, 1.0, xr - xl)
-            w_z = (zero_positions - xl) / denom_z
-            yl = y_data_clean[zero_rows, idx_z - 1]
-            yr = y_data_clean[zero_rows, idx_z]
-            result[zero_width_mask] = yl * (1.0 - w_z) + yr * w_z
-
-    # Handle extrapolation when 'nan' method is used (vectorized).
-    # Bins must lie entirely within the data range; bins partially outside
-    # (straddling) are also set to NaN, since the integral over the missing
-    # portion is undefined and dividing by the full bin width would bias the
-    # average low. Bins fully outside are likewise NaN.
-    if extrapolate_method == "nan":
-        bins_within_range = (x_edges[:, :-1] >= x_data_clean[0]) & (x_edges[:, 1:] <= x_data_clean[-1])
-        if n_series_y > 1:
-            bins_within_range = np.broadcast_to(bins_within_range, (n_series, bins_within_range.shape[1]))
-        result[~bins_within_range] = np.nan
-
-    # With 2D y_data, propagate per-row NaNs from the y series itself: any output bin that
-    # touches an x_data segment with NaN y in this row must be NaN. This 2-D NaN contract is
-    # method-independent -- it also holds for 'outer'/'raise', which would otherwise return a
-    # silently wrong finite average (the NaN trapezoids were zeroed above). Per-row NaN info is
-    # preserved in y_avg; mark bins whose spanned segments contain a NaN segment for this row.
-    if n_series_y > 1:
-        seg_nan = np.isnan(y_avg)  # shape (n_series_y, n_unique_x - 1)
-        seg_nan_cum = np.concatenate([np.zeros((n_series_y, 1)), np.cumsum(seg_nan, axis=1)], axis=1)
-        nan_count_per_bin = seg_nan_cum[:, edge_indices[0, 1:]] - seg_nan_cum[:, edge_indices[0, :-1]]
-        result[nan_count_per_bin > 0] = np.nan
-
-    return result
-
-
-def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.NDArray[np.floating]:
-    """
-    Calculate the fraction of each time bin that overlaps with each time range.
-
-    This function computes an array where element (i, j) represents the fraction
-    of time bin j that overlaps with time range i. The computation uses
-    vectorized operations to avoid loops.
-
-    Parameters
-    ----------
-    tedges : array-like
-        1D array of time bin edges in ascending order. For n bins, there
-        should be n+1 edges.
-    bin_tedges : list of tuple
-        List of tuples where each tuple contains ``(start_time, end_time)``
-        defining a time range.
-
-    Returns
-    -------
-    overlap_array : ndarray
-        Array of shape (len(bin_tedges), n_bins) where n_bins is the number of
-        time bins. Each element (i, j) represents the fraction of time bin j
-        that overlaps with time range i. Values range from 0 (no overlap) to
-        1 (complete overlap).
-
-    Raises
-    ------
-    ValueError
-        If ``tedges`` is not a 1D array, has fewer than 2 elements, or if
-        ``bin_tedges`` is empty.
-
-    Notes
-    -----
-    - tedges must be sorted in ascending order
-    - Uses vectorized operations to handle large arrays efficiently
-    - Time ranges in bin_tedges can be in any order and can overlap
-    - Datetime inputs are differenced in exact int64 nanoseconds before the final
-      float division; a float64 epoch value rounds to its ulp (1024 ns by the
-      2200s), which would corrupt sub-microsecond bins
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> from gwtransport.utils import time_bin_overlap
-    >>> tedges = np.array([0, 10, 20, 30])
-    >>> bin_tedges = [(5, 15), (25, 35)]
-    >>> time_bin_overlap(
-    ...     tedges=tedges, bin_tedges=bin_tedges
-    ... )  # doctest: +NORMALIZE_WHITESPACE
-    array([[0.5, 0.5, 0. ],
-           [0. , 0. , 0.5]])
-    """
-    # Convert inputs to numpy arrays
-    tedges = np.asarray(tedges)
-    bin_tedges_array = np.asarray(bin_tedges)
-
-    # Validate inputs
-    if tedges.ndim != 1:
-        msg = "tedges must be a 1D array"
-        raise ValueError(msg)
-    if len(tedges) < 2:  # noqa: PLR2004
-        msg = "tedges must have at least 2 elements"
-        raise ValueError(msg)
-    if bin_tedges_array.size == 0:
-        msg = "bin_tedges must be non-empty"
-        raise ValueError(msg)
-
-    # Normalize datetime-like inputs (datetime64 or object arrays of Timestamps/datetimes) to a
-    # common int64-nanosecond scale so numeric, datetime64, and Timestamp inputs share one
-    # arithmetic path; ``np.maximum(0, Timedelta)`` on an object array would otherwise raise.
-    # Kept in int64 through the differencing for exactness (see Notes); the epoch origin cancels.
-    if not np.issubdtype(tedges.dtype, np.number):
-        tedges = pd.DatetimeIndex(tedges).asi8
-    if not np.issubdtype(bin_tedges_array.dtype, np.number):
-        flat = pd.DatetimeIndex(bin_tedges_array.ravel()).asi8
-        bin_tedges_array = flat.reshape(bin_tedges_array.shape)
-
-    # Calculate overlaps for all combinations using broadcasting
-    overlap_left = np.maximum(bin_tedges_array[:, [0]], tedges[None, :-1])
-    overlap_right = np.minimum(bin_tedges_array[:, [1]], tedges[None, 1:])
-    overlap_widths = np.maximum(0, overlap_right - overlap_left)
-
-    # Calculate fractions (handle division by zero for zero-width bins)
-    bin_width_bc = np.diff(tedges)[None, :]  # Shape: (1, n_bins)
-
-    return np.divide(
-        overlap_widths, bin_width_bc, out=np.zeros_like(overlap_widths, dtype=float), where=bin_width_bc != 0.0
-    )
+    return np.interp(np.asarray(x_query), np.asarray(x_ref), np.asarray(y_ref), left=left, right=right)
 
 
 def simplify_bins(
@@ -782,14 +322,6 @@ def simplify_bins(
     new_flow = weight_sums / new_widths if flow is not None else None
 
     return new_edges, new_values, new_flow
-
-
-def _generate_failed_coverage_badge() -> None:
-    """Generate a badge indicating failed coverage."""
-    from genbadge import Badge  # type: ignore # noqa: PLC0415
-
-    b = Badge(left_txt="coverage", right_txt="failed", color="red")
-    b.write_to("coverage_failed.svg", use_shields=False)
 
 
 def compute_time_edges(
@@ -1066,6 +598,10 @@ def solve_underdetermined_system(
     ValueError
         If optimization fails, if coefficient_matrix and rhs_vector have incompatible shapes,
         or if an unknown nullspace objective is specified.
+    numpy.linalg.LinAlgError
+        If the squared-differences normal equations ``(DN)^T(DN)`` are ill-conditioned
+        (condition number above 1e12), which happens when the nullspace contains a
+        near-constant vector.
 
     Notes
     -----
@@ -1084,53 +620,19 @@ def solve_underdetermined_system(
 
     Examples
     --------
-    Basic usage with default squared differences objective:
+    Rows containing NaN are dropped; the solution satisfies the remaining equations:
 
     >>> import numpy as np
     >>> from gwtransport.utils import solve_underdetermined_system
-    >>>
-    >>> # Create underdetermined system (2 equations, 4 unknowns)
-    >>> matrix = np.array([[1, 2, 1, 0], [0, 1, 2, 1]])
-    >>> rhs = np.array([3, 4])
-    >>>
-    >>> # Solve with squared differences regularization
-    >>> x = solve_underdetermined_system(coefficient_matrix=matrix, rhs_vector=rhs)
-    >>> print(f"Solution: {x}")  # doctest: +SKIP
-    >>> print(f"Residual: {np.linalg.norm(matrix @ x - rhs):.2e}")  # doctest: +SKIP
-
-    With summed differences objective:
-
-    >>> x_sparse = solve_underdetermined_system(  # doctest: +SKIP
-    ...     coefficient_matrix=matrix,
-    ...     rhs_vector=rhs,
-    ...     nullspace_objective="summed_differences",
-    ... )
-
-    With custom objective function:
-
-    >>> def custom_objective(coeffs, x_ls, nullspace_basis):
-    ...     x = x_ls + nullspace_basis @ coeffs
-    ...     return np.sum(x**2)  # Minimize L2 norm
-    >>>
-    >>> x_custom = solve_underdetermined_system(  # doctest: +SKIP
-    ...     coefficient_matrix=matrix,
-    ...     rhs_vector=rhs,
-    ...     nullspace_objective=custom_objective,
-    ... )
-
-    Handling NaN values:
-
-    >>> # System with missing data
-    >>> matrix_nan = np.array([
-    ...     [1, 2, 1, 0],
+    >>> matrix = np.array([
+    ...     [1.0, 2.0, 1.0, 0.0],
     ...     [np.nan, np.nan, np.nan, np.nan],
-    ...     [0, 1, 2, 1],
+    ...     [0.0, 1.0, 2.0, 1.0],
     ... ])
-    >>> rhs_nan = np.array([3, np.nan, 4])
-    >>>
-    >>> x_nan = solve_underdetermined_system(
-    ...     coefficient_matrix=matrix_nan, rhs_vector=rhs_nan
-    ... )  # doctest: +SKIP
+    >>> rhs = np.array([3.0, np.nan, 4.0])
+    >>> x = solve_underdetermined_system(coefficient_matrix=matrix, rhs_vector=rhs)
+    >>> bool(np.allclose(matrix[[0, 2]] @ x, [3.0, 4.0]))
+    True
     """
     matrix = np.asarray(coefficient_matrix)
     rhs = np.asarray(rhs_vector)
@@ -1154,121 +656,17 @@ def solve_underdetermined_system(
 
     # Compute nullspace
     nullspace_basis = null_space(valid_matrix, rcond=rcond)
-    nullrank = nullspace_basis.shape[1]
 
-    if nullrank == 0:
+    if nullspace_basis.shape[1] == 0:
         # System is determined, return least-squares solution
         return x_ls
 
-    # Optimize in nullspace
-    coeffs = _optimize_nullspace_coefficients(
-        x_ls=x_ls,
-        nullspace_basis=nullspace_basis,
-        nullspace_objective=nullspace_objective,
-        optimization_method=optimization_method,
-    )
-
-    return x_ls + nullspace_basis @ coeffs
-
-
-def _optimize_nullspace_coefficients(
-    *,
-    x_ls: npt.NDArray[np.floating],
-    nullspace_basis: npt.NDArray[np.floating],
-    nullspace_objective: str
-    | Callable[[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]], float],
-    optimization_method: str,
-) -> npt.NDArray[np.floating]:
-    """Optimize coefficients in the nullspace to minimize the objective.
-
-    Parameters
-    ----------
-    x_ls : ndarray
-        Least-squares solution vector.
-    nullspace_basis : ndarray
-        Nullspace basis matrix of shape (n, nullrank).
-    nullspace_objective : str or callable
-        Objective to minimize. Supported string values are
-        ``'squared_differences'`` and ``'summed_differences'``. A callable
-        with signature ``objective(coeffs, x_ls, nullspace_basis)`` is also
-        accepted.
-    optimization_method : str
-        Optimization method passed to ``scipy.optimize.minimize``.
-
-    Returns
-    -------
-    ndarray
-        Optimal nullspace coefficient vector of length nullrank.
-
-    Raises
-    ------
-    ValueError
-        If iterative optimization fails to converge.
-    """
-    # For squared_differences, solve the quadratic form analytically:
-    # min ||D(x_ls + N c)||^2 => (N'D'DN) c = -N'D'D x_ls
-    coeffs_sq = _solve_squared_differences_analytical(x_ls=x_ls, nullspace_basis=nullspace_basis)
-
-    if nullspace_objective == "squared_differences":
-        return coeffs_sq
-
-    # For other objectives, use iterative optimization starting from the
-    # squared_differences solution for stability
-    objective_func = _get_nullspace_objective_function(nullspace_objective=nullspace_objective)
-    coeffs_0 = coeffs_sq
-
-    res = minimize(
-        objective_func,
-        x0=coeffs_0,
-        args=(x_ls, nullspace_basis),
-        method=optimization_method,
-    )
-
-    if not res.success:
-        msg = f"Optimization failed: {res.message}"
-        raise ValueError(msg)
-
-    return res.x
-
-
-def _solve_squared_differences_analytical(
-    *,
-    x_ls: npt.NDArray[np.floating],
-    nullspace_basis: npt.NDArray[np.floating],
-) -> npt.NDArray[np.floating]:
-    """Solve the squared-differences nullspace problem analytically.
-
-    Minimizes ``sum((x[i+1] - x[i])^2)`` where ``x = x_ls + N @ c`` by
-    solving the normal equations ``(N^T D^T D N) c = -N^T D^T D x_ls``.
-
-    Parameters
-    ----------
-    x_ls : ndarray
-        Least-squares solution vector of length n.
-    nullspace_basis : ndarray
-        Nullspace basis matrix of shape (n, nullrank).
-
-    Returns
-    -------
-    ndarray
-        Optimal nullspace coefficient vector of length nullrank.
-
-    Raises
-    ------
-    numpy.linalg.LinAlgError
-        If the normal equations matrix ``(DN)^T(DN)`` is ill-conditioned
-        (condition number exceeds 1e12).
-    """
-    # D is the (n-1, n) first-difference matrix; D @ x = x[1:] - x[:-1]
-    # D^T D is the tridiagonal matrix with 2 on diagonal, -1 on off-diagonals
-    # (except corners which have 1 on diagonal)
-    # Instead of forming D explicitly, compute D @ N and D @ x_ls directly
+    # Squared-differences optimum in closed form: minimizing ||D(x_ls + N c)||^2 gives the normal
+    # equations (DN)^T(DN) c = -(DN)^T(D x_ls), where D is the (n-1, n) first-difference matrix.
+    # D @ N and D @ x_ls are formed directly instead of materializing D.
     dn = nullspace_basis[1:, :] - nullspace_basis[:-1, :]  # (n-1, nullrank)
     dx = x_ls[1:] - x_ls[:-1]  # (n-1,)
-
-    # Normal equations: (DN)^T (DN) c = -(DN)^T (D x_ls)
     dntdn = dn.T @ dn  # (nullrank, nullrank)
-    rhs = -(dn.T @ dx)  # (nullrank,)
 
     cond = np.linalg.cond(dntdn)
     cond_threshold = 1e12
@@ -1286,7 +684,26 @@ def _solve_squared_differences_analytical(
         )
         raise np.linalg.LinAlgError(msg)
 
-    return np.linalg.solve(dntdn, rhs)
+    coeffs = np.linalg.solve(dntdn, -(dn.T @ dx))
+
+    if nullspace_objective != "squared_differences":
+        # Other objectives are optimized iteratively, started from the squared-differences
+        # solution for stability.
+        if nullspace_objective == "summed_differences":
+            objective_func = _summed_differences_objective
+        elif callable(nullspace_objective):
+            objective_func = nullspace_objective
+        else:
+            msg = f"Unknown nullspace objective: {nullspace_objective}"
+            raise ValueError(msg)
+
+        res = minimize(objective_func, x0=coeffs, args=(x_ls, nullspace_basis), method=optimization_method)
+        if not res.success:
+            msg = f"Optimization failed: {res.message}"
+            raise ValueError(msg)
+        coeffs = res.x
+
+    return x_ls + nullspace_basis @ coeffs
 
 
 def compute_reverse_target(
@@ -1337,8 +754,7 @@ def solve_tikhonov(
     rhs_vector: npt.ArrayLike,
     x_target: npt.NDArray[np.floating],
     regularization_strength: float = 1e-10,
-    return_resolution: bool = False,
-) -> npt.NDArray[np.floating] | tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+) -> npt.NDArray[np.floating]:
     """Solve a linear system with Tikhonov regularization toward a target.
 
     Minimizes ``||A x - b||² + λ ||x - x_target||²`` by solving the
@@ -1373,28 +789,11 @@ def solve_tikhonov(
         A good starting value for noisy data is
         ``λ ≈ (noise_std / signal_amplitude)²``. For noiseless synthetic
         data, the default 1e-10 preserves machine precision.
-    return_resolution : bool, optional
-        If True, also return the per-element fraction of the solution that
-        comes from data (vs from the regularization target). Default is
-        False.
 
     Returns
     -------
-    ndarray or tuple of ndarray
-        If ``return_resolution`` is False (default), returns the solution
-        vector of length n.
-
-        If ``return_resolution`` is True, returns ``(x, fraction_data)``
-        where ``fraction_data[j]`` is the diagonal of the model resolution
-        matrix ``R = (A^T A + λ D)^{-1} A^T A``:
-
-        - ``fraction_data[j] ≈ 1``: element *j* is data-driven
-        - ``fraction_data[j] ≈ 0``: element *j* is target-driven
-        - Non-regularized entries (NaN in ``x_target``):
-          ``fraction_data[j] = 1.0``. This includes dead (all-zero) columns
-          with a NaN target: their zero gram row/column would make the
-          resolution inverse singular, so their diagonal is pinned to 1,
-          which leaves every other entry of the inverse unchanged.
+    ndarray
+        Solution vector of length n.
 
     Raises
     ------
@@ -1443,23 +842,6 @@ def solve_tikhonov(
     augmented_rhs = np.concatenate([valid_rhs, reg_rhs])
 
     x, *_ = np.linalg.lstsq(augmented_matrix, augmented_rhs, rcond=None)
-
-    if return_resolution:
-        # Compute fraction_data from model resolution matrix diagonal:
-        # R = G^{-1} A^T A  where  G = A^T A + λ diag(d)
-        # fraction_data[j] = R[j,j] = 1 - λ d[j] G_inv[j,j]
-        d_reg = np.zeros(n_cin)
-        d_reg[target_indices] = 1.0
-        gram = valid_matrix.T @ valid_matrix
-        gram[np.arange(n_cin), np.arange(n_cin)] += regularization_strength * d_reg
-        # Dead (all-zero, NaN-target) columns leave a zero gram row/column; pin the diagonal
-        # to 1 so the inverse stays nonsingular (see Returns).
-        dead = np.diag(gram) == 0.0
-        gram[dead, dead] = 1.0
-        gram_inv_diag = np.diag(np.linalg.inv(gram))
-        fraction_data = 1.0 - regularization_strength * gram_inv_diag * d_reg
-        return x, fraction_data
-
     return x
 
 
@@ -1478,7 +860,6 @@ def solve_inverse_transport(
     n_output: int,
     regularization_strength: float,
     valid_rows: npt.NDArray[np.bool_] | None = None,
-    warn_rank_deficient: bool = False,
 ) -> npt.NDArray[np.floating]:
     """Solve the inverse transport problem via Tikhonov regularization.
 
@@ -1501,20 +882,12 @@ def solve_inverse_transport(
     valid_rows : ndarray of bool, optional
         Which observation rows are valid, with shape ``(n_obs,)``. If None,
         rows with ``row_sum > 1e-10`` are considered valid.
-    warn_rank_deficient : bool, optional
-        If True, emit a warning when the forward matrix has rank
-        deficiency among its active columns. Default is False.
 
     Returns
     -------
     ndarray
         Recovered signal with shape ``(n_output,)``. NaN for bins with no
         active columns.
-
-    Warns
-    -----
-    UserWarning
-        When ``warn_rank_deficient=True`` and the matrix is rank-deficient.
 
     See Also
     --------
@@ -1531,20 +904,6 @@ def solve_inverse_transport(
 
     if not np.any(col_active):
         return np.full(n_output, np.nan)
-
-    if warn_rank_deficient:
-        n_active = int(col_active.sum())
-        rank = np.linalg.matrix_rank(w_forward[:, col_active])
-        if rank < n_active:
-            warnings.warn(
-                f"Forward matrix is rank-deficient (rank {rank} < {n_active} active "
-                f"columns). This occurs with constant flow when the residence time "
-                f"is an integer multiple of the time step width. The "
-                f"underdetermined modes will be pulled toward the regularization "
-                f"target instead of being determined by data. To achieve full rank, "
-                f"adjust aquifer_pore_volumes slightly (e.g., multiply by 1.001).",
-                stacklevel=2,
-            )
 
     # Gapped rows drop out of the data equations and the regularization target.
     valid: npt.NDArray[np.bool_] = (row_sums > _EPSILON_COEFF_SUM if valid_rows is None else valid_rows) & ~nan_obs
@@ -1731,29 +1090,6 @@ def solve_inverse_transport_banded(
     return out
 
 
-def _squared_differences_objective(
-    coeffs: npt.NDArray[np.floating], x_ls: npt.NDArray[np.floating], nullspace_basis: npt.NDArray[np.floating]
-) -> float:
-    """Minimize sum of squared differences between adjacent elements.
-
-    Parameters
-    ----------
-    coeffs : ndarray
-        Nullspace coefficient vector.
-    x_ls : ndarray
-        Least-squares solution vector.
-    nullspace_basis : ndarray
-        Nullspace basis matrix.
-
-    Returns
-    -------
-    float
-        Sum of squared differences between adjacent elements of the solution.
-    """
-    x = x_ls + nullspace_basis @ coeffs
-    return np.sum(np.square(x[1:] - x[:-1]))
-
-
 def _summed_differences_objective(
     coeffs: npt.NDArray[np.floating], x_ls: npt.NDArray[np.floating], nullspace_basis: npt.NDArray[np.floating]
 ) -> float:
@@ -1775,39 +1111,3 @@ def _summed_differences_objective(
     """
     x = x_ls + nullspace_basis @ coeffs
     return np.sum(np.abs(x[1:] - x[:-1]))
-
-
-def _get_nullspace_objective_function(
-    *,
-    nullspace_objective: str
-    | Callable[[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]], float],
-) -> Callable[[npt.NDArray[np.floating], npt.NDArray[np.floating], npt.NDArray[np.floating]], float]:
-    """Get the objective function for nullspace optimization.
-
-    Parameters
-    ----------
-    nullspace_objective : str or callable
-        Objective identifier. Supported string values are
-        ``'squared_differences'`` and ``'summed_differences'``. A callable
-        with signature ``objective(coeffs, x_ls, nullspace_basis)`` is also
-        accepted and returned as-is.
-
-    Returns
-    -------
-    callable
-        Objective function with signature
-        ``(coeffs, x_ls, nullspace_basis) -> float``.
-
-    Raises
-    ------
-    ValueError
-        If ``nullspace_objective`` is an unrecognized string.
-    """
-    if nullspace_objective == "squared_differences":
-        return _squared_differences_objective
-    if nullspace_objective == "summed_differences":
-        return _summed_differences_objective
-    if callable(nullspace_objective):
-        return nullspace_objective  # type: ignore[return-value]  # ty: ignore[invalid-return-type]
-    msg = f"Unknown nullspace objective: {nullspace_objective}"
-    raise ValueError(msg)

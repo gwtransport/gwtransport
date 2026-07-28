@@ -9,35 +9,9 @@ flow rate (higher flow yields shorter residence time), pore volume (larger volum
 longer residence time), and retardation factor (interaction with matrix yields longer
 residence time).
 
-Available functions:
-
-- :func:`full` - Compute the flow-weighted mean residence time over
-  output bins, per pore volume (full ``(n_pore_volumes, n_bins)`` array). Follows the package's
-  bin-edge convention and is the form consumed elsewhere in the package. Supports both forward
-  (infiltration to extraction) and reverse (extraction to infiltration) directions.
-
-- :func:`mean` - Compute the mean residence time over output bins for a discrete
-  aquifer pore-volume distribution (an array of equally-weighted pore volumes). Collapses the
-  pore-volume axis to a single per-bin series. The ``spinup`` policy (default ``"constant"``)
-  warm-starts the spin-up by extrapolating the boundary flow.
-
-- :func:`gamma` - Compute the closed-form mean residence time over output bins for a
-  (shifted) gamma aquifer pore-volume distribution, with no pore-volume discretization. The
-  ``spinup`` policy (default ``"constant"``) warm-starts the spin-up; ``spinup=0.0`` instead
-  renormalizes over the covered sub-mass exactly.
-
-- :func:`fraction_explained_full`, :func:`fraction_explained_mean`,
-  :func:`fraction_explained_gamma` - Compute the **advective** fraction of each output bin that is
-  explained by the flow record: the flow-weighted share of the bin whose retarded advective parcel
-  was infiltrated/extracted inside the record. ``full`` returns one row per pore volume, ``mean``
-  the equal-weight discrete-APVD mean, and ``gamma`` the closed-form (shifted) gamma-APVD value,
-  mirroring :func:`full` / :func:`mean` / :func:`gamma`. These are **purely advective** -- molecular
-  diffusion and microdispersion spread each bin over a range of infiltration times that is
-  not captured here, so no bin is fully informed once dispersion is present (for that dispersive
-  informed fraction use the captured kernel mass of the diffusion coefficient matrix).
-
-- :func:`freundlich_retardation` - Compute concentration-dependent retardation factors from a
-  Freundlich isotherm, for use as the ``retardation_factor`` input to the transport functions.
+The residence times are resolved per pore volume (:func:`full`), collapsed over a discrete
+equally-weighted pore-volume distribution (:func:`mean`), or in closed form over a (shifted) gamma
+aquifer pore-volume distribution with no discretization (:func:`gamma`).
 
 Spin-up period
 --------------
@@ -81,6 +55,10 @@ The :func:`fraction_explained_full` / :func:`fraction_explained_mean` /
 :func:`fraction_explained_gamma` diagnostics report, per output bin, the advective fraction of the
 pore-volume distribution that is out of spin-up (``1.0`` = advectively fully informed, ``0.0`` =
 entirely in spin-up) and are the way to locate the spin-up region when the means warm-start over it.
+They are **purely advective** -- molecular diffusion and microdispersion spread each bin over a
+range of infiltration times that is not captured there, so no bin is fully informed once dispersion
+is present (for that dispersive informed fraction use the captured kernel mass of the diffusion
+coefficient matrix).
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -103,57 +81,11 @@ from gwtransport.utils import cumulative_flow_volume, linear_interpolate
 _SPINUP_GATE_RELTOL = 1e-9
 
 
-def _boundary_extrapolated_map(
-    flow: npt.NDArray[np.floating],
-    flow_cum: npt.NDArray[np.floating],
-    tedges_days: npt.NDArray[np.floating],
-    pad: float,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
-    """Extend the cumulative-volume -> time map past the record for the ``"constant"`` warm-start.
-
-    The boundary extrapolation slope is ``1/Q``, anchored on the nearest strictly-positive flow so a
-    zero-flow boundary bin (whose ``flow_cum`` step is only the strictly-monotone ulp bump) does not
-    give a ``1/0`` extrapolation. Bit-identical to ``1/Q_boundary`` when the boundary already carries
-    flow.
-
-    Returns
-    -------
-    volume_map : ndarray
-        ``flow_cum`` padded by ``pad`` on each end.
-    time_map : ndarray
-        ``tedges_days`` padded by ``pad * (1/Q)`` on each end, aligned with ``volume_map``.
-        Shared by :func:`full` and :func:`gamma`.
-    """
-    positive_flow = flow[flow > 0.0]
-    inv_q_first = 1.0 / positive_flow[0]
-    inv_q_last = 1.0 / positive_flow[-1]
-    volume_map = np.concatenate([[flow_cum[0] - pad], flow_cum, [flow_cum[-1] + pad]])
-    time_map = np.concatenate([
-        [tedges_days[0] - pad * inv_q_first],
-        tedges_days,
-        [tedges_days[-1] + pad * inv_q_last],
-    ])
-    return volume_map, time_map
-
-
 def _resolve_spinup(spinup: str | float | None) -> tuple[bool, float]:
     """Normalize the residence-time ``spinup`` policy to ``(extrapolate, threshold)``.
 
-    The three sibling residence-time functions share one spin-up contract,
-    ``{'constant'} | None | float in [0, 1]``, matching the package convention (see
-    :mod:`gwtransport.advection`):
-
-    * ``'constant'`` -> ``(True, 0.0)`` -- warm-start by extrapolating the boundary flow.
-    * ``None`` -> ``(False, 0.0)`` -- strict map (no extrapolation); a collapsed mean is emitted
-      wherever any covered sub-mass / valid streamtube remains.
-    * ``float`` in ``[0, 1]`` -> ``(False, float)`` -- strict map, with the covered-fraction
-      threshold gating a collapsed mean. ``0.0`` matches ``None``; larger values require a larger
-      covered fraction before a bin is emitted, and ``1.0`` is strictest (full coverage required).
-
-    Parameters
-    ----------
-    spinup : {'constant'}, None, or float in [0, 1]
-        Public spin-up policy.
+    ``'constant'`` -> ``(True, 0.0)``, ``None`` -> ``(False, 0.0)``, and a ``float`` in ``[0, 1]`` ->
+    ``(False, float)``. See the module docstring (``Spin-up period``) for the public contract.
 
     Returns
     -------
@@ -207,7 +139,16 @@ def _phi_setup(
     # pad == 0 (no spin-up reach, e.g. retardation_factor or all pore volumes 0) carries no
     # extrapolation and would only add zero-width boundary segments (0/0 -> NaN phi_rate), so skip it.
     if extrapolate and pad > 0.0 and np.any(flow > 0.0):
-        phi_v, phi_t = _boundary_extrapolated_map(flow, flow_cum, tedges_days, pad)
+        # The boundary extrapolation slope is 1/Q, anchored on the nearest strictly-positive flow so
+        # a zero-flow boundary bin (whose flow_cum step is only the strictly-monotone ulp bump) does
+        # not give a 1/0 extrapolation.
+        positive_flow = flow[flow > 0.0]
+        phi_v = np.concatenate([[flow_cum[0] - pad], flow_cum, [flow_cum[-1] + pad]])
+        phi_t = np.concatenate([
+            [tedges_days[0] - pad * (1.0 / positive_flow[0])],
+            tedges_days,
+            [tedges_days[-1] + pad * (1.0 / positive_flow[-1])],
+        ])
     else:
         phi_v, phi_t = flow_cum, tedges_days
     phi_dv = phi_v[1:] - phi_v[:-1]
@@ -263,8 +204,7 @@ def full(
     ``[cout_tedges[i], cout_tedges[i + 1])`` and returned as the full
     ``(n_pore_volumes, n_output_bins)`` array -- one row per entry in
     ``aquifer_pore_volumes``, without collapsing the pore-volume axis. The average is uniform in
-    cumulative throughflow volume, matching the package's bin-edge convention (and what the diffusion
-    modules consume to compute a per-bin retarded velocity).
+    cumulative throughflow volume, matching the package's bin-edge convention.
 
     Parameters
     ----------
@@ -915,7 +855,7 @@ def gamma(
         # Warm-start the full support only when the phi map was actually extended -- i.e. there is a
         # positive boundary flow to extrapolate from (matching full's `strict`). With all-zero flow the
         # map stays the raw record (see _phi_setup), so an out-of-record parcel is in spin-up (-> NaN);
-        # the raw `extrapolate` flag alone would instead clamp it to a finite pointwise value (RT-P2).
+        # the raw `extrapolate` flag alone would instead clamp it to a finite pointwise value.
         if extrapolate and bool(np.any(flow > 0.0)):
             vp_hi = np.full(v.shape, support_hi)
         else:

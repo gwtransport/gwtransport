@@ -5,14 +5,11 @@ This module shares the conceptual model of :mod:`gwtransport.diffusion` and
 :mod:`gwtransport.diffusion_fast` -- advection with microdispersion (``alpha_L``) and molecular
 diffusion (``D_m``) along orthogonal (Cartesian) flow paths, one independent streamtube per aquifer
 pore volume, the spread across the pore volume distribution providing macrodispersion, and linear
-sorption via the retardation factor. It
-targets the bin-averaged Kreft-Zuber (1978) flux concentration ``C_F`` on the streamtube bundle, but
-trades exactness for a single fast (~1.5 ms) native-grid evaluation that does not depend on the flow
-being constant.
-It is **approximate**: where :mod:`gwtransport.diffusion_fast` reproduces the quadrature reference to
-machine precision, this module is exact only up to a small interpolation floor at constant flow (see
-Accuracy below) and degrades under variable flow. When you need machine precision, use
-:mod:`gwtransport.diffusion_fast`.
+sorption via the retardation factor. It targets the bin-averaged Kreft-Zuber (1978) flux
+concentration ``C_F`` on the streamtube bundle, but trades exactness for a single fast (~1.5 ms)
+native-grid evaluation that does not depend on the flow being constant. It is **approximate** --
+see Accuracy below for the error budget and when to reach for :mod:`gwtransport.diffusion_fast`
+instead.
 
 How it works -- one skewed breakthrough on the native volume grid
 -----------------------------------------------------------------
@@ -61,17 +58,8 @@ closed-form loop, no dense ``(n_cout, n_cin)`` matrix) and solves it with banded
 regularisation (banded Cholesky, ``O(n * band**2)``), so it is much faster than
 :mod:`gwtransport.diffusion_fast`'s reverse, especially for many streamtubes. Inverting exactly the
 forward operator makes a round trip self-consistent (recovering the input up to the deconvolution
-conditioning). On *real* extraction data the reverse is only as accurate as the forward: at constant
-flow it reproduces :mod:`gwtransport.diffusion_fast`'s reverse to ~1e-6, while in the
-molecular-dominated corner under strongly variable flow the deconvolution amplifies the forward's
-commutator residual -- use :mod:`gwtransport.diffusion_fast` there.
-
-Available functions:
-
-- :func:`infiltration_to_extraction` -- forward transport (approximate).
-- :func:`extraction_to_infiltration` -- inverse via banded Tikhonov regularisation (approximate).
-- :func:`gamma_infiltration_to_extraction` -- gamma-distributed APVD (forward).
-- :func:`gamma_extraction_to_infiltration` -- same, inverse.
+conditioning); on *real* extraction data the reverse carries the forward's error budget above,
+amplified by the deconvolution conditioning.
 
 References
 ----------
@@ -92,16 +80,16 @@ from gwtransport import gamma
 from gwtransport._diffusion_shared import (
     _DT_FLOOR,
     _EPSILON_COEFF_SUM,
+    _advective_valid_cout_bins,
     _breakthrough_antideriv,
-    _broadcast_to_pore_volumes,
+    _coerce_and_validate,
     _cout_cumulative_volume,
+    _extend_tedges,
     _extend_tedges_flag,
     _solve_reverse_banded,
-    _validate_inputs,
 )
 from gwtransport._time import dt_to_days, tedges_to_days
 from gwtransport.diffusion_fast import _DEFAULT_SATURATION_THRESHOLD
-from gwtransport.residence_time import fraction_explained_full
 from gwtransport.utils import cumulative_flow_volume
 
 # Samples per native bin used to discretise the 1D breakthrough antiderivative ``Ibar``. Higher =
@@ -129,7 +117,6 @@ def _summed_antideriv(
     retardation_factor: float,
     q_mean: float,
     mean_bin_volume: float,
-    saturation_threshold: float,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating], float, float, float]:
     r"""Precompute the APVD-summed breakthrough antiderivative ``Ibar(dV)`` on a fine 1D grid.
 
@@ -175,7 +162,7 @@ def _summed_antideriv(
     """
     r_vpv = retardation_factor * aquifer_pore_volumes
     mean_r_vpv = float(r_vpv.mean())
-    u = saturation_threshold
+    u = _DEFAULT_SATURATION_THRESHOLD
     # Molecular diffusion as an effective dispersivity (see docstring): D_t = alpha_eff*xi. q_mean > 0
     # is guaranteed -- _build_forward_operator returns early when total_volume <= 0, and
     # tedges_days[-1] - tedges_days[0] > 0 for any valid strictly-increasing tedges.
@@ -224,9 +211,9 @@ def _eval_antideriv(
     g0 = grid[0]
     dstep = grid[1] - grid[0]
     f = (dv - g0) / dstep
-    # astype truncates toward zero; equals floor on f >= 0 (the only regime that survives the
-    # dv < g0 override below and the lower clip), so the floor call is redundant. Precompute the
-    # segment slopes once so the O(N*band) gather reads a single array instead of differencing two.
+    # astype truncates toward zero, which equals floor on f >= 0 -- the only regime that survives
+    # the dv < g0 override below and the lower clip. Precompute the segment slopes once so the
+    # O(N*band) gather reads a single array instead of differencing two.
     slopes = np.diff(ibar)
     i0 = np.clip(f.astype(np.intp), 0, grid.size - 2)
     out = ibar[i0] + (f - i0) * slopes[i0]
@@ -313,7 +300,6 @@ def _build_forward_operator(
     longitudinal_dispersivity: npt.NDArray[np.floating],
     retardation_factor: float,
     extend: bool,
-    saturation_threshold: float,
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp], npt.NDArray[np.bool_]] | None:
     r"""Build the cin-independent pieces of the approximate banded forward operator ``W``.
 
@@ -360,7 +346,6 @@ def _build_forward_operator(
         retardation_factor=retardation_factor,
         q_mean=q_mean,
         mean_bin_volume=mean_bin_volume,
-        saturation_threshold=saturation_threshold,
     )
     coeff, cin_bin = _breakthrough_band(
         cumulative_volume_at_cin=cumulative_volume_at_cin,
@@ -374,26 +359,13 @@ def _build_forward_operator(
     )
 
     # Mask bins beyond the data range (and, without warm-start, incompletely-broken-through spin-up
-    # bins). residence_time uses the extended grid when warm-starting so spin-up bins stay valid.
-    work_tedges = tedges
-    if extend:
-        # Timestamp arithmetic keeps the input timezone (tz-naive stays naive, tz-aware
-        # stays tz-aware); going through ``.to_numpy()`` would strip the tz.
-        pad = pd.Timedelta(days=36500)
-        work_tedges = (tedges[:1] - pad).append(tedges[1:-1]).append(tedges[-1:] + pad)
-    # Output bin valid where every streamtube's advective look-back is in-record across the whole
-    # bin (advective coverage == 1 for all pore volumes; NaN outside the record -> invalid).
-    valid = np.all(
-        fraction_explained_full(
-            flow=flow,
-            tedges=work_tedges,
-            cout_tedges=cout_tedges,
-            aquifer_pore_volumes=aquifer_pore_volumes,
-            retardation_factor=retardation_factor,
-            direction="extraction_to_infiltration",
-        )
-        >= 1.0,
-        axis=0,
+    # bins). The look-back runs on the extended grid when warm-starting so spin-up bins stay valid.
+    valid = _advective_valid_cout_bins(
+        flow=flow,
+        tedges=_extend_tedges(tedges) if extend else tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        retardation_factor=retardation_factor,
     )
     return coeff, cin_bin, valid
 
@@ -457,7 +429,6 @@ def infiltration_to_extraction(
     retardation_factor: float = 1.0,
     flow_out: npt.ArrayLike | None = None,
     spinup: str | None = "constant",
-    saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Compute extracted concentration with advection, microdispersion, and molecular diffusion (approximate).
 
@@ -506,9 +477,6 @@ def infiltration_to_extraction(
     spinup : {"constant"} | None, optional
         ``"constant"`` (default) extends ``tedges`` by 100 years on each side so a constant
         warm-start fills the left-edge spin-up region; ``None`` leaves spin-up cout as NaN.
-    saturation_threshold : float, optional
-        Breakthrough-band cutoff ``U`` (default 7.0). Sets how far into the breakthrough tail the
-        banded build reaches; see :func:`gwtransport.diffusion_fast.infiltration_to_extraction`.
 
     Returns
     -------
@@ -524,15 +492,7 @@ def infiltration_to_extraction(
     extraction_to_infiltration : Inverse operation (deconvolves this same operator).
     :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion.
     """
-    tedges = pd.DatetimeIndex(tedges)
-    cout_tedges = pd.DatetimeIndex(cout_tedges)
-    cin = np.asarray(cin, dtype=float)
-    flow = np.asarray(flow, dtype=float)
-    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
-    if flow_out is not None:
-        flow_out = np.asarray(flow_out, dtype=float)
-
-    _validate_inputs(
+    cin, transport = _coerce_and_validate(
         cin_or_cout=cin,
         flow=flow,
         tedges=tedges,
@@ -545,30 +505,11 @@ def infiltration_to_extraction(
         is_forward=True,
         flow_out=flow_out,
     )
-
-    n_pv = len(aquifer_pore_volumes)
-    streamline_length = _broadcast_to_pore_volumes(streamline_length, n_pv)
-    molecular_diffusivity = _broadcast_to_pore_volumes(molecular_diffusivity, n_pv)
-    longitudinal_dispersivity = _broadcast_to_pore_volumes(longitudinal_dispersivity, n_pv)
-
-    n_cout = len(cout_tedges) - 1
     extend = _extend_tedges_flag(spinup)
-    operator = _build_forward_operator(
-        flow=flow,
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        flow_out=flow_out,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        streamline_length=streamline_length,
-        molecular_diffusivity=molecular_diffusivity,
-        longitudinal_dispersivity=longitudinal_dispersivity,
-        retardation_factor=retardation_factor,
-        extend=extend,
-        saturation_threshold=saturation_threshold,
-    )
+    operator = _build_forward_operator(**transport, retardation_factor=retardation_factor, extend=extend)
     if operator is None:
         # No through-flow: nothing breaks through (matches diffusion_fast's all-NaN result).
-        return np.full(n_cout, np.nan)
+        return np.full(len(transport["cout_tedges"]) - 1, np.nan)
     coeff, cin_bin, valid = operator
 
     # Apply the banded breakthrough operator to the (warm-start-extended) cin. Output bins with no
@@ -594,7 +535,6 @@ def extraction_to_infiltration(
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
     spinup: str | None = "constant",
-    saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Reconstruct infiltration concentration from extracted water (fast approximate deconvolution).
 
@@ -644,8 +584,6 @@ def extraction_to_infiltration(
         :func:`infiltration_to_extraction`. Default None.
     spinup : {"constant"} | None, optional
         See :func:`infiltration_to_extraction`. Default ``"constant"``.
-    saturation_threshold : float, optional
-        See :func:`infiltration_to_extraction`. Default 7.0.
 
     Returns
     -------
@@ -660,15 +598,7 @@ def extraction_to_infiltration(
         use it when the approximation is unacceptable.
     :ref:`concept-dispersion-scales` : Macrodispersion vs microdispersion.
     """
-    tedges = pd.DatetimeIndex(tedges)
-    cout_tedges = pd.DatetimeIndex(cout_tedges)
-    cout = np.asarray(cout, dtype=float)
-    flow = np.asarray(flow, dtype=float)
-    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
-    if flow_out is not None:
-        flow_out = np.asarray(flow_out, dtype=float)
-
-    _validate_inputs(
+    cout, transport = _coerce_and_validate(
         cin_or_cout=cout,
         flow=flow,
         tedges=tedges,
@@ -681,27 +611,9 @@ def extraction_to_infiltration(
         is_forward=False,
         flow_out=flow_out,
     )
-
-    n_pv = len(aquifer_pore_volumes)
-    streamline_length = _broadcast_to_pore_volumes(streamline_length, n_pv)
-    molecular_diffusivity = _broadcast_to_pore_volumes(molecular_diffusivity, n_pv)
-    longitudinal_dispersivity = _broadcast_to_pore_volumes(longitudinal_dispersivity, n_pv)
-
-    n_cin = len(tedges) - 1
+    n_cin = len(transport["flow"])
     extend = _extend_tedges_flag(spinup)
-    operator = _build_forward_operator(
-        flow=flow,
-        tedges=tedges,
-        cout_tedges=cout_tedges,
-        flow_out=flow_out,
-        aquifer_pore_volumes=aquifer_pore_volumes,
-        streamline_length=streamline_length,
-        molecular_diffusivity=molecular_diffusivity,
-        longitudinal_dispersivity=longitudinal_dispersivity,
-        retardation_factor=retardation_factor,
-        extend=extend,
-        saturation_threshold=saturation_threshold,
-    )
+    operator = _build_forward_operator(**transport, retardation_factor=retardation_factor, extend=extend)
     if operator is None:
         # No through-flow: nothing constrains the infiltration signal.
         return np.full(n_cin, np.nan)
@@ -736,7 +648,6 @@ def gamma_infiltration_to_extraction(
     retardation_factor: float = 1.0,
     flow_out: npt.ArrayLike | None = None,
     spinup: str | None = "constant",
-    saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Compute extracted concentration for a gamma-distributed pore volume distribution (approximate).
 
@@ -777,8 +688,6 @@ def gamma_infiltration_to_extraction(
         :func:`infiltration_to_extraction`. Default None.
     spinup : {"constant"} | None, optional
         See :func:`infiltration_to_extraction`. Default ``"constant"``.
-    saturation_threshold : float, optional
-        See :func:`infiltration_to_extraction`. Default 7.0.
 
     Returns
     -------
@@ -806,7 +715,6 @@ def gamma_infiltration_to_extraction(
         retardation_factor=retardation_factor,
         flow_out=flow_out,
         spinup=spinup,
-        saturation_threshold=saturation_threshold,
     )
 
 
@@ -829,7 +737,6 @@ def gamma_extraction_to_infiltration(
     regularization_strength: float = 1e-10,
     flow_out: npt.ArrayLike | None = None,
     spinup: str | None = "constant",
-    saturation_threshold: float = _DEFAULT_SATURATION_THRESHOLD,
 ) -> npt.NDArray[np.floating]:
     """Reconstruct infiltration concentration for a gamma-distributed pore volume distribution.
 
@@ -872,8 +779,6 @@ def gamma_extraction_to_infiltration(
         :func:`infiltration_to_extraction`. Default None.
     spinup : {"constant"} | None, optional
         See :func:`infiltration_to_extraction`. Default ``"constant"``.
-    saturation_threshold : float, optional
-        See :func:`infiltration_to_extraction`. Default 7.0.
 
     Returns
     -------
@@ -901,5 +806,4 @@ def gamma_extraction_to_infiltration(
         regularization_strength=regularization_strength,
         flow_out=flow_out,
         spinup=spinup,
-        saturation_threshold=saturation_threshold,
     )

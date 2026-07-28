@@ -23,6 +23,7 @@ from gwtransport.fronttracking.output import (
     compute_total_outlet_mass,
     concentration_at_point,
     identify_outlet_segments,
+    integrate_fan_exact,
     integrate_rarefaction_exact,
 )
 from gwtransport.fronttracking.solver import FrontTracker
@@ -384,8 +385,8 @@ class TestIdentifyOutletSegments:
         assert segments == background
 
 
-class TestLegacyDecayingFanBinAverage:
-    """Legacy outlet-segment integration of a DSW fan clamps at c_fan_tail, not c_fixed (#311).
+class TestDecayingFanOutletIntegral:
+    """The DSW fan's outlet θ-integral clamps at c_fan_tail, not c_fixed (#311).
 
     Hand-constructed Freundlich ``n=2``, ``c_fixed=0`` DecayingShockWave (closed-form trajectory,
     apex at (V=0, θ=1000), K=1000/27) with a nonzero fan-tail plateau ``c_fan_tail=0.5``. After
@@ -396,7 +397,7 @@ class TestLegacyDecayingFanBinAverage:
     c_fan_tail, and ``∫ c dθ = (a/2)²·Δv·[-(r-1)^{-1}]`` in closed form.
     """
 
-    def test_bin_average_matches_closed_form_plateau_oracle(self):
+    def test_fan_integral_matches_closed_form_plateau_oracle(self):
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         a_half = 0.5 * sorption.bulk_density * sorption.k_f / sorption.porosity  # 25.0
         theta_origin, v_origin = 1000.0, 0.0
@@ -418,7 +419,7 @@ class TestLegacyDecayingFanBinAverage:
         assert theta_cross is not None
         np.testing.assert_allclose(theta_cross, 79000.0 / 27.0, rtol=1e-12)  # c_decay=1 at crossing
 
-        theta_a, theta_b = 2000.0, 4500.0
+        theta_b = 4500.0
         # Wave still valid at theta_b: c_decay(theta_b) > c_fan_tail.
         c_decay_end = wave.c_decay_at_theta(theta_b)
         assert c_decay_end is not None
@@ -432,53 +433,15 @@ class TestLegacyDecayingFanBinAverage:
         assert theta_cross < theta_tail < theta_b
         fan_mass = a_half**2 * delta_v * (1.0 / (r_cross - 1.0) - 1.0 / (r_tail - 1.0))
         plateau_mass = c_fan_tail * (theta_b - theta_tail)
-        # Pre-arrival: downstream of the shock the outlet sees c_fixed = 0.
-        expected_avg = (fan_mass + plateau_mass) / (theta_b - theta_a)
 
-        c_avg = compute_bin_averaged_concentration_exact(np.array([theta_a, theta_b]), v_outlet, [wave], sorption)
-        np.testing.assert_allclose(c_avg, [expected_avg], rtol=1e-12)
+        integral = integrate_fan_exact(
+            theta_origin, v_origin, v_outlet, theta_cross, theta_b, sorption, c_apex=c_fan_tail
+        )
+        np.testing.assert_allclose(integral, fan_mass + plateau_mass, rtol=1e-12)
 
 
 class TestIntegrateRarefactionExact:
     """Test exact analytical integration of rarefaction (θ-based)."""
-
-    def test_integration_positive_definite(self):
-        """Integration returns positive value."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        raref = RarefactionWave(
-            theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
-        )
-        v_outlet = 500.0
-
-        # Pick θ range inside the rarefaction at the outlet.
-        theta_head = v_outlet / raref.head_speed()
-        theta_tail = v_outlet / raref.tail_speed()
-        theta_start = theta_head + 100.0
-        theta_end = theta_tail - 100.0
-
-        integral = integrate_rarefaction_exact(raref, v_outlet, theta_start, theta_end, sorption)
-
-        assert integral > 0
-
-    def test_integration_additive(self):
-        """Additivity: ∫[a,c] = ∫[a,b] + ∫[b,c]."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        raref = RarefactionWave(
-            theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
-        )
-        v_outlet = 500.0
-
-        theta_head = v_outlet / raref.head_speed()
-        theta_tail = v_outlet / raref.tail_speed()
-        theta_a = theta_head + 100.0
-        theta_b = 0.5 * (theta_a + theta_tail)
-        theta_c = theta_tail - 100.0
-
-        integral_ac = integrate_rarefaction_exact(raref, v_outlet, theta_a, theta_c, sorption)
-        integral_ab = integrate_rarefaction_exact(raref, v_outlet, theta_a, theta_b, sorption)
-        integral_bc = integrate_rarefaction_exact(raref, v_outlet, theta_b, theta_c, sorption)
-
-        assert np.isclose(integral_ac, integral_ab + integral_bc, rtol=1e-14)
 
     def test_integration_matches_numerical_quadrature(self):
         """Exact integral matches high-accuracy adaptive quadrature.
@@ -522,7 +485,11 @@ class TestIntegrateRarefactionExact:
 
 
 class TestComputeBinAveragedConcentrationExact:
-    """Test θ-bin-averaged concentration with exact integration."""
+    """Test θ-bin-averaged concentration with exact integration.
+
+    Every case pairs the wave list with the ``cin`` / ``theta_edges_inlet`` record that
+    produces it from a c=0 initial condition, as the ``(Δm_in − Δm_dom)/Δθ`` identity requires.
+    """
 
     def test_constant_concentration_exact_average(self):
         """Bin averaging with constant concentration."""
@@ -533,7 +500,14 @@ class TestComputeBinAveragedConcentrationExact:
 
         # Char arrives at θ=1000. Bins: [0,500], [500,1000], [1000,1500], [1500,2000].
         theta_edges = np.array([0.0, 500.0, 1000.0, 1500.0, 2000.0])
-        c_avg = compute_bin_averaged_concentration_exact(theta_edges, v_outlet, waves, sorption)
+        c_avg = compute_bin_averaged_concentration_exact(
+            theta_edges,
+            v_outlet,
+            waves,
+            sorption,
+            cin=np.array([5.0]),
+            theta_edges_inlet=np.array([0.0, 3000.0]),
+        )
 
         assert c_avg[0] == 0.0  # [0, 500]
         assert c_avg[1] == 0.0  # [500, 1000] — arrival exactly at right edge
@@ -565,7 +539,14 @@ class TestComputeBinAveragedConcentrationExact:
         # char1 reaches outlet at θ=1000, char2 reaches at θ=1500.
         # Total mass extracted via θ-integral = 10 * (1500-1000) = 5000.
         theta_edges = np.linspace(0, 3000, 31)
-        c_avg = compute_bin_averaged_concentration_exact(theta_edges, v_outlet, waves, sorption)
+        c_avg = compute_bin_averaged_concentration_exact(
+            theta_edges,
+            v_outlet,
+            waves,
+            sorption,
+            cin=np.array([10.0, 0.0]),
+            theta_edges_inlet=np.array([0.0, 500.0, 3000.0]),
+        )
 
         dtheta = np.diff(theta_edges)
         # ∫ c dθ in θ-coordinates equals mass extracted.
@@ -588,31 +569,6 @@ class TestComputeBinAveragedConcentrationExact:
         )
         assert np.isclose(mass_extracted, mass_quad, rtol=1e-12)
 
-    def test_rarefaction_bin_averaging_exact(self):
-        """Bin averaging with rarefaction uses exact integration."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        raref = RarefactionWave(
-            theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
-        )
-        waves = [raref]
-        v_outlet = 500.0
-
-        theta_head = v_outlet / raref.head_speed()
-        theta_tail = v_outlet / raref.tail_speed()
-
-        theta_edges = np.linspace(theta_head - 500.0, theta_tail + 500.0, 20)
-        c_avg = compute_bin_averaged_concentration_exact(theta_edges, v_outlet, waves, sorption)
-
-        assert np.all(c_avg >= 0)
-
-        theta_centers = 0.5 * (theta_edges[:-1] + theta_edges[1:])
-        raref_bins = (theta_centers > theta_head) & (theta_centers < theta_tail)
-        if np.any(raref_bins):
-            c_min = min(raref.c_head, raref.c_tail)
-            c_max = max(raref.c_head, raref.c_tail)
-            assert np.all(c_avg[raref_bins] >= c_min - 1e-10)
-            assert np.all(c_avg[raref_bins] <= c_max + 1e-10)
-
     def test_invalid_bins_raise_error(self):
         """Invalid θ-bins (decreasing) raise ValueError."""
         sorption = ConstantRetardation(retardation_factor=2.0)
@@ -622,42 +578,29 @@ class TestComputeBinAveragedConcentrationExact:
         theta_edges = np.array([1000.0, 500.0, 0.0])
 
         with pytest.raises(ValueError, match="Invalid θ-bin"):
-            compute_bin_averaged_concentration_exact(theta_edges, v_outlet, waves, sorption)
+            compute_bin_averaged_concentration_exact(
+                theta_edges,
+                v_outlet,
+                waves,
+                sorption,
+                cin=np.array([5.0]),
+                theta_edges_inlet=np.array([0.0, 3000.0]),
+            )
 
-    def test_fine_binning_converges_to_breakthrough_curve(self):
-        """Fine binning approximates breakthrough curve."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=sorption, is_active=True)
-        waves = [shock]
-        v_outlet = 300.0
+    def test_single_shock_matches_analytic_top_hat(self):
+        """A single ``c_right = 0`` shock gives the exact analytic top-hat bin average.
 
-        theta_edges = np.linspace(0, 2000, 1001)
-        c_avg = compute_bin_averaged_concentration_exact(theta_edges, v_outlet, waves, sorption)
+        Closed form: with ``C_T(0) = 0`` the Rankine-Hugoniot speed is
+        ``v_s = c_left / C_T(c_left)``, so ``m_dom(θ) = C_T(c_left)·min(v_s·θ, v_outlet)``
+        cancels ``m_in(θ) = c_left·θ`` exactly before the crossing
+        ``θ_cross = v_outlet / v_s`` and leaves ``m_out(θ) = c_left·(θ − θ_cross)`` after it.
+        The bin average is therefore ``c_left`` times the overlap of the bin with
+        ``[θ_cross, ∞)``, divided by Δθ — a wave-geometry-dependent truth that no wave-list
+        mutation preserves.
 
-        theta_centers = 0.5 * (theta_edges[:-1] + theta_edges[1:])
-        c_breakthrough = compute_breakthrough_curve(theta_centers, v_outlet, waves, sorption)
-
-        assert np.allclose(c_avg, c_breakthrough, rtol=1e-3)
-
-
-class TestConservationFormBinAverage:
-    """Test the conservation-form branch of ``compute_bin_averaged_concentration_exact``.
-
-    Passing ``cin`` + ``theta_edges_inlet`` switches the function to the
-    ``c_avg = (Δm_in − Δm_dom) / Δθ`` identity (the recommended multi-DSW
-    path, carrying the FP-cancellation clamp and the post-inlet ``UserWarning``).
-    Tests without those kwargs only exercise the legacy segment path.
-    """
-
-    def test_conservation_form_bin_average_matches_legacy(self):
-        """Conservation form agrees with the legacy segment path for a single shock.
-
-        For a canonical single ShockWave (``c_right = 0``) crossing the outlet,
-        both paths are valid. They must agree to the floating-point
-        cancellation bound of the ``m_in − m_dom`` subtraction, which is
-        ``atol ≈ k · ε_machine · max(m_in) / min(Δθ)`` (the two cumulative-mass
-        endpoint evaluations each carry ~``ε·m`` rounding, amplified by
-        ``1/Δθ``). This bound is derived from the inputs, not assumed.
+        Precision floor: ``m_out`` is a cancellation of two ``O(m_in)`` quantities, so each
+        edge carries ~``ε·m_in`` rounding and the bin average carries ~``ε·m_in/Δθ``. Measured
+        worst-case error is 2.1e-13 against a ``16·ε·m_in_max/Δθ_min`` bound of 7.1e-13.
         """
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         c_left = 10.0
@@ -668,141 +611,25 @@ class TestConservationFormBinAverage:
         assert shock.speed is not None
         theta_cross = v_outlet / shock.speed
 
-        # Offset the edges so none lands exactly on the crossing (a coarse edge
-        # exactly at the crossing would expose the legacy path's arrival-bin
-        # discretization, not an FP effect) and use fine bins.
+        # Offset the edges so none lands exactly on the crossing, and use fine bins.
         theta_edges_out = np.linspace(7.0, theta_cross * 2.0 + 7.0, 200)
-        # Inlet history consistent with the wave: sustained c_left, window
+        # Inlet history consistent with the wave: sustained c_left from θ=0, window
         # comfortably covering the output range.
         theta_edges_inlet = np.array([0.0, theta_edges_out[-1] * 3.0])
         cin = np.array([c_left])
 
-        c_legacy = compute_bin_averaged_concentration_exact(theta_edges_out, v_outlet, waves, sorption)
-        c_cons = compute_bin_averaged_concentration_exact(
+        c_avg = compute_bin_averaged_concentration_exact(
             theta_edges_out, v_outlet, waves, sorption, cin=cin, theta_edges_inlet=theta_edges_inlet
         )
 
-        # Derived FP-cancellation bound (factor 8 covers both endpoint evals
-        # plus the final difference).
-        eps = np.finfo(float).eps
-        m_in_max = compute_cumulative_inlet_mass(float(theta_edges_out[-1]), cin, theta_edges_inlet)
+        overlap = theta_edges_out[1:] - np.clip(theta_cross, theta_edges_out[:-1], theta_edges_out[1:])
+        expected = c_left * overlap / np.diff(theta_edges_out)
+
         dtheta_min = float(np.min(np.diff(theta_edges_out)))
-        atol = 8.0 * eps * m_in_max / dtheta_min
+        m_in_max = compute_cumulative_inlet_mass(float(theta_edges_out[-1]), cin, theta_edges_inlet)
+        atol = 16.0 * np.finfo(float).eps * m_in_max / dtheta_min
 
-        assert np.max(np.abs(c_cons - c_legacy)) <= atol
-
-    def test_conservation_form_no_warning_for_in_window_output(self, recwarn):
-        """In-window output range emits no UserWarning under the conservation form.
-
-        When every output θ-edge lies inside ``[0, theta_edges_inlet[-1]]`` the
-        inlet integral and the wave list share a consistent θ range, so the
-        FP-cancellation diagnostic must stay silent.
-        """
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        c_left = 10.0
-        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=c_left, c_right=0.0, sorption=sorption, is_active=True)
-        waves = [shock]
-        v_outlet = 300.0
-
-        assert shock.speed is not None
-        theta_cross = v_outlet / shock.speed
-
-        theta_edges_out = np.linspace(7.0, theta_cross * 2.0 + 7.0, 50)
-        # Inlet window strictly past the largest output edge.
-        theta_edges_inlet = np.array([0.0, theta_edges_out[-1] * 3.0])
-        cin = np.array([c_left])
-
-        compute_bin_averaged_concentration_exact(
-            theta_edges_out, v_outlet, waves, sorption, cin=cin, theta_edges_inlet=theta_edges_inlet
-        )
-
-        assert len(recwarn.list) == 0, "No warning expected for output bins inside the inlet window"
-
-    def test_conservation_form_warns_when_output_exceeds_inlet_window(self):
-        """Driving output edges past ``theta_edges_inlet[-1]`` fires the UserWarning.
-
-        Once the output range exceeds the inlet window, ``m_in`` saturates at
-        the last injected mass while the wave list keeps evolving, producing
-        FP-cancellation residuals on inconsistent θ ranges. The function must
-        surface this as a ``UserWarning`` (and still clamp the result to the
-        ``cout >= 0`` contract).
-        """
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        c_left = 10.0
-        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=c_left, c_right=0.0, sorption=sorption, is_active=True)
-        waves = [shock]
-        v_outlet = 300.0
-
-        assert shock.speed is not None
-        theta_cross = v_outlet / shock.speed
-
-        theta_edges_out = np.linspace(7.0, theta_cross * 2.0 + 7.0, 50)
-        # Inlet window ends BEFORE the output range — output edges exceed it.
-        theta_edges_inlet = np.array([0.0, theta_cross * 0.5])
-        cin = np.array([c_left])
-
-        with pytest.warns(UserWarning, match="exceeding"):
-            result = compute_bin_averaged_concentration_exact(
-                theta_edges_out, v_outlet, waves, sorption, cin=cin, theta_edges_inlet=theta_edges_inlet
-            )
-
-        # The clamp preserves the non-negativity contract despite the warning.
-        assert np.all(result >= 0.0)
-
-
-class TestMachinePrecision:
-    """Test that all functions maintain machine precision."""
-
-    def test_characteristic_roundtrip_exact(self):
-        """Characteristic position calculation is exact."""
-        sorption = ConstantRetardation(retardation_factor=2.0)
-        char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=sorption, is_active=True)
-
-        # At θ=1000: v = (1/2)·1000 = 500.
-        v_at_theta = char.position_at_theta(1000.0)
-        assert v_at_theta is not None
-
-        c = concentration_at_point(v=v_at_theta, theta=1000.0, waves=[char], sorption=sorption)
-
-        assert c == 5.0
-
-    def test_shock_velocity_exact_rankine_hugoniot(self):
-        """Shock speed satisfies Rankine-Hugoniot exactly in (V, θ)."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-
-        c_left = 10.0
-        c_right = 2.0
-
-        shock = ShockWave(
-            theta_start=0.0, v_start=0.0, c_left=c_left, c_right=c_right, sorption=sorption, is_active=True
-        )
-
-        # R-H in (V, θ): dV_s/dθ = (c_R - c_L)/(C_T(c_R) - C_T(c_L)).
-        speed_expected = (c_right - c_left) / (
-            sorption.total_concentration(c_right) - sorption.total_concentration(c_left)
-        )
-
-        assert shock.speed is not None
-        assert np.isclose(shock.speed, speed_expected, rtol=1e-14)
-
-    def test_rarefaction_integral_machine_precision(self):
-        """Rarefaction integration is additive to machine precision."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        raref = RarefactionWave(
-            theta_start=0.0, v_start=0.0, c_head=10.0, c_tail=2.0, sorption=sorption, is_active=True
-        )
-        v_outlet = 500.0
-
-        theta_head = v_outlet / raref.head_speed()
-        theta_a = theta_head + 100.0
-        theta_b = theta_a + 1000.0
-        theta_c = theta_a + 2000.0
-
-        integral_ac = integrate_rarefaction_exact(raref, v_outlet, theta_a, theta_c, sorption)
-        integral_ab = integrate_rarefaction_exact(raref, v_outlet, theta_a, theta_b, sorption)
-        integral_bc = integrate_rarefaction_exact(raref, v_outlet, theta_b, theta_c, sorption)
-
-        assert np.isclose(integral_ac, integral_ab + integral_bc, rtol=1e-14, atol=1e-14)
+        np.testing.assert_allclose(c_avg, expected, rtol=0.0, atol=atol)
 
 
 class TestMassBalanceFunctions:
@@ -1076,7 +903,7 @@ class TestConservationFormClampScale:
 
         A genuine out-of-window residual needs the wave list to keep growing m_dom while m_in
         saturates — use a sustained boundary (single ShockWave, c_left=10) whose inlet record ends
-        before the output range.
+        before the output range. The ``cout >= 0`` contract survives the warning.
         """
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
         shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=0.0, sorption=sorption, is_active=True)
@@ -1087,9 +914,10 @@ class TestConservationFormClampScale:
         theta_edges_inlet = np.array([0.0, theta_cross * 0.5])  # ends before the output range
         cin = np.array([10.0])
         with pytest.warns(UserWarning, match="exceeding theta_edges_inlet"):
-            compute_bin_averaged_concentration_exact(
+            result = compute_bin_averaged_concentration_exact(
                 theta_edges_out, v_outlet, waves, sorption, cin=cin, theta_edges_inlet=theta_edges_inlet
             )
+        assert np.all(result >= 0.0)
 
 
 class TestTotalOutletMassSemantics:

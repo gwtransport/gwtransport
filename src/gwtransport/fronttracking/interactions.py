@@ -5,7 +5,7 @@ characteristics, shocks and rarefactions with the closed-form helpers in
 :mod:`gwtransport.fronttracking.events`. This module adds the missing interaction classes —
 anything a :class:`~gwtransport.fronttracking.waves.DecayingShockWave` or
 :class:`~gwtransport.fronttracking.waves.DoubleFanShockWave` participates in — via one uniform
-calculus (issue #294):
+calculus:
 
 - **Faces and feeders.** Every wave is a set of *faces* (a shock face, a contact, or a
   rarefaction/fan boundary line). Each face separates a *left* (upstream) from a *right*
@@ -43,7 +43,7 @@ from gwtransport.fronttracking.waves import (
 
 EPSILON_POSITION = 1e-15
 # Largest speed used to size the Lipschitz march when a feeder range touches a saturated
-# state (R = 0, λ = +∞ for van Genuchten-Mualem at S_e = 1). The step floor plus the D6
+# state (R = 0, λ = +∞ for van Genuchten-Mualem at S_e = 1). The step floor plus the
 # monotonic-outlet-mass tripwire back this rare case; the sorption isotherms never hit it.
 MAX_FINITE_SPEED = 1e6
 MERGE_MATCH_TOL = 1e-9  # feeder-equality tolerance for degenerate (zero-jump) successors
@@ -69,7 +69,15 @@ class Face:
 
     def position(self, theta: float) -> float | None:
         """Face position at ``theta`` (``None`` outside the wave's active θ-window)."""
-        return _face_position(self, theta)
+        wave = self.wave
+        if not wave.was_active_at(theta):
+            return None
+        if self.role == "boundary" and self.line is not None:
+            v_apex, theta_apex, speed = self.line
+            return v_apex + speed * (theta - theta_apex)
+        if isinstance(wave, RarefactionWave):
+            return wave.head_position_at_theta(theta) if self.role == "head" else wave.tail_position_at_theta(theta)
+        return wave.position_at_theta(theta)
 
 
 def _max_characteristic_speed(feeder: Feeder, sorption: SorptionModel) -> float:
@@ -94,12 +102,11 @@ def _far_bound(feeder: Feeder, sorption: SorptionModel, *, upstream: bool) -> fl
     return feeder.c_a if r_a <= r_b else feeder.c_b
 
 
-def iter_faces(wave: Wave, theta: float, *, include_boundaries: bool = True) -> list[Face]:
+def iter_faces(wave: Wave, theta: float) -> list[Face]:
     """Enumerate the faces of ``wave`` at ``theta`` (shock/contact/boundary).
 
     ``theta`` selects the *historical* boundary state: a free fan boundary line is a face
     only for ``θ`` before it was consumed by a wave entering the fan (mirroring
-    ``was_active_at``). ``include_boundaries=False`` drops boundary lines entirely.
     """
     if isinstance(wave, CharacteristicWave):
         left = Feeder.constant(wave.concentration)
@@ -122,15 +129,15 @@ def iter_faces(wave: Wave, theta: float, *, include_boundaries: bool = True) -> 
         return [head, tail]
 
     if isinstance(wave, DecayingShockWave):
-        return _decaying_shock_faces(wave, theta, include_boundaries=include_boundaries)
+        return _decaying_shock_faces(wave, theta)
 
     if isinstance(wave, DoubleFanShockWave):
-        return _double_fan_faces(wave, theta, include_boundaries=include_boundaries)
+        return _double_fan_faces(wave, theta)
 
     return []
 
 
-def _decaying_shock_faces(wave: DecayingShockWave, theta: float, *, include_boundaries: bool) -> list[Face]:
+def _decaying_shock_faces(wave: DecayingShockWave, theta: float) -> list[Face]:
     """Shock face (curved) plus the free fan boundary line of a decaying shock at ``theta``."""
     s = wave.sorption
     c_lo = min(wave.c_fan_tail, wave.c_decay_initial)
@@ -145,7 +152,7 @@ def _decaying_shock_faces(wave: DecayingShockWave, theta: float, *, include_boun
         shock = Face(wave, "shock", fixed, fan, is_curved=True, speed_bound=speed_bound)
     faces = [shock]
 
-    if include_boundaries and boundary_free:
+    if boundary_free:
         tail_c = Feeder.constant(wave.c_fan_tail)
         line_speed = characteristic_speed(wave.c_fan_tail, s)
         if np.isfinite(line_speed):
@@ -162,7 +169,7 @@ def _decaying_shock_faces(wave: DecayingShockWave, theta: float, *, include_boun
     return faces
 
 
-def _double_fan_faces(wave: DoubleFanShockWave, theta: float, *, include_boundaries: bool) -> list[Face]:
+def _double_fan_faces(wave: DoubleFanShockWave, theta: float) -> list[Face]:
     """Shock face (curved) plus the free left/right fan boundary lines of a doubly-fed shock."""
     s = wave.sorption
     left_free = not wave.left_boundary_consumed and theta < wave.theta_left_boundary_consumed
@@ -186,7 +193,7 @@ def _double_fan_faces(wave: DoubleFanShockWave, theta: float, *, include_boundar
     speed_bound = max(_max_characteristic_speed(left_fan, s), _max_characteristic_speed(right_fan, s))
     faces = [Face(wave, "shock", left_fan, right_fan, is_curved=True, speed_bound=speed_bound)]
 
-    if include_boundaries and left_free:
+    if left_free:
         c_far = _far_bound(left_fan, s, upstream=True)
         line_speed = characteristic_speed(c_far, s)
         if np.isfinite(line_speed):
@@ -198,7 +205,7 @@ def _double_fan_faces(wave: DoubleFanShockWave, theta: float, *, include_boundar
                     wave, left_fan.v_apex, left_fan.theta_apex, line_speed, Feeder.constant(c_far), entry_fan
                 )
             )
-    if include_boundaries and right_free:
+    if right_free:
         c_far = _far_bound(right_fan, s, upstream=False)
         line_speed = characteristic_speed(c_far, s)
         if np.isfinite(line_speed):
@@ -218,19 +225,6 @@ def _boundary_line(wave: Wave, v_apex: float, theta_apex: float, speed: float, l
     return Face(
         wave, "boundary", left, right, is_curved=False, speed_bound=abs(speed), line=(v_apex, theta_apex, speed)
     )
-
-
-def _face_position(face: Face, theta: float) -> float | None:
-    """Position of any face at ``theta`` (dispatch on role/backing wave)."""
-    wave = face.wave
-    if not wave.was_active_at(theta):
-        return None
-    if face.role == "boundary" and face.line is not None:
-        v_apex, theta_apex, speed = face.line
-        return v_apex + speed * (theta - theta_apex)
-    if isinstance(wave, RarefactionWave):
-        return wave.head_position_at_theta(theta) if face.role == "head" else wave.tail_position_at_theta(theta)
-    return wave.position_at_theta(theta)
 
 
 def find_face_crossing(
@@ -291,27 +285,18 @@ def find_face_crossing(
         if g_next is None:
             return None
         if g_prev * g_next <= 0.0:
-            root = _bracket_zero(gap, theta, theta_next)
-            if root is not None:
-                v = face_a.position(root)
-                return (root, v) if v is not None else None
+            # The step endpoints straddle zero (or one sits on it), so the root is
+            # bracketed; take the endpoint directly when it is already the root.
+            if abs(g_prev) < EPSILON_POSITION:
+                root = theta
+            elif abs(g_next) < EPSILON_POSITION:
+                root = theta_next
+            else:
+                root = float(brentq(gap, theta, theta_next, xtol=1e-13))
+            v = face_a.position(root)
+            return (root, v) if v is not None else None
         theta, g_prev = theta_next, g_next
     return None
-
-
-def _bracket_zero(gap, lo: float, hi: float) -> float | None:
-    """Root of ``gap`` in ``[lo, hi]`` (endpoints straddle zero, or one is ~0)."""
-    g_lo = gap(lo)
-    g_hi = gap(hi)
-    if g_lo is None or g_hi is None:
-        return None
-    if abs(g_lo) < EPSILON_POSITION:
-        return lo
-    if abs(g_hi) < EPSILON_POSITION:
-        return hi
-    if g_lo * g_hi > 0.0:
-        return None
-    return float(brentq(gap, lo, hi, xtol=1e-13))
 
 
 def make_wave_from_feeders(left: Feeder, right: Feeder, v: float, theta: float, sorption: SorptionModel) -> Wave | None:
@@ -331,7 +316,16 @@ def make_wave_from_feeders(left: Feeder, right: Feeder, v: float, theta: float, 
     if left.is_const or right.is_const:
         return _make_decaying_shock(left, right, v, theta, sorption)
 
-    return _make_double_fan(left, right, v, theta, sorption)
+    assert isinstance(sorption, NonlinearSorption)  # noqa: S101
+    return DoubleFanShockWave(
+        theta_start=theta,
+        v_start=v,
+        left_feeder=left,
+        right_feeder=right,
+        sorption=sorption,
+        left_boundary_consumed=not left.far_boundary_free,
+        right_boundary_consumed=not right.far_boundary_free,
+    )
 
 
 def _make_decaying_shock(left: Feeder, right: Feeder, v: float, theta: float, sorption: SorptionModel) -> Wave | None:
@@ -383,20 +377,6 @@ def _make_decaying_shock(left: Feeder, right: Feeder, v: float, theta: float, so
         theta_origin=fan.theta_apex,
         sorption=sorption,
         fan_boundary_consumed=not fan.far_boundary_free,
-    )
-
-
-def _make_double_fan(left: Feeder, right: Feeder, v: float, theta: float, sorption: SorptionModel) -> Wave | None:
-    """Successor for two fan feeders → a doubly-fed shock."""
-    assert isinstance(sorption, NonlinearSorption)  # noqa: S101
-    return DoubleFanShockWave(
-        theta_start=theta,
-        v_start=v,
-        left_feeder=left,
-        right_feeder=right,
-        sorption=sorption,
-        left_boundary_consumed=not left.far_boundary_free,
-        right_boundary_consumed=not right.far_boundary_free,
     )
 
 

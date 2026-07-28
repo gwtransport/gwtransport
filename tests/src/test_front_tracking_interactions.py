@@ -100,11 +100,9 @@ class TestRarefactionRarefactionNoInteraction:
 
     A rear rarefaction's head and the front rarefaction's tail both carry the separating
     constant state ``c*`` and move at the same celerity ``λ(c*)``; the gap is rigidly
-    translated and never closes (Rhee-Aris-Amundson). These tests verify that *outcome* —
-    same-family rarefactions coexist and never spawn a merge/shock successor between them —
-    not the solver's ``RAREF_RAREF_COLLISION`` handler itself, which for physical inputs is
-    never reached (no ``rarefaction_rarefaction`` event is ever emitted), consistent with its
-    documented no-op status (see theory doc §4.1).
+    translated and never closes (Rhee-Aris-Amundson). These tests pin that outcome:
+    same-family rarefactions coexist and never spawn a merge/shock successor between them,
+    which is why the solver carries no rarefaction-rarefaction event type at all.
     """
 
     def test_unfavorable_staircase_is_all_coexisting_rarefactions(self):

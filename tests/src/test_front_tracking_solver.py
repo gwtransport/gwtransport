@@ -268,7 +268,7 @@ class TestHandleEvent:
 
         initial_wave_count = len(tracker.state.waves)
 
-        tracker.run(max_iterations=100, verbose=False)
+        tracker.run(max_iterations=100)
 
         assert len(tracker.state.events) > 0, "Expected at least one event to be recorded"
         assert len(tracker.state.waves) >= initial_wave_count
@@ -290,7 +290,7 @@ class TestSimulationRun:
             sorption=freundlich_sorption,
         )
 
-        tracker.run(max_iterations=100, verbose=False)
+        tracker.run(max_iterations=100)
 
         assert len(tracker.state.events) > 0
         assert tracker.state.theta_current >= 0.0
@@ -308,7 +308,7 @@ class TestSimulationRun:
             sorption=freundlich_sorption,
         )
 
-        tracker.run(max_iterations=200, verbose=False)
+        tracker.run(max_iterations=200)
 
         assert len(tracker.state.events) > 0
 
@@ -327,7 +327,7 @@ class TestSimulationRun:
         # With constant retardation, concentration changes create characteristics.
         assert len(tracker.state.waves) >= 0
 
-        tracker.run(max_iterations=100, verbose=False)
+        tracker.run(max_iterations=100)
 
         assert tracker.state.theta_current >= 0.0
 
@@ -345,7 +345,7 @@ class TestSimulationRun:
             sorption=freundlich_sorption,
         )
 
-        tracker.run(max_iterations=500, verbose=False)
+        tracker.run(max_iterations=500)
 
         assert len(tracker.state.events) > 0
         assert len(tracker.state.waves) > 0
@@ -382,7 +382,7 @@ class TestPhysicsVerification:
             sorption=freundlich_sorption,
         )
 
-        tracker.run(max_iterations=100, verbose=False)
+        tracker.run(max_iterations=100)
 
         tracker.verify_physics()
 
@@ -402,7 +402,7 @@ class TestEventHistory:
             sorption=freundlich_sorption,
         )
 
-        tracker.run(max_iterations=100, verbose=False)
+        tracker.run(max_iterations=100)
 
         assert len(tracker.state.events) > 0
 
@@ -418,6 +418,17 @@ class TestEventHistory:
             assert isinstance(event["waves_before"], list)
             assert isinstance(event["waves_after"], list)
 
+        # Outlet crossings carry the crossing wave and its two states, and leave the wave
+        # ACTIVE so concentrations between its origin and the outlet stay queryable.
+        crossings = [e for e in tracker.state.events if e["type"] == "outlet_crossing"]
+        assert crossings, "step input must produce at least one outlet crossing"
+        for event in crossings:
+            wave = event["wave"]
+            assert wave.is_active
+            assert event["location"] == tracker.state.v_outlet
+            assert event["concentration_left"] == wave.concentration_left()
+            assert event["concentration_right"] == wave.concentration_right()
+
     def test_event_thetas_chronological(self, simple_step_input, freundlich_sorption):
         """Events are processed in θ-chronological order."""
         cin, flow, tedges = simple_step_input
@@ -430,7 +441,7 @@ class TestEventHistory:
             sorption=freundlich_sorption,
         )
 
-        tracker.run(max_iterations=100, verbose=False)
+        tracker.run(max_iterations=100)
 
         thetas = [event["theta"] for event in tracker.state.events]
         for i in range(len(thetas) - 1):
@@ -454,7 +465,7 @@ class TestEdgeCases:
             sorption=freundlich_sorption,
         )
 
-        tracker.run(max_iterations=10, verbose=False)
+        tracker.run(max_iterations=10)
 
     def test_single_time_bin(self, freundlich_sorption):
         """Single time bin: simulation completes."""
@@ -470,7 +481,7 @@ class TestEdgeCases:
             sorption=freundlich_sorption,
         )
 
-        tracker.run(max_iterations=50, verbose=False)
+        tracker.run(max_iterations=50)
 
     def test_very_small_domain(self, simple_step_input, freundlich_sorption):
         """Very small pore volume."""
@@ -484,7 +495,7 @@ class TestEdgeCases:
             sorption=freundlich_sorption,
         )
 
-        tracker.run(max_iterations=50, verbose=False)
+        tracker.run(max_iterations=50)
 
     def test_very_large_domain(self, simple_step_input, freundlich_sorption):
         """Very large pore volume."""
@@ -498,7 +509,7 @@ class TestEdgeCases:
             sorption=freundlich_sorption,
         )
 
-        tracker.run(max_iterations=50, verbose=False)
+        tracker.run(max_iterations=50)
 
 
 class TestVerifyPhysicsNegativeCases:
@@ -543,9 +554,9 @@ class TestVerifyPhysicsNegativeCases:
 class TestRuntimeMassBalanceVerification:
     """Conservation + runtime-check tests across sorption regimes.
 
-    ``verify_physics`` itself only checks shock entropy (the closed-form
+    ``verify_physics`` itself only checks shock entropy: the closed-form
     ``m_out := m_in − m_dom`` identity makes any runtime mass-balance assertion
-    tautological, so that machinery was removed). Conservation here is checked
+    tautological. Conservation here is checked
     by the INDEPENDENT breakthrough-integral route
     (``_independent_conservation_rel_err``), which shares no algebra with the
     identity and can actually fail on a domain-mass or outlet-concentration bug.
@@ -560,7 +571,7 @@ class TestRuntimeMassBalanceVerification:
         """0→4→0 pulse: ∫ c_out dθ + m_dom(θ_max) == Σ cin·Δθ; solver converges.
 
         Independent of the ``m_in − m_dom`` identity, so it catches outlet-route
-        and domain-mass bugs the removed runtime check could not. The setup guard
+        and domain-mass bugs that any identity-based check is blind to. The setup guard
         asserts most of the pulse exited, so the breakthrough integral carries the
         weight rather than the residual domain mass.
         """
@@ -573,7 +584,7 @@ class TestRuntimeMassBalanceVerification:
 
         tracker = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
         with caplog.at_level("WARNING", logger="gwtransport.fronttracking.solver"):
-            tracker.run(max_iterations=10000, verbose=False)
+            tracker.run(max_iterations=10000)
         assert "Reached max_iterations" not in caplog.text, "solver hit the iteration cap (non-convergence)"
 
         theta_max = float(tracker.state.theta_edges[-1])
@@ -588,15 +599,14 @@ class TestRuntimeMassBalanceVerification:
     def test_sustained_step_conserves_and_converges(self, simple_step_input, freundlich_sorption):
         """Sustained 0→10 step: domain fills; ∫ c_out dθ + m_dom(θ_max) == Σ cin·Δθ.
 
-        Renamed from ``test_mass_balance_at_early_simulation`` (which ran to the
-        END despite the name). The step sustains cin[-1]>0, so m_dom(θ_max) carries
-        the plateau and the independent identity still holds.
+        The step sustains ``cin[-1] > 0``, so ``m_dom(θ_max)`` carries the plateau and the
+        independent identity still holds at the end of the run.
         """
         cin, flow, tedges = simple_step_input
         tracker = FrontTracker(
             cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=50.0, sorption=freundlich_sorption
         )
-        tracker.run(max_iterations=1000, verbose=False)
+        tracker.run(max_iterations=1000)
 
         rel_err = _independent_conservation_rel_err(tracker, cin)
         assert rel_err < 5e-3, f"conservation violated: rel_err={rel_err:.3e}"
@@ -613,7 +623,7 @@ class TestRuntimeMassBalanceVerification:
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
         tracker = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=50.0, sorption=sorption)
-        tracker.run(max_iterations=10000, verbose=False)
+        tracker.run(max_iterations=10000)
 
         rel_err = _independent_conservation_rel_err(tracker, cin)
         assert rel_err < 5e-3, f"conservation violated: rel_err={rel_err:.3e}"
@@ -624,7 +634,7 @@ class TestRuntimeMassBalanceVerification:
         tracker = FrontTracker(
             cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=500.0, sorption=freundlich_sorption
         )
-        tracker.run(max_iterations=100, verbose=False)
+        tracker.run(max_iterations=100)
         tracker.verify_physics()
 
 
@@ -648,7 +658,7 @@ class TestLangmuirSorption:
             sorption=langmuir_sorption,
         )
 
-        tracker.run(max_iterations=100, verbose=False)
+        tracker.run(max_iterations=100)
 
         assert len(tracker.state.events) > 0
         assert tracker.state.theta_current >= 0.0
@@ -665,7 +675,7 @@ class TestLangmuirSorption:
             sorption=langmuir_sorption,
         )
 
-        tracker.run(max_iterations=200, verbose=False)
+        tracker.run(max_iterations=200)
 
         rarefactions = [w for w in tracker.state.waves if isinstance(w, RarefactionWave)]
         assert len(rarefactions) > 0
@@ -684,7 +694,7 @@ class TestLangmuirSorption:
             sorption=langmuir_sorption,
         )
 
-        tracker.run(max_iterations=100, verbose=False)
+        tracker.run(max_iterations=100)
 
         rel_err = _independent_conservation_rel_err(tracker, cin)
         assert rel_err < 5e-3, f"Langmuir step conservation violated: rel_err={rel_err:.3e}"
@@ -701,7 +711,7 @@ class TestLangmuirSorption:
             sorption=langmuir_sorption,
         )
 
-        tracker.run(max_iterations=200, verbose=False)
+        tracker.run(max_iterations=200)
 
         for wave in tracker.state.waves:
             if isinstance(wave, RarefactionWave) and wave.is_active:
@@ -734,7 +744,7 @@ class TestRiemannProblems:
             aquifer_pore_volume=v_pore,
             sorption=constant_retardation,
         )
-        tracker.run(max_iterations=2000, verbose=False)
+        tracker.run(max_iterations=2000)
 
         dt_days = np.diff((tedges - tedges[0]) / pd.Timedelta(days=1))
         mass_in = float(np.sum(cin * flow * dt_days))
@@ -759,12 +769,12 @@ class TestRiemannProblems:
     def test_square_pulse_analytic_total_matches_independent_breakthrough(self, sorption):
         """``compute_total_outlet_mass`` agrees with the INDEPENDENT breakthrough integral.
 
-        The old form asserted ``compute_total_outlet_mass == Σcin·Δθ``, but for a
+        Asserting ``compute_total_outlet_mass == Σcin·Δθ`` would be vacuous: for a
         ``cin[-1]=0`` pulse the analytic total collapses to ``Σcin·Δθ`` and never
-        touches the wave list — that was ``mass_in == mass_in``. Here the analytic
-        total is instead compared to ``∫ c_out dθ + m_dom(θ_max)`` reconstructed
-        from the wave solution, so a bug in the breakthrough/domain route (which the
-        analytic total bypasses) breaks the test. v_outlet is small enough that the
+        touches the wave list. The analytic total is therefore compared to
+        ``∫ c_out dθ + m_dom(θ_max)`` reconstructed from the wave solution, so a bug in
+        the breakthrough/domain route (which the analytic total bypasses) breaks the
+        test. v_outlet is small enough that the
         pulse essentially fully breaks through, so the trapezoid integral carries the
         weight; first-order shock-front truncation sets the ~5e-3 floor.
         """
@@ -776,7 +786,7 @@ class TestRiemannProblems:
         tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="D")
 
         tracker = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_pore, sorption=sorption)
-        tracker.run(max_iterations=10000, verbose=False)
+        tracker.run(max_iterations=10000)
 
         analytic_total = compute_total_outlet_mass(cin=cin, theta_edges=tracker.state.theta_edges)
 
@@ -806,7 +816,7 @@ class TestRiemannProblems:
             aquifer_pore_volume=v_pore,
             sorption=freundlich_sorption,
         )
-        tracker.run(max_iterations=2000, verbose=False)
+        tracker.run(max_iterations=2000)
 
         active_shocks = [w for w in tracker.state.waves if isinstance(w, ShockWave) and w.is_active]
         assert len(active_shocks) == 1
@@ -833,7 +843,7 @@ class TestRiemannProblems:
             aquifer_pore_volume=v_pore,
             sorption=constant_retardation,
         )
-        tracker.run(max_iterations=500, verbose=False)
+        tracker.run(max_iterations=500)
 
         # Closed form: cout(θ) == cin(θ_inlet) where θ_inlet = θ - V·R.
         # Equivalently in t (constant flow): cout(t) = cin(t - V·R/flow), delay = 6 d.
@@ -847,35 +857,69 @@ class TestRiemannProblems:
             assert np.isclose(c_out, cin[bin_idx], rtol=1e-14, atol=1e-14)
 
 
-class TestParametricMassBalance:
-    """Parametric smoke/coverage suite over the Freundlich-n and Langmuir sweeps.
+def _sweep_checkpoint_anchors(tr, cin, v_outlet, sorption, checkpoints, label):
+    """Assert the domain/outlet mass fields against an independent v-quadrature at each θ.
 
-    The per-checkpoint identity ``m_in(θ) = m_dom(θ) + m_out(θ)`` is
-    TAUTOLOGICAL: ``compute_cumulative_outlet_mass`` returns ``m_in − m_dom`` by
-    definition, so the residual is identically zero regardless of any
-    ``compute_domain_mass`` bug. These asserts therefore only verify the solver
-    runs to completion and that the fan integrals get exercised across the
-    parameter sweep (the ``saw_dom``/``saw_out`` guards). The real conservation
-    oracles are :class:`TestIndependentDomainMass` (independent spatial
-    reconstruction) and :class:`TestEndToEndConservation` (independent
-    breakthrough integral); a hard-coded n=2 in the closed-form path is caught
-    by ``TestIndependentDomainMass``, not by the tautological per-checkpoint
-    identity here.
+    ``compute_cumulative_outlet_mass`` returns ``m_in − m_dom`` by construction, so the
+    identity ``m_in = m_dom + m_out`` is algebraically zero and cannot fail. The anchor
+    here is instead ``∫₀^{v_outlet} C_T(c(v, θ)) dv``, reconstructed pointwise via
+    :func:`concentration_at_point`, which shares no algebra with that identity: it fails on
+    a wrong spatial integrand, wrong limits, or a hard-coded exponent in the closed-form fan
+    integral. The v-grid resolves the shock/fan faces at first order, so the residual floor
+    is the trapezoid truncation: measured worst case 6.0e-4 relative over this sweep on the
+    8000-point grid (2.9e-3 at 2000 points), so ``3e-3`` sits ~5x above the floor while a
+    x1.5 domain-mass mutation lands at 0.33 — two orders of magnitude above it.
+
+    Also returns whether the checkpoints reached a θ where the domain holds mass and one
+    where mass has left, so callers can guard that both integrals were exercised.
+    """
+    v_grid = np.linspace(0.0, v_outlet, 8000)
+    saw_dom = False
+    saw_out = False
+    for theta in checkpoints:
+        m_in = compute_cumulative_inlet_mass(theta=theta, cin=cin, theta_edges=tr.state.theta_edges)
+        m_dom = compute_domain_mass(theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
+        m_out = compute_cumulative_outlet_mass(
+            theta=theta,
+            v_outlet=v_outlet,
+            waves=tr.state.waves,
+            sorption=sorption,
+            cin=cin,
+            theta_edges=tr.state.theta_edges,
+        )
+        saw_dom = saw_dom or m_dom > 1.0
+        saw_out = saw_out or m_out > 1.0
+
+        c_pts = np.array([concentration_at_point(float(v), float(theta), tr.state.waves, sorption) for v in v_grid])
+        m_quad = float(np.trapezoid(sorption.total_concentration(c_pts), v_grid))
+
+        tol = 3e-3 * max(m_dom, m_quad, 1.0)
+        assert abs(m_dom - m_quad) <= tol, f"{label} at θ={theta:.1f}: m_dom={m_dom:.6e} vs quadrature {m_quad:.6e}"
+        assert abs(m_out - (m_in - m_quad)) <= tol, (
+            f"{label} at θ={theta:.1f}: m_out={m_out:.6e} vs m_in − quadrature {m_in - m_quad:.6e}"
+        )
+    return saw_dom, saw_out
+
+
+class TestParametricMassBalance:
+    """Parametric domain/outlet-mass anchors over the Freundlich-n and Langmuir sweeps.
+
+    Each checkpoint compares ``compute_domain_mass`` and ``compute_cumulative_outlet_mass``
+    to an independent pointwise reconstruction of the spatial mass (see
+    ``_sweep_checkpoint_anchors``), so a hard-coded exponent or a wrong fan integrand in the
+    closed-form path fails here across the whole parameter sweep — not only at the single
+    ``n=2`` / Langmuir point covered by :class:`TestIndependentDomainMass`.
     """
 
     @pytest.mark.parametrize("n", [1.5, 2.0, 2.5, 3.0])
     def test_freundlich_parameter_sweep_mass_balance(self, n):
-        """Freundlich n sweep: smoke/coverage that the solver runs and fans get exercised.
+        """Freundlich n sweep: domain/outlet mass match the independent v-quadrature.
 
-        Exercises the full Phase 2 step 4 closed-form chain: DecayingShockWave
-        trajectory + ``integrate_fan_exact`` (temporal) + ``integrate_fan_spatial_exact``
-        (spatial in ``compute_domain_mass``). The n=2 case uses the closed-form
-        quadratic inversion for ``c_decay_at_theta``; n∈{1.5, 2.5, 3.0} use
-        the brentq path (Abel-Ruffini rules out radicals for general n).
-
-        The per-checkpoint ``m_in = m_dom + m_out`` assert is tautological (see the
-        class docstring); only the ``saw_dom``/``saw_out`` guards carry coverage
-        meaning. Genuine conservation is checked by ``TestIndependentDomainMass``.
+        Exercises the closed-form chain: DecayingShockWave trajectory +
+        ``integrate_fan_exact`` (temporal) + ``integrate_fan_spatial_exact`` (spatial in
+        ``compute_domain_mass``). The n=2 case uses the closed-form quadratic inversion for
+        ``c_decay_at_theta``; n∈{1.5, 2.5, 3.0} use the brentq path (Abel-Ruffini rules out
+        radicals for general n).
         """
         sorption = FreundlichSorption(k_f=0.01, n=n, bulk_density=1500.0, porosity=0.3)
         v_outlet = 200.0
@@ -890,26 +934,7 @@ class TestParametricMassBalance:
         # Theta checkpoints span pre-arrival (m_out=0), breakthrough,
         # mid-drainage, and asymptotic regimes for the canonical-pulse geometry.
         checkpoints = [4000.0, 6000.0, 9000.0, 15000.0, 25000.0]
-        saw_dom = False
-        saw_out = False
-        for theta in checkpoints:
-            m_in = compute_cumulative_inlet_mass(theta=theta, cin=cin, theta_edges=tr.state.theta_edges)
-            m_dom = compute_domain_mass(theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
-            m_out = compute_cumulative_outlet_mass(
-                theta=theta,
-                v_outlet=v_outlet,
-                waves=tr.state.waves,
-                sorption=sorption,
-                cin=cin,
-                theta_edges=tr.state.theta_edges,
-            )
-            if m_dom > 1.0:
-                saw_dom = True
-            if m_out > 1.0:
-                saw_out = True
-            err = abs((m_dom + m_out) - m_in)
-            tol = 1e-14 * max(m_in, 1.0)
-            assert err <= tol, f"mass-balance violation at n={n}, θ={theta}: err={err:.6e} > tol={tol:.6e}"
+        saw_dom, saw_out = _sweep_checkpoint_anchors(tr, cin, v_outlet, sorption, checkpoints, f"n={n}")
 
         assert saw_dom, f"n={n}: checkpoints must include θ where m_dom > 1 to exercise the closed-form fan integral"
         assert saw_out, f"n={n}: checkpoints must include θ where m_out > 1 to exercise compute_cumulative_outlet_mass"
@@ -919,15 +944,7 @@ class TestParametricMassBalance:
         [(0.05, 2.0), (0.1, 5.0), (0.2, 10.0)],
     )
     def test_langmuir_parameter_sweep_mass_balance(self, s_max, k_l):
-        """Langmuir parameter sweep: smoke/coverage over the Langmuir DSW path.
-
-        Both asserts here are tautological for the ``cin[-1]=0`` pulse:
-        ``compute_total_outlet_mass`` collapses to ``Σcin·Δθ`` (never touches the
-        waves) and the per-checkpoint ``m_in = m_dom + m_out`` residual is
-        identically zero. They verify the solver runs and the Langmuir fan integral
-        is exercised (``saw_dom``/``saw_out``); genuine conservation lives in
-        ``TestIndependentDomainMass`` / ``TestEndToEndConservation``.
-        """
+        """Langmuir parameter sweep: domain/outlet mass match the independent v-quadrature."""
         sorption = LangmuirSorption(s_max=s_max, k_l=k_l, bulk_density=1500.0, porosity=0.3)
         v_outlet = 200.0
         cin = np.zeros(500)
@@ -938,38 +955,13 @@ class TestParametricMassBalance:
         tr = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_outlet, sorption=sorption)
         tr.run(max_iterations=100000)
 
-        mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
-        mass_out = compute_total_outlet_mass(cin=cin, theta_edges=tr.state.theta_edges)
-        # Empirical rel_err ≤ 7e-15 across the parameter sweep (worst at s_max=0.2, k_l=10); 1e-13 leaves 14× headroom.
-        assert np.isclose(mass_out, mass_in, rtol=1e-13), (
-            f"Langmuir s={s_max}, k_l={k_l}: total mass mass_in={mass_in:.4f} mass_out={mass_out:.4f}"
-        )
-
         theta_max = float(tr.state.theta_edges[-1])
         checkpoints = [theta_max * f for f in (0.1, 0.25, 0.5, 0.75, 0.99)]
-        saw_dom = False
-        saw_out = False
-        for theta in checkpoints:
-            m_in = compute_cumulative_inlet_mass(theta=theta, cin=cin, theta_edges=tr.state.theta_edges)
-            m_dom = compute_domain_mass(theta=theta, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
-            m_out = compute_cumulative_outlet_mass(
-                theta=theta,
-                v_outlet=v_outlet,
-                waves=tr.state.waves,
-                sorption=sorption,
-                cin=cin,
-                theta_edges=tr.state.theta_edges,
-            )
-            if m_dom > 1.0:
-                saw_dom = True
-            if m_out > 1.0:
-                saw_out = True
-            err = abs((m_dom + m_out) - m_in)
-            tol = 1e-14 * max(m_in, 1.0)
-            assert err <= tol, f"Langmuir s={s_max}, k_l={k_l} at θ={theta}: err={err:.6e} > tol={tol:.6e}"
+        label = f"Langmuir s={s_max}, k_l={k_l}"
+        saw_dom, saw_out = _sweep_checkpoint_anchors(tr, cin, v_outlet, sorption, checkpoints, label)
 
-        assert saw_dom, f"Langmuir s={s_max}, k_l={k_l}: checkpoints must include θ where m_dom > 1"
-        assert saw_out, f"Langmuir s={s_max}, k_l={k_l}: checkpoints must include θ where m_out > 1"
+        assert saw_dom, f"{label}: checkpoints must include θ where m_dom > 1"
+        assert saw_out, f"{label}: checkpoints must include θ where m_out > 1"
 
     @pytest.mark.parametrize(
         "flow",
@@ -984,9 +976,9 @@ class TestParametricMassBalance:
     def test_breakthrough_in_theta_is_flow_independent(self, freundlich_sorption, flow):
         """The θ-domain breakthrough curve is BIT-IDENTICAL under time-varying flow.
 
-        Exact, non-tautological flow-independence probe (replaces the old
-        ``compute_total_outlet_mass == Σcin·Δθ`` checks, which never touched the
-        wave list). In (V, θ) the wave dynamics depend on flow only through the
+        Exact, non-tautological flow-independence probe: unlike a
+        ``compute_total_outlet_mass == Σcin·Δθ`` check it touches the whole wave
+        list. In (V, θ) the wave dynamics depend on flow only through the
         precomputed ``theta_edges``; sampled on a SHARED θ-grid the breakthrough is
         therefore identical to the constant-flow reference. A regression that
         re-introduces flow into any wave method would perturb the wave list and

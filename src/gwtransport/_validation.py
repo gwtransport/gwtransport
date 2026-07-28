@@ -11,8 +11,8 @@ module-specific error-message wording and ordering.
 
 Each atom is keyword-only (except for the array under test) and raises
 ``ValueError`` with a default message; the optional ``message`` keyword lets the
-module wrapper preserve the historical wording verbatim so that downstream
-``pytest.raises(..., match=...)`` tests keep passing without modification.
+module wrapper supply its own wording verbatim, which downstream
+``pytest.raises(..., match=...)`` tests pin.
 
 This module has no public API; importers are the transport modules themselves
 plus ``tests/src/test_validation.py``.
@@ -70,8 +70,8 @@ def _validate_no_nan(
         Variable name used in the default error message.
     message : str, optional
         Override the default ``"{name} contains NaN values, which are not allowed"``
-        wording. Used by module wrappers that need to preserve historical strings
-        pinned by ``pytest.raises(..., match=...)`` tests.
+        wording. Used by module wrappers whose strings are pinned by
+        ``pytest.raises(..., match=...)`` tests.
 
     Raises
     ------
@@ -156,7 +156,7 @@ def _validate_positive_scalar(
 
     NaN and ``+inf`` are rejected: both pass the bare ``<= 0`` comparison, so an unchecked
     inequality would let them slip through and poison the downstream computation (e.g. a
-    ``+inf`` thickness silently zeroed the deposition output).
+    ``+inf`` thickness silently zeroes the deposition output).
 
     Parameters
     ----------

@@ -210,13 +210,11 @@ class TestRoundtripSameGrid:
             flow=flow,
             retardation_factor=1.0,
         )
-        band_vals, col_start, _ = _resolve_spinup_mask(
+        band_vals, _ = _resolve_spinup_mask(
             band_vals=band_vals,
-            col_start=col_start,
             contributing_bins=contributing_bins,
             zero_flow_cout=zero_flow_cout,
             n_pv=len(pore_volumes),
-            spinup=None,
         )
         w_forward = _densify_weights(band_vals, col_start, len(tedges) - 1)
         _, sing_vals, vt = np.linalg.svd(w_forward, full_matrices=True)

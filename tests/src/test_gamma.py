@@ -2,14 +2,8 @@ import numpy as np
 import pytest
 from scipy.stats import gamma as gamma_dist
 
-from gwtransport.gamma import (
-    alpha_beta_loc_to_mean_std,
-    mean_std_loc_to_alpha_beta,
-    parse_parameters,
-)
-from gwtransport.gamma import (
-    bins as gamma_bins,
-)
+from gwtransport.gamma import bins as gamma_bins
+from gwtransport.gamma import mean_std_loc_to_alpha_beta, parse_parameters
 
 
 # Fixtures
@@ -108,10 +102,9 @@ def test_gamma_mean_std_loc_to_alpha_beta_basic():
     assert alpha > 0
     assert beta > 0
 
-    # Convert back: the conversion is bit-exact algebra, so the round-trip is exact.
-    mean_back, std_back = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta)
-    np.testing.assert_allclose(mean, mean_back, rtol=1e-15)
-    np.testing.assert_allclose(std, std_back, rtol=1e-15)
+    # Invert the gamma moment formulas: the conversion is bit-exact algebra, so this is exact.
+    np.testing.assert_allclose(alpha * beta, mean, rtol=1e-15)
+    np.testing.assert_allclose(np.sqrt(alpha) * beta, std, rtol=1e-15)
 
 
 def test_gamma_mean_std_loc_to_alpha_beta_with_loc():
@@ -123,9 +116,8 @@ def test_gamma_mean_std_loc_to_alpha_beta_with_loc():
     np.testing.assert_allclose(alpha, (7.0 / 2.0) ** 2, rtol=1e-15)
     np.testing.assert_allclose(beta, 2.0**2 / 7.0, rtol=1e-15)
 
-    mean_back, std_back = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta, loc=loc)
-    np.testing.assert_allclose(mean, mean_back, rtol=1e-15)
-    np.testing.assert_allclose(std, std_back, rtol=1e-15)
+    np.testing.assert_allclose(alpha * beta + loc, mean, rtol=1e-15)
+    np.testing.assert_allclose(np.sqrt(alpha) * beta, std, rtol=1e-15)
 
 
 def test_gamma_mean_std_loc_to_alpha_beta_zero_std():
@@ -148,30 +140,6 @@ def test_gamma_mean_std_loc_to_alpha_beta_negative_loc():
     """loc must be non-negative."""
     with pytest.raises(ValueError, match="loc must be non-negative"):
         mean_std_loc_to_alpha_beta(mean=5.0, std=1.0, loc=-0.1)
-
-
-def test_gamma_alpha_beta_loc_to_mean_std_basic():
-    """Test gamma_alpha_beta_loc_to_mean_std with typical alpha/beta."""
-    alpha, beta = 4.0, 2.0
-    mean_expected = alpha * beta
-    mean, std = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta)
-    assert mean == mean_expected, f"Expected mean = {mean_expected}, got {mean}"
-    # std = sqrt(4) * 2 = 4.0 exactly
-    np.testing.assert_allclose(std, 4.0, rtol=0, atol=0)
-
-
-def test_gamma_alpha_beta_loc_to_mean_std_with_loc():
-    """mean shifts by loc; std is invariant under the shift."""
-    alpha, beta, loc = 4.0, 2.0, 3.5
-    mean, std = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta, loc=loc)
-    np.testing.assert_allclose(mean, alpha * beta + loc, rtol=1e-15)
-    np.testing.assert_allclose(std, np.sqrt(alpha) * beta, rtol=1e-15)
-
-
-# The unshifted Monte Carlo accuracy tests have been removed: their bug-catching is a
-# strict subset of test_bins_expected_values_against_scipy_quadrature (exact, deterministic)
-# and the single retained sampling sanity check test_bins_loc_monte_carlo_expected_values
-# (shifted case). See the per-module review for the deduplication rationale.
 
 
 # =============================================================================
@@ -200,9 +168,8 @@ def test_parse_parameters_with_mean_std():
     assert loc == 0.0
 
     # Verify conversion back gives same mean/std (bit-exact algebra)
-    mean_back, std_back = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta, loc=loc)
-    np.testing.assert_allclose(mean, mean_back, rtol=1e-15)
-    np.testing.assert_allclose(std, std_back, rtol=1e-15)
+    np.testing.assert_allclose(alpha * beta + loc, mean, rtol=1e-15)
+    np.testing.assert_allclose(np.sqrt(alpha) * beta, std, rtol=1e-15)
 
 
 def test_parse_parameters_with_loc():
@@ -293,82 +260,31 @@ def test_parse_parameters_zero_beta():
 
 
 # =============================================================================
-# Tests for bins function with quantile_edges
+# Tests for bins() binning structure
 # =============================================================================
 
 
-def test_bins_with_quantile_edges_basic():
-    """Test bins with custom quantile edges."""
-    quantile_edges = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
-    result = gamma_bins(alpha=10.0, beta=2.0, quantile_edges=quantile_edges)
-
-    # Verify correct number of bins
-    assert len(result["probability_mass"]) == 4
-    assert len(result["expected_values"]) == 4
-    assert len(result["edges"]) == 5
-
-    # Verify probability masses sum to 1 (the sum is exactly representable)
-    np.testing.assert_allclose(np.sum(result["probability_mass"]), 1.0, rtol=1e-14)
-
-    # Verify probability masses match quantile differences
-    expected_masses = np.diff(quantile_edges)
-    np.testing.assert_allclose(result["probability_mass"], expected_masses, rtol=1e-15)
-
-
-def test_bins_with_quantile_edges_unequal():
-    """Test bins with unequal quantile edges."""
-    quantile_edges = np.array([0.0, 0.1, 0.3, 0.7, 1.0])
-    result = gamma_bins(alpha=5.0, beta=3.0, quantile_edges=quantile_edges)
-
-    # Verify correct number of bins
-    assert len(result["probability_mass"]) == 4
-
-    # Verify probability masses
-    expected_masses = np.diff(quantile_edges)
-    np.testing.assert_allclose(result["probability_mass"], expected_masses, rtol=1e-15)
-
-    # Verify expected values are within bins
-    for i in range(len(result["expected_values"])):
-        assert result["lower_bound"][i] <= result["expected_values"][i] <= result["upper_bound"][i]
-
-
-def test_bins_quantile_edges_vs_n_bins():
-    """Test that quantile_edges produces same result as n_bins for uniform quantiles."""
-    alpha, beta = 8.0, 1.5
-    n_bins = 5
-
-    # Using n_bins
-    result_n_bins = gamma_bins(alpha=alpha, beta=beta, n_bins=n_bins)
-
-    # Using quantile_edges (uniform)
-    quantile_edges = np.linspace(0, 1, n_bins + 1)
-    result_quantiles = gamma_bins(alpha=alpha, beta=beta, quantile_edges=quantile_edges)
-
-    # Results should be identical to machine precision
-    np.testing.assert_allclose(result_n_bins["edges"], result_quantiles["edges"], rtol=1e-15)
-    np.testing.assert_allclose(result_n_bins["probability_mass"], result_quantiles["probability_mass"], rtol=1e-15)
-    np.testing.assert_allclose(result_n_bins["expected_values"], result_quantiles["expected_values"], rtol=1e-15)
-
-
-def test_bins_neither_n_bins_nor_quantiles():
-    """Test bins uses default n_bins=100 when neither n_bins nor quantile_edges provided."""
+def test_bins_default_n_bins():
+    """bins() uses the default n_bins=100 when n_bins is not given."""
     result = gamma_bins(alpha=5.0, beta=2.0)
-    # Should use default n_bins=100
     assert len(result["probability_mass"]) == 100
     assert len(result["expected_values"]) == 100
     assert len(result["edges"]) == 101
 
 
-def test_bins_both_n_bins_and_quantiles():
-    """Test bins uses quantile_edges when both n_bins and quantile_edges provided (quantile_edges takes precedence)."""
-    quantile_edges = np.array([0.0, 0.5, 1.0])
+def test_bins_are_equal_probability_mass():
+    """Every streamtube bin carries exactly 1/n_bins of the probability mass.
 
-    # When both are provided, quantile_edges takes precedence
-    result = gamma_bins(alpha=5.0, beta=2.0, n_bins=10, quantile_edges=quantile_edges)
-    # Should use quantile_edges (2 bins), not n_bins (10)
-    assert len(result["probability_mass"]) == 2
-    assert len(result["expected_values"]) == 2
-    assert len(result["edges"]) == 3
+    Equal-mass binning is the locked streamtube discretization: an unequal-mass split would
+    silently reweight the transport calculation that consumes ``probability_mass``.
+    """
+    n_bins = 7
+    result = gamma_bins(alpha=5.0, beta=3.0, loc=2.0, n_bins=n_bins)
+    np.testing.assert_allclose(result["probability_mass"], np.full(n_bins, 1.0 / n_bins), rtol=1e-15)
+
+    # The edges are the uniform-quantile PPF values, so the CDF differences recover 1/n_bins too.
+    cdf = gamma_dist.cdf(result["edges"] - 2.0, 5.0, scale=3.0)
+    np.testing.assert_allclose(np.diff(cdf), np.full(n_bins, 1.0 / n_bins), rtol=1e-13)
 
 
 def test_bins_n_bins_too_small():
@@ -383,55 +299,7 @@ def test_bins_n_bins_too_small():
         gamma_bins(alpha=5.0, beta=2.0, n_bins=-2)
 
 
-def test_bins_quantile_edges_must_span_unit_interval():
-    """Regression: quantile_edges not spanning [0, 1] must raise, not silently lose probability mass.
-
-    Before the fix, ``quantile_edges=[0.1, 0.5, 0.9]`` ran and produced bins covering
-    only 0.8 of the total probability mass, silently violating the conservation contract.
-    """
-    with pytest.raises(ValueError, match="must start at 0 and end at 1"):
-        gamma_bins(alpha=5.0, beta=2.0, quantile_edges=np.array([0.1, 0.5, 0.9]))
-
-    # First edge not 0
-    with pytest.raises(ValueError, match="must start at 0 and end at 1"):
-        gamma_bins(alpha=5.0, beta=2.0, quantile_edges=np.array([0.1, 0.5, 1.0]))
-
-    # Last edge not 1
-    with pytest.raises(ValueError, match="must start at 0 and end at 1"):
-        gamma_bins(alpha=5.0, beta=2.0, quantile_edges=np.array([0.0, 0.5, 0.9]))
-
-
-def test_bins_quantile_edges_must_be_strictly_increasing():
-    """Non-monotone or duplicated quantile_edges must raise."""
-    with pytest.raises(ValueError, match="strictly increasing"):
-        gamma_bins(alpha=5.0, beta=2.0, quantile_edges=np.array([0.0, 0.5, 0.5, 1.0]))
-
-    with pytest.raises(ValueError, match="strictly increasing"):
-        gamma_bins(alpha=5.0, beta=2.0, quantile_edges=np.array([0.0, 0.7, 0.3, 1.0]))
-
-
-def test_bins_quantile_edges_too_few():
-    """quantile_edges with only 2 entries (n_bins=1) must raise via the n_bins guard."""
-    with pytest.raises(ValueError, match="Number of bins must be greater than 1"):
-        gamma_bins(alpha=5.0, beta=2.0, quantile_edges=np.array([0.0, 1.0]))
-
-
-def test_bins_empty_quantile_edges_raises():
-    """Regression (G1): an empty quantile_edges must raise ValueError, not leak IndexError.
-
-    Before the fix the empty array passed the (vacuously true) strictly-increasing check
-    and then indexed ``quantile_edges[0]`` on a size-0 array, leaking an IndexError instead
-    of the documented ValueError family.
-    """
-    with pytest.raises(ValueError):
-        gamma_bins(alpha=2.0, beta=3.0, quantile_edges=np.array([]))
-
-    # A single edge cannot define even one bin either.
-    with pytest.raises(ValueError):
-        gamma_bins(alpha=2.0, beta=3.0, quantile_edges=np.array([0.0]))
-
-
-def test_bins_loc_zero_matches_legacy():
+def test_bins_loc_zero_matches_unshifted():
     """With loc=0, bins() reproduces the two-parameter result bit-for-bit."""
     r_default = gamma_bins(alpha=5.0, beta=2.0, n_bins=20)
     r_explicit = gamma_bins(alpha=5.0, beta=2.0, loc=0.0, n_bins=20)
@@ -523,28 +391,6 @@ def test_bins_second_moment_matches_parameterization(mean, std, loc):
     np.testing.assert_allclose(gamma_dist(alpha, loc=loc_out, scale=beta).mean(), mean, rtol=1e-12)
 
 
-def test_bins_quantile_edge_construction_inverts_to_quantile_diff():
-    """The bin edges produced by ``gamma.bins`` recover the input quantile diff exactly.
-
-    The construction
-        edges = gamma_dist.ppf(q, alpha, scale=beta) + loc
-        diff(gamma_dist.cdf(edges - loc, alpha, scale=beta)) = diff(q)
-    holds by the CDF-PPF round-trip identity ``F(F^{-1}(q)) == q``. Catches any
-    inconsistency between the edge-construction path and the mass-computation path.
-    """
-    quantile_edges = np.array([0.0, 0.1, 0.3, 0.55, 0.85, 1.0])
-    alpha, beta, loc = 3.0, 2.0, 1.5
-    r = gamma_bins(alpha=alpha, beta=beta, loc=loc, quantile_edges=quantile_edges)
-
-    # probability_mass is constructed directly as np.diff(q) inside bins
-    np.testing.assert_array_equal(r["probability_mass"], np.diff(quantile_edges))
-
-    # Re-deriving the masses from the constructed (unshifted) edges must reproduce diff(q)
-    unshifted_edges = r["edges"] - loc
-    cdf = gamma_dist.cdf(unshifted_edges, alpha, scale=beta)
-    np.testing.assert_allclose(np.diff(cdf), np.diff(quantile_edges), rtol=1e-13)
-
-
 def test_bins_loc_monte_carlo_expected_values():
     """Monte Carlo validation of expected_values under a shifted gamma distribution.
 
@@ -601,7 +447,7 @@ def test_bins_expected_values_against_scipy_quadrature():
     would produce errors many orders of magnitude larger than the quadrature tolerance.
     """
     test_cases = [
-        # (alpha, beta, loc, n_bins / quantile_edges)
+        # (alpha, beta, loc, n_bins)
         (0.5, 2.0, 0.0, 5),  # strong curvature
         (1.0, 1.5, 0.0, 4),  # exponential
         (2.5, 1.5, 0.0, 6),  # moderate
@@ -609,55 +455,41 @@ def test_bins_expected_values_against_scipy_quadrature():
         (3.0, 2.0, 4.5, 7),  # shifted
         (0.7, 3.0, 1.2, 5),  # shifted strong-curvature
     ]
-    custom_quantile_edges = np.array([0.0, 0.1, 0.35, 0.6, 0.85, 1.0])
 
     for alpha, beta, loc, n_bins in test_cases:
-        for edges_spec in (n_bins, custom_quantile_edges):
-            kwargs: dict = {"alpha": alpha, "beta": beta, "loc": loc}
-            if isinstance(edges_spec, int):
-                kwargs["n_bins"] = edges_spec
-            else:
-                kwargs["quantile_edges"] = edges_spec
+        result = gamma_bins(alpha=alpha, beta=beta, loc=loc, n_bins=n_bins)
+        edges = result["edges"]
+        expected_values = result["expected_values"]
+        probability_mass = result["probability_mass"]
 
-            result = gamma_bins(**kwargs)
-            edges = result["edges"]
-            expected_values = result["expected_values"]
-            probability_mass = result["probability_mass"]
+        dist = gamma_dist(alpha, scale=beta, loc=loc)
+        expected_quad = np.empty(n_bins)
+        for i in range(n_bins):
+            lo = edges[i]
+            hi = edges[i + 1] if np.isfinite(edges[i + 1]) else np.inf
+            # scipy.gamma.expect returns int_{lo}^{hi} x * f(x) dx (an unconditional integral).
+            unconditional_mean = dist.expect(lambda x: x, lb=lo, ub=hi, conditional=False)
+            expected_quad[i] = unconditional_mean / probability_mass[i]
 
-            dist = gamma_dist(alpha, scale=beta, loc=loc)
-            n = len(expected_values)
-            expected_quad = np.empty(n)
-            for i in range(n):
-                lo = edges[i]
-                hi = edges[i + 1] if np.isfinite(edges[i + 1]) else np.inf
-                # scipy.gamma.expect returns int_{lo}^{hi} x * f(x) dx (an unconditional integral).
-                unconditional_mean = dist.expect(lambda x: x, lb=lo, ub=hi, conditional=False)
-                expected_quad[i] = unconditional_mean / probability_mass[i]
-
-            # scipy.integrate.quad default tolerance is ~1.49e-8 absolute, which scales with the
-            # magnitude of the expected values. Use a comparable absolute tolerance.
-            atol = 1e-7 * max(1.0, np.abs(expected_values).max())
-            np.testing.assert_allclose(
-                expected_values,
-                expected_quad,
-                atol=atol,
-                rtol=1e-10,
-                err_msg=f"alpha={alpha}, beta={beta}, loc={loc}, edges_spec={edges_spec}",
-            )
-
-
-# The former test_bins_alpha_less_than_one_large_nbins (alpha=0.5, beta=10.0, n_bins=100)
-# is now covered, at tighter tolerance and with the first-moment check, by the
-# (0.5, 10.0, 100) case in test_bins_extreme_regimes_finite_and_conservative.
+        # scipy.integrate.quad default tolerance is ~1.49e-8 absolute, which scales with the
+        # magnitude of the expected values. Use a comparable absolute tolerance.
+        atol = 1e-7 * max(1.0, np.abs(expected_values).max())
+        np.testing.assert_allclose(
+            expected_values,
+            expected_quad,
+            atol=atol,
+            rtol=1e-10,
+            err_msg=f"alpha={alpha}, beta={beta}, loc={loc}, n_bins={n_bins}",
+        )
 
 
 # =============================================================================
-# Numerical-envelope guards for bins() / parse_parameters (issue #331).
+# Numerical-envelope guards for bins() / parse_parameters (#331).
 #
-# Each degenerate input below previously returned silently-wrong structure -- expected
-# values outside their own bins, E == loc, or an all-NaN distribution -- with no error.
-# The guards now raise a clear ValueError. Every "must raise" test fails on the pre-guard
-# baseline (no exception was raised there), which is what makes it a regression test.
+# Each degenerate input below returns silently-wrong structure without the guards --
+# expected values outside their own bins, E == loc, or an all-NaN distribution. Every
+# "must raise" test fails on the pre-guard baseline (no exception was raised there),
+# which is what makes it a regression test.
 # =============================================================================
 
 
@@ -691,15 +523,6 @@ def test_bins_rejects_huge_alpha():
         gamma_bins(mean=1.0, std=1e-8, n_bins=10)
 
 
-def test_bins_rejects_tiny_quantile_gap():
-    """A quantile gap below 1e-8 makes the conditional-mean CDF difference cancel catastrophically,
-    placing an expected value outside its own (infinitesimal) bin; it must raise (GAM-F2)."""
-    q0 = 0.5
-    edges = np.array([0.0, q0, np.nextafter(q0, 1.0), 1.0])
-    with pytest.raises(ValueError, match="quantile-edge gap"):
-        gamma_bins(alpha=10.0, beta=1.0, loc=5.0, quantile_edges=edges)
-
-
 def test_bins_rejects_expected_value_underflow():
     """A very small alpha underflows the leftmost equal-mass bin's expected value to loc (a
     numerically-zero pore volume); it must raise rather than propagate a bad value downstream (ADV-F2)."""
@@ -708,13 +531,12 @@ def test_bins_rejects_expected_value_underflow():
 
 
 def test_bins_guards_leave_realistic_configs_untouched():
-    """The #331 guards must not reject any realistic APVD: default and shifted configs, a fine
-    250-bin grid, and custom quantile edges all still succeed with strictly in-bin expected values."""
+    """The #331 guards must not reject any realistic APVD: default and shifted configs and a fine
+    250-bin grid all succeed with strictly in-bin expected values."""
     for kwargs in (
         {"mean": 30000.0, "std": 8100.0, "n_bins": 10},
         {"mean": 30000.0, "std": 8100.0, "loc": 5000.0, "n_bins": 250},
         {"alpha": 13.7, "beta": 2000.0, "n_bins": 20},
-        {"mean": 30000.0, "std": 8100.0, "quantile_edges": np.array([0.0, 0.25, 0.5, 0.75, 1.0])},
     ):
         result = gamma_bins(**kwargs)
         assert result["probability_mass"].sum() == 1.0

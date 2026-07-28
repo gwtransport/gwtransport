@@ -39,26 +39,23 @@ from gwtransport.utils import (
 )
 
 
-# The package builder/mask are banded (see advection_utils). These thin adapters present
-# the historical dense (n_cout, n_cin) signatures so the dense-oracle and Fraction-truth
-# comparisons below stay unchanged: the build is densified, and the row-wise mask is applied
-# to the dense matrix (its col_start passthrough is irrelevant when the input is full-width).
+# The package builder/mask are banded (see advection_utils). These thin adapters present a
+# dense (n_cout, n_cin) signature so the dense-oracle and Fraction-truth comparisons below
+# can be written against the full matrix: the build is densified, and the row-wise mask is
+# applied to the dense matrix.
 def _infiltration_to_extraction_weights(**kwargs):
     band_vals, col_start, contributing_bins, zero_flow_cout = _banded_weights(**kwargs)
     dense = _densify_weights(band_vals, col_start, len(kwargs["tedges"]) - 1)
     return dense, contributing_bins, zero_flow_cout
 
 
-def _resolve_spinup_mask(*, accumulated_weights, contributing_bins, zero_flow_cout, n_pv, spinup):
-    weights, _, invalid = _banded_mask(
+def _resolve_spinup_mask(*, accumulated_weights, contributing_bins, zero_flow_cout, n_pv):
+    return _banded_mask(
         band_vals=accumulated_weights,
-        col_start=np.zeros(len(accumulated_weights), dtype=np.intp),
         contributing_bins=contributing_bins,
         zero_flow_cout=zero_flow_cout,
         n_pv=n_pv,
-        spinup=spinup,
     )
-    return weights, invalid
 
 
 # ===============================================================================
@@ -1633,8 +1630,8 @@ def test_gamma_extraction_to_infiltration_roundtrip():
     )
 
 
-def test_gamma_infiltration_to_extraction_loc_zero_matches_legacy():
-    """With loc=0 the loc-aware call must match the legacy (mean, std) call bit-for-bit."""
+def test_gamma_infiltration_to_extraction_loc_zero_matches_unshifted():
+    """Passing loc=0 explicitly must match the (mean, std) call without loc bit-for-bit."""
     dates = pd.date_range(start="2020-01-01", end="2020-06-30", freq="D")
     tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
 
@@ -2541,10 +2538,10 @@ def test_infiltration_to_extraction_accepts_zero_flow_without_warnings():
 def test_infiltration_to_extraction_zero_flow_insertion_invariance():
     """Insert a zero-flow bin: cout at that bin is NaN; other bins are unchanged.
 
-    The pre-fix version masked the zero-flow output cell with ``np.delete`` before
-    asserting, hiding bug #161 (zero-flow cout bins returning fabricated values).
-    Under strict-validity, a zero-flow cout bin must be NaN; after stripping it,
-    the remaining cout matches the baseline to machine precision.
+    Under strict-validity a zero-flow cout bin must be NaN, not a fabricated value
+    (regression: issue #161); after stripping it, the remaining cout matches the
+    baseline to machine precision. The masked cell is asserted directly, since
+    dropping it before comparing hides that failure mode.
     """
     s = _zero_flow_invariance_setup()
     apv = np.array([500.0])
@@ -2699,9 +2696,9 @@ def test_infiltration_to_extraction_zero_flow_bin_returns_nan_multi_pv():
 def test_infiltration_to_extraction_variable_flow_constant_cin_post_spinup():
     """Constant cin x variable flow x multi-PV -> constant cout post-spinup (issue #169 group 1).
 
-    The pre-fix mass over-attribution combined with variable flow could mask
-    incorrect flow weighting. Under strict-validity the flow-weighted bundle row
-    sums to 1, so a constant cin must produce constant cout to machine precision.
+    Under strict-validity the flow-weighted bundle row sums to 1, so a constant cin
+    must produce constant cout to machine precision; incorrect flow weighting shows
+    up as a cout that ripples with the flow.
     """
     n = 600
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
@@ -3001,36 +2998,6 @@ def test_spinup_constant_does_not_pad_right_edge():
     assert not np.isnan(cout[0])
 
 
-def test_spinup_zero_threshold_reproduces_issue_161_overattribution():
-    """spinup=0.0 reproduces the count-mean issue #161 over-attribution.
-
-    With a left-edge cin pulse cin[0]=1.0, apv=[100, 500, 1500], flow=100,
-    the count-mean over contributing streamtubes gives:
-    - cout[1] (only 1d streamtube contributes): cin[0]/1 = 1.0
-    - cout[5] (1d + 5d contribute): cin[0]/2 = 0.5
-    - cout[15] (all 3 contribute): cin[0]/3 ≈ 0.333
-
-    Sum = 1 + 0.5 + 1/3 = 11/6 ≈ 1.833 — the documented pre-fix
-    over-attribution. This is the deliberately opt-in behavior of the
-    fraction-threshold mode at ``spinup=0.0``.
-    """
-    n = 50
-    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
-    flow = np.full(n, 100.0)
-    apv = np.array([100.0, 500.0, 1500.0])
-    cin = np.zeros(n)
-    cin[0] = 1.0
-
-    cout = infiltration_to_extraction(
-        cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=0.0
-    )
-
-    np.testing.assert_allclose(cout[1], 1.0, atol=1e-15)
-    np.testing.assert_allclose(cout[5], 0.5, atol=1e-15)
-    np.testing.assert_allclose(cout[15], 1.0 / 3.0, atol=1e-15)
-    np.testing.assert_allclose(np.nansum(cout), 11.0 / 6.0, atol=1e-13)
-
-
 def test_spinup_constant_round_trip_recovers_cin():
     """Forward+reverse with spinup='constant' on both ends recovers cin.
 
@@ -3081,7 +3048,7 @@ def test_spinup_constant_falls_back_when_flow_zero():
 
 @pytest.mark.parametrize("bad", ["constants", "none", "", "default"])
 def test_spinup_invalid_string_raises(bad):
-    """spinup must be 'constant', None, or a float in [0, 1]."""
+    """The only accepted spinup string is 'constant'."""
     n = 10
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     with pytest.raises(ValueError, match="spinup"):
@@ -3095,28 +3062,17 @@ def test_spinup_invalid_string_raises(bad):
         )
 
 
-@pytest.mark.parametrize("bad", [True, False])
-def test_spinup_bool_raises_type_error(bad):
-    """Booleans are rejected (Python bool is a numeric subtype, easy to mis-pass)."""
+@pytest.mark.parametrize("bad", [True, False, 0.0, 0.5, 1.0, -0.1, 2, 1.5])
+def test_spinup_non_string_raises_type_error(bad):
+    """spinup accepts only None or 'constant'; bools and numbers are a TypeError.
+
+    Numeric values are rejected rather than silently ignored: a fraction
+    threshold would emit a count-mean over the contributing streamtubes, which
+    does not conserve cin -> cout mass.
+    """
     n = 10
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     with pytest.raises(TypeError, match="spinup"):
-        infiltration_to_extraction(
-            cin=np.ones(n),
-            flow=np.full(n, 100.0),
-            tedges=tedges,
-            cout_tedges=tedges,
-            aquifer_pore_volumes=np.array([100.0]),
-            spinup=bad,
-        )
-
-
-@pytest.mark.parametrize("bad", [-0.1, 1.5, 2.0, -1.0])
-def test_spinup_float_out_of_range_raises(bad):
-    """Float spinup must be in [0, 1]."""
-    n = 10
-    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
-    with pytest.raises(ValueError, match="spinup"):
         infiltration_to_extraction(
             cin=np.ones(n),
             flow=np.full(n, 100.0),
@@ -3377,7 +3333,7 @@ def test_weight_matrix_identity_forward_reverse(spinup):
     retardation_factor = 1.0
 
     def _build_w(cin_arg):
-        weight_tedges, weight_flow, _, threshold, _ = _resolve_spinup_inputs(
+        weight_tedges, weight_flow, _, _, _ = _resolve_spinup_inputs(
             spinup,
             tedges=tedges,
             flow=flow,
@@ -3397,7 +3353,6 @@ def test_weight_matrix_identity_forward_reverse(spinup):
             contributing_bins=contrib,
             zero_flow_cout=zero_flow,
             n_pv=len(aquifer_pore_volumes),
-            spinup=threshold,
         )
         return w
 
@@ -3455,8 +3410,8 @@ def test_multi_pv_boundary_partial_coverage_contract(spinup):
     Setup: two streamtubes with very different residence times (RT = 1d
     short, RT = 8d long), constant flow. Early cout bins have a fully-valid
     source window for the short PV but a source window past ``tedges[0]``
-    for the long PV. This is the multi-PV partial-coverage scenario the
-    spinup parameter was introduced to handle (issue #161 + PR #178).
+    for the long PV — the multi-PV partial-coverage scenario the ``spinup``
+    parameter governs (regression: issue #161).
 
     Contract pinned here:
 
@@ -3542,7 +3497,7 @@ def test_weight_matrix_rows_sum_to_one_or_zero():
     flow = 100.0 + 25.0 * np.sin(np.arange(n_cin) * 2 * np.pi / 9)
     aquifer_pore_volumes = np.array([150.0, 350.0, 600.0])
 
-    weight_tedges, weight_flow, _, threshold, _ = _resolve_spinup_inputs(
+    weight_tedges, weight_flow, _, _, _ = _resolve_spinup_inputs(
         None,
         tedges=tedges,
         flow=flow,
@@ -3561,7 +3516,6 @@ def test_weight_matrix_rows_sum_to_one_or_zero():
         contributing_bins=contrib,
         zero_flow_cout=zero_flow,
         n_pv=len(aquifer_pore_volumes),
-        spinup=threshold,
     )
 
     row_sums = w.sum(axis=1)
@@ -3572,8 +3526,7 @@ def test_weight_matrix_rows_sum_to_one_or_zero():
 
 # =============================================================================
 # Validator helper: parametrized snapshot pinning every ValueError branch of
-# _validate_advection_inputs. Verbatim messages from the prior duplicated
-# prologues; new branches (flow>=0 in rev) are the issue #187 omission fix.
+# _validate_advection_inputs, on both the forward and the reverse path.
 # =============================================================================
 
 
@@ -3585,11 +3538,12 @@ def _good_advection_inputs():
         "tedges": tedges,
         "flow": np.full(n, 100.0),
         "retardation_factor": 1.0,
+        "aquifer_pore_volumes": np.array([100.0, 300.0]),
     }
 
 
 def test_advection_public_rejects_nan_retardation_factor():
-    """NaN retardation slipped past ``< 1.0`` and silently produced all-NaN output; must raise."""
+    """NaN retardation must raise instead of silently producing all-NaN output."""
     n = 5
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     with pytest.raises(ValueError, match=r"retardation_factor must be >= 1\.0"):
@@ -3683,8 +3637,7 @@ def test_validate_advection_inputs_silent_on_good_input_reverse():
             },
             r"cout_tedges must have one more element than cout",
         ),
-        # NaN cout no longer raises: gaps are masked out of the inverse solve (#321).
-        # NEW: flow >= 0 in reverse (omission fix; symmetric with diffusion reverse)
+        # NaN cout does not raise: gaps are masked out of the inverse solve.
         (
             "reverse",
             lambda k: {
@@ -3708,7 +3661,7 @@ def test_validate_advection_inputs_silent_on_good_input_reverse():
     ],
 )
 def test_validate_advection_inputs_raises_on_bad_input(path, mutate, match_regex):
-    """Each ValueError branch raises with the exact historical message string."""
+    """Each ValueError branch raises with its exact message string."""
     del path
     bad = mutate(_good_advection_inputs())
     with pytest.raises(ValueError, match=match_regex):
@@ -3724,10 +3677,10 @@ def test_validate_advection_inputs_raises_on_bad_input(path, mutate, match_regex
 # machine-precision identical to the dense build at O(n_pv * n_cout * band)
 # instead of O(n_pv * n_cout * n_cin). Two independent oracles pin it:
 #
-#   _dense_weights_reference -- the relocated O(n_pv * N^2) dense full-overlap
-#       build (inverse cumulative-volume map + partial_isin) the banded builder replaced. The
-#       builder reproduces it to float reordering noise (~1e-14); accumulated
-#       parity uses atol=1e-12 (two independent float paths), structure exactly.
+#   _dense_weights_reference -- an independent O(n_pv * N^2) dense full-overlap
+#       build (inverse cumulative-volume map + partial_isin). The builder
+#       reproduces it to float reordering noise (~1e-14); accumulated parity
+#       uses atol=1e-12 (two independent float paths), structure exactly.
 #   _exact_rational_advection -- fractions.Fraction overlap arithmetic on the
 #       cumulative-volume axis, the absolute truth; the builder matches it to
 #       ~1e-15 (machine precision) on every grid including sub-bin cout.
@@ -3738,7 +3691,7 @@ def test_validate_advection_inputs_raises_on_bad_input(path, mutate, match_regex
 
 
 def _dense_weights_reference(*, tedges, cout_tedges, aquifer_pore_volumes, flow, retardation_factor):
-    """Relocated copy of the original dense full-overlap-matrix builder.
+    """Dense full-overlap-matrix builder, independent of the package's banded build.
 
     Loops over pore volumes, back-projects the cout edges via the inverse cumulative-volume map
     (no residence-time function), and accumulates per-streamtube flow-normalized ``partial_isin``
@@ -3859,7 +3812,7 @@ def _forward_via(builder, *, cin, flow, tedges, cout_tedges, aquifer_pore_volume
     builder be swapped (package builder vs dense oracle) so the two can be
     compared through identical spin-up resolution.
     """
-    weight_tedges, weight_flow, weight_cin, threshold, _ = _resolve_spinup_inputs(
+    weight_tedges, weight_flow, weight_cin, _, _ = _resolve_spinup_inputs(
         spinup,
         tedges=tedges,
         flow=flow,
@@ -3879,7 +3832,6 @@ def _forward_via(builder, *, cin, flow, tedges, cout_tedges, aquifer_pore_volume
         contributing_bins=contrib,
         zero_flow_cout=zero_flow,
         n_pv=len(aquifer_pore_volumes),
-        spinup=threshold,
     )
     assert weight_cin is not None  # cin is always supplied in these tests
     out = w.dot(weight_cin)
@@ -4073,12 +4025,10 @@ def test_banded_builder_degenerate_zero_width_broken_through_bin():
     np.testing.assert_allclose(acc[1].sum() / contrib[1], 1.0, atol=1e-13)
 
 
-@pytest.mark.parametrize("spinup", [None, "constant", 0.5])
+@pytest.mark.parametrize("spinup", [None, "constant"])
 def test_banded_builder_public_forward_parity_spinup_modes(spinup):
-    """Public forward output matches the dense-oracle-driven forward for all
-    three spin-up modes, including bit-identical NaN masks. For spinup=0.5 the
-    fringe (0 < contributing < n_pv on surviving bins) is asserted non-empty, so
-    a broken fringe path would change the float-mode output and fail here."""
+    """Public forward output matches the dense-oracle-driven forward for both
+    spin-up modes, including bit-identical NaN masks."""
     n = 50
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     flow = 100.0 + 20.0 * np.sin(np.arange(n) * 2 * np.pi / 11)
@@ -4088,7 +4038,7 @@ def test_banded_builder_public_forward_parity_spinup_modes(spinup):
     real_out = infiltration_to_extraction(
         cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=spinup
     )
-    dense_out, contrib = _forward_via(
+    dense_out, _ = _forward_via(
         _dense_weights_reference,
         cin=cin,
         flow=flow,
@@ -4101,32 +4051,6 @@ def test_banded_builder_public_forward_parity_spinup_modes(spinup):
     np.testing.assert_array_equal(np.isnan(real_out), np.isnan(dense_out))
     valid = ~np.isnan(real_out)
     np.testing.assert_allclose(real_out[valid], dense_out[valid], atol=1e-12, rtol=0)
-    if spinup == 0.5:
-        assert np.any(valid & (contrib < len(apv))), "fringe path not exercised"
-
-
-def test_banded_builder_fringe_decircularized_vs_rational():
-    """De-circularize the fringe: a surviving fringe bin's spinup=0.5 public
-    value equals the exact rational count-mean (W_rational @ cin / contributing),
-    not just the relocated dense build."""
-    n = 24
-    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
-    flow = 1.0 + 0.3 * np.sin(np.arange(n) * 2 * np.pi / 7)  # small-volume, variable
-    cin = 3.0 + np.cos(np.arange(n) * 2 * np.pi / 5)
-    apv = np.array([1.3, 2.7, 4.1])  # non-integer residence times
-
-    out = infiltration_to_extraction(
-        cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, spinup=0.5
-    )
-    acc_r, contrib_r = _exact_rational_advection(
-        tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, flow=flow, retardation_factor=1.0
-    )
-    # Exact count-mean reference for the threshold mode (contributing >= 0.5*n_pv).
-    n_pv = len(apv)
-    fringe = (contrib_r > 0) & (contrib_r < n_pv) & (contrib_r >= 0.5 * n_pv)
-    assert np.any(fringe), "no surviving fringe bin in this setup"
-    expected = (acc_r[fringe] @ cin) / contrib_r[fringe]
-    np.testing.assert_allclose(out[fringe], expected, atol=1e-13, rtol=0)
 
 
 def test_banded_builder_sharp_step_and_pulse_exact_vs_rational():
@@ -4244,14 +4168,14 @@ def test_banded_builder_reverse_and_gamma_match_dense_driven():
 
     # Dense-driven reverse: rebuild W_forward with the dense oracle and solve the
     # same Tikhonov system the package uses.
-    weight_tedges, weight_flow, _, threshold, n_pad = _resolve_spinup_inputs(
+    weight_tedges, weight_flow, _, _, n_pad = _resolve_spinup_inputs(
         "constant", tedges=tedges, flow=flow, aquifer_pore_volumes=apv, retardation_factor=1.0
     )
     acc_d, contrib_d, zf_d = _dense_weights_reference(
         tedges=weight_tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, flow=weight_flow, retardation_factor=1.0
     )
     w_d, _ = _resolve_spinup_mask(
-        accumulated_weights=acc_d, contributing_bins=contrib_d, zero_flow_cout=zf_d, n_pv=len(apv), spinup=threshold
+        accumulated_weights=acc_d, contributing_bins=contrib_d, zero_flow_cout=zf_d, n_pv=len(apv)
     )
     cin_dense = solve_inverse_transport(
         w_forward=w_d, observed=cout, n_output=len(weight_tedges) - 1, regularization_strength=1e-10
@@ -4322,20 +4246,18 @@ def test_solve_inverse_transport_banded_matches_dense():
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     flow = 100.0 + 20.0 * np.sin(np.arange(n) * 2 * np.pi / 11)
     apv = np.array([200.0, 450.0, 700.0])
-    weight_tedges, weight_flow, _, threshold, _ = _resolve_spinup_inputs(
+    weight_tedges, weight_flow, _, _, _ = _resolve_spinup_inputs(
         "constant", tedges=tedges, flow=flow, aquifer_pore_volumes=apv, retardation_factor=1.0
     )
     n_out = len(weight_tedges) - 1
     band_vals, col_start, contrib, zero_flow = _banded_weights(
         tedges=weight_tedges, cout_tedges=tedges, aquifer_pore_volumes=apv, flow=weight_flow, retardation_factor=1.0
     )
-    band_vals, col_start, _ = _banded_mask(
+    band_vals, _ = _banded_mask(
         band_vals=band_vals,
-        col_start=col_start,
         contributing_bins=contrib,
         zero_flow_cout=zero_flow,
         n_pv=len(apv),
-        spinup=threshold,
     )
     w_dense = _densify_weights(band_vals, col_start, n_out)
     observed = 3.0 + np.sin(np.arange(n) * 2 * np.pi / 17)
@@ -4377,35 +4299,44 @@ def test_solve_inverse_transport_banded_degenerate_cases():
         )
 
 
-def test_advection_empty_pore_volumes_all_nan():
-    """An empty pore-volume distribution means no transport: both directions
-    return all-NaN through the public API without raising."""
+def test_advection_empty_pore_volumes_raises():
+    """An empty pore-volume distribution carries no water: every entry point rejects
+    it instead of degenerating to an all-NaN output."""
     n = 20
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     flow = np.full(n, 100.0)
     empty = np.array([])
-    cout = infiltration_to_extraction(
-        cin=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=empty
-    )
-    assert np.all(np.isnan(cout))
-    cin_rec = extraction_to_infiltration(
-        cout=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=empty
-    )
-    assert np.all(np.isnan(cin_rec))
+    with pytest.raises(ValueError, match="aquifer_pore_volumes must not be empty"):
+        infiltration_to_extraction(
+            cin=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=empty
+        )
+    with pytest.raises(ValueError, match="aquifer_pore_volumes must not be empty"):
+        extraction_to_infiltration(
+            cout=np.ones(n), flow=flow, tedges=tedges, cout_tedges=tedges, aquifer_pore_volumes=empty
+        )
+    with pytest.raises(ValueError, match="aquifer_pore_volumes must not be empty"):
+        infiltration_to_extraction_nonlinear_sorption(
+            cin=np.ones(n),
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            aquifer_pore_volumes=empty,
+            retardation_factor=2.0,
+        )
 
 
 # =============================================================================
-# Regression: nonlinear-sorption output wrapper zero-flow / left-edge handling
-# (review item A1 / M3). Baseline (pre-fix) raised ValueError "Invalid θ-bin"
-# because a zero-flow input span collapses θ-edges and a cout edge left of the
-# flow record clamps to θ=0; both produce a zero-width θ sub-bin. The linear
-# sibling handles both gracefully, so it is the physics oracle here (front
-# tracking with ConstantRetardation == linear advection at the same R).
+# Regression: nonlinear-sorption output wrapper zero-flow / left-edge handling.
+# A zero-flow input span collapses θ-edges and a cout edge left of the flow
+# record clamps to θ=0; both produce a zero-width θ sub-bin, which must be
+# dropped rather than raising ValueError "Invalid θ-bin". The linear sibling
+# handles both gracefully, so it is the physics oracle here (front tracking
+# with ConstantRetardation == linear advection at the same R).
 # =============================================================================
 
 
 def test_nonlinear_sorption_interior_zero_flow_coarse_cout_matches_linear():
-    """A1(a): an interior zero-flow input bin must not crash the front-tracking
+    """An interior zero-flow input bin must not crash the front-tracking
     output wrapper. With a coarse (3-day) cout grid the zero-flow day is absorbed
     into a bin with positive throughflow, so every output bin is finite and equals
     the linear sibling to machine precision."""
@@ -4431,7 +4362,7 @@ def test_nonlinear_sorption_interior_zero_flow_coarse_cout_matches_linear():
 
 
 def test_nonlinear_sorption_zero_throughflow_output_bin_is_nan():
-    """A1(a): when the cout grid isolates the zero-flow input bin (daily cout
+    """When the cout grid isolates the zero-flow input bin (daily cout
     aligned with the flow grid), that output bin has zero throughflow and an
     undefined flow-weighted average. It must be returned as NaN -- exactly where
     the linear sibling is NaN -- while every other bin matches to machine
@@ -4458,7 +4389,7 @@ def test_nonlinear_sorption_zero_throughflow_output_bin_is_nan():
 
 
 def test_nonlinear_sorption_cout_before_record_returns_zero_left_bins():
-    """A1(b): a cout grid starting before tedges[0] must not crash. The left
+    """A cout grid starting before tedges[0] must not crash. The left
     underflow fixup extrapolates the θ map at flow[0] (mirroring the right-edge
     rule), so pre-record output bins read θ <= 0 -> mass 0 -> exactly 0.0 (the
     documented out-of-range contract), and the in-record window matches the linear
@@ -4487,7 +4418,7 @@ def test_nonlinear_sorption_cout_before_record_returns_zero_left_bins():
 
 
 def test_infiltration_to_extraction_negative_pore_volume_raises():
-    """A2: a negative aquifer pore volume back-projects a cout bin to future
+    """A negative aquifer pore volume back-projects a cout bin to future
     infiltration (anti-causal). The linear forward path must reject it, matching
     the nonlinear and diffusion paths, rather than returning a silent wrong value."""
     n = 10
@@ -4503,7 +4434,7 @@ def test_infiltration_to_extraction_negative_pore_volume_raises():
 
 
 def test_extraction_to_infiltration_negative_pore_volume_raises():
-    """A2: the reverse (deconvolution) path must reject a negative pore volume too."""
+    """The reverse (deconvolution) path must reject a negative pore volume too."""
     n = 10
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     with pytest.raises(ValueError, match="aquifer_pore_volumes must be positive"):

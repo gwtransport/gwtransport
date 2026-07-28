@@ -36,10 +36,10 @@ def _infiltration_to_extraction_weights(
 
     Builds the per-cout-bin sum of streamtube-normalized overlap rows in a
     **compact banded layout**, plus the count of contributing streamtubes per
-    cout bin and the zero-flow cout-bin mask. The caller decides how to convert
-    these into final weights (strict-validity, count-mean, or padded "constant"
-    spin-up); see :func:`_resolve_spinup_mask` and :func:`_resolve_spinup_inputs`.
-    Reconstruct the dense ``(n_cout, n_cin)`` matrix with :func:`_densify_weights`.
+    cout bin and the zero-flow cout-bin mask. The caller converts these into
+    final weights; see :func:`_resolve_spinup_mask` and
+    :func:`_resolve_spinup_inputs`. Reconstruct the dense ``(n_cout, n_cin)``
+    matrix with :func:`_densify_weights`.
 
     The per-streamtube weight is the literal mass-flux / water-flux ratio for
     that streamtube and cout bin: each contributing row sums to 1 to ULP.
@@ -59,9 +59,7 @@ def _infiltration_to_extraction_weights(
     a **pore-volume loop** -- ``O(n_cout * full_band)`` memory regardless of
     record length or ``n_pv``. The overlap is the flow-weighted time overlap
     normalized by the window's total in-range flow, so each contributing row
-    sums to 1 exactly: the exact flow-weighted overlap, matching the dense
-    ``residence_time`` + ``partial_isin`` reference to machine precision, not an
-    approximation.
+    sums to 1 exactly: the exact flow-weighted overlap, not an approximation.
 
     A streamtube whose source volume leaves ``[Vi[0], Vi[-1]]`` -- or a cout
     edge outside the cin time range -- maps to NaN and is **dropped, not
@@ -120,9 +118,6 @@ def _infiltration_to_extraction_weights(
     # volume passes during the bin, i.e. its cumulative-volume width is zero. This is
     # bit-identical to the dense flow-overlap-matrix product but is O(n_cout), not O(N^2).
     zero_flow_cout = np.diff(vc) == 0
-
-    if n_pv == 0:
-        return np.zeros((n_cout, 1)), np.zeros(n_cout, dtype=np.intp), np.zeros(n_cout, dtype=np.intp), zero_flow_cout
 
     r = np.sort(np.asarray(aquifer_pore_volumes, dtype=float) * retardation_factor)
 
@@ -204,72 +199,42 @@ def _infiltration_to_extraction_weights(
 def _resolve_spinup_mask(
     *,
     band_vals: npt.NDArray[np.floating],
-    col_start: npt.NDArray[np.intp],
     contributing_bins: npt.NDArray[np.intp],
     zero_flow_cout: npt.NDArray[np.bool_],
     n_pv: int,
-    spinup: float | None,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp], npt.NDArray[np.bool_]]:
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool_]]:
     """Convert raw banded bundle outputs into final banded weights + invalid mask.
+
+    A cout bin is valid only when every streamtube has contributed and the bin
+    carries throughflow; its bundle row is then the arithmetic mean over the
+    ``n_pv`` streamtube rows and sums to 1, so the operator conserves cin → cout
+    mass. Rows failing either condition are zeroed and flagged invalid.
 
     Parameters
     ----------
     band_vals : numpy.ndarray
         Per-cout-bin sum of streamtube-normalized rows in banded layout from
         :func:`_infiltration_to_extraction_weights`. Shape (n_cout, full_band).
-    col_start : numpy.ndarray of int
-        First cin bin index of each cout row's band. Passed through unchanged.
     contributing_bins : numpy.ndarray of int
         Number of streamtubes that contributed to each cout bin.
     zero_flow_cout : numpy.ndarray of bool
         Mask of zero-extraction-flow cout bins.
     n_pv : int
-        Total number of streamtubes (length of aquifer_pore_volumes).
-    spinup : float in [0, 1] or None
-        Spin-up policy. ``None`` requires every streamtube to have
-        contributed (strict-validity, mass-conserving across cin → cout
-        per row). A float in [0, 1] is the minimum fraction of
-        contributing streamtubes for the row to be emitted; the bundle
-        is then a count-mean over the contributing subset (NOT
-        mass-conserving across the bundle when contributing < n_pv —
-        this is the pre-fix behavior of issue #161 made explicit).
+        Total number of streamtubes (length of aquifer_pore_volumes), at least 1.
 
     Returns
     -------
     weights : numpy.ndarray
         Final banded weight matrix of the same shape as ``band_vals``.
         Rows where the policy is not satisfied are zero.
-    col_start : numpy.ndarray of int
-        The input ``col_start``, returned unchanged for caller convenience.
     invalid_mask : numpy.ndarray of bool
         True for cout bins where the policy is not satisfied.
-
-    Notes
-    -----
-    ``spinup`` is assumed already validated: :func:`_resolve_spinup_inputs`
-    resolves the string ``"constant"`` and rejects out-of-range values before
-    this function is reached, so ``spinup`` is always ``None`` or a float in
-    ``[0, 1]`` here.
     """
-    if n_pv == 0:
-        # No streamtubes means no transport: every cout bin is invalid.
-        return np.zeros_like(band_vals), col_start, np.ones(band_vals.shape[0], dtype=bool)
-
-    if spinup is None:
-        # Strict validity: every streamtube must have contributed, so
-        # contributing_bins == n_pv on valid rows and the divisor below
-        # (contributing_bins) coincides with n_pv there.
-        valid = (contributing_bins == n_pv) & ~zero_flow_cout
-    else:
-        # ``_resolve_spinup_inputs`` has already narrowed a non-None threshold to a
-        # float in [0, 1], so no further type/range check is reachable here.
-        valid = (contributing_bins >= spinup * n_pv) & ~zero_flow_cout & (contributing_bins > 0)
-
-    # Every valid row has contributing_bins > 0 (== n_pv > 0 for strict validity,
-    # > 0 for the float threshold), so the divisor is guaranteed positive.
+    valid = (contributing_bins == n_pv) & ~zero_flow_cout
+    # Every valid row has contributing_bins == n_pv > 0, so the divisor is positive.
     weights = np.zeros_like(band_vals)
     weights[valid, :] = band_vals[valid, :] / contributing_bins[valid, None]
-    return weights, col_start, ~valid
+    return weights, ~valid
 
 
 def _densify_weights(
@@ -314,18 +279,16 @@ def _resolve_spinup_inputs(
     aquifer_pore_volumes: npt.ArrayLike,
     retardation_factor: float,
     cin: npt.NDArray[np.floating] | None = None,
-) -> tuple[pd.DatetimeIndex, npt.NDArray[np.floating], npt.NDArray[np.floating] | None, float | None, int]:
+) -> tuple[pd.DatetimeIndex, npt.NDArray[np.floating], npt.NDArray[np.floating] | None, None, int]:
     """Validate ``spinup`` and apply its input-side effects.
 
     Returns the (possibly padded) tedges, flow, and cin to use for
-    weight computation, plus the threshold for the output-side policy
-    and the number of bins prepended.
+    weight computation, and the number of bins prepended.
 
     Modes:
 
-    - ``spinup is None`` — strict-validity. Returns inputs unchanged
-      and ``threshold = None``. Mass-conserving but NaN where any
-      streamtube has not broken through.
+    - ``spinup is None`` — strict-validity. Returns inputs unchanged.
+      Mass-conserving but NaN where any streamtube has not broken through.
     - ``spinup == "constant"`` — warm-start. Prepends ``n_pad`` bins
       (each of width ``tedges[1] - tedges[0]``) so the total prepended
       duration covers ``retardation_factor * max(aquifer_pore_volumes)
@@ -334,11 +297,6 @@ def _resolve_spinup_inputs(
       yields no spin-up NaN for cout bins at or after the original
       ``tedges[0]``. Right-edge spin-up (cout extending past
       ``tedges[-1]``) is not addressed.
-    - ``spinup`` is a float in ``[0, 1]`` — fraction threshold. Returns
-      inputs unchanged and ``threshold = float(spinup)``. *Warning:*
-      with ``spinup < 1.0`` the bundle is a count-mean over contributing
-      streamtubes; this conserves mass per row but NOT cin → cout (it
-      is exactly the issue #161 over-attribution made explicit).
 
     The first bin width ``tedges[1] - tedges[0]`` is used as the unit
     for prepended bins; this preserves uniformity if the input
@@ -347,7 +305,7 @@ def _resolve_spinup_inputs(
 
     Parameters
     ----------
-    spinup : None, "constant", or float in [0, 1]
+    spinup : None or "constant"
         Public spin-up policy.
     tedges : pandas.DatetimeIndex
         Original cin/flow time edges (length n_cin + 1).
@@ -372,69 +330,60 @@ def _resolve_spinup_inputs(
     new_cin : numpy.ndarray or None
         cin values aligned with ``new_tedges`` if ``cin`` was provided;
         otherwise ``None``.
-    threshold : float in [0, 1] or None
-        Threshold for :func:`_resolve_spinup_mask`. ``None`` (strict)
-        for ``spinup is None`` and ``spinup="constant"``.
+    threshold : None
+        Always ``None``: both policies are resolved on the input side and
+        :func:`_resolve_spinup_mask` needs no threshold.
     n_pad : int
-        Number of bins prepended. ``0`` for non-padding modes. Callers
+        Number of bins prepended. ``0`` for the non-padding mode. Callers
         of the inverse direction must drop the first ``n_pad`` entries
         from the recovered cin to align with the original ``tedges``.
 
     Raises
     ------
     TypeError
-        If ``spinup`` has an unsupported type.
+        If ``spinup`` is neither ``None`` nor a string.
     ValueError
-        If ``spinup`` is a string other than ``"constant"`` or a float
-        outside ``[0, 1]``.
+        If ``spinup`` is a string other than ``"constant"``.
     """
     if spinup is None:
         return tedges, np.asarray(flow, dtype=float), cin, None, 0
-    flow_arr = np.asarray(flow, dtype=float)
-    if isinstance(spinup, str):
-        if spinup != "constant":
-            msg = f"spinup string must be 'constant'; got {spinup!r}"
-            raise ValueError(msg)
-        # Determine whether padding is feasible. We fall back to strict-validity
-        # (no padding) silently when the warm-start is undefined (zero or NaN
-        # initial flow) or when the implied padding would be unreasonably large
-        # (extreme pore volumes). This keeps the default usable for edge cases
-        # while still triggering the strict-validity NaN when the warm-start
-        # assumption cannot meaningfully be applied.
-        if len(tedges) < 2:  # noqa: PLR2004
-            return tedges, flow_arr, cin, None, 0
-        q0 = float(flow_arr[0])
-        apvs = np.asarray(aquifer_pore_volumes, dtype=float)
-        if apvs.size == 0:
-            return tedges, flow_arr, cin, None, 0
-        v_max = float(np.max(apvs))
-        if not (q0 > 0 and v_max > 0):
-            return tedges, flow_arr, cin, None, 0
-        bin_width = tedges[1] - tedges[0]
-        bin_width_days = bin_width / pd.Timedelta(days=1)
-        if not bin_width_days > 0:
-            return tedges, flow_arr, cin, None, 0
-        pad_days = retardation_factor * v_max / q0
-        # Add 1 extra bin so the longest streamtube's source window for the
-        # earliest original cout bin lies strictly inside the padded range
-        # (avoids strict-validity NaN due to floating-point edge alignment).
-        n_pad_float = np.ceil(pad_days / bin_width_days) + 1
-        # Cap to keep memory bounded; beyond this, "constant" is no longer a
-        # meaningful warm-start (the user probably has unphysical pore volumes
-        # or extreme retardation), so fall through to strict-validity.
-        max_n_pad = max(10_000, 10 * len(flow_arr))
-        if not np.isfinite(n_pad_float) or n_pad_float > max_n_pad:
-            return tedges, flow_arr, cin, None, 0
-        n_pad = int(n_pad_float)
-        offsets = pd.TimedeltaIndex(bin_width * np.arange(n_pad, 0, -1))
-        new_tedges = (tedges[0] - offsets).append(tedges)
-        new_flow = np.concatenate([np.full(n_pad, flow_arr[0]), flow_arr])
-        new_cin = np.concatenate([np.full(n_pad, cin[0]), cin]) if cin is not None else None
-        return new_tedges, new_flow, new_cin, None, n_pad
-    if isinstance(spinup, bool) or not isinstance(spinup, (int, float)):
-        msg = f"spinup must be None, 'constant', or float in [0, 1]; got {spinup!r}"
+    if not isinstance(spinup, str):
+        msg = f"spinup must be None or 'constant'; got {spinup!r}"
         raise TypeError(msg)
-    if not (0.0 <= spinup <= 1.0):
-        msg = f"spinup float must be in [0, 1]; got {spinup!r}"
+    if spinup != "constant":
+        msg = f"spinup string must be 'constant'; got {spinup!r}"
         raise ValueError(msg)
-    return tedges, flow_arr, cin, float(spinup), 0
+    flow_arr = np.asarray(flow, dtype=float)
+    # Determine whether padding is feasible. We fall back to strict-validity
+    # (no padding) silently when the warm-start is undefined (zero or NaN
+    # initial flow) or when the implied padding would be unreasonably large
+    # (extreme pore volumes). This keeps the default usable for edge cases
+    # while still triggering the strict-validity NaN when the warm-start
+    # assumption cannot meaningfully be applied.
+    if len(tedges) < 2:  # noqa: PLR2004
+        return tedges, flow_arr, cin, None, 0
+    q0 = float(flow_arr[0])
+    v_max = float(np.max(np.asarray(aquifer_pore_volumes, dtype=float)))
+    if not (q0 > 0 and v_max > 0):
+        return tedges, flow_arr, cin, None, 0
+    bin_width = tedges[1] - tedges[0]
+    bin_width_days = bin_width / pd.Timedelta(days=1)
+    if not bin_width_days > 0:
+        return tedges, flow_arr, cin, None, 0
+    pad_days = retardation_factor * v_max / q0
+    # Add 1 extra bin so the longest streamtube's source window for the
+    # earliest original cout bin lies strictly inside the padded range
+    # (avoids strict-validity NaN due to floating-point edge alignment).
+    n_pad_float = np.ceil(pad_days / bin_width_days) + 1
+    # Cap to keep memory bounded; beyond this, "constant" is not a meaningful
+    # warm-start (the user probably has unphysical pore volumes or extreme
+    # retardation), so fall through to strict-validity.
+    max_n_pad = max(10_000, 10 * len(flow_arr))
+    if not np.isfinite(n_pad_float) or n_pad_float > max_n_pad:
+        return tedges, flow_arr, cin, None, 0
+    n_pad = int(n_pad_float)
+    offsets = pd.TimedeltaIndex(bin_width * np.arange(n_pad, 0, -1))
+    new_tedges = (tedges[0] - offsets).append(tedges)
+    new_flow = np.concatenate([np.full(n_pad, flow_arr[0]), flow_arr])
+    new_cin = np.concatenate([np.full(n_pad, cin[0]), cin]) if cin is not None else None
+    return new_tedges, new_flow, new_cin, None, n_pad

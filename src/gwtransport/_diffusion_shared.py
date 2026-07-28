@@ -2,9 +2,9 @@
 Shared closed-form helpers for the Kreft-Zuber flux-concentration transport modules.
 
 This private module holds the pieces common to :mod:`gwtransport.diffusion_fast` and
-:mod:`gwtransport.diffusion_fast_fast`: the breakthrough antiderivative, input validation, the
-banded Tikhonov reverse solve, and the small per-streamtube / spin-up helpers. Both modules import
-from here so these primitives are defined once
+:mod:`gwtransport.diffusion_fast_fast`: the breakthrough antiderivative, the input
+coerce/validate/broadcast preamble, the warm-start and advective-validity grids, and the banded
+Tikhonov reverse solve. Both modules import from here so these primitives are defined once
 and evaluate bit-identically in either module (the modules' overall transport is *not* identical:
 diffusion_fast is exact, diffusion_fast_fast approximate).
 
@@ -24,6 +24,7 @@ from gwtransport._validation import (
     _validate_positive_array,
     _validate_retardation_factor,
 )
+from gwtransport.residence_time import fraction_explained_full
 from gwtransport.utils import solve_inverse_transport_banded
 
 # Minimum coefficient sum to consider an output bin valid.
@@ -103,7 +104,7 @@ def _cout_cumulative_volume(
         return np.interp(cout_tedges_days, tedges_days, cumulative_volume_at_cin)
     cumsum_out = np.concatenate(([0.0], np.cumsum(flow_out * dt_to_days(cout_tedges))))
     in_range = (cout_tedges_days >= tedges_days[0]) & (cout_tedges_days <= tedges_days[-1])
-    # np.argmax returns 0 for an all-False mask, the same fallback the guard provided.
+    # np.argmax returns 0 for an all-False mask (no cout edge inside the flow record).
     i0 = int(np.argmax(in_range))
     v_at_i0 = float(np.interp(cout_tedges_days[i0], tedges_days, cumulative_volume_at_cin))
     return v_at_i0 + (cumsum_out - cumsum_out[i0])
@@ -114,7 +115,7 @@ def _extend_tedges_flag(spinup: str | float | None) -> bool:
 
     ``"constant"`` (default) extends ``tedges`` by 100 years on each side so a constant
     warm-start fills the left-edge spin-up region; ``None`` disables the extension (spin-up
-    cout becomes NaN). Mirrors :func:`gwtransport.diffusion._diffusion_extend_tedges_flag`.
+    cout becomes NaN).
 
     Returns
     -------
@@ -139,13 +140,59 @@ def _extend_tedges_flag(spinup: str | float | None) -> bool:
     raise NotImplementedError(msg)
 
 
-def _broadcast_to_pore_volumes(
-    values: npt.NDArray[np.floating] | float, n_pore_volumes: int
-) -> npt.NDArray[np.floating]:
+def _extend_tedges(tedges: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """Pad ``tedges`` by 100 years on each side, the warm-start grid of ``spinup="constant"``.
+
+    Timestamp arithmetic keeps the input timezone (tz-naive stays naive, tz-aware stays
+    tz-aware); going through ``.to_numpy()`` would strip it.
+
+    Returns
+    -------
+    DatetimeIndex
+        Padded edges, same length as ``tedges``.
+    """
+    pad = pd.Timedelta(days=36500)
+    return (tedges[:1] - pad).append(tedges[1:-1]).append(tedges[-1:] + pad)
+
+
+def _advective_valid_cout_bins(
+    *,
+    flow: npt.NDArray[np.floating],
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    aquifer_pore_volumes: npt.NDArray[np.floating],
+    retardation_factor: float,
+) -> npt.NDArray[np.bool_]:
+    """Output bins whose advective look-back stays in-record for every streamtube.
+
+    A bin is valid where the advective coverage is 1 for all pore volumes (NaN outside the
+    record -> invalid). This is the advective gate only; the dispersive informedness is the
+    captured kernel mass, applied downstream.
+
+    Returns
+    -------
+    ndarray of bool, shape (len(cout_tedges) - 1,)
+        True where the bin is fully informed by the infiltration record.
+    """
+    return np.all(
+        fraction_explained_full(
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=cout_tedges,
+            aquifer_pore_volumes=aquifer_pore_volumes,
+            retardation_factor=retardation_factor,
+            direction="extraction_to_infiltration",
+        )
+        >= 1.0,
+        axis=0,
+    )
+
+
+def _broadcast_to_pore_volumes(values: npt.ArrayLike, n_pore_volumes: int) -> npt.NDArray[np.floating]:
     """Return a per-pore-volume array: a scalar broadcasts to all streamtubes, an array passes through.
 
-    Length is validated upstream by :func:`_validate_inputs`, so a non-scalar array is
-    returned as-is (assumed length ``n_pore_volumes``).
+    Callers validate the length separately, so a non-scalar array is returned as-is (assumed
+    length ``n_pore_volumes``). Broadcast results are read-only views.
 
     Returns
     -------
@@ -203,9 +250,9 @@ def _validate_inputs(
         if np.size(arr) not in {1, n_pore_volumes}:
             msg = f"{name} must be a scalar or have length len(aquifer_pore_volumes) = {n_pore_volumes}"
             raise ValueError(msg)
-    # Delegate the finite+sign invariants to the shared _validation atoms so the NaN/+inf guards
-    # (which the bare ``< 0`` / ``<= 0`` / ``< 1.0`` comparisons here would let slip through) are
-    # enforced in exactly one place. Order and messages match the historical inline checks.
+    # The finite+sign invariants go through the shared _validation atoms so the NaN/+inf guards
+    # (which bare ``< 0`` / ``<= 0`` / ``< 1.0`` comparisons would let slip through) are enforced
+    # in exactly one place.
     _validate_non_negative_array(molecular_diffusivity, name="molecular_diffusivity")
     _validate_non_negative_array(longitudinal_dispersivity, name="longitudinal_dispersivity")
     # Reverse cout may contain NaN (measurement gaps); gapped rows are excluded from the solve.
@@ -234,6 +281,69 @@ def _validate_inputs(
         if np.any(flow_out < 0):
             msg = "flow_out must be non-negative (negative flow not supported)"
             raise ValueError(msg)
+
+
+def _coerce_and_validate(
+    *,
+    cin_or_cout: npt.ArrayLike,
+    flow: npt.ArrayLike,
+    tedges: pd.DatetimeIndex,
+    cout_tedges: pd.DatetimeIndex,
+    aquifer_pore_volumes: npt.ArrayLike,
+    streamline_length: npt.NDArray[np.floating] | float,
+    molecular_diffusivity: npt.NDArray[np.floating] | float,
+    longitudinal_dispersivity: npt.NDArray[np.floating] | float,
+    retardation_factor: float,
+    is_forward: bool,
+    flow_out: npt.ArrayLike | None,
+) -> tuple[npt.NDArray[np.floating], dict]:
+    """Coerce, validate, and broadcast the public transport inputs of the fast modules.
+
+    Validation runs on the coerced-but-not-yet-broadcast per-streamtube parameters, so a
+    length mismatch against ``aquifer_pore_volumes`` is still caught.
+
+    Returns
+    -------
+    values : ndarray
+        ``cin`` (forward) or ``cout`` (reverse) as a float array.
+    transport : dict
+        Coefficient-matrix builder arguments, keyed by parameter name: the coerced ``flow`` /
+        ``tedges`` / ``cout_tedges`` / ``flow_out`` / ``aquifer_pore_volumes`` plus the three
+        per-streamtube arrays broadcast to one value per pore volume.
+    """
+    tedges = pd.DatetimeIndex(tedges)
+    cout_tedges = pd.DatetimeIndex(cout_tedges)
+    values = np.asarray(cin_or_cout, dtype=float)
+    flow = np.asarray(flow, dtype=float)
+    aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
+    if flow_out is not None:
+        flow_out = np.asarray(flow_out, dtype=float)
+
+    _validate_inputs(
+        cin_or_cout=values,
+        flow=flow,
+        tedges=tedges,
+        cout_tedges=cout_tedges,
+        aquifer_pore_volumes=aquifer_pore_volumes,
+        streamline_length=streamline_length,
+        molecular_diffusivity=molecular_diffusivity,
+        longitudinal_dispersivity=longitudinal_dispersivity,
+        retardation_factor=retardation_factor,
+        is_forward=is_forward,
+        flow_out=flow_out,
+    )
+
+    n_pore_volumes = len(aquifer_pore_volumes)
+    return values, {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "flow_out": flow_out,
+        "aquifer_pore_volumes": aquifer_pore_volumes,
+        "streamline_length": _broadcast_to_pore_volumes(streamline_length, n_pore_volumes),
+        "molecular_diffusivity": _broadcast_to_pore_volumes(molecular_diffusivity, n_pore_volumes),
+        "longitudinal_dispersivity": _broadcast_to_pore_volumes(longitudinal_dispersivity, n_pore_volumes),
+    }
 
 
 def _solve_reverse_banded(

@@ -50,15 +50,56 @@ class NonlinearSorption(ABC):
 
     @abstractmethod
     def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
-        """Compute retardation factor R(C)."""
+        """Compute retardation factor R(C).
+
+        R fixes the characteristic celerity in (V, θ) coordinates: ``dV/dθ = 1/R(C)``.
+
+        Parameters
+        ----------
+        c : float or numpy.ndarray
+            Dissolved concentration [mass/volume]. Non-negative.
+
+        Returns
+        -------
+        float or numpy.ndarray
+            Retardation factor [-].
+        """
 
     @abstractmethod
     def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
-        """Compute total concentration (dissolved + sorbed per unit pore volume)."""
+        """Compute total concentration (dissolved + sorbed per unit pore volume).
+
+        ``C_T`` is the conserved quantity of ``∂C_T/∂θ + ∂C/∂V = 0``; the flux carries
+        only the dissolved part because sorbed mass is immobile.
+
+        Parameters
+        ----------
+        c : float or numpy.ndarray
+            Dissolved concentration [mass/volume]. Non-negative.
+
+        Returns
+        -------
+        float or numpy.ndarray
+            Total concentration [mass/volume].
+        """
 
     @abstractmethod
     def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
-        """Invert retardation factor to obtain concentration."""
+        """Invert retardation factor to obtain concentration.
+
+        Used by rarefaction fans, where the self-similar solution gives R as a
+        function of position and cumulative flow.
+
+        Parameters
+        ----------
+        r : float or numpy.ndarray
+            Retardation factor [-].
+
+        Returns
+        -------
+        float or numpy.ndarray
+            Dissolved concentration [mass/volume]. Non-negative.
+        """
 
     def shock_speed(self, c_left: float, c_right: float) -> float:
         """Compute shock speed dV/dθ via Rankine-Hugoniot in (V, θ) coordinates.
@@ -177,20 +218,6 @@ class FreundlichSorption(NonlinearSorption):
     For n < 1: Higher C travels slower
     For n = 1: linear (not supported, use ConstantRetardation instead)
 
-    Parameters
-    ----------
-    k_f : float
-        Freundlich coefficient [(m³/kg)^(1/n)]. Must be positive.
-    n : float
-        Freundlich exponent [-]. Must be positive and != 1.
-    bulk_density : float
-        Bulk density of porous medium [kg/m³]. Must be positive.
-    porosity : float
-        Porosity [-]. Must be in (0, 1).
-    c_min : float, optional
-        Minimum concentration threshold (the dry-soil singularity floor). For
-        n>1, prevents infinite retardation as C→0. Default ``1e-12`` for all n.
-
     Notes
     -----
     The retardation factor is defined as:
@@ -215,15 +242,15 @@ class FreundlichSorption(NonlinearSorption):
     """
 
     k_f: float
-    """Freundlich coefficient [(m³/kg)^(1/n)]."""
+    """Freundlich coefficient [(m³/kg)^(1/n)]. Positive."""
     n: float
-    """Freundlich exponent [-]."""
+    """Freundlich exponent [-]. Positive and != 1."""
     bulk_density: float
-    """Bulk density of porous medium [kg/m³]."""
+    """Bulk density of porous medium [kg/m³]. Positive."""
     porosity: float
-    """Porosity [-]."""
+    """Porosity [-]. In (0, 1)."""
     c_min: float = 1e-12
-    """Minimum concentration threshold to prevent infinite retardation."""
+    """Dry-soil singularity floor [mass/volume]; keeps ``R(C)`` finite as ``C → 0`` for n>1."""
     _ret_coefficient: float = field(init=False, repr=False, compare=False)
     """Cached ``(rho_b*k_f)/(n_por*n)`` — shared by the scalar and array paths."""
     _ret_exponent: float = field(init=False, repr=False, compare=False)
@@ -268,36 +295,14 @@ class FreundlichSorption(NonlinearSorption):
         self._cfr_inv_exponent = 1.0 / self._ret_exponent
 
     def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
-        """
-        Compute retardation factor R(C).
-
-        The retardation factor relates concentration speed to pore water speed in
-        (V, θ) coordinates::
-
-            dV/dθ = 1 / R(C)
-
-        For Freundlich sorption::
-
-            R(C) = 1 + (rho_b*k_f)/(n_por*n) * C^((1/n)-1)
-
-        Parameters
-        ----------
-        c : float or array-like
-            Dissolved concentration [mass/volume]. Non-negative.
-
-        Returns
-        -------
-        r : float or numpy.ndarray
-            Retardation factor [-]. Always >= 1.0.
+        """``R(C) = 1 + (rho_b*k_f)/(n_por*n) * C^((1/n)-1)``. See :meth:`NonlinearSorption.retardation`.
 
         Notes
         -----
-        - For n > 1: R decreases with increasing C (higher C travels faster)
-        - For n < 1: R increases with increasing C (higher C travels slower)
-        - n<1 with c_min=0: R(0)=1 (no sorption at zero, physically correct)
-          because clamping to ``c_min=0`` leaves ``C^((1/n)-1) = 0^positive = 0``.
-        - Otherwise: ``c`` is clamped to ``c_min`` before evaluation. This pairs with
-          :meth:`total_concentration`, which also clamps to ``c_min``.
+        R decreases with C for n > 1 (higher C travels faster) and increases for n < 1.
+        With n<1 and ``c_min=0``, ``R(0) = 1`` (no sorption at zero) because clamping to
+        ``c_min=0`` leaves ``C^((1/n)-1) = 0^positive = 0``; otherwise ``c`` is clamped to
+        ``c_min`` before evaluation.
 
         Clamping with ``np.maximum`` before the power keeps a single general path
         for every ``(n, c_min)`` combination and avoids raising the base to a
@@ -319,31 +324,10 @@ class FreundlichSorption(NonlinearSorption):
         return result if isinstance(c, np.ndarray) else float(result)
 
     def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
-        """
-        Compute total concentration (dissolved + sorbed per unit pore volume).
-
-        Total concentration includes both dissolved and sorbed mass:
-            C_total = C + (rho_b/n_por) * s(C)
-                    = C + (rho_b/n_por) * k_f * C^(1/n)
-
-        Parameters
-        ----------
-        c : float or array-like
-            Dissolved concentration [mass/volume]. Non-negative.
-
-        Returns
-        -------
-        c_total : float or numpy.ndarray
-            Total concentration [mass/volume]. Always >= c.
+        """``C_T = C + (rho_b/n_por)·k_f·C^(1/n)``. See :meth:`NonlinearSorption.total_concentration`.
 
         Notes
         -----
-        This is the conserved quantity in the transport equation:
-            ∂C_total/∂t + ∂(flow*C)/∂v = 0
-
-        The flux term only includes dissolved concentration because sorbed mass
-        is immobile.
-
         For ``c = 0``, ``c^(1/n) = 0`` exactly (no singularity for any
         ``n > 0``), so ``C_T(0) = 0`` is physically correct and no ``c_min``
         clamp is needed here. ``c_min`` is only required to keep
@@ -360,45 +344,15 @@ class FreundlichSorption(NonlinearSorption):
         return c_arr + self._ct_coefficient * (c_arr ** (1.0 / self.n))
 
     def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
-        """
-        Invert retardation factor to obtain concentration analytically.
-
-        Given R, solves R = retardation(C) for C. This is used in rarefaction waves
-        where the self-similar solution gives R as a function of position and time.
-
-        Parameters
-        ----------
-        r : float or array-like
-            Retardation factor [-]. Must be >= 1.0.
-
-        Returns
-        -------
-        c : float or numpy.ndarray
-            Dissolved concentration [mass/volume]. Non-negative.
+        """``C = [(R-1)·n_por·n/(rho_b·k_f)]^(n/(1-n))``. See :meth:`NonlinearSorption.concentration_from_retardation`.
 
         Notes
         -----
-        This inverts the relation:
-            R = 1 + (rho_b*k_f)/(n_por*n) * C^((1/n)-1)
-
-        The analytical solution is:
-            C = [(R-1) * n_por*n / (rho_b*k_f)]^(n/(1-n))
-
-        For n = 1 (linear sorption), the exponent n/(1-n) is undefined, which is
-        why linear sorption must use ConstantRetardation class instead.
-
-        Examples
-        --------
-        >>> sorption = FreundlichSorption(
-        ...     k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3
-        ... )
-        >>> r = sorption.retardation(5.0)
-        >>> c = sorption.concentration_from_retardation(r)
-        >>> bool(np.isclose(c, 5.0, rtol=1e-14))
-        True
+        The exponent ``n/(1-n)`` is undefined at n = 1, which is why linear sorption
+        must use :class:`ConstantRetardation` instead. Results below ``c_min`` are
+        clamped to it.
         """
-        # FreundlichSorption.__post_init__ rejects |n-1| < EPSILON_FREUNDLICH_N,
-        # so the previous n≈1 guard here was unreachable.
+        # __post_init__ rejects |n-1| < EPSILON_FREUNDLICH_N, so _cfr_inv_exponent is finite.
         if not isinstance(r, np.ndarray):
             base = (float(r) - 1.0) / self._ret_coefficient
             if base > 0.0:
@@ -428,12 +382,6 @@ class ConstantRetardation:
     This is a special case where concentration-dependent behavior disappears.
     Used for conservative tracers or as approximation for weak sorption.
 
-    Parameters
-    ----------
-    retardation_factor : float
-        Constant retardation factor [-]. Must be >= 1.0.
-        R = 1.0 means no retardation (conservative tracer).
-
     Notes
     -----
     With constant retardation:
@@ -455,7 +403,7 @@ class ConstantRetardation:
     """
 
     retardation_factor: float
-    """Constant retardation factor [-]. Must be >= 1.0."""
+    """Constant retardation factor [-]. At least 1.0; ``R = 1`` is a conservative tracer."""
 
     def __post_init__(self):
         """Validate parameters after initialization.
@@ -470,79 +418,30 @@ class ConstantRetardation:
             raise ValueError(msg)
 
     def retardation(self, c: float) -> float:  # noqa: ARG002
-        """
-        Return constant retardation factor (independent of concentration).
-
-        Parameters
-        ----------
-        c : float
-            Dissolved concentration (not used for constant retardation).
-
-        Returns
-        -------
-        r : float
-            Constant retardation factor.
-        """
+        """Constant retardation factor, independent of ``c``."""
         return self.retardation_factor
 
     def total_concentration(self, c: float) -> float:
-        """
-        Compute total concentration for linear sorption.
-
-        For constant retardation:
-            C_total = C * R
-
-        Parameters
-        ----------
-        c : float
-            Dissolved concentration [mass/volume].
-
-        Returns
-        -------
-        c_total : float
-            Total concentration [mass/volume].
-        """
+        """``C_T = C·R`` for linear sorption."""
         return c * self.retardation_factor
 
     def concentration_from_retardation(self, r: float) -> float:
-        """
-        Not applicable for constant retardation.
-
-        With constant R, all concentrations have the same retardation, so
-        inversion is not meaningful. This method raises an error.
+        """Not applicable: with constant R the inversion is not meaningful.
 
         Raises
         ------
         NotImplementedError
-            Always raised for constant retardation.
+            Always.
         """
         msg = "concentration_from_retardation not applicable for ConstantRetardation (R is independent of C)"
         raise NotImplementedError(msg)
 
     def shock_speed(self, c_left: float, c_right: float) -> float:  # noqa: ARG002
-        """Compute shock speed dV/dθ for constant retardation.
-
-        With constant R, ``dV/dθ = 1 / R`` for any concentration pair —
-        identical to every characteristic speed.
-
-        Parameters
-        ----------
-        c_left, c_right : float
-            Concentrations (unused — kept for ABC compatibility).
-
-        Returns
-        -------
-        shock_speed : float
-            Shock speed dV/dθ = 1/R.
-        """
+        """``dV/dθ = 1/R`` for any concentration pair — identical to every characteristic speed."""
         return 1.0 / self.retardation_factor
 
     def check_entropy_condition(self, c_left: float, c_right: float, shock_speed: float) -> bool:  # noqa: PLR6301
-        """Entropy condition for constant retardation: trivially satisfied.
-
-        With constant R every characteristic speed equals the shock speed in
-        θ-space, so the Lax condition holds as an equality regardless of
-        ``c_left``/``c_right``.
+        """Check the Lax entropy condition; always satisfied, since with constant R it holds as an equality.
 
         Returns
         -------
@@ -569,18 +468,6 @@ class LangmuirSorption(NonlinearSorption):
     Retardation always decreases with C (favorable isotherm), and R(0) is
     finite — unlike Freundlich with n > 1, no minimum concentration threshold
     is needed.
-
-    Parameters
-    ----------
-    s_max : float
-        Maximum sorption capacity [mass/mass of solid]. Must be positive.
-    k_l : float
-        Half-saturation constant [mass/volume]. Concentration at which
-        s = s_max / 2. Must be positive.
-    bulk_density : float
-        Bulk density of porous medium [kg/m³]. Must be positive.
-    porosity : float
-        Porosity [-]. Must be in (0, 1).
 
     See Also
     --------
@@ -612,13 +499,13 @@ class LangmuirSorption(NonlinearSorption):
     """
 
     s_max: float
-    """Maximum sorption capacity [mass/mass of solid]."""
+    """Maximum sorption capacity [mass/mass of solid]. Positive."""
     k_l: float
-    """Half-saturation constant [mass/volume]."""
+    """Half-saturation constant [mass/volume] — the C at which ``s = s_max/2``. Positive."""
     bulk_density: float
-    """Bulk density of porous medium [kg/m³]."""
+    """Bulk density of porous medium [kg/m³]. Positive."""
     porosity: float
-    """Porosity [-]."""
+    """Porosity [-]. In (0, 1)."""
 
     def __post_init__(self):
         """Validate parameters after initialization.
@@ -649,29 +536,10 @@ class LangmuirSorption(NonlinearSorption):
         """Cached ``(rho_b/n_por)*s_max`` sorbed-mass coefficient (scalar + array paths)."""
 
     def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
-        """
-        Compute retardation factor R(C).
+        """``R(C) = 1 + A/(K_L + C)²`` with ``A = rho_b·s_max·K_L/n_por``.
 
-        For Langmuir sorption:
-            R(C) = 1 + A / (K_L + C)²
-
-        where A = rho_b * s_max * K_L / n_por.
-
-        Parameters
-        ----------
-        c : float or array-like
-            Dissolved concentration [mass/volume]. Non-negative.
-
-        Returns
-        -------
-        r : float or numpy.ndarray
-            Retardation factor [-]. Always >= 1.0.
-
-        Notes
-        -----
-        - R(0) = 1 + rho_b * s_max / (n_por * K_L) — always finite
-        - R decreases with increasing C (higher C travels faster)
-        - R → 1 as C → ∞ (all sorption sites saturated)
+        See :meth:`NonlinearSorption.retardation`. ``R(0)`` is finite, R decreases with
+        C, and ``R → 1`` as ``C → ∞`` (all sorption sites saturated).
         """
         if not isinstance(c, np.ndarray):
             cf = float(c)
@@ -681,22 +549,7 @@ class LangmuirSorption(NonlinearSorption):
         return 1.0 + self.a_coeff / (self.k_l + c_eff) ** 2
 
     def total_concentration(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
-        """
-        Compute total concentration (dissolved + sorbed per unit pore volume).
-
-        For Langmuir sorption:
-            C_total = C + (rho_b / n_por) * s_max * C / (K_L + C)
-
-        Parameters
-        ----------
-        c : float or array-like
-            Dissolved concentration [mass/volume]. Non-negative.
-
-        Returns
-        -------
-        c_total : float or numpy.ndarray
-            Total concentration [mass/volume]. Always >= c.
-        """
+        """``C_T = C + (rho_b/n_por)·s_max·C/(K_L + C)``. See :meth:`NonlinearSorption.total_concentration`."""
         if not isinstance(c, np.ndarray):
             cf = float(c)
             c_eff = max(0.0, cf)
@@ -706,36 +559,12 @@ class LangmuirSorption(NonlinearSorption):
         return c_arr + self._ct_coefficient * c_eff / (self.k_l + c_eff)
 
     def concentration_from_retardation(self, r: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
-        """
-        Invert retardation factor to obtain concentration analytically.
-
-        Given R, solves R = 1 + A / (K_L + C)² for C:
-            C = sqrt(A / (R - 1)) - K_L
-
-        Parameters
-        ----------
-        r : float or array-like
-            Retardation factor [-]. Must be >= 1.0.
-
-        Returns
-        -------
-        c : float or numpy.ndarray
-            Dissolved concentration [mass/volume]. Non-negative.
+        """``C = sqrt(A/(R - 1)) - K_L``. See :meth:`NonlinearSorption.concentration_from_retardation`.
 
         Notes
         -----
-        For R <= 1, returns 0.0 (unphysical region).
-        For R >= R(0) = 1 + A/K_L², returns 0.0 (at or below zero concentration).
-
-        Examples
-        --------
-        >>> sorption = LangmuirSorption(
-        ...     s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3
-        ... )
-        >>> r = sorption.retardation(5.0)
-        >>> c = sorption.concentration_from_retardation(r)
-        >>> bool(np.isclose(c, 5.0, rtol=1e-14))
-        True
+        Returns ``0.0`` for ``R <= 1`` (unphysical) and for ``R >= R(0) = 1 + A/K_L²``
+        (at or below zero concentration).
         """
         if not isinstance(r, np.ndarray):
             r_minus_1 = float(r) - 1.0
@@ -769,23 +598,6 @@ class BrooksCoreyConductivity(NonlinearSorption):
     storage). All three abstract methods have closed forms; ``shock_speed``
     and ``check_entropy_condition`` are inherited unchanged from
     :class:`NonlinearSorption`.
-
-    Parameters
-    ----------
-    theta_r : float
-        Residual volumetric moisture content [-]. Must satisfy
-        ``0 <= theta_r < theta_s``.
-    theta_s : float
-        Saturated volumetric moisture content [-]. Equal to the porosity
-        for typical soils. Must satisfy ``theta_r < theta_s < 1``.
-    k_s : float
-        Saturated hydraulic conductivity [length/time]. Positive.
-    brooks_corey_lambda : float
-        Pore-size distribution index ``λ`` [-]. Positive. The exponent
-        ``a = 3 + 2/λ`` is the Burdine pore-connectivity result. The Mualem
-        variant (``L = 0.5``) gives ``a = 2.5 + 2/λ`` and is not implemented;
-        a user wanting it can re-derive ``λ`` so the Burdine ``a`` matches the
-        desired Mualem exponent.
 
     See Also
     --------
@@ -821,13 +633,17 @@ class BrooksCoreyConductivity(NonlinearSorption):
     """
 
     theta_r: float
-    """Residual volumetric moisture content [-]."""
+    """Residual volumetric moisture content [-]; ``0 <= theta_r < theta_s``."""
     theta_s: float
-    """Saturated volumetric moisture content [-]."""
+    """Saturated volumetric moisture content [-]; ``theta_r < theta_s < 1``. The porosity for typical soils."""
     k_s: float
-    """Saturated hydraulic conductivity [length/time]."""
+    """Saturated hydraulic conductivity [length/time]. Positive."""
     brooks_corey_lambda: float
-    """Pore-size distribution index λ [-]."""
+    """Pore-size distribution index ``λ`` [-]. Positive.
+
+    The exponent ``a = 3 + 2/λ`` is the Burdine pore-connectivity result. The Mualem
+    variant (``L = 0.5``) gives ``a = 2.5 + 2/λ`` and is not implemented; a user wanting
+    it can re-derive ``λ`` so the Burdine ``a`` matches the desired Mualem exponent."""
     a: float = field(init=False)
     """Exponent ``a = 3 + 2/λ`` (Burdine); set in ``__post_init__``."""
     delta_theta: float = field(init=False)
@@ -918,21 +734,6 @@ class VanGenuchtenMualemConductivity(NonlinearSorption):
     ``S_e(R)`` have no closed form; both use ``scipy.optimize.brentq``
     with ``xtol = BRENTQ_XTOL = 1e-14``.
 
-    Parameters
-    ----------
-    theta_r : float
-        Residual volumetric moisture content [-].
-    theta_s : float
-        Saturated volumetric moisture content [-].
-    k_s : float
-        Saturated hydraulic conductivity [length/time].
-    van_genuchten_n : float
-        Shape parameter ``n_vG > 1``. ``m = 1 − 1/n_vG`` is derived.
-    mualem_l : float, optional
-        Pore-connectivity parameter ``L``. Default 0.5 (standard Mualem).
-        Must satisfy ``L >= 0``. Setting ``L = 0`` (Burdine variant) gives
-        a closed-form ``S_e(C)`` inverse; ``L != 0`` requires ``brentq``.
-
     See Also
     --------
     BrooksCoreyConductivity : Brooks-Corey closed-form variant.
@@ -946,10 +747,9 @@ class VanGenuchtenMualemConductivity(NonlinearSorption):
         \\frac{dK_M}{dS_e} = K_s \\cdot S_e^{L-1} \\cdot U \\cdot
         \\left[L \\cdot U + 2 \\cdot S_e^{1/m} \\cdot T^{m-1}\\right],
 
-    with ``T = 1 - S_e^{1/m}`` and ``U = 1 - T^m``. Used for
-    ``retardation(C)`` (after solving ``S_e(C)``) and for the brentq
-    objective in ``concentration_from_retardation(R)``. The formula is
-    inlined at both call sites, not exposed as a separate method.
+    with ``T = 1 - S_e^{1/m}`` and ``U = 1 - T^m``. It is evaluated by
+    ``_dk_dse`` and used for ``retardation(C)`` (after solving ``S_e(C)``)
+    and as the brentq objective in ``_se_from_retardation``.
 
     ``dK_M/dS_e`` is strictly increasing for every ``n_vG > 1`` and
     ``L ≥ 0`` (the conductivity flux is convex, ``d²K/dS_e² > 0``; proved at
@@ -970,15 +770,18 @@ class VanGenuchtenMualemConductivity(NonlinearSorption):
     """
 
     theta_r: float
-    """Residual volumetric moisture content [-]."""
+    """Residual volumetric moisture content [-]; ``0 <= theta_r < theta_s``."""
     theta_s: float
-    """Saturated volumetric moisture content [-]."""
+    """Saturated volumetric moisture content [-]; ``theta_r < theta_s < 1``."""
     k_s: float
-    """Saturated hydraulic conductivity [length/time]."""
+    """Saturated hydraulic conductivity [length/time]. Positive."""
     van_genuchten_n: float
-    """vG shape parameter ``n_vG > 1``."""
+    """vG shape parameter ``n_vG > 1``; ``m = 1 − 1/n_vG`` is derived from it."""
     mualem_l: float = 0.5
-    """Mualem pore-connectivity ``L``. Default 0.5."""
+    """Mualem pore-connectivity ``L >= 0``. Default 0.5 (standard Mualem).
+
+    ``L = 0`` (Burdine variant) gives a closed-form ``S_e(C)`` inverse; ``L != 0``
+    requires ``brentq``."""
     m: float = field(init=False)
     """Derived ``m = 1 − 1/n_vG``; set in ``__post_init__``."""
     delta_theta: float = field(init=False)
@@ -1027,7 +830,7 @@ class VanGenuchtenMualemConductivity(NonlinearSorption):
         return self.k_s * s**self.mualem_l * u * u
 
     def _dk_dse(self, s: float) -> float:
-        """Closed-form ``dK_M/dS_e`` at scalar ``S_e``. Inlined at call sites.
+        """Closed-form ``dK_M/dS_e`` at scalar ``S_e``.
 
         At ``s → 1`` (saturation), ``dK/dS_e`` diverges because ``t^(m-1) → ∞``
         for ``m < 1``. The function returns ``+∞`` at and above ``s = 1`` so that
@@ -1077,7 +880,7 @@ class VanGenuchtenMualemConductivity(NonlinearSorption):
         return result if is_array else float(result)
 
     def retardation(self, c: float | npt.NDArray[np.float64]) -> float | npt.NDArray[np.float64]:
-        """``R = Δθ / (dK_M/dS_e)|_{S_e(C)}``. Uses inlined derivative; clamps C at ``_C_MIN``."""
+        """``R = Δθ / (dK_M/dS_e)|_{S_e(C)}`` via ``_dk_dse``; clamps C at ``_C_MIN``."""
         is_array = isinstance(c, np.ndarray)
         c_arr = np.maximum(np.asarray(c, dtype=float), _C_MIN)
         flat = c_arr.ravel()

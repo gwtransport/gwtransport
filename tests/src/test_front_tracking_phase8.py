@@ -1,8 +1,8 @@
 """
-Phase 8 Integration Tests: Scenarios and Validation.
+Integration tests for the public nonlinear-sorption transport API.
 
-Simplified tests focusing on core integration and validation.
-All tests have correct physics expectations for Freundlich n>1.
+Covers wave creation per sorption regime, entropy admissibility, physical output
+bounds, and multi-wave interaction scenarios for Freundlich n>1 and n<1.
 """
 
 import numpy as np
@@ -10,7 +10,6 @@ import pandas as pd
 
 from gwtransport.advection import infiltration_to_extraction_nonlinear_sorption
 from gwtransport.fronttracking.math import FreundlichSorption
-from gwtransport.fronttracking.solver import FrontTracker
 from gwtransport.fronttracking.waves import RarefactionWave, ShockWave
 from gwtransport.utils import compute_time_edges
 
@@ -135,20 +134,16 @@ class TestEntropyAndPhysics:
     def test_all_shocks_satisfy_entropy(self):
         """Every shock the solver builds satisfies the Lax entropy condition.
 
-        The multi-level input (0.1→10→5→15→8) makes a later, faster shock
-        overtake an earlier wave. The solver (issue #294) now resolves this
-        interacting multi-front input instead of refusing it, so the public API
-        runs. Entropy is a solver-level property of each individual shock,
-        verified directly on the resolved wave list that ``FrontTracker`` builds.
+        The multi-level input (0.1→10→5→15→8) makes a later, faster shock overtake an
+        earlier wave, so the resolved wave list contains interacting fronts. Entropy is a
+        per-shock property, verified on the wave list the public API returns.
         """
         dates = pd.date_range(start="2020-01-01", periods=20, freq="D")
         tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
         cin = np.array([0.1] * 4 + [10.0] * 4 + [5.0] * 4 + [15.0] * 4 + [8.0] * 4)
         flow = np.full(len(dates), 100.0)
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-        # The interacting multi-front input now runs at the public boundary.
-        infiltration_to_extraction_nonlinear_sorption(
+        _cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -160,11 +155,7 @@ class TestEntropyAndPhysics:
             porosity=0.3,
         )
 
-        # Solver invariant on the resolved wave list: every shock the tracker
-        # builds individually satisfies the Lax entropy condition.
-        tracker = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=300.0, sorption=sorption)
-        tracker.run()
-        shocks = [w for w in tracker.state.waves if isinstance(w, ShockWave)]
+        shocks = [w for w in structure[0]["waves"] if isinstance(w, ShockWave)]
         assert shocks, "expected the multi-change input to create shocks"
         for shock in shocks:
             assert shock.satisfies_entropy(), "Shock violates entropy condition"
@@ -472,20 +463,16 @@ class TestComplexInteractions:
     def test_rapid_sequential_changes_event_ordering(self):
         """Rapid concentration changes: stress test for the event queue and wave creation.
 
-        The rapid sequence (0→10→5→15→2→8) interacts (faster later shocks
-        overtake earlier waves). The solver (issue #294) now resolves this
-        interacting multi-front input instead of refusing it, so the public API
-        runs. Wave creation and θ-ordering of events are solver invariants,
-        verified directly on the ``FrontTracker`` state.
+        The sequence (0→10→5→15→2→8) makes faster later shocks overtake earlier waves.
+        Rapid changes must still create multiple waves and leave the event queue
+        chronologically ordered in θ.
         """
         dates = pd.date_range(start="2020-01-01", periods=30, freq="D")
         tedges = compute_time_edges(tedges=None, tstart=None, tend=dates, number_of_bins=len(dates))
         cin = np.array([0.0] * 5 + [10.0] * 5 + [5.0] * 5 + [15.0] * 5 + [2.0] * 5 + [8.0] * 5)
         flow = np.full(len(dates), 100.0)
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
-        # The interacting multi-front input now runs at the public boundary.
-        infiltration_to_extraction_nonlinear_sorption(
+        _cout, structure = infiltration_to_extraction_nonlinear_sorption(
             cin=cin,
             flow=flow,
             tedges=tedges,
@@ -497,12 +484,7 @@ class TestComplexInteractions:
             porosity=0.3,
         )
 
-        # Solver invariants: rapid changes create multiple waves and the event
-        # queue stays chronologically ordered in θ.
-        tracker = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=300.0, sorption=sorption)
-        tracker.run()
-        assert len(tracker.state.waves) >= 5, (
-            f"Should create multiple waves from rapid changes, got {len(tracker.state.waves)}"
-        )
-        event_thetas = [event["theta"] for event in tracker.state.events]
+        waves = structure[0]["waves"]
+        assert len(waves) >= 5, f"Should create multiple waves from rapid changes, got {len(waves)}"
+        event_thetas = [event["theta"] for event in structure[0]["events"]]
         assert event_thetas == sorted(event_thetas), "Events should be chronologically ordered in θ"

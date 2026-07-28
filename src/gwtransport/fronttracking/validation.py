@@ -49,7 +49,7 @@ _MASS_BALANCE_GRID_POINTS = 3000
 logger = logging.getLogger(__name__)
 
 
-def _independent_outlet_mass(tracker_state: FrontTrackerState, *, n_grid: int = _MASS_BALANCE_GRID_POINTS) -> float:
+def _independent_outlet_mass(tracker_state: FrontTrackerState) -> float:
     """Outlet-side mass total computed independently of the ``m_in - m_dom`` identity.
 
     Integrated to θ_max (the last θ-bin edge). Sums the mass that has already left through
@@ -67,8 +67,6 @@ def _independent_outlet_mass(tracker_state: FrontTrackerState, *, n_grid: int = 
     tracker_state : FrontTrackerState
         Solver state; must expose ``v_outlet``, ``sorption``, ``waves`` and
         ``theta_edges``.
-    n_grid : int, optional
-        Number of trapezoid nodes for the breakthrough integral over ``[0, θ_max]``.
 
     Returns
     -------
@@ -83,7 +81,7 @@ def _independent_outlet_mass(tracker_state: FrontTrackerState, *, n_grid: int = 
     if theta_max <= 0.0:
         return compute_domain_mass(theta=theta_max, v_outlet=v_outlet, waves=waves, sorption=sorption)
 
-    theta_grid: npt.NDArray[np.floating] = np.linspace(0.0, theta_max, n_grid)
+    theta_grid: npt.NDArray[np.floating] = np.linspace(0.0, theta_max, _MASS_BALANCE_GRID_POINTS)
     breakthrough = compute_breakthrough_curve(theta_grid, v_outlet, waves, sorption)
     mass_out = float(np.trapezoid(breakthrough, theta_grid))
     mass_dom = compute_domain_mass(theta=theta_max, v_outlet=v_outlet, waves=waves, sorption=sorption)
@@ -249,13 +247,13 @@ def verify_physics(
     # Check 7: Total integrated outlet mass vs total inlet mass (in θ-space).
     #
     # The outlet-side total is computed *independently* of the conservation identity
-    # ``m_out = m_in − m_dom`` (which the old check used on both sides, making it an
-    # algebraic tautology that passed for any input). ``_independent_outlet_mass``
-    # integrates the breakthrough curve and adds the spatial domain mass; both come from
-    # direct wave evaluation, so a mismatch with the cumulative inlet mass signals a real
-    # conservation failure. Integrated to θ_max (the last θ-bin edge); for pulses that
-    # have not fully broken through there, the partial breakthrough integral plus the
-    # residual domain mass still equals the cumulative inlet mass.
+    # ``m_out = m_in − m_dom``; using that identity on both sides would be an algebraic
+    # tautology that passes for any input. ``_independent_outlet_mass`` integrates the
+    # breakthrough curve and adds the spatial domain mass; both come from direct wave
+    # evaluation, so a mismatch with the cumulative inlet mass signals a real conservation
+    # failure. Integrated to θ_max (the last θ-bin edge); for pulses that have not fully
+    # broken through there, the partial breakthrough integral plus the residual domain mass
+    # still equals the cumulative inlet mass.
     if tracker_state is not None and hasattr(tracker_state, "theta_edges"):
         theta_edges_arr = np.asarray(tracker_state.theta_edges, dtype=float)
         theta_integration_end = float(theta_edges_arr[-1])

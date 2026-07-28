@@ -6,10 +6,10 @@ and rarefaction waves in the front tracking algorithm. Each wave stores its
 formation position in cumulative-flow coordinate ``θ = ∫flow(t') dt'`` and
 knows how to compute its position at any later θ.
 
-The change from (V, t) to (V, θ) makes every wave velocity a property of the
-sorption isotherm alone — flow no longer enters into wave dynamics. Time-
-varying flow is absorbed entirely into the θ(t) mapping at the API boundary;
-no wave needs recreation when the flow rate changes.
+In (V, θ) every wave velocity is a property of the sorption isotherm alone —
+flow does not enter wave dynamics. Time-varying flow is absorbed entirely into
+the θ(t) mapping at the API boundary, so no wave needs recreation when the flow
+rate changes.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -142,15 +142,6 @@ class Wave(ABC):
     computing position and concentration. Waves can be active or inactive
     (deactivated waves are preserved for history but don't participate in
     future interactions).
-
-    Parameters
-    ----------
-    theta_start : float
-        Cumulative flow at which the wave forms [m³].
-    v_start : float
-        Position at which the wave forms [m³].
-    is_active : bool, optional
-        Whether wave is currently active. Default True.
     """
 
     theta_start: float
@@ -260,19 +251,6 @@ class CharacteristicWave(Wave):
     constant. This is the fundamental solution element for hyperbolic
     conservation laws.
 
-    Parameters
-    ----------
-    theta_start : float
-        Formation cumulative flow [m³].
-    v_start : float
-        Starting position [m³].
-    concentration : float
-        Constant concentration carried [mass/volume].
-    sorption : SorptionModel
-        Sorption model determining the speed.
-    is_active : bool, optional
-        Activity status. Default True.
-
     Examples
     --------
     >>> sorption = FreundlichSorption(
@@ -346,23 +324,6 @@ class ShockWave(Wave):
     condition and is independent of flow::
 
         dV_s/dθ = (C_R - C_L) / (C_T(C_R) - C_T(C_L))
-
-    Parameters
-    ----------
-    theta_start : float
-        Formation cumulative flow [m³].
-    v_start : float
-        Formation position [m³].
-    c_left : float
-        Concentration upstream (behind) shock [mass/volume].
-    c_right : float
-        Concentration downstream (ahead of) shock [mass/volume].
-    sorption : SorptionModel
-        Sorption model.
-    is_active : bool, optional
-        Activity status. Default True.
-    speed : float, optional
-        Shock speed dV/dθ. Computed from Rankine-Hugoniot in ``__post_init__``.
 
     Examples
     --------
@@ -447,21 +408,6 @@ class RarefactionWave(Wave):
 
     Head and tail propagate at flow-free speeds ``1/R(C_head)`` and
     ``1/R(C_tail)``.
-
-    Parameters
-    ----------
-    theta_start : float
-        Formation cumulative flow [m³].
-    v_start : float
-        Formation position [m³].
-    c_head : float
-        Concentration at leading edge (faster) [mass/volume].
-    c_tail : float
-        Concentration at trailing edge (slower) [mass/volume].
-    sorption : SorptionModel
-        Sorption model (must be concentration-dependent).
-    is_active : bool, optional
-        Activity status. Default True.
 
     Raises
     ------
@@ -660,38 +606,8 @@ class DecayingShockWave(Wave):
 
     The invariant constant ``K`` (closed-form Freundlich/Langmuir only) is set
     in ``__post_init__`` from the collision IC ``(theta_start, c_decay_initial)``.
-
-    Parameters
-    ----------
-    theta_start : float
-        Cumulative flow at which the merged wave forms (collision θ) [m³].
-    v_start : float
-        Position at which the merged wave forms [m³]. Should equal
-        ``v_origin + (V_s) at θ=theta_start`` for a fan-consistent
-        construction.
-    c_decay_initial : float
-        Concentration on the decaying side at θ=theta_start [mass/volume].
-        Must be non-negative; a fully-drained collision value of ``0`` is
-        floored to the shared dry-soil singularity floor ``_C_MIN`` so the
-        retardation and secant-speed evaluations stay finite (issue #222).
-    c_fixed : float
-        Concentration on the non-decaying side [mass/volume]. Constant in θ.
-        Non-negative.
-    c_fan_tail : float
-        Concentration at the fan's far boundary [mass/volume]. The wave is
-        valid only while ``c_decay ∈ (c_fan_tail, c_decay_initial]``; at
-        ``c_fan_tail`` the fan is exhausted. Non-negative.
-    decay_side : str
-        ``'left'`` or ``'right'``. See class docstring.
-    v_origin : float
-        Position of the rarefaction apex [m³].
-    theta_origin : float
-        Cumulative flow at the rarefaction apex [m³]. Must satisfy
-        ``theta_origin < theta_start``.
-    sorption : NonlinearSorption
-        Sorption model (any concentration-dependent isotherm).
-    is_active : bool, optional
-        Activity flag. Default True.
+    ``theta_start``/``v_start`` are the collision coordinates; a fan-consistent
+    construction has ``v_start = v_origin + (theta_start − theta_origin)/R(c_decay_initial)``.
 
     See Also
     --------
@@ -700,17 +616,23 @@ class DecayingShockWave(Wave):
     """
 
     c_decay_initial: float
-    """Concentration on the decaying side at θ=theta_start [mass/volume]."""
+    """Concentration on the decaying side at θ=theta_start [mass/volume]. Non-negative.
+
+    A fully-drained collision value of ``0`` is floored to the shared dry-soil singularity
+    floor ``_C_MIN`` so the retardation and secant-speed evaluations stay finite."""
     c_fixed: float
-    """Concentration on the non-decaying side [mass/volume]."""
+    """Concentration on the non-decaying side [mass/volume]. Non-negative, constant in θ."""
     c_fan_tail: float
-    """Concentration at the fan's far boundary [mass/volume]; bounds the decay."""
+    """Concentration at the fan's far boundary [mass/volume]; bounds the decay. Non-negative.
+
+    The wave is valid only while ``c_decay ∈ (c_fan_tail, c_decay_initial]``; at
+    ``c_fan_tail`` the fan is exhausted."""
     decay_side: str
     """``'left'`` (favorable head-collision) or ``'right'`` (n<1 mirrored)."""
     v_origin: float
     """Position of the rarefaction apex [m³]."""
     theta_origin: float
-    """Cumulative flow at the rarefaction apex [m³]."""
+    """Cumulative flow at the rarefaction apex [m³]; strictly less than ``theta_start``."""
     sorption: NonlinearSorption
     """Sorption model (any concentration-dependent isotherm)."""
     K: float = field(init=False)
@@ -742,7 +664,7 @@ class DecayingShockWave(Wave):
         if self.c_decay_initial < 0.0:
             msg = f"c_decay_initial must be non-negative, got {self.c_decay_initial}"
             raise ValueError(msg)
-        # Floor a fully-drained fan tail (c_decay_initial == 0, #222) to _C_MIN so the
+        # Floor a fully-drained fan tail (c_decay_initial == 0) to _C_MIN so the
         # retardation and secant-speed evaluations stay finite (package floor convention).
         self.c_decay_initial = max(self.c_decay_initial, _C_MIN)
         if self.c_fixed < 0.0:
@@ -1242,11 +1164,6 @@ class DoubleFanShockWave(Wave):
             return None
         return self._v_at(theta)
 
-    def side_values(self, theta: float) -> tuple[float, float]:
-        """``(c_L, c_R)`` on the two sides of the shock face at ``theta``."""
-        v = self._v_at(theta)
-        return self.left_feeder.value(v, theta), self.right_feeder.value(v, theta)
-
     def concentration_left(self) -> float:
         """Left-side concentration at the collision moment."""
         return self.left_feeder.value(self.v_start, self.theta_start)
@@ -1255,26 +1172,23 @@ class DoubleFanShockWave(Wave):
         """Right-side concentration at the collision moment."""
         return self.right_feeder.value(self.v_start, self.theta_start)
 
-    def _bracket_and_solve(self, residual, *, r0: float) -> float | None:
-        """Find the first θ > theta_start where a monotone ``residual(θ)`` crosses zero.
-
-        ``r0 = residual(theta_start)`` is known to be nonzero; grow the upper bracket
-        geometrically until the sign flips, then ``brentq``. Returns ``None`` if the
-        residual never changes sign (the trajectory asymptotes short of the target).
-        """
-        seed = max(self.theta_start - min(self.theta_origin_left, self.theta_origin_right), 1.0)
-        hi = self.theta_start + seed
-        for _ in range(200):
-            if residual(hi) * r0 < 0.0:
-                return float(brentq(residual, self.theta_start, hi, xtol=DECAYING_SHOCK_BRENTQ_XTOL))
-            hi = self.theta_start + 2.0 * (hi - self.theta_start)
-        return None
-
     def outlet_crossing_theta(self, v_outlet: float) -> float | None:
-        """Cumulative flow at which ``V_s = v_outlet`` (monotone, inverted by brentq)."""
+        """Cumulative flow at which ``V_s = v_outlet`` (monotone, inverted by brentq).
+
+        ``θ_local`` is measured from the older of the two fan apexes, so the shared
+        bracket-then-brentq inversion sees a positive seed.
+        """
         if v_outlet <= self.v_start:
             return None
-        return self._bracket_and_solve(lambda theta: self._v_at(theta) - v_outlet, r0=self.v_start - v_outlet)
+        theta_origin = min(self.theta_origin_left, self.theta_origin_right)
+        theta_local_cross = _invert_monotone_theta_local(
+            lambda theta_local: self._v_at(theta_origin + theta_local) - v_outlet,
+            theta_hi_seed=self.theta_start - theta_origin,
+            f_seed=self.v_start - v_outlet,
+        )
+        if theta_local_cross is None:
+            return None
+        return theta_origin + theta_local_cross
 
     def concentration_at_point(self, v: float, theta: float) -> float | None:
         """Concentration at ``(v, θ)`` if controlled by this doubly-fed shock.
@@ -1288,8 +1202,7 @@ class DoubleFanShockWave(Wave):
         v_s = self._v_at(theta)
         tol = 1e-15 * max(abs(v_s), 1.0)
         if abs(v - v_s) < tol:
-            c_l, c_r = self.side_values(theta)
-            return 0.5 * (c_l + c_r)
+            return 0.5 * (self.left_feeder.value(v_s, theta) + self.right_feeder.value(v_s, theta))
         feeder = self.left_feeder if v < v_s else self.right_feeder
         # Only claim the point if it lies within the fan's live self-similar range.
         if theta <= feeder.theta_apex or v <= feeder.v_apex:
@@ -1305,8 +1218,9 @@ class DoubleFanShockWave(Wave):
 def _invert_monotone_theta_local(f, *, theta_hi_seed: float, f_seed: float | None = None) -> float | None:
     """Bracket-then-brentq a monotone ``f(θ_local)`` with a sign change above the seed.
 
-    Shared by the closed-form branch of ``theta_at_fan_exhaustion`` and by
-    ``_outlet_crossing_numerical``: both invert a monotone function of
+    Shared by the closed-form branch of ``theta_at_fan_exhaustion``, by
+    ``DecayingShockWave._outlet_crossing_numerical`` and by
+    ``DoubleFanShockWave.outlet_crossing_theta``: each inverts a monotone function of
     ``θ_local`` whose sign at the collision is already known to differ from its
     sign at large ``θ_local``. Geometrically grows ``θ_hi`` (``×2``, ≤200 iters)
     from ``theta_hi_seed`` until ``f`` flips sign, then inverts with ``brentq``.
@@ -1356,10 +1270,9 @@ def _build_decay_profile(
     Langmuir ``c_fixed>0``, Brooks-Corey ``c_fixed>0`` and any van Genuchten case
     alike. ``I(c)`` is built ONCE by a single vectorised composite Gauss-Legendre
     cumulative quadrature over a c-grid from ``c_decay_initial`` to the reachable
-    limit, then inverted by monotone-spline interpolation — replacing the former
-    quad-inside-brentq-inside-brentq scalar solve (~1000× fewer integrand evals
-    across a record). The reachable limit is the fan tail ``c_fan_tail`` UNLESS
-    ``c_fixed`` lies strictly between ``c_decay_initial`` and ``c_fan_tail`` — then
+    limit, then inverted by monotone-spline interpolation. The reachable limit is the
+    fan tail ``c_fan_tail`` UNLESS ``c_fixed`` lies strictly between
+    ``c_decay_initial`` and ``c_fan_tail`` — then
     the secant speed has a pole at ``c_fixed`` (``R·S → 1``, ``θ_local → ∞``): the
     shock asymptotes to the fixed state, so the grid stops a hair short of it and
     ``c_decay`` clamps there.

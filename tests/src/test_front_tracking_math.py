@@ -11,7 +11,6 @@ import math
 import warnings
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from gwtransport.fronttracking.math import (
@@ -26,74 +25,25 @@ from gwtransport.fronttracking.math import (
 )
 
 
-def _theta_edges_from(flow: np.ndarray, tedges: pd.DatetimeIndex) -> np.ndarray:
-    """Build θ-edges from per-bin flow and time-edges (test-only helper)."""
-    dt = np.asarray((tedges - tedges[0]) / pd.Timedelta(days=1), dtype=float)
-    return np.concatenate(([0.0], np.cumsum(np.asarray(flow, dtype=float) * np.diff(dt))))
-
-
-def _t_at_theta(theta: float, flow: np.ndarray, tedges: pd.DatetimeIndex) -> float:
-    """Translate θ→t against a piecewise-constant flow profile (test-only helper)."""
-    tedges_days = np.asarray((tedges - tedges[0]) / pd.Timedelta(days=1), dtype=float)
-    theta_edges = _theta_edges_from(flow, tedges)
-    if theta <= theta_edges[0]:
-        return float(tedges_days[0])
-    if theta >= theta_edges[-1]:
-        last_flow = float(flow[-1])
-        return (
-            float(tedges_days[-1] + (theta - theta_edges[-1]) / last_flow) if last_flow > 0 else float(tedges_days[-1])
-        )
-    i = int(np.searchsorted(theta_edges, theta, side="right")) - 1
-    flow_i = float(flow[i])
-    return float(tedges_days[i] + (theta - theta_edges[i]) / flow_i) if flow_i > 0 else float(tedges_days[i])
-
-
-def compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption):
-    """Test shim: θ-native helper + θ→t translation (uses test-local helpers)."""
-    theta_edges = _theta_edges_from(np.asarray(flow), tedges)
-    theta = compute_first_front_arrival_theta(np.asarray(cin), theta_edges, aquifer_pore_volume, sorption)
-    # Past the simulation window with non-positive trailing flow → no finite t,
-    # preserve the legacy `np.inf` sentinel.
-    if (not np.isfinite(theta) or theta > theta_edges[-1]) and (not np.isfinite(theta) or float(flow[-1]) <= 0):
-        return float(np.inf)
-    return _t_at_theta(float(theta), np.asarray(flow), tedges)
+@pytest.mark.parametrize(
+    ("invalid_kwargs", "match"),
+    [
+        ({"k_f": -0.01, "n": 2.0, "bulk_density": 1500.0, "porosity": 0.3}, "k_f must be positive"),
+        ({"k_f": 0.01, "n": 0.0, "bulk_density": 1500.0, "porosity": 0.3}, "n must be positive"),
+        ({"k_f": 0.01, "n": 1.0, "bulk_density": 1500.0, "porosity": 0.3}, "not supported"),
+        ({"k_f": 0.01, "n": 2.0, "bulk_density": -1500.0, "porosity": 0.3}, "bulk_density must be positive"),
+        ({"k_f": 0.01, "n": 2.0, "bulk_density": 1500.0, "porosity": 1.5}, "porosity must be in"),
+        ({"k_f": 0.01, "n": 2.0, "bulk_density": 1500.0, "porosity": 0.3, "c_min": -1.0}, "c_min must be non-negative"),
+    ],
+)
+def test_freundlich_validation_rejects_invalid(invalid_kwargs, match):
+    """Each out-of-range constructor argument raises ``ValueError`` with its own message."""
+    with pytest.raises(ValueError, match=match):
+        FreundlichSorption(**invalid_kwargs)
 
 
 class TestFreundlichSorption:
     """Test FreundlichSorption class."""
-
-    def test_initialization_valid(self):
-        """Test valid initialization."""
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-        assert sorption.k_f == 0.01
-        assert sorption.n == 2.0
-        assert sorption.bulk_density == 1500.0
-        assert sorption.porosity == 0.3
-
-    def test_initialization_invalid_kf(self):
-        """Test that negative k_f raises error."""
-        with pytest.raises(ValueError, match="k_f must be positive"):
-            FreundlichSorption(k_f=-0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-
-    def test_initialization_invalid_n_zero(self):
-        """Test that n=0 raises error."""
-        with pytest.raises(ValueError, match="n must be positive"):
-            FreundlichSorption(k_f=0.01, n=0.0, bulk_density=1500.0, porosity=0.3)
-
-    def test_initialization_invalid_n_one(self):
-        """Test that n=1 raises error."""
-        with pytest.raises(ValueError, match="not supported"):
-            FreundlichSorption(k_f=0.01, n=1.0, bulk_density=1500.0, porosity=0.3)
-
-    def test_initialization_invalid_bulk_density(self):
-        """Test that negative bulk_density raises error."""
-        with pytest.raises(ValueError, match="bulk_density must be positive"):
-            FreundlichSorption(k_f=0.01, n=2.0, bulk_density=-1500.0, porosity=0.3)
-
-    def test_initialization_invalid_porosity(self):
-        """Test that invalid porosity raises error."""
-        with pytest.raises(ValueError, match="porosity must be in"):
-            FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=1.5)
 
     def test_retardation_zero_concentration(self):
         """R(0) behavior depends on n and c_min."""
@@ -108,11 +58,9 @@ class TestFreundlichSorption:
     def test_retardation_single_path_no_invalid_power_warning_on_negative_c(self):
         """Non-positive ``c`` (n<1, c_min=0) clamps to zero -> R=1 with no fractional-power warning.
 
-        Regression for the collapse to a single ``np.maximum``-clamped path: the earlier
-        ``np.where`` special branch eagerly evaluated ``c**(1/n - 1)`` on the raw (negative)
-        array, raising ``(-c)`` to a fractional power and emitting a spurious
-        ``invalid value encountered in power`` RuntimeWarning before discarding the result.
-        Here ``1/n - 1 = 0.4285...`` is non-integer, so the raw-power path would warn.
+        Clamping with ``np.maximum`` happens BEFORE the power, so ``c**(1/n - 1)`` is never
+        evaluated on a negative base. Here ``1/n - 1 = 0.4285...`` is non-integer, so any
+        route that powered the raw array would emit ``invalid value encountered in power``.
         """
         sorption = FreundlichSorption(k_f=0.01, n=0.7, bulk_density=1500.0, porosity=0.3, c_min=0.0)
         c = np.array([-5.0, -1e-9, 0.0, 2.0])
@@ -153,9 +101,8 @@ class TestFreundlichSorption:
 
         # n>1 with c_min>0: c_min only clamps retardation (to keep R finite as c->0);
         # total_concentration uses c^(1/n) which is well-defined at c=0 with no
-        # singularity, so C_T(0) = 0 unconditionally. Phase 2 step 4 corrects an
-        # earlier design (c_min-clamped C_T) that biased Rankine-Hugoniot shock
-        # speeds when c_R=0.
+        # singularity, so C_T(0) = 0 unconditionally. A c_min-clamped C_T would bias
+        # Rankine-Hugoniot shock speeds when c_R=0.
         sorption_fav = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=1e-12)
         assert sorption_fav.total_concentration(0.0) == 0.0
 
@@ -200,9 +147,6 @@ class TestFreundlichSorption:
         sorption_unfav = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
         c = sorption_unfav.concentration_from_retardation(0.5)
         assert c == 0.0
-
-    # Math-layer Rankine-Hugoniot check dropped in P2.5: the canonical assertion lives at
-    # tests/src/test_front_tracking_waves.py:test_velocity_rankine_hugoniot.
 
     def test_shock_velocity_equal_concentrations(self):
         """Shock speed when c_left = c_right (degenerate case) returns characteristic speed."""
@@ -250,36 +194,23 @@ class TestFreundlichSorption:
         assert satisfies, "Physical shock for n<1 should satisfy entropy"
 
 
+@pytest.mark.parametrize(
+    ("invalid_kwargs", "match"),
+    [
+        ({"s_max": -0.1, "k_l": 5.0, "bulk_density": 1500.0, "porosity": 0.3}, "s_max must be positive"),
+        ({"s_max": 0.1, "k_l": 0.0, "bulk_density": 1500.0, "porosity": 0.3}, "k_l must be positive"),
+        ({"s_max": 0.1, "k_l": 5.0, "bulk_density": -1500.0, "porosity": 0.3}, "bulk_density must be positive"),
+        ({"s_max": 0.1, "k_l": 5.0, "bulk_density": 1500.0, "porosity": 1.5}, "porosity must be in"),
+    ],
+)
+def test_langmuir_validation_rejects_invalid(invalid_kwargs, match):
+    """Each out-of-range constructor argument raises ``ValueError`` with its own message."""
+    with pytest.raises(ValueError, match=match):
+        LangmuirSorption(**invalid_kwargs)
+
+
 class TestLangmuirSorption:
     """Test LangmuirSorption class."""
-
-    def test_initialization_valid(self):
-        """Test valid initialization."""
-        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
-        assert sorption.s_max == 0.1
-        assert sorption.k_l == 5.0
-        assert sorption.bulk_density == 1500.0
-        assert sorption.porosity == 0.3
-
-    def test_initialization_invalid_s_max(self):
-        """Test that non-positive s_max raises error."""
-        with pytest.raises(ValueError, match="s_max must be positive"):
-            LangmuirSorption(s_max=-0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
-
-    def test_initialization_invalid_k_l(self):
-        """Test that non-positive k_l raises error."""
-        with pytest.raises(ValueError, match="k_l must be positive"):
-            LangmuirSorption(s_max=0.1, k_l=0.0, bulk_density=1500.0, porosity=0.3)
-
-    def test_initialization_invalid_bulk_density(self):
-        """Test that non-positive bulk_density raises error."""
-        with pytest.raises(ValueError, match="bulk_density must be positive"):
-            LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=-1500.0, porosity=0.3)
-
-    def test_initialization_invalid_porosity(self):
-        """Test that invalid porosity raises error."""
-        with pytest.raises(ValueError, match="porosity must be in"):
-            LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=1.5)
 
     def test_retardation_zero_concentration_finite(self):
         """Test R(0) is finite — key difference from Freundlich n>1."""
@@ -404,37 +335,13 @@ class TestLangmuirSorption:
         v_shock = sorption.shock_speed(c_left, c_right)
         assert not sorption.check_entropy_condition(c_left, c_right, v_shock)
 
-    def test_first_arrival_langmuir_sorption(self):
-        """Test first arrival time with Langmuir sorption."""
-        cin = np.array([0.0] + [10.0] * 19)
-        flow = np.array([100.0] * 20)
-        tedges = pd.date_range("2020-01-01", periods=21, freq="10D")
-        aquifer_pore_volume = 500.0
-        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
-
-        t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
-
-        # Langmuir is concave (favorable) like Freundlich n>1: the 0->c step creates
-        # a Rankine-Hugoniot shock, so the analytic arrival uses shock velocity
-        # s = flow * c / (C_tot(c) - C_tot(0)) = flow * c / C_tot(c).
-        c_total = sorption.total_concentration(10.0)
-        t_expected = 10.0 + aquifer_pore_volume * c_total / (10.0 * 100.0)
-
-        assert np.isclose(t_first, t_expected, rtol=1e-14)
-
 
 class TestConstantRetardation:
     """Test ConstantRetardation class."""
 
-    def test_initialization_valid(self):
-        """Test valid initialization."""
-        sorption = ConstantRetardation(retardation_factor=2.0)
-        assert sorption.retardation_factor == 2.0
-
-    def test_initialization_conservative_tracer(self):
-        """Test R = 1.0 (conservative tracer)."""
-        sorption = ConstantRetardation(retardation_factor=1.0)
-        assert sorption.retardation_factor == 1.0
+    def test_conservative_tracer_is_accepted(self):
+        """``R = 1`` (the validation boundary) is a valid conservative tracer."""
+        assert ConstantRetardation(retardation_factor=1.0).retardation(5.0) == 1.0
 
     def test_initialization_invalid_retardation(self):
         """Test that R < 1 raises error."""
@@ -535,170 +442,85 @@ class TestCharacteristicFunctions:
         assert np.isclose(v_pos, v_expected, rtol=1e-14)
 
 
-class TestFirstArrivalTime:
-    """Test first arrival time computation."""
+class TestFirstFrontArrivalTheta:
+    """Cumulative flow θ at which the first nonzero inlet level is fully present at the outlet.
 
-    def test_first_arrival_constant_flow_constant_retardation(self):
-        """Test first arrival with constant flow and retardation."""
+    Every analytic reference is derived from the isotherm rather than from the function's
+    own arithmetic: ``θ_emit + V·C_T(c)/c`` on the shock branch (Freundlich n>1, Langmuir,
+    constant R) and ``θ_emit + V·R(c)`` on the Freundlich n<1 characteristic branch.
+    """
 
-        cin = np.array([0.0, 10.0, 10.0])
-        flow = np.array([100.0, 100.0, 100.0])
-        tedges = pd.date_range("2020-01-01", periods=4, freq="10D")  # [0, 10, 20, 30] days
-        aquifer_pore_volume = 500.0
-        sorption = ConstantRetardation(retardation_factor=2.0)
+    V_PORE = 500.0
+    THETA_EDGES = np.array([0.0, 1000.0, 2000.0, 3000.0])
 
-        t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
+    def test_constant_retardation_shock_arrival(self):
+        """Constant R: ``C_T(c)/c = R``, so arrival is ``θ_emit + V·R``."""
+        theta_first = compute_first_front_arrival_theta(
+            np.array([0.0, 10.0, 10.0]), self.THETA_EDGES, self.V_PORE, ConstantRetardation(retardation_factor=2.0)
+        )
+        assert np.isclose(theta_first, 1000.0 + self.V_PORE * 2.0, rtol=1e-14)
 
-        # Expected: time from tedges[0] when first concentration reaches outlet
-        # First non-zero at index 1 (day 10), travels for 500*2/100 = 10 days
-        # Arrives at day 10 + 10 = 20 days from tedges[0]
-        t_expected = 20.0
+    def test_nonzero_first_bin_emits_at_the_leading_edge(self):
+        """A nonzero first bin emits at ``theta_edges[0]``, not at the next edge."""
+        theta_first = compute_first_front_arrival_theta(
+            np.array([10.0, 10.0]), self.THETA_EDGES[:3], self.V_PORE, ConstantRetardation(retardation_factor=2.0)
+        )
+        assert np.isclose(theta_first, self.V_PORE * 2.0, rtol=1e-14)
 
-        assert np.isclose(t_first, t_expected, rtol=1e-14)
+    def test_all_zero_cin_never_arrives(self):
+        """All-zero ``cin`` returns ``+inf``."""
+        theta_first = compute_first_front_arrival_theta(
+            np.zeros(3), self.THETA_EDGES, self.V_PORE, ConstantRetardation(retardation_factor=2.0)
+        )
+        assert theta_first == np.inf
 
-    def test_first_arrival_starts_at_zero(self):
-        """Test first arrival when concentration starts at t=0."""
+    def test_zero_width_bin_emits_no_wave(self):
+        """A pump-off bin (zero θ-width) carries no water, so the first *flowing* nonzero bin wins."""
+        # cin[0] > 0 but spans zero θ; cin[2] = 4 is the first bin that actually carries water.
+        theta_edges = np.array([0.0, 0.0, 1000.0, 2000.0])
+        theta_first = compute_first_front_arrival_theta(
+            np.array([10.0, 0.0, 4.0]), theta_edges, self.V_PORE, ConstantRetardation(retardation_factor=2.0)
+        )
+        assert np.isclose(theta_first, 1000.0 + self.V_PORE * 2.0, rtol=1e-14)
 
-        cin = np.array([10.0, 10.0])
-        flow = np.array([100.0, 100.0])
-        tedges = pd.date_range("2020-01-01", periods=3, freq="10D")  # [0, 10, 20] days
-        aquifer_pore_volume = 500.0
-        sorption = ConstantRetardation(retardation_factor=2.0)
-
-        t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
-
-        # Expected: concentration starts at t=0 (tedges[0]), travels for 500*2/100 = 10 days
-        # Arrives at 0 + 10 = 10 days from tedges[0]
-        t_expected = 10.0
-
-        assert np.isclose(t_first, t_expected, rtol=1e-14)
-
-    def test_first_arrival_no_concentration(self):
-        """Test that all-zero concentration returns infinity."""
-
-        cin = np.array([0.0, 0.0, 0.0])
-        flow = np.array([100.0, 100.0, 100.0])
-        tedges = pd.date_range("2020-01-01", periods=4, freq="10D")  # [0, 10, 20, 30] days
-        aquifer_pore_volume = 500.0
-        sorption = ConstantRetardation(retardation_factor=2.0)
-
-        t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
-
-        assert t_first == np.inf
-
-    def test_first_arrival_variable_flow(self):
-        """Test first arrival with variable flow."""
-
-        cin = np.array([0.0, 10.0, 10.0])
-        flow = np.array([100.0, 50.0, 200.0])  # Variable flow
-        tedges = pd.date_range("2020-01-01", periods=4, freq="10D")  # [0, 10, 20, 30] days
-        aquifer_pore_volume = 500.0
-        sorption = ConstantRetardation(retardation_factor=2.0)
-
-        t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
-
-        # Target volume: 500 * 2 = 1000 m³
-        # First non-zero at index 1 (day 10)
-        # From day 10 to day 20: flow=50, volume = 50*10 = 500 m³
-        # From day 20 onward: flow=200, remaining = 500 m³, time = 500/200 = 2.5 days
-        # Total: 20.0 + 2.5 = 22.5 days from tedges[0]
-        t_expected = 22.5
-
-        assert np.isclose(t_first, t_expected, rtol=1e-14)
-
-    def test_first_arrival_freundlich_sorption(self):
-        """First arrival for Freundlich n>1 uses Rankine-Hugoniot shock velocity (P1.3)."""
-        n_bins = 20
-        cin = np.array([0.0] + [10.0] * (n_bins - 1))
-        flow = np.array([100.0] * n_bins)
-        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="10D")
-        aquifer_pore_volume = 500.0
+    def test_freundlich_n_gt_1_uses_shock_arrival(self):
+        """Freundlich n>1: the 0→c step emits a Rankine-Hugoniot shock, arrival ``θ_emit + V·C_T(c)/c``."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+        theta_first = compute_first_front_arrival_theta(
+            np.array([0.0, 10.0, 10.0]), self.THETA_EDGES, self.V_PORE, sorption
+        )
+        theta_analytic = 1000.0 + self.V_PORE * float(sorption.total_concentration(10.0)) / 10.0
+        assert np.isclose(theta_first, theta_analytic, rtol=1e-14)
 
-        t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
+    def test_langmuir_uses_shock_arrival(self):
+        """Langmuir is favorable like Freundlich n>1, so the same shock arrival applies."""
+        sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
+        theta_first = compute_first_front_arrival_theta(
+            np.array([0.0, 10.0, 10.0]), self.THETA_EDGES, self.V_PORE, sorption
+        )
+        theta_analytic = 1000.0 + self.V_PORE * float(sorption.total_concentration(10.0)) / 10.0
+        assert np.isclose(theta_first, theta_analytic, rtol=1e-14)
 
-        # n>1: solver emits a R-H shock for 0->c step. Shock velocity uses C_tot:
-        # arrival_from_inlet = V * C_tot(c) / (c * flow).
-        c_total = sorption.total_concentration(10.0)
-        t_expected = 10.0 + aquifer_pore_volume * c_total / (10.0 * 100.0)
-
-        assert np.isclose(t_first, t_expected, rtol=1e-14)
-
-    def test_first_arrival_extrapolates_past_simulation_window(self):
-        """Past the simulation window, the last bin's flow is extrapolated (θ-native semantics).
-
-        Previously this test asserted ``np.inf`` for "insufficient flow history";
-        the (V, θ) refactor moves the time/θ map into the public API where
-        out-of-window translation extrapolates the last positive flow.
-        """
-        cin = np.array([0.0, 10.0])
-        flow = np.array([10.0, 10.0])  # Constant 10 m³/day
-        tedges = pd.date_range("2020-01-01", periods=3, freq="10D")  # [0, 10, 20] days
-        aquifer_pore_volume = 10000.0  # Very large pore volume
-        sorption = ConstantRetardation(retardation_factor=2.0)
-
-        t_first = compute_first_front_arrival_time(cin, flow, tedges, aquifer_pore_volume, sorption)
-
-        # V_target = V·R = 20000 m³. cin>0 from t=10 day onward. θ_emit = 100.
-        # θ_target = 100 + 20000 = 20100. tedges_days[-1] = 20, theta_edges[-1] = 200.
-        # t_target = 20 + (20100 - 200)/10 = 2010 days.
-        assert np.isclose(t_first, 2010.0, rtol=1e-14)
+    def test_freundlich_n_lt_1_uses_characteristic_arrival(self):
+        """Freundlich n<1: the step emits a rarefaction; the tail arrives at ``θ_emit + V·R(c)``."""
+        c_step = 5.0
+        sorption = FreundlichSorption(k_f=0.001, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
+        theta_first = compute_first_front_arrival_theta(
+            np.array([0.0, c_step, c_step]), self.THETA_EDGES, self.V_PORE, sorption
+        )
+        theta_analytic = 1000.0 + self.V_PORE * float(sorption.retardation(c_step))
+        # The n<1 branch must NOT collapse onto the shock formula.
+        theta_shock = 1000.0 + self.V_PORE * float(sorption.total_concentration(c_step)) / c_step
+        assert not np.isclose(theta_analytic, theta_shock, rtol=1e-3)
+        assert np.isclose(theta_first, theta_analytic, rtol=1e-14)
 
 
 class TestRegressionsForIssue168:
-    """Regression tests for the physics fixes in Phase 1 (issue #168).
+    """Regression tests for the Freundlich c_min and inversion-warning contracts (issue #168).
 
-    Each test below is constructed so that the analytic reference value is
-    computed independently of the implementation under test (no mirroring of
-    the function's own arithmetic). Loosening any tolerance here means the fix
-    is incomplete — route the failure back to Phase 1 physics review.
+    Each analytic reference is computed independently of the implementation under test
+    (no mirroring of the method's own arithmetic).
     """
-
-    def test_first_arrival_step_zero_to_c_uses_shock_velocity_n_gt_1(self):
-        """P1.3 (n>1 branch): 0 -> C step creates a R-H shock; arrival = V*C_tot(C)/(C*flow)."""
-        n_bins = 40
-        c_step = 5.0
-        flow_val = 100.0
-        v_pore = 500.0
-        cin = np.array([0.0] + [c_step] * (n_bins - 1))
-        flow = np.full(n_bins, flow_val)
-        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="10D")
-        sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-
-        # Analytic reference: closed-form shock velocity arrival, independent of
-        # compute_first_front_arrival_time's cumulative-sum integration.
-        c_total_at_c = sorption.total_concentration(c_step)
-        # First nonzero bin starts at tedges[1] = 10 days; transit takes V*C_tot/(C*flow).
-        t_analytic = 10.0 + v_pore * c_total_at_c / (c_step * flow_val)
-
-        t_first = compute_first_front_arrival_time(cin, flow, tedges, v_pore, sorption)
-
-        assert np.isclose(t_first, t_analytic, rtol=1e-14)
-
-    def test_first_arrival_step_zero_to_c_n_lt_1_uses_characteristic_speed(self):
-        """P1.3 (n<1 branch): solver emits a CharacteristicWave; arrival = V*R(C)/flow."""
-        n_bins = 400
-        c_step = 5.0
-        flow_val = 100.0
-        v_pore = 500.0
-        cin = np.array([0.0] + [c_step] * (n_bins - 1))
-        flow = np.full(n_bins, flow_val)
-        tedges = pd.date_range("2020-01-01", periods=n_bins + 1, freq="10D")
-        # Use a small k_f to keep R(5) modest so the analytic arrival fits in the time grid.
-        sorption = FreundlichSorption(k_f=0.001, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
-
-        # Analytic reference: characteristic velocity (n<1 solver path).
-        r_at_c = sorption.retardation(c_step)
-        t_analytic = 10.0 + v_pore * r_at_c / flow_val
-
-        t_first = compute_first_front_arrival_time(cin, flow, tedges, v_pore, sorption)
-
-        # Sanity: n<1 result must NOT equal the n>1 shock formula here.
-        c_total_at_c = sorption.total_concentration(c_step)
-        wrong_shock_t = 10.0 + v_pore * c_total_at_c / (c_step * flow_val)
-        assert not np.isclose(t_analytic, wrong_shock_t, rtol=1e-3)
-
-        assert np.isclose(t_first, t_analytic, rtol=1e-14)
 
     def test_freundlich_retardation_clamps_below_c_min_but_total_concentration_does_not(self):
         """Retardation clamps to c_min (avoids R->inf as c->0 for n>1); C_T does not clamp.
@@ -706,8 +528,7 @@ class TestRegressionsForIssue168:
         ``c_min`` exists to keep ``R(c)`` finite as ``c -> 0`` for ``n > 1``
         (where ``R(c) = 1 + alpha * c^((1-n)/n)`` diverges). It does NOT apply
         to ``total_concentration``, whose ``c^(1/n)`` factor is well-defined
-        at ``c = 0`` for any ``n > 0``. Phase 2 step 4 disentangled these:
-        ``C_T(0) = 0`` physically, regardless of ``c_min``.
+        at ``c = 0`` for any ``n > 0``: ``C_T(0) = 0`` physically, regardless of ``c_min``.
         """
         c_min = 0.1
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3, c_min=c_min)
@@ -721,7 +542,7 @@ class TestRegressionsForIssue168:
             )
 
     def test_concentration_from_retardation_no_runtime_warning_at_r_le_1(self):
-        """P1.5: masking base before exponentiation removes the warning."""
+        """Masking the base before exponentiation keeps ``R <= 1`` warning-free."""
         sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
         with warnings.catch_warnings(record=True) as caught:
@@ -972,14 +793,13 @@ class TestFluxCurvatureNoCompoundWaves:
     def test_van_genuchten_mualem_convex_no_compound_waves(self, n_vg):
         """vG-Mualem: ``λ = 1/R`` strictly increasing in ``U = C_T`` ⇒ convex ⇒ no compound waves.
 
-        This is the direct no-compound-wave test for the parameter the plan flagged as a
-        (spurious) non-convexity risk. A prior finite-difference analysis reported clay
-        (``n_vG≈1.09``) as non-convex; that was float64 cancellation in
-        ``U = 1 − (1 − S_e^{1/m})^m`` near ``S_e → 0`` (the astronomically small dry tail,
-        where ``dK/dS_e`` underflows float64 to 0). Working in the ``c``-domain via the
-        public ``characteristic_speed``/``total_concentration`` maps to well-resolved
-        ``S_e`` and is cleanly monotone. The full-range convexity (including the dry tail)
-        is proved at 200-digit precision in ``docs/theory/front_tracking_interactions.md`` §2.
+        The probe works in the ``c``-domain via the public
+        ``characteristic_speed``/``total_concentration``, which maps to well-resolved ``S_e``.
+        A direct finite-difference probe in ``S_e`` is unusable near ``S_e → 0``: float64
+        cancellation in ``U = 1 − (1 − S_e^{1/m})^m`` (where ``dK/dS_e`` underflows to 0)
+        reads as spurious non-convexity for clay-like ``n_vG ≈ 1.09``. The full-range
+        convexity including that dry tail is proved at 200-digit precision in
+        ``docs/theory/front_tracking_interactions.md`` §2.
         """
         s = VanGenuchtenMualemConductivity(theta_r=0.06, theta_s=0.40, k_s=10.0, van_genuchten_n=n_vg)
         # Probe the float64-RESOLVABLE part of the range. c in [0.01, 0.6*k_s] maps to the upper S_e
@@ -1020,10 +840,10 @@ class TestIsothermScalarFastPath:
     """The pure-float scalar fast path agrees with the array route it short-circuits to ≤2 ULP.
 
     ``retardation``/``total_concentration``/``concentration_from_retardation`` carry a
-    scalar branch (avoiding the numpy dispatch that dominated the front-tracking solver's
-    per-event cost). It must reproduce the value a scalar previously got by routing through
-    the array code — reproduced here as ``float(method(np.asarray(x)))``, the 0-d-array
-    route the pre-optimisation scalar call took. The two routes are the same formula through
+    scalar branch that avoids the numpy dispatch dominating the front-tracking solver's
+    per-event cost. It must reproduce the value the array code gives — evaluated here as
+    ``float(method(np.asarray(x)))``, the 0-d-array
+    route. The two routes are the same formula through
     different faithfully-rounded ``**`` implementations (Python-float libm vs numpy's ufunc
     loop), which agree bit-for-bit on some platform/wheel combinations but not others
     (observed: linux cp312 wheels vs glibc pow in ``concentration_from_retardation`` — 1 ULP

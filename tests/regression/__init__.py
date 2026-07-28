@@ -1,5 +1,7 @@
-"""Snapshot regression tests for front tracking.
+"""Cross-cutting regression tests for the front-tracking engine.
 
-Captures public API outputs of selected scenarios on `main` and asserts that
-the refactored Phase 1 code reproduces them to machine precision.
+Scenario-level unit tests live in ``tests/src``. This package holds the checks
+that span several engine modules at once: the invariant contracts pinned against
+analytic and high-precision references, and the concentration-dispatch parity
+between ``concentration_at_point`` and ``compute_domain_mass``.
 """

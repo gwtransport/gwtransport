@@ -4,11 +4,8 @@ Tests for front tracking with zero concentration transitions.
 This module tests the correct handling of transitions from/to C=0,
 which are special cases in the front tracking implementation.
 
-Physical interpretation:
-- C=0 → C>0: Injecting solute into clean domain → characteristic wave
-- C>0 → C=0: Stopping injection → characteristic wave
-
-These tests ensure that Example 1 scenarios work correctly.
+The wave a C=0 transition emits depends on the isotherm: a shock, a rarefaction, or
+(for constant retardation) a contact characteristic.
 """
 
 import numpy as np
@@ -42,10 +39,9 @@ class TestInletWaveCreationZeroConcentration:
     def test_zero_to_nonzero_creates_rarefaction_freundlich_n_lt_1(self):
         """Test C=0 → C=10 creates a rarefaction for n<1 Freundlich with c_min=0.
 
-        Regression for #312: a former c_min==0 special branch returned a single
-        ``CharacteristicWave`` (which fabricated cout); for n<1 the fast clean water (R(0)=1)
-        behind the slow contaminated water is an expansion → rarefaction, entropy-correct via
-        the general path.
+        Regression for #312: for n<1 the fast clean water (R(0)=1) ahead of the slow
+        contaminated water is an expansion → rarefaction, entropy-correct via the general
+        path. A ``CharacteristicWave`` here would fabricate cout.
         """
         sorption = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
 
@@ -101,10 +97,6 @@ class TestInletWaveCreationZeroConcentration:
         assert isinstance(waves[0], RarefactionWave)
         assert waves[0].c_head == 10.0  # Faster (higher C)
         assert waves[0].c_tail == 2.0  # Slower (lower C)
-
-
-# TestStepInputPlateau removed (P2.5): plateau coverage is parametrized in
-# tests/src/test_front_tracking_plateau_behavior.py.
 
 
 class TestFirstArrivalTime:

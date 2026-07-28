@@ -2307,9 +2307,8 @@ def test_per_pv_arrays_match_diffusion_exact():
 def test_per_pv_arrays_reverse_matches_diffusion_exact():
     """Per-streamtube arrays through the REVERSE direction match ``gwtransport.diffusion``.
 
-    The reverse function carries its own ``_broadcast_to_pore_volumes`` call-sites
-    (distinct from the forward function's), so a regression that collapsed a per-PV
-    parameter to its first entry on only the reverse path would slip past
+    The reverse function coerces and broadcasts its own inputs, so a regression that
+    collapsed a per-PV parameter to its first entry on only the reverse path would slip past
     :func:`test_per_pv_arrays_match_diffusion_exact`. Every other reverse test uses scalar
     / single-element parameters, where such a collapse is a no-op. This drives the same
     three heterogeneous tubes through both inverse solvers.
@@ -2520,7 +2519,7 @@ def test_diffusion_fast_reverse_rejects_mismatched_cout_tedges(entry):
     """Reverse surfaces raise when ``cout_tedges`` length does not match ``cout``.
 
     Exercises the reverse-only ``len(cout_tedges) != len(cout) + 1`` branch of
-    :func:`gwtransport.diffusion_fast._validate_inputs`, which the forward
+    :func:`gwtransport._diffusion_shared._validate_inputs`, which the forward
     direction never reaches. ``cout`` has ``len(flow)`` entries, so a
     ``cout_tedges`` of length ``len(flow)`` (one too short) is invalid.
     """
@@ -3195,7 +3194,7 @@ def test_leading_zero_flow_inverse_finite_and_matches_dense_reverse():
 
 
 def test_interior_zero_flow_gap_band_covers_gap_accumulated_diffusion():
-    """Interior zero-flow gap: the default band (U=7) reproduces the wide band (U=25).
+    """Interior zero-flow gap: the production band (U=7) reproduces the wide band (U=25).
 
     During a pumped-off (zero-flow) gap, molecular diffusion keeps growing the moving-frame
     variance ``D_t = D_m*tau + alpha_L*xi`` (``tau`` grows, ``xi`` frozen), so post-restart
@@ -3217,23 +3216,24 @@ def test_interior_zero_flow_gap_band_covers_gap_accumulated_diffusion():
     cumvol = cumulative_flow_volume(flow, dt_to_days(tedges))
     flow_out = np.diff(np.interp(cout_days, tedges_days, cumvol)) / np.diff(cout_days)
     cin = np.random.default_rng(42).random(n)
-    kwargs = {
-        "cin": cin,
+    build = {
         "flow": flow,
         "tedges": tedges,
         "cout_tedges": cout_tedges,
-        "aquifer_pore_volumes": np.array([300.0]),
-        "streamline_length": 10.0,
-        "molecular_diffusivity": 0.1,
-        "longitudinal_dispersivity": 0.0,
         "flow_out": flow_out,
+        "aquifer_pore_volumes": np.array([300.0]),
+        "streamline_length": np.array([10.0]),
+        "molecular_diffusivity": np.array([0.1]),
+        "longitudinal_dispersivity": np.array([0.0]),
+        "retardation_factor": 1.0,
+        "extend_tedges": _extend_tedges_flag("constant"),
     }
-    cout_default = infiltration_to_extraction(**kwargs, saturation_threshold=7.0)
-    cout_wide = infiltration_to_extraction(**kwargs, saturation_threshold=25.0)
-    np.testing.assert_array_equal(np.isnan(cout_default), np.isnan(cout_wide))
-    valid = ~np.isnan(cout_default)
+    band_default, col_default, valid = _closed_form_coeff_matrix(**build)
+    band_wide, col_wide, _ = _closed_form_coeff_matrix(**build, saturation_threshold=25.0)
+    w_default = _densify_banded(band_default, col_default, n)
+    w_wide = _densify_banded(band_wide, col_wide, n)
     assert np.sum(valid) > 1000
-    assert_allclose(cout_default[valid], cout_wide[valid], atol=1e-13, rtol=0.0)
+    assert_allclose(w_default @ cin, w_wide @ cin, atol=1e-13, rtol=0.0)
 
 
 @pytest.mark.parametrize(
