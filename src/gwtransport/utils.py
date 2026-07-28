@@ -1477,7 +1477,8 @@ def solve_inverse_transport(
         Forward coefficient matrix with shape ``(n_obs, n_output)``.
     observed : ndarray
         Observed values with shape ``(n_obs,)`` (e.g., extraction
-        concentrations).
+        concentrations). NaN entries mark measurement gaps; their rows are
+        excluded from the solve and the regularization target.
     n_output : int
         Length of the output vector (e.g., number of cin bins).
     regularization_strength : float
@@ -1505,12 +1506,13 @@ def solve_inverse_transport(
     solve_inverse_transport_banded : Memory-light banded equivalent.
     """
     row_sums = w_forward.sum(axis=1)
-    # Emit only columns carrying real weight. Aligning the gate with the regularization
-    # threshold (``_EPSILON_COEFF_SUM``, also used for the row-validity gate below and by the
-    # banded/fast siblings) NaNs the erfc-tail sliver columns (``col_sum`` in ``(0, _EPSILON]``)
-    # instead of emitting the collapsed-singular-value garbage (tiny or negative) lstsq returns
-    # there — those bins are uninformative, not resolvable (#307).
-    col_active: npt.NDArray[np.bool_] = w_forward.sum(axis=0) > _EPSILON_COEFF_SUM
+    nan_obs = np.isnan(observed)
+    # Aliases w_forward when there are no gaps; otherwise one masked copy, shared with the
+    # regularization target below.
+    w_masked = np.where(nan_obs[:, None], 0.0, w_forward) if nan_obs.any() else w_forward
+    # A column is active when its weight over the surviving rows exceeds the regularization
+    # epsilon; sliver-support and gap-only columns emit NaN instead of a min-norm value.
+    col_active: npt.NDArray[np.bool_] = w_masked.sum(axis=0) > _EPSILON_COEFF_SUM
 
     if not np.any(col_active):
         return np.full(n_output, np.nan)
@@ -1529,13 +1531,17 @@ def solve_inverse_transport(
                 stacklevel=2,
             )
 
-    valid: npt.NDArray[np.bool_] = row_sums > _EPSILON_COEFF_SUM if valid_rows is None else valid_rows
+    # Gapped rows drop out of the data equations and the regularization target.
+    valid: npt.NDArray[np.bool_] = (row_sums > _EPSILON_COEFF_SUM if valid_rows is None else valid_rows) & ~nan_obs
 
     rhs = np.where(valid, row_sums * observed, np.nan)
     w_solve = w_forward.copy()
     w_solve[~valid, :] = np.nan
 
-    x_target = compute_reverse_target(coeff_matrix=w_forward, rhs_vector=observed)
+    x_target = compute_reverse_target(
+        coeff_matrix=w_masked,
+        rhs_vector=np.where(nan_obs, 0.0, observed),
+    )
 
     x_solved = solve_tikhonov(
         coefficient_matrix=w_solve,
@@ -1595,7 +1601,8 @@ def solve_inverse_transport_banded(
         First output-column index of each row's band, shape ``(n_obs,)``.
     observed : ndarray
         Observed values of shape ``(n_obs,)`` (e.g. extraction concentrations).
-        Must not contain NaN.
+        NaN entries mark measurement gaps; their rows are excluded from the
+        normal equations (band row and observed value zeroed).
     n_output : int
         Length of the output vector (number of cin bins).
     regularization_strength : float
@@ -1629,6 +1636,12 @@ def solve_inverse_transport_banded(
     # needs no row_sums scaling -- matching the dense solve_inverse_transport.
     band_vals = np.asarray(band_vals, dtype=float)
     observed = np.asarray(observed, dtype=float)
+    # Zeroed gapped rows drop out of the normal equations, and a zeroed observed value keeps
+    # 0 * NaN out of Wᵀ·observed and the refinement residual.
+    nan_obs = np.isnan(observed)
+    if nan_obs.any():
+        band_vals = np.where(nan_obs[:, None], 0.0, band_vals)
+        observed = np.where(nan_obs, 0.0, observed)
     full_band = band_vals.shape[1]
     n_cin = n_output
     cols = col_start[:, None] + np.arange(full_band)[None, :]  # (n_obs, full_band) output-column index
