@@ -2275,11 +2275,7 @@ def test_validate_diffusion_inputs_silent_on_good_input_reverse():
             },
             r"cout_tedges must have one more element than cout",
         ),
-        (
-            "reverse",
-            lambda k: {**k, "cout_values": np.array([1.0, np.nan, 1.0, 1.0, 1.0]), "cout_tedges": k["tedges"]},
-            r"cout contains NaN values, which are not allowed",
-        ),
+        # NaN cout no longer raises: gaps are masked out of the inverse solve (#321).
         # NEW: flow >= 0 in reverse (omission fix)
         (
             "reverse",
@@ -2395,3 +2391,75 @@ def test_coarse_cout_grid_conserves_pulse_mass(offset_days):
     cout_disp = infiltration_to_extraction(molecular_diffusivity=0.02, longitudinal_dispersivity=1.0, **kwargs)
     assert not np.any(np.isnan(cout_disp))
     np.testing.assert_allclose(np.sum(flow_rate * cout_disp * dt_days), mass_in, rtol=1e-10)
+
+
+def test_extraction_to_infiltration_gapped_cout_masked():
+    """Gapped (NaN) cout: the dense reverse solve uses only the measured bins (#321).
+
+    Gapped rows drop out of both the data equations and the regularization
+    target. cout at 12h resolution vs daily cin keeps the system overdetermined,
+    so the surviving rows pin every interior cin bin at the no-gap round-trip floor.
+    """
+    n_days = 120
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    cout_tedges = pd.date_range("2020-01-01", periods=2 * n_days + 1, freq="12h")
+    flow = np.full(n_days, 100.0)
+    cin_true = 5.0 + 3.0 * np.sin(2 * np.pi * np.arange(n_days) / 30.0)
+    kwargs = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([517.0]),
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.01,
+        "longitudinal_dispersivity": 0.1,
+    }
+
+    cout = infiltration_to_extraction(cin=cin_true, **kwargs)
+    cout[[0, 90, 120, 121, 150, 239]] = np.nan  # boundary + scattered gaps
+
+    cin_rec = extraction_to_infiltration(cout=cout, **kwargs)
+
+    interior = slice(30, 95)
+    np.testing.assert_allclose(cin_rec[interior], cin_true[interior], atol=1e-10)
+
+
+def test_extraction_to_infiltration_wide_gap_never_fabricates():
+    """A gap wider than the dispersive arrival window yields NaN cin bins, never fabricated values (#321).
+
+    A cin bin whose entire breakthrough support falls inside the NaN-cout window
+    has no surviving data equation: its column is inactive and the bin is NaN.
+    Well-constrained bins recover at the round-trip floor. Partially-supported
+    gap-edge bins (a sliver of the dispersive tail survives) emit softened
+    regularized estimates bounded by the data's physical range.
+    """
+    n_days = 120
+    tedges = pd.date_range("2020-01-01", periods=n_days + 1, freq="D")
+    cout_tedges = pd.date_range("2020-01-01", periods=2 * n_days + 1, freq="12h")
+    flow = np.full(n_days, 100.0)
+    cin_true = 5.0 + 3.0 * np.sin(2 * np.pi * np.arange(n_days) / 30.0)
+    kwargs = {
+        "flow": flow,
+        "tedges": tedges,
+        "cout_tedges": cout_tedges,
+        "aquifer_pore_volumes": np.array([517.0]),
+        "streamline_length": 80.0,
+        "molecular_diffusivity": 0.01,
+        "longitudinal_dispersivity": 0.1,
+    }
+
+    cout = infiltration_to_extraction(cin=cin_true, **kwargs)
+    cout[100:160] = np.nan  # 30-day gap (12h bins): days 50-80, far wider than the ~5.2-day arrival
+
+    cin_rec = extraction_to_infiltration(cout=cout, **kwargs)
+
+    # Bins wholly inside the gap's shadow have no data equations -> NaN.
+    assert np.isnan(cin_rec[50:70]).all(), "unconstrained cin bins inside the gap shadow must be NaN"
+    # Bins away from the gap remain pinned by surviving rows at the round-trip floor.
+    np.testing.assert_allclose(cin_rec[10:40], cin_true[10:40], atol=1e-8)
+    assert np.isfinite(cin_rec[10:40]).all()
+    # Every finite bin sits inside the data's physical range (cin_true spans [2, 8]);
+    # partially-supported gap-edge bins may be soft, never non-physical.
+    finite = np.isfinite(cin_rec)
+    assert cin_rec[finite].min() >= cin_true.min() - 1.0
+    assert cin_rec[finite].max() <= cin_true.max() + 1.0
