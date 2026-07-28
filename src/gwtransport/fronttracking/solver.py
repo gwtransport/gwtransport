@@ -123,9 +123,8 @@ class FrontTrackerState:
         ``flow[i] == 0``, θ is constant across ``[tedges_days[i], tedges_days[i+1])``;
         ``np.searchsorted(..., side='right') - 1`` lands on the rightmost
         such bin, so this function returns ``tedges_days[i]`` for the
-        right-most i sharing that θ. Events scheduled at zero-flow bin
-        boundaries therefore align with the END of the zero-flow interval
-        — pick one convention and call it documented.
+        right-most i sharing that θ. Convention: events at a zero-flow θ
+        plateau map to the END of the zero-flow interval.
         """
         if theta <= self.theta_edges[0]:
             return float(self.tedges_days[0])

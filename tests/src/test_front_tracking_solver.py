@@ -778,9 +778,7 @@ class TestRiemannProblems:
         tracker = FrontTracker(cin=cin, flow=flow, tedges=tedges, aquifer_pore_volume=v_pore, sorption=sorption)
         tracker.run(max_iterations=10000, verbose=False)
 
-        analytic_total = compute_total_outlet_mass(
-            v_outlet=v_pore, sorption=sorption, cin=cin, theta_edges=tracker.state.theta_edges
-        )
+        analytic_total = compute_total_outlet_mass(cin=cin, theta_edges=tracker.state.theta_edges)
 
         theta_max = float(tracker.state.theta_edges[-1])
         theta_grid = np.linspace(0.0, theta_max, 2000)
@@ -941,12 +939,7 @@ class TestParametricMassBalance:
         tr.run(max_iterations=100000)
 
         mass_in = float(np.sum(cin * np.diff(tr.state.theta_edges)))
-        mass_out = compute_total_outlet_mass(
-            v_outlet=v_outlet,
-            sorption=sorption,
-            cin=cin,
-            theta_edges=tr.state.theta_edges,
-        )
+        mass_out = compute_total_outlet_mass(cin=cin, theta_edges=tr.state.theta_edges)
         # Empirical rel_err ≤ 7e-15 across the parameter sweep (worst at s_max=0.2, k_l=10); 1e-13 leaves 14× headroom.
         assert np.isclose(mass_out, mass_in, rtol=1e-13), (
             f"Langmuir s={s_max}, k_l={k_l}: total mass mass_in={mass_in:.4f} mass_out={mass_out:.4f}"

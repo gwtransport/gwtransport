@@ -1558,7 +1558,9 @@ def _c_decay_freundlich(
     alpha = sorption.bulk_density * sorption.k_f / sorption.porosity
 
     if c_fixed == 0.0:
-        if np.isclose(n, 2.0, rtol=1e-12):
+        # atol=0.0: the default atol=1e-8 would silently route any n within 1e-8 of 2
+        # to the n=2 closed form instead of the general-n inversion.
+        if np.isclose(n, 2.0, rtol=1e-12, atol=0.0):
             disc = k_invariant * k_invariant + theta_local * k_invariant * alpha
             u = (k_invariant + np.sqrt(disc)) / theta_local
             return float(u * u)

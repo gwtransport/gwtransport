@@ -143,6 +143,14 @@ def transfer_function(
     -------
     ndarray of complex
         ``g_hat(s)``, same shape as ``s``.
+
+    Notes
+    -----
+    Validity floor: for ``|s|`` below ~1e-10 the scaled-Airy building blocks of the
+    ``D_m = 0`` branch degenerate and the result is NaN instead of the analytic limit
+    ``g_hat -> 1``. This is unreachable through the public API: the smallest de Hoog
+    node is ``gamma ~ -ln(tol) / (2 * 1.3 * max(mu, tau)) ~ 8 / max(mu, tau)``, which
+    stays orders of magnitude above 1e-10 for any physical phase volume.
     """
     # Linear retardation rescales the constant-Q operator: A_0 -> A_0/R, D_m -> D_m/R (alpha_L is
     # geometric and unchanged); the residence time then scales by R.

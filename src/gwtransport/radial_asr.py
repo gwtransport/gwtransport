@@ -319,7 +319,8 @@ def _auto_n_modes(
     r"""Azimuthal truncation ``M`` sized from the drift ratio ``eps`` and the rest-phase displacement.
 
     The pumping-phase mode amplitudes decay geometrically, ``|c_m| ~ eps^|m|`` with
-    ``eps = v_d R_b / A_0``, so keeping modes ``-M .. M`` truncates the azimuthal field at
+    ``eps = v_d (R_b + delta) / A_0`` (worst-case ratio at the rest-displaced plume edge, so the
+    rest displacement ``delta`` feeds this bound too), so keeping modes ``-M .. M`` truncates the azimuthal field at
     ``O(eps^{M+1})``; ``M`` is chosen so that tail is below ``~5e-3``. An interior rest phase
     additionally translates the plume by ``delta = v_d t_rest / R`` (the free-space rest kernel's
     own translation; idle bins before the first or after the last pumping do not move the field),
@@ -356,7 +357,9 @@ def _auto_n_modes(
     # Rest translation is v_d t / R (the free-space rest kernel's exact drift), not v_d t.
     delta = abs(v_d) * float(np.sum(dt_days[interior][flow[interior] == 0.0])) / retardation_factor
     eps = min(abs(v_d) * (r_b + delta) / abs(a0), _RS_FRAC)
-    m_eps = int(np.ceil(np.log(5e-3) / np.log(eps))) if eps > 0.0 else 2
+    # eps > 0 always holds here: v_d != 0 (this function is only reached for nonzero drift),
+    # r_b >= r_w > 0, and a0 > 0.
+    m_eps = int(np.ceil(np.log(5e-3) / np.log(eps)))
     width = np.sqrt(longitudinal_dispersivity * r_b + longitudinal_dispersivity**2)
     m_shift = int(np.ceil(delta / width)) + 2 if delta > 0.0 else 2
     return int(np.clip(max(m_eps, m_shift), 2, 8))
