@@ -252,6 +252,11 @@ def identify_outlet_segments(
     4. Handling rarefaction and decaying-fan profiles with θ-varying concentration.
 
     The segments completely partition the interval [theta_start, theta_end].
+
+    Every crossing is clamped to ``theta_cross < theta_deactivation``
+    (matching ``was_active_at`` semantics): a crossing extrapolated past a
+    wave's deactivation is an artifact — after a collision the front belongs
+    to the successor wave, whose own crossing covers the outlet.
     """
     # Find all waves that cross outlet in this θ-range
     outlet_events: list[dict] = []
@@ -261,13 +266,12 @@ def identify_outlet_segments(
     active_rarefactions_at_start: list[RarefactionWave | DecayingShockWave] = []
 
     for wave in waves:
-        # Retrospective filter: ``identify_outlet_segments`` is called over
-        # arbitrary [theta_start, theta_end] windows (e.g., plotting after the
-        # simulation ends). ``is_active`` is the wave's *current* (end-of-sim)
-        # state and skips waves that legitimately crossed v_outlet during the
-        # window but were later deactivated by a collision. Skip only if the
-        # wave's lifetime ended before the window started.
-        if wave.theta_deactivation <= theta_start:
+        # Lifetime filter, matching ``Wave.was_active_at``: skip waves that were never
+        # activated (``is_active=False`` with no recorded deactivation) or whose lifetime
+        # ended before the window starts. ``is_active`` alone is the end-of-simulation
+        # state and would also skip waves deactivated after an in-window crossing.
+        never_active = not wave.is_active and wave.theta_deactivation == float("inf")
+        if never_active or wave.theta_deactivation <= theta_start:
             continue
 
         if isinstance(wave, DecayingShockWave):
@@ -277,7 +281,8 @@ def identify_outlet_segments(
             # whose c follows the self-similar profile and asymptotes to the
             # fan's tail concentration.
             theta_cross = wave.outlet_crossing_theta(v_outlet)
-            if theta_cross is None:
+            if theta_cross is None or theta_cross >= wave.theta_deactivation:
+                # Crossings at or after deactivation are spurious extrapolations.
                 continue
             if theta_cross <= theta_start:
                 # Outlet already inside the fan at theta_start.
@@ -305,7 +310,7 @@ def identify_outlet_segments(
                 tail_speed = wave.tail_speed()
                 if tail_speed > EPSILON_VELOCITY:
                     theta_cross = wave.theta_start + (v_outlet - wave.v_start) / tail_speed
-                    if theta_start < theta_cross <= theta_end:
+                    if theta_start < theta_cross <= theta_end and theta_cross < wave.theta_deactivation:
                         outlet_events.append({
                             "theta": theta_cross,
                             "wave": wave,
@@ -318,7 +323,7 @@ def identify_outlet_segments(
             head_speed = wave.head_speed()
             if head_speed > EPSILON_VELOCITY and wave.v_start < v_outlet:
                 theta_cross = wave.theta_start + (v_outlet - wave.v_start) / head_speed
-                if theta_start <= theta_cross <= theta_end:
+                if theta_start <= theta_cross <= theta_end and theta_cross < wave.theta_deactivation:
                     outlet_events.append({
                         "theta": theta_cross,
                         "wave": wave,
@@ -330,7 +335,7 @@ def identify_outlet_segments(
             tail_speed = wave.tail_speed()
             if tail_speed > EPSILON_VELOCITY and wave.v_start < v_outlet:
                 theta_cross = wave.theta_start + (v_outlet - wave.v_start) / tail_speed
-                if theta_start <= theta_cross <= theta_end:
+                if theta_start <= theta_cross <= theta_end and theta_cross < wave.theta_deactivation:
                     outlet_events.append({
                         "theta": theta_cross,
                         "wave": wave,
@@ -574,7 +579,8 @@ def integrate_fan_exact(
     c_apex : float, optional
         Concentration on the constant side at the fan apex. For
         ``RarefactionWave`` this is ``raref.c_tail``; for
-        ``DecayingShockWave`` (decay_side='left') this is ``wave.c_fixed``.
+        ``DecayingShockWave`` (decay_side='left') this is ``wave.c_fan_tail``
+        (the plateau the outlet holds once the fan's far edge sweeps by).
         For ``c_apex > 0`` the fan formula extrapolates past the physical
         fan range; the integration is clamped at ``θ_tail`` (where
         ``c(θ_tail) = c_apex``) and the constant-c_apex region beyond
@@ -844,9 +850,10 @@ def compute_bin_averaged_concentration_exact(
                     c_mid = concentration_at_point(v_outlet, 0.5 * (seg_a + seg_b), waves, sorption)
                     total += c_mid * d
             elif seg["type"] == "decaying_fan":
+                # Outlet is inside the fan; past the fan's far edge c holds the c_fan_tail plateau.
                 w = seg["wave"]
                 total += integrate_fan_exact(
-                    w.theta_origin, w.v_origin, v_outlet, seg_a, seg_b, sorption, c_apex=w.c_fixed
+                    w.theta_origin, w.v_origin, v_outlet, seg_a, seg_b, sorption, c_apex=w.c_fan_tail
                 )
         c_avg[i] = total / dtheta_bin
     return c_avg

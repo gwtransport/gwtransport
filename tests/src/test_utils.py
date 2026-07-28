@@ -1694,3 +1694,51 @@ def test_solve_inverse_transport_banded_rejects_nonpositive_lambda():
         solve_inverse_transport_banded(
             band_vals=band_vals, col_start=col_start, observed=observed, n_output=4, regularization_strength=0.0
         )
+
+
+def test_simplify_bins_all_zero_flow_group_falls_back_to_width_weights():
+    """A merged group whose bins all have zero flow gets a width-weighted average, not NaN (#313)."""
+    edges = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    values = np.array([2.0, 2.0, 5.0, 5.0])
+    flow = np.array([0.0, 0.0, 10.0, 10.0])
+    new_edges, new_values, new_flow = simplify_bins(edges=edges, values=values, flow=flow)
+    np.testing.assert_allclose(new_edges, [0.0, 2.0, 4.0])
+    np.testing.assert_allclose(new_values, [2.0, 5.0])
+    assert new_flow is not None  # narrow the flow=None overload for the type checker
+    np.testing.assert_allclose(new_flow, [0.0, 10.0])
+
+
+def test_time_bin_overlap_nanosecond_precision_far_epoch():
+    """Datetime edges are differenced in exact int64 nanoseconds (#313).
+
+    Near year 2200 the float64 ulp of an epoch-nanosecond value is 1024 ns, so
+    sub-microsecond bins require integer differencing to overlap exactly.
+    """
+    base = pd.Timestamp("2200-01-01")
+    tedges = pd.DatetimeIndex([base + pd.Timedelta(n, "ns") for n in (0, 1000, 2000, 3000)])
+    bin_tedges = [(base + pd.Timedelta(500, "ns"), base + pd.Timedelta(1500, "ns"))]
+    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
+    np.testing.assert_allclose(result, [[0.5, 0.5, 0.0]], rtol=0, atol=0)
+
+
+def test_solve_tikhonov_resolution_dead_column_nan_target():
+    """A dead (all-zero) column with NaN x_target reports fraction_data = 1.0 (#313).
+
+    Its pinned gram diagonal keeps the resolution inverse nonsingular and leaves
+    the live entries unchanged.
+    """
+    coeff = np.array([[1.0, 0.0], [2.0, 0.0]])
+    rhs = np.array([1.0, 2.0])
+    x_target = np.array([1.0, np.nan])
+    lam = 1e-10
+    x, fraction_data = solve_tikhonov(
+        coefficient_matrix=coeff,
+        rhs_vector=rhs,
+        x_target=x_target,
+        regularization_strength=lam,
+        return_resolution=True,
+    )
+    # lstsq returns the minimum-norm solution: dead column -> 0, live column exact.
+    np.testing.assert_allclose(x, [1.0, 0.0])
+    # Live column: R = 1 - lam / (||col||^2 + lam); dead unregularized column: 1.0 by convention.
+    np.testing.assert_allclose(fraction_data, [1.0 - lam / (5.0 + lam), 1.0], rtol=1e-12)

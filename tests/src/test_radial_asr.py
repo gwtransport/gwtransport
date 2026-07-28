@@ -645,3 +645,18 @@ class TestGeneralEngine:
         )
         ext = flow < 0
         np.testing.assert_allclose(pub[ext], eng[ext], rtol=1e-12, atol=1e-12)
+
+
+def test_reverse_negative_regularization_strength_raises():
+    """Negative regularization_strength raises ValueError instead of a silent all-NaN cin (#313)."""
+    tedges, flow, geom = _scenario()
+    with pytest.raises(ValueError, match="regularization_strength"):
+        extraction_to_infiltration(
+            cout=np.zeros(len(flow)),
+            flow=flow,
+            tedges=tedges,
+            cout_tedges=tedges,
+            **geom,
+            regularization_strength=-1.0,
+            n_quad=80,
+        )
