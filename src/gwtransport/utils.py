@@ -641,6 +641,9 @@ def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.N
     - tedges must be sorted in ascending order
     - Uses vectorized operations to handle large arrays efficiently
     - Time ranges in bin_tedges can be in any order and can overlap
+    - Datetime inputs are differenced in exact int64 nanoseconds before the final
+      float division; a float64 epoch value rounds to its ulp (1024 ns by the
+      2200s), which would corrupt sub-microsecond bins
 
     Examples
     --------
@@ -670,13 +673,13 @@ def time_bin_overlap(*, tedges: npt.ArrayLike, bin_tedges: list[tuple]) -> npt.N
         raise ValueError(msg)
 
     # Normalize datetime-like inputs (datetime64 or object arrays of Timestamps/datetimes) to a
-    # common int64-nanosecond float scale so numeric, datetime64, and Timestamp inputs share one
-    # arithmetic path; ``np.maximum(0, Timedelta)`` on an object array would otherwise raise. Only
-    # differences enter the result, so the shared epoch origin cancels and the fractions are exact.
+    # common int64-nanosecond scale so numeric, datetime64, and Timestamp inputs share one
+    # arithmetic path; ``np.maximum(0, Timedelta)`` on an object array would otherwise raise.
+    # Kept in int64 through the differencing for exactness (see Notes); the epoch origin cancels.
     if not np.issubdtype(tedges.dtype, np.number):
-        tedges = pd.DatetimeIndex(tedges).asi8.astype(float)
+        tedges = pd.DatetimeIndex(tedges).asi8
     if not np.issubdtype(bin_tedges_array.dtype, np.number):
-        flat = pd.DatetimeIndex(bin_tedges_array.ravel()).asi8.astype(float)
+        flat = pd.DatetimeIndex(bin_tedges_array.ravel()).asi8
         bin_tedges_array = flat.reshape(bin_tedges_array.shape)
 
     # Calculate overlaps for all combinations using broadcasting
@@ -769,7 +772,12 @@ def simplify_bins(
     new_edges = edges[idx]
     new_widths = np.add.reduceat(widths, s)
     weight_sums = np.add.reduceat(weights, s)
-    new_values = np.add.reduceat(weights * values, s) / weight_sums
+    # A merged group of all-zero-flow bins has zero volume weight (0/0 -> NaN); its average is
+    # still well defined, so fall back to width weighting there.
+    zero_weight = weight_sums == 0.0
+    new_values = np.where(
+        zero_weight, np.add.reduceat(widths * values, s), np.add.reduceat(weights * values, s)
+    ) / np.where(zero_weight, new_widths, weight_sums)
     # When flow is given, weights == flow * widths, so weight_sums == reduceat(flow * widths, s) exactly.
     new_flow = weight_sums / new_widths if flow is not None else None
 
@@ -1383,7 +1391,10 @@ def solve_tikhonov(
         - ``fraction_data[j] ≈ 1``: element *j* is data-driven
         - ``fraction_data[j] ≈ 0``: element *j* is target-driven
         - Non-regularized entries (NaN in ``x_target``):
-          ``fraction_data[j] = 1.0``
+          ``fraction_data[j] = 1.0``. This includes dead (all-zero) columns
+          with a NaN target: their zero gram row/column would make the
+          resolution inverse singular, so their diagonal is pinned to 1,
+          which leaves every other entry of the inverse unchanged.
 
     Raises
     ------
@@ -1441,6 +1452,10 @@ def solve_tikhonov(
         d_reg[target_indices] = 1.0
         gram = valid_matrix.T @ valid_matrix
         gram[np.arange(n_cin), np.arange(n_cin)] += regularization_strength * d_reg
+        # Dead (all-zero, NaN-target) columns leave a zero gram row/column; pin the diagonal
+        # to 1 so the inverse stays nonsingular (see Returns).
+        dead = np.diag(gram) == 0.0
+        gram[dead, dead] = 1.0
         gram_inv_diag = np.diag(np.linalg.inv(gram))
         fraction_data = 1.0 - regularization_strength * gram_inv_diag * d_reg
         return x, fraction_data

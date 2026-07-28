@@ -558,8 +558,12 @@ def extraction_to_deposition(
     ``O(n_cout * n_cin)``). Unlike advection (where rows sum to ~1), deposition
     rows sum to ``r_i = residence_time_i / (retardation_factor * porosity *
     thickness)``. Rows are
-    rescaled by ``r_i`` before solving: for systems where ``cout`` lies in
-    the column space of ``W`` this preserves the exact ``dep``, while for
+    rescaled by ``r_i`` before solving: when ``W`` has full column rank and
+    ``cout`` lies in its column space this preserves the exact ``dep`` (with
+    the default square ``spinup="constant"`` system the warm-start padding
+    makes ``W`` structurally rank-deficient, so even a forward-generated
+    ``cout`` is recovered only up to the nullspace, regardless of
+    ``regularization_strength``), while for
     overdetermined systems with noise it is equivalent to weighted least
     squares with weights ``1 / r_i^2`` (shorter residence times get more
     weight; under constant flow all ``r_i`` are equal and this reduces to

@@ -4621,6 +4621,34 @@ def test_fronttracking_domain_mass_interior_zero_flow_gap_matches_deleted_gap(so
         np.testing.assert_allclose(mass_gap, mass_nogap, rtol=0.0, atol=1e-9)
 
 
+def test_infiltration_to_extraction_non_monotonic_tedges_raises():
+    """Non-monotonic infiltration time edges raise ValueError instead of corrupting the volume mapping (#313)."""
+    n = 10
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D").to_numpy().copy()
+    tedges[3], tedges[4] = tedges[4], tedges[3]  # swap two interior edges
+    with pytest.raises(ValueError, match="strictly increasing"):
+        infiltration_to_extraction(
+            cin=np.ones(n),
+            flow=np.full(n, 100.0),
+            tedges=pd.DatetimeIndex(tedges),
+            cout_tedges=pd.date_range("2020-01-01", periods=n + 1, freq="D"),
+            aquifer_pore_volumes=np.array([300.0]),
+        )
+
+
+def test_extraction_to_infiltration_non_monotonic_tedges_raises():
+    """The reverse (deconvolution) path also rejects non-monotonic tedges (#313)."""
+    n = 10
+    tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D").to_numpy().copy()
+    tedges[3], tedges[4] = tedges[4], tedges[3]
+    with pytest.raises(ValueError, match="strictly increasing"):
+        extraction_to_infiltration(
+            cout=np.ones(n),
+            flow=np.full(n, 100.0),
+            tedges=pd.DatetimeIndex(tedges),
+            cout_tedges=pd.date_range("2020-01-01", periods=n + 1, freq="D"),
+            aquifer_pore_volumes=np.array([300.0]),
+        )
 def test_extraction_to_infiltration_gapped_cout_masked():
     """Gapped (NaN) cout: the reverse solve uses only the measured bins (#321).
 
