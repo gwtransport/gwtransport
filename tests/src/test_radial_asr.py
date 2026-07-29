@@ -571,7 +571,8 @@ class TestGeneralEngine:
     def test_dm_positive_forward_conserves(self):
         # Single inject->extract cycle (no rest) with D_m>0 routes to the closed-form echo operator; this
         # checks that path conserves mass under molecular diffusion. The multi-cycle reuse-engine D_m>0 path
-        # is covered by test_dm_positive_multi_cycle_round_trip. n_quad-insensitive (verified 8/16/120).
+        # is covered by test_dm_positive_multi_cycle_round_trip. n_quad=16 is the floor for the 2e-2
+        # conservation gate: measured rel error 5.9e-2 at n_quad=8 and 1.3e-2 at 12.
         tedges, flow, geom = _scenario()
         cin = np.where(flow > 0, 1.0, 0.0)
         cout = infiltration_to_extraction(
@@ -631,7 +632,7 @@ class TestGeneralEngine:
         cin = np.where(flow > 0, 1.0, 0.0)
         geom = {"pore_heights": 10.0, "porosity": 0.3, "well_radius": 0.5, "longitudinal_dispersivity": 0.5}
         pub = infiltration_to_extraction(
-            cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, molecular_diffusivity=1.0, n_quad=24
+            cin=cin, flow=flow, tedges=tedges, cout_tedges=tedges, **geom, molecular_diffusivity=1.0, n_quad=8
         )
         eng = cout_deviation(
             cin_deviation=cin,
@@ -641,7 +642,7 @@ class TestGeneralEngine:
             r_w=geom["well_radius"],
             alpha_l=geom["longitudinal_dispersivity"],
             molecular_diffusivity=1.0,
-            n_quad=24,
+            n_quad=8,
         )
         ext = flow < 0
         np.testing.assert_allclose(pub[ext], eng[ext], rtol=1e-12, atol=1e-12)

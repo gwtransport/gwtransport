@@ -125,6 +125,9 @@ config-path = "ruff.toml"
 addopts = [
     "--import-mode=importlib",
     "-n=auto",
+    # loadgroup honors @pytest.mark.xdist_group: the memory-heavy radial-ASR drift tests are serialized
+    # onto two workers so their multi-GB transients never stack across the whole worker pool.
+    "--dist=loadgroup",
     "--doctest-modules",
 ]
 markers = [

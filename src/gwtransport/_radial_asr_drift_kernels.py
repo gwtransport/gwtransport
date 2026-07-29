@@ -409,12 +409,6 @@ def _block_solutions(
         ``Lm_w`` (``L_-`` at ``r_w``, shape ``(n_s, nm, nm)``), ``H`` (the Wronskian blocks
         ``[A (L_- - L_+)]^{-1}`` at ``r_nodes``, ``(n_quad, n_s, nm, nm)``) and ``Tm``/``Tp`` (recessive
         outward / regular inward per-interval transitions, ``(n_quad, n_s, nm, nm)``).
-
-    Raises
-    ------
-    RuntimeError
-        If a matrix Riccati or interval-transition integration does not succeed (the log-derivative hit
-        a pole, typically the coordinate finite-escape near the stagnation radius).
     """
     s = np.asarray(s, dtype=complex).reshape(-1)
     n_s = s.size
@@ -450,16 +444,53 @@ def _block_solutions(
         kappa = np.sqrt(retardation_factor * s / d_m)
         a_coef = (1.0 - sigma_a * abs(a0) / d_m) / 2.0 - kappa * astar / 2.0
         l0 = -kappa - a_coef / (r_far + astar)
+    prev = np.concatenate(([r_w], r_nodes[:-1]))
+
+    def _branch(
+        l0_blocks: npt.NDArray[np.complexfloating],
+        r_start: float,
+        r_end: float,
+        hop_from: npt.NDArray[np.floating],
+        hop_to: npt.NDArray[np.floating],
+    ) -> tuple[npt.NDArray[np.complexfloating], npt.NDArray[np.complexfloating], npt.NDArray[np.complexfloating]]:
+        """Integrate one Riccati branch; return ``L`` at ``r_nodes``, ``L`` at ``r_w``, and its hops.
+
+        The dense ODE interpolant -- the block engine's peak-memory term, ``O(steps n_s (2M+1)^2)`` --
+        lives only inside this scope, so at most one branch's interpolant is resident at a time.
+
+        Returns
+        -------
+        tuple of ndarray
+            ``L`` at ``r_nodes`` (``(n_quad, n_s, nm, nm)``), ``L`` at ``r_w`` (``(n_s, nm, nm)``), and
+            the per-interval transitions over ``(hop_from, hop_to)`` (``(n_quad, n_s, nm, nm)``).
+
+        Raises
+        ------
+        RuntimeError
+            If the matrix Riccati integration does not succeed (the log-derivative hit a pole, typically
+            the coordinate finite-escape near the stagnation radius).
+        """
+        sol = solve_ivp(
+            riccati_rhs,
+            [r_start, r_end],
+            l0_blocks.reshape(-1).view(float),
+            rtol=_RICCATI_RTOL,
+            atol=_RICCATI_ATOL,
+            dense_output=True,
+            method="DOP853",
+        )
+        if not sol.success:
+            msg = "block Riccati integration failed (the matrix log-derivative likely hit a pole near stagnation)"
+            raise RuntimeError(msg)
+
+        def l_at(r: npt.NDArray[np.floating]) -> npt.NDArray[np.complexfloating]:
+            return np.ascontiguousarray(sol.sol(r).T).view(complex).reshape(np.size(r), n_s, nm, nm)
+
+        return l_at(r_nodes), l_at(np.array([r_w]))[0], _interval_transitions(l_at, hop_from, hop_to, n_s, nm)
+
     lm0 = (l0[:, None, None] * eye[None]).astype(complex)
-    sol_m = solve_ivp(
-        riccati_rhs,
-        [r_far, r_w],
-        lm0.reshape(-1).view(float),
-        rtol=_RICCATI_RTOL,
-        atol=_RICCATI_ATOL,
-        dense_output=True,
-        method="DOP853",
-    )
+    # Psi_-(r_i, r_{i-1}): recessive outward hops
+    lm_nodes, lm_w, tm = _branch(lm0, r_far, r_w, prev, r_nodes)
     # Exact block well-face IC for the regular branch: the theta-modulated face velocity and the
     # D_rtheta cross-dispersion couple the modes in the face condition (a mode-decoupled face IC would
     # mis-state the drift loss at O(eps^2), the order of the loss itself):
@@ -470,37 +501,15 @@ def _block_solutions(
     cross = (m_drt * i_dm_face[None, :]) / r_w
     lp_w = np.linalg.solve(m_drr, (m_vr - cross) if sigma_a > 0 else -cross)
     lp0 = np.broadcast_to(lp_w, (n_s, nm, nm)).astype(complex)
-    sol_p = solve_ivp(
-        riccati_rhs,
-        [r_w, r_max],
-        lp0.reshape(-1).view(float),
-        rtol=_RICCATI_RTOL,
-        atol=_RICCATI_ATOL,
-        dense_output=True,
-        method="DOP853",
-    )
-    if not (sol_m.success and sol_p.success):
-        msg = "block Riccati integration failed (the matrix log-derivative likely hit a pole near stagnation)"
-        raise RuntimeError(msg)
+    # Psi_+(r_{i-1}, r_i): regular inward hops
+    lp_nodes, _, tp = _branch(lp0, r_w, r_max, r_nodes, prev)
 
-    def l_minus_at(r: npt.NDArray[np.floating]) -> npt.NDArray[np.complexfloating]:
-        return np.ascontiguousarray(sol_m.sol(r).T).view(complex).reshape(np.size(r), n_s, nm, nm)
-
-    def l_plus_at(r: npt.NDArray[np.floating]) -> npt.NDArray[np.complexfloating]:
-        return np.ascontiguousarray(sol_p.sol(r).T).view(complex).reshape(np.size(r), n_s, nm, nm)
-
-    prev = np.concatenate(([r_w], r_nodes[:-1]))
     a_n = block_coupling_matrices(r_nodes, alpha_l=alpha_l, a0=a0_signed, v_d=v_d, d_m=d_m, n_modes=n_modes)[0]
     # The log-derivative branches enter the resolvent only through the Wronskian block
     # H(r') = [A(r')(L_-(r') - L_+(r'))]^{-1} -- bounded wherever the recessive and regular subspaces are
     # transverse -- so H is materialized once here (and cached with the phase) instead of its factors.
-    h = np.linalg.inv(a_n[:, None] @ (l_minus_at(r_nodes) - l_plus_at(r_nodes)))
-    return {
-        "Lm_w": l_minus_at(np.array([r_w]))[0],
-        "H": h,
-        "Tm": _interval_transitions(l_minus_at, prev, r_nodes, n_s, nm),  # Psi_-(r_i, r_{i-1}), outward hops
-        "Tp": _interval_transitions(l_plus_at, r_nodes, prev, n_s, nm),  # Psi_+(r_{i-1}, r_i), inward hops
-    }
+    h = np.linalg.inv(a_n[:, None] @ (lm_nodes - lp_nodes))
+    return {"Lm_w": lm_w, "H": h, "Tm": tm, "Tp": tp}
 
 
 def _resident_laplace(
