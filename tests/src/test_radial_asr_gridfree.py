@@ -29,10 +29,10 @@ from _radial_asr_whittaker_oracle import (  # ty: ignore[unresolved-import]  # f
 )
 from flint import acb  # ty: ignore[unresolved-import]  # python-flint is a test-only dependency
 
-from gwtransport._radial_asr_compose import single_cycle_echo_matrix
 from gwtransport._radial_asr_kernels import (
+    _resolvent_airy_pieces,
     _transfer_riccati,
-    interior_resolvent,
+    assemble_airy_resolvent,
     resolvent_riccati,
     rest_resolvent,
 )
@@ -54,6 +54,26 @@ def _mp_precision():
     # mp.mp.dps assignment would leak globally and under-resolve other modules' high-precision fits.
     with mp.workdps(40):
         yield
+
+
+def _interior_resolvent(*, s, r, r_prime, r_w, alpha_l, a0, direction):
+    """Bare interior two-point Airy resolvent ``Ghat(r, r'; s)``, no Sturm-Liouville source weight.
+
+    The production assembly (``_resolvent_airy_pieces`` + ``assemble_airy_resolvent``) evaluated at a
+    single output radius, so the tests below can gate it pointwise against mpmath and against the
+    Laplace conservation identity. The engine itself assembles whole grids from prefix selection.
+
+    Returns
+    -------
+    ndarray of complex
+        ``Ghat(r, r'; s)``, shape ``(n_s, n_r')``.
+    """
+    gauge_sign = 1.0 if direction == "injection" else -1.0
+    s = np.asarray(s, dtype=complex).reshape(-1, 1)
+    rp = np.atleast_1d(np.asarray(r_prime, dtype=float)).reshape(1, -1)
+    r_a, r_b = np.minimum(r, rp), np.maximum(r, rp)
+    pieces = [_resolvent_airy_pieces(s, rr, alpha_l, a0, gauge_sign) for rr in (r_a, r_b, r_w)]
+    return assemble_airy_resolvent(*pieces, r_a + r_b, alpha_l, gauge_sign)
 
 
 # --- mpmath ground-truth references (independent of the production assembly) ---------------------
@@ -98,9 +118,9 @@ class TestInteriorResolventAiry:
         gauge = 1.0 if direction == "injection" else -1.0
         s = np.array([0.004 + 0j, 0.03 - 0.02j, 0.4 + 0.1j])
         got = np.array([
-            interior_resolvent(s=np.array([sv]), r=r, r_prime=rp, r_w=r_w, alpha_l=alpha_l, a0=a0, direction=direction)[
-                0, 0
-            ]
+            _interior_resolvent(
+                s=np.array([sv]), r=r, r_prime=rp, r_w=r_w, alpha_l=alpha_l, a0=a0, direction=direction
+            )[0, 0]
             for sv in s
         ])
         assert np.all(np.isfinite(got))
@@ -125,7 +145,7 @@ class TestLaplaceMassBalance:
             nodes, wts = np.polynomial.legendre.leggauss(nq)
             r = 0.5 * (hi - lo) * (nodes + 1) + lo
             dr = 0.5 * (hi - lo) * wts
-            g = interior_resolvent(
+            g = _interior_resolvent(
                 s=np.array([p]), r=r0, r_prime=r, r_w=r_w, alpha_l=alpha_l, a0=a0, direction="extraction"
             )[0]
             return np.sum(g * 2 * c_geo * r * dr)
@@ -133,7 +153,7 @@ class TestLaplaceMassBalance:
         mbar = mbar_panel(r_w, r0) + mbar_panel(r0, r_max)
         w_minus = (2 * c_geo * r0 / alpha_l) * np.exp(r0 / alpha_l)
         m0 = 2 * c_geo * r0 / w_minus
-        coutbar = interior_resolvent(
+        coutbar = _interior_resolvent(
             s=np.array([p]), r=r_w, r_prime=r0, r_w=r_w, alpha_l=alpha_l, a0=a0, direction="extraction"
         )[0, 0]
         return abs(p * mbar - m0 + coutbar) / abs(m0)
@@ -209,13 +229,13 @@ class TestRiccatiVsOracle:
     by :meth:`test_extraction_integer_ratio_is_finite`.
     """
 
-    @pytest.mark.parametrize(("inject", "detect"), [("flux", "flux"), ("flux", "resident")])
+    @pytest.mark.parametrize("detect", ["flux", "resident"])
     @pytest.mark.parametrize("a0", [5.0, 20.0])  # A_0/D_m = 50, 200
-    def test_transfer_matches_oracle(self, inject, detect, a0):
+    def test_transfer_matches_oracle(self, detect, a0):
         alpha_l, d_m, r_w, r = 0.5, 0.1, 0.5, 4.0
         s = np.array([0.02 + 0.05j, 0.02 + 0.4j, 0.05 + 1.5j, 0.1 + 6.0j])
-        ric = _transfer_riccati(s, r, r_w, alpha_l, a0, d_m, inject, detect)
-        ref = transfer_function_oracle(s=s, r=r, r_w=r_w, alpha_l=alpha_l, a0=a0, d_m=d_m, inject=inject, detect=detect)
+        ric = _transfer_riccati(s, r, r_w, alpha_l, a0, d_m, detect)
+        ref = transfer_function_oracle(s=s, r=r, r_w=r_w, alpha_l=alpha_l, a0=a0, d_m=d_m, detect=detect)
         np.testing.assert_allclose(ric, ref, rtol=1e-11)  # double-precision agreement vs the Arb oracle
 
     @pytest.mark.parametrize("direction", ["injection", "extraction"])
@@ -258,10 +278,8 @@ class TestRiccatiVsOracle:
         # old fixed r_far = 8 r_max the worst case was ~6e-3.
         r_w = 0.5
         s = np.array([0.01 + 0.0j, 0.03 + 0.01j, 0.05 + 0.4j, 0.1 + 2.0j])  # incl tiny-|s| / real nodes
-        ric = _transfer_riccati(s, r, r_w, 0.5, 2.0, d_m, "flux", "resident")
-        ref = transfer_function_oracle(
-            s=s, r=r, r_w=r_w, alpha_l=0.5, a0=2.0, d_m=d_m, inject="flux", detect="resident"
-        )
+        ric = _transfer_riccati(s, r, r_w, 0.5, 2.0, d_m, "resident")
+        ref = transfer_function_oracle(s=s, r=r, r_w=r_w, alpha_l=0.5, a0=2.0, d_m=d_m, detect="resident")
         np.testing.assert_allclose(ric, ref, rtol=1e-9)
 
     @pytest.mark.slow
@@ -296,23 +314,6 @@ GEOM = {"c_geo": CG, "r_w": 0.5, "alpha_l": 0.5}
 
 
 class TestGridfreeEngine:
-    def test_single_cycle_equals_echo(self):
-        # Grid-free single cycle reduces to the closed-form echo (same machinery) -- de Hoog floor.
-        flow, dt, cin = _scenario(8, 24)
-        inj_vol = np.concatenate(([0.0], np.cumsum((100.0 * dt)[:8])))
-        ext_vol = np.concatenate(([0.0], np.cumsum((100.0 * dt)[8:])))
-        w = single_cycle_echo_matrix(
-            inj_volume_edges=inj_vol,
-            ext_volume_edges=ext_vol,
-            inj_flow_scale=100.0,
-            ext_flow_scale=100.0,
-            n_quad=200,
-            **GEOM,
-        )
-        echo = w @ cin[flow > 0]
-        gf = gridfree_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, n_quad=200, **GEOM)
-        np.testing.assert_allclose(gf[flow < 0], echo, atol=1e-8)  # de Hoog floor (achieved ~2e-10)
-
     def test_multi_cycle_self_convergence(self):
         # The grid-free engine is n_quad-INSENSITIVE once converged: Gauss-Legendre on the smooth
         # resident-profile integrand reaches the de Hoog inversion floor (~1e-9) by a modest node count,
@@ -346,32 +347,21 @@ class TestGridfreeEngine:
         e_coarse, e_fine = fv_err(100, 4), fv_err(400, 16)
         assert e_fine < 0.4 * e_coarse  # first-order: ~4x cells -> ~4x smaller error
 
-    def test_retardation_recovers_mass_and_matches_echo(self):
+    def test_retardation_recovers_mass(self):
         # Retardation R>1: the readout must restore the desorbing sorbed mass (factor R), so total
-        # recovery stays ~1. Anchored on the closed-form echo (machine precision); the finite-volume oracle is
-        # unvalidated under R, so it is NOT used here. Exercises the xR in both single_cycle_echo_matrix
-        # and _cout_phase (the grid-free engine run directly on a single cycle).
+        # recovery stays ~1 instead of collapsing to 1/R. Anchored on the per-reversal grid-free engine
+        # (the finite-volume oracle is unvalidated under R, so it is NOT used here); exercises the xR in
+        # both the reuse readout matrix and _cout_phase.
         flow, dt, cin = _scenario(8, 24)
-        inj_vol = np.concatenate(([0.0], np.cumsum((100.0 * dt)[:8])))
-        ext_vol = np.concatenate(([0.0], np.cumsum((100.0 * dt)[8:])))
-        r_fac = 2.5
-        w = single_cycle_echo_matrix(
-            inj_volume_edges=inj_vol,
-            ext_volume_edges=ext_vol,
-            inj_flow_scale=100.0,
-            ext_flow_scale=100.0,
-            n_quad=200,
-            retardation_factor=r_fac,
-            **GEOM,
-        )
-        echo = w @ cin[flow > 0]
+        r_fac, ext = 2.5, flow < 0
+        re = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, retardation_factor=r_fac, n_quad=200, **GEOM)
         gf = gridfree_cout_deviation(
             cin_deviation=cin, flow=flow, dt_days=dt, retardation_factor=r_fac, n_quad=200, **GEOM
         )
-        np.testing.assert_allclose(gf[flow < 0], echo, atol=2e-6)  # grid-free == echo under R (de Hoog floor)
-        # Recovery ~0.99 (a little of the R-stretched tail spills past the finite window); the xR fix is
-        # decisive vs the bug, which would give 1/R = 0.4. > 0.95 cleanly separates the two.
-        assert np.sum(echo * 100.0) / np.sum(cin[flow > 0] * 100.0) > 0.95
+        np.testing.assert_allclose(re[ext], gf[ext], rtol=1e-13, atol=1e-14)  # K=1: no propagator, same readout
+        # Recovery ~0.99 (a little of the R-stretched tail spills past the finite window); the xR is
+        # decisive vs its absence, which would give 1/R = 0.4. > 0.95 cleanly separates the two.
+        assert np.sum(re[ext] * 100.0) / np.sum(cin[flow > 0] * 100.0) > 0.95
 
     def test_ensemble_equals_weighted_mean_of_disks(self):
         # Multi-cycle ensemble over disk heights = weighted mean of per-disk grid-free solves (the
@@ -405,25 +395,25 @@ class TestGridfreeEngine:
         np.testing.assert_allclose(ens[ext], manual, rtol=1e-12)
 
     @pytest.mark.parametrize("alpha_l", [8.0, 3.0])
-    def test_echo_v_window_conserves_mass_at_low_peclet(self, alpha_l):
-        # The resident-profile V' quadrature window must be Peclet-aware. At low Peclet (large alpha_L,
-        # r_front/alpha_L << 1) the profile spreads over many breakthrough widths; a flat 4 S_inj/R margin
+    def test_field_window_conserves_mass_at_low_peclet(self, alpha_l):
+        # The resident-profile radial quadrature window must be Peclet-aware. At low Peclet (large alpha_L,
+        # r_front/alpha_L << 1) the profile spreads over many breakthrough widths; a Peclet-blind margin
         # truncates that tail and loses mass. Isolate the window from any finite-extraction loss with ONE
-        # injection bin and ONE huge extraction bin (every parcel arrives, so G1(T_end; V') -> 1): then
-        # recovered = W[0, 0] * T_end = int f(V') dV' = S_inj/R exactly, and any deficit is pure window
-        # truncation. Before the Peclet-aware window this lost ~1.5e-2 at alpha_L = 8 / ~3e-4 at alpha_L = 3.
+        # injection bin and ONE huge extraction bin (every parcel arrives, so G1(T_end; V') -> 1): then the
+        # recovered mass equals the injected mass exactly, and any deficit is pure window truncation.
         c_geo, r_w, s_inj, t_end = 25.0, 0.5, 5000.0, 5.0e7
-        w = single_cycle_echo_matrix(
-            inj_volume_edges=np.array([0.0, s_inj]),
-            ext_volume_edges=np.array([0.0, t_end]),
+        flow = np.array([100.0, -100.0])
+        dt = np.array([s_inj / 100.0, t_end / 100.0])
+        cout = cout_deviation(
+            cin_deviation=np.array([1.0, 0.0]),
+            flow=flow,
+            dt_days=dt,
             c_geo=c_geo,
             r_w=r_w,
             alpha_l=alpha_l,
-            inj_flow_scale=100.0,
-            ext_flow_scale=100.0,
             n_quad=240,
         )
-        np.testing.assert_allclose(w[0, 0] * t_end, s_inj, rtol=1e-4)
+        np.testing.assert_allclose(cout[1] * t_end, s_inj, rtol=1e-4)
 
 
 @contextlib.contextmanager
@@ -760,14 +750,14 @@ class TestMolecularDiffusion:
             )
             assert np.all(np.isfinite(f))
             assert np.max(np.abs(f)) > 0.0  # non-trivial (not silently zeroed)
-        g = _transfer_riccati(s, 5.0, r_w, alpha_l, a0, d_m, "flux", "resident")
+        g = _transfer_riccati(s, 5.0, r_w, alpha_l, a0, d_m, "resident")
         assert np.all(np.isfinite(g))
         assert np.all(np.abs(g) > 0.0)
         # value-pin at ratio 1000: the transfer oracle (Tricomi-U) IS finite/correct for moderate |s|
         # (only its resolvent M-branch overflows there), so the transfer can be checked exactly, not just
         # for finiteness.
         s_mod = np.array([0.05 + 0.4j, 0.1 + 1.0j, 0.2 + 6.0j])
-        gp = _transfer_riccati(s_mod, 5.0, r_w, alpha_l, a0, d_m, "flux", "flux")
+        gp = _transfer_riccati(s_mod, 5.0, r_w, alpha_l, a0, d_m, "flux")
         ref = transfer_function_oracle(s=s_mod, r=5.0, r_w=r_w, alpha_l=alpha_l, a0=a0, d_m=d_m)
         np.testing.assert_allclose(gp, ref, rtol=1e-11)
 
@@ -1021,11 +1011,11 @@ class TestRebinningInvariance:
         assert np.max(np.abs(eng[ext] - fv[ext])) / scale < 0.15  # constant-|Q| kernel (~7%) + slow-FV floor
 
     @pytest.mark.slow
-    def test_echo_operator_rebinning_invariance(self):
-        # The single-cycle D_m>0 public path uses the echo operator (radial_asr._echo_operator), whose
-        # inj/ext_flow_scale are the milder RAR-F1 site (volume corners exact, only the kernel A_0 shape is
-        # off). Non-uniform vs uniform injection of the same tracer -> identical cout after the fix (baseline
-        # ~2.6%). Exercises the public infiltration_to_extraction dispatch + tedges->dt conversion.
+    def test_single_cycle_rebinning_invariance(self):
+        # Single-cycle D_m>0 through the public path: the injection phase's flow_scale is the milder RAR-F1
+        # site (volume corners exact, only the kernel A_0 shape is off). Non-uniform vs uniform injection of
+        # the same tracer -> identical cout (baseline ~2.6%). Exercises the public
+        # infiltration_to_extraction wrapper + its tedges->dt conversion.
         inj_a = (np.array([190.0, 10.0]), np.array([1.0, 19.0]), np.array([1.0, 1.0]))
         inj_b = (np.concatenate([[190.0], np.full(19, 10.0)]), np.ones(20), np.ones(20))
         ext = (np.full(6, -100.0), np.full(6, 2.0), np.zeros(6))

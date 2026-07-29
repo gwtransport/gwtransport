@@ -34,7 +34,7 @@ from gwtransport._radial_asr_drift_kernels import (
 from gwtransport._radial_asr_reuse import cout_deviation
 from gwtransport.radial_asr import (
     _auto_n_modes,
-    _block_ensemble,
+    _streamtube_ensemble,
     extraction_to_infiltration,
     gamma_extraction_to_infiltration,
     gamma_infiltration_to_extraction,
@@ -1031,7 +1031,7 @@ def test_extraction_bin_nan_surfaces_not_background(monkeypatch):
     np.testing.assert_allclose(cout[healthy], background + 0.25)
     assert np.isnan(cout[poisoned])  # NOT background: the failure must not masquerade as physics
     # the (n, k) column-batch path (reverse operator build) must propagate the NaN row too
-    dev = _block_ensemble(
+    dev = _streamtube_ensemble(
         np.zeros((n, 2)),
         flow=flow,
         dt_days=np.ones(n),

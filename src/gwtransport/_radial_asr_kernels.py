@@ -24,8 +24,8 @@ Two evaluation regimes
   (:func:`resolvent_riccati`) are assembled from O(1) quantities, with the divergent Sturm-Liouville
   gauge carried in log space. This is exact to the de Hoog inversion floor at ANY ``A_0/D_m`` -- no
   special-function precision cap, no arbitrary-precision dependency -- and continuously becomes the Airy
-  branch as ``D_m -> 0``. The exact flint/Arb Whittaker evaluation it replaced is retained as a
-  machine-precision test oracle (``tests/src/_radial_asr_whittaker_oracle.py``).
+  branch as ``D_m -> 0``. An exact flint/Arb Whittaker evaluation is the machine-precision test oracle
+  (``tests/src/_radial_asr_whittaker_oracle.py``).
 
 Retardation enters by the standard linear-sorption rescaling of the constant-Q operator: dividing the
 retarded equation ``R d_t C + ... `` by ``R`` is the unretarded equation with ``A_0 -> A_0/R`` and
@@ -41,8 +41,9 @@ import numpy.typing as npt
 from scipy.integrate import solve_ivp
 from scipy.special import airye, ive, kve
 
-# Injection / detection boundary types (Kreft-Zuber modes). "flux" applies the flux operator
-# F[psi] = psi - (G/A_0) psi'; any other value ("resident") uses psi directly.
+# Detection boundary type (Kreft-Zuber mode). "flux" applies the flux operator
+# F[psi] = psi - (G/A_0) psi'; any other value ("resident") uses psi directly. Injection is always
+# through the Kreft-Zuber flux boundary at the well.
 _FLUX = "flux"
 
 # Phase orientation for the interior two-point resolvent. "injection" is the divergent operator
@@ -99,22 +100,19 @@ def transfer_function(
     a0: float,
     d_m: float = 0.0,
     retardation_factor: float = 1.0,
-    inject: str = _FLUX,
     detect: str = _FLUX,
 ) -> npt.NDArray[np.complexfloating]:
     r"""Laplace-domain transfer function ``g_hat(s)`` for a constant-Q divergent phase.
 
-    Implements the four Kreft-Zuber injection/detection modes (KB Sec. 5) as ratios of ``phi_s``
-    (resident) and ``F[phi_s]`` (flux) evaluated at the detection radius ``r`` and the well ``r_w``:
+    Injection is through the Kreft-Zuber flux boundary at the well; the detection mode selects
+    ``F[phi_s]`` (flux) or ``phi_s`` (resident) at the detection radius ``r``:
 
-    ===========  ============  ===================================
-    inject       detect        ``g_hat``
-    ===========  ============  ===================================
-    flux (FF)    flux          ``F[phi_s](r) / F[phi_s](r_w)``
-    flux (FR)    resident      ``phi_s(r) / F[phi_s](r_w)``
-    resident RF  flux          ``F[phi_s](r) / phi_s(r_w)``
-    resident RR  resident      ``phi_s(r) / phi_s(r_w)``
-    ===========  ============  ===================================
+    ============  ===================================
+    detect        ``g_hat``
+    ============  ===================================
+    flux (FF)     ``F[phi_s](r) / F[phi_s](r_w)``
+    resident (FR) ``phi_s(r) / F[phi_s](r_w)``
+    ============  ===================================
 
     ``g_hat(0) = 1`` (mass conservation). The flux-flux (FF) mode is the package observable.
 
@@ -136,8 +134,8 @@ def transfer_function(
         log-derivative branch.
     retardation_factor : float, optional
         Linear retardation ``R >= 1``. Default 1.
-    inject, detect : {'flux', 'resident'}, optional
-        Boundary type at the well (injection) and at ``r`` (detection). Default flux/flux (FF).
+    detect : {'flux', 'resident'}, optional
+        Detection boundary type at ``r``. Default flux (FF).
 
     Returns
     -------
@@ -160,14 +158,13 @@ def transfer_function(
     if d_m_eff == 0.0:
         # Airy branch: vectorized, overflow-safe (scaled-Airy amplitudes, bounded log-difference).
         log_r, res_r, flux_r = _airy_amplitudes(s, r, alpha_l, a0_eff)
-        log_w, res_w, flux_w = _airy_amplitudes(s, r_w, alpha_l, a0_eff)
+        log_w, _, flux_w = _airy_amplitudes(s, r_w, alpha_l, a0_eff)
         numer = flux_r if detect == _FLUX else res_r
-        denom = flux_w if inject == _FLUX else res_w
-        return np.exp(log_r - log_w) * (numer / denom)
+        return np.exp(log_r - log_w) * (numer / flux_w)
 
     # D_m > 0: Riccati log-derivative (numerical ODE on the log-derivative L = phi'/phi; exact to the
     # de Hoog floor at any A_0/D_m, no special-function precision cap). Divergent orientation sigma_A = +1.
-    return _transfer_riccati(s.reshape(-1), r, r_w, alpha_l, a0_eff, d_m_eff, inject, detect).reshape(s.shape)
+    return _transfer_riccati(s.reshape(-1), r, r_w, alpha_l, a0_eff, d_m_eff, detect).reshape(s.shape)
 
 
 def _resolvent_airy_pieces(
@@ -179,7 +176,7 @@ def _resolvent_airy_pieces(
 ) -> dict[str, npt.NDArray[np.complexfloating]]:
     r"""Scaled-Airy building blocks for the interior two-point resolvent at radius ``r`` (``D_m = 0``).
 
-    The two homogeneous solutions of the constant-Q ODE (KB Sec. 4), in the gauge
+    The two homogeneous solutions of the constant-Q ODE, in the gauge
     ``e^{gauge_sign * r/(2 alpha_L)}`` (``+1`` divergent/injection, ``-1`` convergent/extraction):
 
     * ``u_inf = s_inf * exp(gauge_sign r/2alpha_L - xi)`` -- the decaying branch (``Ai``),
@@ -215,71 +212,6 @@ def _resolvent_airy_pieces(
     }
 
 
-def interior_resolvent(
-    *,
-    s: npt.NDArray[np.complexfloating],
-    r: float,
-    r_prime: npt.ArrayLike,
-    r_w: float,
-    alpha_l: float,
-    a0: float,
-    direction: str,
-) -> npt.NDArray[np.complexfloating]:
-    r"""Interior two-point Laplace resolvent ``Ghat(r, r'; s)`` of a constant-Q phase (``D_m = 0``).
-
-    ``Ghat`` is the kernel of the spatial resolvent ``(s - L)^{-1}`` of the per-phase generator ``L``
-    (KB Sec. 7 / addendum Sec. A3): the field after propagating an initial resident profile ``f`` for
-    flushed volume ``tau`` is ``f_resid(r) = L^{-1}_s[ int Ghat(r, r'; s) f(r') w(r') dr' ](tau)``, with
-    the Sturm-Liouville weight ``w(r') = (2 c_geo r'/alpha_L) e^{-gauge_sign r'/alpha_L} dr'`` supplied
-    by the caller. Built from the convergent/divergent Airy solutions with the physical well boundary
-    condition (Danckwerts/Neumann for extraction, Robin/flux for injection) and outgoing decay:
-
-    ``Ghat(r, r'; s) = -u_0(r_<) u_inf(r_>) / N(s)``,  ``N(s) = P(r)[u_0 u_inf' - u_0' u_inf]``,
-
-    ``u_inf`` the decaying solution, ``u_0`` the well-BC solution, ``r_< = min(r, r')``,
-    ``r_> = max(r, r')``, ``P = e^{-gauge_sign r/alpha_L}`` (``N`` is constant in ``r`` -- the SL Abel
-    identity). The leading minus sign and ``N`` are pinned by the KB Sec. 7 duality: the well-face
-    trace ``Ghat(r_w, r'; s) w(r')`` equals the extraction arrival kernel. The normalization is
-    factored out before exponentiating, so the scaled-Airy form is overflow-safe.
-
-    The Laplace variable enters only through ``beta = s/(alpha_L a0)`` (``D_m = 0``); for the
-    flushed-volume clock pass ``s = flow_scale * p``, ``a0 = flow_scale/(2 c_geo)`` so that
-    ``beta = 2 c_geo p/alpha_L`` is flow-magnitude independent. Retardation is a pure clock rescale
-    handled by the caller (propagate over ``tau/R``); ``Ghat`` itself is retardation-free.
-
-    Parameters
-    ----------
-    s : ndarray of complex
-        Laplace nodes (conjugate to flushed volume). Shape ``(n_s,)``.
-    r : float
-        Output radius (m), ``>= r_w``.
-    r_prime : array-like
-        Source radius/radii (m), ``>= r_w``. Scalar or shape ``(n_r',)``.
-    r_w : float
-        Well radius (m).
-    alpha_l : float
-        Longitudinal dispersivity (m).
-    a0 : float
-        Flow scale ``A_0`` setting ``beta = s/(alpha_L a0)``.
-    direction : {'injection', 'extraction'}
-        Phase orientation: divergent (Robin well BC) or convergent (Neumann well BC).
-
-    Returns
-    -------
-    ndarray of complex
-        ``Ghat(r, r'; s)``, shape ``(n_s, n_r')`` (broadcast of ``s`` and ``r_prime``).
-    """
-    gauge_sign = 1.0 if direction == _INJECTION else -1.0
-    s = np.asarray(s, dtype=complex).reshape(-1, 1)
-    rp = np.atleast_1d(np.asarray(r_prime, dtype=float)).reshape(1, -1)
-    r_a = np.minimum(r, rp)
-    r_b = np.maximum(r, rp)
-    piece_a = _resolvent_airy_pieces(s, r_a, alpha_l, a0, gauge_sign)
-    piece_b = _resolvent_airy_pieces(s, r_b, alpha_l, a0, gauge_sign)
-    piece_w = _resolvent_airy_pieces(s, r_w, alpha_l, a0, gauge_sign)
-    return assemble_airy_resolvent(piece_a, piece_b, piece_w, r_a + r_b, alpha_l, gauge_sign)
-
-
 def assemble_airy_resolvent(
     piece_a: dict[str, npt.NDArray[np.complexfloating]],
     piece_b: dict[str, npt.NDArray[np.complexfloating]],
@@ -291,13 +223,32 @@ def assemble_airy_resolvent(
 ) -> npt.NDArray[np.complexfloating]:
     r"""Assemble ``Ghat(r, r'; s) = -(pref_a e^{ea} - pref_b e^{eb})`` from precomputed scaled-Airy pieces.
 
+    ``Ghat`` is the kernel of the spatial resolvent ``(s - L)^{-1}`` of the per-phase generator ``L``:
+    the field after propagating an initial resident profile ``f`` for flushed volume ``tau`` is
+    ``f_resid(r) = L^{-1}_s[ int Ghat(r, r'; s) f(r') w(r') dr' ](tau)``, with the Sturm-Liouville
+    weight ``w(r') = (2 c_geo r'/alpha_L) e^{-gauge_sign r'/alpha_L} dr'`` supplied by the caller. Built
+    from the convergent/divergent Airy solutions with the physical well boundary condition
+    (Danckwerts/Neumann for extraction, Robin/flux for injection) and outgoing decay,
+
+    ``Ghat(r, r'; s) = -u_0(r_<) u_inf(r_>) / N(s)``,  ``N(s) = P(r)[u_0 u_inf' - u_0' u_inf]``,
+
+    ``u_inf`` the decaying solution, ``u_0`` the well-BC solution, ``P = e^{-gauge_sign r/alpha_L}``
+    (``N`` is constant in ``r`` -- the SL Abel identity). The leading minus sign and ``N`` are pinned by
+    the extraction duality: the well-face trace ``Ghat(r_w, r'; s) w(r')`` equals the extraction arrival
+    kernel.
+
     ``piece_a``, ``piece_b`` are :func:`_resolvent_airy_pieces` at ``r_< = min(r, r')`` and
     ``r_> = max(r, r')``; ``piece_w`` at ``r_w``; ``r_sum = r_< + r_> = r + r'`` (the radii enter the
     bounded exponents only through their sum). The normalization ``N`` (with its huge exponent) is
-    factored into the bounded exponents ``ea, eb``, so the result is overflow-safe (Sec. 1b of the
-    plan). Splitting piece computation from assembly lets a caller evaluate the scaled Airy on a grid
-    of radii once and assemble every output node from prefix selection -- the ``O(n^2) -> O(n)``
-    saving the field propagator relies on.
+    factored into the bounded exponents ``ea, eb``, so the result is overflow-safe. Splitting piece
+    computation from assembly lets a caller evaluate the scaled Airy on a grid of radii once and
+    assemble every output node from prefix selection -- the ``O(n^2) -> O(n)`` saving the field
+    propagator relies on.
+
+    The Laplace variable enters only through ``beta = s/(alpha_L a0)`` (``D_m = 0``); for the
+    flushed-volume clock the caller passes the canonical ``s = 2 c_geo p``, ``a0 = 1`` so that
+    ``beta = 2 c_geo p/alpha_L`` is flow-magnitude independent. Retardation is a pure clock rescale
+    handled by the caller (propagate over ``tau/R``); ``Ghat`` itself is retardation-free.
 
     The gauge term ``g * r_sum = gauge_sign (r + r')/(2 alpha_L)`` grows with the radii, so for the
     field propagator its ``e^{g r_sum}`` factor is divergent (``+r/alpha_L`` injection) or its Airy
@@ -355,7 +306,7 @@ def rest_resolvent(
 ) -> npt.NDArray[np.complexfloating]:
     r"""Interior two-point resolvent ``Ghat(r, r'; s)`` of a rest (``Q = 0``) phase -- pure diffusion.
 
-    With no flow the constant-Q ODE (KB Sec. 4) loses its advective and mechanical-dispersion terms and
+    With no flow the constant-Q ODE loses its advective and mechanical-dispersion terms and
     collapses to the order-0 modified Bessel equation ``C'' + C'/r - (s/D_m) C = 0`` with
     ``kappa = sqrt(s/D_m)``. The resident solution decaying as ``r -> inf`` is ``u_inf = K_0(kappa r)``;
     the no-dispersive-flux (Danckwerts/Neumann) well solution is
@@ -505,29 +456,26 @@ def _transfer_riccati(
     alpha_l: float,
     a0_eff: float,
     d_m_eff: float,
-    inject: str,
     detect: str,
 ) -> npt.NDArray[np.complexfloating]:
-    r"""Four Kreft-Zuber transfer modes for the ``D_m > 0`` branch via the decaying log-derivative.
+    r"""Kreft-Zuber flux-injection transfer modes for the ``D_m > 0`` branch via the decaying log-derivative.
 
     With ``E = phi(r)/phi(r_w) = exp(int_{r_w}^{r} L)`` and the flux factor ``f(r) = 1 - (alpha_L +
-    D_m r/A_0) L(r)`` (so ``F[phi](r) = phi(r) f(r)``), the modes are ``FF = E f(r)/f(r_w)``,
-    ``FR = E/f(r_w)``, ``RF = E f(r)``, ``RR = E``. ``sigma_A = +1`` (the divergent operator). ``inject``
-    / ``detect`` select the Kreft-Zuber well / detection boundary ('flux' or 'resident').
+    D_m r/A_0) L(r)`` (so ``F[phi](r) = phi(r) f(r)``), the modes are ``FF = E f(r)/f(r_w)`` and
+    ``FR = E/f(r_w)``. ``sigma_A = +1`` (the divergent operator); ``detect`` selects the Kreft-Zuber
+    detection boundary ('flux' or 'resident').
 
     Returns
     -------
     ndarray of complex
-        ``g_hat(s)`` for the requested ``(inject, detect)`` mode, shape ``(n_s,)``.
+        ``g_hat(s)`` for the requested detection mode, shape ``(n_s,)``.
     """
     ld, jj = _integrate_logderiv(s, [r, r_w], r_w, alpha_l, a0_eff, d_m_eff, +1, "decaying")
     l_r, l_w = ld[:, 0], ld[:, 1]
     e = np.exp(jj[:, 0])  # phi(r)/phi(r_w)
     f_r = 1.0 - (alpha_l + d_m_eff * r / a0_eff) * l_r
     f_w = 1.0 - (alpha_l + d_m_eff * r_w / a0_eff) * l_w
-    numer = e * (f_r if detect == _FLUX else 1.0)
-    denom = f_w if inject == _FLUX else 1.0
-    return numer / denom
+    return e * (f_r if detect == _FLUX else 1.0) / f_w
 
 
 def resolvent_riccati(

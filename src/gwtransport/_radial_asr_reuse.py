@@ -295,8 +295,8 @@ def _fr_source_matrix(
     r"""Injection-source operator ``M[k, j]`` such that ``field_k += sum_j M[k, j] cin_dev_j`` over one phase.
 
     Matrix form of the per-reversal ``_fr_profile``:
-    ``M[k, j] = G1_FR(S_inj - sigma_j; V'_k) - G1_FR(S_inj - sigma_{j+1}; V'_k)`` (the same FR step response,
-    KB Sec. 10a), built once per distinct injection phase and reused across recurring cycles.
+    ``M[k, j] = G1_FR(S_inj - sigma_j; V'_k) - G1_FR(S_inj - sigma_{j+1}; V'_k)`` (the same FR step
+    response), built once per distinct injection phase and reused across recurring cycles.
 
     Returns
     -------
@@ -318,9 +318,9 @@ def _cout_readout_matrix(
     r"""Cout-readout operator ``M[i, k]`` such that ``cout_i = sum_k M[i, k] field_k`` over one phase.
 
     Matrix form of the per-reversal ``_cout_phase``:
-    ``M[i, k] = R dv_k [G1_FR(T_{i+1}; V'_k) - G1_FR(T_i; V'_k)] / dT_i`` (the KB Sec. 7 duality arrival
-    kernel, same FR step response; the ``R`` amplitude mobilises the sorbed companion), built once per
-    distinct extraction phase and reused.
+    ``M[i, k] = R dv_k [G1_FR(T_{i+1}; V'_k) - G1_FR(T_i; V'_k)] / dT_i`` (the duality arrival kernel,
+    same FR step response; the ``R`` amplitude mobilises the sorbed companion), built once per distinct
+    extraction phase and reused.
 
     Returns
     -------
@@ -410,6 +410,8 @@ def cout_deviation(
     matrices: dict[tuple, npt.NDArray[np.floating]] = {}
 
     def propagate(field, direction, flow_scale, phase_volume, phase_time):
+        if not field.any():  # an empty buffer propagates to itself (P @ 0 = 0) -- no matrix needed
+            return field
         if molecular_diffusivity == 0.0:  # Airy: flushed-volume clock, retardation rescales the clock
             tau = phase_volume / retardation_factor
             key = ("airy", direction, round(tau, 9))  # matrix is flow-magnitude independent (S-clock autonomy)
@@ -449,7 +451,7 @@ def cout_deviation(
     for idx, (sign, sl) in enumerate(phases):
         phase_volume = float(flushed[sl].sum())
         if phase_volume == 0.0:  # rest: pure molecular diffusion on the wall-clock clock (D_m = 0 -> identity)
-            if molecular_diffusivity > 0.0:
+            if molecular_diffusivity > 0.0 and field.any():
                 tau = float(np.sum(dt_days[sl]))
                 key = ("rest", round(tau, 9))
                 if key not in matrices:
