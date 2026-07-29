@@ -414,11 +414,14 @@ def _validate_diffusion_inputs(
 ) -> None:
     """Validate inputs common to diffusion forward / reverse entry points.
 
-    Path selection via mutually-exclusive kwargs:
+    The caller supplies the kwargs of its own direction; the parity checks that apply to
+    that direction then run:
 
-    - ``cin_values`` provided => forward path. ``tedges`` parities cin and flow.
-    - ``cout_values`` + ``cout_tedges`` provided => reverse path. ``tedges`` parities
-      flow; ``cout_tedges`` parities cout.
+    - ``cin_values`` (forward): ``tedges`` parities cin and flow.
+    - ``cout_values`` + ``cout_tedges`` (reverse): ``tedges`` parities flow, ``cout_tedges``
+      parities cout.
+
+    The physical-parameter checks below run either way.
 
     Raises
     ------
