@@ -63,6 +63,43 @@ shape/scale and the mean/std pairs are validated through :func:`gwtransport.gamm
 so invalid parameters (e.g. a negative shape) raise ``ValueError`` rather than silently returning
 an unphysical result.
 
+Available functions:
+
+- :func:`residence_time_to_log_removal` - Multiply residence times [days] by a log10 decay rate
+  [log10/day] to get log removal, returning an array of the same shape as the input. Negative
+  residence times or a negative rate give negative log removal; the caller interprets the sign.
+
+- :func:`decay_rate_to_log10_decay_rate` - Convert a natural-log first-order decay rate constant
+  lambda [1/day] to a log10 decay rate mu [log10/day] via ``mu = lambda / ln(10)``.
+
+- :func:`log10_decay_rate_to_decay_rate` - Convert a log10 decay rate mu [log10/day] to a
+  natural-log first-order decay rate constant lambda [1/day] via ``lambda = mu * ln(10)``.
+
+- :func:`parallel_mean` - Combine the log removals of parallel flow paths into the single log
+  removal of their blended outflow, ``-log10(sum(F_i * 10^(-LR_i)))``. Flow fractions default to
+  an equal split and must sum to 1.0 along the reduction axis; ``axis=None`` reduces over the
+  flattened input and returns a scalar.
+
+- :func:`gamma_pdf` - Probability density of log removal when the residence time is (shifted)
+  gamma-distributed: a gamma density with shape ``rt_alpha``, scale ``log10_decay_rate * rt_beta``,
+  and location ``log10_decay_rate * rt_loc``, evaluated at the requested log removal values.
+
+- :func:`gamma_cdf` - Cumulative distribution of log removal for the same shifted-gamma residence
+  time, i.e. the fraction of the extracted water whose log removal does not exceed ``r``.
+
+- :func:`gamma_mean` - Effective (flow-weighted, concentration-mixing) mean log removal for
+  gamma-distributed residence time,
+  ``log10_decay_rate * rt_loc + rt_alpha * log10(1 + rt_beta * log10_decay_rate * ln(10))``. This
+  is the continuous counterpart of :func:`parallel_mean` and lies below the arithmetic mean
+  ``log10_decay_rate * (rt_alpha * rt_beta + rt_loc)``, because short-residence-time paths
+  dominate the mixed outflow.
+
+- :func:`gamma_find_flow_for_target_mean` - Invert :func:`gamma_mean` for the flow rate that
+  attains a target effective mean log removal, given a gamma-distributed **aquifer pore volume**
+  (hence the ``apv_`` prefix; dividing the pore volume by the flow gives the residence time).
+  Closed form when ``apv_loc == 0``, otherwise a bracketed :func:`scipy.optimize.brentq` root in
+  ``1 / flow``. Requires a positive ``target_mean`` and a positive ``log10_decay_rate``.
+
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """

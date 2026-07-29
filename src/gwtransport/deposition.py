@@ -11,6 +11,42 @@ The model is a *source* term (positive deposition adds mass to the water); it do
 processes such as pathogen attachment, particle filtration, or chemical precipitation, which would
 remove mass from the water and require the opposite sign convention.
 
+Available functions:
+
+- :func:`deposition_to_extraction` - Forward model: from areal deposition rates [g/m²/day] and
+  flow, compute the concentration [g/m³] of the extracted water on ``cout_tedges``. Each output
+  bin is the flow-weighted average over the water extracted in that bin; a parcel's concentration
+  gain is proportional to the residence-time contact with the areal flux, mixed over
+  ``porosity * thickness``. Bins whose residence time is not yet resolved (spin-up) return NaN,
+  while bins that extract zero volume -- including bins lying outside the flow record -- return 0.0.
+
+- :func:`extraction_to_deposition` - Inverse model (deconvolution): from the concentration of the
+  extracted water [g/m³], estimate the mean deposition rate [g/m²/day] in each ``tedges`` bin.
+  Solves the banded forward system with Tikhonov regularization toward a physically motivated
+  target (transpose-and-normalize of the forward operator), with ``regularization_strength``
+  trading data fit against that target. Rows without a resolved residence time, zero-flow output
+  bins and NaN entries in ``cout`` are excluded from the solve. This is the recommended inverse.
+
+- :func:`extraction_to_deposition_full` - Same inversion routed through the dense nullspace solver
+  :func:`gwtransport.utils.solve_underdetermined_system`, exposing its options: the nullspace
+  objective (``"squared_differences"`` for smooth solutions, ``"summed_differences"`` for
+  piecewise-constant ones, or a callable), the scipy ``optimization_method``, and the
+  least-squares ``rcond`` cutoff. Reach for it when the choice of nullspace component matters;
+  otherwise prefer :func:`extraction_to_deposition`, which is cheaper and needs no dense operator.
+
+- :func:`compute_deposition_weights` - Build the operator relating deposition rates to extracted
+  concentrations in a compact banded layout, returning the band values, the first cin column of
+  each row, and the row masks for valid and spin-up output bins. Row ``k`` sums to
+  ``residence_time_k / (retardation_factor * porosity * thickness)`` rather than to one, because a
+  deposition rate maps to a concentration through the residence time. Exposed for custom inverse
+  solvers; the forward and both inverse entry points build on it.
+
+- :func:`spinup_duration` - Time in days, measured from ``tedges[0]``, at which the cumulative flow
+  first reaches ``retardation_factor * aquifer_pore_volume``: the earliest extraction time whose
+  water carries a complete deposition history, and hence the start of the valid analysis period.
+  Under constant flow this is ``retardation_factor * aquifer_pore_volume / flow``. Raises
+  ``ValueError`` when the flow record is too short to reach that volume.
+
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """

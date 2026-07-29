@@ -19,6 +19,44 @@ solute with D_m ~ 1e-4 m²/day), the molecular diffusion contribution is baked i
 calibrated std. The cleanest fix is to calibrate with :mod:`gwtransport.diffusion_fast`
 instead, which keeps the three contributions separate.
 
+The aquifer pore volume distribution (APVD) enters in one of two forms. The ``gamma_*`` pair takes
+the APVD in closed form as a (shifted) gamma distribution, parameterized by either (mean, std, loc)
+or (alpha, beta, loc), and discretizes it internally into ``n_bins`` equal-probability-mass
+streamtubes. The plain pair takes ``aquifer_pore_volumes``: an explicit array of pore volumes [m³],
+one per streamtube, treated as equally weighted at the outlet.
+
+Available functions:
+
+- :func:`infiltration_to_extraction` - Compute the concentration (or temperature) of the extracted
+  water from an infiltration series and an explicit array of aquifer pore volumes. Each
+  ``cout_tedges`` bin gets the flow-weighted average of ``cin`` over each streamtube's
+  back-projected source window, averaged over the streamtubes; units are those of ``cin``. Sorption
+  is linear, through a constant ``retardation_factor``. The ``spinup`` policy (default
+  ``"constant"``) warm-starts the record before ``tedges[0]``; ``spinup=None`` instead returns NaN
+  for every cout bin whose streamtube source windows are not fully inside the cin range.
+
+- :func:`extraction_to_infiltration` - Reverse operation: reconstruct the infiltrating
+  concentration from measured extraction concentrations by inverting the forward weight matrix
+  with Tikhonov regularization (``regularization_strength``). Returns one value per ``tedges``
+  bin. NaN in ``cout`` marks measurement gaps; those rows are excluded from the solve, and cin
+  bins constrained only by gapped cout bins come back as NaN.
+
+- :func:`gamma_infiltration_to_extraction` - Forward transport as in
+  :func:`infiltration_to_extraction`, with the APVD supplied as gamma parameters rather than as an
+  explicit array of pore volumes.
+
+- :func:`gamma_extraction_to_infiltration` - Deconvolution as in
+  :func:`extraction_to_infiltration`, with the APVD supplied as gamma parameters rather than as an
+  explicit array of pore volumes.
+
+- :func:`infiltration_to_extraction_nonlinear_sorption` - Forward transport with a
+  concentration-dependent isotherm -- Freundlich, Langmuir, or a constant retardation factor --
+  solved by front tracking along each pore volume. Returns a tuple: the flow-weighted bin-averaged
+  extraction concentration, and one diagnostic structure per pore volume holding the waves, events,
+  first arrival and final solver state. Cout bins whose source window leaves the flow record are
+  returned as ``0.0`` rather than NaN, while bins with zero throughflow are NaN. Forward only:
+  non-linear sorption forms shocks, and there is no extraction-to-infiltration counterpart.
+
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """

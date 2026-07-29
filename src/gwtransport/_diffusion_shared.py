@@ -2,11 +2,13 @@
 Shared closed-form helpers for the Kreft-Zuber flux-concentration transport modules.
 
 This private module holds the pieces common to :mod:`gwtransport.diffusion_fast` and
-:mod:`gwtransport.diffusion_fast_fast`: the breakthrough antiderivative, the input
-coerce/validate/broadcast preamble, the warm-start and advective-validity grids, and the banded
-Tikhonov reverse solve. Both modules import from here so these primitives are defined once
-and evaluate bit-identically in either module (the modules' overall transport is *not* identical:
-diffusion_fast is exact, diffusion_fast_fast approximate).
+:mod:`gwtransport.diffusion_fast_fast`: the closed-form breakthrough antiderivative, the input
+coerce/validate/broadcast preamble, the cout-edge cumulative-volume axis, the warm-start (spin-up)
+grid and its policy flag, the advective-validity gate, and the banded Tikhonov reverse solve. Both
+modules import from here so these primitives are defined once and evaluate bit-identically in either
+module (the modules' overall transport is *not* identical: diffusion_fast is exact,
+diffusion_fast_fast approximate). :mod:`gwtransport.diffusion`, the quadrature reference, shares only
+the parameter broadcasting and the spin-up policy flag; its kernel is its own.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.

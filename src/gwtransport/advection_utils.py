@@ -1,9 +1,20 @@
 """
 Private helper functions for advective transport modeling.
 
-This module contains internal helper functions used by the advection module.
-These functions implement various algorithms for computing transport weights
-and handling nonlinear sorption.
+This module contains internal helper functions used by :mod:`gwtransport.advection`. It has no
+public API; every name is private and the module is not part of the documented interface.
+
+The helpers build and post-process the linear infiltration-to-extraction operator that both the
+forward and the reverse advection entry points share. One helper computes the raw
+streamtube-bundle weights on the cumulative-throughflow-volume axis, in a compact banded layout
+together with the per-cout-bin count of contributing streamtubes and the zero-flow cout mask; a
+second turns those raw outputs into the final banded weights plus the mask of cout bins the
+spin-up policy rejects; a third reconstructs the dense ``(n_cout, n_cin)`` matrix from the banded
+layout; and a fourth validates the ``spinup`` argument and applies its input-side effect of
+prepending warm-start bins to tedges, flow and cin.
+
+Nonlinear sorption is not handled here -- the front-tracking solver lives in
+:mod:`gwtransport.fronttracking`.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.

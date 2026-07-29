@@ -12,6 +12,62 @@ both fed by :func:`compute_reverse_target` and built on :func:`solve_tikhonov`) 
 overdetermined deconvolution in advection/diffusion, and a separate nullspace solver
 (:func:`solve_underdetermined_system`) for the underdetermined deposition inverse.
 
+Available functions:
+
+- :func:`step_plot_coords` - Expand bin edges (n+1) and bin-averaged values (n) into paired x/y arrays of 2n
+  points each, so that ``ax.plot(x, y)`` draws the piecewise-constant series as a step function. Edges may be
+  numeric or datetime; each output keeps the dtype of its input.
+
+- :func:`cumulative_flow_volume` - Accumulate per-bin flow rates times bin widths into the cumulative volume at
+  every bin edge (n+1 values, starting at zero). With ``strictly_monotone=True`` the plateaus left by zero-flow
+  bins are bumped by a few ulps, which is required before inverting the sequence from volume back to time.
+
+- :func:`linear_interpolate` - Interpolate ``y_ref`` at ``x_query`` linearly; ``x_ref`` must be ascending and the
+  result has the shape of ``x_query``. Query points outside the reference range clamp to the end values unless
+  ``left`` / ``right`` supply a fill value such as NaN.
+
+- :func:`simplify_bins` - Merge adjacent bins of a piecewise-constant series until the peak-to-peak range within
+  each merged group is at most ``tol``, returning the merged edges, values and flow. Values are volume-weighted
+  (flow times width) when ``flow`` is given and width-weighted otherwise, while the merged flow is always
+  width-weighted. Splitting at the largest value jump makes the result independent of scan direction.
+
+- :func:`compute_time_edges` - Build the n+1 bin edges as a nanosecond-precision DatetimeIndex from exactly one of
+  explicit edges, per-bin start times, or per-bin end times, validating the length against ``number_of_bins``.
+  From ``tstart`` or ``tend`` the single missing outer edge is extrapolated from the adjacent interval alone, so
+  pass ``tedges`` directly when the bins are not uniformly spaced.
+
+- :func:`get_soil_temperature` - Download the KNMI soil-temperature record of one of four Dutch weather stations
+  and return it as a DataFrame in degrees Celsius on a UTC DatetimeIndex, with columns for the temperature at 5,
+  10, 20, 50 and 100 cm depth and the six-hourly minima and maxima at 5 and 10 cm. The download is cached on disk
+  for the calendar day; missing values are interpolated and forward-filled unless disabled. This is the only
+  function here that needs ``requests``, which is therefore imported lazily.
+
+- :func:`solve_underdetermined_system` - Solve ``A x = b`` for a wide system (more unknowns than equations) by
+  taking the least-squares solution and adding the nullspace component that minimizes a roughness objective;
+  rows holding NaN are dropped first. The closed-form squared-differences optimum is always computed and also
+  seeds the iterative optimization of the other objectives, so a nullspace containing a near-constant vector
+  raises :class:`numpy.linalg.LinAlgError` whichever objective is requested.
+
+- :func:`compute_reverse_target` - Transpose the forward coefficient matrix, normalize its rows and apply it to
+  the observations, giving each input bin the contribution-weighted average of the output bins it fed. This is
+  the reference solution the Tikhonov solvers pull poorly-determined modes toward; input bins with negligible
+  forward weight are returned as NaN.
+
+- :func:`solve_tikhonov` - Solve ``min ||A x - b||² + λ ||x - x_target||²`` as a single augmented least-squares
+  problem. Rows of the system holding NaN are excluded, and NaN entries of ``x_target`` are left unregularized.
+
+- :func:`solve_inverse_transport` - Recover the input signal of the dense forward model
+  ``w_forward @ x = observed`` by building the target with :func:`compute_reverse_target` and solving it with
+  :func:`solve_tikhonov`. Observation rows that are NaN or carry negligible weight drop out (an explicit
+  ``valid_rows`` mask overrides the weight test), and output bins left without forward contribution come back
+  as NaN.
+
+- :func:`solve_inverse_transport_banded` - Solve the same inverse problem for a forward operator stored in banded
+  layout (row ``k`` is ``band_vals[k]`` placed at column ``col_start[k]``), through banded Cholesky normal
+  equations plus corrected semi-normal refinement. The factorization, solve and refinement stay at
+  ``O(n_output * full_band)``. The regularization strength must be strictly positive, since it is what makes the
+  banded factor positive definite.
+
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """

@@ -9,7 +9,49 @@ knows how to compute its position at any later θ.
 In (V, θ) every wave velocity is a property of the sorption isotherm alone —
 flow does not enter wave dynamics. Time-varying flow is absorbed entirely into
 the θ(t) mapping at the API boundary, so no wave needs recreation when the flow
-rate changes.
+rate changes. Attributes named ``theta_*`` are therefore cumulative flow [m³],
+never time; ``v_*`` are volumetric positions [m³] measured from the inlet face
+``V = 0``. Every module in :mod:`gwtransport.fronttracking` follows this convention.
+
+Available functions:
+
+- :class:`Wave` - Abstract base of the hierarchy. Holds the formation point ``(v_start, theta_start)``, the
+  ``is_active`` flag and the ``theta_deactivation`` history marker, and requires ``position_at_theta``,
+  ``concentration_left``, ``concentration_right`` and ``concentration_at_point`` from every subclass. Use
+  ``was_active_at(theta)`` for retrospective queries; ``is_active`` describes only the current state.
+
+- :class:`CharacteristicWave` - A single characteristic line carrying one constant concentration at the
+  flow-free speed ``1/R(c)``. Physically a contact discontinuity in a smooth region: the concentration value
+  travels unchanged, and ``c_ahead`` records the state it separates from downstream.
+
+- :class:`ShockWave` - A sharp front across which concentration jumps from ``c_left`` to ``c_right``, formed
+  where faster water overtakes slower water. Its ``speed`` is the Rankine-Hugoniot secant
+  ``(c_R − c_L)/(C_T(c_R) − C_T(c_L))``, constant in θ; ``satisfies_entropy`` tests the Lax condition.
+
+- :class:`RarefactionWave` - An expansion fan spreading between ``c_head`` and ``c_tail``, formed where
+  slower water follows faster water. The interior is self-similar, ``R(c) = (θ − θ_start)/(V − v_start)``, so
+  head and tail move at the characteristic speeds ``1/R(c_head)`` and ``1/R(c_tail)``; construction is
+  rejected when the head is not faster than the tail (that geometry is a compression, hence a shock).
+
+- :class:`DecayingShockWave` - A shock with a fan on one side, formed when a rarefaction and a shock collide.
+  The fan feeds the ``decay_side``, whose concentration relaxes from ``c_decay_initial`` toward the fan's far
+  bound ``c_fan_tail`` while the other side stays at ``c_fixed``, so the front decelerates along a curved
+  trajectory instead of a straight line. The trajectory uses a closed form where one exists (Freundlich with
+  ``c_fixed = 0`` or ``n = 2``, Langmuir and Brooks-Corey with ``c_fixed = 0``) and a cached quadrature
+  profile otherwise; ``theta_at_fan_exhaustion`` reports the θ at which the fan is spent and the wave hands
+  off to a plain shock.
+
+- :class:`DoubleFanShockWave` - A shock fed by a self-similar fan on *both* sides, formed when a fan boundary
+  catches a decaying shock whose surviving side is itself a fan. Both side concentrations then relax as the
+  front advances. The trajectory is closed form for Freundlich ``n = 2`` with a shared apex position (the
+  case every inlet-born fan produces) and a cached RK4 spline otherwise; a side ending is detected
+  externally, as the shock face crossing its own fan boundary line.
+
+- :class:`Feeder` - The boundary state on one side of a front: either a constant concentration or a bounded
+  self-similar fan with apex ``(v_apex, theta_apex)`` spanning ``[c_a, c_b]``, evaluated by inverting
+  ``R = (θ − θ_apex)/(v − v_apex)`` and clamped in ``R``-space so a query past the fan edge reads the plateau
+  value. Feeders are the common currency of the interaction calculus in
+  :mod:`gwtransport.fronttracking.interactions`.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.

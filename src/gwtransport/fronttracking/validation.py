@@ -8,6 +8,17 @@ and event ordering. The solver runs in cumulative-flow coordinate
 ``flow ≥ 0`` is enforced, θ is monotone non-decreasing in t, so θ-ordering and
 chronological ordering are equivalent.
 
+Available functions:
+
+- :func:`verify_physics` - Run seven checks on a completed front-tracking result and return a summary
+  dictionary with ``'all_passed'``, the check counts, the ``'failures'`` list, a per-check record list and a
+  one-line ``'summary'``: Lax entropy for every shock, no negative concentrations, output bounded by the
+  inlet maximum, finite first-arrival θ, no NaN after spin-up, θ-ordered events, and mass conservation
+  comparing an independent outlet integral plus the domain mass against the injected mass at ``θ_max``. The
+  mass-balance check uses ``max(rtol, _MASS_BALANCE_RTOL)`` because integrating a shock-bearing breakthrough
+  curve is only first-order accurate. Passing ``verbose=False`` suppresses printing but returns the same
+  dictionary.
+
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """

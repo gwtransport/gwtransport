@@ -1,13 +1,12 @@
 """
 Time-axis conversion atoms for transport-module entry points.
 
-The transport modules in :mod:`gwtransport.advection`,
-:mod:`gwtransport.diffusion`, :mod:`gwtransport.diffusion_fast`,
-:mod:`gwtransport.deposition`, and :mod:`gwtransport.residence_time` repeatedly
-convert a :class:`pandas.DatetimeIndex` of bin edges into a float64 array of
-days relative to a reference timestamp. The two helpers here factor that
-idiom once so the conversion (and its object-dtype-on-old-pandas contract)
-lives in a single place.
+The transport modules across :mod:`gwtransport` -- advection, diffusion,
+deposition, percolation, recharge, residence time, radial ASR and front
+tracking -- repeatedly convert a :class:`pandas.DatetimeIndex` of bin edges into
+a float64 array of days relative to a reference timestamp. The two helpers here
+factor that idiom once so the conversion (and its object-dtype-on-old-pandas
+contract) lives in a single place.
 
 Both helpers return ``float64`` arrays. ``tedges_to_days`` measures each edge
 relative to ``ref`` (defaulting to the first edge); ``dt_to_days`` returns the
@@ -16,7 +15,7 @@ conversions (e.g. output edges measured against the input-flow reference) must
 share a common origin.
 
 This module has no public API; importers are the transport modules themselves
-plus ``tests/src/test_utils.py``.
+plus their unit tests.
 """
 
 from __future__ import annotations

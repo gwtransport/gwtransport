@@ -11,6 +11,12 @@ native-grid evaluation that does not depend on the flow being constant. It is **
 see Accuracy below for the error budget and when to reach for :mod:`gwtransport.diffusion_fast`
 instead.
 
+The three modules form an accuracy/speed ladder: :mod:`gwtransport.diffusion` is the dense reference
+implementation and the ground-truth oracle (composite Gauss-Legendre quadrature, slowest),
+:mod:`gwtransport.diffusion_fast` is its banded closed-form equivalent (agrees to machine precision,
+~80-90x faster), and this module is the approximate rung -- fastest, and exact only up to the error
+budget below.
+
 How it works -- one skewed breakthrough on the native volume grid
 -----------------------------------------------------------------
 
@@ -60,6 +66,31 @@ regularisation (banded Cholesky, ``O(n * band**2)``), so it is much faster than
 forward operator makes a round trip self-consistent (recovering the input up to the deconvolution
 conditioning); on *real* extraction data the reverse carries the forward's error budget above,
 amplified by the deconvolution conditioning.
+
+Available functions:
+
+- :func:`infiltration_to_extraction` - Forward transport from an explicit ``aquifer_pore_volumes``
+  distribution: returns the approximate bin-averaged Kreft-Zuber flux concentration on ``cout_tedges``,
+  from one banded breakthrough on the native cumulative-volume grid with molecular diffusion folded
+  into the effective dispersivity ``alpha_eff = alpha_L + D_m * R * V_pore / (L * q_mean)`` per
+  streamtube. ``streamline_length``, ``molecular_diffusivity`` and ``longitudinal_dispersivity`` are
+  either scalars shared by all streamtubes or one value per pore volume. ``flow_out`` (extraction flow
+  on the ``cout_tedges`` grid) is required whenever ``cout_tedges`` differs from ``tedges``. Output
+  bins without complete breakthrough information are NaN.
+
+- :func:`extraction_to_infiltration` - Reverse direction: assembles the same approximate banded
+  operator and deconvolves it with banded Tikhonov regularization (banded Cholesky on the normal
+  equations, ``O(n * band**2)``), returning the bin-averaged infiltration concentration on ``tedges``.
+  NaN entries in ``cout`` mark measurement gaps and are excluded from the solve; spin-up and
+  unconstrained cin bins come back NaN.
+
+- :func:`gamma_infiltration_to_extraction` - :func:`infiltration_to_extraction` with the pore volume
+  distribution given as a (shifted) gamma -- either (mean, std) or (alpha, beta), plus ``loc`` --
+  discretized into ``n_bins`` equal-probability streamtubes that share one ``streamline_length`` and
+  one pair of dispersion parameters.
+
+- :func:`gamma_extraction_to_infiltration` - :func:`extraction_to_infiltration` with the same gamma
+  parameterization of the pore volume distribution: reconstructs ``cin`` on ``tedges`` from ``cout``.
 
 References
 ----------

@@ -16,6 +16,29 @@ Algorithm:
 5. Repeat until no more events.
 
 All calculations are exact analytical with machine precision.
+
+Available functions:
+
+- :class:`FrontTrackerState` - Dataclass carrying the whole simulation state: every wave ever created
+  (active and deactivated), the event log, the current θ, the outlet position ``v_outlet``, the sorption
+  model, the inlet series, and the ``tedges_days``/``theta_edges`` grids. Its ``t_at_theta``, ``theta_at_t``
+  and ``theta_at_t_array`` methods are the piecewise-linear θ↔t maps a caller needs to read any solver output
+  in user-facing days; events at a zero-flow θ plateau map to the end of that plateau.
+
+- :class:`FrontTracker` - The event-driven solver. Construction validates the inputs (non-negative ``cin``
+  and ``flow``, ``len(tedges) == len(cin) + 1``, positive pore volume), builds ``theta_edges`` by cumulating
+  ``flow · dt``, sets the resolution horizon ``theta_horizon`` (default: the last inlet edge), computes
+  ``theta_first_arrival``, and emits the inlet waves. ``find_next_event`` returns the earliest candidate in
+  θ — characteristic, shock and rarefaction collisions, face merges involving a decaying or doubly-fed shock,
+  fan exhaustion, and outlet crossings — ``handle_event`` dispatches it to the handler that retires the
+  parents and appends the successors, and ``run`` repeats until the candidate set is empty or
+  ``max_iterations`` is reached. ``verify_physics`` asserts that every active shock still satisfies the Lax
+  entropy condition.
+
+- :func:`find_unresolved_interaction` - Invariant tripwire over a completed state. The cumulative outlet mass
+  ``m_out(θ) = m_in(θ) − m_dom(θ)`` must never decrease; this returns a short description of the first θ
+  where it does beyond the floating-point cancellation band — the fingerprint of an interaction the solver
+  failed to resolve — and ``None`` for a mass-conserving wave field.
 """
 
 import logging

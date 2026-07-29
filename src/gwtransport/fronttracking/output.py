@@ -10,6 +10,55 @@ conservation for transport with sorption). ``m_dom`` honors historical
 wave activity via ``wave.was_active_at(theta)`` so retrospective queries
 at θ before a collision event correctly attribute c at v_outlet.
 
+Available functions:
+
+- :func:`concentration_at_point` - Exact concentration at a single point ``(v, θ)``: the upstream state of the
+  nearest wave face at or downstream of ``v`` among the waves active at ``θ``, the downstream state of the
+  outermost face when nothing lies downstream, and ``0`` in a virgin domain. Exactly on a shock or fan face the
+  two sides are averaged; a contact carries its upstream value at its own position. The ``sorption`` argument is
+  unused — each wave carries its own sorption reference.
+
+- :func:`compute_breakthrough_curve` - Outlet concentration sampled at every θ of a θ-array, i.e.
+  :func:`concentration_at_point` evaluated at ``v_outlet``. Returns one concentration [mass/volume] per θ; these
+  are point samples of the exact trace, not bin averages.
+
+- :func:`compute_bin_averaged_concentration_exact` - Outlet concentration averaged over each output θ-bin (a
+  flow-weighted average, since θ is cumulative flow), evaluated through the conservation identity
+  ``c_avg = (Δm_in − Δm_dom) / Δθ`` rather than by integrating the outlet trace, so overlapping fans need no
+  ownership dispatch. A residual inside the floating-point cancellation band is set to zero; a bin more negative
+  than that band warns and is clamped to zero to preserve the ``cout >= 0`` contract.
+
+- :func:`identify_outlet_segments` - Partition of a θ-interval into the segments over which a single wave
+  controls the outlet, as a list of dicts holding the segment θ-range, its type (``'constant'``,
+  ``'rarefaction'`` or ``'decaying_fan'``), the controlling wave and the concentrations at both segment ends.
+  Crossings extrapolated at or past a wave's deactivation are dropped.
+
+- :func:`compute_domain_mass` - Total mass ``∫₀^{v_outlet} C_total(v, θ) dv`` held in the domain at one θ [mass],
+  dissolved plus sorbed. The domain is partitioned at the active wave faces; a constant region integrates as
+  ``C_total·Δv`` and a fan region in closed form via :func:`integrate_fan_spatial_exact`.
+
+- :func:`compute_cumulative_inlet_mass` - Mass injected at the inlet from ``θ = 0`` up to ``theta``,
+  ``∫₀^θ cin dτ`` [mass], exact for the piecewise-constant ``cin`` on ``theta_edges``.
+
+- :func:`compute_cumulative_outlet_mass` - Mass that has left through the outlet from ``θ = 0`` up to ``theta``
+  [mass], as ``m_in(θ) − m_dom(θ)``; ``0`` for ``θ <= 0``.
+
+- :func:`compute_total_outlet_mass` - Outlet mass over all θ, from the inlet record alone: the full injected mass
+  ``Σ cin·Δθ`` when the record returns to ``cin[-1] = 0``, and ``+inf`` for a sustained ``cin[-1] > 0`` boundary,
+  which keeps injecting forever.
+
+- :func:`integrate_fan_exact` - Exact ``∫ c(θ) dθ`` [mass] at a fixed position for any self-similar fan, given
+  the fan apex ``(theta_origin, v_origin)``, via the universal integration-by-parts antiderivative
+  ``F(θ) = c·(θ − θ_origin) − Δv·C_T(c)``. ``c_apex > 0`` clamps the fan at its tail θ and adds the constant
+  plateau beyond it; ``theta_end`` may be ``+inf`` where the fan integral converges, and raises otherwise.
+
+- :func:`integrate_rarefaction_exact` - :func:`integrate_fan_exact` with the apex and ``c_apex = raref.c_tail``
+  read off a :class:`~gwtransport.fronttracking.waves.RarefactionWave`.
+
+- :func:`integrate_fan_spatial_exact` - Exact ``∫ C_total(v, θ) dv`` [mass] over a v-segment of a self-similar
+  fan at fixed θ, via the spatial counterpart ``G(u) = C_T(c)·u − κ·c`` with ``κ = θ − θ_origin`` and
+  ``u = v − v_origin``. ``c_apex > 0`` splits off the constant-``C_total(c_apex)`` region near the apex.
+
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
