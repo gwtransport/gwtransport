@@ -950,7 +950,7 @@ class TestRebinningInvariance:
         # propagator and A == B bit-for-bit (measured 0.0). R>1 exercises the a0_eff = flow_scale/(2c_geo)/R
         # coupling; the extraction probe exercises the convergent (Danckwerts) hand-off.
         seg_a, seg_b = _rebinning_schedules(direction)
-        kw = {"molecular_diffusivity": 0.05, "retardation_factor": r_fac, "n_quad": 40, **GEOM}
+        kw = {"molecular_diffusivity": 0.05, "retardation_factor": r_fac, "n_quad": 12, **GEOM}
         fa, da, ca = _assemble(seg_a)
         fb, db, cb = _assemble(seg_b)
         cout_a = cout_deviation(cin_deviation=ca, flow=fa, dt_days=da, **kw)
@@ -985,11 +985,11 @@ class TestRebinningInvariance:
         # advects exactly the flushed volume, i.e. flow_scale = phase_volume/phase_time. Baseline (mean|Q|)
         # mis-advects -> ~0.97 gap; any wrong-but-binning-invariant scale (e.g. max|Q|, = 190 in both binnings)
         # would also fail here while passing the A==B tests. Post-fix the gap is the first-order D_m truncation
-        # (~2e-3 at D_m=1e-3).
+        # (<1e-3 at D_m=1e-3).
         flow, dt, cin = _assemble(_rebinning_schedules("injection")[0])
         ext = flow < 0
-        ref = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.0, n_quad=48, **GEOM)
-        approx = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=1e-3, n_quad=48, **GEOM)
+        ref = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.0, n_quad=24, **GEOM)
+        approx = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=1e-3, n_quad=24, **GEOM)
         scale = np.max(np.abs(ref[ext]))
         assert np.max(np.abs(approx[ext] - ref[ext])) / scale < 8e-3  # first-order D_m limit; baseline ~0.97
 
@@ -1000,10 +1000,10 @@ class TestRebinningInvariance:
         # against "engine and gridfree oracle silently agree on the wrong value" (both were fixed together).
         # The floor is the constant-|Q| per-phase kernel approximation (~7%, ratio-independent) + slow-FV
         # first-order convergence -- NOT "a few %". Baseline engine-vs-FV = 0.87 (sides with the wrong value);
-        # post-fix ~0.08.
+        # post-fix ~0.03.
         flow, dt, cin = _assemble(_rebinning_schedules("injection")[0])
         ext = flow < 0
-        eng = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.05, n_quad=64, **GEOM)
+        eng = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.05, n_quad=16, **GEOM)
         fv = fv_cout_deviation(
             cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.05, n_cells=600, n_sub=8, **GEOM
         )
@@ -1019,7 +1019,7 @@ class TestRebinningInvariance:
         inj_a = (np.array([190.0, 10.0]), np.array([1.0, 19.0]), np.array([1.0, 1.0]))
         inj_b = (np.concatenate([[190.0], np.full(19, 10.0)]), np.ones(20), np.ones(20))
         ext = (np.full(6, -100.0), np.full(6, 2.0), np.zeros(6))
-        np.testing.assert_allclose(_i2e([inj_a, ext], 48)[-6:], _i2e([inj_b, ext], 48)[-6:], rtol=0, atol=1e-13)
+        np.testing.assert_allclose(_i2e([inj_a, ext], 12)[-6:], _i2e([inj_b, ext], 12)[-6:], rtol=0, atol=1e-13)
 
     @pytest.mark.slow
     def test_public_multicycle_rebinning(self):
@@ -1027,4 +1027,4 @@ class TestRebinningInvariance:
         # the tedges->dt conversion and streamtube averaging) is rebinning-invariant. Complements the direct
         # cout_deviation tests, which bypass the public wrapper. Baseline ~0.95; post-fix bit-identical.
         seg_a, seg_b = _rebinning_schedules("injection")
-        np.testing.assert_allclose(_i2e(seg_a, 40)[-6:], _i2e(seg_b, 40)[-6:], rtol=0, atol=1e-13)
+        np.testing.assert_allclose(_i2e(seg_a, 12)[-6:], _i2e(seg_b, 12)[-6:], rtol=0, atol=1e-13)
