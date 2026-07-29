@@ -295,7 +295,11 @@ def field_grid(
         raise ValueError(msg)
     # r_far >= r_significant (the cap was not exceeded and the washout floor is >= r_grid >= r_significant),
     # so clipping the generous grid at r_far drops only the negligible far tail, not the significant plume.
-    r_far = min(max(_RFAR_FIELD_MULT * r_grid, r_grid + _RFAR_DECAY * alpha_l), r_far_cap)
+    # D_m = 0: branch separation >= 1/alpha_L uniformly in s, r, and mode, so _RFAR_DECAY * alpha_L e-folds
+    # wash the recessive IC to double precision; D_m > 0: the slow-node decay length is s-dependent and
+    # unknown here, so keep the generous grid multiple.
+    washout = _RFAR_DECAY * alpha_l if d_m == 0.0 else max(_RFAR_FIELD_MULT * r_grid - r_grid, _RFAR_DECAY * alpha_l)
+    r_far = min(r_grid + washout, r_far_cap)
     r_max = min(r_grid, r_far)
     nodes, weights = np.polynomial.legendre.leggauss(n_quad)
     r_nodes = 0.5 * (r_max - r_w) * (nodes + 1.0) + r_w
@@ -356,6 +360,7 @@ def _interval_transitions(
             msg = "block interval-transition integration failed"
             raise RuntimeError(msg)
         out[lo:hi] = np.ascontiguousarray(sol.y[:, -1]).view(complex).reshape(nc, n_s, nm, nm)
+        sol.y = None  # the cycled result object would otherwise pin the (state, steps) trajectory
     return out
 
 
@@ -442,6 +447,9 @@ def _block_solutions(
     else:
         astar = alpha_l * abs(a0) / d_m
         kappa = np.sqrt(retardation_factor * s / d_m)
+        # Decay-aware recessive start (mirrors the scalar kernels): the slowest node needs
+        # _RFAR_DECAY / min Re(kappa) of washout beyond the grid; r_far keeps the outer cap.
+        r_far = min(r_far, r_max + _RFAR_DECAY / float(kappa.real.min()))
         a_coef = (1.0 - sigma_a * abs(a0) / d_m) / 2.0 - kappa * astar / 2.0
         l0 = -kappa - a_coef / (r_far + astar)
     prev = np.concatenate(([r_w], r_nodes[:-1]))
@@ -486,7 +494,14 @@ def _block_solutions(
         def l_at(r: npt.NDArray[np.floating]) -> npt.NDArray[np.complexfloating]:
             return np.ascontiguousarray(sol.sol(r).T).view(complex).reshape(np.size(r), n_s, nm, nm)
 
-        return l_at(r_nodes), l_at(np.array([r_w]))[0], _interval_transitions(l_at, hop_from, hop_to, n_s, nm)
+        l_nodes = l_at(r_nodes)
+        l_w = l_at(np.array([r_w]))[0]
+        hops = _interval_transitions(l_at, hop_from, hop_to, n_s, nm)
+        # The result object sits in a reference cycle, so refcounting alone never frees the per-step
+        # interpolant arrays (the engine's peak-memory term); drop them now that all evaluations are done.
+        sol.sol.interpolants.clear()
+        sol.y = None
+        return l_nodes, l_w, hops
 
     lm0 = (l0[:, None, None] * eye[None]).astype(complex)
     # Psi_-(r_i, r_{i-1}): recessive outward hops

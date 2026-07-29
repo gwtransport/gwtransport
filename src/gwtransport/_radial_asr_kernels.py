@@ -438,6 +438,9 @@ def _integrate_logderiv(
         )
         y = sol.sol(radii)  # dense output at all radii at once -> shape (2n, n_radii)
         j_w = sol.sol(r_w)[n:, None]  # re-anchor J to int_{r_w}^{r} (the IC put J(r_far) = 0)
+        # The result object sits in a reference cycle, so refcounting alone never frees the per-step
+        # interpolant arrays (the dominant allocation); drop them now that all evaluations are done.
+        sol.sol.interpolants.clear()
         return y[:n], y[n:] - j_w
 
     # regular branch: outward from r_w to r_max -- the growing solution is the stable outward attractor and
@@ -446,6 +449,7 @@ def _integrate_logderiv(
     y0 = np.concatenate([np.full(n, ld0, dtype=complex), np.zeros(n, dtype=complex)])
     sol = solve_ivp(rhs, [r_w, r_max], y0, rtol=_RICCATI_RTOL, atol=_RICCATI_ATOL, dense_output=True, method="DOP853")
     y = sol.sol(radii)
+    sol.sol.interpolants.clear()
     return y[:n], y[n:]
 
 

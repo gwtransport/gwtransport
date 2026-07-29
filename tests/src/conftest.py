@@ -5,6 +5,8 @@ This module provides common fixtures used across multiple test files to reduce
 code duplication and improve test maintainability.
 """
 
+import gc
+import os
 import sys
 from pathlib import Path
 
@@ -13,6 +15,11 @@ import pandas as pd
 import pytest
 
 from gwtransport.utils import compute_time_edges
+
+# macOS libmalloc strands freed large solver buffers as dirty free-list pages, ratcheting each xdist
+# worker's footprint by ~the size of every distinct heavy test it ran. Space-efficient mode returns
+# them; workers inherit the env at spawn. No effect on other platforms or already-running processes.
+os.environ.setdefault("MallocSpaceEfficient", "1")
 
 # Make tests-only helper modules (e.g. the finite-volume oracle _radial_asr_fv_oracle) importable by bare
 # name under the importlib import mode.
@@ -433,6 +440,18 @@ def pytest_generate_tests(metafunc):
 # ============================================================================
 # Pytest Configuration
 # ============================================================================
+
+
+@pytest.fixture(autouse=True)
+def _collect_cycles():
+    """Collect reference cycles after every test.
+
+    Large solver buffers (e.g. the radial-ASR dense ODE interpolants) sit in reference cycles and
+    otherwise survive until an allocation-count-triggered generational collection, ratcheting each
+    xdist worker's resident memory to the sum of its recent tests' transients.
+    """
+    yield
+    gc.collect()
 
 
 def pytest_configure(config):

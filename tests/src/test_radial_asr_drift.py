@@ -12,14 +12,14 @@ rest, the v_d = 0 reduction to the scalar Bessel rest kernel (to the Neumann-ima
 FV drift-loss cross-check of an inject-rest-extract cycle, and the honest spectral-tail guard.
 
 Cost note: the block engine's peak memory is one branch's dense Riccati interpolant
-(``O(steps * n_s * (2 n_modes + 1)^2)`` with ``n_s = 2 n_terms + 1``), which reaches ~1-2 GB per call at
-``v_d ~ 0`` where the recessive-IC grid is uncapped (``r_far = 8 r_grid``); runtime grows steeply with
+(``O(steps * n_s * (2 n_modes + 1)^2)`` with ``n_s = 2 n_terms + 1``); runtime grows steeply with
 ``n_modes`` at the production ODE tolerances. Each test therefore keeps ``n_quad``/``n_terms``/``n_modes``
-as small as its physics anchor allows (assertion margins re-measured at the reduced settings), U=0
-reference recoveries use the scalar engine (the exact ``v_d -> 0`` limit, certified by the
-reduces-to-scalar tests), and tests with multi-GB transients carry
-``@pytest.mark.xdist_group("radial-asr-heavy-a"/"-b")`` so ``--dist=loadgroup`` serializes them onto two
-workers (~5 min wall on two workers, peak ~4.6 GB).
+as small as its physics anchor allows (assertion margins re-measured at the reduced settings; parity /
+identity / guard anchors are exact at any azimuthal truncation and run at ``n_modes=2``), U=0 reference
+recoveries use the scalar engine (the exact ``v_d -> 0`` limit, certified by the reduces-to-scalar
+tests), and the heaviest tests carry ``@pytest.mark.xdist_group("radial-asr-heavy-a"/"-b")`` so
+``--dist=loadgroup`` serializes them onto two workers (~5 min wall on two workers, true-footprint peak
+~1.3 GB).
 """
 
 import numpy as np
@@ -188,7 +188,7 @@ def test_drift_reversal_symmetry():
         "c_geo": _C_GEO,
         "r_w": _R_W,
         "alpha_l": _ALPHA_L,
-        "n_modes": 3,
+        "n_modes": 2,
         "n_quad": 48,
         "n_terms": 40,
         "tol": 1e-11,
@@ -255,7 +255,7 @@ def test_retardation_rescale_in_drift():
         v_d=v_d,
         molecular_diffusivity=0.4,
         retardation_factor=r,
-        n_modes=3,
+        n_modes=2,
         n_quad=60,
         n_terms=40,
         tol=1e-11,
@@ -271,7 +271,7 @@ def test_retardation_rescale_in_drift():
         v_d=v_d / r,
         molecular_diffusivity=0.4 / r,
         retardation_factor=1.0,
-        n_modes=3,
+        n_modes=2,
         n_quad=60,
         n_terms=40,
         tol=1e-11,
@@ -375,7 +375,7 @@ def test_rest_long_translation_raises():
             r_w=_R_W,
             alpha_l=_ALPHA_L,
             v_d=v_d,
-            n_modes=3,
+            n_modes=2,
             n_quad=60,
         )
 
@@ -385,7 +385,7 @@ def test_rest_long_translation_raises():
 def test_rest_tiny_duration_reduces_to_no_rest():
     """A vanishing rest phase is a no-op: the translate+spread kernel reduces to the identity (t -> 0),
     exercising the full real-space evaluate / Gauss-Hermite / FFT-reproject round trip at delta ~ 0."""
-    kw = {"c_geo": _C_GEO, "r_w": _R_W, "alpha_l": _ALPHA_L, "n_modes": 3, "n_quad": 48, "n_terms": 40, "tol": 1e-10}
+    kw = {"c_geo": _C_GEO, "r_w": _R_W, "alpha_l": _ALPHA_L, "n_modes": 2, "n_quad": 48, "n_terms": 40, "tol": 1e-10}
     r_b = np.sqrt(_R_W**2 + _Q * 6 / _C_GEO)
     v_d = _eps_to_vd(0.2, r_b)
     flow_r = np.array([_Q] * 6 + [0.0] + [-_Q] * 10)
@@ -417,7 +417,7 @@ def test_rest_drift_reversal_symmetry():
         "c_geo": _C_GEO,
         "r_w": _R_W,
         "alpha_l": _ALPHA_L,
-        "n_modes": 3,
+        "n_modes": 2,
         "n_quad": 48,
         "n_terms": 40,
         "tol": 1e-10,
@@ -435,7 +435,7 @@ def test_rest_drift_reversal_symmetry():
         r_w=_R_W,
         alpha_l=_ALPHA_L,
         v_d=v_d,
-        n_modes=3,
+        n_modes=2,
         n_quad=48,
         n_terms=40,
         tol=1e-10,
@@ -455,7 +455,7 @@ def test_rest_dm_reduces_to_scalar_bessel():
     ext = flow < 0
     kw = {"c_geo": _C_GEO, "r_w": _R_W, "alpha_l": _ALPHA_L, "n_quad": 90, "n_terms": 40, "tol": 1e-10}
     blk = block_cout_deviation(
-        cin_deviation=cin, flow=flow, dt_days=dt, v_d=0.0, molecular_diffusivity=0.5, n_modes=3, **kw
+        cin_deviation=cin, flow=flow, dt_days=dt, v_d=0.0, molecular_diffusivity=0.5, n_modes=2, **kw
     )
     sca = cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, molecular_diffusivity=0.5, **kw)
     np.testing.assert_allclose(blk[ext], sca[ext], atol=1e-3)
@@ -654,7 +654,7 @@ def test_public_drift_background_linearity():
         "well_radius": _R_W,
         "longitudinal_dispersivity": _ALPHA_L,
         "regional_flux": 0.04,
-        "n_modes": 3,
+        "n_modes": 2,
         "n_quad": 48,
     }
     bg = 5.0
@@ -682,7 +682,7 @@ def test_reverse_round_trip_under_drift():
         "well_radius": _R_W,
         "longitudinal_dispersivity": _ALPHA_L,
         "regional_flux": 0.05,
-        "n_modes": 3,
+        "n_modes": 2,
         "n_quad": 48,
     }
     cout = infiltration_to_extraction(cin=cin, **kw)
@@ -711,7 +711,7 @@ def test_public_single_streamtube_ensemble_equals_engine():
         well_radius=_R_W,
         longitudinal_dispersivity=_ALPHA_L,
         regional_flux=u,
-        n_modes=3,
+        n_modes=2,
         n_quad=40,
     )
     engine = block_cout_deviation(
@@ -722,7 +722,7 @@ def test_public_single_streamtube_ensemble_equals_engine():
         r_w=_R_W,
         alpha_l=_ALPHA_L,
         v_d=u / _POROSITY,
-        n_modes=3,
+        n_modes=2,
         n_quad=40,
     )
     np.testing.assert_allclose(public[ext], engine[ext], atol=1e-12)
@@ -748,7 +748,7 @@ def test_public_multi_streamtube_ensemble_averaging():
         well_radius=_R_W,
         longitudinal_dispersivity=_ALPHA_L,
         regional_flux=u,
-        n_modes=3,
+        n_modes=2,
         n_quad=40,
     )
     per_tube = [
@@ -760,7 +760,7 @@ def test_public_multi_streamtube_ensemble_averaging():
             r_w=_R_W,
             alpha_l=_ALPHA_L,
             v_d=u / _POROSITY,
-            n_modes=3,
+            n_modes=2,
             n_quad=40,
         )
         for h in heights
@@ -822,7 +822,7 @@ def test_nonuniform_phase_schedule():
     np.testing.assert_allclose(block0[ext], scalar[ext], atol=1e-6)
     r_b = np.sqrt(_R_W**2 + 80.0 * 4 / _C_GEO)
     v_d = 0.15 * (60.0 / (2.0 * _C_GEO)) / r_b  # eps relative to the WEAKEST phase (the binding envelope)
-    drift = block_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, v_d=v_d, n_modes=3, **kw)
+    drift = block_cout_deviation(cin_deviation=cin, flow=flow, dt_days=dt, v_d=v_d, n_modes=2, **kw)
     assert np.isfinite(drift[ext]).all()
     assert np.all(drift[ext] > -1e-9)
     assert np.nansum(drift[ext]) < np.nansum(block0[ext])  # drift strictly reduces recovery
