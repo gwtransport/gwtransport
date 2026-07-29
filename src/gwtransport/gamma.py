@@ -32,6 +32,23 @@ gamma distribution.
 
 Streamtube discretization by :func:`bins` is always into bins of **equal probability mass**.
 
+Available functions:
+
+- :func:`parse_parameters` - Resolve either ``(mean, std)`` or ``(alpha, beta)``, together with an
+  optional ``loc``, into the validated ``(alpha, beta, loc)`` triple the rest of the package works with.
+  Exactly one of the two pairs must be supplied; positivity, ``0 <= loc < mean`` and finiteness are
+  enforced, otherwise ``ValueError`` is raised.
+
+- :func:`mean_std_loc_to_alpha_beta` - Convert the physically intuitive ``(mean, std, loc)`` parameters
+  to gamma shape and scale from the excess-over-``loc`` moments,
+  ``alpha = ((mean - loc) / std) ** 2`` and ``beta = std ** 2 / (mean - loc)``.
+
+- :func:`bins` - Split the (shifted) gamma distribution at the ``n_bins + 1`` uniform quantile edges, so
+  every bin (streamtube) carries probability mass ``1 / n_bins``. Returns a dict of arrays: the bin edges
+  (``lower_bound``, ``upper_bound``, ``edges``; the first lower bound is ``loc`` and the last upper bound
+  is infinite), the per-bin conditional mean pore volume (``expected_values``) that serves as the
+  streamtube pore volume in transport calculations, and the per-bin ``probability_mass``.
+
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """

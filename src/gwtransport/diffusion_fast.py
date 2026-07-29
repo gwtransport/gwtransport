@@ -37,8 +37,8 @@ enters the V-space variance through ``D_m * tau`` and microdispersion through
 ``longitudinal_dispersivity`` may be a scalar (shared by all streamtubes) or an array with
 one value per pore volume, exactly as in :mod:`gwtransport.diffusion`.
 
-When to choose this module vs :mod:`gwtransport.diffusion`
-----------------------------------------------------------
+Choosing among the three diffusion modules
+------------------------------------------
 
 Whenever the cout grid is at or finer than the flow grid, this module reproduces
 :mod:`gwtransport.diffusion` to machine precision for *every* parameter regime -- including
@@ -49,6 +49,37 @@ favours :mod:`gwtransport.diffusion` is a cout grid *coarser* than the flow deta
 treats ``flow_out`` as constant within each cout bin, whereas :mod:`gwtransport.diffusion`
 integrates the full ``tedges``-resolution flow within each cout bin -- a ~0.1%-of-peak
 difference for a rapidly-varying ``cin`` over wide cout bins under variable flow.
+
+The third rung is :mod:`gwtransport.diffusion_fast_fast`, which is approximate by design: it folds
+molecular diffusion into an effective dispersivity per streamtube and evaluates one banded
+breakthrough on the native cumulative-volume grid, so it is faster still. It agrees with this module
+to ~1e-6 (smooth inputs) to ~1e-4 (sharp inputs) at constant flow and degrades in the
+molecular-diffusion-dominated corner (``alpha_L`` ~ 0) under strongly variable flow; this module is
+the one to use whenever machine precision against :mod:`gwtransport.diffusion` is required.
+
+Available functions:
+
+- :func:`infiltration_to_extraction` - Forward transport from an explicit ``aquifer_pore_volumes``
+  distribution: returns the bin-averaged Kreft-Zuber flux concentration on ``cout_tedges``, evaluated
+  from the closed-form antiderivative on the breakthrough band only and averaged with equal weight over
+  the streamtubes. ``streamline_length``, ``molecular_diffusivity`` and ``longitudinal_dispersivity``
+  are either scalars shared by all streamtubes or one value per pore volume. ``flow_out`` (extraction
+  flow on the ``cout_tedges`` grid) is required whenever ``cout_tedges`` differs from ``tedges``: it
+  sets the cout-bin volumes and the outlet velocity. Output bins without complete breakthrough
+  information are NaN.
+
+- :func:`extraction_to_infiltration` - Reverse direction: assembles the same banded forward operator
+  and deconvolves it with banded Tikhonov regularization (banded Cholesky on the normal equations),
+  returning the bin-averaged infiltration concentration on ``tedges``. NaN entries in ``cout`` mark
+  measurement gaps and are excluded from the solve; spin-up and unconstrained cin bins come back NaN.
+
+- :func:`gamma_infiltration_to_extraction` - :func:`infiltration_to_extraction` with the pore volume
+  distribution given as a (shifted) gamma -- either (mean, std) or (alpha, beta), plus ``loc`` --
+  discretized into ``n_bins`` equal-probability streamtubes that share one ``streamline_length`` and
+  one pair of dispersion parameters.
+
+- :func:`gamma_extraction_to_infiltration` - :func:`extraction_to_infiltration` with the same gamma
+  parameterization of the pore volume distribution: reconstructs ``cin`` on ``tedges`` from ``cout``.
 
 References
 ----------

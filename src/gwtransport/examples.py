@@ -6,6 +6,35 @@ and testing groundwater transport models. It creates realistic flow patterns,
 concentration/temperature time series, and deposition events suitable for testing
 advection, diffusion, and deposition analysis functions.
 
+Available functions:
+
+- :func:`generate_example_data` - Build a daily ``(DataFrame, tedges)`` pair with columns
+  ``flow`` (seasonal sinusoid plus noise and randomly placed low-flow spill periods, floored at
+  5 m³/day), ``cin`` (a seasonal sinusoid, a constant, or inline KNMI De Bilt soil temperature,
+  selected with ``cin_method``), and ``cout``, obtained by transporting the noiseless ``cin``
+  through either a gamma-distributed or an explicitly listed set of aquifer pore volumes, using
+  :mod:`gwtransport.advection` or, when the three diffusion parameters are given,
+  :mod:`gwtransport.diffusion_fast`. Independent Gaussian measurement noise is added to ``cin``
+  and ``cout``, so the pair is not exactly consistent when ``measurement_noise > 0``. The aquifer
+  and generation settings are recorded in ``df.attrs``. Consumed by
+  ``examples/04_Deposition_Analysis_Bank_Filtration.ipynb``.
+
+- :func:`generate_temperature_example_data` - Same dataset viewed as heat transport: a thin
+  wrapper over :func:`generate_example_data` whose defaults are thermal (retardation factor 2.0,
+  diffusivity 0.05 m²/day, longitudinal dispersivity 1.0 m, streamline length 100 m), so the
+  diffusion path is taken. Consumed by
+  ``examples/01_Aquifer_Characterization_Temperature.ipynb``,
+  ``examples/02_Residence_Time_Analysis.ipynb``,
+  ``examples/03_Pathogen_Removal_Bank_Filtration.ipynb``, and
+  ``examples/08_bank_filtration_timflow.ipynb``.
+
+- :func:`generate_example_deposition_timeseries` - Build a ``(Series, tedges)`` pair of surface
+  deposition rates (ng/m²/day) on a UTC index: a baseline plus an annual sinusoid, Gaussian noise,
+  and episodic events that start at the given dates and decay exponentially over
+  ``event_duration`` days, optionally clipped at zero. Feeds
+  :func:`gwtransport.deposition.deposition_to_extraction` in
+  ``examples/04_Deposition_Analysis_Bank_Filtration.ipynb``.
+
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """

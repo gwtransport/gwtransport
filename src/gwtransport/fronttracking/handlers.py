@@ -12,7 +12,40 @@ All handlers enforce physical correctness:
 - Causality (no backward-traveling information)
 
 Handlers modify wave states in-place by deactivating parent waves and
-creating new child waves.
+creating new child waves. Positions are volumetric [m³] and ``theta_event``
+is cumulative flow [m³]; see :mod:`gwtransport.fronttracking.waves` for the
+(V, θ) convention.
+
+Available functions:
+
+- :func:`handle_characteristic_collision` - Two characteristics meet, the faster catching the slower from
+  behind. This compression always emits a single shock spanning the two concentrations, in every sorption
+  regime; a resulting shock that fails the Lax condition raises ``RuntimeError``.
+
+- :func:`handle_shock_collision` - Two shocks merge into one connecting the outer states: ``c_left`` from the
+  upstream shock, ``c_right`` from the downstream one, with the speed recomputed from Rankine-Hugoniot. An
+  entropy-violating merge raises ``RuntimeError``.
+
+- :func:`handle_shock_characteristic_collision` - A shock and a characteristic meet; the characteristic's
+  concentration replaces ``c_right`` when the shock does the catching and ``c_left`` when the characteristic
+  does. The successor is the modified shock if it satisfies entropy, otherwise a rarefaction, so mass balance
+  is preserved either way.
+
+- :func:`handle_shock_rarefaction_collision` - A shock meets a rarefaction head or tail. The pair is replaced
+  by one :class:`~gwtransport.fronttracking.waves.DecayingShockWave` that subsumes fan and shock together: a
+  head collision decays the left side from ``raref.c_head`` with ``c_fixed = shock.c_right``, a tail collision
+  decays the right side from ``raref.c_tail`` with ``c_fixed = shock.c_left``, and the fan's opposite boundary
+  becomes ``c_fan_tail`` so partial drying is resolved exactly. Degenerate input where the boundary is not
+  faster than the shock deactivates both waves and emits nothing.
+
+- :func:`handle_rarefaction_characteristic_collision` - A rarefaction boundary meets a characteristic. The
+  characteristic is absorbed when its concentration matches the boundary value within tolerance; otherwise
+  ``RuntimeError`` is raised rather than silently destroying mass.
+
+- :func:`create_inlet_waves_at_theta` - Emit the wave a step from ``c_prev`` to ``c_new`` produces at the
+  inlet face ``V = 0``: a shock when the new characteristic speed is higher (compression), a rarefaction when
+  it is lower (expansion), and a characteristic when the two speeds tie. Returns an empty list for a
+  negligible step or for a shock that fails the entropy check.
 """
 
 from gwtransport.fronttracking.math import (

@@ -13,6 +13,45 @@ Events include:
 - Outlet crossings
 
 All calculations return exact floating-point results with machine precision.
+The ``theta`` coordinate is cumulative flow [m³]; see
+:mod:`gwtransport.fronttracking.waves` for the (V, θ) convention.
+
+Available functions:
+
+- :class:`EventType` - Enumeration of the event kinds the solver dispatches on: characteristic-characteristic,
+  shock-shock, shock-characteristic, rarefaction-characteristic and shock-rarefaction collisions, decaying-shock
+  fan exhaustion, wave merges from the face calculus, and outlet crossings.
+
+- :class:`Event` - Record of one scheduled event: the θ at which it occurs, its :class:`EventType`, the waves
+  involved, the position ``location`` [m³], the ``'head'``/``'tail'`` ``boundary_type`` for rarefaction
+  collisions, and the colliding face pair for merges. It defines no ordering, because the solver orders
+  ``(theta, counter, ...)`` tuples rather than the objects themselves.
+
+- :func:`find_characteristic_intersection` - First strictly-future crossing ``(θ, V)`` of two characteristics,
+  or ``None`` when their speeds are equal or they never meet after ``theta_current``. Both lines are evaluated
+  from the shared reference ``max(θ_start_1, θ_start_2, θ_current)``.
+
+- :func:`find_shock_shock_intersection` - Same line/line crossing for two shocks, using each shock's constant
+  Rankine-Hugoniot speed.
+
+- :func:`find_shock_characteristic_intersection` - Same for a shock against a characteristic. The operand
+  order is load-bearing: ``V`` is evaluated on the first line, so it fixes the successor wave's ``v_start``
+  bit for bit.
+
+- :func:`find_rarefaction_boundary_intersections` - Crossings of a rarefaction's head and tail lines (which
+  travel at ``1/R(c_head)`` and ``1/R(c_tail)``) with another wave, returned as a list of
+  ``(θ, V, boundary_type)`` with ``boundary_type`` in ``{'head', 'tail'}``.
+
+- :func:`find_outlet_crossing` - Cumulative flow at which a wave reaches ``v_outlet``, assuming positive flow:
+  a straight-line inverse for characteristics and shocks, and the cached-trajectory inverse
+  ``outlet_crossing_theta`` for the fan-fed shocks (both the decaying and the doubly-fed one). Returns
+  ``None`` if the wave is inactive, moves backward, has a pinned characteristic speed, or has already passed
+  the outlet within a relative tolerance that stops a just-processed crossing from re-firing. Rarefactions
+  are excluded — their callers split head and tail into separate boundary crossings.
+
+- :func:`is_outlet_crossing_pinned` - Whether a boundary state sits on the ``c_min`` retardation floor with an
+  inflated ``R(c_min)``, so that its scheduled outlet crossing is a floor artifact rather than physics and the
+  caller should drop it.
 """
 
 from dataclasses import dataclass

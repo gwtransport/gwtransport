@@ -57,6 +57,36 @@ displacement) must stay well inside the stagnation radius ``r_s = |A_0|/|v_d|`` 
 Rest phases (``flow == 0``) are propagated by the exact free-space drift kernel (translate + anisotropic
 spread). The drift-induced recovery loss is validated against an independent 2-D finite-volume oracle.
 
+Available functions:
+
+- :func:`infiltration_to_extraction` - Forward transport: compute the extracted flux concentration ``cout`` from an
+  injected concentration ``cin``, a signed flow schedule (``> 0`` injection, ``< 0`` extraction, ``0`` rest) and the
+  well geometry. Grid-free -- the exact per-phase kernels are composed across every flow reversal, and the phases
+  (and hence the number of push-pull / ASR cycles) follow from the flow sign pattern rather than from an argument.
+  ``cout`` is the flow-weighted average over each output bin, in the units of ``cin``, defined on the extraction bins
+  and ``NaN`` on injection and rest bins; ``cout_tedges`` must equal ``tedges``. ``pore_heights`` is a scalar
+  (one homogeneous screen) or an array of streamtube heights -- each streamtube carries the full flow, and the
+  breakthroughs are averaged with ``weights`` (equal by default). Sorption is linear through ``retardation_factor``;
+  ``background`` is the ambient aquifer concentration, so the deviation ``cin - background`` is transported and
+  ``background`` added back. Nonzero ``regional_flux`` engages the azimuthal-mode drift engine within its
+  slow-drift envelope, and raises ``ValueError`` when the plume leaves that envelope.
+
+- :func:`extraction_to_infiltration` - Reverse operation: recover the injected concentration from measured extracted
+  concentrations under the same flow schedule and geometry. The forward operator is assembled column-by-column from
+  unit injection-pulse responses and inverted by Tikhonov least squares (``regularization_strength``). Returns one
+  value per bin: the recovered ``cin`` on injection bins and ``NaN`` on extraction and rest bins. ``NaN`` in ``cout``
+  on an extraction bin raises ``ValueError``; structural ``NaN`` on injection and rest bins is ignored.
+
+- :func:`gamma_infiltration_to_extraction` - Forward transport as in :func:`infiltration_to_extraction`, with the
+  streamtube ensemble built from a gamma distribution of the layer velocity across a well screen of known height
+  ``screen_height``. The velocity ratio has mean 1 and coefficient of variation ``velocity_cv``, a streamtube of
+  velocity ratio ``rho`` gets effective pore height ``screen_height / rho``, and the distribution is discretized into
+  ``n_bins`` equal-probability bins averaged by probability mass. ``velocity_cv = 0`` is the homogeneous screen: a
+  single streamtube at pore height ``screen_height``.
+
+- :func:`gamma_extraction_to_infiltration` - Reverse operation as in :func:`extraction_to_infiltration`, over the same
+  gamma layer-velocity streamtube ensemble as :func:`gamma_infiltration_to_extraction`.
+
 References
 ----------
 The references below give the published closed-form solutions for the **single-phase** radial *injection*

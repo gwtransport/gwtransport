@@ -1,15 +1,9 @@
 """
 Percolation through thick unsaturated zones via the Kinematic Wave method.
 
-This module provides one public function:
-
-- :func:`root_zone_to_water_table_kinematic_wave` — exact front-tracking
-  solver for gravity-driven percolation between the bottom of the root
-  zone and the water table, following the Kinematic-Wave method described
-  in Olsthoorn (2026, *Stromingen* 32(1)). Supports Brooks-Corey and
-  van Genuchten-Mualem constitutive curves and a time-varying
-  multiplicative scaling of K(θ) (e.g. for temperature-corrected
-  viscosity).
+This module solves gravity-driven percolation between the bottom of the
+root zone and the water table by exact front tracking, following the
+Kinematic-Wave method described in Olsthoorn (2026, *Stromingen* 32(1)).
 
 **Forward-only.** Inverse mapping ``water_table_to_root_zone`` is not
 provided. The KW unsaturated-zone problem is fundamentally one-way under
@@ -27,6 +21,21 @@ spells out the recovery rule and the layered-porosity generalisation.
 
 The full Kinematic-Wave derivation and the constitutive-curve references
 are documented on :func:`root_zone_to_water_table_kinematic_wave`.
+
+Available functions:
+
+- :func:`root_zone_to_water_table_kinematic_wave` - Solve the Kinematic-Wave conservation law
+  ``∂θ_m/∂t + ∂K(θ_m)/∂z = 0`` exactly by front tracking, returning the bin-averaged percolation flux
+  at the water table on ``q_water_table_tedges`` together with the per-column solver structures
+  (waves, events, first-arrival time, counts, and the tracker state that maps cumulative effective
+  time back to wall-clock time). The flux is in the same units as ``q_root_zone`` and is averaged
+  over the columns listed in ``cumulative_pore_volumes_outlet``, whose entries are cumulative pore
+  volume per unit area rather than geometric depth. The constitutive curve is Brooks-Corey when
+  ``brooks_corey_lambda`` is given and van Genuchten-Mualem when ``van_genuchten_n`` is given;
+  exactly one of the two is required. The optional ``k_scaling`` applies a time-only multiplicative
+  factor ``f(t)`` to the whole ``K(θ)`` curve (e.g. temperature-corrected viscosity) and then
+  requires ``q_water_table_tedges`` to equal ``tedges``, since the back-transform
+  ``q_water_table = f · cout`` is exact only on the input grid.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.

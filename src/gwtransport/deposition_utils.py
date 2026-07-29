@@ -1,9 +1,10 @@
 """
 Utility Functions for the Deposition Module.
 
-This module provides the clipped-trapezoid integral helpers (``_clipped_linear_integral``
-and ``_positive_part_integral``) used by the deposition module's banded weight builder to
-integrate ``clip(y(x), y_lower, y_upper)`` over each cin bin of a streamtube's residence window.
+This module provides the clipped-trapezoid integral helper ``_clipped_linear_integral``, which the
+deposition module's banded weight builder uses to integrate ``clip(f(x), lo, hi)`` over each cin bin
+inside an output bin's residence window, and ``_positive_part_integral``, the positive-part integral
+it is built from.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.

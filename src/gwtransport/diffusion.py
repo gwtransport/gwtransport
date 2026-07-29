@@ -9,23 +9,8 @@ macrodispersion. Forward and backward modeling are supported. The flow is assume
 The orthogonal-flow (Cartesian) geometry is what makes the Kreft-Zuber breakthrough the exact
 1D solution used below.
 
-Key functions:
-
-- :func:`infiltration_to_extraction` - Main transport function combining advection,
-  microdispersion, and molecular diffusion with explicit pore volume distribution and
-  streamline lengths.
-
-- :func:`extraction_to_infiltration` - Inverse operation (deconvolution with dispersion).
-
-- :func:`gamma_infiltration_to_extraction` - Gamma-distributed pore volumes with dispersion.
-  Models aquifer heterogeneity with 2-parameter gamma distribution. Parameterizable via
-  (alpha, beta) or (mean, std). Discretizes gamma distribution into equal-probability bins.
-
-- :func:`gamma_extraction_to_infiltration` - Gamma-distributed pore volumes, deconvolution
-  with dispersion. Symmetric inverse of gamma_infiltration_to_extraction.
-
-When to choose this module vs :mod:`gwtransport.diffusion_fast`
----------------------------------------------------------------
+Choosing among the three diffusion modules
+------------------------------------------
 
 This is the reference implementation: it evaluates the bin-averaged Kreft-Zuber flux
 concentration by resolution-aware composite Gauss-Legendre quadrature (splitting at
@@ -40,6 +25,15 @@ molecular diffusivity, whose flux correction it also evaluates in closed form) a
 per-streamtube ``streamline_length`` / ``molecular_diffusivity`` /
 ``longitudinal_dispersivity`` arrays (heterogeneous flow paths -- partially-penetrating
 wells, wedge-shaped capture zones).
+
+:mod:`gwtransport.diffusion_fast_fast` is the third rung and is approximate by design: it folds
+molecular diffusion into an effective dispersivity ``alpha_eff = alpha_L + D_m * R * V_pore /
+(L * q_mean)`` per streamtube, so the whole streamtube bundle collapses to one banded breakthrough
+on the native cumulative-volume grid -- the fastest of the three. At constant flow it reproduces
+:mod:`gwtransport.diffusion_fast` to ~1e-6 for smooth inputs and ~1e-4 for sharp ones, and it loses
+accuracy in the molecular-diffusion-dominated corner (``alpha_L`` ~ 0) under strongly variable flow,
+where the frozen record-mean flow leaves a commutator residual. This module is the ground truth both
+fast modules are validated against.
 
 Reported outlet concentration: Kreft-Zuber (1978) flux concentration
 ---------------------------------------------------------------------
@@ -114,6 +108,28 @@ the streamline length ``L`` and the pore volume ``V_pore`` together fixing the i
 streamtube cross-section ``A = V_pore / L``. Callers who need distributed-area effects must
 provide multiple streamtubes (via ``aquifer_pore_volumes`` or the gamma-parameterised
 wrappers).
+
+Available functions:
+
+- :func:`infiltration_to_extraction` - Forward transport from an explicit ``aquifer_pore_volumes``
+  distribution: returns the bin-averaged Kreft-Zuber flux concentration on ``cout_tedges``, integrated
+  over the full ``tedges``-resolution flow within each output bin and averaged with equal weight over
+  the streamtubes. ``streamline_length``, ``molecular_diffusivity`` and ``longitudinal_dispersivity``
+  are either scalars shared by all streamtubes or one value per pore volume. Output bins that no
+  infiltration has reached, or whose look-back leaves the record, are NaN.
+
+- :func:`extraction_to_infiltration` - Reverse direction: builds the same forward coefficient matrix
+  and solves ``W @ cin = cout`` by Tikhonov regularization, returning the bin-averaged infiltration
+  concentration on ``tedges``. NaN entries in ``cout`` mark measurement gaps; their rows are dropped
+  from the solve and cin bins that nothing else constrains are returned as NaN.
+
+- :func:`gamma_infiltration_to_extraction` - :func:`infiltration_to_extraction` with the pore volume
+  distribution given as a (shifted) gamma -- either (mean, std) or (alpha, beta), plus ``loc`` --
+  discretized into ``n_bins`` equal-probability streamtubes that share one ``streamline_length`` and
+  one pair of dispersion parameters.
+
+- :func:`gamma_extraction_to_infiltration` - :func:`extraction_to_infiltration` with the same gamma
+  parameterization of the pore volume distribution: reconstructs ``cin`` on ``tedges`` from ``cout``.
 
 References
 ----------

@@ -21,6 +21,34 @@ calculus:
   double-crossings inside one step. The bound is per-pair (not a global ``1``) because the
   percolation conductivity isotherms have ``R < 1`` regions.
 
+Available functions:
+
+- :class:`Face` - One separating surface of a wave: the wave it belongs to, a ``role`` tag
+  (``'shock'``, ``'contact'``, ``'head'``, ``'tail'`` or ``'boundary'``), its left (upstream) and right
+  (downstream) :class:`~gwtransport.fronttracking.waves.Feeder`, whether its trajectory is curved, and an
+  upper bound on its speed for the Lipschitz march. ``position(theta)`` evaluates the face, returning ``None``
+  outside the owning wave's active θ-window.
+
+- :func:`iter_faces` - Enumerate the faces a wave exposes at ``theta``: one contact for a characteristic, one
+  shock face for a shock, head and tail for a rarefaction, and for the fan-fed shocks a curved shock face plus
+  each fan boundary line that is still free. The ``theta`` argument selects the historical state, so a
+  boundary already consumed by a wave entering the fan is not re-exposed.
+
+- :func:`find_face_crossing` - First θ in ``(θ_start, θ_horizon]`` at which two faces coincide, or ``None``.
+  The gap is marched with a per-pair speed bound so no sign change can be stepped over, and each step also
+  brackets the gap's interior minimum to catch a grazing double crossing.
+
+- :func:`make_wave_from_feeders` - Build the successor a merge produces from a ``(left, right)`` feeder pair
+  at ``(v, θ)``: two constants give a :class:`~gwtransport.fronttracking.waves.ShockWave` (or ``None`` for a
+  zero jump), one constant and one fan give a :class:`~gwtransport.fronttracking.waves.DecayingShockWave`, and
+  two fans give a :class:`~gwtransport.fronttracking.waves.DoubleFanShockWave`. A feeder whose far boundary is
+  already owned marks the successor's boundary consumed on that side.
+
+- :func:`resolve_merge` - Resolve a two-face collision into the successor waves. It identifies which face is
+  rear (upstream) and which is front just before the crossing, forms the successor from
+  ``(rear.left, front.right)``, and retires the parents — a wave whose shock, contact or rarefaction face
+  merged is deactivated, while a bare fan boundary line is only marked consumed and its wave lives on.
+
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """

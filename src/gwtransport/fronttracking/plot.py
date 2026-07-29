@@ -2,12 +2,33 @@
 Visualization functions for front tracking.
 
 This module provides plotting utilities for visualizing front-tracking simulations:
+
 - V-t diagrams showing wave propagation in space-time
 - Breakthrough curves showing concentration at outlet over time
 
 Internally the simulation uses cumulative-flow coordinates (V, θ). All plots
 remain in user-facing time t (days). Translation is done via the state's
 ``t_at_theta`` / ``theta_at_t`` methods at the plotting boundary.
+
+Available functions:
+
+- :func:`plot_vt_diagram` - Draw every wave of a completed simulation in the (time, position) plane:
+  characteristics as thin blue lines, shocks as thick red lines, rarefactions as filled green fans, with the
+  inlet and the outlet marked as horizontal lines. Each straight-in-θ trajectory is sampled in θ and translated
+  to time t before plotting. Returns the axes; ``show_inactive`` adds the waves deactivated by interactions and
+  ``show_events`` marks the interaction events.
+
+- :func:`plot_inlet_concentration` - Draw ``cin`` on its ``tedges`` as a step function of time [days], optionally
+  marking a first-arrival time with a vertical line. Returns the axes.
+
+- :func:`plot_front_tracking_summary` - Three-panel figure for one simulation: the V-t diagram, the inlet
+  concentration, and across the bottom the outlet concentration as the exact analytical breakthrough curve
+  and/or the bin-averaged ``cout`` step trace, both referenced to the tracker's own time origin so the two
+  overlay without a shift. Returns the figure and a dict of axes keyed ``'vt'``, ``'inlet'`` and ``'outlet'``.
+
+- :func:`plot_sorption_comparison` - 2x3 figure contrasting a pulse inlet and a dip inlet with the exact outlet
+  response each produces under a favorable (``n>1``) and an unfavorable (``n<1``) isotherm: column 0 holds the
+  two inlets, columns 1-2 their responses. Returns the figure and the 2x3 array of axes.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.

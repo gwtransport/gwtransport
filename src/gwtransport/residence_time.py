@@ -60,6 +60,39 @@ range of infiltration times that is not captured there, so no bin is fully infor
 is present (for that dispersive informed fraction use the captured kernel mass of the diffusion
 coefficient matrix).
 
+Available functions:
+
+- :func:`full` - Flow-weighted mean residence time [days] over each output bin, resolved per pore volume:
+  the full ``(n_pore_volumes, n_output_bins)`` array, without collapsing the pore-volume axis. The bin
+  average is uniform in cumulative throughflow volume, and ``direction`` selects whether the time is the
+  look-back to infiltration (``extraction_to_infiltration``) or the look-forward to extraction
+  (``infiltration_to_extraction``).
+
+- :func:`mean` - Mean residence time [days] per output bin for a discrete aquifer pore-volume
+  distribution: the :func:`full` array collapsed by averaging over the equally-weighted streamtubes that
+  are valid in each bin, shape ``(n_output_bins,)``.
+
+- :func:`gamma` - Mean residence time [days] per output bin for a continuous (shifted) gamma aquifer
+  pore-volume distribution, parameterized by either ``(mean, std, loc)`` or ``(alpha, beta, loc)``. The
+  expectation is taken in closed form from regularized incomplete-gamma partial moments, so there is no
+  pore-volume discretization and no accuracy/cost knob; shape ``(n_output_bins,)``.
+
+- :func:`fraction_explained_full` - Advective coverage per pore volume: the flow-weighted fraction of each
+  output bin, in ``[0, 1]``, whose retarded parcel lies inside the supplied flow record. Returned as the
+  full ``(n_pore_volumes, n_output_bins)`` array, mirroring :func:`full`.
+
+- :func:`fraction_explained_mean` - Equally-weighted mean of :func:`fraction_explained_full` over the
+  discrete streamtubes, shape ``(n_output_bins,)``.
+
+- :func:`fraction_explained_gamma` - Closed-form expectation of the advective in-record indicator over a
+  (shifted) gamma pore-volume distribution, shape ``(n_output_bins,)`` -- the continuum analogue of
+  :func:`fraction_explained_mean`, evaluated from the antiderivative of the shifted-gamma CDF.
+
+- :func:`freundlich_retardation` - Concentration-dependent retardation factors
+  ``R = 1 + (rho_b / theta) * k_f * (1 / n) * C ** (1 / n - 1)`` from the Freundlich isotherm
+  ``s = k_f * C ** (1 / n)``, one per concentration entry, for use as the ``retardation_factor`` input of
+  the transport functions.
+
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """

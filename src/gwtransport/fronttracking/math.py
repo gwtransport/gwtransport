@@ -15,6 +15,51 @@ All sorption-class computations are exact analytical formulas; the
 van Genuchten-Mualem class uses ``scipy.optimize.brentq`` for the two
 inversions that have no closed form.
 
+Available functions:
+
+- :class:`NonlinearSorption` - Abstract base for concentration-dependent isotherms. Subclasses supply
+  ``retardation(c)``, ``total_concentration(c)`` and ``concentration_from_retardation(r)``; the base derives
+  the Rankine-Hugoniot ``shock_speed(c_left, c_right)``, the Lax ``check_entropy_condition``, the paired
+  ``c_and_total_from_retardation`` and ``fan_converges_at_infinity`` from them.
+
+- :class:`FreundlichSorption` - Power-law isotherm ``s(C) = k_f · C^(1/n)`` with closed-form
+  ``R(C) = 1 + (ρ_b · k_f)/(n_por · n) · C^(1/n − 1)``. ``n > 1`` makes higher concentrations travel faster,
+  ``n < 1`` mirrors that, and ``n = 1`` is rejected (use :class:`ConstantRetardation`). Because ``R → ∞`` as
+  ``C → 0`` for ``n > 1``, ``retardation`` and ``concentration_from_retardation`` clamp ``C`` at ``c_min``.
+
+- :class:`ConstantRetardation` - Linear sorption ``s(C) = K_d · C`` reduced to one ``retardation_factor``:
+  every concentration moves at ``dV/dθ = 1/R``, so no rarefaction ever forms and the solution is a pure
+  θ-shift with shocks only at inlet discontinuities.
+
+- :class:`LangmuirSorption` - Favorable isotherm ``s(C) = s_max · C/(K_L + C)`` with
+  ``R(C) = 1 + (ρ_b · s_max · K_L)/(n_por · (K_L + C)²)``, which is finite at ``C = 0``, so no concentration
+  floor is needed; ``R`` decreases with ``C``, giving shocks on concentration rises and fans on falls.
+
+- :class:`BrooksCoreyConductivity` - Brooks-Corey unsaturated conductivity ``K(θ) = K_s · Θ^a`` recast into
+  the ``(C, C_T)`` variables of the sorption interface by identifying ``C ≡ K`` (flux) and ``C_T ≡ θ − θ_r``
+  (storage), which lets :mod:`gwtransport.percolation` run Kinematic-Wave percolation on this solver. All
+  three curve methods are closed form; ``C`` is clamped at a dry-soil floor in ``retardation`` and
+  ``concentration_from_retardation`` but not in ``total_concentration``, keeping the ``c_R = 0``
+  wetting-front shock speed exact.
+
+- :class:`VanGenuchtenMualemConductivity` - Mualem conductivity for the van Genuchten retention curve, recast
+  the same way. ``total_concentration`` and the flux derivative are closed form; the two inversions ``S_e(C)``
+  and ``S_e(R)`` use ``scipy.optimize.brentq``. The retention parameter ``α_vG`` is not needed because the
+  Kinematic-Wave approximation drops capillary suction.
+
+- :func:`characteristic_speed` - Characteristic speed ``dV/dθ = 1/R(c)`` in (V, θ) coordinates, a property of
+  the isotherm alone. Its ``sorption`` argument is any of the classes above (the ``SorptionModel`` alias is
+  their union).
+
+- :func:`characteristic_position` - Position of a characteristic at cumulative flow ``theta``, evaluated as
+  ``v_start + (θ − θ_start)/R(c)``, or ``None`` when ``theta`` lies before ``theta_start``.
+
+- :func:`compute_first_front_arrival_theta` - Cumulative flow at which the first injected concentration level
+  is fully present at the outlet: the θ-edge of the first bin that both carries water (positive θ-width) and
+  has ``cin > 0``, plus ``V · R(c_first)`` for Freundlich ``n < 1`` and ``V · C_T(c_first)/c_first``
+  otherwise. These are *tail*-arrival semantics — a rarefaction head can reach the outlet much earlier — and
+  the result is ``inf`` when no water-carrying bin injects concentration.
+
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
