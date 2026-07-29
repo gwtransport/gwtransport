@@ -184,39 +184,38 @@ def handle_shock_characteristic_collision(
             sorption=shock.sorption,
         )
 
-    if not new_shock.satisfies_entropy():
-        # Expansion regime: emit a rarefaction whose head is the faster
-        # state and tail the slower state.
-        if s_shock > s_char:
-            c_head = shock.c_left
-            c_tail = char.concentration
-        else:
-            c_head = char.concentration
-            c_tail = shock.c_right
-
-        s_head = characteristic_speed(c_head, shock.sorption)
-        s_tail = characteristic_speed(c_tail, shock.sorption)
-
-        if s_head > s_tail:
-            raref = RarefactionWave(
-                theta_start=theta_event,
-                v_start=v_event,
-                c_head=c_head,
-                c_tail=c_tail,
-                sorption=shock.sorption,
-            )
-            shock.deactivate(theta_event)
-            char.deactivate(theta_event)
-            return [raref]
-        # Edge case (s_head == s_tail within machine precision): deactivate
-        # and emit nothing.
-        shock.deactivate(theta_event)
-        char.deactivate(theta_event)
-        return []
-
+    # Both parents are consumed by the collision on every outcome.
     shock.deactivate(theta_event)
     char.deactivate(theta_event)
-    return [new_shock]
+
+    if new_shock.satisfies_entropy():
+        return [new_shock]
+
+    # Expansion regime: emit a rarefaction whose head is the faster state and
+    # tail the slower state.
+    if s_shock > s_char:
+        c_head = shock.c_left
+        c_tail = char.concentration
+    else:
+        c_head = char.concentration
+        c_tail = shock.c_right
+
+    s_head = characteristic_speed(c_head, shock.sorption)
+    s_tail = characteristic_speed(c_tail, shock.sorption)
+
+    if s_head <= s_tail:
+        # Edge case (s_head == s_tail within machine precision): emit nothing.
+        return []
+
+    return [
+        RarefactionWave(
+            theta_start=theta_event,
+            v_start=v_event,
+            c_head=c_head,
+            c_tail=c_tail,
+            sorption=shock.sorption,
+        )
+    ]
 
 
 def handle_shock_rarefaction_collision(
@@ -310,10 +309,9 @@ def handle_rarefaction_characteristic_collision(
 ) -> list:
     """Rarefaction boundary intersects a characteristic.
 
-    The safe option (b) from the front-tracking rebuild plan: when a
-    characteristic's concentration matches the boundary concentration to
-    within tolerance the characteristic is absorbed; otherwise an
-    informative ``RuntimeError`` is raised because deactivating it would
+    When the characteristic's concentration matches the boundary concentration
+    to within tolerance the characteristic is absorbed; otherwise an
+    informative ``RuntimeError`` is raised, because deactivating it would
     silently destroy mass.
 
     Raises
@@ -348,25 +346,6 @@ def handle_rarefaction_characteristic_collision(
 
     char.deactivate(theta_event)
     return []
-
-
-def handle_outlet_crossing(wave, theta_event: float, v_outlet: float) -> dict:
-    """Record a wave crossing the outlet boundary.
-
-    The wave is NOT deactivated — it remains for concentration queries at
-    points between its origin and the outlet. The returned event record
-    holds the cumulative flow ``theta`` at which the crossing occurs; the
-    solver translates this to the user-facing time when appending to
-    ``state.events``.
-    """
-    return {
-        "theta": theta_event,
-        "type": "outlet_crossing",
-        "wave": wave,
-        "location": v_outlet,
-        "concentration_left": wave.concentration_left(),
-        "concentration_right": wave.concentration_right(),
-    }
 
 
 def create_inlet_waves_at_theta(

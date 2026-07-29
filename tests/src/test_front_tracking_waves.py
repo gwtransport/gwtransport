@@ -423,20 +423,12 @@ class TestRarefactionWave:
 
 
 class TestDecayingShockWave:
-    """Phase 2 step 1 analytical acceptance tests for ``DecayingShockWave``.
+    """Analytical acceptance tests for ``DecayingShockWave``.
 
     Hand-derived against the closed forms for Freundlich n=2 c_R=0 (fast
     quadratic path) and Freundlich n=3 c_R=0 (brentq path) — the latter
     independently exercises the inversion code so the n=2 specialization
-    doesn't mask brentq bugs. Math derivations live in the plan document
-    `check-out-the-main-wondrous-alpaca.md` §"Closed-form derivations".
-
-    Parametric coverage (Langmuir, n=0.5 mirrored, c_R>0, mass balance,
-    pointwise breakthrough, entropy, multi-pulse, flow-change) is deferred
-    to Phase 2 steps 5+ per the plan: those tests would all assert
-    closed-form numbers that derive from un-reviewed math here, so the
-    plan defers them until ``bas-physics-math-reviewer`` signs off on the
-    math-interim pass.
+    doesn't mask brentq bugs.
     """
 
     def test_freundlich_n2_cr_zero_closed_form(self):
@@ -888,8 +880,8 @@ class TestDecayingShockWaveNumericalInversion:
 
         Favorable-Freundlich tail collision ([12,6,3,40]-class geometry): the
         decaying side grows 3 → 6 and reaches ``c_fan_tail`` at a finite
-        ``θ_local`` given by the un-clamped invariant. The orientation-blind
-        early return previously reported immediate exhaustion at ``θ_start``.
+        ``θ_local`` given by the un-clamped invariant. An orientation-blind
+        crossing test would report immediate exhaustion at ``θ_start``.
         """
         sorption = FreundlichSorption(k_f=0.02, n=2.0, bulk_density=1500.0, porosity=0.3)
         c0, c_fixed, c_fan_tail = 3.0, 40.0, 6.0

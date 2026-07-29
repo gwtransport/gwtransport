@@ -79,7 +79,7 @@ where:
 The K-Z flux-correction term is what makes the column-sum invariant
 ``integral Q c_out dt = integral Q c_in dt`` hold under arbitrary variable Q.
 Without it, the leading-order C_R loses O(1/Pe) per column under variable Q +
-pure D_m (issue #180).
+pure D_m.
 
 Implementation: the bin-averaged C_F is computed by resolution-aware composite
 Gauss-Legendre quadrature in volume space, split at flow-bin boundaries so each
@@ -134,6 +134,7 @@ import pandas as pd
 from scipy import special
 
 from gwtransport import gamma
+from gwtransport._diffusion_shared import _broadcast_to_pore_volumes, _extend_tedges_flag
 from gwtransport._time import dt_to_days, tedges_to_days
 from gwtransport._validation import (
     _validate_no_nan,
@@ -188,36 +189,17 @@ def _cfrac_mean_volume(
         \text{frac}_{i,j} = \frac{1}{\Delta V_i}
         \int_{V_i}^{V_{i+1}} C_F\!\left(L,\,V;\,t_j\right) dV
 
-    where :math:`C_F = C_R - (D_s / v_s) \, \partial_x C_R\big|_{x=L}` and
-    :math:`C_R` is Bear's (1972) moving-frame solution:
-
-    .. math::
-
-        C_R(L, V; t_j) &= \tfrac{1}{2}\,
-            \mathrm{erfc}\!\left( \frac{L - \xi_j(V)}{2\sqrt{D_t(V)}} \right) \\
-        \xi_j(V) &= L \cdot (V - V_j) \,/\, (R\,V_\text{pore}) \\
-        D_t(V) &= D_m\,\tau_j(V) + \alpha_L\,\xi_j(V),
-            \quad \tau_j(V) = t(V) - t_j \\
-        D_s &= D_m + \alpha_L\,v_s(t), \quad v_s(t) = Q(t)\,L\,/\,(R\,V_\text{pore}).
-
-    The solute-front velocity :math:`v_s` (advection speed of the retarded ADE
-    that :math:`C_R` solves), not the fluid velocity :math:`Q L / V_\text{pore}`,
-    sets the flux coefficient :math:`D_s/v_s = D_m/v_s + \alpha_L`. The added
-    flux-correction term
+    with :math:`C_F = C_R - (D_s / v_s) \, \partial_x C_R\big|_{x=L}`, Bear's
+    resident concentration :math:`C_R`, the moving-frame variance
+    :math:`D_t = D_m \tau + \alpha_L \xi` and the solute-front flux coefficient
+    :math:`D_s/v_s`, all as derived in the module docstring. The correction term
+    added to :math:`C_R` at each quadrature node is
 
     .. math::
 
         \frac{D_s}{v_s(t(V))} \cdot
         \frac{1}{\sqrt{4\pi\,D_t(V)}}\,
-        \exp\!\left( -\frac{(L - \xi_j(V))^2}{4\,D_t(V)} \right)
-
-    converts Bear's *resident* concentration to a *flux* concentration. This
-    makes the coefficient matrix conserve mass under the criterion
-    ``integral Q c_out dt = integral Q c_in dt`` — the relevant invariant for
-    tracer measurements taken in the extracted fluid (Kreft & Zuber, 1978,
-    Eq. 5 and Eq. 1). Without this correction, Bear's leading-order kernel
-    misses the dispersive boundary flux at the outlet and column-sum mass
-    conservation fails by O(1/Pe) under variable Q.
+        \exp\!\left( -\frac{(L - \xi_j(V))^2}{4\,D_t(V)} \right).
 
     Implementation: resolution-aware composite Gauss-Legendre quadrature in
     volume space, split at flow-bin boundaries so that within each sub-interval
@@ -227,10 +209,10 @@ def _cfrac_mean_volume(
     front-centred panels (see ``_FRONT_OFFSETS``), while smooth/already-resolved
     sub-intervals keep the plain single 16-point rule (bit-identical to it *per
     sub-interval*; a cell split at flow-bin boundaries still integrates more
-    accurately than one un-split rule over the whole cell). No
-    "fully capped" branch: the moving-frame variance keeps growing past
-    breakthrough, and the K-Z identity requires Bear's formula to satisfy the
-    variable-coefficient ADE exactly (which it does only without capping).
+    accurately than one un-split rule over the whole cell). The moving-frame
+    variance keeps growing past breakthrough and is never capped: the K-Z
+    identity holds only while Bear's formula satisfies the variable-coefficient
+    ADE exactly.
 
     Parameters
     ----------
@@ -259,12 +241,6 @@ def _cfrac_mean_volume(
     -------
     ndarray, shape (n_cout_bins, n_cin_edges)
         Bin-averaged flux concentration for each cell. NaN for inactive cells.
-
-    References
-    ----------
-    Kreft, A., & Zuber, A. (1978). On the physical meaning of the dispersion
-    equation and its solutions for different initial and boundary conditions.
-    Chemical Engineering Science, 33(11), 1471-1480.
     """
     n_cout_edges, n_cin_edges = step_widths.shape
     n_cout_bins = n_cout_edges - 1
@@ -292,10 +268,8 @@ def _cfrac_mean_volume(
     dt_per_bin = np.diff(tedges_days)
     with np.errstate(divide="ignore", invalid="ignore"):
         q_per_bin = np.where(dt_per_bin > 0, dv_per_bin / dt_per_bin, 0.0)
-        # Solute-front velocity v_s = Q L / (R V_pore) -- the advection speed of the retarded ADE
-        # that C_R actually solves. Kreft-Zuber requires the flux coefficient D_s/v_s = D_m/v_s +
-        # alpha_L to use THAT velocity (not the fluid velocity Q L / V_pore); pairing it with the
-        # moving-frame variance D_t = D_m tau + alpha_L xi is what conserves mass for R>1, D_m>0.
+        # Solute-front velocity v_s = Q L / (R V_pore), the advection speed of the retarded ADE
+        # that C_R solves -- not the fluid velocity Q L / V_pore.
         v_per_bin = q_per_bin * streamline_len / r_vpv
         # (D_s/v_s) = D_m/v_s + alpha_L. At v_s=0 the bin has dV=0 and is skipped below; the
         # surrounding errstate suppresses the divide warning for those lanes.
@@ -324,7 +298,7 @@ def _cfrac_mean_volume(
     total_dv = v_hi_cells - v_lo_cells
     valid_cells = total_dv > 0
 
-    # Post-injection lower bound is loop-invariant: max(V_lo, V_cin) (D2 hoist).
+    # Post-injection lower bound, loop-invariant: max(V_lo, V_cin).
     v_lo_or_cin = np.maximum(v_lo_cells, v_cin_cells)
 
     integral_cf = np.zeros(len(idx_i))
@@ -425,43 +399,6 @@ def _cfrac_mean_volume(
     return frac
 
 
-def _diffusion_extend_tedges_flag(spinup: object) -> bool:
-    """Translate the public ``spinup`` parameter to the internal extend flag.
-
-    The diffusion module's existing warm-start behavior is to extend
-    ``tedges`` by 100 years on each side. The public ``spinup`` parameter
-    maps onto this binary toggle: ``"constant"`` enables the extension
-    (default; preserves legacy behavior), ``None`` disables it (cout in
-    spin-up region becomes NaN). The float fraction-threshold mode of
-    other modules is not implemented here.
-
-    Returns
-    -------
-    bool
-        True if tedges should be extended (warm-start), False if not.
-
-    Raises
-    ------
-    ValueError
-        If ``spinup`` is a string other than ``"constant"``.
-    NotImplementedError
-        If ``spinup`` is a float (fraction-threshold mode is not
-        implemented for the diffusion module).
-    """
-    if spinup is None:
-        return False
-    if isinstance(spinup, str):
-        if spinup != "constant":
-            msg = f"spinup string must be 'constant'; got {spinup!r}"
-            raise ValueError(msg)
-        return True
-    msg = (
-        "diffusion's spinup parameter only supports None or 'constant'; "
-        f"float thresholds are not yet implemented (got {spinup!r})"
-    )
-    raise NotImplementedError(msg)
-
-
 def _validate_diffusion_inputs(
     *,
     tedges: pd.DatetimeIndex,
@@ -477,11 +414,14 @@ def _validate_diffusion_inputs(
 ) -> None:
     """Validate inputs common to diffusion forward / reverse entry points.
 
-    Path selection via mutually-exclusive kwargs:
+    The caller supplies the kwargs of its own direction; the parity checks that apply to
+    that direction then run:
 
-    - ``cin_values`` provided => forward path. ``tedges`` parities cin and flow.
-    - ``cout_values`` + ``cout_tedges`` provided => reverse path. ``tedges`` parities
-      flow; ``cout_tedges`` parities cout.
+    - ``cin_values`` (forward): ``tedges`` parities cin and flow.
+    - ``cout_values`` + ``cout_tedges`` (reverse): ``tedges`` parities flow, ``cout_tedges``
+      parities cout.
+
+    The physical-parameter checks below run either way.
 
     Raises
     ------
@@ -496,9 +436,6 @@ def _validate_diffusion_inputs(
     elif cout_values is not None and cout_tedges is not None:
         _validate_tedges_parity(tedges, flow, tedges_name="tedges", values_name="flow")
         _validate_tedges_parity(cout_tedges, cout_values, tedges_name="cout_tedges", values_name="cout")
-    else:
-        msg = "must provide cin_values (forward) or both cout_values and cout_tedges (reverse)"
-        raise ValueError(msg)
     if len(aquifer_pore_volumes) != len(streamline_length):
         msg = "aquifer_pore_volumes and streamline_length must have the same length"
         raise ValueError(msg)
@@ -555,19 +492,14 @@ def _prepare_diffusion_arrays(
     """
     flow = np.asarray(flow, dtype=float)
     aquifer_pore_volumes = np.asarray(aquifer_pore_volumes, dtype=float)
-    streamline_length = np.atleast_1d(np.asarray(streamline_length, dtype=float))
-    molecular_diffusivity = np.atleast_1d(np.asarray(molecular_diffusivity, dtype=float))
-    longitudinal_dispersivity = np.atleast_1d(np.asarray(longitudinal_dispersivity, dtype=float))
-
     n_pore_volumes = len(aquifer_pore_volumes)
-    if streamline_length.size == 1:
-        streamline_length = np.broadcast_to(streamline_length, (n_pore_volumes,))
-    if molecular_diffusivity.size == 1:
-        molecular_diffusivity = np.broadcast_to(molecular_diffusivity, (n_pore_volumes,))
-    if longitudinal_dispersivity.size == 1:
-        longitudinal_dispersivity = np.broadcast_to(longitudinal_dispersivity, (n_pore_volumes,))
-
-    return flow, aquifer_pore_volumes, streamline_length, molecular_diffusivity, longitudinal_dispersivity
+    return (
+        flow,
+        aquifer_pore_volumes,
+        _broadcast_to_pore_volumes(streamline_length, n_pore_volumes),
+        _broadcast_to_pore_volumes(molecular_diffusivity, n_pore_volumes),
+        _broadcast_to_pore_volumes(longitudinal_dispersivity, n_pore_volumes),
+    )
 
 
 def _infiltration_to_extraction_coeff_matrix(
@@ -718,24 +650,14 @@ def infiltration_to_extraction(
     4. At extraction, the concentration is a dispersed breakthrough curve
 
     The reported extracted concentration is the Kreft-Zuber (1978) **flux
-    concentration** at the outlet, defined as the solute mass flux divided
-    by the volumetric fluid flux. This is what is measured when sampling the
-    outflowing fluid. Compared to Bear's leading-order resident concentration,
-    it includes the dispersive boundary flux ``-D_s * dC_R/dx`` at
-    ``x = L`` (with the solute-front dispersion ``D_s = D_m + alpha_L * v_s``
-    and velocity ``v_s = Q L / (R V_pore)``), which is what makes the column-sum
-    invariant ``integral Q c_out dt = integral Q c_in dt`` hold exactly under
-    variable flow.
-
-    Microdispersion and molecular diffusion enter as the moving-frame variance
-
-        sigma^2(V) = 2 * D_m * tau(V) + 2 * alpha_L * xi(V),
-
-    where ``tau(V)`` is the elapsed time since infiltration and ``xi(V)`` is
-    the distance the parcel has actually travelled. Evaluating sigma^2 at each
-    quadrature node — and avoiding any artificial capping past breakthrough —
-    keeps Bear's formula an exact solution of the variable-coefficient ADE,
-    which the Kreft-Zuber identity relies on.
+    concentration** at the outlet -- the solute mass flux divided by the
+    volumetric fluid flux, which is what is measured when sampling the
+    outflowing fluid. Microdispersion and molecular diffusion enter as the
+    moving-frame variance ``sigma^2(V) = 2*D_m*tau(V) + 2*alpha_L*xi(V)``, with
+    ``tau(V)`` the elapsed time since infiltration and ``xi(V)`` the distance the
+    parcel has actually travelled. See the module docstring for the derivation
+    and for why the flux form is what makes the column-sum invariant
+    ``integral Q c_out dt = integral Q c_in dt`` hold exactly under variable flow.
 
     Parameters
     ----------
@@ -837,11 +759,6 @@ def infiltration_to_extraction(
 
     4. Average coefficients across all pore volumes.
 
-    The K-Z flux-correction term in C_F = C_R - (D_s/v_s) * dC_R/dx (solute-front
-    velocity v_s = Q L / (R V_pore), dispersion D_s = D_m + alpha_L * v_s) is what
-    makes the column-sum invariant exact under variable Q; see the module
-    docstring for the derivation.
-
     Examples
     --------
     Basic usage with constant flow:
@@ -919,7 +836,7 @@ def infiltration_to_extraction(
         cin_values=cin,
     )
 
-    extend_tedges = _diffusion_extend_tedges_flag(spinup)
+    extend_tedges = _extend_tedges_flag(spinup)
     coeff_matrix, valid_cout_bins = _infiltration_to_extraction_coeff_matrix(
         flow=flow,
         tedges=tedges,
@@ -1106,7 +1023,7 @@ def extraction_to_infiltration(
     n_cin = len(tedges) - 1
 
     # Build forward weight matrix: W_forward @ cin = cout
-    extend_tedges = _diffusion_extend_tedges_flag(spinup)
+    extend_tedges = _extend_tedges_flag(spinup)
     w_forward, valid_cout_bins = _infiltration_to_extraction_coeff_matrix(
         flow=flow,
         tedges=tedges,

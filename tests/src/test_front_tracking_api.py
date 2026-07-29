@@ -680,8 +680,8 @@ class TestMultiPeakInteractionResolved:
         m_in = compute_cumulative_inlet_mass(theta_end, cin, theta_edges)
 
         # Nothing broke through in-window, so all injected mass is still in the domain.
-        # rtol 1e-5 absorbs the benign c_min-floor transient (~5e-7); the pre-fix C3 bug dropped a
-        # full pulse (1000 of 3000), far above this — so the pin still catches that regression.
+        # rtol 1e-5 absorbs the benign c_min-floor transient (~5e-7); dropping a full pulse
+        # (1000 of 3000) sits far above this, so the pin still catches that failure mode.
         np.testing.assert_allclose(m_dom, m_in, rtol=1e-5)
 
 
@@ -902,13 +902,13 @@ class TestMultiFrontExactAnchors:
     def test_multipeak_domain_mass_holds_both_pulses_before_arrival(self):
         """Review C3: at θ=810 (< first arrival 840) all injected mass is still stored in-domain.
 
-        The pre-fix bug dropped the second pulse's 1000 units from ``compute_domain_mass`` (2000 vs
-        3000), emitting a spurious inlet→outlet echo. Here both pulses are in-domain and exact.
+        Both pulses are in-domain and exact; dropping the second pulse's 1000 units from
+        ``compute_domain_mass`` (2000 vs 3000) emits a spurious inlet→outlet echo.
         """
         tr = self._tracker([0, 10, 10, 0, 0, 0, 5, 5, 0], 40.0, 111)
         m_dom = compute_domain_mass(810.0, 40.0, tr.state.waves, tr.state.sorption)
-        # rtol 1e-5 absorbs the benign c_min-floor transient (~1.4e-3 on 3000); the pre-fix bug
-        # was off by 1000 (a full pulse), so this cleanly catches the C3 regression.
+        # rtol 1e-5 absorbs the benign c_min-floor transient (~1.4e-3 on 3000); a lost pulse
+        # is off by 1000, so this cleanly catches the C3 failure mode.
         np.testing.assert_allclose(m_dom, 3000.0, rtol=1e-5)
 
     def test_multipeak_dsw_formation_and_first_arrival_exact(self):
@@ -930,18 +930,19 @@ class TestMultiFrontExactAnchors:
         # rtol 1e-3: the fan-entry DSW feeding this front is born at c_decay_initial = c_min
         # (~1e-12) not exactly 0, shifting the idealized θ=1340 / faces (4, 1) by ~5e-4.
         np.testing.assert_allclose(theta_cross, 1340.0, rtol=1e-3)
-        c_l, c_r = dfsw[0].side_values(theta_cross)
+        # At the crossing the shock face sits exactly at V=40, so both feeders are read there.
+        c_l = dfsw[0].left_feeder.value(40.0, theta_cross)
+        c_r = dfsw[0].right_feeder.value(40.0, theta_cross)
         np.testing.assert_allclose([c_l, c_r], [4.0, 1.0], rtol=1e-3)
 
     def test_plateau_breakthrough_has_no_zero_hole(self):
         """Review C2: the V=40 plateau breakthrough reads ≈5 in the plateau window, not a c=0 hole.
 
-        The pre-fix bug deactivated the fan's plateau carrier, returning c=0 where physics gives ≈5
-        and losing ~21% of outlet mass.
+        Deactivating the fan's plateau carrier returns c=0 where physics gives ≈5, losing
+        ~21% of outlet mass.
         """
         tr = self._tracker([0, 5, 10, 10, 5, 0], 40.0, 74)
-        # In the CORRECT solution the c≈5 plateau breaks through at θ∈[880, 950] (the review's
-        # [686, 763] was the BUGGY hole's window); assert no bin collapses to zero there.
+        # The c≈5 plateau breaks through at θ∈[880, 950]; assert no bin collapses to zero there.
         thetas = np.linspace(880.0, 950.0, 40)
         c_out = compute_breakthrough_curve(thetas, 40.0, tr.state.waves, tr.state.sorption)
         assert np.all(c_out > 4.5), f"plateau hole: min outlet c = {c_out.min():.4f} (expected ≈5)"

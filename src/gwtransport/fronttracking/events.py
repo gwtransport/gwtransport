@@ -77,8 +77,6 @@ class EventType(Enum):
     """Rarefaction boundary intersects with characteristic."""
     SHOCK_RAREF_COLLISION = "shock_rarefaction_collision"
     """Shock intersects with rarefaction boundary."""
-    RAREF_RAREF_COLLISION = "rarefaction_rarefaction_collision"
-    """Rarefaction boundary intersects with another rarefaction boundary."""
     DSW_FAN_EXHAUSTED = "decaying_shock_fan_exhausted"
     """A decaying shock's fan is exhausted (c_decay reached c_fan_tail)."""
     WAVE_MERGE = "wave_merge"
@@ -143,7 +141,7 @@ def _line_intersection(
 
     ``V_intersect`` is evaluated on line ``a``: the ``dθ`` is invariant under an a↔b swap
     (exact IEEE negation of numerator and denominator) but ``V_intersect`` is not, so the
-    four public wrappers pass the same operand order their pre-refactor bodies used.
+    operand order each public wrapper passes is load-bearing for bit-reproducibility.
     """
     if abs(speed_a - speed_b) < EPSILON_SPEED:
         return None
@@ -193,10 +191,9 @@ def find_rarefaction_boundary_intersections(raref, other_wave, theta_current: fl
     Both rarefaction boundaries propagate at characteristic speeds (head at
     ``1/R(c_head)``, tail at ``1/R(c_tail)``), so each is a straight (V, θ) line
     fed directly into :func:`_line_intersection` — no temporary ``CharacteristicWave``
-    objects. The operand order matches the per-branch order the closed-form helpers
-    used before the refactor (``a`` is the raref boundary vs a characteristic, but the
-    SHOCK vs a raref boundary, so ``V_intersect`` — the new wave's ``v_start`` — is
-    bit-identical).
+    objects. The operand order is per-branch: ``a`` is the raref boundary against a
+    characteristic, but the SHOCK against a raref boundary, so ``V_intersect`` — the new
+    wave's ``v_start`` — matches :func:`find_shock_characteristic_intersection` bit for bit.
 
     Returns
     -------

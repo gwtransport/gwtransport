@@ -5,7 +5,6 @@ import pandas as pd
 import pytest
 
 from gwtransport.examples import (
-    generate_ec_example_data,
     generate_example_data,
     generate_example_deposition_timeseries,
     generate_temperature_example_data,
@@ -14,7 +13,6 @@ from gwtransport.examples import (
 GENERATORS = [
     generate_example_data,
     generate_temperature_example_data,
-    generate_ec_example_data,
     generate_example_deposition_timeseries,
 ]
 

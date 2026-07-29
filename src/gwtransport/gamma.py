@@ -30,22 +30,7 @@ Conversion formulas (with constraint ``mean > loc``):
 When ``loc == 0`` the three-parameter model reduces to the standard two-parameter
 gamma distribution.
 
-Available functions:
-
-- :func:`parse_parameters` - Parse and validate gamma distribution parameters from either
-  (mean, std, loc) or (alpha, beta, loc). Requires exactly one parameter pair and raises
-  ``ValueError`` if both are supplied; validates positivity and ordering constraints.
-
-- :func:`mean_std_loc_to_alpha_beta` - Convert physically intuitive (mean, std, loc) parameters
-  to gamma shape/scale parameters.
-
-- :func:`alpha_beta_loc_to_mean_std` - Convert gamma (alpha, beta, loc) parameters back to
-  (mean, std) for physical interpretation.
-
-- :func:`bins` - Primary function for transport modeling. Creates discrete probability bins
-  from the (optionally shifted) gamma distribution with equal-probability bins (default) or
-  custom quantile edges. Returns bin edges, expected values (mean pore volume within each
-  bin), and probability masses (weight in transport calculations).
+Streamtube discretization by :func:`bins` is always into bins of **equal probability mass**.
 
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
@@ -55,11 +40,9 @@ import numpy as np
 import numpy.typing as npt
 from scipy.stats import gamma as gamma_dist
 
-# Numerical-envelope guard thresholds for bins() (issue #331). Below _MIN_QUANTILE_GAP the
-# conditional-mean CDF difference cancels catastrophically; when alpha*eps exceeds
-# _HUGE_ALPHA_GAP_FRACTION of the smallest quantile gap, alpha + 1 == alpha to machine precision
-# and the per-bin expected values degrade to noise.
-_MIN_QUANTILE_GAP = 1e-8
+# Numerical-envelope guard threshold for bins(): when alpha*eps exceeds this fraction of the
+# equal-mass quantile gap 1/n_bins, alpha + 1 == alpha to machine precision and the per-bin
+# expected values degrade to noise.
 _HUGE_ALPHA_GAP_FRACTION = 0.01
 
 
@@ -182,7 +165,6 @@ def mean_std_loc_to_alpha_beta(*, mean: float, std: float, loc: float = 0.0) -> 
 
     See Also
     --------
-    alpha_beta_loc_to_mean_std : Convert shape/scale/loc parameters to mean and std.
     parse_parameters : Parse and validate gamma distribution parameters.
 
     Examples
@@ -222,51 +204,6 @@ def mean_std_loc_to_alpha_beta(*, mean: float, std: float, loc: float = 0.0) -> 
     return alpha, beta
 
 
-def alpha_beta_loc_to_mean_std(*, alpha: float, beta: float, loc: float = 0.0) -> tuple[float, float]:
-    """
-    Convert shape, scale, and location of gamma distribution to mean and standard deviation.
-
-    Parameters are validated via :func:`parse_parameters`, which raises ``ValueError`` if
-    ``alpha`` or ``beta`` are non-positive or ``loc`` is negative.
-
-    Parameters
-    ----------
-    alpha : float
-        Shape parameter of the gamma distribution. Must be positive.
-    beta : float
-        Scale parameter of the gamma distribution. Must be positive.
-    loc : float, optional
-        Location (horizontal shift) of the gamma distribution. Must be non-negative.
-        Default is ``0.0``.
-
-    Returns
-    -------
-    mean : float
-        Mean of the gamma distribution, equal to ``alpha * beta + loc``.
-    std : float
-        Standard deviation of the gamma distribution, equal to ``sqrt(alpha) * beta``.
-        ``std`` is invariant under the ``loc`` shift.
-
-    See Also
-    --------
-    mean_std_loc_to_alpha_beta : Convert mean/std/loc to shape and scale parameters.
-    parse_parameters : Parse and validate gamma distribution parameters.
-
-    Examples
-    --------
-    >>> from gwtransport.gamma import alpha_beta_loc_to_mean_std
-    >>> alpha = 13.72  # shape parameter
-    >>> beta = 2187.0  # scale parameter
-    >>> mean, std = alpha_beta_loc_to_mean_std(alpha=alpha, beta=beta)
-    >>> print(f"Mean pore volume: {mean:.0f} m³")
-    Mean pore volume: 30006 m³
-    >>> print(f"Std pore volume: {std:.0f} m³")
-    Std pore volume: 8101 m³
-    """
-    parse_parameters(alpha=alpha, beta=beta, loc=loc)
-    return alpha * beta + loc, np.sqrt(alpha) * beta
-
-
 def bins(
     *,
     mean: float | None = None,
@@ -275,16 +212,12 @@ def bins(
     alpha: float | None = None,
     beta: float | None = None,
     n_bins: int = 100,
-    quantile_edges: npt.ArrayLike | None = None,
 ) -> dict[str, npt.NDArray[np.floating]]:
     """
-    Divide a (shifted) gamma distribution into bins and compute bin properties.
+    Divide a (shifted) gamma distribution into equal-probability-mass bins and compute bin properties.
 
-    If ``n_bins`` is provided, the gamma distribution is divided into ``n_bins``
-    equal-mass bins. If ``quantile_edges`` is provided, the distribution is divided
-    into bins defined by those quantile edges. The quantile edges must be a strictly
-    increasing 1-D array of at least 3 entries (>= 2 bins) in ``[0, 1]``, with the
-    first and last entries exactly 0 and 1; ``n_bins`` is then ignored.
+    The distribution is split at the ``n_bins + 1`` uniform quantile edges, so every bin
+    (streamtube) carries probability mass ``1 / n_bins``.
 
     Parameters
     ----------
@@ -302,10 +235,6 @@ def bins(
         Scale parameter of gamma distribution (must be > 0).
     n_bins : int, optional
         Number of bins to divide the gamma distribution (must be >= 2). Default is 100.
-    quantile_edges : array-like, optional
-        Quantile edges for binning. Must be a strictly increasing 1-D array of at least
-        3 entries (>= 2 bins), all in ``[0, 1]``, with the first and last entries exactly
-        0 and 1. If provided, ``n_bins`` is ignored.
 
     Returns
     -------
@@ -323,14 +252,12 @@ def bins(
     Raises
     ------
     ValueError
-        If ``n_bins`` is not greater than 1, if ``quantile_edges`` is not a strictly
-        increasing 1-D array in ``[0, 1]`` with endpoints exactly 0 and 1, or if
-        parameter validation in :func:`parse_parameters` fails. Also raised for
-        numerically-degenerate requests that would otherwise return silently-wrong
-        structure: a smallest quantile-edge gap below ``1e-8`` (catastrophic
-        cancellation of the conditional-mean CDF difference), an ``alpha`` so large that
-        ``alpha + 1 == alpha`` in float64 relative to that gap (the distribution is
-        numerically a point mass), or a bin whose expected value underflows to ``loc``.
+        If ``n_bins`` is not greater than 1, or if parameter validation in
+        :func:`parse_parameters` fails. Also raised for numerically-degenerate requests that
+        would otherwise return silently-wrong structure: an ``alpha`` so large that
+        ``alpha + 1 == alpha`` in float64 relative to the ``1 / n_bins`` quantile gap (the
+        distribution is numerically a point mass), or a bin whose expected value underflows
+        to ``loc``.
 
     See Also
     --------
@@ -341,81 +268,41 @@ def bins(
     :ref:`concept-dispersion-scales` : What ``std`` represents (macrodispersion vs total spreading).
     :ref:`assumption-gamma-distribution` : When gamma distribution is adequate.
 
-    Notes
-    -----
-    For a very large ``alpha`` (``>= ~1e6``) combined with custom ``quantile_edges`` deep
-    in the left tail, ``scipy``'s ``ppf`` loses relative accuracy; prefer equal-mass bins
-    or a coarser grid in that regime.
-
     Examples
     --------
     Create equal-mass bins for a gamma distribution:
 
     >>> from gwtransport.gamma import bins
     >>> result = bins(mean=30000.0, std=8100.0, n_bins=5)
+    >>> print(f"Number of bins: {len(result['probability_mass'])}")
+    Number of bins: 5
 
     With a location parameter representing a minimum pore volume:
 
     >>> result = bins(mean=30000.0, std=8100.0, loc=5000.0, n_bins=5)
     >>> float(result["edges"][0])
     5000.0
-
-    Create bins with custom quantile edges:
-
-    >>> import numpy as np
-    >>> quantiles = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
-    >>> result = bins(mean=30000.0, std=8100.0, quantile_edges=quantiles)
-    >>> print(f"Number of bins: {len(result['probability_mass'])}")
-    Number of bins: 4
     """
     alpha, beta, loc = parse_parameters(mean=mean, std=std, loc=loc, alpha=alpha, beta=beta)
 
-    if quantile_edges is not None:
-        quantile_edges = np.asarray(quantile_edges, dtype=float)
-        if quantile_edges.ndim != 1:
-            msg = "quantile_edges must be a 1-D array."
-            raise ValueError(msg)
-        if quantile_edges.size == 0:
-            msg = "quantile_edges must not be empty."
-            raise ValueError(msg)
-        if not np.all(np.diff(quantile_edges) > 0):
-            msg = "quantile_edges must be strictly increasing."
-            raise ValueError(msg)
-        if quantile_edges[0] != 0.0 or quantile_edges[-1] != 1.0:
-            msg = "quantile_edges must start at 0 and end at 1."
-            raise ValueError(msg)
-        n_bins = len(quantile_edges) - 1
-    else:
-        if n_bins <= 1:
-            # Validate before np.linspace: a negative n_bins would otherwise surface as
-            # numpy's opaque "Number of samples ... must be non-negative" error.
-            msg = "Number of bins must be greater than 1"
-            raise ValueError(msg)
-        quantile_edges = np.linspace(0, 1, n_bins + 1)
-
     if n_bins <= 1:
+        # Validate before np.linspace: a negative n_bins would otherwise surface as
+        # numpy's opaque "Number of samples ... must be non-negative" error.
         msg = "Number of bins must be greater than 1"
         raise ValueError(msg)
 
-    # Guard the two numerical cliffs of the closed-form conditional mean below. A quantile gap
-    # narrower than ~1e-8 makes the CDF difference cancel catastrophically (expected values leave
-    # their own bins); an alpha so large that alpha*eps exceeds ~1% of that gap makes alpha+1 == alpha
-    # to machine precision, so the conditional means degrade to noise. Both are only reachable with
-    # extreme custom quantile_edges or a near-degenerate (delta-like) distribution.
-    min_quantile_gap = float(np.min(np.diff(quantile_edges)))
-    if min_quantile_gap < _MIN_QUANTILE_GAP:
-        msg = (
-            f"The smallest quantile-edge gap ({min_quantile_gap:.3g}) is below {_MIN_QUANTILE_GAP:g}; the "
-            "conditional-mean CDF difference cancels catastrophically and expected values may fall "
-            "outside their own bins. Use wider quantile bins."
-        )
-        raise ValueError(msg)
-    if alpha * np.finfo(float).eps > _HUGE_ALPHA_GAP_FRACTION * min_quantile_gap:
+    quantile_edges = np.linspace(0, 1, n_bins + 1)
+
+    # Guard the numerical cliff of the closed-form conditional mean below: an alpha so large that
+    # alpha*eps exceeds ~1% of the equal-mass quantile gap 1/n_bins makes alpha+1 == alpha to machine
+    # precision, so the conditional means degrade to noise. Only reachable with a near-degenerate
+    # (delta-like) distribution.
+    if alpha * np.finfo(float).eps * n_bins > _HUGE_ALPHA_GAP_FRACTION:
         msg = (
             f"alpha ({alpha:.3g}) is too large for float64 bin resolution: alpha*eps exceeds 1% of "
-            f"the smallest quantile gap ({min_quantile_gap:.3g}), so alpha+1 == alpha to machine "
-            "precision and the per-bin expected values are numerical noise. The distribution is "
-            "effectively a point mass at alpha*beta + loc; use a larger std/(mean-loc) or fewer bins."
+            f"the equal-mass quantile gap (1/{n_bins}), so alpha+1 == alpha to machine precision and "
+            "the per-bin expected values are numerical noise. The distribution is effectively a point "
+            "mass at alpha*beta + loc; use a larger std/(mean-loc) or fewer bins."
         )
         raise ValueError(msg)
 

@@ -11,39 +11,6 @@ The model is a *source* term (positive deposition adds mass to the water); it do
 processes such as pathogen attachment, particle filtration, or chemical precipitation, which would
 remove mass from the water and require the opposite sign convention.
 
-Available functions:
-
-- :func:`deposition_to_extraction` - Compute concentrations from deposition rates (convolution).
-  Given deposition rate time series [g/m²/day], computes resulting concentration changes in
-  extracted water [g/m³]. The areal deposition flux is mixed instantaneously over the aquifer
-  thickness, so a parcel's concentration gain is proportional to its residence time. Accounts for
-  aquifer geometry (porosity, thickness) and residence time distribution.
-
-- :func:`extraction_to_deposition` - Compute deposition rates from concentration changes
-  (deconvolution). Given concentration change time series in extracted water [g/m³], estimates
-  deposition rate history [g/m²/day] that produced those changes. Uses Tikhonov regularization
-  toward a physically motivated target (transpose-and-normalize of the forward matrix). Handles
-  NaN values in concentration data by excluding corresponding time periods.
-
-- :func:`extraction_to_deposition_full` - Full-featured inverse solver exposing all options of
-  the nullspace-based solver (:func:`~gwtransport.utils.solve_underdetermined_system`). Allows
-  choosing between different nullspace objectives (``'squared_differences'``,
-  ``'summed_differences'``, or custom callables) and optimization methods.
-
-- :func:`compute_deposition_weights` - Build the banded weight operator relating deposition
-  rates to concentration changes in a compact banded layout. Useful for custom inverse solvers.
-  Used by deposition_to_extraction (forward), extraction_to_deposition (reverse), and
-  extraction_to_deposition_full. Each weight is a water parcel's residence-time contribution to
-  its concentration gain under areal deposition mixed over the aquifer thickness, independent of
-  whether the flow geometry is radial or orthogonal.
-
-- :func:`spinup_duration` - Compute spinup duration for deposition modeling. Returns the
-  earliest extraction time at which the extracted water was infiltrated at the start of the
-  flow series (equivalently, the time at which cumulative flow first reaches
-  ``retardation_factor * aquifer_pore_volume``). Before this duration the extracted
-  concentration lacks complete deposition history. Useful for determining the valid analysis
-  period and identifying when boundary effects are negligible.
-
 This file is part of gwtransport which is released under AGPL-3.0 license.
 See the ./LICENSE file or go to https://github.com/gwtransport/gwtransport/blob/main/LICENSE for full license details.
 """
@@ -90,21 +57,17 @@ def _validate_deposition_inputs(
 
     Activates checks per the kwargs that are not None:
 
-    - ``dep_values`` provided => ``tedges``-parity vs ``dep`` + combined dep+flow
-      NaN-check (forward path; preserves the historical "Input arrays cannot
-      contain NaN values" message that covered both dep and flow).
+    - ``dep_values`` provided => ``tedges``-parity vs ``dep`` + a combined dep+flow
+      NaN-check (forward path) under the "Input arrays cannot contain NaN values"
+      message.
     - ``cout_values`` + ``cout_tedges`` provided => ``cout_tedges``-parity check
       (inverse paths). ``cout_values`` itself is intentionally NOT NaN-checked
       -- NaN in ``cout`` is allowed and excluded downstream by the inverse solve.
     - ``flow_values`` + ``tedges`` always => parity check + non-negative;
       additionally, in the inverse path (``dep_values is None``), a flow-only
-      NaN-check fires with the historical "flow array cannot contain NaN
-      values" message.
+      NaN-check fires with the "flow array cannot contain NaN values" message.
     - Physical params (``porosity``, ``thickness``, ``aquifer_pore_volume``,
       ``retardation_factor``) always validated.
-
-    Every error message and f-string substitution is preserved verbatim from
-    the prior triplicate prologue so that ``match=`` regex tests do not break.
 
     Raises
     ------
@@ -117,11 +80,9 @@ def _validate_deposition_inputs(
         diffusion family); floats, ints, and bools are all rejected.
     """
     if spinup is not None and spinup != "constant":
-        # Accept only None and "constant"; reject everything else (floats, ints,
-        # bools, typo'd strings). Checking isinstance(spinup, float) alone let an
-        # int threshold (e.g. spinup=0 or 1) slip through and be silently ignored
-        # -- the fraction-threshold value from _resolve_spinup_inputs is discarded
-        # by the deposition callers, so the request had no effect.
+        # Accept only None and "constant"; reject everything else (floats, ints, bools,
+        # typo'd strings). The deposition callers discard the fraction-threshold value from
+        # _resolve_spinup_inputs, so any other request would be silently ignored.
         msg = (
             "deposition's spinup parameter only supports None or 'constant'; "
             f"other values are not yet implemented (got {spinup!r})"
@@ -810,8 +771,8 @@ def extraction_to_deposition_full(
     )
 
     # The nullspace solver (lstsq + null_space SVD) genuinely needs a dense matrix,
-    # so build the band and densify it. Spin-up rows are set to NaN to match the
-    # behavior of the historical dense build (which left those rows entirely NaN).
+    # so build the band and densify it. Spin-up rows carry no complete deposition
+    # history and are therefore set entirely to NaN.
     band_vals, col_start, _, spinup_row = compute_deposition_weights(
         flow=weight_flow,
         tedges=weight_tedges,

@@ -1,26 +1,28 @@
-"""Regression: ``concentration_at_point`` honors ``was_active_at`` retrospectively
-and dispatches stacked shocks by V_shock, not by theta_start.
+"""Dispatch contracts of ``concentration_at_point``, and their parity with ``compute_domain_mass``.
 
-Round 2 introduced a structural asymmetry: ``compute_domain_mass`` switched to
-``was_active_at(theta)`` for retrospective queries, but ``concentration_at_point``
-still filtered by ``wave.is_active``. After the canonical n=2 pulse, the leading
-shock is deactivated at θ=2580 (collision with the trailing rarefaction tail).
-Retrospective queries at θ ∈ [θ_shock_start, θ_deactivation] for any v left of
-the shock should return ``c_left=4`` — but pre-fix returned 0 because the shock
-was skipped by the ``is_active`` filter.
+``compute_domain_mass`` reconstructs the spatial profile through
+``concentration_at_point``, so the two must resolve the wave list by the same
+rules. A dispatch error is not local: m_dom drops out of the conservation form
+``m_out = m_in − m_dom``, and the production advection path then echoes the
+inlet straight through ``compute_bin_averaged_concentration_exact``. Each test
+below pairs the pointwise contract with the m_dom consequence.
 
-The bug surfaces through ``compute_domain_mass`` (which calls
-``concentration_at_point`` in its constant-region fallback): m_dom drops to 0
-for θ < θ_first_outlet_crossing, and the conservation form
-``m_out = m_in - m_dom`` then echoes the inlet directly through
-``compute_bin_averaged_concentration_exact`` in the production advection path.
+Contracts pinned here:
 
-Round 4 fix: ``concentration_at_point``'s elif-branch tiebreaker for ``v > v_shock``
-(shock not yet passed v) switched from ``wave.theta_start`` to a separate
-``rightmost_passed_v_shock`` tracker. The pre-fix tiebreaker mis-ranked stacked
-shocks (the youngest shock by theta_start = innermost in V, ≠ closest to v from
-the left). A c=[0,3,6,9,12] ramp through advection produced a 777 spike in
-cout[4] pre-fix.
+- **Retrospective activity.** A query at θ selects faces by
+  ``wave.was_active_at(θ)``, never by the current ``wave.is_active`` flag. The
+  canonical n=2 pulse deactivates its leading shock at θ=2580 (collision with
+  the trailing rarefaction tail); a query at θ=550 still sees it, and the c=4
+  plateau it carries.
+- **Nearest downstream face.** Among stacked shocks all upstream of the query
+  point, the state at ``v`` comes from the nearest face downstream of ``v`` —
+  the one with the largest ``V_shock`` — not from the youngest by
+  ``theta_start``, which in a cascade is the innermost in V.
+- **Obstruction.** A shock's downstream state reaches only as far as the next
+  face; it does not propagate past an intervening rarefaction into plateaus that
+  rarefaction owns.
+- **Overlapping fans.** Where two DecayingShockWave fans cover the same ``v``,
+  the value comes from the newer wave, whose fan has physically swept the region.
 """
 
 import numpy as np
@@ -90,16 +92,15 @@ def test_compute_domain_mass_matches_inlet_pre_outlet_arrival():
 
 
 def test_stacked_shocks_right_side_uses_v_shock_tiebreaker():
-    """Round-4 fix: among stacked shocks all left of v, the c at v is
-    c_right of the shock with LARGEST V_shock (closest from the left), not
-    the largest theta_start (which mis-ranks innermost = deepest in stack).
+    """Among stacked shocks all left of v, c at v is the right state of the
+    shock with the LARGEST V_shock — the one closest to v from the left — not
+    of the one with the largest theta_start.
 
-    Reproduces the c=[0,3,6,9,12] ramp scenario through Freundlich n=2 at
-    θ_query=250.0 — a time where multiple cascade shocks coexist before
-    fully merging. Pre-fix, the elif-branch tiebreaker used ``theta_start``,
-    causing the youngest (innermost in V, leftmost from the query) shock
-    to win for any v right of all shocks. The ``test_api_freundlich_n_gt_1_
-    n_greater_than_one`` API test surfaced this as a 777 spike in cout[4].
+    A c=[0,3,6,9,12] ramp through Freundlich n=2 produces a cascade of shocks
+    that coexist at θ_query=250 before merging. There the youngest shock by
+    ``theta_start`` is the innermost in V, so an age-based tiebreaker returns
+    the wrong plateau for every v right of the stack; through the advection API
+    that surfaces as a spike in ``cout``.
     """
     sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
     v_outlet = 500.0
@@ -113,37 +114,31 @@ def test_stacked_shocks_right_side_uses_v_shock_tiebreaker():
     # At θ_query=250 (during the second inlet bin, before pulse end):
     # the leading cascade shock (3→0) is at V ≈ 0.0335*150 = 5.0,
     # and the trailing cascade shock (6→3) is at V ≈ 0.0772*50 = 3.86.
-    # So V_oldest=5.0 > V_newest=3.86: shock layout V_new=3.86 < V_old=5.0.
-    # Pre-fix mutation: youngest shock (theta_start=200) wins → c_right of
-    # newest = 3. Post-fix: rightmost-V shock (theta_start=100) wins →
-    # c_right of oldest = 0.
+    # So the layout is V_new=3.86 < V_old=5.0. An age tiebreaker would pick the
+    # youngest shock (theta_start=200) → c_right = 3; the rightmost-V shock
+    # (theta_start=100) is the correct owner → c_right = 0.
     theta_query = 250.0
     v_query_right = 100.0  # well right of both shocks
 
     c = concentration_at_point(v=v_query_right, theta=theta_query, waves=tr.state.waves, sorption=sorption)
     # At v=100 right of all shocks at θ=250: c must be the IC value =
     # c_right of the leading (rightmost-V) shock = 0.
-    # Pre-fix would have returned 3 (c_right of the second-cascade shock).
     assert c == 0.0, f"v=100 right of all shocks at θ=250: expected c=0 (IC), got {c}"
 
 
 def test_multi_rarefaction_overlap_no_overcount_in_domain_mass():
-    """Round-5c fix: ``concentration_at_point`` shock c_R only applies in the
-    immediate-right zone, not past intervening rarefactions.
+    """A shock's right state reaches only to the next face, not past intervening rarefactions.
 
     For an n<1 ramp ``cin=[0,3,6,9,12,0]`` (Freundlich n=0.5), the simulator
-    produces 4 stacked rarefactions from the upramp PLUS a closing shock
-    from the trailing zero. At θ=500 (just after the closing shock forms at
-    V=0), 4 active rarefactions sit in the V-range [0.083, 400] with c
-    plateaus between them (c=9, 6, 3 at the gaps). Pre-fix, the shock's
-    c_R=12 propagated through ALL constant regions — including [400, 500]
-    where c should be 0 (IC, past the outermost rarefaction's head). The
-    overcount made m_dom=727694 vs the physically-injected 3000 (240×
-    overcount). Post-fix, the _intervening_wave_between obstruction check
-    correctly stops the shock c_R's reach at the next downstream wave.
+    produces 4 stacked rarefactions from the upramp PLUS a closing shock from
+    the trailing zero. At θ=500 (just after the closing shock forms at V=0), 4
+    active rarefactions sit in the V-range [0.083, 400] with c plateaus between
+    them (c=9, 6, 3 at the gaps), and c=0 past the outermost head.
 
-    This test asserts the c profile is geometrically correct across all
-    intermediate-V positions of the padded n=0.5 ramp at θ=500.
+    The test asserts the c profile is geometrically correct at a midpoint of
+    every constant region. Letting the closing shock's c_R=12 reach through all
+    of them — including [400, 500], which the outermost rarefaction owns — sends
+    m_dom to 727694 against the 3000 actually injected, a 240× overcount.
     """
     sorption = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3)
     v_outlet = 500.0
@@ -170,27 +165,24 @@ def test_multi_rarefaction_overlap_no_overcount_in_domain_mass():
         c = concentration_at_point(v=v, theta=theta_query, waves=tr.state.waves, sorption=sorption)
         assert c == c_expected, (
             f"n=0.5 ramp at θ=500, v={v}: expected c={c_expected}, got {c} "
-            f"(pre-round-5c shock c_R=12 would propagate to all constant regions)"
+            f"(an unobstructed shock c_R=12 would fill every constant region)"
         )
 
-    # Sanity: m_dom should match m_in (no mass has reached v_outlet=500 yet).
+    # m_dom must match m_in: no mass has reached v_outlet=500 yet.
     m_in = compute_cumulative_inlet_mass(theta=theta_query, cin=cin, theta_edges=tr.state.theta_edges)
     m_dom = compute_domain_mass(theta=theta_query, v_outlet=v_outlet, waves=tr.state.waves, sorption=sorption)
     rel_err = abs(m_dom - m_in) / max(m_in, 1.0)
-    # Pre-round-5c: m_dom=727694, rel_err ≈ 240. Post-fix: rel_err ≤ 1e-12.
     assert rel_err < 1e-12, f"m_dom={m_dom}, m_in={m_in}, rel_err={rel_err:.3e}"
 
 
 def test_multi_dsw_concentration_at_point_uses_newest():
-    """Two-pulse Freundlich n=2 with two coexisting DSWs: ``concentration_at_point``
-    must match the ``max(theta_start)`` rule used by ``compute_domain_mass``.
+    """Two-pulse Freundlich n=2 with two coexisting DSWs: the newer fan owns the overlap.
 
-    Pre-fix: ``concentration_at_point`` iterated DSWs chronologically and
-    short-circuited on the first non-None c, returning DSW0's (older) fan
-    value (~0.102) for v in the overlap region. The newer DSW1's fan has
-    physically swept through that region, so the correct value is DSW1's
-    (~0.300). The fix collects DSWs whose ``v`` is strictly in-fan and picks
-    the one with the largest ``theta_start``.
+    Where both fans cover ``v``, the newer DecayingShockWave has physically
+    swept through the region, so its value (~0.300 here) is the state at ``v``,
+    not the older one's (~0.102). Returning the first in-fan match found by
+    iterating the wave list chronologically would take the older value and
+    disagree with ``compute_domain_mass``.
     """
     sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
     v_outlet = 200.0

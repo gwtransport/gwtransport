@@ -41,7 +41,6 @@ from gwtransport.fronttracking.handlers import (
     EPSILON_CONCENTRATION,
     create_inlet_waves_at_theta,
     handle_characteristic_collision,
-    handle_outlet_crossing,
     handle_rarefaction_characteristic_collision,
     handle_shock_characteristic_collision,
     handle_shock_collision,
@@ -149,24 +148,15 @@ class FrontTrackerState:
     def theta_at_t(self, t: float) -> float:
         """Translate user-facing time t [days] to cumulative flow θ [m³].
 
-        Piecewise linear forward map. Outside the input range the boundary
-        flow is extrapolated.
+        Scalar form of :meth:`theta_at_t_array`.
         """
-        if t <= self.tedges_days[0]:
-            return float(self.theta_edges[0])
-        if t >= self.tedges_days[-1]:
-            return float(self.theta_edges[-1] + (t - self.tedges_days[-1]) * float(self.flow[-1]))
-
-        # Boundary returns above guarantee strictly-interior t, so searchsorted
-        # lands in [0, len(flow)-1] without an extra index clamp.
-        i = int(np.searchsorted(self.tedges_days, t, side="right")) - 1
-        return float(self.theta_edges[i] + (t - self.tedges_days[i]) * float(self.flow[i]))
+        return float(self.theta_at_t_array(t))
 
     def theta_at_t_array(self, t: npt.ArrayLike) -> npt.NDArray[np.floating]:
-        """Vectorized ``theta_at_t``: map an array of times t [days] to θ [m³].
+        """Map times t [days] to cumulative flow θ [m³].
 
-        Element-wise identical to :meth:`theta_at_t`; replaces per-scalar loops
-        in the plotting/output breakthrough routines.
+        Piecewise linear forward map. Outside the input range the boundary flow is
+        extrapolated.
 
         Parameters
         ----------
@@ -331,7 +321,7 @@ class FrontTracker:
 
         def push_collision(theta, event_type, waves, v, boundary):
             nonlocal counter
-            # Global resolution (issue #294 D5): collisions are resolved wherever they occur,
+            # Global resolution: collisions are resolved wherever they occur,
             # up to θ_horizon — not only within [0, v_outlet]. The single-owner reader needs a
             # globally interaction-consistent front order, since the nearest downstream face
             # of an in-domain query may lie beyond the outlet (e.g. a rarefaction head that
@@ -381,14 +371,8 @@ class FrontTracker:
                 for theta, v, boundary in intersections:
                     push_collision(theta, EventType.SHOCK_RAREF_COLLISION, [shock, raref], v, boundary)
 
-        for i, raref1 in enumerate(rarefs):
-            for raref2 in rarefs[i + 1 :]:
-                intersections = find_rarefaction_boundary_intersections(raref1, raref2, theta_current)
-                for theta, v, boundary in intersections:
-                    push_collision(theta, EventType.RAREF_RAREF_COLLISION, [raref1, raref2], v, boundary)
-
-        # Interaction events (issue #294): every face pair with at least one decaying/doubly-fed
-        # shock. The closed-form loops above cover char/shock/rarefaction pairs; here a face of a
+        # Interaction events: every face pair with at least one decaying/doubly-fed shock. The
+        # closed-form loops above cover char/shock/rarefaction pairs; here a face of a
         # DSW/DFSW (its curved shock face or a free fan boundary line) meets any other wave's face.
         # Resolution is GLOBAL — allowed beyond v_outlet up to θ_horizon — because the sweep reader
         # needs a globally interaction-consistent front order for the nearest-downstream lookup.
@@ -504,11 +488,7 @@ class FrontTracker:
 
         theta_event, _, event_type, waves, v, extra, faces = min(candidates, key=itemgetter(slice(2)))
 
-        raref_types = {
-            EventType.RAREF_CHAR_COLLISION,
-            EventType.SHOCK_RAREF_COLLISION,
-            EventType.RAREF_RAREF_COLLISION,
-        }
+        raref_types = {EventType.RAREF_CHAR_COLLISION, EventType.SHOCK_RAREF_COLLISION}
         boundary_type = extra if event_type in raref_types else None
 
         return Event(
@@ -557,11 +537,6 @@ class FrontTracker:
                 boundary_type=event.boundary_type,
             )
 
-        elif event.event_type == EventType.RAREF_RAREF_COLLISION:
-            # Conservative: rarefaction-rarefaction collision records the event
-            # but makes no topology change. Both rarefactions remain active.
-            new_waves = []
-
         elif event.event_type == EventType.WAVE_MERGE:
             assert event.faces is not None  # noqa: S101  # WAVE_MERGE always carries its two faces
             face_a, face_b = event.faces
@@ -571,8 +546,17 @@ class FrontTracker:
             new_waves = self._handle_fan_exhaustion(event.waves_involved[0], event.theta, event.location)
 
         elif event.event_type == EventType.OUTLET_CROSSING:
-            event_record = handle_outlet_crossing(event.waves_involved[0], event.theta, event.location)
-            self.state.events.append(event_record)
+            # The wave is NOT deactivated: it stays queryable for concentrations
+            # between its origin and the outlet.
+            wave = event.waves_involved[0]
+            self.state.events.append({
+                "theta": event.theta,
+                "type": "outlet_crossing",
+                "wave": wave,
+                "location": event.location,
+                "concentration_left": wave.concentration_left(),
+                "concentration_right": wave.concentration_right(),
+            })
             return
 
         self.state.waves.extend(new_waves)
@@ -621,63 +605,38 @@ class FrontTracker:
             return []
         return [shock]
 
-    def run(self, max_iterations: int = 10000, *, verbose: bool = False):
+    def run(self, max_iterations: int = 10000):
         """Process events in θ-order until the queue is empty or ``max_iterations`` is reached."""
         iteration = 0
-
-        if verbose:
-            logger.info("Starting simulation at θ=%.3f", self.state.theta_current)
-            logger.info("Initial waves: %d", len(self.state.waves))
-            logger.info("First arrival: θ=%.3f", self.theta_first_arrival)
 
         while iteration < max_iterations:
             event = self.find_next_event()
 
             if event is None:
-                if verbose:
-                    logger.info("Simulation complete after %d events at θ=%.6f", iteration, self.state.theta_current)
                 break
 
             self.state.theta_current = event.theta
-
-            try:
-                self.handle_event(event)
-            except Exception:
-                logger.exception("Error handling event at θ=%.3f", event.theta)
-                raise
-
-            if iteration % 100 == 0:
-                self.verify_physics()
-
-            if verbose and iteration % 10 == 0:
-                active = sum(1 for w in self.state.waves if w.is_active)
-                logger.debug("Iteration %d: θ=%.3f, active_waves=%d", iteration, event.theta, active)
-
+            self.handle_event(event)
             iteration += 1
 
         if iteration >= max_iterations:
             logger.warning("Reached max_iterations=%d", max_iterations)
 
-        if verbose:
-            logger.info("Final statistics:")
-            logger.info("  Total events: %d", len(self.state.events))
-            logger.info("  Total waves created: %d", len(self.state.waves))
-            logger.info("  Active waves: %d", sum(1 for w in self.state.waves if w.is_active))
-            logger.info("  First arrival: θ=%.6f", self.theta_first_arrival)
-
     def verify_physics(self):
         """Verify physical correctness: every active shock satisfies Lax entropy.
 
         Mass conservation is intentionally NOT checked here. The closed-form
-        identity ``m_out(θ) = m_in(θ) − m_dom(θ)`` makes any runtime
+        identity ``m_out(θ) = m_in(θ) − m_dom(θ)`` makes any
         ``m_in_domain + m_out_cumulative == m_in_cumulative`` test tautological
         (residual identically zero, regardless of any ``compute_domain_mass``
         bug), so it cannot catch a conservation error. The non-tautological,
         integral-based conservation check (an independent breakthrough integral
         compared to the inlet mass) lives in
-        :func:`gwtransport.fronttracking.validation.verify_physics` check 7 and
-        is exercised by ``TestEndToEndConservation`` /
-        ``TestIndependentDomainMass``.
+        :func:`gwtransport.fronttracking.validation.verify_physics` check 7.
+
+        Every shock the solver creates is entropy-checked at construction and a
+        shock's ``(c_left, c_right)`` never change, so this scan is an assertion
+        for externally assembled wave lists, not a solver self-check.
 
         Raises
         ------
@@ -695,22 +654,17 @@ class FrontTracker:
 
 
 def find_unresolved_interaction(state: FrontTrackerState) -> str | None:
-    """Tripwire for a solver-left inconsistency in the resolved wave field (issue #294 D6).
+    """Tripwire for a solver-left inconsistency in the resolved wave field.
 
-    The solver now resolves *every* wave interaction (shock↔shock, fan-entry, doubly-fed
+    The solver resolves *every* wave interaction (shock↔shock, fan-entry, doubly-fed
     formation, same-apex annihilation, and their compositions), so the wave list is
     interaction-consistent and the single-owner sweep reader is exact — overlapping fans are
-    normal and correct. This function is therefore no longer an input filter but an internal
-    invariant check: the cumulative outlet mass ``m_out(θ) = m_in(θ) − m_dom(θ)`` must be
-    non-decreasing in θ (mass leaves the column, it never re-enters). A decrease beyond the
-    FP-cancellation band means the reader's domain-mass field transiently over-counts stored
-    mass — the fingerprint of an interaction the solver failed to resolve (a bug). The public
-    API turns a non-``None`` return into a fail-loud ``RuntimeError`` rather than returning a
-    silently wrong ``cout``.
-
-    The geometric fan-overlap scan of the previous (input-refusing) version is intentionally
-    dropped: with interactions resolved, overlapping fans read identically from either
-    neighbour and are not an error, so that scan is now only a false positive.
+    normal and correct, not an error. This is an internal invariant check: the cumulative
+    outlet mass ``m_out(θ) = m_in(θ) − m_dom(θ)`` must be non-decreasing in θ (mass leaves
+    the column, it never re-enters). A decrease beyond the FP-cancellation band means the
+    reader's domain-mass field transiently over-counts stored mass — the fingerprint of an
+    interaction the solver failed to resolve (a bug). The public API turns a non-``None``
+    return into a fail-loud ``RuntimeError`` rather than returning a silently wrong ``cout``.
 
     Parameters
     ----------

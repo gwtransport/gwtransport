@@ -18,15 +18,12 @@ from gwtransport.utils import (
     compute_time_edges,
     cumulative_flow_volume,
     get_soil_temperature,
-    linear_average,
     linear_interpolate,
     simplify_bins,
     solve_inverse_transport,
     solve_inverse_transport_banded,
-    solve_tikhonov,
     solve_underdetermined_system,
     step_plot_coords,
-    time_bin_overlap,
 )
 
 
@@ -108,275 +105,6 @@ def test_make_strictly_monotone_multiple_runs_reset_cumcount():
     expected = np.array([0.0, 5.0, 5.0 + bump, 5.0 + 2 * bump, 7.0, 7.0 + bump, 9.0])
     result = _make_strictly_monotone(arr)
     np.testing.assert_array_equal(result, expected)
-
-
-def test_constant_function():
-    """Test average of constant function y=2."""
-    x_data = np.array([0, 1, 2, 3, 4])
-    y_data = np.array([2, 2, 2, 2, 2])
-    x_edges = np.array([0, 2, 4])
-
-    expected = np.array([[2, 2]])  # Average is constant, now 2D
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges)
-
-    np.testing.assert_allclose(result, expected)
-
-
-def test_linear_function():
-    """Test average of linear function y=x."""
-    x_data = np.array([0, 1, 2, 3, 4])
-    y_data = np.array([0, 1, 2, 3, 4])
-    x_edges = np.array([0, 2, 4])
-
-    # Average of y=x from 0 to 2 = 1
-    # Average of y=x from 2 to 4 = 3
-    expected = np.array([[1, 3]])
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges)
-
-    np.testing.assert_allclose(result, expected)
-
-
-def test_piecewise_linear():
-    """Test average of piecewise linear function."""
-    x_data = np.array([0, 1, 2, 3])
-    y_data = np.array([0, 1, 1, 0])
-    x_edges = np.array([0, 1.5, 3])
-
-    # Integral from 0 to 1.5 = 1, width = 1.5 → average = 2/3
-    # Integral from 1.5 to 3 = 1, width = 1.5 → average = 2/3
-    expected = np.array([[1.0 / 1.5, 1.0 / 1.5]])
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges)
-
-    np.testing.assert_allclose(result, expected, rtol=1e-10)
-
-
-def test_edges_beyond_data():
-    """Test averages with edges outside the data range."""
-    x_data = np.array([1, 2, 3])
-    y_data = np.array([1, 2, 3])
-    x_edges = np.array([0, 4])
-
-    # Extrapolation should extend the first and last segments
-    # Average of y=x from 0 to 4 = 2
-    expected = np.array([[2]])
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges, extrapolate_method="outer")
-
-    np.testing.assert_allclose(result, expected)
-
-
-def test_edges_matching_data():
-    """Test when edges exactly match data points."""
-    x_data = np.array([0, 1, 2, 3, 4])
-    y_data = np.array([0, 1, 4, 9, 16])
-    x_edges = np.array([1, 3])
-
-    # Average under the curve from 1 to 3 = 4.5
-    expected = np.array([[4.5]])
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges)
-
-    np.testing.assert_allclose(result, expected)
-
-
-def test_multiple_edge_intervals():
-    """Test with multiple averaging intervals."""
-    x_data = np.array([0, 1, 2, 3, 4, 5])
-    y_data = np.array([0, 1, 4, 9, 16, 25])
-    x_edges = np.array([0, 1, 2, 3, 4, 5])
-
-    # Average of each segment
-    expected = np.array([[0.5, 2.5, 6.5, 12.5, 20.5]])
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges)
-
-    np.testing.assert_allclose(result, expected)
-
-
-def test_empty_interval():
-    """Test averaging over an empty interval (edges are the same)."""
-    x_data = np.array([0, 1, 2, 3])
-    y_data = np.array([0, 1, 4, 9])
-    x_edges = np.array([0, 1, 1, 2])
-
-    # Second interval has zero width at x=1, so average should be y=1
-    expected = np.array([[0.5, 1.0, 2.5]])
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges)
-
-    np.testing.assert_allclose(result, expected)
-
-
-def test_input_validation():
-    """Test input validation."""
-    # Test unequal lengths of x_data and y_data
-    with pytest.raises(ValueError, match="x_data and y_data must have the same length and be non-empty"):
-        linear_average(x_data=[0, 1], y_data=[0], x_edges=[0, 1])
-
-    # Test x_edges too short
-    with pytest.raises(ValueError, match="x_edges must contain at least 2 values in each row"):
-        linear_average(x_data=[0, 1], y_data=[0, 1], x_edges=[0])
-
-    # Test x_data not in ascending order
-    with pytest.raises(ValueError, match="x_data must be in ascending order"):
-        linear_average(x_data=[1, 0], y_data=[0, 1], x_edges=[0, 1])
-
-    # Test x_edges not in ascending order
-    with pytest.raises(ValueError, match="x_edges must be in ascending order"):
-        linear_average(x_data=[0, 1], y_data=[0, 1], x_edges=[1, 0])
-
-
-def test_complex_piecewise_function():
-    """Test a more complex piecewise linear function."""
-    x_data = np.array([0, 1, 2, 3, 4, 5])
-    y_data = np.array([0, 2, 1, 3, 0, 2])
-    x_edges = np.array([0.5, 2.5, 4.5])
-
-    # First interval: integral = 3.0, width = 2.0 → average = 1.5
-    # Second interval: integral = 3.0, width = 2.0 → average = 1.5
-    expected = np.array([[1.5, 1.5]])
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges)
-
-    np.testing.assert_allclose(result, expected)
-
-
-def test_edge_case_numerical_precision():
-    """Test numerical precision for very close x values."""
-    x_data = np.array([0, 1e-10, 1])
-    y_data = np.array([0, 1e-10, 1])
-    x_edges = np.array([0, 0.5, 1])
-
-    # For a linear function y=x, the average from 0 to 0.5 is 0.25
-    # and from 0.5 to 1 is 0.75
-    expected = np.array([[0.25, 0.75]])
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges)
-
-    np.testing.assert_allclose(result, expected, rtol=1e-10)
-
-
-def test_single_point_data():
-    """Test with a single data point - should extrapolate as constant."""
-    x_data = np.array([1])
-    y_data = np.array([5])
-    x_edges = np.array([0, 2])
-
-    # Single point should be treated as constant value
-    expected = np.array([[5]])
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges, extrapolate_method="outer")
-
-    np.testing.assert_allclose(result, expected)
-
-
-def test_zero_width_interval_edge_case():
-    """Test handling of a zero-width interval at the edge."""
-    x_data = np.array([0, 1, 2])
-    y_data = np.array([0, 1, 2])
-    x_edges = np.array([0, 0, 1])
-
-    # First interval has zero width at x=0, so average should be y=0
-    # Second interval is 0 to 1, average is 0.5
-    expected = np.array([[0.0, 0.5]])
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges)
-
-    np.testing.assert_allclose(result, expected)
-
-
-def test_2d_x_edges():
-    """Test 2D x_edges functionality."""
-    x_data = np.array([0, 1, 2, 3])
-    y_data = np.array([0, 1, 1, 0])
-
-    # 2D x_edges: two different edge sets
-    x_edges_2d = np.array([
-        [0, 1.5, 3],  # First set of edges
-        [0.5, 2, 3],  # Second set of edges
-    ])
-
-    # Expected results for each row
-    expected = np.array([
-        [2 / 3, 2 / 3],  # First row results
-        [11 / 12, 0.5],  # Second row results (0.916667, 0.5)
-    ])
-
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges_2d)
-
-    np.testing.assert_allclose(result, expected, rtol=1e-12)
-
-
-def test_linear_average_2d_y_data_basic():
-    """2D y_data computes the per-row average independently and matches looping."""
-    x_data = np.array([0.0, 1.0, 2.0, 3.0])
-    y_data_2d = np.array([
-        [0.0, 1.0, 1.0, 0.0],
-        [0.0, 2.0, 2.0, 0.0],
-        [1.0, 1.0, 1.0, 1.0],
-    ])
-    x_edges = np.array([0.0, 1.5, 3.0])
-
-    result = linear_average(x_data=x_data, y_data=y_data_2d, x_edges=x_edges)
-
-    # Compare to a loop over rows -- each row averaged independently.
-    expected = np.vstack([
-        linear_average(x_data=x_data, y_data=y_data_2d[i], x_edges=x_edges)[0] for i in range(y_data_2d.shape[0])
-    ])
-    np.testing.assert_allclose(result, expected, rtol=1e-12)
-    # Sanity check: row 2 is constant 1, so its average over any interval is 1.
-    np.testing.assert_allclose(result[2], 1.0, rtol=1e-12)
-
-
-def test_linear_average_2d_y_data_per_row_nan():
-    """2D y_data: a NaN in one row only marks bins of that row, not others."""
-    x_data = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
-    y_data_2d = np.array([
-        [0.0, 1.0, 2.0, 3.0, 4.0],  # ramp y = x
-        [0.0, 1.0, np.nan, 3.0, 4.0],  # NaN at x=2 in row 1 only
-    ])
-    x_edges = np.array([0.0, 1.0, 3.0, 4.0])
-
-    result = linear_average(x_data=x_data, y_data=y_data_2d, x_edges=x_edges)
-
-    # Row 0: y = x clean. Means over [0,1], [1,3], [3,4] are 0.5, 2.0, 3.5.
-    np.testing.assert_allclose(result[0], [0.5, 2.0, 3.5], rtol=1e-12)
-    # Row 1: bin [0, 1] does not touch any NaN segment -> finite. Bin [1, 3] does -> NaN.
-    # Bin [3, 4] does not -> finite (the NaN segment is [1,2] U [2,3]).
-    np.testing.assert_allclose(result[1, 0], 0.5, rtol=1e-12)
-    assert np.isnan(result[1, 1])
-    np.testing.assert_allclose(result[1, 2], 3.5, rtol=1e-12)
-
-
-def test_linear_average_2d_y_data_with_2d_x_edges_raises():
-    """Combining 2D y_data with 2D x_edges is intentionally unsupported."""
-    x_data = np.array([0.0, 1.0, 2.0])
-    y_data_2d = np.array([[0.0, 1.0, 2.0], [2.0, 1.0, 0.0]])
-    x_edges_2d = np.array([[0.0, 1.0, 2.0], [0.5, 1.0, 1.5]])
-    with pytest.raises(ValueError, match="Cannot combine 2D x_edges with 2D y_data"):
-        linear_average(x_data=x_data, y_data=y_data_2d, x_edges=x_edges_2d)
-
-
-def test_linear_average_straddling_bin_is_nan():
-    """Bins partially outside the data range must be NaN, not biased low.
-
-    With the previous implementation, a straddling bin's integral covered only
-    the in-range portion while being divided by the full bin width, biasing the
-    result low. The fix sets such bins to NaN, the same as bins fully outside
-    the range.
-    """
-    # Linear ramp y = x on [0, 4]; mean over [-1, 4] would equal 4/2 = 2 but
-    # only the in-range portion (over [0, 4]) is integrable; the result must
-    # therefore be NaN, not the buggy 8/5 = 1.6.
-    x_data = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
-    y_data = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
-    x_edges = np.array([-1.0, 4.0])
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges, extrapolate_method="nan")
-    assert np.isnan(result).all()
-
-    # Same on the right side.
-    x_edges = np.array([0.0, 5.0])
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges, extrapolate_method="nan")
-    assert np.isnan(result).all()
-
-    # Mixed: one fully-inside bin, one straddling-left bin, one straddling-right bin.
-    x_edges = np.array([-1.0, 1.0, 3.0, 5.0])
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges, extrapolate_method="nan")
-    assert np.isnan(result[0, 0])
-    np.testing.assert_allclose(result[0, 1], 2.0, rtol=1e-12)  # mean of y=x over [1, 3] = 2
-    assert np.isnan(result[0, 2])
 
 
 def test_basic_case():
@@ -585,297 +313,6 @@ def test_get_soil_temperature_cache():
             cache_path_false = Path(temp_dir) / "cache" / f"soil_temp_260_False_{mock_date.isoformat()}.pkl"
             assert cache_path_false.exists()
             assert not df3.equals(df1)
-
-
-def test_time_bin_overlap_basic():
-    """Test basic functionality of time_bin_overlap."""
-    tedges = np.array([0, 10, 20, 30])
-    bin_tedges = [(5, 15), (25, 35)]
-    expected = np.array([[0.5, 0.5, 0.0], [0.0, 0.0, 0.5]])
-
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_array_equal(result, expected)
-
-
-def test_time_bin_overlap_no_overlap():
-    """Test when time ranges don't overlap with any bins."""
-    tedges = np.array([0, 10, 20, 30])
-    bin_tedges = [(40, 50), (60, 70)]
-    expected = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
-
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_array_equal(result, expected)
-
-
-def test_time_bin_overlap_complete_overlap():
-    """Test when time ranges completely overlap with bins."""
-    tedges = np.array([0, 10, 20, 30])
-    bin_tedges = [(0, 10), (10, 20), (20, 30)]
-    expected = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
-
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_array_equal(result, expected)
-
-
-def test_time_bin_overlap_partial_overlap():
-    """Test partial overlaps with multiple bins."""
-    tedges = np.array([0, 10, 20, 30])
-    bin_tedges = [(5, 25)]
-    expected = np.array([[0.5, 1.0, 0.5]])
-
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_array_equal(result, expected)
-
-
-def test_time_bin_overlap_single_bin():
-    """Test with single time bin."""
-    tedges = np.array([0, 10])
-    bin_tedges = [(5, 15), (-5, 5)]
-    expected = np.array([[0.5], [0.5]])
-
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_array_equal(result, expected)
-
-
-def test_time_bin_overlap_edge_alignment():
-    """Test when time ranges align perfectly with bin edges."""
-    tedges = np.array([0, 10, 20, 30])
-    bin_tedges = [(0, 20), (10, 30)]
-    expected = np.array([[1.0, 1.0, 0.0], [0.0, 1.0, 1.0]])
-
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_array_equal(result, expected)
-
-
-def test_time_bin_overlap_floating_point():
-    """Test with floating point values."""
-    tedges = np.array([0.1, 0.3, 0.5, 0.7])
-    bin_tedges = [(0.2, 0.4), (0.6, 0.8)]
-    expected = np.array([[0.5, 0.5, 0.0], [0.0, 0.0, 0.5]])
-
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6)
-
-
-def test_time_bin_overlap_negative_values():
-    """Test with negative time values."""
-    tedges = np.array([-30, -20, -10, 0])
-    bin_tedges = [(-25, -15), (-5, 5)]
-    expected = np.array([[0.5, 0.5, 0.0], [0.0, 0.0, 0.5]])
-
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_array_equal(result, expected)
-
-
-def test_time_bin_overlap_overlapping_ranges():
-    """Test with overlapping time ranges."""
-    tedges = np.array([0, 10, 20, 30])
-    bin_tedges = [(5, 15), (10, 25)]
-    expected = np.array([[0.5, 0.5, 0.0], [0.0, 1.0, 0.5]])
-
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_array_equal(result, expected)
-
-
-def test_time_bin_overlap_zero_width_bins():
-    """Test with zero-width time bins."""
-    tedges = np.array([0, 10, 10, 20])
-    bin_tedges = [(5, 15)]
-    expected = np.array([[0.5, 0.0, 0.5]])
-
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_array_equal(result, expected)
-
-
-def test_time_bin_overlap_large_range():
-    """Test with a large time range covering all bins."""
-    tedges = np.array([0, 10, 20, 30])
-    bin_tedges = [(-10, 40)]
-    expected = np.array([[1.0, 1.0, 1.0]])
-
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_array_equal(result, expected)
-
-
-def test_time_bin_overlap_list_inputs():
-    """Test with list inputs instead of numpy arrays."""
-    tedges = [0, 10, 20, 30]
-    bin_tedges = [(5, 15), (25, 35)]
-    expected = np.array([[0.5, 0.5, 0.0], [0.0, 0.0, 0.5]])
-
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_array_equal(result, expected)
-
-
-def test_time_bin_overlap_input_validation():
-    """Test input validation for time_bin_overlap."""
-    # Test with non-1D tedges
-    with pytest.raises(ValueError, match="tedges must be a 1D array"):
-        time_bin_overlap(tedges=np.array([[0, 10], [20, 30]]), bin_tedges=[(5, 15)])
-
-    # Test with too few tedges
-    with pytest.raises(ValueError, match="tedges must have at least 2 elements"):
-        time_bin_overlap(tedges=np.array([0]), bin_tedges=[(5, 15)])
-
-    # Test with empty bin_tedges
-    with pytest.raises(ValueError, match="bin_tedges must be non-empty"):
-        time_bin_overlap(tedges=np.array([0, 10, 20]), bin_tedges=[])
-
-
-def test_time_bin_overlap_precision():
-    """Test numerical precision with very small overlaps."""
-    tedges = np.array([0, 1e-10, 1])
-    bin_tedges = [(0.5, 1.5)]
-    expected = np.array([[0.0, 0.5]])
-
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-10)
-
-
-def test_time_bin_overlap_many_ranges():
-    """Test with many time ranges and bins for performance."""
-    tedges = np.linspace(0, 100, 101)  # 100 bins
-    bin_tedges = [(i, i + 10) for i in range(0, 90, 5)]  # 18 overlapping ranges
-
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-
-    # Check output shape
-    assert result.shape == (18, 100)
-
-    # Check that each range has correct total overlap
-    for i in range(len(bin_tedges)):
-        # Each range spans 10 units, so total overlap should be 10
-        total_overlap = np.sum(result[i, :])
-        np.testing.assert_array_equal([total_overlap], [10.0])
-
-
-def test_time_bin_overlap_boundary_cases():
-    """Test boundary cases and edge conditions."""
-    tedges = np.array([0, 5, 10, 15, 20])
-
-    # Range that touches bin boundary but doesn't overlap
-    bin_tedges = [(10, 10)]
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    expected = np.array([[0.0, 0.0, 0.0, 0.0]])
-    np.testing.assert_array_equal(result, expected)
-
-    # Range that exactly matches a bin
-    bin_tedges = [(5, 10)]
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    expected = np.array([[0.0, 1.0, 0.0, 0.0]])
-    np.testing.assert_array_equal(result, expected)
-
-
-# =============================================================================
-# Tests for solve_tikhonov resolution diagnostics
-# =============================================================================
-
-
-def test_solve_tikhonov_resolution_well_determined():
-    """Well-determined system: fraction_data should be close to 1 everywhere."""
-    # Overdetermined 4x3 system with good conditioning
-    coeff = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 1]], dtype=float)
-    x_true = np.array([1.0, 2.0, 3.0])
-    rhs = coeff @ x_true
-    x_target = np.zeros(3)
-
-    x, fraction_data = solve_tikhonov(
-        coefficient_matrix=coeff,
-        rhs_vector=rhs,
-        x_target=x_target,
-        regularization_strength=1e-10,
-        return_resolution=True,
-    )
-
-    np.testing.assert_allclose(x, x_true, atol=1e-6)
-    np.testing.assert_allclose(fraction_data, 1.0, rtol=0, atol=1e-9)
-
-
-def test_solve_tikhonov_resolution_underdetermined():
-    """Underdetermined system: some fraction_data values should be < 1."""
-    # 2 equations, 4 unknowns
-    coeff = np.array([[1, 1, 0, 0], [0, 0, 1, 1]], dtype=float)
-    rhs = np.array([3.0, 7.0])
-    x_target = np.array([1.0, 2.0, 3.0, 4.0])
-
-    _x, fraction_data = solve_tikhonov(
-        coefficient_matrix=coeff,
-        rhs_vector=rhs,
-        x_target=x_target,
-        regularization_strength=0.1,
-        return_resolution=True,
-    )
-
-    # fraction_data should be in [0, 1]
-    assert np.all(fraction_data >= -1e-10), f"fraction_data has values < 0: {fraction_data}"
-    assert np.all(fraction_data <= 1.0 + 1e-10), f"fraction_data has values > 1: {fraction_data}"
-    # Some elements should be pulled toward target (fraction_data < 1)
-    assert np.any(fraction_data < 0.99), "Expected some target-driven elements in underdetermined system"
-    # Pin the resolution scale. For this symmetric block system the model resolution
-    # diagonal is analytically 10/21: each block has inverse-gram diagonal
-    # (G^T G + 0.1 I)^-1[j, j] = 1.1/0.21, so
-    # R[j, j] = 1 - 0.1 * (1.1/0.21) = 0.10/0.21 = 10/21. A 0.5 or 0.3 rescaling of the
-    # regularization coefficient (R = 1 - c*lambda*d*G_inv) would shift this value.
-    np.testing.assert_allclose(fraction_data, 10 / 21, rtol=1e-12)
-
-
-def test_solve_tikhonov_resolution_bounds():
-    """fraction_data should always be in [0, 1]."""
-    rng = np.random.default_rng(42)
-    coeff = rng.standard_normal((3, 6))
-    x_true = rng.standard_normal(6)
-    rhs = coeff @ x_true
-    x_target = rng.standard_normal(6)
-
-    for lam in [1e-12, 1e-6, 1e-2, 1.0, 100.0]:
-        _, fraction_data = solve_tikhonov(
-            coefficient_matrix=coeff,
-            rhs_vector=rhs,
-            x_target=x_target,
-            regularization_strength=lam,
-            return_resolution=True,
-        )
-        assert np.all(fraction_data >= -1e-10), f"λ={lam}: fraction_data has values < 0"
-        assert np.all(fraction_data <= 1.0 + 1e-10), f"λ={lam}: fraction_data has values > 1"
-
-
-def test_solve_tikhonov_resolution_nan_target():
-    """NaN entries in x_target should have fraction_data = 1.0."""
-    coeff = np.eye(3, dtype=float)
-    rhs = np.array([1.0, 2.0, 3.0])
-    x_target = np.array([0.0, np.nan, 0.0])
-
-    _x, fraction_data = solve_tikhonov(
-        coefficient_matrix=coeff,
-        rhs_vector=rhs,
-        x_target=x_target,
-        regularization_strength=0.1,
-        return_resolution=True,
-    )
-
-    # Entry with NaN target is not regularized → fully data-driven
-    assert fraction_data[1] == pytest.approx(1.0), (
-        f"NaN target entry should have fraction_data=1.0, got {fraction_data[1]}"
-    )
-    # Other entries are regularized
-    assert fraction_data[0] < 1.0
-    assert fraction_data[2] < 1.0
-
-
-def test_solve_tikhonov_resolution_not_returned_by_default():
-    """Without return_resolution, only x is returned (not a tuple)."""
-    coeff = np.eye(3, dtype=float)
-    rhs = np.array([1.0, 2.0, 3.0])
-    x_target = np.zeros(3)
-
-    result = solve_tikhonov(
-        coefficient_matrix=coeff,
-        rhs_vector=rhs,
-        x_target=x_target,
-    )
-
-    assert isinstance(result, np.ndarray)
-    assert result.shape == (3,)
 
 
 # =============================================================================
@@ -1377,42 +814,6 @@ def test_partial_isin_nan_input_edge_propagates_nan():
 
 
 # ---------------------------------------------------------------------------
-# linear_average extrapolate_method='raise' and 1D NaN bridging
-# ---------------------------------------------------------------------------
-
-
-def test_linear_average_raise_out_of_range():
-    """extrapolate_method='raise' rejects any edge outside the data range."""
-    x_data = np.array([0.0, 1.0, 2.0])
-    y_data = np.array([0.0, 1.0, 2.0])
-    with pytest.raises(ValueError, match="x_edges must be within the range of x_data"):
-        linear_average(x_data=x_data, y_data=y_data, x_edges=np.array([-1.0, 2.0]), extrapolate_method="raise")
-
-
-def test_linear_average_raise_in_range_passes():
-    """extrapolate_method='raise' returns the in-range average when all edges are in range."""
-    x_data = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
-    y_data = np.array([0.0, 1.0, 2.0, 3.0, 4.0])  # y = x
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=np.array([1.0, 3.0]), extrapolate_method="raise")
-    # mean of y = x over [1, 3] = 2.
-    np.testing.assert_array_equal(result, [[2.0]])
-
-
-def test_linear_average_1d_nan_bridging():
-    """1D y_data silently bridges an interior NaN by linear interpolation across the gap.
-
-    This pins the documented 1D-vs-2D asymmetry: a 1D series treats an interior NaN as a gap
-    to interpolate across, so a bin spanning it returns the bridged linear mean.
-    """
-    x_data = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
-    y_data = np.array([0.0, 1.0, np.nan, 3.0, 4.0])  # y = x with an interior hole at x=2
-    # The NaN sample is dropped; the remaining points still lie on y = x, so the bridged
-    # value at x=2 is 2. Mean of y = x over [1, 3] is therefore 2 (no NaN leaks through).
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=np.array([1.0, 3.0]))
-    np.testing.assert_array_equal(result, [[2.0]])
-
-
-# ---------------------------------------------------------------------------
 # solve_underdetermined_system: summed_differences and NaN-row paths
 # ---------------------------------------------------------------------------
 
@@ -1470,147 +871,6 @@ def test_solve_underdetermined_system_all_nan_rows_raises():
     rhs = np.array([np.nan, np.nan])
     with pytest.raises(ValueError, match="No valid rows found"):
         solve_underdetermined_system(coefficient_matrix=matrix, rhs_vector=rhs)
-
-
-# ---------------------------------------------------------------------------
-# simplify_bins early-exit must echo the flow array when flow is provided
-# ---------------------------------------------------------------------------
-
-
-def test_simplify_bins_empty_with_flow_returns_empty_flow_array():
-    """Empty input with flow provided returns an empty float array, not None."""
-    edges = np.array([0.0])
-    values = np.array([])
-    flow = np.array([])
-    new_edges, new_values, new_flow = simplify_bins(edges=edges, values=values, flow=flow)
-    assert len(new_edges) == 1
-    assert len(new_values) == 0
-    assert new_flow is not None
-    assert new_flow.dtype == np.float64
-    assert len(new_flow) == 0
-
-
-# ---------------------------------------------------------------------------
-# U1: linear_average 2-D NaN contract is method-independent
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("method", ["outer", "raise", "nan"])
-def test_linear_average_2d_nan_propagates_for_all_methods(method):
-    """The documented 2-D per-row NaN contract must hold for every extrapolate_method.
-
-    Regression: the per-row NaN-propagation block was nested under the ``'nan'`` branch, so
-    ``'outer'``/``'raise'`` zeroed the NaN trapezoids and returned a silently wrong finite
-    average (1.0) for a row containing an interior NaN. A row whose bin touches a NaN segment
-    must be NaN regardless of the extrapolation method; a clean row is unaffected.
-    """
-    x_data = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
-    y_data = np.array([[2.0, 2.0, 2.0, 2.0, 2.0], [2.0, 2.0, np.nan, 2.0, 2.0]])
-    x_edges = np.array([0.0, 4.0])
-    result = linear_average(x_data=x_data, y_data=y_data, x_edges=x_edges, extrapolate_method=method)
-    np.testing.assert_array_equal(result[0], [2.0])  # clean row: unaffected
-    assert np.isnan(result[1, 0])  # NaN-touching row: NaN, not the buggy 1.0
-
-
-# ---------------------------------------------------------------------------
-# U2: time_bin_overlap accepts pandas Timestamp / datetime64 bin_tedges
-# ---------------------------------------------------------------------------
-
-
-def test_time_bin_overlap_timestamp_bin_tedges():
-    """Timestamp tedges and Timestamp (start, end) tuples must work like the numeric case.
-
-    Regression: object arrays of Timestamps drove ``np.maximum(0, Timedelta)`` and raised
-    ``TypeError``. Ten-day bins mirror the numeric ``test_time_bin_overlap_basic`` case, so the
-    expected fractions are identical.
-    """
-    tedges = pd.DatetimeIndex(["2020-01-01", "2020-01-11", "2020-01-21", "2020-01-31"])
-    bin_tedges = [
-        (pd.Timestamp("2020-01-06"), pd.Timestamp("2020-01-16")),
-        (pd.Timestamp("2020-01-26"), pd.Timestamp("2020-02-05")),
-    ]
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, [[0.5, 0.5, 0.0], [0.0, 0.0, 0.5]])
-
-
-def test_time_bin_overlap_timestamp_matches_datetime64_and_numeric():
-    """Timestamp, datetime64, and numeric inputs give bit-identical overlap fractions."""
-    numeric = time_bin_overlap(tedges=np.array([0, 10, 20, 30]), bin_tedges=[(5, 15), (25, 35)])
-    tedges_dt = pd.DatetimeIndex(["2020-01-01", "2020-01-11", "2020-01-21", "2020-01-31"])
-    bins_ts = [
-        (pd.Timestamp("2020-01-06"), pd.Timestamp("2020-01-16")),
-        (pd.Timestamp("2020-01-26"), pd.Timestamp("2020-02-05")),
-    ]
-    bins_dt64 = [(a.to_datetime64(), b.to_datetime64()) for a, b in bins_ts]
-    np.testing.assert_array_equal(time_bin_overlap(tedges=tedges_dt, bin_tedges=bins_ts), numeric)
-    np.testing.assert_array_equal(time_bin_overlap(tedges=np.asarray(tedges_dt), bin_tedges=bins_dt64), numeric)
-
-
-# ---------------------------------------------------------------------------
-# U3: simplify_bins uses an iterative stack (no RecursionError) with identical splits
-# ---------------------------------------------------------------------------
-
-
-def _simplify_bins_recursive_reference(*, edges, values, flow=None, tol=0.0):
-    """Reference implementation using the original recursive _splits (pre-U3).
-
-    Reproduces the exact merged-bin outputs so the iterative-stack rewrite can be pinned
-    bit-for-bit on inputs shallow enough not to overflow the interpreter stack.
-    """
-    edges = np.asarray(edges) if not isinstance(edges, pd.DatetimeIndex) else edges
-    values = np.asarray(values, dtype=float)
-    widths = np.asarray(np.diff(edges), dtype=float)
-    weights = widths * np.asarray(flow, dtype=float) if flow is not None else widths
-
-    def _splits(lo, hi):
-        if np.ptp(values[lo:hi]) <= tol:
-            return []
-        i = lo + int(np.argmax(np.abs(np.diff(values[lo:hi])))) + 1
-        return [*_splits(lo, i), i, *_splits(i, hi)]
-
-    s = np.array([0, *_splits(0, len(values))])
-    idx = np.append(s, len(values))
-    new_edges = edges[idx]
-    new_widths = np.add.reduceat(widths, s)
-    weight_sums = np.add.reduceat(weights, s)
-    new_values = np.add.reduceat(weights * values, s) / weight_sums
-    new_flow = weight_sums / new_widths if flow is not None else None
-    return new_edges, new_values, new_flow
-
-
-def test_simplify_bins_no_recursion_error_on_smooth_monotone():
-    """A smooth monotone breakthrough (logistic, n=2500) must not overflow the stack.
-
-    Regression: the recursive splitter peeled one element per level on monotone data whose
-    largest |diff| sits at a segment edge, raising RecursionError. The iterative stack removes
-    the depth limit; the result is a valid, non-trivial simplification.
-    """
-    n = 2500
-    values = 1.0 / (1.0 + np.exp(-np.linspace(-6.0, 6.0, n)))
-    edges = np.arange(n + 1, dtype=float)
-    new_edges, new_values, _ = simplify_bins(edges=edges, values=values, tol=0.0)
-    # tol=0 merges only runs of identical values; the strictly increasing logistic has none,
-    # so no bins merge and the series is returned intact.
-    assert len(new_values) == n
-    np.testing.assert_array_equal(new_edges, edges)
-
-
-def test_simplify_bins_iterative_matches_recursive_reference():
-    """The iterative stack reproduces the recursive splitter's merged bins bit-for-bit.
-
-    Uses a non-monotone series with a non-trivial merge structure and volume weighting so the
-    split indices, merged values, and merged flow are all exercised on a case shallow enough
-    for the recursive reference to run.
-    """
-    edges = np.array([0.0, 1.0, 3.0, 6.0, 6.5, 8.0, 11.0, 12.0])
-    values = np.array([1.0, 1.0, 1.0, 5.0, 5.2, 2.0, 2.0])
-    flow = np.array([2.0, 4.0, 1.0, 3.0, 0.5, 2.5, 1.5])
-    for tol in (0.0, 0.5):
-        e_new, v_new, f_new = simplify_bins(edges=edges, values=values, flow=flow, tol=tol)
-        e_ref, v_ref, f_ref = _simplify_bins_recursive_reference(edges=edges, values=values, flow=flow, tol=tol)
-        np.testing.assert_array_equal(e_new, e_ref)
-        np.testing.assert_array_equal(v_new, v_ref)
-        np.testing.assert_array_equal(f_new, f_ref)
 
 
 # ---------------------------------------------------------------------------
@@ -1696,6 +956,96 @@ def test_solve_inverse_transport_banded_rejects_nonpositive_lambda():
         )
 
 
+# ---------------------------------------------------------------------------
+# simplify_bins early-exit must echo the flow array when flow is provided
+# ---------------------------------------------------------------------------
+
+
+def test_simplify_bins_empty_with_flow_returns_empty_flow_array():
+    """Empty input with flow provided returns an empty float array, not None."""
+    edges = np.array([0.0])
+    values = np.array([])
+    flow = np.array([])
+    new_edges, new_values, new_flow = simplify_bins(edges=edges, values=values, flow=flow)
+    assert len(new_edges) == 1
+    assert len(new_values) == 0
+    assert new_flow is not None
+    assert new_flow.dtype == np.float64
+    assert len(new_flow) == 0
+
+
+# ---------------------------------------------------------------------------
+# U3: simplify_bins uses an iterative stack (no RecursionError) with identical splits
+# ---------------------------------------------------------------------------
+
+
+def _simplify_bins_recursive_reference(*, edges, values, flow=None, tol=0.0):
+    """Reference implementation using the original recursive _splits (pre-U3).
+
+    Reproduces the exact merged-bin outputs so the iterative-stack rewrite can be pinned
+    bit-for-bit on inputs shallow enough not to overflow the interpreter stack.
+    """
+    edges = np.asarray(edges) if not isinstance(edges, pd.DatetimeIndex) else edges
+    values = np.asarray(values, dtype=float)
+    widths = np.asarray(np.diff(edges), dtype=float)
+    weights = widths * np.asarray(flow, dtype=float) if flow is not None else widths
+
+    def _splits(lo, hi):
+        if np.ptp(values[lo:hi]) <= tol:
+            return []
+        i = lo + int(np.argmax(np.abs(np.diff(values[lo:hi])))) + 1
+        return [*_splits(lo, i), i, *_splits(i, hi)]
+
+    s = np.array([0, *_splits(0, len(values))])
+    idx = np.append(s, len(values))
+    new_edges = edges[idx]
+    new_widths = np.add.reduceat(widths, s)
+    weight_sums = np.add.reduceat(weights, s)
+    new_values = np.add.reduceat(weights * values, s) / weight_sums
+    new_flow = weight_sums / new_widths if flow is not None else None
+    return new_edges, new_values, new_flow
+
+
+def test_simplify_bins_no_recursion_error_on_smooth_monotone():
+    """A smooth monotone breakthrough (logistic, n=2500) must not overflow the stack.
+
+    Regression: the recursive splitter peeled one element per level on monotone data whose
+    largest |diff| sits at a segment edge, raising RecursionError. The iterative stack removes
+    the depth limit; the result is a valid, non-trivial simplification.
+    """
+    n = 2500
+    values = 1.0 / (1.0 + np.exp(-np.linspace(-6.0, 6.0, n)))
+    edges = np.arange(n + 1, dtype=float)
+    new_edges, new_values, _ = simplify_bins(edges=edges, values=values, tol=0.0)
+    # tol=0 merges only runs of identical values; the strictly increasing logistic has none,
+    # so no bins merge and the series is returned intact.
+    assert len(new_values) == n
+    np.testing.assert_array_equal(new_edges, edges)
+
+
+def test_simplify_bins_iterative_matches_recursive_reference():
+    """The iterative stack reproduces the recursive splitter's merged bins bit-for-bit.
+
+    Uses a non-monotone series with a non-trivial merge structure and volume weighting so the
+    split indices, merged values, and merged flow are all exercised on a case shallow enough
+    for the recursive reference to run.
+    """
+    edges = np.array([0.0, 1.0, 3.0, 6.0, 6.5, 8.0, 11.0, 12.0])
+    values = np.array([1.0, 1.0, 1.0, 5.0, 5.2, 2.0, 2.0])
+    flow = np.array([2.0, 4.0, 1.0, 3.0, 0.5, 2.5, 1.5])
+    for tol in (0.0, 0.5):
+        e_new, v_new, f_new = simplify_bins(edges=edges, values=values, flow=flow, tol=tol)
+        e_ref, v_ref, f_ref = _simplify_bins_recursive_reference(edges=edges, values=values, flow=flow, tol=tol)
+        np.testing.assert_array_equal(e_new, e_ref)
+        np.testing.assert_array_equal(v_new, v_ref)
+        np.testing.assert_array_equal(f_new, f_ref)
+
+
+# ---------------------------------------------------------------------------
+# U4: banded WᵀW assembly (dense BLAS build) equivalence
+# ---------------------------------------------------------------------------
+
+
 def test_simplify_bins_all_zero_flow_group_falls_back_to_width_weights():
     """A merged group whose bins all have zero flow gets a width-weighted average, not NaN (#313)."""
     edges = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
@@ -1706,39 +1056,3 @@ def test_simplify_bins_all_zero_flow_group_falls_back_to_width_weights():
     np.testing.assert_allclose(new_values, [2.0, 5.0])
     assert new_flow is not None  # narrow the flow=None overload for the type checker
     np.testing.assert_allclose(new_flow, [0.0, 10.0])
-
-
-def test_time_bin_overlap_nanosecond_precision_far_epoch():
-    """Datetime edges are differenced in exact int64 nanoseconds (#313).
-
-    Near year 2200 the float64 ulp of an epoch-nanosecond value is 1024 ns, so
-    sub-microsecond bins require integer differencing to overlap exactly.
-    """
-    base = pd.Timestamp("2200-01-01")
-    tedges = pd.DatetimeIndex([base + pd.Timedelta(n, "ns") for n in (0, 1000, 2000, 3000)])
-    bin_tedges = [(base + pd.Timedelta(500, "ns"), base + pd.Timedelta(1500, "ns"))]
-    result = time_bin_overlap(tedges=tedges, bin_tedges=bin_tedges)
-    np.testing.assert_allclose(result, [[0.5, 0.5, 0.0]], rtol=0, atol=0)
-
-
-def test_solve_tikhonov_resolution_dead_column_nan_target():
-    """A dead (all-zero) column with NaN x_target reports fraction_data = 1.0 (#313).
-
-    Its pinned gram diagonal keeps the resolution inverse nonsingular and leaves
-    the live entries unchanged.
-    """
-    coeff = np.array([[1.0, 0.0], [2.0, 0.0]])
-    rhs = np.array([1.0, 2.0])
-    x_target = np.array([1.0, np.nan])
-    lam = 1e-10
-    x, fraction_data = solve_tikhonov(
-        coefficient_matrix=coeff,
-        rhs_vector=rhs,
-        x_target=x_target,
-        regularization_strength=lam,
-        return_resolution=True,
-    )
-    # lstsq returns the minimum-norm solution: dead column -> 0, live column exact.
-    np.testing.assert_allclose(x, [1.0, 0.0])
-    # Live column: R = 1 - lam / (||col||^2 + lam); dead unregularized column: 1.0 by convention.
-    np.testing.assert_allclose(fraction_data, [1.0 - lam / (5.0 + lam), 1.0], rtol=1e-12)

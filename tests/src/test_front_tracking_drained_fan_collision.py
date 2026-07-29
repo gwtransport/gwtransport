@@ -1,19 +1,15 @@
 """
 Regression and conservation tests for issue #222.
 
-A wetting shock that collides with a *fully drained* (c=0) drying rarefaction
-fan used to raise ``ValueError: c_decay_initial must be positive`` deep in the
-solver (``handlers.py`` → ``DecayingShockWave.__post_init__``). The collision
-hands the fan-tail concentration to the merged
-:class:`~gwtransport.fronttracking.waves.DecayingShockWave` as
-``c_decay_initial``; for a fully drained fan that value is exactly ``0``.
-
-The fix floors ``c_decay_initial`` to the shared dry-soil singularity floor
-``_C_MIN`` (matching the package's retardation-floor convention) rather than
-rejecting the collision, and generalises the fan-exhaustion orientation guard
-so the *growing* decay (``c_decay_initial < c_fan_tail``) is handled. For the
-issue's inputs the decaying shock asymptotically merges with the fan head, so
-there is no finite exhaustion event -- the solver terminates cleanly.
+A wetting shock colliding with a *fully drained* (c=0) drying rarefaction fan hands the
+fan-tail concentration to the merged
+:class:`~gwtransport.fronttracking.waves.DecayingShockWave` as ``c_decay_initial``; for a
+fully drained fan that value is exactly ``0``. It is floored to the shared dry-soil
+singularity floor ``_C_MIN`` (the package's retardation-floor convention) rather than
+rejected, and the fan-exhaustion guard is orientation-agnostic so the *growing* decay
+(``c_decay_initial < c_fan_tail``) is handled. For these inputs the decaying shock
+asymptotically merges with the fan head, so there is no finite exhaustion event and the
+solver terminates cleanly.
 
 These end-to-end tests drive the public
 :func:`gwtransport.percolation.root_zone_to_water_table_kinematic_wave` entry
@@ -129,14 +125,11 @@ class TestWettingShockIntoDrainedFan:
     def test_wetting_shock_into_drained_fan_runs(self):
         """The issue's exact wet→zero→wet forcing runs without raising.
 
-        On baseline this raises ``ValueError: c_decay_initial must be positive``
-        from ``DecayingShockWave.__post_init__`` when the wetting shock collides
-        with the fully drained fan tail (c_decay_initial == 0). The floor fixes
-        it; this is the regression guard.
-
-        The wet→zero→wet forcing is the issue's shape on a shrunk daily grid (the
-        numerical-DSW path makes each event expensive); the drained-collision floor
-        path is the same regardless of plateau length.
+        The wetting shock collides with the fully drained fan tail (c_decay_initial == 0),
+        which the ``_C_MIN`` floor keeps constructible; this is the regression guard. The
+        forcing is the issue's shape on a shrunk daily grid (the numerical-DSW path makes
+        each event expensive); the drained-collision path is the same regardless of
+        plateau length.
         """
         q_root = np.array([0.003] * 6 + [0.0] * 6 + [0.003] * 10)
         q_wt, _ = _run_percolation(q_root)

@@ -14,7 +14,6 @@ import pytest
 from gwtransport.fronttracking.handlers import (
     create_inlet_waves_at_theta,
     handle_characteristic_collision,
-    handle_outlet_crossing,
     handle_rarefaction_characteristic_collision,
     handle_shock_characteristic_collision,
     handle_shock_collision,
@@ -42,14 +41,14 @@ freundlich_sorptions = [
 
 @pytest.fixture
 def freundlich_sorption():
-    """Standard Freundlich sorption for testing (n>1, n>1)."""
+    """Freundlich sorption with n>1: higher C travels faster."""
     return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
 
 @pytest.fixture
-def constant_retardation():
-    """Constant retardation for testing."""
-    return ConstantRetardation(retardation_factor=2.0)
+def freundlich_n_lt_1():
+    """Freundlich sorption with n<1 and ``c_min=0``: lower C travels faster."""
+    return FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
 
 
 class TestCharacteristicCollisionHandler:
@@ -250,34 +249,6 @@ class TestShockRarefactionCollisionHandler:
         assert not raref.is_active
 
 
-class TestOutletCrossingHandler:
-    """Test handle_outlet_crossing function."""
-
-    def test_crossing_returns_event_record(self, freundlich_sorption):
-        """Test that crossing returns proper event record."""
-        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=5.0, sorption=freundlich_sorption)
-
-        event = handle_outlet_crossing(shock, theta_event=50.0, v_outlet=500.0)
-
-        assert event["theta"] == 50.0
-        assert event["type"] == "outlet_crossing"
-        assert event["location"] == 500.0
-        assert event["wave"] is shock
-        assert event["concentration_left"] == 10.0
-        assert event["concentration_right"] == 5.0
-
-    def test_wave_remains_active_after_crossing(self, freundlich_sorption):
-        """Test that wave is NOT deactivated when crossing outlet."""
-        char = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=freundlich_sorption)
-
-        assert char.is_active
-
-        handle_outlet_crossing(char, theta_event=50.0, v_outlet=500.0)
-
-        # Wave should still be active for querying concentration at earlier positions
-        assert char.is_active
-
-
 class TestInletWaveCreation:
     """Test create_inlet_waves_at_time function."""
 
@@ -321,27 +292,6 @@ class TestInletWaveCreation:
 
         assert len(waves) == 0
 
-    def test_created_shock_satisfies_entropy(self, freundlich_sorption):
-        """Test that created shocks satisfy entropy condition."""
-        # Create a scenario that definitely produces a shock
-        # For n>1: C: 2→10 means fast→slow, compression→shock
-        waves = create_inlet_waves_at_theta(c_prev=2.0, c_new=10.0, theta=10.0, sorption=freundlich_sorption)
-
-        # This MUST create shock (C: 2→10, fast→slow, compression)
-        assert len(waves) == 1, "Expected exactly one wave"
-        assert isinstance(waves[0], ShockWave), "Expected wave to be a shock"
-        assert waves[0].satisfies_entropy(), "Shock must satisfy entropy"
-
-    def test_constant_retardation(self, constant_retardation):
-        """Test wave creation with constant retardation."""
-        # With constant retardation, all concentrations have same velocity
-        # So any change is a contact discontinuity (characteristic)
-        waves = create_inlet_waves_at_theta(c_prev=5.0, c_new=10.0, theta=10.0, sorption=constant_retardation)
-
-        # With constant R, all velocities are same, so contact discontinuity
-        assert len(waves) == 1
-        assert isinstance(waves[0], CharacteristicWave)
-
     def test_wave_properties_correct(self, freundlich_sorption):
         """Test that created waves have correct properties."""
         waves = create_inlet_waves_at_theta(c_prev=2.0, c_new=10.0, theta=15.0, sorption=freundlich_sorption)
@@ -357,41 +307,16 @@ class TestInletWaveCreation:
 class TestPhysicsCorrectness:
     """Test that handlers maintain physical correctness."""
 
-    def test_entropy_always_satisfied_case1(self, freundlich_sorption):
-        """Test that created shock satisfies entropy (case 1: C=10.0 → C=2.0)."""
-        char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=10.0, sorption=freundlich_sorption)
-
-        char2 = CharacteristicWave(theta_start=5.0, v_start=0.0, concentration=2.0, sorption=freundlich_sorption)
-
-        new_waves = handle_characteristic_collision(char1, char2, theta_event=15.0, v_event=100.0)
-
-        # MUST create entropy-satisfying shock
-        assert len(new_waves) == 1, "Expected exactly one wave"
-        assert isinstance(new_waves[0], ShockWave), "Expected wave to be shock"
-        assert new_waves[0].satisfies_entropy(), "Shock must satisfy entropy"
-
-    def test_entropy_always_satisfied_case2(self, freundlich_sorption):
-        """Test that created shock satisfies entropy (case 2: C=5.0 → C=1.0)."""
-        char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=5.0, sorption=freundlich_sorption)
-
-        char2 = CharacteristicWave(theta_start=5.0, v_start=0.0, concentration=1.0, sorption=freundlich_sorption)
+    @pytest.mark.parametrize(("c_upstream", "c_downstream"), [(10.0, 2.0), (5.0, 1.0), (8.0, 3.0)])
+    def test_entropy_always_satisfied(self, freundlich_sorption, c_upstream, c_downstream):
+        """A faster (higher-C, n>1) characteristic catching a slower one yields an entropic shock."""
+        char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=c_upstream, sorption=freundlich_sorption)
+        char2 = CharacteristicWave(
+            theta_start=5.0, v_start=0.0, concentration=c_downstream, sorption=freundlich_sorption
+        )
 
         new_waves = handle_characteristic_collision(char1, char2, theta_event=15.0, v_event=100.0)
 
-        # MUST create entropy-satisfying shock
-        assert len(new_waves) == 1, "Expected exactly one wave"
-        assert isinstance(new_waves[0], ShockWave), "Expected wave to be shock"
-        assert new_waves[0].satisfies_entropy(), "Shock must satisfy entropy"
-
-    def test_entropy_always_satisfied_case3(self, freundlich_sorption):
-        """Test that created shock satisfies entropy (case 3: C=8.0 → C=3.0)."""
-        char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=8.0, sorption=freundlich_sorption)
-
-        char2 = CharacteristicWave(theta_start=5.0, v_start=0.0, concentration=3.0, sorption=freundlich_sorption)
-
-        new_waves = handle_characteristic_collision(char1, char2, theta_event=15.0, v_event=100.0)
-
-        # MUST create entropy-satisfying shock
         assert len(new_waves) == 1, "Expected exactly one wave"
         assert isinstance(new_waves[0], ShockWave), "Expected wave to be shock"
         assert new_waves[0].satisfies_entropy(), "Shock must satisfy entropy"
@@ -606,7 +531,7 @@ class TestEntropyViolatingScenarios:
 
 
 class TestCharacteristicCollisionVelocityOrdering:
-    """Test velocity ordering in characteristic collisions (lines 148-153).
+    """Velocity ordering in characteristic collisions.
 
     For Freundlich sorption with n>1:
     - R(C) = 1 + (rho_b*k_f)/(n_por*n) * C^((1/n)-1)
@@ -615,12 +540,7 @@ class TestCharacteristicCollisionVelocityOrdering:
     - Therefore: HIGHER C = HIGHER velocity for n>1
     """
 
-    @pytest.fixture
-    def freundlich_n_gt_1(self):
-        """Freundlich sorption with n>1."""
-        return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-
-    def test_faster_characteristic_becomes_left(self, freundlich_n_gt_1):
+    def test_faster_characteristic_becomes_left(self, freundlich_sorption):
         """Test that faster characteristic becomes c_left of shock.
 
         Physics: The shock separates upstream (left, behind shock) from
@@ -633,18 +553,18 @@ class TestCharacteristicCollisionVelocityOrdering:
             theta_start=0.0,
             v_start=0.0,
             concentration=10.0,  # Higher C = faster for n>1
-            sorption=freundlich_n_gt_1,
+            sorption=freundlich_sorption,
         )
 
         char_slow = CharacteristicWave(
             theta_start=5.0,
             v_start=0.0,
             concentration=2.0,  # Lower C = slower for n>1
-            sorption=freundlich_n_gt_1,
+            sorption=freundlich_sorption,
         )
 
-        vel_fast = characteristic_speed(10.0, freundlich_n_gt_1)
-        vel_slow = characteristic_speed(2.0, freundlich_n_gt_1)
+        vel_fast = characteristic_speed(10.0, freundlich_sorption)
+        vel_slow = characteristic_speed(2.0, freundlich_sorption)
         assert vel_fast > vel_slow, "Higher C should be faster for n>1"
 
         new_waves = handle_characteristic_collision(char_fast, char_slow, theta_event=20.0, v_event=150.0)
@@ -657,8 +577,8 @@ class TestCharacteristicCollisionVelocityOrdering:
         assert shock.c_left == 10.0, "Faster concentration should be c_left"
         assert shock.c_right == 2.0, "Slower concentration should be c_right"
 
-    def test_slower_characteristic_first_argument(self, freundlich_n_gt_1):
-        """Test ordering when slower characteristic is first argument (line 152-153).
+    def test_slower_characteristic_first_argument(self, freundlich_sorption):
+        """Ordering when the slower characteristic is the first argument.
 
         When vel1 <= vel2, then char2's concentration becomes c_left.
         """
@@ -667,7 +587,7 @@ class TestCharacteristicCollisionVelocityOrdering:
             theta_start=0.0,
             v_start=0.0,
             concentration=2.0,  # Lower C = slower for n>1
-            sorption=freundlich_n_gt_1,
+            sorption=freundlich_sorption,
         )
 
         # char2 is faster (higher C for n>1)
@@ -675,11 +595,11 @@ class TestCharacteristicCollisionVelocityOrdering:
             theta_start=5.0,
             v_start=0.0,
             concentration=10.0,  # Higher C = faster for n>1
-            sorption=freundlich_n_gt_1,
+            sorption=freundlich_sorption,
         )
 
-        vel1 = characteristic_speed(2.0, freundlich_n_gt_1)
-        vel2 = characteristic_speed(10.0, freundlich_n_gt_1)
+        vel1 = characteristic_speed(2.0, freundlich_sorption)
+        vel2 = characteristic_speed(10.0, freundlich_sorption)
         assert vel2 > vel1, "char2 should be faster"
 
         new_waves = handle_characteristic_collision(char1, char2, theta_event=20.0, v_event=150.0)
@@ -697,7 +617,7 @@ class TestCharacteristicCollisionVelocityOrdering:
 
 
 class TestShockRarefactionTailCollisionPhysics:
-    """Physics tests for shock catching rarefaction tail (lines 454-531).
+    """Physics tests for a shock catching a rarefaction tail.
 
     When a shock catches the tail of a rarefaction fan, it "penetrates" into
     the rarefaction, creating:
@@ -707,12 +627,7 @@ class TestShockRarefactionTailCollisionPhysics:
     This is wave splitting - a fundamental phenomenon in nonlinear wave interaction.
     """
 
-    @pytest.fixture
-    def freundlich_n_gt_1(self):
-        """Freundlich sorption with n>1 (higher C travels faster)."""
-        return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-
-    def test_physics_shock_penetrates_rarefaction(self, freundlich_n_gt_1):
+    def test_physics_shock_penetrates_rarefaction(self, freundlich_sorption):
         """Test shock penetrating into rarefaction fan.
 
         Physics: A strong shock (large concentration jump) can penetrate
@@ -725,7 +640,7 @@ class TestShockRarefactionTailCollisionPhysics:
             v_start=0.0,
             c_left=15.0,  # Very high concentration behind shock
             c_right=1.0,  # Low concentration ahead
-            sorption=freundlich_n_gt_1,
+            sorption=freundlich_sorption,
         )
 
         # Create a rarefaction ahead of the shock
@@ -735,7 +650,7 @@ class TestShockRarefactionTailCollisionPhysics:
             v_start=50.0,
             c_head=8.0,  # Higher C = slower (leading edge for n>1)
             c_tail=3.0,  # Lower C = faster (trailing edge for n>1)
-            sorption=freundlich_n_gt_1,
+            sorption=freundlich_sorption,
         )
 
         # Collision at tail
@@ -755,7 +670,7 @@ class TestShockRarefactionTailCollisionPhysics:
         assert not shock.is_active, "Original shock should be deactivated"
         assert not raref.is_active, "Original rarefaction should be deactivated"
 
-    def test_physics_shock_overtakes_rarefaction_completely(self, freundlich_n_gt_1):
+    def test_physics_shock_overtakes_rarefaction_completely(self, freundlich_sorption):
         """Shock overtaking a small rarefaction yields one exact DecayingShockWave.
 
         Physics: a fast shock catching a small rarefaction tail merges into a
@@ -769,7 +684,7 @@ class TestShockRarefactionTailCollisionPhysics:
             v_start=0.0,
             c_left=20.0,  # Very high C
             c_right=2.0,  # Low C
-            sorption=freundlich_n_gt_1,
+            sorption=freundlich_sorption,
         )
 
         # Small rarefaction (small concentration range)
@@ -778,7 +693,7 @@ class TestShockRarefactionTailCollisionPhysics:
             v_start=50.0,
             c_head=5.0,
             c_tail=4.0,  # Very close to head
-            sorption=freundlich_n_gt_1,
+            sorption=freundlich_sorption,
         )
 
         new_waves = handle_shock_rarefaction_collision(
@@ -792,50 +707,16 @@ class TestShockRarefactionTailCollisionPhysics:
         assert not shock.is_active
         assert not raref.is_active
 
-    def test_physics_wave_splitting_creates_modified_rarefaction(self, freundlich_n_gt_1):
-        """Test that wave splitting can create modified rarefaction.
-
-        Physics: When shock partially penetrates rarefaction, the portion
-        ahead of the shock remains as a modified rarefaction with a new tail.
-        """
-        # Moderate shock
-        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=12.0, c_right=3.0, sorption=freundlich_n_gt_1)
-
-        # Large rarefaction
-        raref = RarefactionWave(
-            theta_start=5.0,
-            v_start=50.0,
-            c_head=10.0,  # Wide concentration range
-            c_tail=2.0,
-            sorption=freundlich_n_gt_1,
-        )
-
-        new_waves = handle_shock_rarefaction_collision(
-            shock, raref, theta_event=30.0, v_event=200.0, boundary_type="tail"
-        )
-
-        # Check for rarefactions in result (wave splitting)
-        rarefactions = [w for w in new_waves if isinstance(w, RarefactionWave)]
-
-        # If rarefaction created, verify it has valid structure
-        for r in rarefactions:
-            assert r.head_speed() > r.tail_speed(), "Rarefaction head must be faster than tail"
-
 
 class TestShockRarefactionHeadCollisionPhysics:
-    """Physics tests for rarefaction head catching shock (lines 533-566).
+    """Physics tests for a rarefaction head catching a shock.
 
     When the head of a rarefaction catches a slower shock from behind,
     it creates compression between the rarefaction head and the shock.
     This may form a new compression shock.
     """
 
-    @pytest.fixture
-    def freundlich_n_gt_1(self):
-        """Freundlich sorption with n>1."""
-        return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-
-    def test_physics_rarefaction_head_creates_compression(self, freundlich_n_gt_1):
+    def test_physics_rarefaction_head_creates_compression(self, freundlich_sorption):
         """Rarefaction head faster than the leading shock compresses into one DSW.
 
         Physics: when the rarefaction head outruns the leading shock, the head
@@ -853,7 +734,7 @@ class TestShockRarefactionHeadCollisionPhysics:
             v_start=50.0,  # Started ahead
             c_left=8.0,
             c_right=5.0,  # Moderate jump
-            sorption=freundlich_n_gt_1,
+            sorption=freundlich_sorption,
         )
 
         # Fast rarefaction with high-C head (fast for n>1).
@@ -862,7 +743,7 @@ class TestShockRarefactionHeadCollisionPhysics:
             v_start=0.0,  # Started behind
             c_head=12.0,  # Higher C = faster velocity for n>1
             c_tail=6.0,  # Lower C = slower velocity
-            sorption=freundlich_n_gt_1,
+            sorption=freundlich_sorption,
         )
 
         shock_vel = shock.speed
@@ -893,18 +774,18 @@ class TestShockRarefactionHeadCollisionPhysics:
         assert not shock.is_active
         assert not raref.is_active
 
-    def test_physics_shock_deactivated_on_head_collision(self, freundlich_n_gt_1):
+    def test_physics_shock_deactivated_on_head_collision(self, freundlich_sorption):
         """Test that original shock is deactivated when caught by rarefaction head."""
-        shock = ShockWave(theta_start=0.0, v_start=50.0, c_left=6.0, c_right=4.0, sorption=freundlich_n_gt_1)
+        shock = ShockWave(theta_start=0.0, v_start=50.0, c_left=6.0, c_right=4.0, sorption=freundlich_sorption)
 
-        raref = RarefactionWave(theta_start=5.0, v_start=0.0, c_head=10.0, c_tail=5.0, sorption=freundlich_n_gt_1)
+        raref = RarefactionWave(theta_start=5.0, v_start=0.0, c_head=10.0, c_tail=5.0, sorption=freundlich_sorption)
 
         handle_shock_rarefaction_collision(shock, raref, theta_event=25.0, v_event=180.0, boundary_type="head")
 
         # Original shock should be deactivated
         assert not shock.is_active, "Original shock should be deactivated"
 
-    def test_head_collision_creates_left_decay_dsw(self, freundlich_n_gt_1):
+    def test_head_collision_creates_left_decay_dsw(self, freundlich_sorption):
         """Head collision is resolved by one left-decay DecayingShockWave.
 
         Mirror of the tail-collision DSW test (``decay_side='right'``) for the
@@ -917,13 +798,13 @@ class TestShockRarefactionHeadCollisionPhysics:
         """
         # n>1: higher C is faster. A high-C rarefaction head (fast) catches a
         # small slow leading shock; head speed must exceed the shock speed.
-        shock = ShockWave(theta_start=0.0, v_start=50.0, c_left=4.0, c_right=2.0, sorption=freundlich_n_gt_1)
-        raref = RarefactionWave(theta_start=5.0, v_start=0.0, c_head=12.0, c_tail=6.0, sorption=freundlich_n_gt_1)
+        shock = ShockWave(theta_start=0.0, v_start=50.0, c_left=4.0, c_right=2.0, sorption=freundlich_sorption)
+        raref = RarefactionWave(theta_start=5.0, v_start=0.0, c_head=12.0, c_tail=6.0, sorption=freundlich_sorption)
 
         # Verify the head is faster than the shock so the DSW branch is taken
         # (otherwise the handler hits the degenerate ``return []``).
         assert shock.speed is not None
-        assert characteristic_speed(raref.c_head, freundlich_n_gt_1) > shock.speed
+        assert characteristic_speed(raref.c_head, freundlich_sorption) > shock.speed
 
         new_waves = handle_shock_rarefaction_collision(
             shock, raref, theta_event=20.0, v_event=150.0, boundary_type="head"
@@ -941,16 +822,6 @@ class TestShockRarefactionHeadCollisionPhysics:
         assert not raref.is_active
 
 
-# =============================================================================
-# Physics tests for handle_flow_change (lines 901-967)
-# =============================================================================
-
-
-# =============================================================================
-# Physics tests for create_inlet_waves with n<1 (lines 1029-1060)
-# =============================================================================
-
-
 class TestInletWavesNLT1Physics:
     """Physics tests for inlet wave creation with n<1 Freundlich sorption.
 
@@ -964,11 +835,6 @@ class TestInletWavesNLT1Physics:
     emitted a single ``CharacteristicWave`` here, fabricating cout (the outlet collapsed to 0).
     The general path is entropy-correct for every ``(n, c_min)`` including 0.
     """
-
-    @pytest.fixture
-    def freundlich_n_lt_1(self):
-        """Freundlich sorption with n<1 and c_min=0."""
-        return FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
 
     def test_physics_step_from_zero_creates_rarefaction(self, freundlich_n_lt_1):
         """Step from C=0 to C>0 is a rarefaction for n<1 (fast clean water behind slow).
@@ -1050,11 +916,6 @@ class TestInletWavesNLT1Physics:
             assert waves_down[0].satisfies_entropy(), "Shock must satisfy entropy"
 
 
-# =============================================================================
-# Physics tests for entropy violation edge cases (lines 351-393)
-# =============================================================================
-
-
 class TestEntropyViolationRarefactionCreation:
     """Physics tests for rarefaction creation when entropy is violated.
 
@@ -1063,12 +924,7 @@ class TestEntropyViolationRarefactionCreation:
     entropy violation indicates expansion, not compression.
     """
 
-    @pytest.fixture
-    def freundlich_n_gt_1(self):
-        """Freundlich sorption with n>1."""
-        return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-
-    def test_physics_faster_characteristic_catches_shock_creates_entropy_shock(self, freundlich_n_gt_1):
+    def test_physics_faster_characteristic_catches_shock_creates_entropy_shock(self, freundlich_sorption):
         """A genuinely faster characteristic catching a shock yields one entropy shock.
 
         Physics: for n>1 higher C travels faster, so a high-C characteristic
@@ -1084,14 +940,14 @@ class TestEntropyViolationRarefactionCreation:
             v_start=0.0,
             c_left=5.0,
             c_right=4.0,  # Small jump
-            sorption=freundlich_n_gt_1,
+            sorption=freundlich_sorption,
         )
 
         # n>1: higher C is faster. C=8 characteristic outruns the shock.
         c_char = 8.0
-        char = CharacteristicWave(theta_start=5.0, v_start=0.0, concentration=c_char, sorption=freundlich_n_gt_1)
+        char = CharacteristicWave(theta_start=5.0, v_start=0.0, concentration=c_char, sorption=freundlich_sorption)
 
-        char_vel = characteristic_speed(c_char, freundlich_n_gt_1)
+        char_vel = characteristic_speed(c_char, freundlich_sorption)
         shock_vel = shock.speed
         assert shock_vel is not None
         # Guard the setup, not the assertions: the characteristic MUST be faster
@@ -1112,49 +968,9 @@ class TestEntropyViolationRarefactionCreation:
         assert not shock.is_active
         assert not char.is_active
 
-    def test_physics_rarefaction_head_faster_than_tail(self, freundlich_n_gt_1):
-        """Test: Created rarefactions always have head faster than tail.
-
-        Physics: Rarefaction head (leading edge) must travel faster than tail
-        (trailing edge) for the fan to expand, not collapse.
-        """
-        shock = ShockWave(theta_start=0.0, v_start=0.0, c_left=6.0, c_right=5.0, sorption=freundlich_n_gt_1)
-
-        char = CharacteristicWave(
-            theta_start=5.0,
-            v_start=0.0,
-            concentration=3.0,  # Fast for n>1
-            sorption=freundlich_n_gt_1,
-        )
-
-        new_waves = handle_shock_characteristic_collision(shock, char, theta_event=20.0, v_event=150.0)
-
-        for w in new_waves:
-            if isinstance(w, RarefactionWave):
-                assert w.head_speed() > w.tail_speed(), "Rarefaction must expand, not collapse"
-
-
-# =============================================================================
-# Physics tests for recreate wave error cases (lines 756-757, 820-821, 887-888)
-# =============================================================================
-
-
-# =============================================================================
-# Additional edge case tests for remaining uncovered lines
-# =============================================================================
-
-
-# Removed in Phase 1 (n<1 collision branch was a bug; tested behavior now invalid).
-# Phase 2 adds  and friends in this file.
-
 
 class TestShockCollisionEdgeCases:
     """Test edge cases for shock collision handling."""
-
-    @pytest.fixture
-    def freundlich_sorption(self):
-        """Standard Freundlich sorption for testing."""
-        return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
 
     def test_shock_merger_connects_outer_states(self, freundlich_sorption):
         """Merged shock connects the outer states regardless of argument order.
@@ -1202,25 +1018,11 @@ class TestShockCollisionEdgeCases:
             assert merged.c_right == expected_c_right
 
 
-class TestShockCharacteristicEdgeCases:
-    """Test edge cases for shock-characteristic collision."""
-
-    @pytest.fixture
-    def freundlich_sorption(self):
-        """Standard Freundlich sorption for testing."""
-        return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-
-
 class TestShockRarefactionEdgeCases:
     """Test edge cases for shock-rarefaction collision."""
 
-    @pytest.fixture
-    def freundlich_sorption(self):
-        """Standard Freundlich sorption for testing."""
-        return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-
     def test_tail_collision_raref_concentration_none(self, freundlich_sorption):
-        """Test lines 462-477: rarefaction concentration at collision is None.
+        """Rarefaction concentration at the collision point is None.
 
         When the shock is not actually inside the rarefaction (edge case),
         fall back to simple approach.
@@ -1247,7 +1049,7 @@ class TestShockRarefactionEdgeCases:
         assert isinstance(new_waves, list)
 
     def test_head_collision_no_compression_shock(self, freundlich_sorption):
-        """Test lines 563-566: no compression shock forms.
+        """No compression shock forms.
 
         When the rarefaction head is slower than the shock, no new shock forms.
         """
@@ -1289,13 +1091,8 @@ class TestShockRarefactionEdgeCases:
 class TestInletWaveCreationEdgeCases:
     """Test edge cases for inlet wave creation."""
 
-    @pytest.fixture
-    def freundlich_sorption(self):
-        """Standard Freundlich sorption for testing."""
-        return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
-
     def test_entropy_violation_returns_empty(self, freundlich_sorption):
-        """Test lines 1080-1085: entropy violation in shock returns empty.
+        """An entropy-violating inlet shock returns an empty wave list.
 
         When a shock would violate entropy, the function returns empty list.
         """
@@ -1318,7 +1115,7 @@ class TestInletWaveCreationEdgeCases:
             assert isinstance(waves[0], RarefactionWave), "Expansion should create rarefaction"
 
     def test_same_velocity_creates_characteristic(self):
-        """Test lines 1107-1117: same velocity creates characteristic.
+        """Equal characteristic speeds create a contact discontinuity.
 
         When vel_new == vel_prev (contact discontinuity), create characteristic.
         """
@@ -1334,15 +1131,10 @@ class TestInletWaveCreationEdgeCases:
 
 
 class TestCharacteristicCollisionEntropyViolation:
-    """Test entropy violation in characteristic collision (lines 166-172)."""
-
-    @pytest.fixture
-    def freundlich_sorption(self):
-        """Standard Freundlich sorption for testing."""
-        return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+    """Entropy violation in a characteristic collision."""
 
     def test_entropy_violation_raises_runtime_error(self, freundlich_sorption):
-        """Test lines 166-172: entropy violation raises RuntimeError.
+        """An entropy-violating characteristic collision raises RuntimeError.
 
         When a shock from characteristic collision violates entropy,
         a RuntimeError is raised. This is a safety check that shouldn't
@@ -1375,19 +1167,14 @@ class TestCharacteristicCollisionEntropyViolation:
 
 
 class TestShockCharCollisionEntropyViolationPaths:
-    """Test entropy violation paths in shock-characteristic collision (lines 351-393).
+    """Entropy-violation paths in a shock-characteristic collision.
 
     These tests exercise the rarefaction creation path when a shock-char collision
     would violate entropy (indicating expansion instead of compression).
     """
 
-    @pytest.fixture
-    def freundlich_n_lt_1(self):
-        """Freundlich sorption with n<1 (lower C travels faster)."""
-        return FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3, c_min=0.0)
-
     def test_entropy_violation_shock_catches_characteristic(self, freundlich_n_lt_1):
-        """Test lines 351-387: entropy violation when shock catches characteristic.
+        """Entropy violation when a shock catches a characteristic.
 
         For n<1, lower C is faster. Create scenario where resulting shock
         would violate entropy, triggering rarefaction creation.
@@ -1425,7 +1212,7 @@ class TestShockCharCollisionEntropyViolationPaths:
                 assert w.head_speed() > w.tail_speed()
 
     def test_entropy_violation_characteristic_catches_shock(self, freundlich_n_lt_1):
-        """Test lines 356-360: entropy violation when characteristic catches shock.
+        """Entropy violation when a characteristic catches a shock.
 
         Test the other branch where characteristic velocity > shock velocity.
         """
@@ -1458,12 +1245,7 @@ class TestShockCharCollisionEntropyViolationPaths:
 
 
 class TestShockRarefactionTailEdgeCases:
-    """Test edge cases in shock-rarefaction tail collision (lines 477, 492-494, 516-520, 529-531)."""
-
-    @pytest.fixture
-    def freundlich_sorption(self):
-        """Standard Freundlich sorption for testing."""
-        return FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
+    """Edge cases in a shock-rarefaction tail collision."""
 
     def test_tail_collision_standard_wave_splitting(self, freundlich_sorption):
         """Tail collision is resolved by one exact DecayingShockWave.

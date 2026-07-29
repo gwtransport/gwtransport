@@ -44,8 +44,8 @@ _INJECTION = "injection"
 
 # Riccati integration tolerances (matched to the scalar log-derivative kernel) and the drift-specific
 # outer-boundary policy: the recessive initial condition is set at r_far and washed inward; r_far is
-# floored well past the field but hard-capped below the stagnation radius r_s = |A_0|/v_d, where the
-# coordinate finite-escape of the matrix Riccati would otherwise blow up (the plan's r_far <= 0.6 r_s).
+# floored well past the field but hard-capped at _RS_FRAC of the stagnation radius r_s = |A_0|/v_d,
+# where the coordinate finite-escape of the matrix Riccati would otherwise blow up.
 # The slow-drift envelope is honest: the SIGNIFICANT plume (front + _PLUME_WIDTHS breakthrough widths,
 # where the resident field has decayed to ~1% of peak) must fit below that cap, else the engine raises
 # rather than silently truncate it. Only the negligible far tail beyond r_far is dropped (the recessive
@@ -544,26 +544,6 @@ def _resident_laplace(
     return np.transpose(c, (1, 0, 2))
 
 
-def _source_blocks(
-    d: dict[str, npt.NDArray[np.complexfloating]],
-    field: npt.NDArray[np.floating],
-    dr_weights: npt.NDArray[np.floating],
-    retardation_factor: float,
-) -> npt.NDArray[np.complexfloating]:
-    r"""Wronskian-weighted source contributions ``H_j (R dr_j) field_j`` of the interior resolvent.
-
-    ``H(r') = [A(r')(L_-(r') - L_+(r'))]^{-1}`` is the matrix Wronskian block of the interior Green's
-    function, materialized with the per-phase solutions (:func:`_block_solutions`).
-
-    Returns
-    -------
-    ndarray
-        ``H_j source_j``, shape ``(n_quad, n_s, nm, k)`` for a ``(n_quad, nm, k)`` mode-field batch.
-    """
-    src = ((retardation_factor * dr_weights)[:, None, None] * field).astype(complex)  # (n_quad, nm, k)
-    return d["H"] @ src[:, None]  # (n_quad, n_s, nm, k)
-
-
 def _resolvent_field_laplace(
     d: dict[str, npt.NDArray[np.complexfloating]],
     field: npt.NDArray[np.floating],
@@ -593,7 +573,10 @@ def _resolvent_field_laplace(
     ndarray
         Propagated mode-field batch, shape ``(n_s, n_quad, nm, k)`` for a ``(n_quad, nm, k)`` ``field``.
     """
-    hs = _source_blocks(d, field, dr_weights, retardation_factor)  # (n_quad, n_s, nm, k)
+    # Wronskian-weighted source contributions hs_j = H_j (R dr_j) field_j, with the matrix Wronskian
+    # block H(r') = [A(r')(L_-(r') - L_+(r'))]^{-1} materialized by _block_solutions.
+    src = ((retardation_factor * dr_weights)[:, None, None] * field).astype(complex)  # (n_quad, nm, k)
+    hs = d["H"] @ src[:, None]  # (n_quad, n_s, nm, k)
     tm, tp = d["Tm"], d["Tp"]
     n_quad = hs.shape[0]
     f = np.empty_like(hs)
@@ -638,7 +621,9 @@ def _readout_laplace(
     ndarray
         ``cout_hat(s)``, shape ``(n_s, k)`` for a ``(n_quad, nm, k)`` ``field``.
     """
-    hs = _source_blocks(d, field, dr_weights, retardation_factor)  # (n_quad, n_s, nm, k)
+    # Wronskian-weighted source contributions (as in :func:`_resolvent_field_laplace`).
+    src = ((retardation_factor * dr_weights)[:, None, None] * field).astype(complex)  # (n_quad, nm, k)
+    hs = d["H"] @ src[:, None]  # (n_quad, n_s, nm, k)
     tp = d["Tp"]
     s_acc = np.zeros_like(hs[0])
     for i in range(hs.shape[0] - 1, 0, -1):
@@ -730,17 +715,16 @@ def _rest_drift_field(
         return np.einsum("pmk,pm->pk", vals.reshape(-1, nm, k), phase).real.reshape(*xp.shape, k)
 
     zh, wh = np.polynomial.hermite.hermgauss(_REST_HERMITE)
+    # D_m = 0 collapses the cross-drift Gaussian to a delta: a single unit node reproduces it exactly,
+    # so one nested quadrature covers both regimes (the normalization drops the collapsed axis).
+    zh_y, wh_y = (zh, wh) if sig_y > 0.0 else (np.zeros(1), np.ones(1))
+    norm = np.pi if sig_y > 0.0 else np.sqrt(np.pi)
     f_new = np.zeros((n_quad, nth, k))
-    if sig_y == 0.0:  # D_m = 0: the Gaussian spread is 1-D along the drift
-        for za, wa in zip(zh, wh, strict=True):
-            f_new += wa * field_at(x - delta - np.sqrt(2.0) * sig_x * za, y)
-        f_new /= np.sqrt(np.pi)
-    else:
-        for za, wa in zip(zh, wh, strict=True):
-            x_shift = x - delta - np.sqrt(2.0) * sig_x * za
-            for zb, wb in zip(zh, wh, strict=True):
-                f_new += (wa * wb) * field_at(x_shift, y - np.sqrt(2.0) * sig_y * zb)
-        f_new /= np.pi
+    for za, wa in zip(zh, wh, strict=True):
+        x_shift = x - delta - np.sqrt(2.0) * sig_x * za
+        for zb, wb in zip(zh_y, wh_y, strict=True):
+            f_new += (wa * wb) * field_at(x_shift, y - np.sqrt(2.0) * sig_y * zb)
+    f_new /= norm
     coeffs = np.fft.fft(f_new, axis=1) / nth  # (n_quad, nth, k); c_m at index m mod nth
     measure = (r_nodes * dr_weights)[:, None, None]  # radial area measure for the spectral-tail energy
     tail_idx = np.concatenate([np.arange(n_modes + 1, 2 * n_modes + 1), -np.arange(n_modes + 1, 2 * n_modes + 1)])

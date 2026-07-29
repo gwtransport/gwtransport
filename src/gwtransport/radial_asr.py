@@ -7,36 +7,26 @@ screen provides macrodispersion. Forward and backward modeling are supported.
 
 Computes the extracted flux concentration ``cout`` at a single fully-penetrating well driven by an
 arbitrary signed flow schedule (positive = injection, negative = extraction, zero = rest) and an
-arbitrary injected concentration ``cin``. The physics is the exact radial advection-dispersion of the
-radial ASR knowledge base: volume coordinate ``V(r) = pi b n (r^2 - r_w^2)``, Scheidegger
-velocity-dependent dispersion ``D = alpha_L |u| + D_m`` (microdispersion ``alpha_L |u|`` plus molecular diffusion ``D_m``), Kreft-Zuber flux boundary conditions, and
-the exact per-phase kernels (Airy for ``D_m = 0``; the log-derivative Riccati ODE for ``D_m > 0``).
-Nothing is reduced to a Gaussian; the exact
+arbitrary injected concentration ``cin``. The physics is the exact radial advection-dispersion:
+volume coordinate ``V(r) = pi b n (r^2 - r_w^2)``, Scheidegger velocity-dependent dispersion
+``D = alpha_L |u| + D_m`` (microdispersion ``alpha_L |u|`` plus molecular diffusion ``D_m``),
+Kreft-Zuber flux boundary conditions, and the exact per-phase kernels (Airy for ``D_m = 0``; the
+log-derivative Riccati ODE for ``D_m > 0``). Nothing is reduced to a Gaussian; the exact
 non-Gaussian breakthrough (with the correct skewness) is carried.
 
 The forward map is **grid-free** end to end -- no PDE is discretized, so none of the finite-volume
-artefacts appear. A single inject-then-extract cycle with no intervening rest uses the closed-form echo operator
-(``gwtransport._radial_asr_compose``, KB Sec. 10a) -- exact for arbitrary within-phase variable flow,
-with the exact temporal moments. Any other signed-flow schedule (more reversals / multi-cycle ASR, or a
-single cycle with a rest under nonzero ``D_m``) uses the reused-propagator-matrix engine
-(``gwtransport._radial_asr_reuse``, KB addendum Sec. A1-A7), which composes the exact per-phase kernels
-(Airy / Riccati / Bessel) through the interior two-point Green's functions. Each per-reversal field
-hand-off ``f_out = P @ f`` is a bounded linear operator; its matrix ``P`` is built once per distinct
-``(direction, phase volume)`` from a single batched de Hoog inversion and reused at every recurrence, so
-the special-function + inversion cost is ``O(distinct phase volumes)`` rather than ``O(reversals)``. It is
-bit-equivalent, to the de Hoog floor, to the per-reversal grid-free composition. Molecular diffusion during
-pumping (the ``D_m > 0`` Whittaker kernel) is evaluated through the log-derivative Riccati ODE
-(``gwtransport._radial_asr_kernels.resolvent_riccati``) -- exact to the de Hoog inversion floor at any
-``A_0/D_m``, with no special-function precision cap, and reducing continuously to the Airy branch as
-``D_m -> 0``. During a **rest** (``Q = 0``) advection and microdispersion vanish and molecular
-diffusion acts alone on the wall-clock clock; it is carried exactly by the order-0 modified Bessel
-pure-diffusion kernel, the dominant mixing for seasonal storage / ATES. The only
-numerical steps are Gauss-Legendre quadrature and de Hoog Laplace inversion of exact special-function
-kernels. An independent finite-volume solve of the same PDE (``tests/src/_radial_asr_fv_oracle.py``,
-KB Sec. 9) is used only as a test oracle. The propagator matrices are assembled on the Bromwich
-contour (``Re s > 0``), where the field hand-off is well-conditioned at any Peclet. The engine is chosen
-automatically; cycles are expressed through the flow sign pattern, not
-an argument.
+artefacts appear. Every signed-flow schedule (single cycle, multi-cycle ASR, intervening rests) is
+composed by the propagator-matrix engine (``gwtransport._radial_asr_reuse``), which carries the
+resident field across each flow reversal with the exact per-phase interior Green's functions
+(Airy / Riccati / Bessel); cycles are expressed through the flow sign pattern, not an argument.
+Molecular diffusion during pumping (the ``D_m > 0`` Whittaker kernel) is evaluated through the
+log-derivative Riccati ODE -- exact to the de Hoog inversion floor at any ``A_0/D_m``, with no
+special-function precision cap, and reducing continuously to the Airy branch as ``D_m -> 0``. During
+a **rest** (``Q = 0``) advection and microdispersion vanish and molecular diffusion acts alone on the
+wall-clock clock; it is carried exactly by the order-0 modified Bessel pure-diffusion kernel, the
+dominant mixing for seasonal storage / ATES. The only numerical steps are Gauss-Legendre quadrature
+and de Hoog Laplace inversion of exact special-function kernels. An independent finite-volume solve
+of the same PDE (``tests/src/_radial_asr_fv_oracle.py``) is used only as a test oracle.
 
 The reported ``cout`` is the flow-weighted average over each output bin -- defined on extraction bins
 (``flow < 0``) and ``NaN`` on injection / rest bins (nothing is recovered there).
@@ -67,19 +57,12 @@ displacement) must stay well inside the stagnation radius ``r_s = |A_0|/|v_d|`` 
 Rest phases (``flow == 0``) are propagated by the exact free-space drift kernel (translate + anisotropic
 spread). The drift-induced recovery loss is validated against an independent 2-D finite-volume oracle.
 
-Available functions:
-
-- :func:`infiltration_to_extraction` -- forward transport (cin -> cout).
-- :func:`extraction_to_infiltration` -- inverse via Tikhonov regularization (cout -> cin).
-- :func:`gamma_infiltration_to_extraction` -- gamma-distributed screen velocity (forward).
-- :func:`gamma_extraction_to_infiltration` -- same, inverse.
-
 References
 ----------
 The references below give the published closed-form solutions for the **single-phase** radial *injection*
 problem (steady divergent flow from one well) -- the per-phase forward kernel this module composes. The
-convergent-extraction dual (KB Sec. 7) and the multi-cycle push-pull / ASR composition across flow
-reversals are built on top of those kernels here and are not in the single-injection references. All
+convergent-extraction dual and the multi-cycle push-pull / ASR composition across flow reversals are
+built on top of those kernels here and are not in the single-injection references. All
 share the assumptions used here: a single fully-penetrating well in a homogeneous medium with steady
 divergent flow ``v = Q / (2 pi b n r)``, plus retardation.
 
@@ -121,27 +104,10 @@ import numpy.typing as npt
 import pandas as pd
 
 from gwtransport import gamma
-from gwtransport._radial_asr_compose import single_cycle_echo_matrix
 from gwtransport._radial_asr_drift_kernels import _RS_FRAC, block_cout_deviation
 from gwtransport._radial_asr_reuse import cout_deviation
 from gwtransport._time import dt_to_days
 from gwtransport._validation import _validate_retardation_factor
-
-
-def _is_single_cycle(flow: npt.NDArray[np.floating]) -> bool:
-    """Return True if the schedule is a single injection block followed by a single extraction block.
-
-    Such schedules (one flow reversal, injection first) use the exact closed-form echo operator; any
-    other signed-flow pattern (more reversals, extraction first) uses the reused-propagator-matrix engine.
-
-    Returns
-    -------
-    bool
-        Whether ``flow`` is a single inject-then-extract cycle.
-    """
-    signs = np.sign(flow[flow != 0.0])
-    n_changes = int(np.sum(np.diff(signs) != 0)) if signs.size else 0
-    return n_changes <= 1 and (signs.size == 0 or signs[0] > 0)
 
 
 def _validate(
@@ -209,104 +175,6 @@ def _validate(
         raise ValueError(msg)
 
 
-def _echo_operator(
-    *,
-    flow: npt.NDArray[np.floating],
-    tedges: pd.DatetimeIndex,
-    c_geos: npt.NDArray[np.floating],
-    well_radius: float,
-    longitudinal_dispersivity: float,
-    molecular_diffusivity: float,
-    retardation_factor: float,
-    weights: npt.NDArray[np.floating],
-    n_quad: int,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool_], npt.NDArray[np.bool_]]:
-    """Weight-averaged single-cycle echo operator ``W`` (``cout' = W @ cin'_inj``) over the streamtubes.
-
-    Builds the closed-form echo matrix per streamtube (geometry constant ``c_geo = pi b n``) and
-    averages by ``weights``. Used by both the forward (``cout = W @ cin``) and the reverse (Tikhonov).
-
-    Returns
-    -------
-    w_ens : ndarray, shape (n_ext, n_inj)
-        Weight-averaged echo operator.
-    inj_mask, ext_mask : ndarray of bool
-        Injection (``flow > 0``) and extraction (``flow < 0``) bin masks.
-    """
-    inj_mask, ext_mask = flow > 0.0, flow < 0.0
-    dt = dt_to_days(tedges)
-    inj_vol = np.concatenate(([0.0], np.cumsum((flow * dt)[inj_mask])))  # 0 .. S_inj
-    ext_vol = np.concatenate(([0.0], np.cumsum((-flow * dt)[ext_mask])))  # 0 .. T_end
-    # dt-weighted mean |Q| per direction (total flushed volume / total pumping time): flow_scale * time =
-    # flushed volume, so the D_m>0 constant-|Q| kernel conserves volume and cout is rebinning-invariant.
-    inj_flow_scale = float(inj_vol[-1] / np.sum(dt[inj_mask])) if np.any(inj_mask) else 1.0
-    ext_flow_scale = float(ext_vol[-1] / np.sum(dt[ext_mask])) if np.any(ext_mask) else 1.0
-    w_ens = np.zeros((int(np.sum(ext_mask)), int(np.sum(inj_mask))))
-    for c_geo, w_i in zip(c_geos, weights, strict=True):
-        w_ens += w_i * single_cycle_echo_matrix(
-            inj_volume_edges=inj_vol,
-            ext_volume_edges=ext_vol,
-            c_geo=c_geo,
-            r_w=well_radius,
-            alpha_l=longitudinal_dispersivity,
-            inj_flow_scale=inj_flow_scale,
-            ext_flow_scale=ext_flow_scale,
-            retardation_factor=retardation_factor,
-            molecular_diffusivity=molecular_diffusivity,
-            n_quad=n_quad,
-        )
-    return w_ens / np.sum(weights), inj_mask, ext_mask
-
-
-def _reuse_ensemble(
-    cin_deviation: npt.NDArray[np.floating],
-    *,
-    flow: npt.NDArray[np.floating],
-    dt_days: npt.NDArray[np.floating],
-    c_geos: npt.NDArray[np.floating],
-    well_radius: float,
-    longitudinal_dispersivity: float,
-    molecular_diffusivity: float,
-    retardation_factor: float,
-    weights: npt.NDArray[np.floating],
-    n_quad: int,
-) -> npt.NDArray[np.floating]:
-    """Weight-averaged multi-cycle extracted-flux deviation over the streamtubes.
-
-    Runs the reused-propagator-matrix multi-cycle engine once per streamtube (geometry constant
-    ``c_geo = pi b n``) and averages by ``weights``. ``cin_deviation`` may be ``(n,)`` or ``(n, k)`` -- a
-    column batch is transported through one engine pass per streamtube (the per-phase propagator / source /
-    readout matrices are cin-independent, so they are built once and applied to every column). Used by the
-    forward (with ``cin``) and the reverse (with the unit-pulse column batch).
-
-    Returns
-    -------
-    ndarray, shape (n,) or (n, k)
-        Weight-averaged extracted-flux deviation on extraction bins (matching ``cin_deviation``), ``0``
-        elsewhere.
-    """
-    # cout_deviation returns NaN on injection / rest bins by contract (structural, expected). Only the
-    # extraction bins are accumulated, so those structural NaNs are dropped without a blanket nan_to_num --
-    # a genuine NaN on an EXTRACTION bin (a real numerical failure) then propagates and surfaces instead of
-    # silently reading as a physical zero.
-    ext_mask = flow < 0.0
-    acc = np.zeros(np.shape(cin_deviation))
-    for c_geo, w_i in zip(c_geos, weights, strict=True):
-        dev = cout_deviation(
-            cin_deviation=cin_deviation,
-            flow=flow,
-            dt_days=dt_days,
-            c_geo=c_geo,
-            r_w=well_radius,
-            alpha_l=longitudinal_dispersivity,
-            molecular_diffusivity=molecular_diffusivity,
-            retardation_factor=retardation_factor,
-            n_quad=n_quad,
-        )
-        acc[ext_mask] += w_i * dev[ext_mask]
-    return acc / np.sum(weights)
-
-
 def _auto_n_modes(
     flow: npt.NDArray[np.floating],
     dt_days: npt.NDArray[np.floating],
@@ -365,12 +233,13 @@ def _auto_n_modes(
     return int(np.clip(max(m_eps, m_shift), 2, 8))
 
 
-def _block_ensemble(
+def _streamtube_ensemble(
     cin_deviation: npt.NDArray[np.floating],
     *,
     flow: npt.NDArray[np.floating],
     dt_days: npt.NDArray[np.floating],
     c_geos: npt.NDArray[np.floating],
+    weights: npt.NDArray[np.floating],
     porosity: float,
     well_radius: float,
     longitudinal_dispersivity: float,
@@ -378,18 +247,21 @@ def _block_ensemble(
     retardation_factor: float,
     regional_flux: float,
     n_modes: int | None,
-    weights: npt.NDArray[np.floating],
     n_quad: int,
 ) -> npt.NDArray[np.floating]:
-    """Weight-averaged multi-cycle extracted-flux deviation with regional drift over the streamtubes.
+    """Weight-averaged extracted-flux deviation over the streamtube ensemble.
 
-    Runs the azimuthal-mode block engine (:func:`gwtransport._radial_asr_drift_kernels.block_cout_deviation`)
-    once per streamtube (geometry constant ``c_geo = pi b n``) and averages by ``weights``. The drift
+    Runs the transport engine once per streamtube (geometry constant ``c_geo = pi b n``) and averages by
+    ``weights``: the reused-propagator-matrix engine
+    (:func:`gwtransport._radial_asr_reuse.cout_deviation`) without regional drift, the azimuthal-mode
+    block engine (:func:`gwtransport._radial_asr_drift_kernels.block_cout_deviation`) with it. The drift
     seepage ``v_d = U / n`` is the same for every streamtube (a regional Darcy flux through the porosity);
     only the radial strength ``A_0 ~ 1/c_geo`` varies, so faster (thinner) streamtubes see a smaller drift
-    ratio. ``n_modes`` is auto-sized per streamtube from its drift ratio when not given. ``cin_deviation``
+    ratio, and ``n_modes`` is auto-sized per streamtube from that ratio when not given. ``cin_deviation``
     may be ``(n,)`` or ``(n, k)`` -- a column batch is transported through one engine pass per streamtube
-    (used by the reverse operator build).
+    (the per-phase propagator / source / readout matrices are cin-independent, so they are built once and
+    applied to every column). Used by the forward (with ``cin``) and the reverse (with the unit-pulse
+    column batch).
 
     Returns
     -------
@@ -398,31 +270,47 @@ def _block_ensemble(
         elsewhere.
     """
     v_d = regional_flux / porosity
-    # block_cout_deviation returns NaN on injection / rest bins by contract (structural, expected). Only the
+    # Both engines return NaN on injection / rest bins by contract (structural, expected). Only the
     # extraction bins are accumulated, so those structural NaNs are dropped without a blanket nan_to_num --
-    # a genuine NaN on an EXTRACTION bin (a de Hoog breakdown) then propagates and surfaces instead of
-    # silently reading as the background (mirrors _reuse_ensemble).
+    # a genuine NaN on an EXTRACTION bin (a real numerical failure) then propagates and surfaces instead of
+    # silently reading as a physical zero.
     ext_mask = flow < 0.0
     acc = np.zeros(np.shape(cin_deviation))
     for c_geo, w_i in zip(c_geos, weights, strict=True):
-        m = (
-            n_modes
-            if n_modes is not None
-            else _auto_n_modes(flow, dt_days, c_geo, well_radius, longitudinal_dispersivity, v_d, retardation_factor)
-        )
-        dev = block_cout_deviation(
-            cin_deviation=cin_deviation,
-            flow=flow,
-            dt_days=dt_days,
-            c_geo=c_geo,
-            r_w=well_radius,
-            alpha_l=longitudinal_dispersivity,
-            v_d=v_d,
-            molecular_diffusivity=molecular_diffusivity,
-            retardation_factor=retardation_factor,
-            n_modes=m,
-            n_quad=n_quad,
-        )
+        if regional_flux == 0.0:
+            dev = cout_deviation(
+                cin_deviation=cin_deviation,
+                flow=flow,
+                dt_days=dt_days,
+                c_geo=c_geo,
+                r_w=well_radius,
+                alpha_l=longitudinal_dispersivity,
+                molecular_diffusivity=molecular_diffusivity,
+                retardation_factor=retardation_factor,
+                n_quad=n_quad,
+            )
+        else:
+            # Steady regional drift breaks radial symmetry: the azimuthal-mode block engine carries it.
+            m = (
+                n_modes
+                if n_modes is not None
+                else _auto_n_modes(
+                    flow, dt_days, c_geo, well_radius, longitudinal_dispersivity, v_d, retardation_factor
+                )
+            )
+            dev = block_cout_deviation(
+                cin_deviation=cin_deviation,
+                flow=flow,
+                dt_days=dt_days,
+                c_geo=c_geo,
+                r_w=well_radius,
+                alpha_l=longitudinal_dispersivity,
+                molecular_diffusivity=molecular_diffusivity,
+                retardation_factor=retardation_factor,
+                v_d=v_d,
+                n_modes=m,
+                n_quad=n_quad,
+            )
         acc[ext_mask] += w_i * dev[ext_mask]
     return acc / np.sum(weights)
 
@@ -523,59 +411,23 @@ def infiltration_to_extraction(
         regional_flux=regional_flux,
         n_modes=n_modes,
     )
-    c_geos = np.pi * pore_heights * porosity
-    cout = np.full(len(flow), np.nan)
-    if regional_flux != 0.0:
-        # Steady regional drift breaks radial symmetry: the azimuthal-mode block engine carries it.
-        ext_mask = flow < 0.0
-        cout_dev = _block_ensemble(
-            cin - background,
-            flow=flow,
-            dt_days=dt_to_days(tedges),
-            c_geos=c_geos,
-            porosity=porosity,
-            well_radius=well_radius,
-            longitudinal_dispersivity=longitudinal_dispersivity,
-            molecular_diffusivity=molecular_diffusivity,
-            retardation_factor=retardation_factor,
-            regional_flux=regional_flux,
-            n_modes=n_modes,
-            weights=weights_arr,
-            n_quad=n_quad,
-        )
-        cout[ext_mask] = background + cout_dev[ext_mask]
-        return cout
-    # A rest phase combined with molecular diffusion (seasonal storage / ATES) cannot use the
-    # flushed-volume echo operator, which is blind to a rest's wall-clock diffusion; route it to the
-    # reuse engine (which propagates the rest with the Bessel pure-diffusion kernel).
-    use_echo = _is_single_cycle(flow) and not (molecular_diffusivity > 0.0 and np.any(flow == 0.0))
-    if use_echo:
-        w_ens, inj_mask, ext_mask = _echo_operator(
-            flow=flow,
-            tedges=tedges,
-            c_geos=c_geos,
-            well_radius=well_radius,
-            longitudinal_dispersivity=longitudinal_dispersivity,
-            molecular_diffusivity=molecular_diffusivity,
-            retardation_factor=retardation_factor,
-            weights=weights_arr,
-            n_quad=n_quad,
-        )
-        cout[ext_mask] = background + w_ens @ (cin[inj_mask] - background)
-        return cout
     ext_mask = flow < 0.0
-    cout_dev = _reuse_ensemble(
+    cout_dev = _streamtube_ensemble(
         cin - background,
         flow=flow,
         dt_days=dt_to_days(tedges),
-        c_geos=c_geos,
+        c_geos=np.pi * pore_heights * porosity,
+        weights=weights_arr,
+        porosity=porosity,
         well_radius=well_radius,
         longitudinal_dispersivity=longitudinal_dispersivity,
         molecular_diffusivity=molecular_diffusivity,
         retardation_factor=retardation_factor,
-        weights=weights_arr,
+        regional_flux=regional_flux,
+        n_modes=n_modes,
         n_quad=n_quad,
     )
+    cout = np.full(len(flow), np.nan)
     cout[ext_mask] = background + cout_dev[ext_mask]
     return cout
 
@@ -656,67 +508,31 @@ def extraction_to_infiltration(
     if regularization_strength < 0.0:
         msg = f"regularization_strength must be >= 0, got {regularization_strength}"
         raise ValueError(msg)
-    c_geos = np.pi * pore_heights * porosity
-    # A rest phase with molecular diffusion routes to the reuse engine (see the forward function); regional
-    # drift never uses the radial echo operator (it breaks the azimuthal symmetry the echo relies on).
-    use_echo = (
-        regional_flux == 0.0 and _is_single_cycle(flow) and not (molecular_diffusivity > 0.0 and np.any(flow == 0.0))
+    # Build the dense forward operator W whose columns are the unit-injection-pulse responses. The per-phase
+    # propagator / source / readout matrices are cin-independent (flow + geometry only), so the whole
+    # unit-pulse batch is transported in ONE engine pass -- built once and applied to every column.
+    inj_mask, ext_mask = flow > 0.0, flow < 0.0
+    inj_idx = np.flatnonzero(inj_mask)
+    pulses = np.zeros((len(flow), len(inj_idx)))
+    pulses[inj_idx, np.arange(len(inj_idx))] = 1.0
+    cols = _streamtube_ensemble(
+        pulses,
+        flow=flow,
+        dt_days=dt_to_days(tedges),
+        c_geos=np.pi * pore_heights * porosity,
+        weights=weights_arr,
+        porosity=porosity,
+        well_radius=well_radius,
+        longitudinal_dispersivity=longitudinal_dispersivity,
+        molecular_diffusivity=molecular_diffusivity,
+        retardation_factor=retardation_factor,
+        regional_flux=regional_flux,
+        n_modes=n_modes,
+        n_quad=n_quad,
     )
-    if use_echo:
-        w_ens, inj_mask, ext_mask = _echo_operator(
-            flow=flow,
-            tedges=tedges,
-            c_geos=c_geos,
-            well_radius=well_radius,
-            longitudinal_dispersivity=longitudinal_dispersivity,
-            molecular_diffusivity=molecular_diffusivity,
-            retardation_factor=retardation_factor,
-            weights=weights_arr,
-            n_quad=n_quad,
-        )
-    else:
-        # Build the dense forward operator W whose columns are the unit-injection-pulse responses; the reverse
-        # cannot reuse the cheap single-solve forward path. The per-phase propagator / source / readout matrices
-        # are cin-independent (flow + geometry only), so the whole unit-pulse batch is transported in ONE engine
-        # pass -- the matrices are built once and applied to every column. The block (drift) engine carries
-        # the regional drift; the scalar reuse engine the drift-free case.
-        inj_mask, ext_mask = flow > 0.0, flow < 0.0
-        inj_idx = np.flatnonzero(inj_mask)
-        dt_days = dt_to_days(tedges)
-        pulses = np.zeros((len(flow), len(inj_idx)))
-        pulses[inj_idx, np.arange(len(inj_idx))] = 1.0
-        if regional_flux != 0.0:
-            cols = _block_ensemble(
-                pulses,
-                flow=flow,
-                dt_days=dt_days,
-                c_geos=c_geos,
-                porosity=porosity,
-                well_radius=well_radius,
-                longitudinal_dispersivity=longitudinal_dispersivity,
-                molecular_diffusivity=molecular_diffusivity,
-                retardation_factor=retardation_factor,
-                regional_flux=regional_flux,
-                n_modes=n_modes,
-                weights=weights_arr,
-                n_quad=n_quad,
-            )
-        else:
-            cols = _reuse_ensemble(
-                pulses,
-                flow=flow,
-                dt_days=dt_days,
-                c_geos=c_geos,
-                well_radius=well_radius,
-                longitudinal_dispersivity=longitudinal_dispersivity,
-                molecular_diffusivity=molecular_diffusivity,
-                retardation_factor=retardation_factor,
-                weights=weights_arr,
-                n_quad=n_quad,
-            )
-        w_ens = cols[ext_mask, :]
+    w_ens = cols[ext_mask, :]
     # Tikhonov least-squares min ||W x - (cout-bg)||^2 + lambda ||x||^2 via the stable augmented
-    # system [W; sqrt(lambda) I] x = [cout-bg; 0]. The echo / reuse operator has column sums ~1
+    # system [W; sqrt(lambda) I] x = [cout-bg; 0]. The forward operator has column sums ~1
     # (mass conservation per injection bin) and overdetermined rows, so a direct Tikhonov fit is used.
     n_inj = w_ens.shape[1]
     augmented = np.vstack([w_ens, np.sqrt(regularization_strength) * np.eye(n_inj)])

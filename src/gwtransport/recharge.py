@@ -34,13 +34,6 @@ entry point:
   (:func:`gwtransport.advection.infiltration_to_extraction`); with the
   boundary never feeding the well it reduces exactly to the unbounded model.
 
-Available functions:
-
-- :func:`recharge_to_extraction` - Compute extracted concentration from
-  recharge concentration (and, in the bounded model, upstream-boundary
-  concentration). Exact closed-form solution; output is a flow-weighted
-  (bounded) or recharge-weighted (unbounded) bin average.
-
 References
 ----------
 Haitjema, H.M. (1995). On the residence time distribution in idealized

@@ -1,20 +1,33 @@
-"""Phase-1 invariants for the fronttracking (V, θ) refactor.
+"""Invariant contracts of the fronttracking engine in (V, θ) coordinates.
 
-These tests target *specific* defects fixed by the refactor — independent of
-the snapshot baselines, so they catch regressions even if a scenario is
-removed or replaced.
+Every test here pins a property that holds for any scenario, stated against an
+analytic or high-precision reference rather than against a recorded output — so
+the contract survives a rewrite of the unit-test scenario library.
 
-Covered:
+Contracts covered:
 
-- ``RarefactionWave.concentration_at_point`` FP-clamp at the tail boundary.
-- One ``outlet_crossing`` event per (wave, outlet) pair, even at FP-edge
-  collisions.
-- Hard-coded ``compute_first_front_arrival_theta`` value for a
-  ``ConstantRetardation`` case (independent of the function's own output).
-- Mass balance to machine precision for the conservative-tracer case (the
-  only scenario where Phase-1 wave splitting fully conserves; nonlinear
-  sorption has a known ~few-thousand-mass deficit traced to the
-  shock-rarefaction overlay, fixed in Phase 2 by ``DecayingShockWave``).
+- **Wave geometry and events.** A rarefaction returns ``c_tail`` exactly at its
+  tail position (an unclamped comparison there drops the modified-rarefaction
+  emission at a shock-rarefaction collision), and each (wave, outlet) pair emits
+  exactly one ``outlet_crossing``.
+- **The θ(t) map.** Flow changes enter the engine only through ``theta_edges``:
+  θ is constant across a zero-flow bin, and ``theta_at_t`` / ``t_at_theta``
+  invert each other to machine precision wherever flow is non-zero.
+- **Mass conservation against independent references.** ``m_in = m_dom + m_out``
+  is tautological on its own, because ``compute_cumulative_outlet_mass`` returns
+  ``m_in − m_dom`` by construction. Each conservation check here is therefore
+  paired with a reference sharing no algebra with it: a pointwise
+  ``∫₀^{v_outlet} C_T(c(v, θ)) dv`` trapezoid, the analytic steady-state domain
+  mass, or an analytic self-similar fan profile at the outlet.
+- **Fan integrals.** The universal integration-by-parts kernel ``R·c − C_T`` is
+  pinned against 50-digit ``mpmath`` quadrature for Freundlich (``n > 1`` and
+  ``n < 1``) and Langmuir, together with the apex boundary value ``G(0) = 0``,
+  the ``c_apex`` / ``u_zero`` clamps that bound a fan's physical extent, and the
+  divergence guard for the unbounded ``n < 1`` case.
+- **DecayingShockWave.** Fan-continuity and Rankine-Hugoniot hold along the
+  decaying side for the closed-form (Freundlich, Brooks-Corey) and numerical
+  (van Genuchten, ``c_fixed > 0``) paths, and fan exhaustion hands over to a
+  continuation shock without losing domain mass.
 """
 
 from __future__ import annotations
@@ -51,11 +64,12 @@ from gwtransport.fronttracking.waves import DecayingShockWave, RarefactionWave, 
 
 
 def test_rarefaction_concentration_at_point_clamps_at_tail_boundary():
-    """At v = v_tail (machine-precision), c is clamped to c_tail instead of None.
+    """At v = v_tail the rarefaction returns ``c_tail``, not ``None``.
 
-    Regression for the FP-imprecision defect that caused freundlich_nhalf to
-    miss the modified-rarefaction emission at the shock-rarefaction
-    collision (400 mass deficit on the original main baseline).
+    The shock-rarefaction collision handler probes the rarefaction exactly at
+    its tail position, where the comparison is only accurate to a few ULPs. An
+    unclamped test there reports "outside the fan", the modified-rarefaction
+    emission is skipped, and the collision loses mass.
     """
     sorption = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3)
     raref = RarefactionWave(theta_start=500.0, v_start=0.0, c_head=0.0, c_tail=4.0, sorption=sorption)
@@ -70,10 +84,10 @@ def test_rarefaction_concentration_at_point_clamps_at_tail_boundary():
 def test_outlet_crossing_no_fp_duplicate_per_wave():
     """No (wave, outlet) pair emits two outlet_crossing events within FP of each other.
 
-    Legitimate distinct crossings (e.g., a rarefaction's head and tail) are
-    separated by macroscopic Δθ. The FP-duplicate defect in
-    ``find_outlet_crossing`` produced two crossings at ``|Δθ| ≈ 1 ULP`` for
-    the *same* boundary, which this test catches.
+    Legitimate distinct crossings (a rarefaction's head and its tail, say) are
+    separated by a macroscopic Δθ. Two crossings for the same boundary within
+    ``|Δθ| ≈ 1 ULP`` mean ``find_outlet_crossing`` emitted a floating-point
+    duplicate, which double-counts that wave's outlet contribution.
     """
     sorption = FreundlichSorption(k_f=0.01, n=0.5, bulk_density=1500.0, porosity=0.3)
     cin = np.zeros(200)
@@ -101,9 +115,8 @@ def test_outlet_crossing_no_fp_duplicate_per_wave():
 def test_compute_first_front_arrival_theta_constant_retardation_analytic():
     """Hard-coded analytic answer for constant retardation: θ = θ_emit + V·R.
 
-    Defends against silent-rewrite of the function itself (snapshot test
-    `test_theta_first_arrival_matches` only confirms determinism, not
-    physical correctness).
+    The expected value is derived by hand from the isotherm, not read back from
+    the function, so it pins physical correctness rather than determinism.
     """
     cin = np.array([0.0] * 5 + [10.0] * 10)
     theta_edges = np.concatenate(([0.0], np.cumsum(np.full(15, 100.0))))
@@ -177,8 +190,8 @@ def test_mass_balance_constant_retardation_machine_precision():
 def test_theta_constant_across_zero_flow_bin():
     """θ is constant across every zero-flow bin: ``theta_edges[i+1] == theta_edges[i]``.
 
-    The (V, θ) refactor's flow-change machinery is exactly the precomputed
-    ``theta_edges`` array; a zero-flow bin must produce a zero-width θ-segment.
+    Flow changes enter the engine only through the precomputed ``theta_edges``
+    array, so a zero-flow bin must produce a zero-width θ-segment.
     A regression that silently advances θ across a flow=0 bin would be invisible
     to the breakthrough-curve checks (cout is unchanged in θ-space) but would
     corrupt all θ→t translations afterwards.
@@ -205,12 +218,12 @@ def test_theta_constant_across_zero_flow_bin():
 def test_theta_at_t_roundtrip_machine_precision():
     """``theta_at_t`` and ``t_at_theta`` invert each other to machine precision.
 
-    The (V, θ) refactor's central claim is that flow-change behavior is absorbed
-    into the θ(t) map at the API boundary; this map MUST be a proper bijection
-    on the non-zero-flow portion of the domain (it is many-to-one in zero-flow
-    bins where θ is constant — handled by right-continuous t_at_theta).
+    Flow-change behavior is absorbed into the θ(t) map at the API boundary, so
+    this map MUST be a proper bijection on the non-zero-flow portion of the
+    domain (it is many-to-one in zero-flow bins where θ is constant — handled by
+    right-continuous t_at_theta).
     """
-    # Three flow profiles covering the refactor's load-bearing cases.
+    # Flow profiles covering the load-bearing cases.
     profiles = [
         # (label, flow array). All use 100 daily bins so tedges_days = [0, 1, ..., 100].
         ("constant_flow", np.full(100, 100.0)),
@@ -259,10 +272,9 @@ def test_integrate_fan_spatial_langmuir_clamps_below_u_zero():
        all ``u_start ≤ u_zero`` (lower-bound clamp test): pulling the
        lower bound below ``u_zero`` must NOT contribute to the integral.
 
-    Catches the five mutation classes flagged by the test reviewer:
-    no-clamp (negative result), wrong-side clamp (upper instead of
-    lower), off-by-factor on u_zero, sign flip on the sqrt term, and
-    swapped sqrt-end/sqrt-start.
+    Together they catch five mutation classes: no clamp (negative result),
+    wrong-side clamp (upper instead of lower), off-by-factor on u_zero, sign
+    flip on the sqrt term, and swapped sqrt-end/sqrt-start.
     """
     sorption = LangmuirSorption(s_max=0.1, k_l=5.0, bulk_density=1500.0, porosity=0.3)
     kappa = 10.0
@@ -316,44 +328,27 @@ def test_integrate_fan_spatial_langmuir_clamps_below_u_zero():
 
 @pytest.mark.parametrize("n", [0.25, 0.5])
 def test_mass_balance_freundlich_nhalf_mirror_pointwise_breakthrough(n):
-    """n<1 mirror canonical pulse: pointwise breakthrough matches analytical fan.
+    """n<1 mirror canonical pulse: pointwise breakthrough matches the analytical fan.
 
-    Step 5b (conservation-law pivot): outlet mass derived from
-    ``m_out = m_in - m_dom``. The original identify_outlet_segments +
-    integrate_fan_exact path couldn't handle the n<1 mirror geometry
-    (parent rarefaction deactivated at DSW formation, deactivated wave's
-    history lost). The pivot to retrospective ``was_active_at`` queries in
-    ``compute_domain_mass`` (round 2 fix) is required for correct m_dom at
-    intermediate θ.
+    ``compute_breakthrough_curve`` is compared against the analytical
+    self-similar fan ``c = ((θ/V − 1)/α)^(1/(1/n − 1))`` computed directly from
+    the Freundlich parameters, at θ-values spanning the pre-DSW (rarefaction
+    dispatch) and post-DSW (closed-form fan lookup) regimes. This is a pointwise
+    shape check with no algebra in common with the mass bookkeeping, so a
+    mutation in ``RarefactionWave.concentration_at_point`` or in the DSW's
+    fan-interior branch surfaces as a numerical mismatch — a 0.5% perturbation
+    of the rarefaction formula gives rel_err ≈ 5e-3, far above the 1e-10 rtol.
+    It does not exercise the ``was_active_at`` retrospective dispatch; that path
+    is pinned by ``test_compute_domain_mass_matches_inlet_pre_outlet_arrival``
+    in ``test_concentration_at_point_parity.py``.
 
-    Step 5b round 5: rewritten after round-4 reviewer flagged the original
-    per-checkpoint ``(m_dom + m_out) - m_in`` identity as tautological —
-    ``compute_cumulative_outlet_mass`` returns ``m_in - m_dom`` literally,
-    so the assertion is algebraically zero regardless of mutations. The
-    new assertion compares ``compute_breakthrough_curve`` against an
-    analytical rarefaction fan formula at θ-values spanning pre-DSW
-    (rarefaction dispatch) and immediately-post-DSW (DSW closed-form
-    fan-lookup) regimes. The analytical c is computed directly from the
-    Freundlich isotherm parameters; mutations to either
-    ``RarefactionWave.concentration_at_point`` or to the DSW's
-    ``concentration_at_point`` fan-interior branch surface as a numerical
-    mismatch (verified: a 0.5% rarefaction-formula mutation produces
-    rel_err≈5e-3, well above the test's 1e-10 rtol). This test does NOT
-    catch ``was_active_at → is_active`` reverts — that mutation is caught
-    by ``test_compute_domain_mass_matches_inlet_pre_outlet_arrival``,
-    which exercises a different dispatch path.
+    The parameter range is n ∈ {0.25, 0.5}: these are the n<1 values whose
+    collision geometry reaches the DSW closed-form solver for this pulse.
+    n ∈ {0.75, 0.9} produce only regular shocks here.
 
-    Parameter range restricted to n ∈ {0.25, 0.5} — these are the n<1
-    values that actually exercise the DSW closed-form solver. n ∈ {0.75,
-    0.9} produce only regular shocks for this pulse geometry and do not
-    exercise the DSW path, so they are excluded.
-
-    Asserts:
-    1. Pointwise breakthrough match against analytical fan at pre-DSW θ.
-    2. Asymptotic total outlet mass: ``m_out_total = m_in_total -
-       C_T(c_∞)·V_outlet`` where ``c_∞ = cin[-1] = 4`` is the sustained
-       ambient. For canonical n<1 mirror this is NOT equal to mass_in —
-       the aquifer fills to steady state at c=4 and never empties.
+    The second assertion covers the sustained-ambient boundary: ``c_∞ = cin[-1]
+    = 4 > 0``, so the θ → ∞ outlet total is unbounded and
+    ``compute_total_outlet_mass`` must return ``+inf``.
     """
     sorption = FreundlichSorption(k_f=0.01, n=n, bulk_density=1500.0, porosity=0.3)
     v_outlet = 200.0
@@ -407,10 +402,7 @@ def test_mass_balance_freundlich_nhalf_mirror_pointwise_breakthrough(n):
     )
 
     # Sustained ambient boundary: c_∞ = cin[-1] = 4 > 0, so the inlet keeps
-    # injecting forever and the θ → ∞ total outlet mass is unbounded. The
-    # corrected compute_total_outlet_mass returns +inf here (review O3); the
-    # old finite form ``m_in − C_T(c_∞)·V_outlet`` mixed a finite record
-    # integral with an infinite-time steady-state fill and could go negative.
+    # injecting forever and the θ → ∞ total outlet mass is unbounded.
     mass_out = compute_total_outlet_mass(
         cin=cin,
         theta_edges=tr.state.theta_edges,
@@ -419,13 +411,13 @@ def test_mass_balance_freundlich_nhalf_mirror_pointwise_breakthrough(n):
 
 
 def test_mass_balance_freundlich_n2_multipulse():
-    """Two-pulse n=2 canonical mass balance at machine precision via conservation.
+    """Two-pulse n=2: the θ → ∞ outlet total is the injected record integral.
 
-    Step 5b (conservation-law pivot): outlet mass derived from
-    ``m_out = m_in - m_dom``, sidestepping the multi-DSW outlet dispatch
-    that the original identify_outlet_segments + integrate_fan_exact path
-    couldn't handle (newer DSW's swept-up region miscounted as separate
-    DSW1 fan contribution).
+    Two pulses spawn two coexisting DecayingShockWaves, so the run exercises the
+    multi-DSW dispatch (the newer DSW sweeps up the older one's region) and must
+    reach the end of the record within the iteration budget. Because the record
+    returns to ``c = 0`` the domain empties, so ``compute_total_outlet_mass``
+    takes its ``c_∞ = 0`` branch and returns ``Σ cin·Δθ``.
     """
     sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
     v_outlet = 200.0
@@ -457,16 +449,14 @@ def test_pointwise_breakthrough_match_freundlich_n2_canonical():
 
         c(t) = 2500 / (t − 17)²       valid for t ≥ t_DSW_arrival ≈ 79.5 d
 
-    The 17-day offset is the fan-profile time-axis intercept: numerically
-    c(t)·(t−17)² = 2500 holds to ~1e-16 across the asserted t-range. It
-    is NOT a shock-arrival time (the bare leading shock never arrives
-    separately — it merges with the rarefaction head at θ=2580 into the
-    DSW). See Step 5 re-evaluation §Q3 (physics-math reviewer round 2)
-    for the full derivation against R(c) = (θ−θ_apex)/(v−v_apex).
+    The 17-day offset is the fan-profile time-axis intercept, obtained from
+    ``R(c) = (θ − θ_apex)/(v − v_apex)``: numerically c(t)·(t−17)² = 2500 holds
+    to ~1e-16 across the asserted t-range. It is NOT a shock-arrival time — the
+    bare leading shock never arrives separately, it merges with the rarefaction
+    head at θ=2580 into the DSW.
 
-    Mass-balance integrated tests can hide a "right total, wrong shape"
-    mutation; this pointwise comparison is the highest-leverage test in
-    the parametric suite per the test reviewer.
+    Mass-balance integrals can hide a "right total, wrong shape" mutation; this
+    pointwise comparison pins the shape.
     """
     sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
     v_outlet = 200.0
@@ -486,9 +476,8 @@ def test_pointwise_breakthrough_match_freundlich_n2_canonical():
     c_numerical = compute_breakthrough_curve(theta_samples, v_outlet, tr.state.waves, sorption)
     c_analytical = 2500.0 / (t_samples - 17.0) ** 2
 
-    # Empirical rel_err ≈ 2e-16 (physics-math reviewer round 2 verified); 1e-13
-    # leaves ~5000× headroom while catching sub-percent shape mutations that
-    # a 1e-12 budget would absorb.
+    # Empirical rel_err ≈ 2e-16; rtol=1e-13 leaves ~5000× headroom while catching
+    # sub-percent shape mutations that a looser budget would absorb.
     np.testing.assert_allclose(
         c_numerical,
         c_analytical,
@@ -523,10 +512,9 @@ def test_freundlich_n_just_above_1_plateau_holds_inlet_c():
     not read out of the wave list — so a regression that shifts either
     boundary breaks the assertion.
 
-    Replaces a previous xfail whose ``relative_spread < 0.1`` premise was
-    wrong: at n=1.001 the breakthrough at v_outlet is a step (no smooth
-    fan reaches v_outlet before the integration window ends), so any wide
-    sampling window sees both 0s and ``c_inlet``s and a large std.
+    The sampling window must stay strictly inside the plateau: at n=1.001 the
+    fan does not reach ``v_outlet`` within the record, so a wider window sees a
+    step from 0 to ``c_inlet`` rather than a smooth profile.
     """
     c_inlet = 4.0
     sorption = FreundlichSorption(k_f=0.01, n=1.001, bulk_density=1500.0, porosity=0.3)
@@ -576,26 +564,24 @@ def test_freundlich_n_just_above_1_plateau_holds_inlet_c():
 
 
 def test_mass_balance_freundlich_n2_c_fixed_gt_0_pre_filled_aquifer():
-    """Step 5c regression: c_fixed > 0 DSW mass balance at machine precision.
+    """c_fixed > 0 DSW: per-checkpoint mass balance at machine precision.
 
-    The canonical c_R > 0 scenario (pulse ``c_low → c_H → c_low``) cannot
-    test the DSW c_fixed > 0 closed form directly because the simulator
-    initializes the aquifer at c=0, and the 0→c_low fill-up shock at θ=0
-    merges with the leading pulse shock before any DSW could form (the
-    canonical_head dispatch check ``raref.c_tail == shock.c_right`` fails
-    when c_right has been "knocked down" to 0 by the merger).
+    Reaching a DSW with ``c_fixed > 0`` requires care. A plain
+    ``c_low → c_H → c_low`` pulse does not get there: the simulator initializes
+    the aquifer at c=0 and the 0→c_low fill-up shock at θ=0 merges with the
+    leading pulse shock first, which knocks ``shock.c_right`` down to 0 and
+    fails the canonical-head dispatch check ``raref.c_tail == shock.c_right``.
 
-    Workaround: pre-fill the aquifer with c=c_low for long enough that the
-    fill-up shock exits before the pulse arrives (θ_fillup_exit ≈ 10200
-    for our params). Use a SHORT pulse (3 bins) so the trailing fan head
+    So the aquifer is pre-filled with c=c_low long enough for the fill-up shock
+    to exit before the pulse arrives (θ_fillup_exit ≈ 10200 for these
+    parameters), and the pulse is short (3 bins) so the trailing fan head
     catches the leading shock INSIDE the domain, forming a DSW with
-    c_fixed = c_low > 0 (decay_side='left'). Then assert per-checkpoint
-    ``m_in = m_dom + m_out`` at machine precision.
+    ``c_fixed = c_low > 0`` and ``decay_side='left'``.
 
-    Without the Step 5c V_tail/θ_tail clamps in ``integrate_fan_exact`` /
-    ``integrate_fan_spatial_exact``, the fan formula extrapolates past
-    the physical fan range and underestimates m_out / m_dom by 37–84% at
-    intermediate θ (per physics-math reviewer round 2 diagnosis).
+    What the mass balance pins is the V_tail/θ_tail clamps in
+    ``integrate_fan_exact`` / ``integrate_fan_spatial_exact``: without them the
+    fan formula extrapolates past the physical fan range and underestimates
+    m_out / m_dom by 37–84% at intermediate θ.
     """
     sorption = FreundlichSorption(k_f=0.01, n=2.0, bulk_density=1500.0, porosity=0.3)
     v_outlet = 200.0
@@ -632,8 +618,8 @@ def test_mass_balance_freundlich_n2_c_fixed_gt_0_pre_filled_aquifer():
             theta_edges=tr.state.theta_edges,
         )
         err = abs((m_dom + m_out) - m_in)
-        # Empirical max abs_err = 3.6e-12 at frac=0.25 (per test-reviewer Q5);
-        # rtol=1e-14·m_in + atol=1e-11 covers the worst case with ~3× margin.
+        # Empirical max abs_err = 3.6e-12 at frac=0.25; rtol=1e-14·m_in + atol=1e-11
+        # covers the worst case with ~3× margin.
         tol = 1e-14 * max(m_in, 1.0) + 1e-11
         assert err <= tol, f"c_fixed>0 mass balance at θ={theta}: err={err:.6e} > tol={tol:.6e}"
 
@@ -691,10 +677,9 @@ def test_integrate_fan_exact_c_apex_constant_region_freundlich_n2():
         f"diff={full_closed - fan_only_closed}, expected={expected_constant}"
     )
 
-    # Sanity: c_apex=0 default reproduces the original behavior on the same range
-    # for [100, θ_tail] (where the fan formula is valid). For θ > θ_tail the
-    # c_apex=0 path gives c < c_apex (extrapolated, unphysical), so the default
-    # path agrees with the c_apex>0 path only up to θ_tail.
+    # The c_apex=0 default agrees with the c_apex>0 path on [100, θ_tail], where the
+    # fan formula is valid. Past θ_tail the c_apex=0 path extrapolates to c < c_apex
+    # (unphysical), so agreement is expected only up to θ_tail.
     default_closed_fan_only = integrate_fan_exact(theta_origin, v_origin, v_outlet, 100.0, theta_tail, sorption)
     assert np.isclose(default_closed_fan_only, fan_only_closed, rtol=1e-14)
 
@@ -750,9 +735,9 @@ def test_integrate_fan_spatial_exact_c_apex_constant_region_freundlich_n2():
         f"[0, u_tail/2] constant region: got {partial}, expected {expected_partial}"
     )
 
-    # Non-zero theta_origin (test-reviewer Gap 2): same hand-derivation translated
-    # by theta_origin. Catches a sign error or wrong subtraction on theta_origin
-    # that the theta_origin=0 cases above can't see.
+    # Non-zero theta_origin: the same hand-derivation translated by theta_origin.
+    # Catches a sign error or wrong subtraction on theta_origin that the
+    # theta_origin=0 cases above can't see.
     theta_origin_shifted = 100.0
     theta_shifted = theta + theta_origin_shifted  # preserve κ = theta - theta_origin = 500
     u_tail_shifted = kappa / r_c_apex
@@ -768,11 +753,11 @@ def test_integrate_fan_spatial_exact_c_apex_constant_region_freundlich_n2():
 def test_integrate_rarefaction_exact_passes_c_tail_as_c_apex():
     """The ``integrate_rarefaction_exact`` wrapper plumbs ``c_apex=raref.c_tail``.
 
-    Closes test-reviewer Gap 3: the wrapper at output.py:541 passes
-    ``c_apex=raref.c_tail`` to ``integrate_fan_exact``. A mutation that
-    silently drops the wiring (``c_apex=0.0``) would break c_tail>0 cases
-    end-to-end but is invisible to the existing canonical c_tail=0
-    rarefaction tests. This synthetic test exercises the wrapper directly.
+    ``integrate_rarefaction_exact`` forwards ``c_apex=raref.c_tail`` to
+    ``integrate_fan_exact``. A mutation that silently drops that wiring
+    (``c_apex=0.0``) breaks every c_tail>0 case end-to-end but is invisible to
+    the canonical c_tail=0 rarefaction tests, so the wrapper is exercised
+    directly here.
 
     For a Freundlich n=2 rarefaction with c_tail=1.0, c_head=4.0
     spanning v=0 to v=v_outlet=10, the fan integral at v_outlet over
@@ -911,9 +896,9 @@ def test_universal_spatial_fan_apex_matches_mpmath(sorption):
 def test_freundlich_n_below_1_plus_inf_fan_integral_raises():
     """Freundlich n<1 fan integral diverges at θ=+∞; the universal integrator rejects it.
 
-    Preserves the divergence guard that the dedicated integrator enforced. (Production never
-    hits this path — DecayingShockWave.mass_after_outlet_arrival returns 0 for the n<1 mirror
-    before calling — but the guard protects a direct caller.)
+    For ``n < 1`` the self-similar fan concentration grows with θ, so ``∫ c dθ``
+    over an unbounded window has no finite value. The integrator must raise
+    rather than return a silently truncated number.
     """
     sorption = FreundlichSorption(k_f=0.05, n=0.5, bulk_density=1200.0, porosity=0.35)
     with pytest.raises(ValueError, match="diverges"):
@@ -924,11 +909,10 @@ def test_freundlich_n_below_1_plus_inf_fan_integral_raises():
 # DecayingShockWave dedicated isotherm paths (Brooks-Corey, van Genuchten)
 # =============================================================================
 #
-# These would have caught the shipped percolation collision bug at the engine
-# level: before the fix, percolation's Brooks-Corey/van Genuchten isotherms had
-# no DecayingShockWave path at all (collisions fell through to an approximate
-# overlay that never converged). The tests below pin the closed-form (BC) and
-# quadrature (vG) DSW paths directly, independent of the percolation wrapper.
+# The conductivity isotherms that percolation builds on reach the DecayingShockWave
+# through two distinct paths: a closed form for Brooks-Corey and a quadrature
+# inversion for van Genuchten. The tests below pin both at the engine level,
+# independent of the percolation wrapper that consumes them.
 
 
 def _make_fan_consistent_dsw(
@@ -975,8 +959,8 @@ def test_dsw_bc_vg_fan_continuity_and_rankine_hugoniot(sorption):
     A moderate step ``h=0.1`` (a fifth of the smallest θ_local offset) is used:
     vG's ``c_decay`` comes from a ``brentq`` inversion of a ``quad`` integral
     whose ~1e-12 residual is amplified by ``1/(2h)`` in the difference quotient,
-    so the spec's nominal ``h≈1e-3`` leaves the vG FD at ~2e-5 (above 1e-5).
-    At ``h=0.1`` the truncation error and the inversion noise balance and both
+    so an ``h≈1e-3`` leaves the vG FD at ~2e-5, above the 1e-5 gate. At
+    ``h=0.1`` the truncation error and the inversion noise balance and both
     isotherms land at ≤1.2e-7. BC is closed-form and tight at any ``h``.
 
     The closed-form Brooks-Corey relation

@@ -113,8 +113,10 @@ class TestCharacteristicIntersection:
             )
             assert v1 is not None
             assert v2 is not None
-            assert np.isclose(v1, v2, rtol=1e-14)
-            assert np.isclose(v1, v_int, rtol=1e-14)
+            # atol pinned well below one ULP of V (~1e-13 here) so the default 1e-8
+            # cannot mask a lost-precision regression in the intersection kernel.
+            assert np.isclose(v1, v2, rtol=1e-14, atol=1e-15)
+            assert np.isclose(v1, v_int, rtol=1e-14, atol=1e-15)
 
     def test_parallel_characteristics(self, freundlich_sorption):
         """Two characteristics with the same concentration (same speed) never intersect."""
@@ -134,28 +136,44 @@ class TestCharacteristicIntersection:
 class TestShockShockIntersection:
     """Test find_shock_shock_intersection function."""
 
-    def test_shock_collision_simple(self, freundlich_sorption):
-        """Two shock configurations for n>1 and n<1."""
+    @pytest.mark.parametrize(
+        ("c_left_1", "c_right_1", "theta_start_2", "v_start_2", "c_left_2", "c_right_2"),
+        [
+            (10.0, 0.0, 0.0, 200.0, 5.0, 0.0),
+            (5.0, 0.0, 10.0, 50.0, 3.0, 0.0),
+            (10.0, 2.0, 0.0, 300.0, 8.0, 1.0),
+        ],
+    )
+    def test_shock_collision_simple(
+        self, freundlich_sorption, c_left_1, c_right_1, theta_start_2, v_start_2, c_left_2, c_right_2
+    ):
+        """A trailing shock catches a leading one for n>1 but never for n<1, to machine precision."""
+        shock1 = ShockWave(
+            theta_start=0.0, v_start=0.0, c_left=c_left_1, c_right=c_right_1, sorption=freundlich_sorption
+        )
+        shock2 = ShockWave(
+            theta_start=theta_start_2,
+            v_start=v_start_2,
+            c_left=c_left_2,
+            c_right=c_right_2,
+            sorption=freundlich_sorption,
+        )
+
+        result = find_shock_shock_intersection(shock1, shock2, theta_current=0.0)
+
         if freundlich_sorption.n < 1.0:
-            shock1 = ShockWave(theta_start=0.0, v_start=0.0, c_left=5.0, c_right=0.0, sorption=freundlich_sorption)
-            shock2 = ShockWave(theta_start=10.0, v_start=50.0, c_left=3.0, c_right=0.0, sorption=freundlich_sorption)
-
-            result = find_shock_shock_intersection(shock1, shock2, theta_current=0.0)
+            # For n<1 the trailing (higher-C) shock is the slower one, so it never catches up.
             assert result is None, "Expected no intersection between these shocks for n<1"
-        elif freundlich_sorption.n > 1.0:
-            shock1 = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=0.0, sorption=freundlich_sorption)
-            shock2 = ShockWave(theta_start=0.0, v_start=200.0, c_left=5.0, c_right=0.0, sorption=freundlich_sorption)
+            return
 
-            result = find_shock_shock_intersection(shock1, shock2, theta_current=0.0)
-            assert result is not None, "Expected intersection between two shocks for n>1"
-
-            theta_int, v_int = result
-            assert shock1.speed is not None
-            assert shock2.speed is not None
-            v1 = shock1.v_start + shock1.speed * (theta_int - shock1.theta_start)
-            v2 = shock2.v_start + shock2.speed * (theta_int - shock2.theta_start)
-            assert np.isclose(v1, v2, rtol=1e-14)
-            assert np.isclose(v1, v_int, rtol=1e-14)
+        assert result is not None, "Expected intersection between two shocks for n>1"
+        theta_int, v_int = result
+        v1 = shock1.v_start + shock1.speed * (theta_int - shock1.theta_start)
+        v2 = shock2.v_start + shock2.speed * (theta_int - shock2.theta_start)
+        # atol pinned well below one ULP of V (~1e-13 here) so the default 1e-8
+        # cannot mask a lost-precision regression in the intersection kernel.
+        assert np.isclose(v1, v2, rtol=1e-14, atol=1e-15)
+        assert np.isclose(v1, v_int, rtol=1e-14, atol=1e-15)
 
     def test_parallel_shocks(self, freundlich_sorption):
         """Two shocks with the same speed never intersect."""
@@ -678,66 +696,6 @@ class TestShockVelocityAndEntropy:
             assert char_left.speed() > shock.speed > char_right.speed(), (
                 "Entropy condition violated: characteristic speeds must bracket shock speed for n>1"
             )
-
-
-@pytest.mark.parametrize("freundlich_sorption", freundlich_sorptions)
-class TestMachinePrecision:
-    """Test that all calculations achieve machine precision."""
-
-    def test_roundtrip_precision_characteristic(self, freundlich_sorption):
-        """Characteristic intersection has machine precision."""
-        if freundlich_sorption.n < 1.0:
-            char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=1.0, sorption=freundlich_sorption)
-            char2 = CharacteristicWave(theta_start=100.0, v_start=0.0, concentration=10.0, sorption=freundlich_sorption)
-
-            result = find_characteristic_intersection(char1, char2, theta_current=100.0)
-            assert result is None
-        elif freundlich_sorption.n > 1.0:
-            char1 = CharacteristicWave(theta_start=0.0, v_start=0.0, concentration=1.0, sorption=freundlich_sorption)
-            char2 = CharacteristicWave(theta_start=100.0, v_start=0.0, concentration=10.0, sorption=freundlich_sorption)
-
-            result = find_characteristic_intersection(char1, char2, theta_current=100.0)
-
-            assert result is not None, "Expected intersection for machine precision test"
-
-            theta_int, v_int = result
-
-            v1 = characteristic_position(
-                char1.concentration, char1.sorption, char1.theta_start, char1.v_start, theta_int
-            )
-            v2 = characteristic_position(
-                char2.concentration, char2.sorption, char2.theta_start, char2.v_start, theta_int
-            )
-            assert v1 is not None
-            assert v2 is not None
-            assert np.isclose(v1, v2, rtol=1e-14, atol=1e-15)
-            assert np.isclose(v1, v_int, rtol=1e-14, atol=1e-15)
-
-    def test_roundtrip_precision_shock(self, freundlich_sorption):
-        """Shock-shock intersection has machine precision."""
-        if freundlich_sorption.n < 1.0:
-            shock1 = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=freundlich_sorption)
-            shock2 = ShockWave(theta_start=0.0, v_start=300.0, c_left=8.0, c_right=1.0, sorption=freundlich_sorption)
-
-            result = find_shock_shock_intersection(shock1, shock2, theta_current=0.0)
-            assert result is None
-        elif freundlich_sorption.n > 1.0:
-            shock1 = ShockWave(theta_start=0.0, v_start=0.0, c_left=10.0, c_right=2.0, sorption=freundlich_sorption)
-            shock2 = ShockWave(theta_start=0.0, v_start=300.0, c_left=8.0, c_right=1.0, sorption=freundlich_sorption)
-
-            result = find_shock_shock_intersection(shock1, shock2, theta_current=0.0)
-
-            assert result is not None, "Expected shock intersection for machine precision test"
-
-            theta_int, v_int = result
-
-            assert shock1.speed is not None
-            assert shock2.speed is not None
-            v1 = shock1.v_start + shock1.speed * (theta_int - shock1.theta_start)
-            v2 = shock2.v_start + shock2.speed * (theta_int - shock2.theta_start)
-
-            assert np.isclose(v1, v2, rtol=1e-14, atol=1e-15)
-            assert np.isclose(v1, v_int, rtol=1e-14, atol=1e-15)
 
 
 def _ref_char_char(c1, c2, tc) -> tuple[float, float] | None:

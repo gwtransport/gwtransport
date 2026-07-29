@@ -1,8 +1,4 @@
-"""Tests for ``freundlich_retardation`` -- concentration-dependent retardation from a Freundlich isotherm.
-
-Relocated from the deleted ``test_residence_time_series.py`` (the point-sampler that file tested was
-removed; ``freundlich_retardation`` itself is unchanged).
-"""
+"""Tests for ``freundlich_retardation`` -- concentration-dependent retardation from a Freundlich isotherm."""
 
 import numpy as np
 import pytest

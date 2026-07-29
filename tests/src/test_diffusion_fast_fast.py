@@ -1176,8 +1176,8 @@ def test_gamma_forward_matches_diffusion_fast():
 def test_gamma_forward_matches_explicit():
     """The gamma forward wrapper must equal an explicit infiltration_to_extraction call on the same
     discretized bins, exactly. A coarse cout grid + variable flow_out + non-default R exercises every
-    transport pass-through, so dropping any of retardation_factor / flow_out / saturation_threshold
-    in the wrapper breaks the exact equality."""
+    transport pass-through, so dropping either retardation_factor or flow_out in the wrapper breaks
+    the exact equality."""
     n = 180
     tedges = pd.date_range("2020-01-01", periods=n + 1, freq="D")
     cout_tedges = pd.date_range("2020-01-01", periods=n // 3 + 1, freq="3D")
