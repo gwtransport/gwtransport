@@ -4,10 +4,10 @@ gwtransport
 ``gwtransport`` enables timeseries analysis of groundwater transport of solutes and temperature. 1) Estimate aquifer properties either from temperature tracer tests or streamline analysis. 2) Predict residence times and solute transport, and assess pathogen removal efficiency in bank filtration systems.
 
 +------------------------+--------------------------------------------+
-| Testing of source code | |Functional Testing| |Test Coverage|       |
+| Testing of source code | |CI| |Test Coverage|                       |
 |                        | |Linting| |Build and release package|      |
 +------------------------+--------------------------------------------+
-| Testing of examples    | |Testing of examples|                      |
+| Testing of examples    | |Example Coverage|                         |
 |                        |                                            |
 +------------------------+--------------------------------------------+
 | Package                | |PyPI - Python Version| |PyPI - Version|   |
@@ -147,9 +147,9 @@ Indices and tables
 * :ref:`modindex`
 * :ref:`search`
 
-.. |Functional Testing| image:: https://github.com/gwtransport/gwtransport/actions/workflows/functional_testing.yml/badge.svg?branch=main
-   :target: https://github.com/gwtransport/gwtransport/actions/workflows/functional_testing.yml
-   :width: 178
+.. |CI| image:: https://github.com/gwtransport/gwtransport/actions/workflows/site.yml/badge.svg?branch=main
+   :target: https://github.com/gwtransport/gwtransport/actions/workflows/site.yml
+   :width: 66
    :height: 20
 .. |Test Coverage| image:: https://gwtransport.github.io/gwtransport/coverage-badge.svg
    :target: https://gwtransport.github.io/gwtransport/htmlcov/
@@ -163,9 +163,9 @@ Indices and tables
    :target: https://github.com/gwtransport/gwtransport/actions/workflows/release.yml
    :width: 222
    :height: 20
-.. |Testing of examples| image:: https://github.com/gwtransport/gwtransport/actions/workflows/examples_testing.yml/badge.svg?branch=main
-   :target: https://github.com/gwtransport/gwtransport/actions/workflows/examples_testing.yml
-   :width: 189
+.. |Example Coverage| image:: https://gwtransport.github.io/gwtransport/coverage_examples-badge.svg
+   :target: https://gwtransport.github.io/gwtransport/htmlcov_examples/
+   :width: 114
    :height: 20
 .. |PyPI - Python Version| image:: https://img.shields.io/pypi/pyversions/gwtransport.svg?logo=python&label=Python&logoColor=gold
    :target: https://pypi.org/project/gwtransport/
