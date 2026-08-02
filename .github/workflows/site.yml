@@ -1,0 +1,201 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test-minimum:
+    name: Python 3.12 - minimum dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install with minimum dependencies
+        run: uv sync --extra test --resolution lowest-direct --python 3.12
+      - name: Run tests
+        run: uv run pytest tests/src -n0
+
+  test-latest:
+    name: Python 3.14 - latest dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Set up Python 3.14
+        run: uv python install 3.14
+      - name: Install with latest dependencies
+        run: uv sync --extra test --python 3.14
+      - name: Run tests with coverage
+        run: uv run pytest tests/src -n0 --cov=src --cov-report=xml:coverage/coverage.xml --cov-report=html:coverage/htmlcov --cov-append
+      - name: Create coverage badge
+        run: |
+          uv tool install "genbadge[coverage]"
+          uv run genbadge coverage -i coverage/coverage.xml -o coverage/coverage-badge.svg
+      - name: Use the failed badge if coverage creation failed
+        if: ${{ failure() }}
+        run: |
+          mkdir -p coverage/htmlcov
+          cp .github/assets/coverage_failed.svg coverage/coverage-badge.svg
+      - name: Upload the functional coverage slice of the site
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-coverage-functional
+          path: coverage
+          retention-days: 1
+
+  test-examples-minimum:
+    name: Examples - Python 3.12 - minimum dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install with minimum dependencies
+        run: uv sync --extra test --resolution lowest-direct --python 3.12
+      - name: Run tests
+        run: uv run pytest tests/examples
+
+  test-examples-latest:
+    name: Examples - Python 3.14 - latest dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Set up Python 3.14
+        run: uv python install 3.14
+      - name: Install with latest dependencies
+        run: uv sync --extra test --python 3.14
+      - name: Run tests with coverage
+        run: uv run pytest tests/examples --cov=src --cov-report=xml:coverage/coverage_examples.xml --cov-report=html:coverage/htmlcov_examples --cov-append
+      - name: Create coverage badge
+        run: |
+          uv tool install "genbadge[coverage]"
+          uv run genbadge coverage -i coverage/coverage_examples.xml -o coverage/coverage_examples-badge.svg
+      - name: Use the failed badge if coverage creation failed
+        if: ${{ failure() }}
+        run: |
+          mkdir -p coverage/htmlcov_examples
+          cp .github/assets/coverage_failed.svg coverage/coverage_examples-badge.svg
+      - name: Upload the example coverage slice of the site
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-coverage-examples
+          path: coverage
+          retention-days: 1
+
+  build-documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Disable man-db to speed up pandoc install
+        run: |
+          echo 'set man-db/auto-update false' | sudo debconf-communicate >/dev/null
+          sudo dpkg-reconfigure man-db
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # hatch-vcs needs the tag history to derive the version
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Set up Python
+        run: uv python install
+      - name: Install the project
+        run: uv sync --extra test
+      - name: Run inline examples that are part of the documentation
+        run: uv run pytest tests/docs
+      - name: Install Pandoc
+        uses: pandoc/actions/setup@v1
+      - name: Build documentation with sphinx and uv
+        run: |
+          uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b html docs/source docs/build/html
+      - name: Publish the gwtransport wheel into the docs site
+        # The interactive (JupyterLite/Pyodide) examples install gwtransport from this wheel via
+        # micropip, so the in-browser code runs the exact version the docs were built from.
+        run: |
+          uv build --wheel --out-dir dist
+          mkdir -p docs/build/html/_static/wheels
+          cp dist/gwtransport-*-py3-none-any.whl docs/build/html/_static/wheels/
+      - name: Upload the documentation slice of the site
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-documentation
+          path: docs/build/html
+          include-hidden-files: true # .nojekyll and .buildinfo
+          retention-days: 1
+
+  check-documentation-links:
+    runs-on: ubuntu-latest
+    needs: build-documentation
+    steps:
+      - name: Disable man-db to speed up pandoc install
+        run: |
+          echo 'set man-db/auto-update false' | sudo debconf-communicate >/dev/null
+          sudo dpkg-reconfigure man-db
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # hatch-vcs needs the tag history to derive the version
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Install Pandoc
+        uses: pandoc/actions/setup@v1
+      - name: Check documentation links
+        run: |
+          uv tool run --from sphinx --with-editable ".[docs]" sphinx-build -j auto -b linkcheck docs/source docs/build/linkcheck
+      - name: Check links in README.md, pyproject.toml, and FUNDING.yml
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # Exclude the coverage badge + htmlcov report: deploy-time artifacts that 404 until the
+          # coverage deploy publishes them (also listed in .lycheeignore for local runs).
+          args: --verbose --no-progress --exclude 'gwtransport\.github\.io/gwtransport/(coverage-badge\.svg|htmlcov)' README.md pyproject.toml .github/FUNDING.yml
+
+  deploy-site:
+    # Every slice of the site is assembled here from this run's artifacts and published in one
+    # deployment. A failed coverage run still publishes its "failed" badge; a failed docs build
+    # publishes nothing, so the last good site stays up.
+    if: ${{ always() && github.ref == 'refs/heads/main' && needs.build-documentation.result == 'success' }}
+    needs:
+      [
+        build-documentation,
+        test-minimum,
+        test-latest,
+        test-examples-minimum,
+        test-examples-latest,
+      ]
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - name: Collect the site slices
+        uses: actions/download-artifact@v5
+        with:
+          pattern: site-*
+          merge-multiple: true
+          path: site
+      - name: Upload the assembled site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
