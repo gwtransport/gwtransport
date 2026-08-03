@@ -185,7 +185,7 @@ jobs:
       id-token: write
     steps:
       - name: Collect the site slices
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: site-*
           merge-multiple: true
