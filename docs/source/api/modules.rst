@@ -14,6 +14,14 @@ advection
    :undoc-members:
    :show-inheritance:
 
+arrival
+=======
+
+.. automodule:: gwtransport.arrival
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 deposition
 ==========
 
