@@ -49,7 +49,7 @@ jobs:
           cp .github/assets/coverage_failed.svg coverage/coverage-badge.svg
       - name: Upload the functional coverage slice of the site
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: site-coverage-functional
           path: coverage
@@ -93,7 +93,7 @@ jobs:
           cp .github/assets/coverage_failed.svg coverage/coverage_examples-badge.svg
       - name: Upload the example coverage slice of the site
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: site-coverage-examples
           path: coverage
@@ -130,7 +130,7 @@ jobs:
           mkdir -p docs/build/html/_static/wheels
           cp dist/gwtransport-*-py3-none-any.whl docs/build/html/_static/wheels/
       - name: Upload the documentation slice of the site
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: site-documentation
           path: docs/build/html
